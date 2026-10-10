@@ -547,6 +547,14 @@ def capture(root: Path, payload: dict) -> None:
                 task_order.capture_fault(conn, payload, now, agent)
             except Exception:
                 pass
+        # Native transcript cells retain their own exact call IDs. Shell hook
+        # payloads can lose process status; recording UNKNOWN is deliberate.
+        try:
+            from . import native_trace
+            native_trace.capture(conn, payload, agent)
+        except Exception:
+            # Optional trace observation must never alter tool/cost outcomes.
+            pass
         if hook in ("PreToolUse", "PostToolUseFailure"):
             conn.commit()
             return
