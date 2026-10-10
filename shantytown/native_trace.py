@@ -32,11 +32,11 @@ def _stamp(value):
         return None
 
 
-def _item(conn, session, agent):
+def _item(conn, session, agent, action_stamp):
     try:
-        row = conn.execute('SELECT task,paired_start FROM task_contexts WHERE session=? AND agent=? '
+        row = conn.execute('SELECT task,paired_start,ts FROM task_contexts WHERE session=? AND agent=? '
                            'ORDER BY id DESC LIMIT 1', (session, agent)).fetchone()
-        return row[0] if row and row[1] == 1 else None
+        return row[0] if row and row[1] == 1 and row[2] <= action_stamp else None
     except sqlite3.Error:
         return None
 
@@ -131,7 +131,7 @@ def capture(conn, payload, agent, spool=None):
                 if stamp is None:
                     continue
                 if kind == 'custom_tool_call' and row.get('name') == 'exec':
-                    item = _item(conn,session,agent)
+                    item = _item(conn,session,agent,stamp)
                     event = {'kind':'action','action_id':call,'agent':agent,'session':session,
                              'ts':stamp,'target_class':'unknown','trace_source':'codex-transcript',
                              'granularity':'tool-call','tool':'exec','tenant':os.environ.get('BOBBIN_ROLE') or 'unknown'}

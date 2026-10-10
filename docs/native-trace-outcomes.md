@@ -13,7 +13,8 @@ command text, time or agent, and never parses output text as exit status.
 A new recorder adopts the current transcript boundary rather than attributing
 historical calls to the current task. Run the normal task-boundary declaration
 before measuring new controls. Later actions use only the latest confirmed task
-binding for that same session and agent; an unconfirmed new binding is UNKNOWN.
+binding for that same session and agent. An unconfirmed binding or a declaration
+newer than the action is UNKNOWN; delayed reads never fall back to an older task.
 A completion inherits its action's binding even after the next task begins.
 
 The session metadata must match the hook session. Partial output records wait

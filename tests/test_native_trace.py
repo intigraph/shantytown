@@ -9,7 +9,7 @@ def setup(tmp_path, rows):
     header={'type':'session_meta','payload':{'session_id':'session'}}
     path.write_text(json.dumps(header)+'\n')
     conn=sqlite3.connect(tmp_path/'stats.sqlite')
-    conn.execute('CREATE TABLE task_contexts(id INTEGER,session TEXT,agent TEXT,task TEXT,paired_start INTEGER DEFAULT 1)')
+    conn.execute('CREATE TABLE task_contexts(id INTEGER,session TEXT,agent TEXT,task TEXT,paired_start INTEGER DEFAULT 1,ts REAL DEFAULT 1791590399)')
     conn.execute('INSERT INTO task_contexts(id,session,agent,task) VALUES (1,"session","worker","work-first")')
     conn.commit()
     payload={'session_id':'session','transcript_path':str(path),'hook_event_name':'PostToolUse',
@@ -98,7 +98,19 @@ def test_first_adoption_never_scopes_historical_calls_to_current_work(tmp_path):
 
 def test_unpaired_task_declaration_does_not_claim_scope(tmp_path):
     conn,payload,path,spool=setup(tmp_path,[])
-    conn.execute('INSERT INTO task_contexts VALUES (2,"session","worker","unconfirmed-next",0)');conn.commit()
+    conn.execute('INSERT INTO task_contexts(id,session,agent,task,paired_start) VALUES (2,"session","worker","unconfirmed-next",0)');conn.commit()
     with path.open('a') as f:f.write(json.dumps(call())+'\n'+json.dumps(result())+'\n')
     native_trace.capture(conn,payload,'worker',spool)
     assert all('item' not in row for row in read(spool))
+
+
+def test_delayed_old_call_does_not_inherit_newer_task(tmp_path):
+    conn,payload,path,spool=setup(tmp_path,[call(),result()])
+    conn.execute('INSERT INTO task_contexts(id,session,agent,task,ts) VALUES (2,"session","worker","work-new",1791590402)')
+    conn.commit()
+    native_trace.capture(conn,payload,'worker',spool)
+    rows=read(spool)
+    assert len(rows)==2
+    assert {row['action_id'] for row in rows}=={'call-outer'}
+    assert all('item' not in row for row in rows)
+    assert all('item_source' not in row for row in rows)
