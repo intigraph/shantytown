@@ -139,6 +139,12 @@ is_excluded() {
   for p in ${EXCLUDE_PREFIXES[@]+"${EXCLUDE_PREFIXES[@]}"}; do
     case "$dir" in "$p"*) return 0 ;; esac
   done
+  # The HOME guard gives tests private homes under this managed fixture pool.
+  # Their pre-commit dependency caches have the same never-pushed contract as
+  # the real HOME cache; ordinary test repos and caches elsewhere stay in scope.
+  case "$dir" in
+    "$HOME"/.cache/aegis-metric-fixtures/*/home-escape-*/.cache/pre-commit/*) return 0 ;;
+  esac
   return 1
 }
 
@@ -500,6 +506,18 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "FAIL the summary does not report exclusions"; fail=1
   fi
 
+  # Only dependency caches inside managed test homes inherit the exclusion.
+  fixture_home="$tmp/exclusion-home"
+  nested="$fixture_home/.cache/aegis-metric-fixtures/suite-test/home-escape-test"
+  if HOME="$fixture_home" is_excluded "$nested/.cache/pre-commit/repo-test" \
+     && ! HOME="$fixture_home" is_excluded "$nested/public-repo" \
+     && ! HOME="$fixture_home" is_excluded "$fixture_home/work/home-escape-test/.cache/pre-commit/public" \
+     && ! HOME="$fixture_home" is_excluded "$nested/.cache/other/public"; then
+    echo "ok   managed test dependency cache excluded; all other repo controls retained"
+  else
+    echo "FAIL managed test dependency cache exclusion escaped its scope"; fail=1
+  fi
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
@@ -641,7 +659,7 @@ echo
 # (aegis-yi7o93). Both numbers were true; neither could state what it did not
 # look at. Print the denominator's provenance next to the denominator.
 echo "  roots swept: ${ROOTS[*]} (any depth)"
-echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]})"
+echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]}; managed test HOME pre-commit caches)"
 echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
 echo "  public armed: $armed   unarmed: $unarmed"
 # A --root run sees only its roots, so its counts are NOT the estate's coverage.
