@@ -15,6 +15,7 @@
 - [New host setup](new-host.md)
 - [Second host setup](second-host.md)
 - [Configuration](configuration.md)
+  - [Configuration source](config-source.md)
 - [The CLI](cli.md)
 - [Routing](routing.md)
 - [Workflows & events](workflows.md)

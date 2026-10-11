@@ -9,7 +9,7 @@
 
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
+[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#-measured-against-gas-town)
 [![43 commands](https://img.shields.io/badge/commands-43-blue)](#-the-whole-surface)
 [![tests](https://img.shields.io/badge/tests-4366%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
