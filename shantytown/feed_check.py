@@ -596,6 +596,25 @@ def haul_governor_verdict(root, card):
             governor.evaluate(persist=False))
 
 
+def worker_governor_admissions(root, reg, workers):
+    """Usage admission per candidate card; no base-lane opinion for the fleet."""
+    from types import SimpleNamespace
+    from .cli import _governor_verdicts_for
+    from . import quiet_time
+    hold = quiet_time.read(Path(root))
+    cards = [card for card in reg.all().exact() if card.name in workers]
+    if hold.held:
+        return {card.name: lambda item, reason=hold.refusal: reason for card in cards}
+    verdicts = _governor_verdicts_for(SimpleNamespace(root=Path(root)), cards)
+    def admission(name, lane, verdict):
+        def check(item):
+            why = verdict.admits(item, name) if verdict is not None else ''
+            return f'{lane} ({name}): {why}' if why else ''
+        return check
+    return {name: admission(name, lane, verdict)
+            for name, (lane, verdict) in verdicts.items()}
+
+
 def admitted_haul(beads, card, verdict, log):
     """Keep refused work queued; both haul triggers use dispatch's own rule."""
     admitted = []
@@ -657,9 +676,27 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # filter — so `held` names exactly the work that WOULD have been dispatched
     # and is not, which is the number the coordinator needs to tell a holding
     # throttle from a broken feeder.
-    ok, held = throttle(dispatchable(set(free), ready_beads), ready_beads,
-                        admits if admits is not None else governor_admits(root))
-    return free, ok, held
+    ready = dispatchable(set(free), ready_beads)
+    if admits is not None:
+        ok, held = throttle(ready, ready_beads, admits)
+        return free, ok, held
+    checks = worker_governor_admissions(root, reg, free)
+    by_id = {bead.get('id'): bead for bead in ready_beads}
+    ok, held, targets = [], [], set()
+    for bid, title in ready:
+        item = _Item(by_id[bid])
+        reasons, eligible = [], []
+        for worker in free:
+            if worker not in checks:
+                raise RuntimeError(f'usage lane unavailable for {worker}')
+            why = checks[worker](item)
+            (reasons if why else eligible).append(why if why else worker)
+        if eligible:
+            ok.append((bid, title))
+            targets.update(eligible)
+        else:
+            held.append((bid, title, '; '.join(reasons)))
+    return sorted(targets) if ok else free, ok, held
 
 
 def _br_tracker(root, reg):

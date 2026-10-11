@@ -19,6 +19,8 @@ one it can act on.
 """
 from __future__ import annotations
 
+import pytest
+
 from shantytown import feed_check as feed_mod
 from shantytown import governor as gov_mod
 from shantytown import stop_policy as sp
@@ -200,3 +202,112 @@ def test_rule_zero_no_longer_recommends_beads_st_go_would_refuse():
     # And every one of them would indeed have been refused at dispatch.
     for bid, _t, _w in held:
         assert admits(feed_mod._Item(next(b for b in beads if b["id"] == bid)))
+
+
+# Mixed-harness advisories must use the dispatch lane, not the base subscription.
+@pytest.fixture
+def mixed_lanes(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from shantytown import cli, config
+    from shantytown.protocols import Agent
+    from shantytown.answer import Answer
+    (tmp_path / 'shantytown.toml').write_text('[governor]\nsource="stub"\nstub_pct=83\n[[governor.tier]]\nat=70\nmin_priority=1\n[governor.by_harness.codex]\nsource="stub"\nstub_pct=10\n')
+    cfg = config.load(tmp_path)
+    governors = {
+        name: gov_mod.Governor(policy, gov_mod.reader_for(policy),
+                              gov_mod.FilesGovernorState(tmp_path, None if name == 'base' else name))
+        for name, policy in [('base', cfg.governor),
+                             ('codex', cfg.governor.by_harness['codex'])]
+    }
+    cards = [Agent(name='claude_worker', harness='claude'),
+             Agent(name='codex_worker', harness='codex')]
+    class Registry:
+        def all(self):
+            return Answer.complete_read(cards, how='paired harness fixture')
+        def get(self, name):
+            return next(card for card in cards if card.name == name)
+    reg = Registry()
+    monkeypatch.setattr(cli, '_governors', lambda a: (cfg, governors))
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(feed_mod, 'queue_state', lambda *a: ([_bead('p2', 2)], []))
+    return tmp_path, reg, cards, SimpleNamespace(root=tmp_path), governors
+
+
+def test_codex_p2_feedable_while_claude_has_floor(mixed_lanes, monkeypatch):
+    root, reg, cards, args, governors = mixed_lanes
+    monkeypatch.setattr(feed_mod, 'free_feedable_workers',
+                        lambda *a, **k: [card.name for card in cards])
+    free, ready, held = feed_mod.gate_inputs(root, reg, None, None, 'coordinator')
+    assert free == ['codex_worker']
+    assert [row[0] for row in ready] == ['p2'] and held == []
+    verdict = sp.decide(_inputs(free_feedable=free, dispatchable=len(ready)))
+    assert verdict.block and verdict.by == sp.BY_RULE_ZERO
+    assert 'codex_worker' in verdict.reason and 'claude_worker' not in verdict.reason
+
+
+def test_claude_only_p2_is_still_held(mixed_lanes, monkeypatch):
+    root, reg, cards, args, governors = mixed_lanes
+    monkeypatch.setattr(feed_mod, 'free_feedable_workers',
+                        lambda *a, **k: ['claude_worker'])
+    free, ready, held = feed_mod.gate_inputs(root, reg, None, None, 'coordinator')
+    assert free == ['claude_worker'] and ready == []
+    assert len(held) == 1 and 'claude (claude_worker)' in held[0][2]
+    verdict = sp.decide(_inputs(free_feedable=free, dispatchable=0,
+                               throttled=1, throttled_why=held[0][2]))
+    assert not verdict.block and 'claude (claude_worker)' in verdict.reason
+
+
+def test_crew_warning_names_only_throttled_lane(mixed_lanes):
+    from shantytown import cli
+    root, reg, cards, args, governors = mixed_lanes
+    note = cli._throttled_idle_note(args, [card.name for card in cards])
+    assert 'THROTTLED-IDLE [claude: claude_worker]' in note
+    assert 'P1' in note and 'codex_worker' not in note
+    assert cli._throttled_idle_note(args, ['codex_worker']) == ''
+
+
+def test_lanes_evaluated_once_and_never_persisted(mixed_lanes, monkeypatch):
+    from shantytown import cli
+    root, reg, cards, args, governors = mixed_lanes
+    calls = []
+    for name, governor in governors.items():
+        old = governor.evaluate
+        def evaluate(*, persist=True, old=old, name=name):
+            calls.append((name, persist))
+            return old(persist=persist)
+        monkeypatch.setattr(governor, 'evaluate', evaluate)
+    result = cli._governor_verdicts_for(args, [cards[0], cards[1], cards[0]])
+    assert calls == [('base', False), ('codex', False)]
+    assert len(result) == 2
+
+
+def test_frozen_codex_lane_does_not_borrow_claude_headroom(mixed_lanes, monkeypatch):
+    root, reg, cards, args, governors = mixed_lanes
+    lost = gov_mod.Verdict(reading=gov_mod.Reading(), signal_lost=True, frozen=True)
+    monkeypatch.setattr(governors['codex'], 'evaluate', lambda **kw: lost)
+    monkeypatch.setattr(feed_mod, 'free_feedable_workers', lambda *a, **k: ['codex_worker'])
+    free, ready, held = feed_mod.gate_inputs(root, reg, None, None)
+    assert free == ['codex_worker'] and not ready and len(held) == 1
+    assert 'codex (codex_worker)' in held[0][2]
+
+
+def test_named_exemption_is_used_in_feed_and_advisory(mixed_lanes, monkeypatch):
+    from dataclasses import replace
+    from shantytown import cli
+    root, reg, cards, args, governors = mixed_lanes
+    governor = governors['base']
+    verdict = replace(governor.evaluate(persist=False), exempt=('claude_worker',))
+    monkeypatch.setattr(governor, 'evaluate', lambda **kw: verdict)
+    monkeypatch.setattr(feed_mod, 'free_feedable_workers', lambda *a, **k: ['claude_worker'])
+    free, ready, held = feed_mod.gate_inputs(root, reg, None, None)
+    assert free == ['claude_worker'] and len(ready) == 1 and held == []
+    assert cli._throttled_idle_note(args, free) == ''
+
+
+def test_indeterminate_fleet_never_claims_a_readable_lane(mixed_lanes):
+    from shantytown import cli
+    from types import SimpleNamespace
+    root, reg, cards, args, governors = mixed_lanes
+    args._account_governor = SimpleNamespace(errors=['offline'], fallback=lambda: 'unknown fleet')
+    with pytest.raises(RuntimeError, match='unknown fleet'):
+        cli._governor_verdicts_for(args, cards)

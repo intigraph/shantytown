@@ -177,6 +177,11 @@ def test_SHANTY_DARK_AGENTS_env_overrides_the_default_denylist(tmp_path, monkeyp
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
     monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: free)
+    # These hook-delivery tests inject opaque registry/tmux objects. Declare
+    # ungoverned candidate lanes too; real mixed-lane admission has its own
+    # paired tests in test_governor_rule_zero.
+    monkeypatch.setattr(feed_check, "worker_governor_admissions",
+                        lambda root, reg, workers: {w: lambda item: '' for w in workers})
     monkeypatch.setattr(feed_check, "bd_cwd", lambda reg: None)
     if bd_raises:
         def boom(cwd=None):
