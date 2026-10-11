@@ -1475,6 +1475,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--no-priority-advice", action="store_true",
+                    help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
                     help="print the full assigned title (default marks clipped titles with …)")
     cr.add_argument("--count", action="store_true",
@@ -6552,6 +6554,12 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    if getattr(a, "no_priority_advice", False) and (
+            not getattr(a, "local", False) or not getattr(a, "json", False)
+            or any(getattr(a, name, False) for name in ("pane_state", "count", "governor"))):
+        print("  refused: --no-priority-advice requires --local --json without "
+              "--pane-state/--count/--governor", file=sys.stderr)
+        return REFUSED
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
@@ -6675,8 +6683,10 @@ def _cmd_crew(a) -> int:
                               host=local or "local", complete=not peer_errors,
                               agents=local_rows + fleet_mod.rows(peer_results),
                               errors=peer_errors,
-                              priority_advisories=_priority_fleet_notes(
-                                  a, _registry(a), panes))))
+                              priority_advisories=(
+                                  ["governor: priority advisory not measured (--no-priority-advice)."]
+                                  if getattr(a, "no_priority_advice", False)
+                                  else _priority_fleet_notes(a, _registry(a), panes)))))
         return CANNOT_TELL if peer_errors else OK
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st agent new`.

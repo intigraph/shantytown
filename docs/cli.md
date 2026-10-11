@@ -2350,6 +2350,11 @@ choice is appropriate. Prefer `--note-file` for longer explanations.
 Both haul advance triggers include the same advisory in the next-work message;
 tend also logs it. The crew and tend reports name waiters when a live agent has
 lower-priority active work. `crew --json` includes `priority_advisories`.
+
+Observation-only consumers may use `crew --local --json --no-priority-advice`
+to omit the optional board-wide priority scan. The field explicitly says the
+advisory was not measured; pane, assignment and unknown-state checks still run.
+The flag is refused with other modes. Default crew and dispatch advice is unchanged.
 Deferred, dependency-blocked, decision, record, and anchor beads are excluded.
 An assigned owner whose liveness cannot be read does not count as down. An
 unreadable queue produces an unavailable advisory, never a zero-waiting claim.
