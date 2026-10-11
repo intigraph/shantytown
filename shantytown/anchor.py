@@ -164,10 +164,10 @@ class Anchoring:
                 L.append("    A tool is callable only if it declares itself read-only;")
                 L.append("    an unannotated tool counts as destructive and is refused.")
             L += [
-                "    Every CLI path works: git, gh, br, st.",
-                "    So: push with git, merge with gh, write beads with br. Do NOT",
-                "    stop and wait for permissions to be granted — there is nobody",
-                "    granting them and you are not blocked.",
+                "    Work items use st work item show/update/comment/close.",
+                "    The tracker backend is deployment configuration, not a command",
+                "    an agent chooses from these instructions. Follow the reviewed",
+                "    merge and deploy paths; preserve refused or indeterminate results.",
                 "",
             ]
 

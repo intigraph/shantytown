@@ -1007,14 +1007,20 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # Establish the authority before touching any realized kit. A graph outage
     # must never silently fall back to a stale, locally consistent template.
     try:
+        from . import config as config_mod, instructions
+        instruction_cfg = config_mod.load(root)
+        instruction_plan = instructions.prepare(ws, card, instruction_cfg)
         manifest = tooling.load(root)
         if require_manifest and (manifest is None or not manifest.mcp):
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "
                 "configure SHANTY_TOOLING_MANIFEST in the deployment first")
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
+        for path, text in instruction_plan.updates.items():
+            updates[path] = (tooling.instruction_text(text, manifest.instructions)
+                             if manifest is not None else text)
         retired = tooling.retired_links(ws, manifest) if manifest is not None else []
-    except tooling.ToolingError as e:
+    except (tooling.ToolingError, config_mod.ConfigError, ValueError) as e:
         raise ProvisionError(str(e)) from None
     template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
     rendered = None
@@ -1066,6 +1072,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # MCP template still has a workspace full of skills the runtime cannot see,
     # and the skill links depend on nothing but the clone itself.
     if manifest is None:
+        for path, text in updates.items():
+            path.write_text(text)
         link_skills(ws)
         link_instructions(ws, card.harness)
 

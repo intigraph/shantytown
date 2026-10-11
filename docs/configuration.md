@@ -105,6 +105,10 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `ST_REPORTS_TO` | its lead, for an agent that wants it without re-reading its card. Omitted when absent. |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st fleet roles sync`, or `st ops subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | required for CLI graph access |
+| `SHANTY_CONFIG_ENTITY` | Opt-in Quipu entity with a single versioned JSON configuration value. Local TOML wins per key; unavailable reads visibly retain source-bound last-good data. See [graph configuration](config-source.md). | unset |
+| `SHANTY_CONFIG_FRAGMENT_CLASS` | Absolute governed fragment class IRI, selected locally. References are read through this class, never treated as untyped embedded policy. | unset |
+| `SHANTY_CONFIG_SERVER` | Explicit server for the configuration source; the graph cannot redirect its own bootstrap reader. | unset |
+| `SHANTY_INSTRUCTIONS_MODE` | `compare` reports byte-level migration differences; `apply` realizes the reviewed fragment body during provision. Local identity files stay untouched. | compare |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |

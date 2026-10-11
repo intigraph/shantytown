@@ -280,6 +280,7 @@ class BeadsTracker:
             d = d[0]
         return WorkItem(
             id=d.get("id", item_id),
+            close_reason=d.get("close_reason"),
             title=d.get("title", ""),
             status=d.get("status", "open"),
             description=(None if "description" not in d else

@@ -53,8 +53,9 @@ from __future__ import annotations
 
 import math
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+import os
 
 from .answer import Answer
 
@@ -267,6 +268,9 @@ class Config:
     model_fallback: str | None = None
     model_fallback_by_role: dict[str, str] = field(default_factory=dict)
     path: Path | None = None
+    source_origins: dict[str, str] = field(default_factory=dict)
+    source_document: dict | None = None
+    source_warning: str | None = None
 
     def catalog(self):
         """The role catalog this file declares, over the built-in three."""
@@ -307,12 +311,27 @@ def load(root) -> Config:
     try:
         raw = path.read_bytes()
     except OSError:
-        return Config()                       # no file: the defaults, and say so via path=None
+        # Preserve the historical no-file behavior for deployments that did not
+        # opt into graph configuration; in particular, do not newly read env.json.
+        if not os.environ.get("SHANTY_CONFIG_ENTITY"):
+            return Config()
+        raw = b""
     try:
         data = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise ConfigError(f"{path}: not valid TOML — {e}") from e
-    return _resolve(data, path)
+    from . import config_source
+    try:
+        projection = config_source.project(
+            Path(root) if root is not None else path.parent, data,
+            lambda value: _resolve(value, path))
+    except config_source.SourceError as exc:
+        raise ConfigError(str(exc)) from None
+    result = _resolve(projection.data, path)
+    return replace(result, source_origins=projection.origins,
+                   source_document=projection.document,
+                   source_warning=projection.warning,
+                   path=None if not raw and projection.document is None else path)
 
 
 def load_or_default(root) -> tuple[Config, str | None]:

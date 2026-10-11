@@ -22,6 +22,8 @@ st crew [--count] [--wide]    who exists, state, role, assigned title, WHO IS FR
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
 st work                       the item and the board
+  item <show|update|comment|close> <id>
+                              exact-ID operations on the configured work tracker
   repool <item>               hand an item back to the pool: status -> open AND
                               assignee cleared, one verified write. Clearing the
                               assignee alone leaves it in_progress — off `bd ready`,
@@ -244,7 +246,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-two. Seven verbs at the top level and thirty-five grouped commands under five groups
+Forty-three. Seven verbs at the top level and thirty-six grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying

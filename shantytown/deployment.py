@@ -54,6 +54,8 @@ def command_environment(root, how=None):
     to run, and the journal refuses that guess (the nipg fragmentation mode).
     """
     from .config import load_or_default
+    from . import config_source
+    source_token = config_source.start_snapshot()
     cfg, _err = load_or_default(root)
     carried = dict(cfg.env)
     if (not os.environ.get("SHANTY_ROOT") and "SHANTY_ROOT" not in carried
@@ -71,6 +73,7 @@ def command_environment(root, how=None):
             else:
                 os.environ[key] = value
         _cli_active.reset(token)
+        config_source.end_snapshot(source_token)
 
 
 # --- WHERE the store is -----------------------------------------------------
