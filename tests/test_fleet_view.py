@@ -94,6 +94,38 @@ def test_count_includes_remote_content(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == '1/2'
 
 
+def test_observation_preserves_roster_and_marks_priority_unmeasured(tmp_path, monkeypatch, capsys):
+    args = setup(tmp_path, monkeypatch)
+    args.local = args.json = True
+    notice = 'governor: 1 higher-priority ready item sits untaken'
+    monkeypatch.setattr(cli, '_priority_fleet_notes', lambda *a: [notice])
+    assert cli._cmd_crew(args) == 0
+    full = json.loads(capsys.readouterr().out)
+    assert full['priority_advisories'] == [notice]
+    args.no_priority_advice = True
+    monkeypatch.setattr(cli, '_priority_fleet_notes', lambda *a: pytest.fail('optional board scan'))
+    monkeypatch.setattr(fleet, 'collect', lambda *a: pytest.fail('peer poll'))
+    assert cli._cmd_crew(args) == 0
+    observation = json.loads(capsys.readouterr().out)
+    assert observation['agents'] == full['agents']
+    assert observation['complete'] is True and observation['errors'] == []
+    assert observation['priority_advisories'] == [
+        'governor: priority advisory not measured (--no-priority-advice).']
+
+
+@pytest.mark.parametrize('change', [dict(local=False), dict(json=False),
+                                  dict(pane_state=True), dict(count=True), dict(governor=True)])
+def test_observation_rejects_other_modes_before_reading(tmp_path, monkeypatch, capsys, change):
+    args = setup(tmp_path, monkeypatch)
+    args.local = args.json = args.no_priority_advice = True
+    for key, value in change.items():
+        setattr(args, key, value)
+    monkeypatch.setattr(cli, '_registry', lambda *a: pytest.fail('registry read'))
+    monkeypatch.setattr(fleet, 'collect', lambda *a: pytest.fail('peer poll'))
+    assert cli._cmd_crew(args) == cli.REFUSED
+    assert 'requires --local --json' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('mode', ['table', 'json', 'count', 'governor'])
 def test_unreachable_remains_visible_and_nonzero(tmp_path, monkeypatch, capsys, mode):
     from shantytown import fleet_governor
