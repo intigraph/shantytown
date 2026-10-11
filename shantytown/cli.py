@@ -10227,16 +10227,16 @@ def _set_aside_tooling_block(path) -> str | None:
 
 
 def _restore_tooling_block(path, instructions) -> None:
-    """Put the projected block back after the pull. Never raises."""
+    """Restore and verify the projected block; report failures to the caller."""
     if instructions is None:
         return
-    try:
-        from .tooling import instruction_text
-        claude = Path(path) / "CLAUDE.md"
-        current = claude.read_text() if claude.is_file() else ""
-        claude.write_text(instruction_text(current, instructions))
-    except Exception:
-        pass
+    from .tooling import instruction_text
+    claude = Path(path) / "CLAUDE.md"
+    current = claude.read_text() if claude.is_file() else ""
+    expected = instruction_text(current, instructions)
+    claude.write_text(expected)
+    if claude.read_text() != expected:
+        raise OSError("generated instructions restoration read-back mismatch")
 
 
 def _refresh_clone(path) -> str | None:
@@ -10288,6 +10288,8 @@ def _refresh_clone(path) -> str | None:
             try:
                 if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
                     mcp.write_bytes(saved)
+                    if mcp.read_bytes() != saved:
+                        raise OSError("tool kit restoration read-back mismatch")
             except Exception as e:
                 cleanup_errors.append(f"tool kit restoration failed: {e}")
             try:

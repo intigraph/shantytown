@@ -210,3 +210,80 @@ def test_cleanup_failure_cannot_report_successful_pull(tmp_path, monkeypatch):
     monkeypatch.setattr(workspace, 'run_with_group_timeout', returned)
     monkeypatch.setattr(cli, '_restore_tooling_block', failed_restore)
     assert 'instruction restoration failed' in _refresh_clone(clone)
+
+
+@pytest.mark.parametrize('pull_timeout', [False, True])
+@pytest.mark.parametrize('failure', ['write', 'read', 'silent-write'])
+def test_actual_block_helper_failure_is_reported(tmp_path, monkeypatch, pull_timeout, failure):
+    from shantytown import workspace
+    _origin, _seed, clone = _origin_and_clone(tmp_path)
+    claude = clone / 'CLAUDE.md'
+    original = claude.read_text()
+    claude.write_text(instruction_text(original, INSTRUCTIONS))
+    kit = clone / '.mcp.json'
+    kit.write_bytes(b'fixture kit')
+    pulling = False
+    write, read = Path.write_text, Path.read_text
+
+    def returned(argv, timeout, **kwargs):
+        nonlocal pulling
+        pulling = True
+        kit.unlink()
+        if pull_timeout:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+
+    def controlled_write(path, text, *args, **kwargs):
+        if path == claude and BEGIN in text:
+            if failure == 'write':
+                raise OSError('fixture block write denied')
+            if failure == 'silent-write':
+                return len(text)
+        return write(path, text, *args, **kwargs)
+
+    def controlled_read(path, *args, **kwargs):
+        if pulling and path == claude and failure == 'read':
+            raise OSError('fixture block read denied')
+        return read(path, *args, **kwargs)
+
+    monkeypatch.setattr(workspace, 'run_with_group_timeout', returned)
+    monkeypatch.setattr(Path, 'write_text', controlled_write)
+    monkeypatch.setattr(Path, 'read_text', controlled_read)
+    err = _refresh_clone(clone)
+    assert err and 'instruction restoration failed' in err
+    if pull_timeout:
+        assert 'timed out' in err
+    assert kit.read_bytes() == b'fixture kit'
+    if failure != 'read':
+        assert BEGIN not in claude.read_text()
+
+
+@pytest.mark.parametrize('pull_timeout', [False, True])
+def test_actual_kit_readback_mismatch_still_restores_block(tmp_path, monkeypatch, pull_timeout):
+    from shantytown import workspace
+    _origin, _seed, clone = _origin_and_clone(tmp_path)
+    claude = clone / 'CLAUDE.md'
+    before = instruction_text(claude.read_text(), INSTRUCTIONS)
+    claude.write_text(before)
+    kit = clone / '.mcp.json'
+    kit.write_bytes(b'fixture kit')
+    write = Path.write_bytes
+
+    def returned(argv, timeout, **kwargs):
+        write(kit, b'incoming fixture template')
+        if pull_timeout:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+
+    def discard_restore(path, data):
+        if path == kit:
+            return len(data)
+        return write(path, data)
+
+    monkeypatch.setattr(workspace, 'run_with_group_timeout', returned)
+    monkeypatch.setattr(Path, 'write_bytes', discard_restore)
+    err = _refresh_clone(clone)
+    assert err and 'tool kit restoration failed' in err and 'read-back mismatch' in err
+    if pull_timeout:
+        assert 'timed out' in err
+    assert claude.read_text() == before
