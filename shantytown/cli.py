@@ -10036,7 +10036,12 @@ def _cmd_push(a) -> int:
               f"first.", file=sys.stderr)
         return REFUSED
 
-    branch = getattr(a, "source_branch", None) or f"wt/{agent}"
+    source_branch = getattr(a, "source_branch", None)
+    if source_branch == "":
+        print("  refused before push: explicit source branch is empty; "
+              "no remote was contacted.", file=sys.stderr)
+        return REFUSED
+    branch = source_branch if source_branch is not None else f"wt/{agent}"
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
@@ -10066,7 +10071,7 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
-    if getattr(a, "source_branch", None) and checked_out is None:
+    if source_branch is not None and checked_out is None:
         print("  refused before push: explicit source branch cannot be verified; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED

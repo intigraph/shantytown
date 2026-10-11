@@ -544,3 +544,22 @@ def test_explicit_source_requires_readable_branch(two_remotes, monkeypatch):
     monkeypatch.setattr(cli, 'push_every_remote', lambda *a: pytest.fail('must not push'))
     assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
                  'wt/ellie']) == REFUSED
+
+
+def test_explicit_empty_source_with_detached_tree_never_publishes_stale_canonical(
+        two_remotes):
+    repo, wt, origin, forge = two_remotes
+    canonical = _sha(wt, 'HEAD')
+    _git(wt, 'checkout', '--detach')
+    _commit(wt, 'held-detached-work')
+    assert _sha(wt, 'HEAD') != canonical
+    assert main(['repo', 'push', str(repo), 'ellie', '--source-branch', '',
+                 '--branch', 'empty-source-probe']) == REFUSED
+    for remote in (origin, forge):
+        result = subprocess.run(['git', '-C', str(remote), 'rev-parse', '--verify',
+                                 'refs/heads/empty-source-probe'],
+                                capture_output=True, text=True)
+        assert result.returncode != 0
+        assert _sha(remote, 'main') == canonical
+    assert _sha(wt, 'wt/ellie') == canonical
+    assert _sha(wt, 'HEAD') != canonical
