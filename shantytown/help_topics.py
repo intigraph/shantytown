@@ -20,7 +20,7 @@ HANDOFF / CYCLE — what to do when st fleet tend says your context is high
 
       st agent cycle --self --checkpoint-file <notes>
 
-    It posts the file as a comment on your checkpoint bead (or your active anchor),
+    It posts the file as a comment on your checkpoint item (or your active anchor),
     uses its first line as the reason, and records the request. `st fleet tend` performs
     the actual stop + relaunch on its next pass. You keep working until it fires,
     and nothing is lost if it never does.
@@ -59,7 +59,7 @@ HANDOFF / CYCLE — what to do when st fleet tend says your context is high
       ~400k  the cycle prompt (idle) — checkpoint, then `st agent cycle --self`.
       ~600k  the haul handoff (mid-haul). Do not start the next item.
       at the harness boundary, on CLAUDE ONLY: a PreCompact hook writes a
-             checkpoint onto your held bead from the transcript tail, and tells
+             checkpoint onto your held item from the transcript tail, and tells
              the summariser to keep landed-vs-local, next step and rollback.
 
     THE HOOK IS A BACKSTOP, NOT YOUR HANDOFF. It scrapes what you last said; it
@@ -67,7 +67,7 @@ HANDOFF / CYCLE — what to do when st fleet tend says your context is high
     next. If you already wrote one, it stays out of the way. Write yours.
 
     ON CODEX there is no such event, which is why `st agent cycle` REFUSES a relaunch
-    when your held bead carries no comment from you since this session launched.
+    when your held item carries no comment from you since this session launched.
     That refusal is not a bug and not a reason to reach for /clear — write the
     comment and it clears. (`--allow-loss` overrides and spends the reasoning.)
 
@@ -83,23 +83,23 @@ HANDOFF / CYCLE — what to do when st fleet tend says your context is high
 _HAUL = """\
 HAUL — the self-feeding queue
 
-  A haul is the set of READY beads already assigned to you. It advances itself:
-  close one and the next is served at your stop. Nobody dispatches per bead.
+  A haul is the set of READY items already assigned to you. It advances itself:
+  close one and the next is served at your stop. Nobody dispatches per item.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
     done            {close}
-    gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
+    gated           st work defer <id> <kind> --reason-file <f>
     not yours       {unassign}
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
-  block and takes the bead OUT of the ready pool until you undo it. Clearing the
-  assignee only RE-POOLS it — a still-ready bead is grabbed by the next idle agent,
+  block and takes the item OUT of the ready pool until you undo it. Clearing the
+  assignee only RE-POOLS it — a still-ready item is grabbed by the next idle agent,
   which is how one agent's "not mine" becomes another's surprise.
 
-  BEING SERVED THE SAME BEAD AGAIN
+  BEING SERVED THE SAME ITEM AGAIN
     That is the re-serve rule, not a verdict on your work. An assigned, open, ready
-    bead comes back until you release it. If you already judged it done, blocked or
-    not yours, act on that judgement rather than re-reading the bead.
+    item comes back until you release it. If you already judged it done, blocked or
+    not yours, act on that judgement rather than re-reading the item.
 
   CONTEXT HIGH MID-HAUL
     See `st ops help handoff`. Your haul resumes itself after a cycle.
@@ -113,19 +113,19 @@ INBOX — a pointer channel, not a document store
   non-ASCII (em dashes, arrows, checkmarks) costs more than it looks.
 
   OVER THE CAP — use the configured tracker, then send the pointer.
-  Choose the matching backend below; never fall back from seeds to br:
+  Deployment configuration selects the tracker; preserve refusals and
+  indeterminate writes rather than switching stores:
 
-    sd comments add <id> --file <notes>   (seeds backend)
-    br comments add <id> --file <notes>   (br backend)
-    st inbox <who> -d 'see <bead-id>: <one-line gist>'
+    st work item comment <id> --file <notes>
+    st inbox <who> -d 'see <id>: <one-line gist>'
 
   WHY IT IS CAPPED
-    A message that must survive a session death belongs in a bead, which is
+    A message that must survive a session death belongs in an item, which is
     readable, greppable and permanent. The inbox exists to say WHERE to look. A
-    long inbox message is a bead nobody can find later.
+    long inbox message is an item nobody can find later.
 
   Relays preserve the source and claim strength. An estimate stays INFERRED;
-  measured values cite the command, time and version in the referenced bead.
+  measured values cite the command, time and version in the referenced item.
   Do not turn "different methods" into "independent evidence" without verifying
   their instruments. A pointer elsewhere in a message does not source every claim.
 

@@ -78,9 +78,9 @@ def test_threshold_reached_NUDGES_THE_AGENT_not_the_coordinator(tmp_path):
     assert mk().sweep(reg.all().exact()) == {"nudged": ["weaver"], "escalated": []}
     (pane, msg), = panes.sent
     assert pane == "p-weaver"                    # the AGENT's pane, not p-admin
-    assert "br close aegis-u140" in msg          # the exit, both ways...
+    assert "st work item close aegis-u140 --reason-file <reason>" in msg          # the exit, both ways...
     assert "st work defer aegis-u140" in msg          # ...close if done, structured DEFER if blocked
-    assert "bead|human|access|external|parked" in msg
+    assert "<kind>" in msg
 
 
 def test_still_frozen_after_the_nudge_ESCALATES_to_the_coordinator(tmp_path):

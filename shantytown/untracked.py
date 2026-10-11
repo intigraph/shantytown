@@ -318,16 +318,16 @@ def _how_to_hook(me: str, card) -> str:
     lead = card.reports_to
     ask = (f"  · or ask {lead} to dispatch you one: `st go <id> {me}`\n"
            if lead else "")
-    return (f"  · `bd create \"<what you are actually doing>\" -p 2` then "
-            f"`br update <id> --assignee={me} --status=in_progress`\n{ask}")
+    return (f'  · `st task "<what you are actually doing>" --assignee {me}` '
+            f'then `st work item update <id> --status in_progress`\n{ask}')
 
 
 def _warn_text(me: str, card, strikes: int, elapsed: float) -> str:
     return (
         f"⚠ UNTRACKED WORK — nothing is on your hook.\n"
         f"You are {me} ({card.role}) and you have made {strikes} acting tool "
-        f"call(s) over {_age(elapsed)} with no open bead assigned to you.\n"
-        f"Work should be bead-tracked: it is how your lead sees what you are "
+        f"call(s) over {_age(elapsed)} with no open item assigned to you.\n"
+        f"Work should be item-tracked: it is how your lead sees what you are "
         f"doing, how it survives your session ending, and how the tier keeps two "
         f"agents off the same problem. Untracked work is invisible work.\n"
         f"Put it on a hook:\n{_how_to_hook(me, card)}"
@@ -342,8 +342,8 @@ def _escalated_text(me: str, to: str, strikes: int, elapsed: float) -> str:
         f"⚠ UNTRACKED WORK — ESCALATED to {to}.\n"
         f"{strikes} acting tool calls over {_age(elapsed)} with an empty hook. "
         f"{to} has been told, and will see it at their next stop.\n"
-        f"Nothing is blocked and nothing is undone — but put your work on a bead "
-        f"now, and if it was already tracked somewhere else, say so on the bead "
+        f"Nothing is blocked and nothing is undone — but put your work on an item "
+        f"now, and if it was already tracked somewhere else, say so on the item "
         f"so the record matches what happened."
     )
 
@@ -354,7 +354,7 @@ def _stranded_text(me: str, strikes: int, elapsed: float, why: str) -> str:
         f"{strikes} acting tool calls over {_age(elapsed)} with an empty hook, "
         f"and your card has no reachable lead or administrator. That is a "
         f"misconfiguration in the tier itself — your stop events have nowhere to "
-        f"go either. Put your work on a bead, then get your card's reports_to "
+        f"go either. Put your work on an item, then get your card's reports_to "
         f"fixed (`st fleet roles show`)."
     )
 

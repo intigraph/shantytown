@@ -27,7 +27,7 @@ def executive(cards: list[Agent]) -> Agent:
 
 def design(tracker, item: str) -> dict:
     if not item or any(c in item for c in ('/', '\\', '\n')) or item.startswith('-'):
-        raise Refused('invalid bead identifier')
+        raise Refused('invalid item identifier')
     from .br import BrTracker
     from .files import FilesTracker
     if isinstance(tracker, BrTracker):
@@ -46,7 +46,7 @@ def design(tracker, item: str) -> dict:
         raise RuntimeError('design response identity mismatch')
     if not any(isinstance(row.get(k), str) and row[k].strip()
                for k in ('description', 'design')):
-        raise Refused(f'{item} has no description or design body; bead the design first')
+        raise Refused(f'{item} has no description or design body; item the design first')
     children = sorted({r['id'] for r in row.get('dependents', [])
                        if r.get('dependency_type') == 'parent-child'})
     if isinstance(tracker, FilesTracker):
@@ -65,9 +65,9 @@ def prepare(body: dict, sender: str, target: Agent, note: str) -> dict:
     # notification. The marker is first so ReceiptInbox can find closed receipts.
     payload = marker + ' ' + attribute(
         f'Design {body["item"]} for scheduling; {len(body["children"])} children. '
-        'Read the sling handoff comment on the bead.', sender)
+        'Read the sling handoff comment on the item.', sender)
     if len(('inbox: ' + payload).encode()) > 500:
-        raise Refused('sender or bead identifier exceeds the durable inbox byte budget')
+        raise Refused('sender or item identifier exceeds the durable inbox byte budget')
     return dict(event, marker=marker, payload=payload)
 
 

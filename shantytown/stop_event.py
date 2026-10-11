@@ -502,7 +502,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd {' '.join(args)} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"sd {' '.join(args)} failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -865,9 +865,9 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         latest[e.frm] = e
     lines = [f"⚠ {len(latest)} agent(s) WORKING UNTRACKED — they have NOT stopped. "
-             f"Each has been acting with an EMPTY HOOK (no open bead assigned) and "
+             f"Each has been acting with an EMPTY HOOK (no open item assigned) and "
              f"was warned in its own context first. Untracked work is invisible to "
-             f"you and does not survive their session: give each one a bead "
+             f"you and does not survive their session: give each one an item "
              f"(`st go <id> <agent>`), or confirm the work is legitimately "
              f"untracked and say so:"]
     for name in sorted(latest):
@@ -948,7 +948,7 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         if verdicts.get(name) == triage.WAITING:
             tag += (" — BLOCKED ON A QUESTION in its pane: it is stopped until "
                     "someone answers. Answer it, or tell it to put the decision on "
-                    "the bead and carry on")
+                    "the item and carry on")
         age = _age(e.ts, now)
         current = (current_items or {}).get(name)
         lines.append(f"  - {name} stopped {age} — now: "

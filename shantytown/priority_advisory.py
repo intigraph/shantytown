@@ -51,7 +51,7 @@ def advice(ready, selected, down=()):
     if not rows:
         return ''
     names = ', '.join(f"{r['id']} (P{priority(r)})" for r in rows[:3])
-    return (f"governor: {len(rows)} higher-priority ready bead(s) sit untaken "
+    return (f"governor: {len(rows)} higher-priority ready item(s) sit untaken "
             f"while {selected.get('id', '?')} is P{p}: {names}. "
             "Advisory only; record the reason when choosing lower-priority work.")
 

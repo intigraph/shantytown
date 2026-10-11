@@ -153,13 +153,13 @@ def plan(policy: Policy, state: dict, ready: list[dict], candidates: list[dict],
     if mode == "consolidate":
         title = f"DREAM consolidate: reconcile {domain} reality against Quipu"
         labels = f"dream,dream-discrepancy,{CYCLE_LABEL}"
-        outcome = ("Document each measured divergence as a dream-discrepancy bead "
+        outcome = ("Document each measured divergence as a dream-discrepancy item "
                    "and/or Quipu episode. Correct stale truth in Quipu only; do not "
                    "mutate infrastructure, code, or deployed configuration.")
     else:
         title = f"DREAM propose: improve {domain}"
         labels = f"dream,dream-proposal,{CYCLE_LABEL}"
-        outcome = ("Create one or more reviewable dream-proposal beads covering "
+        outcome = ("Create one or more reviewable dream-proposal items covering "
                    "functional and/or non-functional improvements. Do not implement "
                    "or auto-apply any proposal in this cycle.")
     description = (
