@@ -826,6 +826,28 @@ def _governor_for(cfg, governors, card, root):
     return harness, governors.get(harness, governors.get("base")), None
 
 
+def _governor_verdicts_for(a, cards):
+    """Read each card's usage lane once, using dispatch's account resolver."""
+    cfg, governors = _governors(a)
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is not None and fleet.errors:
+        raise RuntimeError(fleet.fallback())
+    if not governors:
+        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+                for card in cards}
+    from . import account_state
+    verdicts, out = {}, {}
+    for card in cards:
+        if cfg.accounts:
+            card = account_state.process_card(a.root, card, cfg, _panes(a))
+        lane, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        if lane not in verdicts:
+            verdicts[lane] = (unconfigured if unconfigured is not None else
+                              governor.evaluate(persist=False))
+        out[card.name] = lane, verdicts[lane]
+    return out
+
+
 def _dispatch_gate(a):
     """The `st go` half of the governor: `item -> "" | refusal`.
 
@@ -6916,7 +6938,7 @@ def _cmd_crew(a) -> int:
     # Evaluated ONLY when somebody is free: when the fleet is saturated the
     # answer changes nothing, and `st crew` must not grow a metric read on a path
     # where it cannot matter.
-    if free and (note := _throttled_idle_note(a)):
+    if free and (note := _throttled_idle_note(a, free)):
         print(note)
     # Unconditional, unlike the throttle note above: this one matters MOST when
     # the free list is empty, because an agent alive under another orchestrator is
@@ -7524,7 +7546,7 @@ def _alive_elsewhere_note(agents, panes) -> str:
         return ""
 
 
-def _throttled_idle_note(a) -> str:
+def _throttled_idle_note(a, free) -> str:
     """The line that tells a free agent apart from a REACHABLE one, or "".
 
     FAILS TO SILENCE, always. No governor, an unreadable one, a signal we cannot
@@ -7534,22 +7556,24 @@ def _throttled_idle_note(a) -> str:
     for when things are already going wrong.
     """
     try:
-        gov = _governor(a)
-        if gov is None:
-            return ""
-        verdict = gov.evaluate(persist=False)
-        if verdict.signal_lost or verdict.tier is None:
-            return ""
-        if verdict.drains:
-            return ("    ⚠ THROTTLED-IDLE, not available: the usage governor is "
-                    "draining the fleet — nothing dispatches at any priority.")
-        if verdict.floor is None:
-            return ""
-        return (f"    ⚠ THROTTLED-IDLE, not fully available: the governor's "
-                f"{verdict.tier.at}% tier is engaged — {verdict.effect()}. Work "
-                f"below the floor cannot be dispatched to them; they are idle "
-                f"because the throttle is holding, not because nobody fed "
-                f"them.{_until(verdict)}")
+        cards = [card for card in _registry(a).all().exact() if card.name in free]
+        by_lane = {}
+        for name, (lane, verdict) in _governor_verdicts_for(a, cards).items():
+            if verdict is None or verdict.signal_lost or verdict.tier is None:
+                continue
+            if not verdict.drains and verdict.floor is None:
+                continue
+            from types import SimpleNamespace
+            if verdict.waives(SimpleNamespace(priority=None), name):
+                continue
+            names, _ = by_lane.setdefault(lane, ([], verdict))
+            names.append(name)
+        notes = []
+        for lane, (names, verdict) in sorted(by_lane.items()):
+            who = ', '.join(sorted(names))
+            notes.append(f"    ⚠ THROTTLED-IDLE [{lane}: {who}]: "
+                         f"{verdict.effect()}.{_until(verdict)}")
+        return '\n'.join(notes)
     except Exception:      # noqa: BLE001 — the roster never fails on capacity
         return ""
 
