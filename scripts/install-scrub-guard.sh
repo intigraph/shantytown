@@ -122,7 +122,11 @@ PRUNE_NAMES=(node_modules target .venv venv __pycache__ .cargo .rustup .terrafor
 # The bobbin calibration work dir holds a transient SNAPSHOT of a public repo that
 # is never pushed from; it appears and disappears every calibration cycle, so
 # counting it made the coverage total drop on every cleanup and page as shrinking.
-EXCLUDE_PREFIXES=("$HOME/.local/share/nvim/lazy/" "$HOME/.cache/pre-commit/" "$HOME/.local/state/bobbin-calibration/")
+# Named, disposable test roots are also counted as exclusions. Do not exclude
+# all pytest-looking paths or all of .cache: adjacent development repos still
+# need their hooks and must remain in the fleet denominator.
+EXCLUDE_PREFIXES=("$HOME/.local/share/nvim/lazy/" "$HOME/.cache/pre-commit/" "$HOME/.local/state/bobbin-calibration/"
+  "$HOME/z4/pytest-of-$(id -un)/" "$HOME/.cache/aegis-metric-fixtures/")
 
 find_checkouts() {
   # Every .git under $1, at ANY depth, dir or file (a linked worktree's .git is a
@@ -487,6 +491,27 @@ if [ "${1:-}" = "--selftest" ]; then
   fi
 
   # ── NAMED EXCLUSIONS ARE COUNTED, NEVER SILENTLY DROPPED ──────────────────
+  # Real discovery/arming control: disposable fixtures must not inflate the
+  # fleet, but a normal repo adjacent to them must still be guarded.
+  fixture_home="$tmp/fixture-home"
+  for rel in "z4/pytest-of-$(id -un)/pytest-1/fixture" ".cache/aegis-metric-fixtures/suite/fixture" "z4/production"; do
+    mkdir -p "$fixture_home/$rel"
+    git init -q "$fixture_home/$rel"
+    git -C "$fixture_home/$rel" remote add origin https://example.com/fixture.git
+  done
+  fixture_metrics="$tmp/fixture-metrics.prom"
+  if HOME="$fixture_home" SCRUB_GUARD_SOURCE_DIR="$tmp/fixture-neutral" SCRUB_GUARD_TEXTFILE="$fixture_metrics" \
+      "$SELF/install-scrub-guard.sh" --root "$fixture_home" > "$tmp/fixture-sweep.log" 2>&1 \
+      && grep -q '^scrub_guard_repos_total 1$' "$fixture_metrics" \
+      && grep -q '^scrub_guard_armed_total 1$' "$fixture_metrics" \
+      && grep -q '^scrub_guard_excluded_total 2$' "$fixture_metrics" \
+      && [ -L "$fixture_home/z4/production/.git/hooks/pre-push" ] \
+      && [ ! -e "$fixture_home/z4/pytest-of-$(id -un)/pytest-1/fixture/.git/hooks/pre-push" ]; then
+    echo "ok   named temporary fixtures excluded and counted; adjacent production repo armed"
+  else
+    echo "FAIL fixture exclusion or adjacent production discovery"; fail=1
+  fi
+
   # An uncounted skip is the defect this whole file is about, one layer down.
   EXCLUDE_PREFIXES=("$tmp/vendorland/")
   if is_excluded "$tmp/vendorland/plugin" && ! is_excluded "$tmp/outside/proj"; then
