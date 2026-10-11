@@ -779,3 +779,21 @@ def test_stop_haul_passes_resolved_examples_to_both_messages(monkeypatch, capsys
                     in_progress=[item] if active else [])
     assert 'sd --quipu https://board.example --graph https://seeds.example/project/sample show sample-1' in block['reason']
     assert 'br ' not in block['reason']
+
+
+def test_pending_self_cycle_at_ceiling_never_reclaims_three_queued_items(
+        tmp_path, monkeypatch, capsys):
+    from shantytown.cycle import Requests
+    from shantytown import session_budget
+    queued = [{'id': f'work-{i}', 'assignee': 'billy'} for i in range(3)]
+    claims = []
+    _bd(monkeypatch, ready=queued, claims=claims)
+    Requests(tmp_path).request('billy', 'one durable handoff', 'handoff')
+    # A pending request must hold both new work and continuation before budget admission.
+    monkeypatch.setattr(session_budget, 'at_ceiling', lambda *a: 'items')
+    assert stop_event._haul(_Reg([WORKER]), _Panes({'p-b': '❯ '}),
+                            'billy', tmp_path) == 0
+    assert claims == []
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'cycle pending' in captured.err

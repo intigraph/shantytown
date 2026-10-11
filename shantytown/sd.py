@@ -287,7 +287,10 @@ class SdTracker(BrTracker):
 
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         self.prove_store()
-        cmd = [self._bin, *self._location(), *self._translate(args)]
+        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
+        identity = ["--actor", actor] if actor and not explicit_actor else []
+        cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout)
 
