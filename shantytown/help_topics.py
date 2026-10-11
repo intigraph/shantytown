@@ -112,9 +112,11 @@ INBOX — a pointer channel, not a document store
   your text, after the '[from <you>] ' signature st adds). The cap is on BYTES, so
   non-ASCII (em dashes, arrows, checkmarks) costs more than it looks.
 
-  OVER THE CAP — put the substance, qualifiers and evidence in a bead; send the pointer:
+  OVER THE CAP — use the configured tracker, then send the pointer.
+  Choose the matching backend below; never fall back from seeds to br:
 
-    br comments add <id> --file <notes>
+    sd comments add <id> --file <notes>   (seeds backend)
+    br comments add <id> --file <notes>   (br backend)
     st inbox <who> -d 'see <bead-id>: <one-line gist>'
 
   WHY IT IS CAPPED
