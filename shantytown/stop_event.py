@@ -626,7 +626,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # ADMINISTRATORS ARE STILL EXCLUDED, deliberately: the coordinator's
         # assigned beads are not a haul, and feeding them would put the person
         # who dispatches work head-down in a bead.
-        if card.role not in ("worker", "lead"):
+        if card.role not in ("worker", "lead", "keeper"):
             return 0
         from .feed_check import bd_cwd, haul_hold_reason
         if reason := haul_hold_reason(root, me):

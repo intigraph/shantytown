@@ -1,0 +1,3 @@
+BASE: UNVERIFIED; input remains stranded; queued=0; body writes=0
+HEAD: confirmed queue; queued=1; body writes=0
+Foreign text, changed runtime, empty composer, duplicate pointers and store errors: covered by independent regression controls.

@@ -207,3 +207,24 @@ projection and an explicit `false` disables failover. Role harness pins and brow
 capabilities remain admission constraints. Live acceptance requires operator
 provisioned accounts and an authorized observed launch; fixture tests do not
 establish that a real subscription or its native refresh works.
+
+### Context reminders
+
+`[session_budget] context_threshold_pct` configures the advisory context reminder;
+`context_window` supplies capacity when the transcript does not report it. Role
+and agent overrides use the existing `context_by_role` and `context_by_agent`
+tables. A threshold crossing produces one visible hook message and one model
+instruction to checkpoint and request `st agent cycle --self`. Remaining above
+the threshold does not repeatedly wake the agent; dropping below it or beginning
+a new session re-arms the reminder. It never schedules a cycle automatically.
+
+SessionStart binds the hook's exact session and transcript before the anchor is
+rendered. Until the new transcript contains usage, occupancy is UNKNOWN, rather
+than the previous session's percentage. After a cycle, a failed/empty plate read
+submits a guarded anchor/resume prompt; it does not assign the checkpoint pointer
+as work or modify an unreadable tracker.
+
+A governor refusal is terminal for post-cycle redispatch. The fallback itself
+requires the existing governor to admit a lowest-priority status prompt; it
+cannot borrow a checkpoint's priority when the current plate is unreadable.
+The recovery prompt asks for verification before work, and creates no work item.

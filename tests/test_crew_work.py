@@ -494,3 +494,14 @@ def test_crew_displays_after_turn_hold_actor_and_time(tmp_path, monkeypatch, cap
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "held (by lead, since " in out
+
+
+def test_typed_codex_input_is_visible_as_stranded_not_free(tmp_path, monkeypatch, capsys):
+    from test_codex_submission import OWNED
+    root = _roster(tmp_path, {'ellie': 'p-ellie'})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes({'p-ellie': OWNED}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert 'stranded input' in out
+    assert '1 with UNSUBMITTED text' in out
+    assert 'free: ellie' not in out

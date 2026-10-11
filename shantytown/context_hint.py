@@ -62,6 +62,26 @@ def _category(reading, limits):
     return "high" if reading.over(limits.threshold_pct) else "low"
 
 
+def session_start(root, card, payload):
+    """Bind the hook's exact new transcript before rendering the anchor.
+
+    A clear can precede the next usage event. Missing fresh usage is UNKNOWN;
+    never retain the previous transcript's occupancy or invent a zero.
+    """
+    limits, error = policy(root, card)
+    if limits is None or not isinstance(payload, dict):
+        return
+    if not payload.get("session_id") or not payload.get("transcript_path"):
+        return
+    reading = _reading(payload, limits, error)
+    path = _path(root, card)
+    old = _load(path)
+    identity = {k: payload.get(k) for k in ("session_id", "transcript_path")}
+    _save(path, dict(payload=identity, at=time.time(), origin="SessionStart",
+                     reported=old.get("reported") if old.get("payload") == identity else None,
+                     state=reading.state, detail=reading.label(), ceiling=None))
+
+
 def emit(root, card, payload=None) -> bool:
     """Emit at most one JSON feedback object; subsequent stops remain allowed.
 
@@ -112,7 +132,8 @@ def emit(root, card, payload=None) -> bool:
                        "under-threshold reading. Check the transcript and "
                        "[session_budget] context_window configuration. "
                        "No cycle has been scheduled; work may continue.")
-        print(json.dumps({"decision": "block", "reason": message}))
+        print(json.dumps({"decision": "block", "reason": message,
+                          "systemMessage": message}))
         return True
     except Exception as exc:  # a reader failure must not prevent an agent stopping
         print(f"context UNKNOWN: hint reader failed ({type(exc).__name__})", file=sys.stderr)
@@ -130,7 +151,8 @@ def crew_label(root, card) -> str | None:
     if not isinstance(payload, dict) or not isinstance(observed, (int, float)):
         return "context UNKNOWN — invalid or missing Stop observation"
     current = sb.current_session(root, card.name)
-    if (not current or current != payload.get("session_id")
+    if ((data.get("origin") != "SessionStart"
+         and (not current or current != payload.get("session_id")))
             or time.time() - observed > sb.STALE_AFTER_S):
         return "context UNKNOWN — no recent Stop observation for the current session"
     reading = _reading(payload, limits, error)

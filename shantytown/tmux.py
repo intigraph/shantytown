@@ -68,6 +68,8 @@ _SEND_CHUNK_GAP_S = 0.05
 _CODEX_SETTLE_S = 0.5
 _CODEX_POLL_S = 0.15
 _CODEX_POLLS = 8
+_CODEX_ATTEMPTS = 8
+_CODEX_DEADLINE_S = 25
 
 
 def _codex_owned_input(screen: str, text: str) -> bool:
@@ -86,11 +88,15 @@ def _codex_owned_input(screen: str, text: str) -> bool:
         return False
     start = prompts[-1]
     rows = [lines[start].lstrip()[1:]]
-    for line in lines[start + 1:]:
-        if re.match(r"\s*\S+\s+\S+\s+[·.]\s+(?:~|/)", line) or (
-                "tab to queue message" in line and "context left" in line):
-            break
-        rows.append(line)
+    tail = lines[start + 1:]
+    footers = [i for i, line in enumerate(tail) if
+               re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+[·.]\s+(?:~|/)", line)
+               or ("tab to queue message" in line and "context left" in line)]
+    if not footers:
+        return False
+    # Use the final footer. Footer-looking words inside an input body must
+    # not hide an appended foreign suffix and authorize its submission.
+    rows.extend(tail[:footers[-1]])
     return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
 
 
@@ -607,6 +613,16 @@ class Tmux:
         if codex:
             self._verify_codex_submission(pane, text, before)
 
+    def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
+        """Recover an existing body without ever appending or replacing input."""
+        if not self._confirmed_codex(pane, self.foreground(pane)):
+            raise PaneSubmissionUnverified('UNVERIFIED: runtime is not Codex')
+        before = self.capture(pane, attrs=True, timeout=2)
+        if not _codex_owned_input(before, text):
+            raise PaneSubmissionUnverified('UNVERIFIED: composer ownership changed')
+        _journal_send(pane, '<recover-pending:' + text + '>')
+        self._verify_codex_submission(pane, text, before, deadline=deadline)
+
     def _confirmed_codex(self, pane: str, foreground: str | None) -> bool:
         if foreground == "codex":
             return True
@@ -618,12 +634,21 @@ class Tmux:
                 return False
         return False
 
-    def _verify_codex_submission(self, pane: str, text: str, before: str) -> None:
+    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
         was_busy = triage.mid_flight(before)
-        for attempt in range(2):
+        local_deadline = time.monotonic() + _CODEX_DEADLINE_S
+        deadline = local_deadline if deadline is None else min(deadline, local_deadline)
+        def observed(screen):
+            return (triage.input_state(screen) in
+                    (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
+                    ((_codex_queued(screen, text) and not _codex_queued(before, text)) or
+                     (not was_busy and triage.mid_flight(screen))))
+        for attempt in range(_CODEX_ATTEMPTS):
             screen = ""
             for _ in range(_CODEX_POLLS):
+                if time.monotonic() >= deadline:
+                    break
                 time.sleep(_CODEX_POLL_S)
                 try:
                     screen = self.capture(pane, attrs=True, timeout=2)
@@ -632,35 +657,33 @@ class Tmux:
                         f"UNVERIFIED: cannot observe Codex submission in {pane}") from exc
                 # Existing activity alone proves nothing: the new body can
                 # remain typed while an older turn is still working.
-                if (triage.input_state(screen) in
-                        (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
-                        ((_codex_queued(screen, text) and not _codex_queued(before, text)) or
-                         (not was_busy and triage.mid_flight(screen)))):
+                if observed(screen):
                     return
-            if attempt == 0 and _codex_owned_input(screen, text):
-                # An Enter sent during an older turn can be absorbed too. Wait
-                # briefly for idle, and re-check ownership on every frame.
-                for _ in range(_CODEX_POLLS):
-                    if not triage.mid_flight(screen):
-                        break
-                    time.sleep(_CODEX_POLL_S)
-                    try:
-                        screen = self.capture(pane, attrs=True, timeout=2)
-                    except (OSError, subprocess.SubprocessError):
-                        screen = ""
-                        break
-                if not _codex_owned_input(screen, text) or triage.mid_flight(screen):
+            if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
+                    and _codex_owned_input(screen, text)):
+                # Submit only the exact body we own. Busy Codex queues with
+                # Tab; waiting for the old turn to end can strand this body.
+                try:
+                    screen = self.capture(pane, attrs=True, timeout=2)
+                except (OSError, subprocess.SubprocessError):
+                    screen = ""
+                if observed(screen):
+                    return
+                if not _codex_owned_input(screen, text):
                     break
                 # Initial identification cannot authorize a later keystroke:
                 # the runtime may have exited or become unreadable meanwhile.
                 if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
-                subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
-                was_busy = False  # retry was admitted only after the older turn ended
+                busy = triage.mid_flight(screen)
+                subprocess.run(self._cmd("send-keys", "-t", pane,
+                                         "Tab" if busy else "Enter"), check=True)
+                was_busy = busy
             else:
                 break
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
+            f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
             "body was not resent, do not blindly resend")
 
     def control(self, pane: str, key: str) -> None:
