@@ -71,7 +71,7 @@ def _no_ambient_operator_env(monkeypatch):
     """
     import os
     for name in tuple(os.environ):
-        if name.startswith(("SHANTY_", "ST_")) or name == "QUIPU_SERVER":
+        if name.startswith(("SHANTY_", "ST_")) or name in ("QUIPU_SERVER", "QUIPU_HOOK_GROUP"):
             monkeypatch.delenv(name, raising=False)
 
 

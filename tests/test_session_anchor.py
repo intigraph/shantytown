@@ -113,11 +113,37 @@ def test_it_injects_the_anchor_render_and_role_startup(monkeypatch, capsys):
     _env(monkeypatch)
     monkeypatch.setattr(sa, "_run_anchor", lambda root, agent: (0, PLATE))
     assert sa.main([]) == 0
-    out = capsys.readouterr().out
+    payload = json.loads(capsys.readouterr().out)
+    out = payload["systemMessage"]
+    assert payload["hookSpecificOutput"] == {
+        "hookEventName": "SessionStart", "additionalContext": out,
+    }
     assert out.startswith(sa.BANNER)
     assert "x-1  do the thing" in out and "STARTUP" in out
     assert "sweep YOUR OWN plate" in out          # lead line
     assert sa._EMPTY not in out                    # plate is not empty
+
+
+def test_launch_render_remains_plain_text(monkeypatch):
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
+    assert sa.render("/r", "ana").startswith(sa.BANNER)
+
+
+def test_hook_binds_exact_session_before_anchor_render(tmp_path, monkeypatch):
+    import io
+    from shantytown import context_hint
+    _env(monkeypatch, root=str(tmp_path))
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "crew/ana.json").write_text('{"role":"lead"}')
+    payload = {"session_id": "fresh", "transcript_path": "/private/fresh.jsonl"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    calls = []
+    monkeypatch.setattr(context_hint, "session_start", lambda r, c, p: calls.append(p))
+    def render(*args):
+        assert calls == [payload]
+        return (0, PLATE)
+    monkeypatch.setattr(sa, "_run_anchor", render)
+    assert sa.main([]) == 0
 
 
 def test_an_empty_plate_says_where_to_look(monkeypatch, capsys):
