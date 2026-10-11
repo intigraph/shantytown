@@ -557,6 +557,13 @@ while [ $# -gt 0 ]; do
 done
 [ ${#ROOTS[@]} -eq 0 ] && ROOTS=("${DEFAULT_ROOTS[@]}")
 
+# Managed test repositories appear and disappear during suites. Count their
+# exclusion in the fleet census, while explicit --root fixture sweeps retain
+# discovery and arming coverage. Adjacent cache names remain real candidates.
+if [ "$SCOPED" -eq 0 ]; then
+  EXCLUDE_PREFIXES+=("$HOME/.cache/aegis-metric-fixtures/")
+fi
+
 # A root that does not exist is skipped quietly (not every host has ~/workspace),
 # but a root that exists and holds NO repo at all is reported: silence there is
 # indistinguishable from the blindness this change exists to remove.

@@ -148,3 +148,6 @@ jobs:
       # the reason that comment already gives.
       - name: Scrub-guard installer selftest
         run: bash scripts/install-scrub-guard.sh --selftest
+
+      - name: Scrub-guard fixture census controls
+        run: python3 scripts/tests/test-scrub-guard-fixture-census.py
