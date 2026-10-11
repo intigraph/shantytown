@@ -223,3 +223,8 @@ rendered. Until the new transcript contains usage, occupancy is UNKNOWN, rather
 than the previous session's percentage. After a cycle, a failed/empty plate read
 submits a guarded anchor/resume prompt; it does not assign the checkpoint pointer
 as work or modify an unreadable tracker.
+
+A governor refusal is terminal for post-cycle redispatch. The fallback itself
+requires the existing governor to admit a lowest-priority status prompt; it
+cannot borrow a checkpoint's priority when the current plate is unreadable.
+The recovery prompt asks for verification before work, and creates no work item.

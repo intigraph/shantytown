@@ -3,11 +3,41 @@ from __future__ import annotations
 
 import json
 from argparse import Namespace
+import pytest
 
 import shantytown.cli as cli
 from shantytown.dispatch import Dispatcher
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.tmux import NullPanes
+
+
+@pytest.mark.parametrize("refused,plate_failed,expected", [
+    (True, False, 0), (False, False, 1), (False, True, 1), (True, True, 0),
+])
+def test_cycle_keeps_real_dispatch_admission(tmp_path, monkeypatch, refused, plate_failed, expected):
+    root = tmp_path
+    (root / "crew").mkdir()
+    (root / "items").mkdir()
+    (root / "crew/worker.json").write_text(json.dumps({"role": "worker", "pane": "private-worker"}))
+    (root / "items/x-p3.json").write_text(json.dumps({
+        "title": "private P3", "status": "open", "assignee": "worker", "priority": 3,
+    }))
+    registry, tracker = FilesRegistry(root / "crew"), FilesTracker(root / "items")
+    panes = NullPanes(screen="❯ ")
+    gate = lambda item, agent: "private P0-only control refuses this work" if refused else ""
+    dispatcher = Dispatcher(registry, tracker, panes, governor=gate)
+    monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
+    monkeypatch.setattr(cli, "_wire", lambda a: dispatcher)
+    monkeypatch.setattr(cli, "_dispatch_gate", lambda a: gate)
+    if plate_failed:
+        def unavailable(*a, **kw):
+            raise RuntimeError("HTTP 408")
+        monkeypatch.setattr(cli, "_tracker_plate", unavailable)
+    cli._redispatch_after_cycle(Namespace(root=root), "worker", "",
+                                registry.get("worker"), panes)
+    assert len(panes.sent) == expected
+    if refused:
+        assert tracker.get("x-p3").status == "open"
 
 
 def test_empty_or_failed_plate_submits_resume_prompt(tmp_path, monkeypatch, capsys):

@@ -24,3 +24,8 @@ python3 docs/demos/cycle-resume/demo.py c711a07
 ```
 
 These files are retained with the change; no external hosting or upload is required.
+
+Admission controls in `tests/test_cycle_redispatch.py` use the real dispatcher:
+refused work sends zero prompts, admitted work sends one, an allowed HTTP408
+recovery sends one, and an HTTP408 under a governor hold sends zero. A governor
+refusal is preserved even though the clear itself completed.

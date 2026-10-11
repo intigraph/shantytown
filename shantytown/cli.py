@@ -9762,8 +9762,10 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
         # Both exceptions happen AFTER sending. Never append a second kickoff
         # to a turn that may already be running just because the store failed.
         print(f"  note: cycle dispatch already attempted: {e}", file=sys.stderr)
-    except (TriageRefused, AlreadyAssigned, Blocked, Closed, HasOpenBlocker,
-            GovernorRefused) as e:
+    except GovernorRefused as e:
+        print(f"  note: cycle redispatch REFUSED by governor for {agent_name}: {e}; "
+              "no resume prompt submitted.", file=sys.stderr)
+    except (TriageRefused, AlreadyAssigned, Blocked, Closed, HasOpenBlocker) as e:
         print(f"  note: {agent_name} is UP but {item.id} was not re-dispatched "
               f"({e}). Trying an anchor/resume kickoff.", file=sys.stderr)
         _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
@@ -9779,13 +9781,22 @@ def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
     """Start a fresh turn without guessing or mutating an unreadable plate."""
     import uuid
     marker = f"[resume-id:{uuid.uuid4().hex}]"
-    text = (f"[st cycle resume] {marker} Run `st anchor {agent_name}`, read your resume "
-            "brief, and continue your assigned work. A failed plate read is "
-            "UNKNOWN, not an empty plate.")
+    text = (f"[st cycle resume] {marker} Run `st anchor {agent_name}` and read your resume "
+            "brief. Confirm current status, assignment, and governor admission "
+            "before resuming work. A failed plate read is UNKNOWN, not an empty plate.")
     if checkpoint_bead:
         text += (f" Checkpoint pointer: {checkpoint_bead}; confirm its current "
                  "status and assignment before resuming it.")
     try:
+        # The fallback starts a new turn too. Admit it conservatively as a
+        # lowest-priority status prompt, never borrowing a checkpoint's priority
+        # when its current work/assignment could not be established.
+        from .protocols import WorkItem
+        gate = _dispatch_gate(a)
+        if gate is not None:
+            refusal = gate(WorkItem("post-cycle-status-prompt", priority=4), agent_name)
+            if refusal:
+                raise GovernorRefused(refusal)
         card = card or _registry(a).get(agent_name)
         pane = card.pane or _session_for(card)
         panes = panes or _panes(a)
