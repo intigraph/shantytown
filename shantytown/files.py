@@ -315,6 +315,7 @@ class FilesTracker:
         from .beads import _priority          # ONE reading of "priority", shared
         return WorkItem(
             id=item_id,
+            close_reason=d.get("close_reason"),
             title=d.get("title", ""),
             status=d.get("status", "open"),
             description=(None if "description" not in d else

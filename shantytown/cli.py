@@ -1,8 +1,8 @@
-"""st — the CLI. Seven verbs, five groups, thirty-five grouped commands: forty-two, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-six grouped commands: forty-three, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
-    work  → repool · defer · cost [--sync] · dream [--run] · triage
+    work  → item · repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
@@ -309,6 +309,12 @@ def _backend(a, default="files") -> str:
     explicit = getattr(a, "backend", None)
     if explicit:
         return explicit
+    from .config import load_or_default
+    cfg, _error = load_or_default(getattr(a, "root", None))
+    if (cfg.source_warning and cfg.source_document is None
+            and not cfg.env.get("SHANTY_BACKEND")):
+        raise SystemExit("configuration source has no validated snapshot or explicit local "
+                         "tracker; refusing a guessed backend")
     declared = _deployment_default(a, "SHANTY_BACKEND")
     if declared:
         if declared not in ("files", "beads", "br", "seeds", "forgejo"):
@@ -1190,7 +1196,7 @@ def _default_root() -> Path:
 from .surface import SURFACE, GROUP_OF  # noqa: E402
 
 _GROUP_HELP = {
-    "work": "the item and the board: repool, defer, cost, dream, triage, jobs",
+    "work": "the item and the board: item, repool, defer, cost, dream, triage, jobs",
     "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
     "repo": "a shared project repo: worktree, push, context, pr",
@@ -1393,6 +1399,17 @@ def build_parser() -> argparse.ArgumentParser:
     # The whole hand-back, in one verified write (aegis-ap4gm fix #1): the
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
+    wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi.add_argument("item")
+    wi.add_argument("--status", choices=("open", "in_progress"))
+    wi.add_argument("--assignee")
+    wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--description-file", type=Path)
+    wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--file", type=Path)
+    wi.add_argument("--reason-file", type=Path)
+    wi.add_argument("--dry-run", "-n", action="store_true")
     rp = leaf(
         "repool",
         help="hand an item back to the pool: status -> open AND assignee "
@@ -1764,6 +1781,8 @@ def build_parser() -> argparse.ArgumentParser:
     pv = leaf("provision", help="register canonical tooling for local crew without launching agents")
     pv.add_argument("agent", nargs="?", help="one local crew card; all local cards if omitted")
     pv.add_argument("--json", action="store_true", help="versioned registration receipt; no credentials")
+    pv.add_argument("--instruction-report", action="store_true",
+                    help="compare instruction bytes and report winning config sources; no provisioning")
 
     hk = leaf("hooks", help="registered hook bundles: register, list, check, unregister")
     hk_sub = hk.add_subparsers(dest="hooks_cmd", required=True)
@@ -2304,7 +2323,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
-    with command_environment(a.root, a.root_how):
+    with command_environment(a.root, a.root_how, refresh_config=(
+            a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
+                      "tend", "window"})):
         try:
             return _run_command(a)
         except NamespaceUnconfigured as e:
@@ -2330,6 +2351,18 @@ def _run_command(a) -> int:
         return _cmd_go(a)
     if a.cmd == "repool":
         return _cmd_repool(a)
+    if a.cmd == "item":
+        from .work_item import command
+        try:
+            print(json.dumps(command(a, _tracker(a)), indent=2))
+            return 0
+        except ValueError as exc:
+            print(f"work item refused: {exc}", file=sys.stderr)
+            return 2
+        except Exception as exc:
+            print(f"work item operation unproven: {type(exc).__name__}; "
+                  "do not retry writes without readback", file=sys.stderr)
+            return 2
     if a.cmd == "defer":
         return _cmd_defer(a)
     if a.cmd == "crew":
@@ -4412,6 +4445,17 @@ def _cmd_provision(a) -> int:
             if not card.workspace or not Path(card.workspace).expanduser().is_dir():
                 raise ValueError(f"crew workspace missing for {card.name}; configure it first")
         results = []
+        if getattr(a, "instruction_report", False):
+            from . import config as config_mod, instructions
+            cfg = config_mod.load(a.root, refresh_source=True)
+            for card in sorted(cards, key=lambda card: card.name):
+                plan = instructions.prepare(card.workspace, card, cfg,
+                                            harness=harness_mod.name_for(card, a.root))
+                results.append({"name": card.name, "harness": card.harness,
+                                "comparisons": plan.comparisons})
+            print(json.dumps({"version": 1, "sources": cfg.source_origins,
+                              "warning": cfg.source_warning, "agents": results}))
+            return OK
         for card in sorted(cards, key=lambda card: card.name):
             servers = provision_ws(card, a.root, settings_path=settings(card),
                                    require_manifest=True)

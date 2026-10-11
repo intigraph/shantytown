@@ -80,7 +80,11 @@ class BrTracker(BeadsTracker):
 
         # br protects terminal transitions behind dedicated verbs.
         if status == "closed":
-            r = self._bd_for(item_id, "close", item_id, "--json")
+            close_reason = fields.pop("close_reason", None)
+            close_args = ["close", item_id, "--json"]
+            if close_reason is not None:
+                close_args.extend(["--reason", close_reason])
+            r = self._bd_for(item_id, *close_args)
             if r.returncode != 0:
                 raise RuntimeError(
                     f"br close {item_id} failed: {r.stderr.strip()[:120]}")
