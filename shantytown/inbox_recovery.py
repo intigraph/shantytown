@@ -3,6 +3,7 @@
 # arming: library; invoked by the scheduled tend pass, never an agent wake.
 """
 from __future__ import annotations
+import time
 
 from .tmux import PaneSubmissionUnverified, _codex_owned_input
 from . import triage
@@ -10,7 +11,12 @@ from . import triage
 
 def sweep(agents, panes, box, *, log=lambda message: None):
     recovered = []
+    # One observation budget for the whole fleet, not 25 seconds per strand.
+    deadline = time.monotonic() + 25
     for card in agents:
+        if time.monotonic() >= deadline:
+            log('inbox recovery: observation budget exhausted; remaining pointers retained')
+            break
         if getattr(card, 'retired', False) or not card.pane:
             continue
         try:
@@ -29,7 +35,7 @@ def sweep(agents, panes, box, *, log=lambda message: None):
             msg = matches[0]
             # submit_owned rechecks runtime and exact ownership before any
             # key. A changed composer must never authorize typing our body.
-            panes.submit_owned(card.pane, msg.body)
+            panes.submit_owned(card.pane, msg.body, deadline=deadline)
             box.mark_read(card.name, ids=[msg.id])
             recovered.append((card.name, msg.id))
             log(f'inbox recovery: {card.name} submitted {msg.id}')

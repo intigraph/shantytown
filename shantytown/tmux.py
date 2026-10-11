@@ -613,7 +613,7 @@ class Tmux:
         if codex:
             self._verify_codex_submission(pane, text, before)
 
-    def submit_owned(self, pane: str, text: str) -> None:
+    def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
         """Recover an existing body without ever appending or replacing input."""
         if not self._confirmed_codex(pane, self.foreground(pane)):
             raise PaneSubmissionUnverified('UNVERIFIED: runtime is not Codex')
@@ -621,7 +621,7 @@ class Tmux:
         if not _codex_owned_input(before, text):
             raise PaneSubmissionUnverified('UNVERIFIED: composer ownership changed')
         _journal_send(pane, '<recover-pending:' + text + '>')
-        self._verify_codex_submission(pane, text, before)
+        self._verify_codex_submission(pane, text, before, deadline=deadline)
 
     def _confirmed_codex(self, pane: str, foreground: str | None) -> bool:
         if foreground == "codex":
@@ -634,10 +634,11 @@ class Tmux:
                 return False
         return False
 
-    def _verify_codex_submission(self, pane: str, text: str, before: str) -> None:
+    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
         was_busy = triage.mid_flight(before)
-        deadline = time.monotonic() + _CODEX_DEADLINE_S
+        local_deadline = time.monotonic() + _CODEX_DEADLINE_S
+        deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
             return (triage.input_state(screen) in
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
