@@ -30,6 +30,7 @@ def transport(monkeypatch, frames, foreground='codex'):
     monkeypatch.setattr(panes, 'foreground', lambda _: foreground)
     monkeypatch.setattr(tmux, '_journal_send', lambda *_: None)
     monkeypatch.setattr(tmux, '_CODEX_POLLS', 2)
+    monkeypatch.setattr(tmux, '_CODEX_ATTEMPTS', 2)
     monkeypatch.setattr(tmux.time, 'sleep', lambda seconds: calls.append(('sleep', seconds)))
     monkeypatch.setattr(tmux.subprocess, 'run', lambda args, **kw: calls.append(args))
     return panes, calls
@@ -48,7 +49,7 @@ def test_live_turn_is_observed_after_a_separate_settle(monkeypatch):
 
 
 def test_one_enter_retry_recovers_only_our_pending_body(monkeypatch):
-    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, BUSY])
+    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, OWNED, BUSY])
     panes.send('worker', BODY)
     sends = keys(calls)
     assert [c[-1] for c in sends if '-l' not in c] == ['Enter', 'Enter']
@@ -57,7 +58,7 @@ def test_one_enter_retry_recovers_only_our_pending_body(monkeypatch):
 
 @pytest.mark.parametrize('retry_foreground', [None, 'bash', 'claude', 'unrecognized', 'node'])
 def test_retry_requires_positive_codex_identity(monkeypatch, retry_foreground):
-    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, BUSY])
+    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, OWNED, BUSY])
     foregrounds = iter(['codex', retry_foreground])
     monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
     monkeypatch.setattr(panes, 'cmdline', lambda _: None)
@@ -67,7 +68,7 @@ def test_retry_requires_positive_codex_identity(monkeypatch, retry_foreground):
 
 
 def test_retry_accepts_node_only_with_live_codex_identity(monkeypatch):
-    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, BUSY])
+    panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, OWNED, BUSY])
     foregrounds = iter(['codex', 'node'])
     monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
     monkeypatch.setattr(panes, 'cmdline', lambda _: 'CODEX_HOME=/tmp/probe node /opt/codex')
@@ -158,7 +159,7 @@ def test_ghost_and_partial_input_cannot_authorize_enter():
 
 
 def test_explicit_resend_submits_exact_stranded_body_without_retyping(monkeypatch):
-    panes, calls = transport(monkeypatch, [OWNED, OWNED, OWNED, BUSY])
+    panes, calls = transport(monkeypatch, [OWNED, OWNED, OWNED, OWNED, BUSY])
     panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls)] == ['Enter']
 
@@ -170,9 +171,44 @@ def test_resend_of_exact_body_waits_for_hook_to_finish(monkeypatch):
     assert [c[-1] for c in keys(calls)] == ['Enter']
 
 
-def test_exact_stranded_body_is_not_submitted_while_hook_stays_busy(monkeypatch):
+def test_busy_owned_input_queues_once_without_retyping(monkeypatch):
     busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
-    panes, calls = transport(monkeypatch, [busy_owned])
+    panes, calls = transport(monkeypatch, [busy_owned, busy_owned, busy_owned,
+                                          busy_owned, QUEUED])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls)] == ['Tab']
+
+
+def test_current_footer_and_single_word_model_are_owned():
+    footer = '  GPT-6.1-Sol default · ~/workspace · Current task\n  ? for shortcuts'
+    assert tmux._codex_owned_input(OWNED.replace(FOOTER, footer), BODY)
+    assert tmux._codex_owned_input(OWNED.replace(FOOTER, '  gpt-6 · /workspace'), BODY)
+
+
+def test_footer_like_foreign_suffix_never_authorizes_submission():
+    screen = OWNED.replace('\n\n' + FOOTER,
+                           '\n  gpt-6 high · /fake\nforeign input\n' + FOOTER)
+    assert not tmux._codex_owned_input(screen, BODY)
+
+
+def test_recovery_never_types_after_composer_changes(monkeypatch):
+    panes, calls = transport(monkeypatch, [OWNED.replace(BODY, 'Operator input')])
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.submit_owned('worker', BODY)
+    assert keys(calls) == []
+
+
+def test_busy_foreign_composer_never_queues(monkeypatch):
+    busy_foreign = 'Working (1s • esc to interrupt)\n' + OWNED.replace(BODY, 'Operator input')
+    panes, calls = transport(monkeypatch, [busy_foreign])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
     assert keys(calls) == []
+
+
+def test_slow_hook_gets_rechecked_until_submission_without_retyping(monkeypatch):
+    panes, calls = transport(monkeypatch, [READY] + [OWNED] * 7 + [BUSY])
+    monkeypatch.setattr(tmux, '_CODEX_ATTEMPTS', 4)
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 3
