@@ -44,6 +44,15 @@ def _comments(tracker, item_id, body=None):
     raise ValueError("selected tracker does not support comments")
 
 
+def _comment_body(row):
+    """Read the native tracker body fields without trusting ambiguous envelopes."""
+    values = [row[key] for key in ("text", "body", "content") if key in row]
+    if (not values or any(not isinstance(value, str) for value in values)
+            or any(value != values[0] for value in values[1:])):
+        return None
+    return values[0]
+
+
 def command(args, tracker):
     item = exact(tracker, args.item)
     if args.item_action == "show":
@@ -52,7 +61,7 @@ def command(args, tracker):
         body = _body(args.file)
         if not args.dry_run:
             _comments(tracker, item.id, body)
-            if not any(row.get("body", row.get("content")) == body
+            if not any(_comment_body(row) == body
                        for row in _comments(tracker, item.id)):
                 raise RuntimeError("comment readback unproven; write may have landed, do not resend")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}

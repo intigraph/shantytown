@@ -64,3 +64,52 @@ def test_tracker_protocol_is_still_three_methods():
     from shantytown.protocols import Tracker
     assert {name for name in Tracker.__dict__ if not name.startswith("_")} == {
         "get", "update", "create"}
+
+
+@pytest.mark.parametrize("envelope,verified", [
+    ({"text": "exact body"}, True),
+    ({"body": "exact body"}, True),
+    ({"content": "exact body"}, True),
+    ({"text": "exact body", "body": "exact body"}, True),
+    ({"text": "different body"}, False),
+    ({}, False),
+    ({"text": None}, False),
+    ({"text": "exact body", "body": "different body"}, False),
+    ({"text": "exact body", "content": None}, False),
+])
+def test_native_sd_comment_transport_verifies_exact_text_once(
+        tmp_path, envelope, verified):
+    import json
+    from subprocess import CompletedProcess
+    from shantytown.sd import SdTracker
+
+    class Controlled(SdTracker):
+        def __init__(self):
+            self.rows = []
+            self.writes = 0
+
+        def get(self, item_id):
+            return WorkItem(item_id)
+
+        def _bd_for(self, item_id, *command):
+            if command[:2] == ("comments", "add"):
+                assert command[2] == item_id
+                assert command[3] == "--file"
+                from pathlib import Path
+                assert Path(command[4]).read_text() == "exact body"
+                self.writes += 1
+                self.rows.append(envelope)
+                return CompletedProcess(command, 0, "{}", "")
+            assert command == ("comments", item_id, "--json")
+            return CompletedProcess(command, 0, json.dumps(self.rows), "")
+
+    tracker = Controlled()
+    body = tmp_path / "comment.txt"
+    body.write_text("exact body")
+    operation = args("known-id", "comment", file=body)
+    if verified:
+        assert work_item.command(operation, tracker)["comment"] == "verified"
+    else:
+        with pytest.raises(RuntimeError, match="do not resend"):
+            work_item.command(operation, tracker)
+    assert tracker.writes == 1
