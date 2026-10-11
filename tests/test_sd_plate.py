@@ -19,10 +19,13 @@ def tracker(monkeypatch, *, fail_owner=None, fail_ready=False):
         assert args[0] in ("list", "ready")
         assert "--assignee" in args, "an unfiltered board read escaped"
         owner = args[args.index("--assignee") + 1]
-        calls.append((args[0], owner))
+        status = args[args.index("--status") + 1] if "--status" in args else None
+        calls.append((args[0], owner, status))
         if owner == fail_owner or (fail_ready and args[0] == "ready"):
             return subprocess.CompletedProcess(args, 2, "", "unreadable")
         selected = [r for r in rows if r["assignee"] == owner]
+        if status is not None:
+            selected = [r for r in selected if r["status"] == status]
         if args[0] == "ready":
             selected = [r for r in selected if r["id"] == "z"]
         return subprocess.CompletedProcess(args, 0, json.dumps({"issues": selected, "total": len(selected), "has_more": False}), "")
@@ -37,10 +40,12 @@ def test_both_owner_spellings_preserve_readiness_rank_and_cache_per_agent(monkey
     reader = br.plate_reader(t)
     assert reader("rig/worker").id == "z"
     assert reader("rig/worker").id == "z"
-    assert calls == [("list", "rig/worker"), ("list", "worker"),
-                     ("ready", "rig/worker"), ("ready", "worker")]
+    assert calls == [("list", owner, status) for status in ("hooked", "in_progress", None)
+                     for owner in ("rig/worker", "worker")] + [
+                         ("ready", "rig/worker", None), ("ready", "worker", None)]
     assert reader("other").id == "h"
-    assert len(calls) == 6
+    assert calls[-2:] == [("list", "other", "hooked"), ("list", "other", "in_progress")]
+    assert len(calls) == 10
     assert br.plate(t, "rig/worker").id == "z"
 
 
@@ -195,3 +200,44 @@ def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(
     monkeypatch.setattr(t, "_bd", partial)
     with pytest.raises(PartialAnswer):
         inbox.unread("worker")
+
+@pytest.mark.parametrize('status', ['hooked', 'in_progress'])
+def test_held_plate_never_reads_open_queue_or_readiness(monkeypatch, status):
+    t = SdTracker(quipu='https://example.test', prefix='test')
+    calls = []
+    def run(*args):
+        assert args[0] == 'list' and '--status' in args
+        asked = args[args.index('--status') + 1]
+        owner = args[args.index('--assignee') + 1]
+        calls.append((asked, owner))
+        rows = [dict(id='held', title='work', assignee=owner, status=status, priority=0)] if asked == status else []
+        return subprocess.CompletedProcess(args, 0, json.dumps(dict(issues=rows, total=len(rows), has_more=False)), '')
+    monkeypatch.setattr(t, '_bd', run)
+    monkeypatch.setattr(br, 'name_the_blocker', lambda _, item: item)
+    assert br.plate(t, 'rig/worker').id == 'held'
+    assert calls == [(asked, owner) for asked in (['hooked'] if status == 'hooked' else ['hooked', 'in_progress']) for owner in ['rig/worker', 'worker']]
+
+@pytest.mark.parametrize('kind', ['message', 'deferred', 'partial', 'failure'])
+def test_held_probe_cannot_hide_fallback_work(monkeypatch, kind):
+    t = SdTracker(quipu='https://example.test', prefix='test')
+    calls = []
+    def run(*args):
+        calls.append(args)
+        if args[0] == 'ready':
+            return subprocess.CompletedProcess(args, 0, '[{"id":"open"}]', '')
+        if '--status' not in args:
+            rows = [dict(id='open', title='real work', assignee='worker', status='open')]
+        else:
+            if kind == 'failure':
+                return subprocess.CompletedProcess(args, 2, '', 'unreadable')
+            rows = [dict(id='held', title='inbox: message' if kind == 'message' else 'work', assignee='worker', status='in_progress')]
+            if kind == 'deferred':
+                rows[0]['defer_until'] = '2099-01-01T00:00:00Z'
+            if kind == 'partial':
+                return subprocess.CompletedProcess(args, 0, json.dumps(dict(issues=rows, total=2, has_more=True)), '')
+        return subprocess.CompletedProcess(args, 0, json.dumps(dict(issues=rows, total=len(rows), has_more=False)), '')
+    monkeypatch.setattr(t, '_bd', run)
+    monkeypatch.setattr(br, 'name_the_blocker', lambda _, item: item)
+    assert br.plate(t, 'worker').id == 'open'
+    assert any(args[0] == 'list' and '--status' not in args for args in calls)
+    assert any(args[0] == 'ready' for args in calls)
