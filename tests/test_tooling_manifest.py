@@ -94,6 +94,30 @@ def test_doctor_uses_one_fresh_snapshot_for_entire_report(kit):
     assert len(calls) == 1
 
 
+def test_first_class_config_launch_survives_outage_without_caching_credentials(kit, monkeypatch):
+    from shantytown import config_source
+    root, ws, _, _, _ = kit
+    with (root / "shantytown.toml").open("a") as stream:
+        stream.write('SHANTY_CONFIG_ENTITY="urn:example:config"\n'
+                     'SHANTY_CONFIG_SERVER="https://graph.example"\n'
+                     'SHANTY_CONFIG_FRAGMENT_CLASS="urn:example:InstructionFragment"\n')
+    document = json.dumps({"version": 1, "settings": {}, "fragments": [
+        {"id": "urn:example:fleet", "scope": "fleet", "selector": "", "text": "fleet"}]})
+    monkeypatch.setattr(config_source, "_fetch", lambda *args: document)
+    assert P.provision(card(ws, "claude"), root) == ["search"]
+    def unavailable(*args):
+        raise QuipuUnreachable("controlled outage")
+    monkeypatch.setattr(config_source, "_fetch", unavailable)
+    monkeypatch.setattr(T.QuipuRegistry, "_query_answer", unavailable)
+    with pytest.warns(RuntimeWarning, match="last-good"):
+        assert P.provision(card(ws, "claude"), root) == ["search"]
+    assert all("test-secret" not in path.read_text()
+               for path in (root / "config-source").glob("*.json"))
+    # The old graph-authoritative contract remains default, even with a cache.
+    with pytest.raises(T.ToolingError):
+        T.load(root)
+
+
 @pytest.mark.parametrize("result", [[], [{"value": "{}"}, {"value": "{}"}],
                                     [{"value": {}}], [{"wrong": "{}"}]])
 def test_missing_or_ambiguous_graph_is_not_local_fallback(kit, monkeypatch, result):
