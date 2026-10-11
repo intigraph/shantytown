@@ -113,3 +113,30 @@ def test_native_sd_comment_transport_verifies_exact_text_once(
         with pytest.raises(RuntimeError, match="do not resend"):
             work_item.command(operation, tracker)
     assert tracker.writes == 1
+
+
+def test_files_comment_write_fault_preserves_entire_item(tmp_path, monkeypatch):
+    import errno
+    from pathlib import Path
+    tracker = FilesTracker(tmp_path / "items")
+    item = tracker.create("owned fault control")
+    target = tracker._path(item.id)
+    before = target.read_bytes()
+    body = tmp_path / "body.txt"
+    body.write_text("exact comment")
+    original = Path.write_text
+    calls = []
+
+    def fail(path, *values, **options):
+        if path.parent == target.parent:
+            calls.append(path)
+            with path.open("w"):
+                pass
+            raise OSError(errno.ENOSPC, "owned write fault")
+        return original(path, *values, **options)
+
+    monkeypatch.setattr(Path, "write_text", fail)
+    with pytest.raises(OSError, match="owned write fault"):
+        work_item.command(args(item.id, "comment", file=body), tracker)
+    assert len(calls) == 1
+    assert target.read_bytes() == before

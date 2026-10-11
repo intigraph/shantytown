@@ -81,3 +81,70 @@ def test_actual_provision_consumes_one_fleet_edit_for_two_harnesses(tmp_path, mo
             assert (ws / "CLAUDE.md").read_text() == text
             assert (ws / "AGENTS.md").read_text() == text
             assert (ws / "CLAUDE.local.md").read_text() == "identity"
+
+
+def test_actual_instruction_apply_fault_preserves_old_body(tmp_path, monkeypatch):
+    import errno
+    import io
+    import os
+    from pathlib import Path
+    from shantytown import config, provision
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_CONFIG_ENTITY="urn:test:config"\n'
+        'SHANTY_CONFIG_SERVER="https://graph.example"\n')
+    ws = tmp_path / "agent"
+    ws.mkdir()
+    target = ws / "CLAUDE.md"
+    target.write_bytes(b"previous accepted body\n")
+    target.chmod(0o600)
+    (ws / "AGENTS.md").symlink_to("CLAUDE.md")
+    identity = ws / "CLAUDE.local.md"
+    identity.write_bytes(b"local identity")
+    before = target.read_bytes()
+    doc = cfg("replacement", "apply").source_document
+    doc["settings"] = {"env": {"SHANTY_INSTRUCTIONS_MODE": "apply"}}
+    monkeypatch.setattr(config_source, "_fetch", lambda *args: json.dumps(doc))
+    original_open, original_fdopen = io.open, os.fdopen
+    calls = []
+
+    class Fault:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+        def write(self, text):
+            calls.append(1)
+            raise OSError(errno.ENOSPC, "owned instruction write fault")
+
+    def owned(path):
+        if not isinstance(path, (str, os.PathLike)):
+            return False
+        path = Path(path)
+        return path.parent == ws and path.name.startswith("CLAUDE.md")
+
+    def fault_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        return Fault(stream) if "w" in mode and owned(path) else stream
+
+    def fault_fdopen(fd, mode="r", *args, **kwargs):
+        path = os.readlink(f"/proc/self/fd/{fd}")
+        stream = original_fdopen(fd, mode, *args, **kwargs)
+        return Fault(stream) if "w" in mode and owned(path) else stream
+
+    monkeypatch.setattr(io, "open", fault_open)
+    monkeypatch.setattr(os, "fdopen", fault_fdopen)
+    with pytest.raises(OSError, match="owned instruction write fault"):
+        provision.provision(Agent("alice", workspace=str(ws)), root)
+    assert calls == [1]
+    assert target.read_bytes() == before
+    assert (ws / "AGENTS.md").read_bytes() == before
+    assert (ws / "AGENTS.md").is_symlink()
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert identity.read_bytes() == b"local identity"

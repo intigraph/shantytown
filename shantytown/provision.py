@@ -45,6 +45,7 @@ import tempfile
 from pathlib import Path
 
 from .protocols import Agent
+from .files import write_text_atomic
 from . import tooling
 
 
@@ -1056,7 +1057,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                     raise ProvisionError(f"refusing to replace personal skill: {name}")
         for path, text in updates.items():
             if not path.is_file() or path.read_text() != text:
-                path.write_text(text)
+                write_text_atomic(path, text)
         for name, src in manifest.sources(ws):
             for runtime in (SKILLS_RUNTIME, CODEX_SKILLS_RUNTIME):
                 link = ws.joinpath(*runtime, name)
@@ -1076,7 +1077,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # and the skill links depend on nothing but the clone itself.
     if manifest is None:
         for path, text in updates.items():
-            path.write_text(text)
+            write_text_atomic(path, text)
         link_skills(ws)
         link_instructions(ws, card.harness)
 

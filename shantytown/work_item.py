@@ -27,7 +27,7 @@ def _body(path):
 
 def _comments(tracker, item_id, body=None):
     from .br import BrTracker, append_comment, comments
-    from .files import FilesTracker
+    from .files import FilesTracker, write_json_atomic
     if isinstance(tracker, BrTracker):
         if body is not None:
             append_comment(tracker, item_id, body)
@@ -39,7 +39,7 @@ def _comments(tracker, item_id, body=None):
         if body is not None:
             rows.append({"body": body})
             value["comments"] = rows
-            path.write_text(json.dumps(value, indent=2))
+            write_json_atomic(path, value)
         return rows
     raise ValueError("selected tracker does not support comments")
 
