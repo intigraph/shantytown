@@ -10227,16 +10227,16 @@ def _set_aside_tooling_block(path) -> str | None:
 
 
 def _restore_tooling_block(path, instructions) -> None:
-    """Put the projected block back after the pull. Never raises."""
+    """Restore and verify the projected block; report failures to the caller."""
     if instructions is None:
         return
-    try:
-        from .tooling import instruction_text
-        claude = Path(path) / "CLAUDE.md"
-        current = claude.read_text() if claude.is_file() else ""
-        claude.write_text(instruction_text(current, instructions))
-    except Exception:
-        pass
+    from .tooling import instruction_text
+    claude = Path(path) / "CLAUDE.md"
+    current = claude.read_text() if claude.is_file() else ""
+    expected = instruction_text(current, instructions)
+    claude.write_text(expected)
+    if claude.read_text() != expected:
+        raise OSError("generated instructions restoration read-back mismatch")
 
 
 def _refresh_clone(path) -> str | None:
@@ -10269,20 +10269,35 @@ def _refresh_clone(path) -> str | None:
                     return None
         mcp = Path(path) / ".mcp.json"
         saved = mcp.read_bytes() if mcp.is_file() else None
-        block = _set_aside_tooling_block(path)
-        # Process-GROUP timeout: a plain subprocess timeout kills `git pull`
-        # and orphans the `git fetch` + `ssh` it already spawned (aegis-ujz5gf).
-        from .workspace import run_with_group_timeout
-        r = run_with_group_timeout(
-            ["git", "-C", str(path), "pull", "--ff-only"], 60,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
-        if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
-            mcp.write_bytes(saved)
-        # Re-inject even when the pull FAILED: the block was removed to let the
-        # merge proceed, and leaving it out would strip the agent's tooling
-        # instructions as the price of a pull that achieved nothing.
-        _restore_tooling_block(path, block)
+        block = None
+        err = None
+        cleanup_errors = []
+        try:
+            block = _set_aside_tooling_block(path)
+            # Process-GROUP timeout: killing only git would orphan fetch/ssh.
+            from .workspace import run_with_group_timeout
+            r = run_with_group_timeout(
+                ["git", "-C", str(path), "pull", "--ff-only"], 60,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        except Exception as e:
+            err = str(e)
+        finally:
+            # A timeout is a raised exception, not a returned refusal. Restore
+            # both surfaces on either path, even if one restoration fails.
+            try:
+                if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
+                    mcp.write_bytes(saved)
+                    if mcp.read_bytes() != saved:
+                        raise OSError("tool kit restoration read-back mismatch")
+            except Exception as e:
+                cleanup_errors.append(f"tool kit restoration failed: {e}")
+            try:
+                _restore_tooling_block(path, block)
+            except Exception as e:
+                cleanup_errors.append(f"instruction restoration failed: {e}")
+        if cleanup_errors:
+            return "\n".join(([err] if err else []) + cleanup_errors)
         return err
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
