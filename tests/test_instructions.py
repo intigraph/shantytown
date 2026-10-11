@@ -49,6 +49,16 @@ def test_no_graph_document_keeps_existing_files(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+def test_effective_harness_selector_comes_from_canonical_caller(tmp_path):
+    doc = cfg("fleet").source_document
+    doc["fragments"].append({"id": "urn:test:codex", "scope": "harness",
+                             "selector": "codex", "text": "codex"})
+    plan = instructions.prepare(tmp_path, Agent("alice"),
+                                Config(env={"SHANTY_INSTRUCTIONS_MODE": "apply"},
+                                       source_document=doc), harness="codex")
+    assert set(plan.updates.values()) == {"fleetcodex"}
+
+
 def test_actual_provision_consumes_one_fleet_edit_for_two_harnesses(tmp_path, monkeypatch):
     from shantytown import config, provision
     root = tmp_path / "root"; root.mkdir()

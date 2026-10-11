@@ -1008,9 +1008,12 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # must never silently fall back to a stale, locally consistent template.
     try:
         from . import config as config_mod, instructions
-        instruction_cfg = config_mod.load(root)
-        instruction_plan = instructions.prepare(ws, card, instruction_cfg)
-        manifest = tooling.load(root)
+        from .harness import name_for
+        instruction_cfg = config_mod.load(root, refresh_source=True)
+        instruction_plan = instructions.prepare(ws, card, instruction_cfg,
+                                                harness=name_for(card, root))
+        manifest = (tooling.load(root, last_good=True)
+                    if instruction_cfg.source_document is not None else tooling.load(root))
         if require_manifest and (manifest is None or not manifest.mcp):
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "

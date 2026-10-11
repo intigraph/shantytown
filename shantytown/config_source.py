@@ -24,14 +24,17 @@ VALUE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#value"
 IRI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:[^<>\s\"{}|^`\\]+")
 MAX_BYTES = 1024 * 1024
 _snapshot = ContextVar("st_config_source_snapshot", default=None)
+_refresh = ContextVar("st_config_source_refresh", default=False)
 
 
-def start_snapshot():
-    return _snapshot.set({})
+def start_snapshot(*, refresh=False):
+    return _snapshot.set({}), _refresh.set(refresh)
 
 
 def end_snapshot(token):
-    _snapshot.reset(token)
+    snapshot_token, refresh_token = token
+    _snapshot.reset(snapshot_token)
+    _refresh.reset(refresh_token)
 
 
 class SourceError(ValueError):
@@ -65,7 +68,8 @@ def parse(text):
     if (not isinstance(doc, dict) or set(doc) != {"version", "settings", "fragments"}
             or type(doc["version"]) is not int or doc["version"] != 1
             or not isinstance(doc["settings"], dict)
-            or not isinstance(doc["fragments"], list)):
+            or not isinstance(doc["fragments"], list)
+            or not 1 <= len(doc["fragments"]) <= 128):
         raise SourceError("configuration requires version 1, settings and fragments")
     env = doc["settings"].get("env", {})
     if not isinstance(env, dict):
@@ -160,8 +164,9 @@ def _store(path, text):
             os.unlink(temporary)
 
 
-def project(root, local, validate, *, fetch=None):
-    key = (str(root), json.dumps(local, sort_keys=True))
+def project(root, local, validate, *, fetch=None, refresh=False):
+    wanted = refresh or fetch is not None or _refresh.get()
+    key = (str(root), json.dumps(local, sort_keys=True), wanted)
     memo = _snapshot.get()
     if memo is not None and key in memo:
         return memo[key]
@@ -179,6 +184,10 @@ def project(root, local, validate, *, fetch=None):
     warning = None
     fresh = False
     try:
+        if not wanted:
+            # Reads such as anchor consume a cache; they never contact the graph
+            # or write a cache. Refresh belongs to provision/launch boundaries.
+            raise SourceError("cache-only configuration read")
         text = (fetch or _fetch)(server, entity, fragment_class)
         document = parse(text)
         validate(document["settings"])
@@ -187,12 +196,15 @@ def project(root, local, validate, *, fetch=None):
         try:
             document = parse(cache.read_text())
             validate(document["settings"])
-            warning = "Quipu config unavailable or invalid; using source-bound last-good"
+            if wanted:
+                warning = "Quipu config unavailable or invalid; using source-bound last-good"
         except Exception:
             document = None
-            warning = "Quipu config unavailable or invalid; keeping local configuration/instructions"
+            warning = ("Quipu config unavailable or invalid; keeping local configuration/instructions"
+                       if wanted else
+                       "Quipu config cache absent or invalid; keeping local configuration/instructions")
     data = merge({}, document["settings"] if document else {}, origins,
-                 "quipu" if fresh else "quipu:last-good")
+                 "quipu" if fresh else "quipu:last-good" if wanted else "quipu:cache")
     data = merge(data, local, origins, "toml")
     validate(data)
     if fresh:

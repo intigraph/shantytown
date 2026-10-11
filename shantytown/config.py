@@ -99,6 +99,10 @@ class ConfigError(ValueError):
     """
 
 
+class ConfigSourceError(ConfigError):
+    """A selected graph bootstrap is invalid; never guess another tracker."""
+
+
 @dataclass(frozen=True)
 class Hibernate:
     """When may the administrator's stop hook decline to wake it up?
@@ -296,7 +300,7 @@ def config_path(root) -> Path:
     return Path(root) / CONFIG_NAME
 
 
-def load(root) -> Config:
+def load(root, *, refresh_source=False) -> Config:
     """Read <root>/shantytown.toml. Absent -> the built-in defaults. Malformed or
     unrecognised -> ConfigError.
 
@@ -324,9 +328,9 @@ def load(root) -> Config:
     try:
         projection = config_source.project(
             Path(root) if root is not None else path.parent, data,
-            lambda value: _resolve(value, path))
+            lambda value: _resolve(value, path), refresh=refresh_source)
     except config_source.SourceError as exc:
-        raise ConfigError(str(exc)) from None
+        raise ConfigSourceError(str(exc)) from None
     result = _resolve(projection.data, path)
     return replace(result, source_origins=projection.origins,
                    source_document=projection.document,
@@ -340,6 +344,8 @@ def load_or_default(root) -> tuple[Config, str | None]:
     running on defaults; see the module docstring."""
     try:
         return load(root), None
+    except ConfigSourceError as e:
+        return Config(source_warning=str(e)), str(e)
     except ConfigError as e:
         return Config(), str(e)
     except Exception as e:                    # noqa: BLE001 — a hook must not die here

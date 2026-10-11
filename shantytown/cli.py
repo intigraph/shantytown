@@ -320,7 +320,7 @@ def _backend(a, default="files") -> str:
     from .config import load_or_default
     cfg, _error = load_or_default(getattr(a, "root", None))
     if cfg.source_warning and cfg.source_document is None:
-        raise SystemExit("configuration source unavailable without an explicit local "
+        raise SystemExit("configuration source has no validated snapshot or explicit local "
                          "tracker; refusing a guessed backend")
     return default
 
@@ -2322,7 +2322,9 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_doctor(a)
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
-    with command_environment(a.root, a.root_how):
+    with command_environment(a.root, a.root_how, refresh_config=(
+            a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
+                      "tend", "window"})):
         try:
             return _run_command(a)
         except NamespaceUnconfigured as e:
@@ -4444,9 +4446,10 @@ def _cmd_provision(a) -> int:
         results = []
         if getattr(a, "instruction_report", False):
             from . import config as config_mod, instructions
-            cfg = config_mod.load(a.root)
+            cfg = config_mod.load(a.root, refresh_source=True)
             for card in sorted(cards, key=lambda card: card.name):
-                plan = instructions.prepare(card.workspace, card, cfg)
+                plan = instructions.prepare(card.workspace, card, cfg,
+                                            harness=harness_mod.name_for(card, a.root))
                 results.append({"name": card.name, "harness": card.harness,
                                 "comparisons": plan.comparisons})
             print(json.dumps({"version": 1, "sources": cfg.source_origins,

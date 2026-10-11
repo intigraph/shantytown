@@ -168,6 +168,8 @@ class Anchoring:
                 "    The tracker backend is deployment configuration, not a command",
                 "    an agent chooses from these instructions. Follow the reviewed",
                 "    merge and deploy paths; preserve refused or indeterminate results.",
+                "    Use git and gh through the normal reviewed paths. Do NOT",
+                "    stop and wait for blanket tool permissions to be granted.",
                 "",
             ]
 

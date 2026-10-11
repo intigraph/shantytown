@@ -35,15 +35,24 @@ maximum 128 exact fragment references. Each network call has a one-second timeou
 bootstrap configuration. Its namespace supplies instructionScope and
 instructionSelector; each typed fragment has one rdf:value text body. Missing,
 untyped, duplicate or incomplete rows refuse the fresh document.
-A CLI invocation shares one validated snapshot, avoiding repeated graph reads
-by its configuration consumers. The next invocation reads fresh. A validated
+A provision/launch CLI invocation shares one validated snapshot, avoiding
+repeated graph reads by its configuration consumers. The next provision reads
+fresh. Ordinary reads, including anchor, read the accepted cache without network
+requests or cache writes; a missing cache produces a visible warning and keeps
+local declarations. Invalid bootstrap selectors refuse a guessed tracker. A validated
 source-bound last-good JSON cache is written atomically with private permissions.
 On unavailable or invalid graph data, the reader validates the matching cache
 again and emits a visible warning. Without a usable cache it keeps local
 configuration and instruction files, also with a warning. A different server or
 entity has a different cache; it cannot borrow another source's last-good data.
-This fallback does not relax the separate canonical tooling manifest's authority
-or its existing refusal semantics.
+When a validated first-class source is configured, provisioning also caches the
+validated canonical tooling manifest, bound to both its source and the config
+bootstrap. A tooling read timeout can use that accepted snapshot with a visible
+freshness warning. Credential placeholders are cached before local expansion;
+credential files and live kit validation remain authoritative. Missing cache or
+malformed fresh manifest still refuses. Existing deployments without the new
+source retain their fresh-only contract, and health inspection still asks for
+fresh graph evidence.
 
 `st ops provision --instruction-report` prints winning declared-key sources and
 before/after hashes, byte counts and equality for each selected agent. It prints

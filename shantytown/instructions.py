@@ -14,7 +14,7 @@ class Plan:
     comparisons: dict[str, dict]
 
 
-def prepare(workspace, card, cfg):
+def prepare(workspace, card, cfg, *, harness=None):
     if cfg.source_document is None:
         return Plan({}, {})
     mode = cfg.env.get("SHANTY_INSTRUCTIONS_MODE", "compare")
@@ -24,7 +24,7 @@ def prepare(workspace, card, cfg):
     if (ws / "AGENTS.override.md").exists():
         raise ValueError("instruction override shadows the canonical body")
     text = config_source.render(cfg.source_document, card.name, card.role,
-                                card.harness or "claude")
+                                harness or card.harness or "claude")
     if not text:
         raise ValueError("selected instruction fragments render an empty body")
     after = text.encode("utf-8")

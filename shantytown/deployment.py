@@ -38,7 +38,7 @@ def cli_active() -> bool:
 
 
 @contextmanager
-def command_environment(root, how=None):
+def command_environment(root, how=None, *, refresh_config=False):
     """Carry this command's [env] to all readers and child processes.
 
     Restore the caller's environment even on refusal. This is a CLI boundary,
@@ -55,7 +55,7 @@ def command_environment(root, how=None):
     """
     from .config import load_or_default
     from . import config_source
-    source_token = config_source.start_snapshot()
+    source_token = config_source.start_snapshot(refresh=refresh_config)
     cfg, _err = load_or_default(root)
     carried = dict(cfg.env)
     if (not os.environ.get("SHANTY_ROOT") and "SHANTY_ROOT" not in carried

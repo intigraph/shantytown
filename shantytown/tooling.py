@@ -1,16 +1,19 @@
 """Read the canonical tooling manifest and project its instruction block.
 
 Opt in with SHANTY_TOOLING_MANIFEST (an entity IRI) in deployment [env].
-That entity's rdf:value is one versioned JSON document. No cached or local
-fallback is accepted once a deployment selects the graph as its authority.
+That entity's rdf:value is one versioned JSON document. Existing deployments
+remain fresh-only. Provisioning with the new validated config source can use a
+source-bound last-good snapshot with an explicit freshness warning.
 Secrets stay in provision/secrets.env; the graph contains placeholders only.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
+import warnings
 
 from .answer import CouldNotLook, PartialAnswer
 from .deployment import deployment_default
@@ -83,7 +86,7 @@ def parse(text: str, entity: str) -> Manifest:
     return Manifest(entity, servers, skills, instructions)
 
 
-def load(root) -> Manifest | None:
+def load(root, *, last_good=False) -> Manifest | None:
     entity = deployment_default(root, "SHANTY_TOOLING_MANIFEST")
     if entity is None:
         return None
@@ -91,15 +94,45 @@ def load(root) -> Manifest | None:
     # namespace can change independently of the deployment.
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*:[^<>\s\"{}|^`\\]+", entity):
         raise ToolingError("SHANTY_TOOLING_MANIFEST must be an absolute entity IRI")
+    cache = None
+    if last_good:
+        # Only the new first-class config source enables this availability
+        # contract. Legacy manifest authority remains fresh-only by default.
+        from .quipu import resolve_server
+        selectors = [resolve_server(root=root), entity,
+                     deployment_default(root, "SHANTY_CONFIG_ENTITY"),
+                     deployment_default(root, "SHANTY_CONFIG_SERVER"),
+                     deployment_default(root, "SHANTY_CONFIG_FRAGMENT_CLASS")]
+        identity = hashlib.sha256(json.dumps(selectors).encode()).hexdigest()
+        cache = Path(root) / "config-source" / f"tooling-{identity}.json"
     try:
-        client = QuipuRegistry(root=root, client_label="shantytown-tooling")
+        client = (QuipuRegistry(root=root, client_label="shantytown-tooling", timeout=1.0)
+                  if last_good else QuipuRegistry(root=root, client_label="shantytown-tooling"))
         rows = client._query_answer(f"SELECT ?value WHERE {{ <{entity}> <{VALUE}> ?value }}").exact()
     except (CouldNotLook, PartialAnswer, QuipuQueryRejected):
+        if cache is not None:
+            try:
+                manifest = parse(cache.read_text(), entity)
+            except (OSError, ToolingError):
+                pass
+            else:
+                warnings.warn("Quipu tooling unavailable; using source-bound last-good; "
+                              "freshness unproven", RuntimeWarning, stacklevel=2)
+                return manifest
         # Do not echo HTTP bodies: a misconfigured source might contain secrets.
         raise ToolingError("Quipu tooling source unavailable, rejected, or truncated") from None
     if len(rows) != 1 or not isinstance(rows[0], dict) or not isinstance(rows[0].get("value"), str):
         raise ToolingError("Quipu tooling source must have exactly one JSON rdf:value")
-    return parse(rows[0]["value"], entity)
+    text = rows[0]["value"]
+    manifest = parse(text, entity)
+    if cache is not None:
+        from .config_source import _store
+        try:
+            _store(cache, text)  # placeholders only; never expanded credentials
+        except OSError:
+            warnings.warn("Quipu tooling loaded but last-good cache was not saved",
+                          RuntimeWarning, stacklevel=2)
+    return manifest
 
 
 def instruction_text(before: str, instructions: str) -> str:

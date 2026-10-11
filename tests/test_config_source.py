@@ -98,7 +98,7 @@ def test_actual_config_reader_consumes_graph_and_reports_sources(tmp_path, monke
         'SHANTY_CONFIG_SERVER="https://graph.example"\n')
     monkeypatch.setattr(source, "_fetch", lambda *args:
                         document(settings={"env": {"SHANTY_BACKEND": "seeds"}}))
-    loaded = config.load(tmp_path)
+    loaded = config.load(tmp_path, refresh_source=True)
     assert loaded.env["SHANTY_BACKEND"] == "seeds"
     assert loaded.source_origins["env.SHANTY_BACKEND"] == "quipu"
 
@@ -113,11 +113,11 @@ def test_one_query_per_command_then_fresh_next_command(tmp_path, monkeypatch):
         calls.append(args)
         return document(str(len(calls)))
     monkeypatch.setattr(source, "_fetch", fetch)
-    with command_environment(tmp_path):
+    with command_environment(tmp_path, refresh_config=True):
         config.load(tmp_path)
         config.load(tmp_path)
     assert len(calls) == 1
-    with command_environment(tmp_path):
+    with command_environment(tmp_path, refresh_config=True):
         loaded = config.load(tmp_path)
     assert len(calls) == 2
     assert source.render(loaded.source_document, "alice", "worker", "codex") == "2"
@@ -149,3 +149,32 @@ def test_real_reader_hydrates_typed_nodes_and_rejects_incomplete_refs(monkeypatc
     Client.calls.clear(); Client.missing = True
     with pytest.raises(source.SourceError, match="incomplete"):
         source._fetch("https://graph.example", "urn:test:config", "urn:test:InstructionFragment")
+
+
+def test_ordinary_configuration_read_does_not_refresh_or_touch_cache(tmp_path, monkeypatch):
+    source.project(tmp_path, local(), validate, fetch=lambda *args: document("last good"))
+    cache = next((tmp_path / "config-source").glob("*.json"))
+    before = cache.stat().st_mtime_ns
+    monkeypatch.setattr(source, "_fetch", lambda *args: pytest.fail("read must not contact graph"))
+    projected = source.project(tmp_path, local(), validate)
+    assert source.render(projected.document, "alice", "worker", "codex") == "last good"
+    assert cache.stat().st_mtime_ns == before
+    assert projected.warning is None
+
+
+def test_cold_read_has_no_graph_io_or_cache_write(tmp_path, monkeypatch):
+    monkeypatch.setattr(source, "_fetch", lambda *args: pytest.fail("read must not contact graph"))
+    with pytest.warns(RuntimeWarning, match="cache absent"):
+        projected = source.project(tmp_path, local(), validate)
+    assert projected.document is None
+    assert not list(tmp_path.iterdir())
+
+
+def test_invalid_bootstrap_cannot_silently_select_files(tmp_path):
+    from argparse import Namespace
+    from shantytown.cli import _backend
+    (tmp_path / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_CONFIG_ENTITY="broken iri"\n'
+        'SHANTY_CONFIG_SERVER="https://graph.example"\n')
+    with pytest.raises(SystemExit, match="refusing a guessed backend"):
+        _backend(Namespace(root=tmp_path, backend=None))
