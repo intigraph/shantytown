@@ -1,0 +1,11 @@
+  note: could not read worker's plate to re-dispatch (simulated HTTP 408). It will pick its work up from `st anchor`.
+  note: worker's plate UNKNOWN after cycle (simulated HTTP 408).
+BASE: same simulated HTTP 408 after a clear
+submitted prompts: 0
+HEAD: same simulated HTTP 408 after a clear
+  submitted cycle resume kickoff -> worker
+submitted prompts: 1
+HEAD prompt: [from st agent cycle] [st cycle resume] [resume-id:a736fc699e8344659f2e13ea3b60bdeb] Run `st anchor worker`, read your resume brief, and continue your assigned work. A failed plate read is UNKNOWN, not an empty plate. Checkpoint pointer: x-checkpoint; confirm its current status and assignment before resuming it.
+HEAD visible plate: True
+HEAD model plate: True
+HEAD threshold hint: first= True repeat= False

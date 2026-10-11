@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -95,7 +96,20 @@ def main(argv=None) -> int:
         # A session started outside st: not an error, and not reported — a hook
         # that complains on every non-fleet session start gets removed.
         return 0
-    print(render(root, agent))
+    try:
+        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+        from .context_hint import session_start
+        from .files import FilesRegistry
+        session_start(root, FilesRegistry(os.path.join(root, "crew")).get(agent), payload)
+    except Exception:  # noqa: BLE001 — malformed hook input must not hide the anchor
+        pass
+    text = render(root, agent)
+    print(json.dumps({
+        "systemMessage": text,
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": text,
+        },
+    }, ensure_ascii=False))
     return 0
 
 
