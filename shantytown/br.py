@@ -344,7 +344,9 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     # degrades to None (previous ordering) rather than to an empty set — the
     # could-not-look-is-not-empty rule this function's docstring is built on
     # applies to the readiness call exactly as it does to the rows.
-    ready_ids = read_ready()
+    # In-hand ranks precede every open item and ignore readiness in plate_key.
+    # A remote ready poll hydrates the open queue; it cannot change this choice.
+    ready_ids = None if any(row.get("status") in _PLATE_RANK for row in mine) else read_ready()
     mine.sort(key=lambda row: plate_key(row.get("status"), _priority(row),
                                         row.get("id", ""), ready_ids))
     row = mine[0]

@@ -315,7 +315,11 @@ The four inferred outcomes are finished-unclosed (one close reminder per session
 ### Remote Seeds plate reads
 
 `SdTracker` selects plate candidates and ready IDs by the requested owner,
-including both full and short owner spellings. It uses the same ranking and
+including both full and short owner spellings. It checks `hooked` and then
+`in_progress` first. A complete held rank with
+workable, non-message work ends discovery; a partial read or no eligible held
+work retains the full owner lookup. Held items do not need a readiness read.
+It uses the same ranking and
 blocker checks as `BrTracker`, and keeps failed candidate reads visible as an
 incomplete plate. A roster caches each owner's candidates and readiness for
 one render. Ordinary br trackers continue sharing their single board snapshot. Remote Seeds
