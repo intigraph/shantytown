@@ -1,0 +1,3 @@
+{"version": 2, "width": 90, "height": 24}
+[0.09168915898771957, "o", "Before (faca10f)\r\nInput: one in_progress task and 200 unread notifications.\r\nSelected plate: held\r\n  sd list, status=None: 201 rows\r\n  sd ready, status=None: 200 rows\r\n\r\n"]
+[0.16438354196725413, "o", "Candidate\r\nInput: one in_progress task and 200 unread notifications.\r\nSelected plate: held\r\n  sd list, status=hooked: 0 rows\r\n  sd list, status=in_progress: 1 rows\r\n\r\n"]
