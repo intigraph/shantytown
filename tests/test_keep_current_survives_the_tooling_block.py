@@ -17,6 +17,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from shantytown.cli import _refresh_clone
 from shantytown.tooling import instruction_text, is_committed_plus_block, BEGIN, END
 
@@ -127,3 +129,84 @@ def test_a_clean_clone_is_untouched(tmp_path):
     assert err is None, err
     assert (clone / "CLAUDE.md").read_text() == "# rulebook\n\nupstream line\n"
     assert BEGIN not in (clone / "CLAUDE.md").read_text()
+
+
+@pytest.mark.parametrize('error_type', [subprocess.TimeoutExpired, OSError])
+@pytest.mark.parametrize('kit_change', ['delete', 'replace'])
+def test_raised_pull_restores_both_surfaces(tmp_path, monkeypatch, error_type, kit_change):
+    from shantytown import workspace
+    _origin, _seed, clone = _origin_and_clone(tmp_path)
+    original = (clone / 'CLAUDE.md').read_text()
+    before = instruction_text(original, INSTRUCTIONS)
+    (clone / 'CLAUDE.md').write_text(before)
+    kit = clone / '.mcp.json'
+    kit.write_bytes(b'fixture kit')
+    head = _git(clone, 'rev-parse', 'HEAD')
+
+    def raised(argv, timeout, **kwargs):
+        assert argv == ['git', '-C', str(clone), 'pull', '--ff-only']
+        assert (clone / 'CLAUDE.md').read_text() == original
+        if kit_change == 'delete':
+            kit.unlink()
+        else:
+            kit.write_bytes(b'incoming fixture template')
+        if error_type is subprocess.TimeoutExpired:
+            raise error_type(argv, timeout)
+        raise error_type('fixture transport failed')
+
+    monkeypatch.setattr(workspace, 'run_with_group_timeout', raised)
+    err = _refresh_clone(clone)
+    assert err and ('timed out' in err or 'fixture transport failed' in err)
+    assert (clone / 'CLAUDE.md').read_text() == before
+    assert kit.read_bytes() == b'fixture kit'
+    assert _git(clone, 'rev-parse', 'HEAD') == head
+
+
+@pytest.mark.parametrize('failed_surface', ['kit', 'block'])
+def test_restoration_failure_attempts_other_surface_and_retains_pull_error(
+        tmp_path, monkeypatch, failed_surface):
+    from shantytown import cli, workspace
+    _origin, _seed, clone = _origin_and_clone(tmp_path)
+    original = (clone / 'CLAUDE.md').read_text()
+    before = instruction_text(original, INSTRUCTIONS)
+    (clone / 'CLAUDE.md').write_text(before)
+    kit = clone / '.mcp.json'
+    kit.write_bytes(b'fixture kit')
+
+    def raised(argv, timeout, **kwargs):
+        kit.unlink()
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(workspace, 'run_with_group_timeout', raised)
+    if failed_surface == 'kit':
+        write = Path.write_bytes
+        def failed_write(path, data):
+            if path == kit:
+                raise OSError('fixture kit write denied')
+            return write(path, data)
+        monkeypatch.setattr(Path, 'write_bytes', failed_write)
+    else:
+        def failed_restore(path, instructions):
+            assert kit.read_bytes() == b'fixture kit'
+            raise OSError('fixture block write denied')
+        monkeypatch.setattr(cli, '_restore_tooling_block', failed_restore)
+
+    err = _refresh_clone(clone)
+    assert 'timed out' in err
+    assert 'restoration failed' in err
+    if failed_surface == 'kit':
+        assert (clone / 'CLAUDE.md').read_text() == before
+    else:
+        assert kit.read_bytes() == b'fixture kit'
+
+
+def test_cleanup_failure_cannot_report_successful_pull(tmp_path, monkeypatch):
+    from shantytown import cli, workspace
+    _origin, _seed, clone = _origin_and_clone(tmp_path)
+    def returned(argv, timeout, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout='', stderr='')
+    def failed_restore(path, instructions):
+        raise OSError('fixture restoration denied')
+    monkeypatch.setattr(workspace, 'run_with_group_timeout', returned)
+    monkeypatch.setattr(cli, '_restore_tooling_block', failed_restore)
+    assert 'instruction restoration failed' in _refresh_clone(clone)
