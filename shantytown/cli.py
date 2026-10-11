@@ -5229,7 +5229,9 @@ def _cmd_inbox(a) -> int:
         panes.send(agent.pane, msg)
     except PaneNotAgent as e:
         if isinstance(e, PaneSubmissionUnverified):
-            print(f"  could not tell: {e}", file=sys.stderr)
+            print(f"  could not tell: {e}; live delivery was not confirmed. "
+                  "Use st inbox -d to retain an authenticated recovery pointer.",
+                  file=sys.stderr)
             return CANNOT_TELL
         # THE HAZARD THIS EXISTS FOR (aegis-ikj4t): its runtime has exited, so
         # the pane is a login shell and typing here would EXECUTE the message as
@@ -7339,6 +7341,8 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain),
                 limited=limit_reached(runtime, plain))
+            if triage_mod.input_state(screen) == triage_mod.INPUT_QUEUED:
+                work = f"{work}·stranded input"
             cmdline = None
             read_cmdline = getattr(panes, "cmdline", None)
             if callable(read_cmdline):
@@ -12215,6 +12219,10 @@ def _tend_once(a, quiet: bool = False) -> int:
             return []
 
         _fleet_sweep("priority-advisory", _priority_report)
+
+        from . import inbox_recovery
+        _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
+            agents, panes, _inbox(a), log=_log))
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
