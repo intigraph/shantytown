@@ -4,3 +4,5 @@
 *.md   text diff
 *.py   text diff
 *.toml text diff
+# Terminal recordings retain CRLF bytes for scriptreplay timing.
+docs/demos/cycle-resume/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
