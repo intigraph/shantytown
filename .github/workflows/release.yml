@@ -67,6 +67,11 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
+      - name: Generate and verify release checksums
+        run: |
+          python scripts/release-checksums.py dist
+          (cd dist && sha256sum -c SHA256SUMS)
+
       # The entry point, exercised from the BUILT wheel rather than the source
       # tree — the tests import modules directly, so they all pass over an
       # install whose console script is broken.
@@ -84,6 +89,9 @@ jobs:
           python -m venv /tmp/relcheck
           /tmp/relcheck/bin/pip install --quiet dist/*.whl
           /tmp/relcheck/bin/st --version
+
+      - name: Recheck artifacts before publication
+        run: (cd dist && sha256sum -c SHA256SUMS)
 
       - name: Publish the release
         env:
