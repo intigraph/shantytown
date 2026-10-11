@@ -99,5 +99,5 @@ $ st attach                          # the admin's pane. starts it first if it's
 never launched over, and a retired one is never resurrected — so it is safe to run when you don't know
 what's already running, which is the only time you need it. Modes are named crew sets in
 [`shantytown.toml`](shantytown.toml.example), where the admin can also be told to
-[**hibernate**](cli.md#hibernate--when-the-administrators-stop-may-stay-stopped): stop waking
+[**hibernate**](cli.md#hibernate): stop waking
 itself at every turn boundary once it has handed the work out.
