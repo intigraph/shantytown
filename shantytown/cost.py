@@ -84,6 +84,22 @@ def capture_end(conn, payload, now, agent):
 
 
 def _br(config, *args):
+    if config.get('_tracker') is None and '_authority_args' in config:
+        # Pause/heartbeat-only paths need no board read. Resolve lazily at the
+        # first real item operation, retaining those independent health paths.
+        from . import cli
+        from types import SimpleNamespace
+        command_args=config['_authority_args']
+        authority=SimpleNamespace(root=command_args.root,backend=None,repo=None)
+        backend=cli._backend(authority,default='')
+        if backend not in ('seeds','br','beads'):
+            raise RuntimeError('cost requires an explicit deployment tracker backend')
+        if getattr(command_args,'backend',None) and command_args.backend != backend:
+            raise RuntimeError('cost backend override differs from deployment authority')
+        tracker=cli._tracker(authority)
+        if backend == 'seeds':
+            tracker.prove_store()
+        config.update(_backend=backend,_tracker=tracker)
     tracker=config.get('_tracker')
     if tracker is not None:
         response=tracker._bd(*args)
@@ -290,18 +306,7 @@ def _scheduler_status(config, state, phase):
 def run(args):
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
-        from . import cli
-        from types import SimpleNamespace
-        authority=SimpleNamespace(root=args.root,backend=None,repo=None)
-        backend=cli._backend(authority,default='')
-        if backend not in ('seeds','br','beads'):
-            raise ValueError('cost requires an explicit deployment tracker backend')
-        if getattr(args,'backend',None) and args.backend != backend:
-            raise ValueError('cost backend override differs from deployment authority')
-        tracker=cli._tracker(authority)
-        if backend == 'seeds':
-            tracker.prove_store()
-        config={**config,'_backend':backend,'_tracker':tracker}
+        config={**config,'_authority_args':args}
         with (Path(args.root) / 'cost.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return _run_locked(args, config)
