@@ -138,9 +138,10 @@ def test_codex_resume_new_anchor_bypasses_old_anchor_backoff(tmp_path, monkeypat
     assert "aegis-2" in changed["reason"]
 
 
-def test_a_codex_lead_active_anchor_resumes_too(monkeypatch, capsys):
+@pytest.mark.parametrize("role", ["lead", "keeper"])
+def test_a_codex_lead_active_anchor_resumes_too(monkeypatch, capsys, role):
     """Leads own beads; drain must not strand their own active anchor."""
-    lead = Agent(name="billy", role="lead", pane="p-b", harness="codex")
+    lead = Agent(name="billy", role=role, pane="p-b", harness="codex")
     rc, block = _run(
         monkeypatch, capsys, reg=_Reg([lead]),
         in_progress=[{"id": "aegis-1", "title": "lead work", "assignee": "billy"}],
@@ -423,8 +424,9 @@ def test_an_armed_budget_with_NO_signal_feeds_and_says_it_is_blind(tmp_path,
 # stop, there is no turn loop left to keep. A claude WORKER is fed precisely
 # because nothing else would continue it, and a claude lead is no different.
 
-def test_a_claude_lead_with_a_closed_anchor_IS_FED(monkeypatch, capsys):
-    lead = Agent(name="billy", role="lead", pane="p-b", harness="claude")
+@pytest.mark.parametrize("role", ["lead", "keeper"])
+def test_a_claude_lead_with_a_closed_anchor_IS_FED(monkeypatch, capsys, role):
+    lead = Agent(name="billy", role=role, pane="p-b", harness="claude")
     claims = []
     rc, block = _run(
         monkeypatch, capsys, reg=_Reg([lead]), claims=claims,
