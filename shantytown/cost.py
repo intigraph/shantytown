@@ -84,8 +84,16 @@ def capture_end(conn, payload, now, agent):
 
 
 def _br(config, *args):
-    response = subprocess.run([config.get('br', 'br'), *args], cwd=config['tracker_repo'],
-                              capture_output=True, text=True, timeout=30)
+    tracker=config.get('_tracker')
+    if tracker is not None:
+        response=tracker._bd(*args)
+    elif config.get('_backend') == 'seeds':
+        raise RuntimeError('native cost authority missing; refusing retired tracker fallback')
+    else:
+        # Legacy library callers remain explicit. The CLI always supplies its
+        # selected tracker before source reads, metrics or closure receipts.
+        response = subprocess.run([config.get('br', 'br'), *args], cwd=config['tracker_repo'],
+                                  capture_output=True, text=True, timeout=30)
     if response.returncode:
         raise RuntimeError(response.stderr[:300] or 'tracker command failed')
     return json.loads(response.stdout)
@@ -282,10 +290,22 @@ def _scheduler_status(config, state, phase):
 def run(args):
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
+        from . import cli
+        from types import SimpleNamespace
+        authority=SimpleNamespace(root=args.root,backend=None,repo=None)
+        backend=cli._backend(authority,default='')
+        if backend not in ('seeds','br','beads'):
+            raise ValueError('cost requires an explicit deployment tracker backend')
+        if getattr(args,'backend',None) and args.backend != backend:
+            raise ValueError('cost backend override differs from deployment authority')
+        tracker=cli._tracker(authority)
+        if backend == 'seeds':
+            tracker.prove_store()
+        config={**config,'_backend':backend,'_tracker':tracker}
         with (Path(args.root) / 'cost.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return _run_locked(args, config)
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
         print(f'cost: UNKNOWN: {exc}', file=sys.stderr)
         return 2
 
