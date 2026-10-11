@@ -319,7 +319,7 @@ def _backend(a, default="files") -> str:
     if declared:
         if declared not in ("files", "beads", "br", "seeds", "forgejo"):
             raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
-                             "backend (files|beads|br|seeds|forgejo). Fix [env] in "
+                             "supported backend. Fix [env] in "
                              "shantytown.toml (or the environment); a typo must "
                              "not silently mean files.")
         return declared
@@ -1292,16 +1292,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
-                    help="tracker backend (identity is always files). #3. "
-                         "Unset means the deployment's SHANTY_BACKEND "
-                         "([env] in shantytown.toml, then env), else per-command "
-                         "default: files everywhere, EXCEPT `mail -d`, which "
-                         "defaults to beads because a must-survive message "
-                         "belongs in the shared store (dearing, qdal.2). Pass "
-                         "--backend files to force local.")
+                    help="tracker backend (identity is always files). Unset uses "
+                         "the deployment's SHANTY_BACKEND ([env] in shantytown.toml, "
+                         "then environment), otherwise the command default. An "
+                         "explicit option overrides deployment configuration.")
     ap.add_argument("--repo", default=None,
-                    help="store directory for --backend beads/br (unset: deployment's "
-                         "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the .beads walk-up)")
+                    help="store directory for compatibility tracker adapters (unset: deployment's "
+                         "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the configured store walk-up)")
     ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
                     help="identity backend: files (generated cards, the default), "
                          "quipu (the graph), or toml ([crew.<name>] in "
@@ -1364,7 +1361,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "Flattened to one line (the transport submits on "
                            "newline).")
     go.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
-                    help="quipu node(s) relevant to this bead (repeatable). Rides "
+                    help="quipu node(s) relevant to this item (repeatable). Rides "
                          "the dispatch payload through the same triage gate as the "
                          "work, so the receiving agent starts from what the graph "
                          "already knows instead of re-deriving it")
@@ -1435,7 +1432,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="park an item with a required blocker kind and durable reason")
     df.add_argument("item")
     df.add_argument("kind", choices=tuple(BLOCKER_KIND_LABELS),
-                    help="bead|human|access|external are blockers; parked means "
+                    help="dependency, human, access and external kinds are blockers; parked means "
                          "deliberately set aside with no blocker")
     reason = df.add_mutually_exclusive_group(required=True)
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
@@ -1672,10 +1669,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("-n", "--dry-run", action="store_true",
                        help="verify and describe the transition; change nothing")
 
-    co = leaf("cost", help="per-bead costs from Camayoc and explicit focus bindings")
-    co.add_argument("bead", nargs="?")
+    co = leaf("cost", help="per-item costs from Camayoc and explicit focus bindings")
+    co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
-    co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-bead receipts")
+    co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -1717,8 +1714,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
     ib.add_argument("-d", "--durable", action="store_true",
-                    help="must-survive: deliver to the recipient's INBOX (a bead "
-                         "on the aegis store with --backend beads), then "
+                    help="must-survive: deliver to the recipient's INBOX (an item "
+                         "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
@@ -2005,7 +2002,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "step. Unwritten context is the only thing a cycle "
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
-                    help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
+                    help="durable checkpoint item id; required for administrators and read back before a self-cycle request")
     _add_despite_hold(cy)
     # --checkpoint-file is Stiwi's "an st command that does the needful"
     # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
@@ -2016,7 +2013,7 @@ def build_parser() -> argparse.ArgumentParser:
     # it is posted to the bead and its first line becomes the reason.
     cy.add_argument("--checkpoint-file", default="",
                     help="a file holding your checkpoint notes. Posted as a "
-                         "comment on the checkpoint/anchor bead, and its first "
+                         "comment on the checkpoint/anchor item, and its first "
                          "line becomes the reason. Use INSTEAD of -r: one "
                          "command, no hand-composed summary")
     # Stiwi, same directive: "would be nice to specify a quipu node(s) for the
@@ -5945,7 +5942,7 @@ def _cmd_repool(a) -> int:
     except TrackerWriteLost as e:
         # The write was attempted and the read-back still disagrees. Do NOT
         # blind-retry: read the bead first — the row may hold half the update.
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`)"
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the item (`st work item show {a.item}`)"
               f" before retrying — the row may be half-updated.", file=sys.stderr)
         return CANNOT_TELL
     if r.noop:
@@ -5981,7 +5978,7 @@ def _cmd_defer(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except (TrackerWriteLost, DeferUnconfirmed) as e:
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`) "
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the item (`st work item show {a.item}`) "
               "before retrying — the status and label may already have landed.",
               file=sys.stderr)
         return CANNOT_TELL
@@ -6906,10 +6903,10 @@ def _cmd_crew(a) -> int:
               f"NOT zero")
     elif n_un:
         p1 = f", {n_p1} of them P1 or above" if n_p1 else ""
-        print(f"  {n_un} open bead(s) in NOBODY'S haul{p1} — unassigned, so they "
+        print(f"  {n_un} open item(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
               f"`br list --status open` and route by domain.")
-        print(f"    (includes any `decision-needed` beads, which are correctly "
+        print(f"    (includes any `decision-needed` items, which are correctly "
               f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
@@ -6960,7 +6957,7 @@ def _cmd_crew(a) -> int:
         # changed meaning between two prompts got answered twice in one evening.
         print(f"    Read it:   st agent ask {waiting[0]}")
         print(f"    Answer it: st agent answer {waiting[0]} <N>")
-        print(f"    ...or tell them to put the decision on the bead with a "
+        print(f"    ...or tell them to put the decision on the item with a "
               f"recommendation and carry")
         print(f"    on — a question in a pane reaches nobody and dies with the "
               f"session.")
@@ -6991,7 +6988,7 @@ def _cmd_crew(a) -> int:
         print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
               f"THEN takes the task. tend")
         # tend auto-cycles a checkpointed saturated agent (aegis-zl7jwm).
-        print(f"    cycles it at an idle turn once a checkpoint is on its plate bead; "
+        print(f"    cycles it at an idle turn once a checkpoint is on its plate item; "
               f"do NOT tell it")
         print(f"    to /clear (that drops bypass). Still here means no checkpoint "
               f"yet: `st agent advise <name>`.")
@@ -9034,7 +9031,7 @@ def _cmd_cycle(a) -> int:
                            "you are mid-task on, decisions made, the exact next "
                            "step>'). It is the only thing the cycle destroys.")
         if cycle_mod.requires_checkpoint_bead(role, checkpoint_bead):
-            missing.append("a durable bead: administrator cycles need "
+            missing.append("a durable item: administrator cycles need "
                            "--checkpoint-bead <id>, and you hold no plate item to "
                            "default to.")
         if missing:
@@ -9048,7 +9045,7 @@ def _cmd_cycle(a) -> int:
             try:
                 _tracker(a).get(checkpoint_bead)
             except Exception as e:
-                print(f"  refused: checkpoint bead {checkpoint_bead!r} could not be read ({e})",
+                print(f"  refused: checkpoint item {checkpoint_bead!r} could not be read ({e})",
                       file=sys.stderr)
                 return REFUSED
         # Post the checkpoint file to the bead BEFORE recording the request, so a
@@ -9081,7 +9078,7 @@ def _cmd_cycle(a) -> int:
                           f"but re-post the file when the tracker is reachable.",
                           file=sys.stderr)
             else:
-                print("  ⚠ no checkpoint bead and no active anchor to post to — "
+                print("  ⚠ no checkpoint item and no active anchor to post to — "
                       "the file's first line is recorded as the reason only.",
                       file=sys.stderr)
 
@@ -9255,7 +9252,7 @@ def _cmd_cycle(a) -> int:
     print(f"  {agent_name}: CYCLED via {performed} — context cleared, {kept}.")
     if brief_path:
         print(f"  resume brief written — its SessionStart hook injects the "
-              f"checkpoint, bead and graph nodes into the fresh context.")
+              f"checkpoint, item and graph nodes into the fresh context.")
     _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""), card, panes)
     return OK
 
@@ -9444,7 +9441,7 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
     except Exception as e:  # noqa: BLE001
         print(f"  ⚠ resume brief NOT written ({e}) — {agent_name} will come back "
               f"without its handoff in context. Its checkpoint is still on the "
-              f"bead and the stop record.", file=sys.stderr)
+              f"item and the stop record.", file=sys.stderr)
         return ""
 
 
@@ -10102,7 +10099,7 @@ def _cmd_subscribe(a) -> int:
         try:
             item = tracker.create(title, assignee=admin)
         except Exception as e:
-            print(f"  could not create a bead for {w.iri}: {e}", file=sys.stderr)
+            print(f"  could not create an item for {w.iri}: {e}", file=sys.stderr)
             return
         mailed = ""
         if admin:
@@ -10134,7 +10131,7 @@ def _cmd_subscribe(a) -> int:
                     f"shuttle run {short} ({wf}) — state {r.state}", assignee=admin)
                 print(f"  shuttle run {short} -> {item.id}")
             except Exception as e:
-                print(f"  could not create a bead for {r.iri}: {e}", file=sys.stderr)
+                print(f"  could not create an item for {r.iri}: {e}", file=sys.stderr)
                 return
         if admin:
             try:
@@ -11338,7 +11335,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
             and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
             f"Work is on your hook: {item.id} — {cycle.title} — requested DREAM "
-            f"cycle; read the bead and execute one bounded pass.", "st work dream"))
+            f"cycle; read the item and execute one bounded pass.", "st work dream"))
     return cycle, item.id, "created"
 
 
@@ -12421,7 +12418,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         stale_blocked = _fleet_sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if stale_blocked:
-            print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
+            print(f"  ⚠ re-surfaced {len(stale_blocked)} item(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
@@ -12459,7 +12456,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())
         if misstatused:
-            print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
+            print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked item(s) "
                   f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
                   file=sys.stderr)
         if skipped_fleet:

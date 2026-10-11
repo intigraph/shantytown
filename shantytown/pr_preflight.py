@@ -145,7 +145,7 @@ def family(bead):
 
 def report(candidate, pulls, bead, bead_families=()):
     if not BEAD.fullmatch(bead) or any(not BEAD.fullmatch(b) for b in bead_families):
-        raise Refused("bead/family must be a concrete work-item ID")
+        raise Refused("item/family must be a concrete work-item ID")
     families = {family(b) for b in (bead, *bead_families)}
     matches = []
     for pull in pulls:
@@ -224,7 +224,7 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
     dispositions(checkout, repo, final_candidate, final_review, chosen, api)
     primary = re.findall(r"^Bead:\s*(\S+)\s*$", body, re.M)
     if primary and primary != [bead]:
-        raise Refused("body must identify exactly the requested primary bead")
+        raise Refused("body must identify exactly the requested primary item")
     appendix = ("" if primary else "\n\nBead: " + bead)
     appendix += "\n\nOverlap preflight: " + review["inventory_digest"]
     for d in chosen:

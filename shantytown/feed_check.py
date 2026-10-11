@@ -372,7 +372,7 @@ def _bd_ready(cwd: str | None = None, root=None, reg=None) -> list[dict]:
     r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd ready failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker ready failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -540,7 +540,7 @@ def held_reason(free: list[str], held: list[tuple[str, str, str]]) -> str:
     why = held[0][2] if held else ""
     return (f"RULE ZERO YIELDS to the usage governor: {len(free)} idle "
             f"worker(s) ({', '.join(sorted(free))}) and {len(held)} ready "
-            f"bead(s), 0 of which clear the priority floor. IDLE IS THE CORRECT "
+            f"item(s), 0 of which clear the priority floor. IDLE IS THE CORRECT "
             f"STATE — the throttle is holding, the feeder is not broken, and the "
             f"work is untouched. Nothing here needs doing. Governor says: {why}")
 
@@ -549,8 +549,8 @@ def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
     top = "; ".join(f"{bid} {title}"[:70] for bid, title in ready[:3])
     return (
         f"RULE ZERO — do not stop with the fleet idle. {len(free)} feedable "
-        f"worker(s) IDLE ({', '.join(free)}) and {len(ready)} dispatchable bead(s) "
-        f"ready. Dispatch before you stop (`st go <bead> <worker>`), then this stop "
+        f"worker(s) IDLE ({', '.join(free)}) and {len(ready)} dispatchable item(s) "
+        f"ready. Dispatch before you stop (`st go <item> <worker>`), then this stop "
         f"is allowed. Top ready: {top}.")
 
 
@@ -897,7 +897,7 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     # A repeat must READ as a repeat — being handed the same bead back looks like
     # an instruction to persist, when it only means you have not released it. One
     # line; the rule itself is in `st ops help haul`.
-    again = (f"(SAME bead, served {'twice' if repeats > 1 else 'once'} already — "
+    again = (f"(SAME item, served {'twice' if repeats > 1 else 'once'} already — "
              f"that is the re-serve rule, not a verdict. Release it below.) "
              if repeats else "")
     # No budget declared -> say nothing about headroom. A caveat with no number
@@ -914,7 +914,7 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
         f"Not this one? done -> `{examples.close(nid)}` · gated -> `st work defer {nid} "
-        f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
+        f"<kind> --reason-file <f>` · not yours -> "
         f"`{examples.unassign(nid)}`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
         f"assignee only re-pools it.) Options: `st ops help haul`.")
@@ -941,7 +941,7 @@ def haul_resume_message(nid: str, title: str, *, examples=None) -> str:
         f"(`{examples.show(nid)}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
         f"the evidence, then use `st work defer {nid} "
-        f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "
+        f"<kind> --reason-file <file>`; if it is not "
         f"yours, clear the assignee. "
         f"Do not stop merely because the previous model turn ended. {instruction(nid)}")
 
@@ -971,7 +971,7 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker list failed: {r.stderr.strip()}")
     from .inbox import drop_parked      # parked is not active (aegis-1d3fze)
     return drop_parked(json.loads(r.stdout))
 
@@ -993,7 +993,7 @@ def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker list failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -1010,7 +1010,7 @@ def bd_show(cwd: str | None, bead_id: str, root=None, reg=None) -> dict:
     r = subprocess.run(["bd", "show", bead_id, "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd show {bead_id} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker show {bead_id} failed: {r.stderr.strip()}")
     value = json.loads(r.stdout)
     return value[0] if isinstance(value, list) else value
 
@@ -1030,4 +1030,4 @@ def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd update failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker update failed: {r.stderr.strip()}")

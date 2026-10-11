@@ -59,7 +59,7 @@ def cycle_now(depth_k: float | int | None = None,
     where = (f"{int(depth_k)}k, past the {int(threshold_k)}k cycle line"
              if depth_k and threshold_k else "past the cycle line")
     return (f"⚠ CONTEXT HIGH ({where}). CHECKPOINT, then cycle:\n"
-            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
+            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
             f"{NO_CLEAR} Cycle keeps bypass/MCP/skills/hooks and re-dispatches "
             f"your plate. Keep working until it fires. {HELP_POINTER}")
@@ -73,7 +73,7 @@ def haul_handoff(context_k: float | int, line_k: float | int) -> str:
     """
     return (f"⚠ HANDOFF: {int(context_k)}k, past the {int(line_k)}k line. Do not "
             f"start the next item. CHECKPOINT, then cycle:\n"
-            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
+            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
             f"{NO_CLEAR} Your haul resumes itself afterwards. {HELP_POINTER}")
 
@@ -91,7 +91,7 @@ def coordinator_tag() -> str:
     `/clear` here will tell an agent to /clear, which is how the wrong primitive
     survived a fix to the agent-facing half.
     """
-    return f"checkpoints to its bead, then `{CYCLE_CMD}`"
+    return f"checkpoints to its item, then `{CYCLE_CMD}`"
 
 
 def refusal_note() -> str:
@@ -124,8 +124,8 @@ def coordinator_self_handoff(depth_k: float | int, threshold_k: float | int) -> 
     return (f"⚠ YOUR OWN CONTEXT: {int(depth_k)}k, past the {int(threshold_k)}k "
             f"line. You enforce this on the crew — same rule. CHECKPOINT, then "
             f"cycle:\n"
-            f"  br comments add <bead> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-bead <bead> --checkpoint-file <notes>\n"
+            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
+            f"--checkpoint-bead <id> --checkpoint-file <notes>\n"
             f"{NO_CLEAR} {HELP_POINTER}")
 
 
@@ -146,6 +146,6 @@ def write_your_handoff_now(depth_k: float | int, cycle_k: float | int) -> str:
     return (f"⚠ HANDOFF SOON ({int(depth_k)}k; the cycle line is {int(cycle_k)}k). "
             f"Keep working — but write your handoff NOW, while you still have the "
             f"reasoning:\n"
-            f"  br comments add <bead> --file <notes>   "
+            f"  st work item comment <id> --file <notes>   "
             f"(state · landed-vs-local · exact next step · rollback)\n"
             f"Do it before the cycle prompt, not after. {HELP_POINTER}")

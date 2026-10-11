@@ -116,7 +116,7 @@ def test_a_fully_throttled_queue_allows_the_stop_and_SAYS_WHY():
     assert v.block is False
     assert v.by == sp.BY_THROTTLED
     assert "IDLE IS CORRECT" in v.reason
-    assert "15 ready bead(s)" in v.reason
+    assert "15 ready item(s)" in v.reason
     assert "50% tier" in v.reason           # the tier, named
 
 
