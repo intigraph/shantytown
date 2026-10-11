@@ -498,3 +498,49 @@ def test_the_canonical_case_is_UNTOUCHED_by_that_guard(two_remotes):
     assert main(["push", str(repo), "ellie"]) == OK
     assert _sha(origin, "main") == _sha(wt, "HEAD")
     assert _sha(forge, "main") == _sha(wt, "HEAD")
+
+
+def test_worktree_unrelated_refuses_before_refresh_and_explicit_resume(
+        two_remotes, monkeypatch, capsys):
+    from shantytown import cli
+    repo, wt, origin, forge = two_remotes
+    _git(wt, 'checkout', '-b', 'fix/held')
+    (wt / 'uncommitted').write_text('keep')
+    refreshed = []
+    monkeypatch.setattr(cli, '_refresh_worktree', lambda path: refreshed.append(path))
+    assert main(['repo', 'worktree', str(repo), 'ellie']) == REFUSED
+    assert refreshed == []
+    assert 'fix/held' in capsys.readouterr().err
+    assert main(['repo', 'worktree', str(repo), 'ellie', '--resume']) == OK
+    assert len(refreshed) == 1
+    assert 'RESUMING' in capsys.readouterr().out
+    assert _git(wt, 'branch', '--show-current') == 'fix/held'
+    assert (wt / 'uncommitted').read_text() == 'keep'
+
+
+def test_explicit_source_branch_publishes_exact_topic_to_both_peers(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    _git(wt, 'checkout', '-b', 'fix/held')
+    _commit(wt, 'topic-work')
+    assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
+                 'fix/held', '--branch', 'fix/held']) == OK
+    for remote in (origin, forge):
+        assert _sha(remote, 'fix/held') == _sha(wt, 'HEAD')
+        assert _sha(remote, 'main') != _sha(wt, 'HEAD')
+
+
+def test_explicit_wrong_source_refuses_without_remote_write(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    before = [_sha(remote, 'main') for remote in (origin, forge)]
+    assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
+                 'fix/not-checked-out']) == REFUSED
+    assert [_sha(remote, 'main') for remote in (origin, forge)] == before
+
+
+def test_explicit_source_requires_readable_branch(two_remotes, monkeypatch):
+    from shantytown import cli
+    repo, wt, origin, forge = two_remotes
+    monkeypatch.setattr(cli, '_worktree_branch', lambda path: None)
+    monkeypatch.setattr(cli, 'push_every_remote', lambda *a: pytest.fail('must not push'))
+    assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
+                 'wt/ellie']) == REFUSED

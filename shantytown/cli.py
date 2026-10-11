@@ -2088,6 +2088,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `quipu` -> ~/gt/quipu")
     wt.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
+    wt.add_argument("--resume", action="store_true",
+                    help="explicitly resume an existing non-canonical branch; preserve its work")
     wt.add_argument("--gc", action="store_true",
                     help="remove the worktree IFF unchanged — never discards "
                          "uncommitted or unpushed work")
@@ -2100,6 +2102,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
     ph.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
+    ph.add_argument("--source-branch",
+                    help="explicit source branch; must match the selected worktree and caller")
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
@@ -6284,6 +6288,7 @@ def _cmd_go(a) -> int:
     if a.worktree:
         try:
             wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+            _check_worktree_resume(Path(wt_path), a.agent)
         except WorkspaceError as e:
             print(f"  refused: worktree — {e}", file=sys.stderr)
             return REFUSED
@@ -9900,6 +9905,27 @@ def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
               file=sys.stderr)
 
 
+def _check_worktree_resume(path: Path, agent: str, *, resume: bool = False) -> None:
+    """Require an explicit choice before refreshing an unrelated work branch."""
+    branch = _worktree_branch(path)
+    expected = f"wt/{agent}"
+    if branch == expected:
+        print(f"  worktree branch: {branch}")
+        return
+    observed = repr(branch) if branch is not None else "UNKNOWN or detached"
+    if not resume:
+        raise WorkspaceError(
+            f"existing worktree {path} is on {observed}, expected {expected!r}. "
+            "No refresh or branch change performed. Use st repo worktree with "
+            "--resume only to continue that work; for new work, use --gc first "
+            "(it keeps trees holding work), then provision again."
+        )
+    print(f"  RESUMING existing branch {observed} at {path}; not a new worktree")
+    if branch is not None:
+        print(f"  publish this branch through st repo push with --source-branch "
+              f"{branch!r} and an explicit --branch destination")
+
+
 def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
@@ -9924,6 +9950,7 @@ def _cmd_worktree(a) -> int:
             print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
             return OK
         path = ensure_worktree(repo, agent)
+        _check_worktree_resume(Path(path), agent, resume=getattr(a, "resume", False))
         # ENFORCE, HAVING JUST ASSISTED (aegis-xig5m). Provisioning a worktree is
         # the moment st KNOWS this shared checkout is in play — so it is the
         # moment to install the guard, and it costs nothing. Doing it here is why
@@ -10009,15 +10036,15 @@ def _cmd_push(a) -> int:
               f"first.", file=sys.stderr)
         return REFUSED
 
-    branch = f"wt/{agent}"
+    branch = getattr(a, "source_branch", None) or f"wt/{agent}"
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
-            f"{caller_path} differs from canonical '{branch}' at {dest}. "
+            f"{caller_path} differs from selected source '{branch}' at {dest}. "
             "No remote was contacted. Run st repo push from the canonical worktree, "
-            "or use an explicit git push after reviewing the exact ref.",
+            "or name the intended branch with --source-branch after reviewing the exact ref.",
             file=sys.stderr,
         )
         return REFUSED
@@ -10039,12 +10066,16 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
+    if getattr(a, "source_branch", None) and checked_out is None:
+        print("  refused before push: explicit source branch cannot be verified; "
+              "no remote was contacted.", file=sys.stderr)
+        return REFUSED
     if checked_out is not None and checked_out != branch:
         print(f"  refused before push: {dest} is on '{checked_out}', but this would "
               f"push '{branch}' — a branch the worktree is not on, so it is not the "
               f"work you are looking at. No remote was contacted.\n"
               f"  Either check out '{branch}' there, or push '{checked_out}' "
-              f"deliberately with an explicit git push after reviewing the ref.",
+              f"deliberately with --source-branch after reviewing the ref.",
               file=sys.stderr)
         return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
