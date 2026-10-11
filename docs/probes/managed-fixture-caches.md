@@ -9,8 +9,10 @@ The installer reports these checkouts separately as
 existing shrinking-coverage alert unchanged.
 
 The boundary requires a physical path inside that exact pool, an eight-character
-suite suffix, current ownership, mode0700, and a Git common directory inside the
-same suite. Unknown custody, lookalikes, symlink escapes and worktrees sharing
+suite suffix, current ownership, mode0700, a Git common directory inside the
+same suite, and the effective physical Git hook directory inside that suite.
+Absolute and relative core.hooksPath overrides and hook-directory symlinks are
+resolved; missing or escaped effective directories stay in ordinary coverage. Unknown custody, lookalikes, symlink escapes and worktrees sharing
 hooks with an external repository remain in coverage. This is a disposable
 fixture namespace contract, not a general cache or temporary-directory skip.
 Existing dependency-cache exclusions remain independently reported. Fixture

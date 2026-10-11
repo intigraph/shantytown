@@ -151,9 +151,10 @@ is_excluded() {
 # A sanctioned test namespace is physically owned/private and disposable. A
 # checkout sharing hooks with a repository outside it remains real coverage.
 is_owned_metric_fixture() {
-  local dir="$1" physical prefix rest suite root common
-  physical="$(realpath -e -- "$dir" 2>/dev/null)" || return 1
+  local dir="$1" physical prefix rest suite root common hooks
   prefix="$HOME/.cache/aegis-metric-fixtures/"
+  case "$dir/" in "$prefix"*) ;; *) return 1 ;; esac
+  physical="$(realpath -e -- "$dir" 2>/dev/null)" || return 1
   case "$physical" in "$prefix"*) ;; *) return 1 ;; esac
   rest="${physical#"$prefix"}"
   suite="${rest%%/*}"
@@ -163,7 +164,11 @@ is_owned_metric_fixture() {
   [ "$(stat -c '%u:%a' -- "$root" 2>/dev/null)" = "$(id -u):700" ] || return 1
   common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
-  case "$common" in "$root"/*) return 0 ;; *) return 1 ;; esac
+  case "$common" in "$root"/*) ;; *) return 1 ;; esac
+  hooks="$(git -C "$dir" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)" || return 1
+  hooks="$(realpath -e -- "$hooks" 2>/dev/null)" || return 1
+  [ -d "$hooks" ] || return 1
+  case "$hooks" in "$root"/*) return 0 ;; *) return 1 ;; esac
 }
 
 repo_label() {
@@ -548,6 +553,47 @@ if [ "${1:-}" = "--selftest" ]; then
   else
     echo "FAIL fixture exclusion custody boundary"; fail=1
   fi
+  # Git common storage does not prove the effective core.hooksPath.
+  git -C "$fr/private" config core.hooksPath "$fh/regular/.git/hooks"
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   external absolute core.hooksPath stays in coverage"
+  else
+    echo "FAIL external effective hooks were excluded"; fail=1
+  fi
+  git -C "$fr/private" config core.hooksPath '../../../../regular/.git/hooks'
+  if [ "$(realpath -e -- "$(git -C "$fr/private" rev-parse --path-format=absolute --git-path hooks)")" = "$fh/regular/.git/hooks" ] \
+     && ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   actual external relative core.hooksPath stays in coverage"
+  else
+    echo "FAIL relative effective hook escape excluded"; fail=1
+  fi
+  git -C "$fr/private" config core.hooksPath unknown-missing-hooks
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   missing effective hooks stay in coverage"
+  else
+    echo "FAIL unknown effective hooks excluded"; fail=1
+  fi
+  ln -s "$fh/regular/.git/hooks" "$fr/private/escaped-hooks"
+  git -C "$fr/private" config core.hooksPath escaped-hooks
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   physical hook-directory symlink escape stays in coverage"
+  else
+    echo "FAIL symlink effective hook escape excluded"; fail=1
+  fi
+  mkdir -p "$fr/private/private-hooks"
+  git -C "$fr/private" config core.hooksPath private-hooks
+  if HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   explicit private effective hooks remain a fixture"
+  else
+    echo "FAIL known private hooks were not excluded"; fail=1
+  fi
+  git -C "$fr/private" config --unset core.hooksPath
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "FAIL restored positive fixture exclusion"; fail=1
+  fi
+  git init -q "$fr/redirected"
+  git -C "$fr/redirected" remote add origin https://github.com/example/redirected.git
+  git -C "$fr/redirected" config core.hooksPath "$fh/regular/.git/hooks"
   chmod 755 "$fr"
   if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
     echo "ok   unknown/nonprivate fixture custody stays in coverage"
@@ -560,8 +606,8 @@ if [ "${1:-}" = "--selftest" ]; then
     "$SELF/install-scrub-guard.sh" --root "$fh" 2>&1)"
   if printf '%s' "$fslog" | grep -q 'owned metric fixtures excluded: 1 ' \
      && grep -q '^scrub_guard_fixture_excluded_total 1$' "$fst" \
-     && grep -q '^scrub_guard_repos_total 1$' "$fst"; then
-    echo "ok   exact fixture count reported separately with ordinary coverage preserved"
+     && grep -q '^scrub_guard_repos_total 2$' "$fst"; then
+    echo "ok   exact fixture count reported separately with ordinary and redirected-hooks coverage preserved"
   else
     echo "FAIL fixture family reporting"; printf "%s\n" "$fslog"; cat "$fst"; fail=1
   fi
