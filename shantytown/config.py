@@ -102,6 +102,10 @@ class ConfigError(ValueError):
 class ConfigSourceError(ConfigError):
     """A selected graph bootstrap is invalid; never guess another tracker."""
 
+    def __init__(self, message, local):
+        super().__init__(message)
+        self.local = local
+
 
 @dataclass(frozen=True)
 class Hibernate:
@@ -330,7 +334,7 @@ def load(root, *, refresh_source=False) -> Config:
             Path(root) if root is not None else path.parent, data,
             lambda value: _resolve(value, path), refresh=refresh_source)
     except config_source.SourceError as exc:
-        raise ConfigSourceError(str(exc)) from None
+        raise ConfigSourceError(str(exc), _resolve(data, path)) from None
     result = _resolve(projection.data, path)
     return replace(result, source_origins=projection.origins,
                    source_document=projection.document,
@@ -345,7 +349,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
     try:
         return load(root), None
     except ConfigSourceError as e:
-        return Config(source_warning=str(e)), str(e)
+        return replace(e.local, source_warning=str(e)), str(e)
     except ConfigError as e:
         return Config(), str(e)
     except Exception as e:                    # noqa: BLE001 — a hook must not die here

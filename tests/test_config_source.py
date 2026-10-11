@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -178,3 +179,42 @@ def test_invalid_bootstrap_cannot_silently_select_files(tmp_path):
         'SHANTY_CONFIG_SERVER="https://graph.example"\n')
     with pytest.raises(SystemExit, match="refusing a guessed backend"):
         _backend(Namespace(root=tmp_path, backend=None))
+
+
+@pytest.mark.parametrize("entity", ["urn:test:config", "broken iri"])
+@pytest.mark.parametrize("ambient", ["files", None])
+def test_source_error_preserves_local_tracker_authority(
+        tmp_path, monkeypatch, entity, ambient):
+    from argparse import Namespace
+    from shantytown.cli import _backend
+    from shantytown.deployment import command_environment
+    monkeypatch.delenv("SHANTY_BACKEND", raising=False)
+    if ambient:
+        monkeypatch.setenv("SHANTY_BACKEND", ambient)
+    monkeypatch.setattr(source, "_fetch", lambda *a: pytest.fail("no graph read"))
+    (tmp_path / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_BACKEND="seeds"\nSHANTY_CONFIG_ENTITY='
+        + json.dumps(entity) + '\nSHANTY_CONFIG_SERVER="https://graph.example"\n')
+    with command_environment(tmp_path):
+        assert _backend(Namespace(root=tmp_path, backend=None)) == "seeds"
+        assert _backend(Namespace(root=tmp_path, backend="files")) == "files"
+    assert not (tmp_path / "config-source").exists()
+    assert os.environ.get("SHANTY_BACKEND") == ambient
+
+
+@pytest.mark.parametrize("entity", ["urn:test:config", "broken iri"])
+def test_unvalidated_source_refuses_ambient_tracker_fallback(
+        tmp_path, monkeypatch, entity):
+    from argparse import Namespace
+    from shantytown.cli import _backend
+    from shantytown.deployment import command_environment
+    monkeypatch.setenv("SHANTY_BACKEND", "files")
+    monkeypatch.setattr(source, "_fetch", lambda *a: pytest.fail("no graph read"))
+    (tmp_path / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_CONFIG_ENTITY=' + json.dumps(entity)
+        + '\nSHANTY_CONFIG_SERVER="https://graph.example"\n')
+    with command_environment(tmp_path):
+        with pytest.raises(SystemExit, match="refusing a guessed backend"):
+            _backend(Namespace(root=tmp_path, backend=None))
+        assert _backend(Namespace(root=tmp_path, backend="files")) == "files"
+    assert not (tmp_path / "config-source").exists()

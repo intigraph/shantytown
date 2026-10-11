@@ -309,6 +309,12 @@ def _backend(a, default="files") -> str:
     explicit = getattr(a, "backend", None)
     if explicit:
         return explicit
+    from .config import load_or_default
+    cfg, _error = load_or_default(getattr(a, "root", None))
+    if (cfg.source_warning and cfg.source_document is None
+            and not cfg.env.get("SHANTY_BACKEND")):
+        raise SystemExit("configuration source has no validated snapshot or explicit local "
+                         "tracker; refusing a guessed backend")
     declared = _deployment_default(a, "SHANTY_BACKEND")
     if declared:
         if declared not in ("files", "beads", "br", "seeds", "forgejo"):
@@ -317,11 +323,6 @@ def _backend(a, default="files") -> str:
                              "shantytown.toml (or the environment); a typo must "
                              "not silently mean files.")
         return declared
-    from .config import load_or_default
-    cfg, _error = load_or_default(getattr(a, "root", None))
-    if cfg.source_warning and cfg.source_document is None:
-        raise SystemExit("configuration source has no validated snapshot or explicit local "
-                         "tracker; refusing a guessed backend")
     return default
 
 
