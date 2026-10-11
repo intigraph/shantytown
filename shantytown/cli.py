@@ -8787,7 +8787,7 @@ def _durable_checkpoint_gate(a, agent_name: str):
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
-        bead = _cycle_anchor_bead(a, agent_name)
+        bead = (getattr(a, "checkpoint_bead", "") or "").strip() or _cycle_anchor_bead(a, agent_name)
     except Exception as e:
         return cycle_mod.durable_gate(agent_name, "", since, [], error=f"plate unreadable ({e})")
     if not bead:
