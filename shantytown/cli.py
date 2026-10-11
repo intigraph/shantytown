@@ -9718,6 +9718,20 @@ def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
     return False
 
 
+def _cycle_anchor_summary(a, agent_name: str, item=None, card=None) -> str:
+    """Render the already-read plate and session-bound context in the one prompt."""
+    context = "context UNKNOWN — no current session reading"
+    try:
+        from .context_hint import crew_label
+        card = card or _registry(a).get(agent_name)
+        context = crew_label(a.root, card) or context
+    except Exception:  # local observation failure must remain explicit
+        pass
+    plate = (f"{item.id} — {getattr(item, 'title', '')}" if item is not None
+             else "UNKNOWN — verify with st anchor before task work")
+    return f"ON YOUR PLATE: {plate}\n{agent_name}: {context}"
+
+
 def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
                             card=None, panes=None) -> None:
     """Put the agent's plate item back on its hook after a relaunch.
@@ -9760,7 +9774,8 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
         checkpoint_note = (f" checkpoint: {checkpoint_bead}." if checkpoint_bead
                            else " checkpoint is on the stop record.")
         d.go(item.id, agent_name, reassign=True,
-             note="resumed after a context cycle — your" + checkpoint_note)
+             note="resumed after a context cycle — your" + checkpoint_note
+                  + "\n" + _cycle_anchor_summary(a, agent_name, item, card))
         print(f"  re-dispatched {item.id} -> {agent_name}")
     except (DispatchedButUntracked, SendUnverified) as e:
         # Both exceptions happen AFTER sending. Never append a second kickoff
@@ -9785,7 +9800,8 @@ def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
     """Start a fresh turn without guessing or mutating an unreadable plate."""
     import uuid
     marker = f"[resume-id:{uuid.uuid4().hex}]"
-    text = (f"[st cycle resume] {marker} Run `st anchor {agent_name}` and read your resume "
+    text = (_cycle_anchor_summary(a, agent_name, card=card) + "\n"
+            + f"[st cycle resume] {marker} Run `st anchor {agent_name}` and read your resume "
             "brief. Confirm current status, assignment, and governor admission "
             "before resuming work. A failed plate read is UNKNOWN, not an empty plate.")
     if checkpoint_bead:

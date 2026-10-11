@@ -36,6 +36,11 @@ def test_cycle_keeps_real_dispatch_admission(tmp_path, monkeypatch, refused, pla
     cli._redispatch_after_cycle(Namespace(root=root), "worker", "",
                                 registry.get("worker"), panes)
     assert len(panes.sent) == expected
+    if expected:
+        assert "ON YOUR PLATE:" in panes.sent[0][1]
+        assert "context UNKNOWN" in panes.sent[0][1]
+        if not plate_failed:
+            assert "x-p3 — private P3" in panes.sent[0][1]
     if refused:
         assert tracker.get("x-p3").status == "open"
 
@@ -140,3 +145,13 @@ def test_cycle_redispatch_writes_the_item_assignment(tmp_path, monkeypatch):
     assert written["assignee"] == "malcolm"
     assert len(panes.sent) == 1
     assert "aegis-fbrr0" in panes.sent[0][1]
+
+
+def test_cycle_summary_uses_session_bound_context(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from shantytown import context_hint
+    card = SimpleNamespace(name="worker")
+    monkeypatch.setattr(context_hint, "crew_label", lambda root, agent: "context 12% (120 of 1,000)")
+    summary = cli._cycle_anchor_summary(Namespace(root=tmp_path), "worker",
+        SimpleNamespace(id="x-current", title="Current task"), card)
+    assert summary == "ON YOUR PLATE: x-current — Current task\nworker: context 12% (120 of 1,000)"
