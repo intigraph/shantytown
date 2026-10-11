@@ -96,7 +96,9 @@ def test_new_starts_and_verifies_live(tmp_path, monkeypatch, capsys):
     assert "started ellie" in out
     # the seam actually delivered a launch carrying --settings + identity
     assert panes.sent, "st agent new claimed started but sent nothing"
-    _, text = panes.sent[-1]
+    launches = [text for _, text in panes.sent if "--settings" in text]
+    assert len(launches) == 1
+    text = launches[0]
     assert "SHANTY_AGENT=ellie" in text and "--settings" in text
     assert panes.exists("crew-ellie")
 
@@ -384,7 +386,7 @@ def test_new_clones_an_absent_workspace_then_launches(tmp_path, monkeypatch, cap
     rc = cli._cmd_new(_Args(root=root))
     assert rc == cli.OK
     assert ws.is_dir()
-    assert f"cd {ws} &&" in panes.sent[-1][1]
+    assert any(f"cd {ws} &&" in text for _, text in panes.sent)
 
 
 def test_new_dry_run_does_not_ensure_the_workspace(tmp_path, monkeypatch, capsys):
@@ -772,3 +774,121 @@ def test_launch_provisions_capture_against_selected_agent_settings(tmp_path, mon
     local = json.loads((ws / ".claude" / "settings.local.json").read_text())
     assert not any("shantytown.stats capture" in h["command"]
                    for g in local["hooks"]["PostToolUse"] for h in g["hooks"])
+
+# Codex Remote Control can omit SessionStart context. Launch-time delivery
+# must work without mail and combine with mail into exactly one verified turn.
+@pytest.fixture
+def codex_startup(tmp_path, monkeypatch):
+    from shantytown import session_anchor
+    root = _world(tmp_path, harness="codex")
+    args = _Args(root=root)
+    card = Agent(name="ellie", pane="crew-ellie", workspace="/ws/ellie", harness="codex")
+    plate = ("\n  You are ellie — worker, reports to boss.\n\n  ON YOUR PLATE\n"
+             "    ▶ x-1  actual assigned work\n\n  YOUR LEAD\n    boss — up.\n")
+    monkeypatch.setattr(session_anchor, "_run_anchor", lambda r, a: (0, plate))
+    return args, card, FilesInbox(root / "inbox")
+
+
+def test_codex_gets_verified_anchor_even_with_no_unread_mail(codex_startup, capsys):
+    args, card, box = codex_startup
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert len(panes.sent) == 1
+    prompt = panes.sent[0][1]
+    assert "[st anchor — session start]" in prompt
+    assert "You are ellie" in prompt and "ON YOUR PLATE" in prompt
+    assert "YOUR LEAD" in prompt and "STARTUP" in prompt
+    assert "ST-STARTUP-ANCHOR-COMPLETE:ellie:" in prompt
+    assert "verified context" in capsys.readouterr().out
+    assert box.unread("ellie") == []
+
+
+@pytest.mark.parametrize("role", ["administrator", "lead", "worker"])
+def test_claude_empty_inbox_gets_one_verified_first_turn(
+        codex_startup, role, capsys):
+    from dataclasses import replace
+    args, original, box = codex_startup
+    card = replace(original, harness="claude", role=role, reports_to=None)
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert len(panes.sent) == 1
+    prompt = panes.sent[0][1]
+    assert "[st anchor — session start]" in prompt
+    assert "ON YOUR PLATE" in prompt and "STARTUP" in prompt
+    assert "ST-STARTUP-ANCHOR-COMPLETE:ellie:" in prompt
+    assert "verified context" in capsys.readouterr().out
+    assert box.unread("ellie") == []
+
+
+def test_administrator_anchor_and_mail_share_one_turn(codex_startup):
+    from dataclasses import replace
+    args, original, box = codex_startup
+    card = replace(original, harness="claude", role="administrator", reports_to=None)
+    msg = box.deliver("ellie", "administrator queued work")
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert len(panes.sent) == 1
+    prompt = panes.sent[0][1]
+    assert prompt.index("[st anchor") < prompt.index(msg.body)
+    assert box.unread("ellie") == []
+
+
+def test_codex_anchor_and_mail_are_one_turn_with_verified_ack(codex_startup):
+    args, card, box = codex_startup
+    msg = box.deliver("ellie", "offline facts")
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert len(panes.sent) == 1
+    prompt = panes.sent[0][1]
+    assert prompt.index("[st anchor") < prompt.index(msg.body)
+    assert msg.id in prompt and "STARTUP" in prompt
+    assert box.unread("ellie") == []
+
+
+def test_codex_dropped_context_keeps_mail_unread(codex_startup, capsys):
+    args, card, box = codex_startup
+    msg = box.deliver("ellie", "must survive failed delivery")
+    panes = NullPanes(screen=READY, drops=True)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert [m.id for m in box.unread("ellie")] == [msg.id]
+    assert "not verified" in capsys.readouterr().err
+
+
+def test_codex_empty_mail_marker_cannot_match_an_old_delivery(codex_startup):
+    args, card, _ = codex_startup
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert panes.sent[0][1].splitlines()[-1] != panes.sent[1][1].splitlines()[-1]
+
+
+def test_codex_failed_anchor_lookup_delivers_visible_recovery(codex_startup, monkeypatch):
+    from shantytown import session_anchor
+    args, card, _ = codex_startup
+    monkeypatch.setattr(session_anchor, "_run_anchor", lambda r, a: (2, ""))
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert "could not read your plate" in panes.sent[0][1]
+    assert "Run `st anchor`" in panes.sent[0][1]
+
+
+def test_codex_inbox_unread_failure_still_delivers_anchor(codex_startup, monkeypatch):
+    args, card, _ = codex_startup
+    monkeypatch.setattr(cli, "_inbox", lambda *_a, **_k: (_ for _ in ()).throw(OSError("unread unavailable")))
+    panes = NullPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert len(panes.sent) == 1
+    assert "ON YOUR PLATE" in panes.sent[0][1]
+
+
+def test_codex_marker_without_anchor_cannot_ack_mail(codex_startup):
+    args, card, box = codex_startup
+    msg = box.deliver("ellie", "preserve if context is incomplete")
+
+    class TailOnlyPanes(NullPanes):
+        def capture(self, session, history=None):
+            return self.sent[-1][1].splitlines()[-1]
+
+    panes = TailOnlyPanes(screen=READY)
+    cli._deliver_startup_inbox(args, card, panes, card.pane)
+    assert [m.id for m in box.unread("ellie")] == [msg.id]

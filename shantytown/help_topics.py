@@ -87,11 +87,9 @@ HAUL — the self-feeding queue
   close one and the next is served at your stop. Nobody dispatches per bead.
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
-    done            sd close <id> --reason <proof>   (seeds backend)
-                    br close <id> --reason <proof>   (br backend)
+    done            {close}
     gated           st work defer <id> <bead|human|access|external|parked> --reason-file <f>
-    not yours       sd update <id> --assignee ""     (seeds backend)
-                    br update <id> --assignee ""     (br backend)
+    not yours       {unassign}
 
   Why defer rather than just closing or unassigning: `defer` records the KIND of
   block and takes the bead OUT of the ready pool until you undo it. Clearing the
@@ -126,6 +124,11 @@ INBOX — a pointer channel, not a document store
     readable, greppable and permanent. The inbox exists to say WHERE to look. A
     long inbox message is a bead nobody can find later.
 
+  Relays preserve the source and claim strength. An estimate stays INFERRED;
+  measured values cite the command, time and version in the referenced bead.
+  Do not turn "different methods" into "independent evidence" without verifying
+  their instruments. A pointer elsewhere in a message does not source every claim.
+
   BODIES THAT CONTAIN COMMANDS
     Write them to a file and use --file/--stdin. Prose in double quotes is expanded
     by the shell before st ever sees it: backticks and $(...) RUN, or are silently
@@ -140,9 +143,17 @@ TOPICS = {
 }
 
 
-def render(topic: str) -> str | None:
+def render(topic: str, *, examples=None) -> str | None:
     """The page, or None if there is no such topic."""
-    return TOPICS.get((topic or "").strip().lower())
+    topic = (topic or "").strip().lower()
+    if topic == "haul":
+        from .tracker_examples import TrackerExamples
+        examples = examples or TrackerExamples()
+        if not examples.argv:
+            return "HAUL — the self-feeding queue\n\n  " + examples.diagnostic
+        return _HAUL.format(close=examples.close("<id>"),
+                            unassign=examples.unassign("<id>"))
+    return TOPICS.get(topic)
 
 
 def index() -> str:

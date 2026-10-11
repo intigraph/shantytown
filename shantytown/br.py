@@ -12,6 +12,7 @@ from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
 from .protocols import is_blocked
 from .inbox import drop_parked, is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
+from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
 
 class BrTracker(BeadsTracker):
@@ -60,7 +61,7 @@ class BrTracker(BeadsTracker):
         except Exception:
             return reason, False
         merged, force = merge_notes(existing, reason)
-        if force and existing and existing not in merged:
+        if force and existing and existing not in merged and historical_notes(existing) not in merged:
             # Belt and braces: never force a write that drops what was there.
             return reason, False
         return merged, force
@@ -131,9 +132,12 @@ def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
     machine-readable `resume_when` gate and the only record of how to re-test.
     The br guard is right; what was wrong is replacing instead of appending.
 
-    So force is returned ONLY alongside content that provably contains the
-    original, and the caller asserts that before writing.
+    Ordinary prose retains the original verbatim. A new resume marker retains
+    the original prose with old marker prefixes made inert; the caller verifies
+    that preserved history before permitting force.
     """
+    if MARKER_PREFIX.search(addition):
+        return merge_deferral_notes(existing, addition)
     old = existing or ""
     if not old.strip():
         return addition, False
@@ -249,6 +253,21 @@ def _warn_stderr(note: str) -> None:
     print(f"  \u26a0 PLATE INCOMPLETE - {note}", file=sys.stderr)
 
 
+def _scoped_candidates(reader, agent):
+    answer = reader(agent)
+    return answer.at_least(), [] if answer.complete else [answer.note()]
+
+
+def _scoped_readiness(reader, agent):
+    from .answer import PartialAnswer
+    try:
+        return reader(agent).exact()
+    except PartialAnswer:
+        # Unknown readiness retains the previous ranking. A partial ready set
+        # would incorrectly brand unseen owned work blocked.
+        return None
+
+
 def plate(tracker: BrTracker, agent: str,
           warn: "callable | None" = None) -> WorkItem | None:
     """The agent's ONE held item, surviving an unreadable extra store.
@@ -270,8 +289,11 @@ def plate(tracker: BrTracker, agent: str,
     agent holding an item in the unreadable store still never reads as a clean
     empty plate, because the warning names the store the answer is missing.
     """
-    return _select_plate(tracker, agent, *rows_partial(tracker),
-                         lambda: ready_ids_or_none(tracker), warn)
+    scoped = getattr(tracker, "plate_rows", None)
+    seen, failures = _scoped_candidates(scoped, agent) if callable(scoped) else rows_partial(tracker)
+    scoped_ready = getattr(tracker, "plate_ready_ids", None)
+    read_ready = (lambda: _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else (lambda: ready_ids_or_none(tracker))
+    return _select_plate(tracker, agent, seen, failures, read_ready, warn)
 
 
 def plate_reader(tracker: BrTracker, *, require_complete: bool = False):
@@ -284,14 +306,20 @@ def plate_reader(tracker: BrTracker, *, require_complete: bool = False):
     """
     from functools import cache
 
-    snapshot = cache(lambda: rows_partial(tracker))
-    ready = cache(lambda: ready_ids_or_none(tracker))
+    scoped = getattr(tracker, "plate_rows", None)
+    snapshot = cache(lambda agent: _scoped_candidates(scoped, agent)) if callable(scoped) else None
+    # The ordinary br reader still shares ONE whole-board snapshot; a remote
+    # Seeds reader instead shares only the requested owner's assignments.
+    ordinary = cache(lambda: rows_partial(tracker))
+    scoped_ready = getattr(tracker, "plate_ready_ids", None)
+    ready = cache(lambda agent: _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else cache(lambda: ready_ids_or_none(tracker))
 
     def read(agent):
-        seen, failures = snapshot()
+        seen, failures = snapshot(agent) if callable(scoped) else ordinary()
         if require_complete and failures:
             raise RuntimeError("; ".join(failures))
-        return _select_plate(tracker, agent, seen, failures, ready, None)
+        read_ready = (lambda: ready(agent)) if callable(scoped_ready) else ready
+        return _select_plate(tracker, agent, seen, failures, read_ready, None)
 
     return read
 
@@ -318,7 +346,8 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     row = mine[0]
     item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),
-                    assignee=row.get("assignee"), priority=_priority(row))
+                    assignee=row.get("assignee"), priority=_priority(row),
+                    updated_at=row.get("updated_at"))
     # Same rule as beads.plate: a blocked plate must name its blocker. One extra
     # read, only in the case that would otherwise burn a whole turn.
     if is_blocked(row.get("status"), row.get("id", ""), ready_ids):

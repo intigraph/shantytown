@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from .answer import Answer
+from .deferral_notes import MARKER_PREFIX, merge_deferral_notes
 from .inbox import is_message, is_unworkable
 from .protocols import (Agent, BLOCKER_KIND_LABELS, WorkItem, blocker_kind,
                         _PLATE_RANK, plate_key)
@@ -100,6 +101,8 @@ class FilesRegistry:
         if not p.is_file():
             raise LookupError(f"no such agent: {name} (looked in {p})")
         d = json.loads(p.read_text())
+        if d.get('auto_failover') is not None and type(d['auto_failover']) is not bool:
+            raise ValueError('auto_failover must be an explicit boolean')
         return Agent(
             name=name,
             role=d.get("role", "worker"),
@@ -131,6 +134,8 @@ class FilesRegistry:
             # said" — so an un-migrated card is distinguishable from one that
             # was scoped to this host on purpose (aegis-5du1bz).
             host=d.get("host"),
+            account=d.get("account"),
+            auto_failover=d.get("auto_failover"),
         )
 
     def set(self, agent: Agent) -> None:
@@ -164,6 +169,10 @@ class FilesRegistry:
         # agent back onto the default harness.
         if agent.harness is not None:
             existing["harness"] = agent.harness
+        if agent.account is not None:
+            existing["account"] = agent.account
+        if agent.auto_failover is not None:
+            existing["auto_failover"] = agent.auto_failover
         if agent.dangerous:
             existing["dangerous"] = agent.dangerous
         # Same write-only-when-true shape as `dangerous` above: launch config the
@@ -223,7 +232,26 @@ class FilesRegistry:
         # repointed at `st-*` by a projection, which would leave every card
         # addressing a session that does not exist while the real ones ran on.
         existing.setdefault("pane", tier_pane_for(agent.name))
-        p.write_text(json.dumps(existing, indent=2, sort_keys=True))
+        write_text_atomic(p, json.dumps(existing, indent=2, sort_keys=True))
+
+    def restore_selection(self, agent: Agent) -> None:
+        """Restore an exact account choice, including formerly absent fields.
+
+        set() preserves omissions for identity projection. A refused account
+        restart needs the opposite semantics, without overwriting unrelated card
+        fields changed by another identity writer.
+        """
+        if not agent.name or Path(agent.name).name != agent.name or agent.name in {'.', '..'}:
+            raise ValueError('unsafe agent name')
+        path = self.root / (agent.name + '.json')
+        existing = json.loads(path.read_text())
+        for key in ('account', 'harness', 'model', 'auto_failover'):
+            value = getattr(agent, key, None)
+            if value is None:
+                existing.pop(key, None)
+            else:
+                existing[key] = value
+        write_text_atomic(path, json.dumps(existing, indent=2, sort_keys=True))
 
     def all(self) -> Answer[list[Agent]]:
         """Every agent. RAISES if there is no registry to read.
@@ -289,11 +317,14 @@ class FilesTracker:
             id=item_id,
             title=d.get("title", ""),
             status=d.get("status", "open"),
+            description=(None if "description" not in d else
+                         "" if d["description"] is None else d["description"]),
             assignee=d.get("assignee"),
             priority=_priority(d),
             blocker_kind=blocker_kind(d.get("labels")),
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
+            updated_at=d.get("updated_at"),
         )
 
     def update(self, item_id: str, **fields) -> None:
@@ -309,7 +340,8 @@ class FilesTracker:
             d["labels"] = labels
         if reason is not None:
             notes = (d.get("notes") or "").rstrip()
-            d["notes"] = f"{notes}\n{reason}".strip()
+            d["notes"] = (merge_deferral_notes(notes, reason)[0]
+                          if MARKER_PREFIX.search(reason) else f"{notes}\n{reason}".strip())
         d.update({k: v for k, v in fields.items() if v is not None})
         p.write_text(json.dumps(d, indent=2, sort_keys=True))
 

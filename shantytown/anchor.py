@@ -37,10 +37,25 @@ thing we keep finding untrue.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from .protocols import Agent, Panes, Registry, WorkItem
 from .tier import Reason, find_administrator
+
+
+def stale_plate(item: WorkItem, *, now: datetime | None = None) -> bool:
+    """Age advisory from an explicit tracker timestamp, never filesystem age."""
+    raw = getattr(item, "updated_at", None)
+    if not isinstance(raw, str):
+        return False
+    try:
+        updated = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if updated.tzinfo is None:
+        return False
+    return (now or datetime.now(timezone.utc)) - updated > timedelta(hours=48)
 
 
 class Unreachable(Exception):
@@ -84,7 +99,7 @@ class Anchoring:
     # also the honest default for a deployment that never said (aegis-n549ii).
     mcp_preapproved: tuple[str, ...] = ()
 
-    def render(self) -> str:
+    def render(self, *, now: datetime | None = None) -> str:
         L: list[str] = []
         who = f"  You are {self.me.name} — {self.me.role}"
         if self.me.reports_to:
@@ -95,6 +110,10 @@ class Anchoring:
         if self.item:
             L.append(f"    ▶ {self.item.id}  {self.item.title}".rstrip()
                      + f"        ({self.item.status})")
+            if stale_plate(self.item, now=now):
+                L.append("      STALE PLATE: no tracker update for over 48 hours. "
+                         "Verify whether this work is still current before acting; "
+                         "close completed work or defer/repool it as appropriate.")
             # BLOCKED WORK MUST SAY SO (aegis-fxx3y). The plate is read as an
             # instruction — "execute immediately" — so serving a dependency-
             # blocked item without a word sends an agent to spend a turn
@@ -106,6 +125,11 @@ class Anchoring:
                 L.append(f"      ⛔ BLOCKED by {', '.join(blockers)}"
                          " — nothing ready is on your plate. Chase the blocker,"
                          " or ask your lead for ready work.")
+            else:
+                L.append("      Before a fix or improvement, record a BASELINE on this item"
+                         " before the first change: time, version, probe and result.")
+                L.append("      Choose the success metric now; rerun the same probe afterwards."
+                         " If measurement is impossible, record why.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. `st go <item> <you>` or ask your lead.")

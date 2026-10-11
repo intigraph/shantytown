@@ -48,6 +48,7 @@ import sys
 import time
 from pathlib import Path
 
+from .tmux import shell_foreground
 from . import triage
 from . import workflow
 from .answer import PartialAnswer
@@ -264,7 +265,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path):
+def _plate_reader(root: Path, *, require_complete: bool = False):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -286,6 +287,9 @@ def _plate_reader(root: Path):
         from .br import plate as br_plate
         from .sd import br_like_tracker
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(sd_tracker, require_complete=True)
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -294,6 +298,9 @@ def _plate_reader(root: Path):
                                   or deployment_default(root, "SHANTY_BEADS_REPO")),
                             extra_repos=parse_extra_repos(
                                 deployment_default(root, EXTRA_REPOS_KEY)))
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(tracker, require_complete=True)
         return lambda who, warn=None: br_plate(tracker, who, warn=warn)
     return lambda who, warn=None: files_plate(FilesTracker(root / "items"), who)
 
@@ -661,8 +668,10 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
                 return 0
             _mark_haul_resume(root, me, rid)
             title = resume.get("title") or ""
+            from .tracker_examples import for_deployment
+            examples = for_deployment(root, reg)
             print(json.dumps({"decision": "block",
-                              "reason": haul_resume_message(rid, title)}))
+                              "reason": haul_resume_message(rid, title, examples=examples)}))
             return 0
         mine = []
         if resume is None:
@@ -729,11 +738,13 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
         except Exception:
             pass
+        from .tracker_examples import for_deployment
+        examples = for_deployment(root, reg)
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
                                               headroom=headroom, repeats=repeats,
-                                              advisory=advisory)}))
+                                              advisory=advisory, examples=examples)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop
@@ -759,7 +770,8 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
         card = reg.get(name)
     except Exception:
         return DOWN
-    if not card.pane or not panes.exists(card.pane):
+    if (not card.pane or not panes.exists(card.pane)
+            or shell_foreground(panes, card.pane)):
         return DOWN
     # attrs=True IS LOad-BEARING (aegis-c6hli). work_state asks input_state what
     # is in the box, and input_state can only tell a dim suggestion from typed
@@ -1110,7 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
-    plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
