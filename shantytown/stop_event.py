@@ -502,7 +502,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"sd {' '.join(args)} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"compatibility tracker command {' '.join(args)} failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
