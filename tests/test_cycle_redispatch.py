@@ -56,6 +56,10 @@ def test_delivered_but_untracked_cycle_does_not_send_twice(tmp_path, monkeypatch
         raise AssertionError("a delivered turn must not receive a second kickoff")
     monkeypatch.setattr(cli, "_kickoff_after_cycle", forbidden)
     cli._redispatch_after_cycle(Namespace(root=tmp_path), "worker")
+    def ambiguous(*a, **kw):
+        raise RuntimeError("audit failed after sending")
+    monkeypatch.setattr(cli, "_wire", lambda a: SimpleNamespace(go=ambiguous))
+    cli._redispatch_after_cycle(Namespace(root=tmp_path), "worker")
 
 
 def test_resume_kickoff_respects_busy_pane_and_reports_unverified_send(tmp_path, monkeypatch, capsys):

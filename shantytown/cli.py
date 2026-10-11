@@ -9744,6 +9744,12 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
         return
     try:
         d = _wire(a)
+    except Exception as e:  # noqa: BLE001 — no dispatch was attempted yet
+        print(f"  note: cycle dispatcher unavailable for {agent_name}: {e}",
+              file=sys.stderr)
+        _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
+        return
+    try:
         # reassign=True: the item is ALREADY assigned to this agent — that is the
         # whole point — so the assignee guard would otherwise refuse the very
         # re-dispatch the cycle exists to automate.
@@ -9756,10 +9762,16 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
         # Both exceptions happen AFTER sending. Never append a second kickoff
         # to a turn that may already be running just because the store failed.
         print(f"  note: cycle dispatch already attempted: {e}", file=sys.stderr)
-    except Exception as e:  # noqa: BLE001
+    except (TriageRefused, AlreadyAssigned, Blocked, Closed, HasOpenBlocker,
+            GovernorRefused) as e:
         print(f"  note: {agent_name} is UP but {item.id} was not re-dispatched "
               f"({e}). Trying an anchor/resume kickoff.", file=sys.stderr)
         _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
+    except Exception as e:  # noqa: BLE001
+        # An arbitrary transport/audit failure can occur after sending. Without
+        # a stage-specific verdict, a second prompt could duplicate the turn.
+        print(f"  note: cycle dispatch outcome UNKNOWN for {agent_name}: {e}; "
+              "no duplicate kickoff attempted.", file=sys.stderr)
 
 
 def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
