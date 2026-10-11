@@ -259,3 +259,17 @@ def test_st_worktree_is_SILENT_when_the_two_remotes_agree(tmp_path, capsys):
     cap = capsys.readouterr()
     assert "ahead" not in cap.out + cap.err, \
         f"converged remotes still warned: {cap.out + cap.err!r}"
+
+
+def test_go_refuses_unrelated_worktree_before_refresh_or_send(tmp_path, monkeypatch):
+    root = _root(tmp_path)
+    repo = _shared_repo(tmp_path)
+    wt = repo.parent / 'proj-wt' / 'ellie'
+    _git(repo, 'worktree', 'add', '-b', 'fix/other-task', str(wt), 'main')
+    panes = NullPanes(screen='')
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: panes)
+    monkeypatch.setattr(cli, '_refresh_worktree', lambda *a: pytest.fail('must not refresh'))
+    assert main(['--root', str(root), 'go', 'item-1', 'ellie',
+                 '--worktree', str(repo)]) == REFUSED
+    assert panes.sent == []
+    assert json.loads((root / 'items' / 'item-1.json').read_text())['status'] == 'open'
