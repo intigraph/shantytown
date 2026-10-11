@@ -1001,6 +1001,15 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
     # that makes a stop legible at all, and it does not block.
     history = _history_cmd(root)
 
+    if role == "keeper":
+        from .protocols import Agent
+        from .tier import deployment_catalog
+        from .traits import receives_stops
+        catalog = deployment_catalog(root)
+        if catalog is None or "keeper" not in catalog.roles or not receives_stops(
+                Agent(name="keeper-emission", role="keeper"), catalog):
+            raise ValueError("keeper requires a deployment-declared absorbing role")
+
     if role == "worker":
         # send FIRST (the stop event persists whatever happens), then the HAUL
         # advance — the self-feed for a worker whose queue is already assigned
@@ -1009,7 +1018,7 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
         if history:
             stop.append(history)
         stop.append(_stop_cmd("haul", root))
-    elif role == "lead":
+    elif role in {"lead", "keeper"}:
         # A Codex lead owns work AND receives reports. Its own active anchor must
         # resume before drain: Codex stops after the first blocking Stop hook, so
         # drain-first can consume the boundary and strand the lead's haul. Claude
