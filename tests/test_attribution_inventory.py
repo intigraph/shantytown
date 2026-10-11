@@ -41,6 +41,9 @@ ATTRIBUTED_UPSTREAM = "attributed-upstream"  # the composer signed it already
 BARE = "bare-by-design"                      # not prose; signing it would break it
 
 INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
+    ("cli.py", "_kickoff_after_cycle"): (
+        ATTRIBUTED_HERE,
+        "anchor/resume kickoff after a completed cycle; sender is st agent cycle."),
     ("sling_cli.py", "command"): (
         ATTRIBUTED_UPSTREAM,
         "sling.prepare signs the pointer with attribute() after its receipt marker. "

@@ -404,10 +404,12 @@ def _tracker_rows(trk):
     return beads_mod.rows(trk)
 
 
-def _tracker_plate(trk, who):
+def _tracker_plate(trk, who, *, require_complete=False):
     """Plate reader paired with ``trk`` for non-CLI call sites."""
-    from .br import BrTracker, plate as br_plate
+    from .br import BrTracker, plate as br_plate, plate_reader
     if isinstance(trk, BrTracker):
+        if require_complete:
+            return plate_reader(trk, require_complete=True)(who)
         return br_plate(trk, who)
     if isinstance(trk, FilesTracker):
         return files_plate(trk, who)
@@ -9206,7 +9208,7 @@ def _cmd_cycle(a) -> int:
     if brief_path:
         print(f"  resume brief written — its SessionStart hook injects the "
               f"checkpoint, bead and graph nodes into the fresh context.")
-    _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""))
+    _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""), card, panes)
     return OK
 
 
@@ -9712,18 +9714,17 @@ def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
     return False
 
 
-def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> None:
+def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
+                            card=None, panes=None) -> None:
     """Put the agent's plate item back on its hook after a relaunch.
 
     Today the coordinator hand-re-dispatches after every cycle, which is most of
     what made cycling expensive: five cycles in one session, five manual
     re-dispatches, each one a turn.
 
-    BEST-EFFORT AND LOUD, never fatal. The cycle itself has already succeeded by
-    the time this runs — the agent is up with its runtime intact — so a failure
-    here must report and stop, not unwind a good relaunch. A fresh agent with no
-    plate item runs `st anchor` and finds its own work; that is a slower path, not
-    a broken one.
+    BEST-EFFORT AND LOUD, never fatal. A soft clear leaves an idle composer;
+    SessionStart context cannot initiate a turn. Failed or empty plate reads
+    therefore need a submitted resume prompt, not an instruction nobody sees.
     """
     # The signal was about the session that just ended; the new one starts clean.
     from . import cycle_advice
@@ -9733,17 +9734,22 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
         pass
     try:
         tracker = _tracker(a)
-        item = _tracker_plate(tracker, agent_name)
+        item = _tracker_plate(tracker, agent_name, require_complete=True)
     except Exception as e:  # noqa: BLE001 — a tracker fault must not fail the cycle
-        print(f"  note: could not read {agent_name}'s plate to re-dispatch "
-              f"({e}). It will pick its work up from `st anchor`.",
+        print(f"  note: {agent_name}'s plate UNKNOWN after cycle ({e}).",
               file=sys.stderr)
-        return
+        item = None
     if item is None:
-        print(f"  note: {agent_name} had no plate item to re-dispatch.")
+        _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
         return
     try:
         d = _wire(a)
+    except Exception as e:  # noqa: BLE001 — no dispatch was attempted yet
+        print(f"  note: cycle dispatcher unavailable for {agent_name}: {e}",
+              file=sys.stderr)
+        _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
+        return
+    try:
         # reassign=True: the item is ALREADY assigned to this agent — that is the
         # whole point — so the assignee guard would otherwise refuse the very
         # re-dispatch the cycle exists to automate.
@@ -9752,10 +9758,61 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "") -> No
         d.go(item.id, agent_name, reassign=True,
              note="resumed after a context cycle — your" + checkpoint_note)
         print(f"  re-dispatched {item.id} -> {agent_name}")
-    except Exception as e:  # noqa: BLE001
+    except (DispatchedButUntracked, SendUnverified) as e:
+        # Both exceptions happen AFTER sending. Never append a second kickoff
+        # to a turn that may already be running just because the store failed.
+        print(f"  note: cycle dispatch already attempted: {e}", file=sys.stderr)
+    except GovernorRefused as e:
+        print(f"  note: cycle redispatch REFUSED by governor for {agent_name}: {e}; "
+              "no resume prompt submitted.", file=sys.stderr)
+    except (TriageRefused, AlreadyAssigned, Blocked, Closed, HasOpenBlocker) as e:
         print(f"  note: {agent_name} is UP but {item.id} was not re-dispatched "
-              f"({e}). Send it by hand: `st go {item.id} {agent_name} "
-              f"--reassign`.", file=sys.stderr)
+              f"({e}). Trying an anchor/resume kickoff.", file=sys.stderr)
+        _kickoff_after_cycle(a, agent_name, checkpoint_bead, card, panes)
+    except Exception as e:  # noqa: BLE001
+        # An arbitrary transport/audit failure can occur after sending. Without
+        # a stage-specific verdict, a second prompt could duplicate the turn.
+        print(f"  note: cycle dispatch outcome UNKNOWN for {agent_name}: {e}; "
+              "no duplicate kickoff attempted.", file=sys.stderr)
+
+
+def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
+                         card=None, panes=None) -> None:
+    """Start a fresh turn without guessing or mutating an unreadable plate."""
+    import uuid
+    marker = f"[resume-id:{uuid.uuid4().hex}]"
+    text = (f"[st cycle resume] {marker} Run `st anchor {agent_name}` and read your resume "
+            "brief. Confirm current status, assignment, and governor admission "
+            "before resuming work. A failed plate read is UNKNOWN, not an empty plate.")
+    if checkpoint_bead:
+        text += (f" Checkpoint pointer: {checkpoint_bead}; confirm its current "
+                 "status and assignment before resuming it.")
+    try:
+        # The fallback starts a new turn too. Admit it conservatively as a
+        # lowest-priority status prompt, never borrowing a checkpoint's priority
+        # when its current work/assignment could not be established.
+        from .protocols import WorkItem
+        gate = _dispatch_gate(a)
+        if gate is not None:
+            refusal = gate(WorkItem("post-cycle-status-prompt", priority=4), agent_name)
+            if refusal:
+                raise GovernorRefused(refusal)
+        card = card or _registry(a).get(agent_name)
+        pane = card.pane or _session_for(card)
+        panes = panes or _panes(a)
+        decision = triage_mod.triage(panes, pane, text)
+        if decision.action is not Action.NUDGE:
+            raise TriageRefused(decision)
+        panes.send(pane, attribute(text, "st agent cycle"))
+        # Use the existing scrollback/poll verifier: a single immediate capture
+        # can miss a successfully submitted prompt while the TUI redraws.
+        from types import SimpleNamespace
+        if not Dispatcher.verify(SimpleNamespace(panes=panes), pane, marker):
+            raise SendUnverified(marker, pane)
+        print(f"  submitted cycle resume kickoff -> {agent_name}")
+    except Exception as e:  # noqa: BLE001 — never pretend an idle pane resumed
+        print(f"  note: cycle kickoff NOT CONFIRMED for {agent_name}: {e}",
+              file=sys.stderr)
 
 
 def _cmd_worktree(a) -> int:
