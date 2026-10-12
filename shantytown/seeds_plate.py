@@ -43,7 +43,8 @@ def _query(proof, query: str, timeout: int) -> dict:
     for header, value in (
         (
             "X-Quipu-Agent",
-            os.environ.get("SEEDS_AGENT_NAME") or os.environ.get("SHANTY_AGENT"),
+            os.environ.get("QUIPU_AGENT") or os.environ.get("SEEDS_AGENT_NAME")
+            or os.environ.get("SHANTY_AGENT"),
         ),
         ("X-Quipu-Session", os.environ.get("SEEDS_SESSION")),
         ("X-Quipu-Task", os.environ.get("SEEDS_TASK")),

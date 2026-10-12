@@ -161,6 +161,7 @@ import time
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
+from .query_identity import declared_query_identity
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -11843,6 +11844,7 @@ def _cmd_watch(a) -> int:
     return outcome.exit_code
 
 
+@declared_query_identity("st-tend")
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 
