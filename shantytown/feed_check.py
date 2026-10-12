@@ -804,6 +804,18 @@ class TrackerAdapter:
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
 
+    def closed(self, item: str) -> Answer[bool]:
+        """Condition-only status; full detail remains required before release."""
+        projected = getattr(self.tracker, "closed_status", None)
+        if callable(projected):
+            answer = projected(item)
+            if answer is not None:
+                return answer
+        detail = self.show(item).exact()
+        if not isinstance(detail, dict) or detail.get("id") != item or not detail.get("status"):
+            raise ValueError(f"incomplete show for {item}")
+        return Answer.complete_read(detail["status"] == "closed", how=f"{self.kind} show status")
+
     def undefer(self, item: str) -> None:
         """Clear both historical status and timestamp representations."""
         if self.tracker is not None:
