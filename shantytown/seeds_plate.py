@@ -126,6 +126,51 @@ def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
         return Answer.capped(False, how=how, caveat=f"condition status unreadable: {error}")
 
 
+def closed_statuses(proof, identifiers, *, timeout: int = 30) -> dict[str, bool | None]:
+    """Bounded candidate-only conditions; never a pre-mutation freshness check.
+
+    Each target retains the single-reader's exact identity, shadow and status
+    rules. A failed batch remains UNKNOWN without serial hydration retries.
+    """
+    targets = list(dict.fromkeys(identifiers))
+    verdicts = dict.fromkeys(targets)
+    graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+    for offset in range(0, len(targets), 25):
+        batch = targets[offset:offset + 25]
+        try:
+            branches = []
+            for identifier in batch:
+                if not isinstance(identifier, str) or not identifier.strip():
+                    raise ValueError("empty condition identifier")
+                subject = _iri(SEEDS + "item/" + quote(identifier, safe=""))
+                for graph in graphs:
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ {subject} a <{SCHEMA}Action> . "
+                        f"OPTIONAL {{ {subject} <{SCHEMA}identifier> ?id }} "
+                        f"OPTIONAL {{ {subject} <{SEEDS}ontology/status> ?status }} }} "
+                        f"BIND({json.dumps(identifier)} AS ?requested) "
+                        f"BIND({json.dumps(graph)} AS ?graph) }}")
+            rows = _query(proof, "SELECT ?requested ?graph ?id ?status WHERE { "
+                          + " UNION ".join(branches) + " } LIMIT 1000", timeout)["rows"]
+            if len(rows) >= 1000:
+                raise ValueError("condition batch row budget reached")
+            grouped = {identifier: [] for identifier in batch}
+            for row in rows:
+                if row.get("requested") not in grouped or row.get("graph") not in graphs:
+                    raise ValueError("unexpected condition batch identity")
+                grouped[row["requested"]].append(row)
+            for identifier, found in grouped.items():
+                if len(found) != 1:
+                    continue
+                row = found[0]
+                if row.get("id") == identifier and row.get("status") in (
+                        "open", "hooked", "in_progress", "blocked", "deferred", "closed"):
+                    verdicts[identifier] = row["status"] == "closed"
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            pass  # This batch stays UNKNOWN; the other batches remain independent.
+    return verdicts
+
+
 def _feed_owner_clause(owners: tuple[str, ...]) -> str:
     # queue_state/hauls accepts any crew-path spelling ending in this worker.
     # Principal IRIs encode path slashes, so match both wire representations.

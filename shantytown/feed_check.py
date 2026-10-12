@@ -804,6 +804,11 @@ class TrackerAdapter:
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
 
+    def closed_many(self, items) -> Answer[dict[str, bool | None]] | None:
+        """Optional native candidate batch; legacy readers retain single reads."""
+        projected = getattr(self.tracker, "closed_statuses", None)
+        return projected(items) if callable(projected) else None
+
     def closed(self, item: str) -> Answer[bool]:
         """Condition-only status; full detail remains required before release."""
         projected = getattr(self.tracker, "closed_status", None)
