@@ -139,7 +139,36 @@ is_excluded() {
   for p in ${EXCLUDE_PREFIXES[@]+"${EXCLUDE_PREFIXES[@]}"}; do
     case "$dir" in "$p"*) return 0 ;; esac
   done
+  # The HOME guard gives tests private homes under this managed fixture pool.
+  # Their pre-commit dependency caches have the same never-pushed contract as
+  # the real HOME cache; ordinary test repos and caches elsewhere stay in scope.
+  case "$dir" in
+    "$HOME"/.cache/aegis-metric-fixtures/*/home-escape-*/.cache/pre-commit/*) return 0 ;;
+  esac
   return 1
+}
+
+# A sanctioned test namespace is physically owned/private and disposable. A
+# checkout sharing hooks with a repository outside it remains real coverage.
+is_owned_metric_fixture() {
+  local dir="$1" physical prefix rest suite root common hooks
+  prefix="$HOME/.cache/aegis-metric-fixtures/"
+  case "$dir/" in "$prefix"*) ;; *) return 1 ;; esac
+  physical="$(realpath -e -- "$dir" 2>/dev/null)" || return 1
+  case "$physical" in "$prefix"*) ;; *) return 1 ;; esac
+  rest="${physical#"$prefix"}"
+  suite="${rest%%/*}"
+  [[ "$suite" =~ ^suite-[A-Za-z0-9_]{8}$ ]] || return 1
+  root="$prefix$suite"
+  [ ! -L "$root" ] || return 1
+  [ "$(stat -c '%u:%a' -- "$root" 2>/dev/null)" = "$(id -u):700" ] || return 1
+  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
+  case "$common" in "$root"/*) ;; *) return 1 ;; esac
+  hooks="$(git -C "$dir" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)" || return 1
+  hooks="$(realpath -e -- "$hooks" 2>/dev/null)" || return 1
+  [ -d "$hooks" ] || return 1
+  case "$hooks" in "$root"/*) return 0 ;; *) return 1 ;; esac
 }
 
 repo_label() {
@@ -189,6 +218,9 @@ emit_metrics() {
     echo "# TYPE scrub_guard_missing_total gauge"
     echo "scrub_guard_missing_total $unarmed"
     echo "# HELP scrub_guard_excluded_total Checkouts skipped by a NAMED third-party exclusion, not by blindness."
+    echo "# HELP scrub_guard_fixture_excluded_total Disposable owned test checkouts separately reported. Unknown custody stays in coverage."
+    echo "# TYPE scrub_guard_fixture_excluded_total gauge"
+    echo "scrub_guard_fixture_excluded_total ${fixture_excluded:-0}"
     echo "# TYPE scrub_guard_excluded_total gauge"
     echo "scrub_guard_excluded_total $excluded"
     echo "# HELP scrub_guard_internal_skipped_total Repos with no remote outside the internal forge."
@@ -500,6 +532,98 @@ if [ "${1:-}" = "--selftest" ]; then
     echo "FAIL the summary does not report exclusions"; fail=1
   fi
 
+  # Owned disposable fixture repos do not participate in fleet coverage.
+  fh="$tmp/fixture-custody-home"
+  fr="$fh/.cache/aegis-metric-fixtures/suite-abcd1234"
+  mkdir -p "$fr/private" "$fh/regular" "$fh/.cache/aegis-metric-fixtures-lookalike/suite-abcd1234/repo"
+  chmod 700 "$fr"
+  git init -q "$fr/private"
+  git -C "$fr/private" remote add origin https://github.com/example/owned.git
+  git init -q "$fh/regular"
+  git -C "$fh/regular" remote add origin https://github.com/example/regular.git
+  git -C "$fh/regular" -c user.name=test -c user.email=test@example.org commit --allow-empty -qm initial
+  git -C "$fh/regular" worktree add -q "$fr/shared" -b owned-test
+  ln -s "$fh/regular" "$fr/escaped"
+  if HOME="$fh" is_owned_metric_fixture "$fr/private" \
+     && ! HOME="$fh" is_owned_metric_fixture "$fh/regular" \
+     && ! HOME="$fh" is_owned_metric_fixture "$fr/shared" \
+     && ! HOME="$fh" is_owned_metric_fixture "$fr/escaped" \
+     && ! HOME="$fh" is_owned_metric_fixture "$fh/.cache/aegis-metric-fixtures-lookalike/suite-abcd1234/repo"; then
+    echo "ok   owned fixture excluded; regular/shared/symlink/lookalike stay in coverage"
+  else
+    echo "FAIL fixture exclusion custody boundary"; fail=1
+  fi
+  # Git common storage does not prove the effective core.hooksPath.
+  git -C "$fr/private" config core.hooksPath "$fh/regular/.git/hooks"
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   external absolute core.hooksPath stays in coverage"
+  else
+    echo "FAIL external effective hooks were excluded"; fail=1
+  fi
+  git -C "$fr/private" config core.hooksPath '../../../../regular/.git/hooks'
+  if [ "$(realpath -e -- "$(git -C "$fr/private" rev-parse --path-format=absolute --git-path hooks)")" = "$fh/regular/.git/hooks" ] \
+     && ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   actual external relative core.hooksPath stays in coverage"
+  else
+    echo "FAIL relative effective hook escape excluded"; fail=1
+  fi
+  git -C "$fr/private" config core.hooksPath unknown-missing-hooks
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   missing effective hooks stay in coverage"
+  else
+    echo "FAIL unknown effective hooks excluded"; fail=1
+  fi
+  ln -s "$fh/regular/.git/hooks" "$fr/private/escaped-hooks"
+  git -C "$fr/private" config core.hooksPath escaped-hooks
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   physical hook-directory symlink escape stays in coverage"
+  else
+    echo "FAIL symlink effective hook escape excluded"; fail=1
+  fi
+  mkdir -p "$fr/private/private-hooks"
+  git -C "$fr/private" config core.hooksPath private-hooks
+  if HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   explicit private effective hooks remain a fixture"
+  else
+    echo "FAIL known private hooks were not excluded"; fail=1
+  fi
+  git -C "$fr/private" config --unset core.hooksPath
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "FAIL restored positive fixture exclusion"; fail=1
+  fi
+  git init -q "$fr/redirected"
+  git -C "$fr/redirected" remote add origin https://github.com/example/redirected.git
+  git -C "$fr/redirected" config core.hooksPath "$fh/regular/.git/hooks"
+  chmod 755 "$fr"
+  if ! HOME="$fh" is_owned_metric_fixture "$fr/private"; then
+    echo "ok   unknown/nonprivate fixture custody stays in coverage"
+  else
+    echo "FAIL nonprivate fixture was excluded"; fail=1
+  fi
+  chmod 700 "$fr"
+  fst="$tmp/fixture-census.prom"
+  fslog="$(HOME="$fh" SCRUB_PATTERNS_FILE="$tmp/scrub-patterns.conf" SCRUB_GUARD_TEXTFILE="$fst" SCRUB_GUARD_SOURCE_DIR="$tmp/src" \
+    "$SELF/install-scrub-guard.sh" --root "$fh" 2>&1)"
+  if printf '%s' "$fslog" | grep -q 'owned metric fixtures excluded: 1 ' \
+     && grep -q '^scrub_guard_fixture_excluded_total 1$' "$fst" \
+     && grep -q '^scrub_guard_repos_total 2$' "$fst"; then
+    echo "ok   exact fixture count reported separately with ordinary and redirected-hooks coverage preserved"
+  else
+    echo "FAIL fixture family reporting"; printf "%s\n" "$fslog"; cat "$fst"; fail=1
+  fi
+
+  # Only dependency caches inside managed test homes inherit the exclusion.
+  fixture_home="$tmp/exclusion-home"
+  nested="$fixture_home/.cache/aegis-metric-fixtures/suite-test/home-escape-test"
+  if HOME="$fixture_home" is_excluded "$nested/.cache/pre-commit/repo-test" \
+     && ! HOME="$fixture_home" is_excluded "$nested/public-repo" \
+     && ! HOME="$fixture_home" is_excluded "$fixture_home/work/home-escape-test/.cache/pre-commit/public" \
+     && ! HOME="$fixture_home" is_excluded "$nested/.cache/other/public"; then
+    echo "ok   managed test dependency cache excluded; all other repo controls retained"
+  else
+    echo "FAIL managed test dependency cache exclusion escaped its scope"; fail=1
+  fi
+
   [ "$fail" -eq 0 ] && echo "selftest PASSED" || echo "selftest FAILED"
   exit "$fail"
 fi
@@ -595,7 +719,7 @@ else
   source_current=1
 fi
 
-unarmed=0 armed=0 skipped=0 repos=0 checkouts=0 excluded=0
+unarmed=0 armed=0 skipped=0 repos=0 checkouts=0 excluded=0 fixture_excluded=0
 unarmed_labels=()
 declare -A SEEN_COMMON=()
 
@@ -604,6 +728,9 @@ for ROOT in "${ROOTS[@]}"; do
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     checkouts=$((checkouts+1))
+    if is_owned_metric_fixture "$dir"; then
+      fixture_excluded=$((fixture_excluded+1)); continue
+    fi
     if is_excluded "$dir"; then
       excluded=$((excluded+1)); continue
     fi
@@ -641,7 +768,8 @@ echo
 # (aegis-yi7o93). Both numbers were true; neither could state what it did not
 # look at. Print the denominator's provenance next to the denominator.
 echo "  roots swept: ${ROOTS[*]} (any depth)"
-echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]})"
+echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]}; managed test HOME pre-commit caches)"
+echo "  owned metric fixtures excluded: $fixture_excluded (physical suite-XXXXXXXX, owner private0700, hooks contained)"
 echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
 echo "  public armed: $armed   unarmed: $unarmed"
 # A --root run sees only its roots, so its counts are NOT the estate's coverage.
