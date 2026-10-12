@@ -114,7 +114,8 @@ def test_it_injects_the_anchor_render_and_role_startup(monkeypatch, capsys):
     monkeypatch.setattr(sa, "_run_anchor", lambda root, agent: (0, PLATE))
     assert sa.main([]) == 0
     payload = json.loads(capsys.readouterr().out)
-    out = payload["systemMessage"]
+    assert "systemMessage" not in payload  # full anchor belongs in model context
+    out = payload["hookSpecificOutput"]["additionalContext"]
     assert payload["hookSpecificOutput"] == {
         "hookEventName": "SessionStart", "additionalContext": out,
     }
