@@ -33,6 +33,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
+from .query_identity import sdk_subprocess_options
 from .answer import Answer
 from .protocols import WorkItem
 from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
@@ -118,7 +119,8 @@ class SdTracker(BrTracker):
                 "only the prefix check can tell it from the real board")
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
-                               capture_output=True, text=True, timeout=self.timeout)
+                               capture_output=True, text=True, timeout=self.timeout,
+                               **sdk_subprocess_options())
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -235,6 +237,48 @@ class SdTracker(BrTracker):
             return None
         from .seeds_plate import unassigned_counts
         return unassigned_counts(self.prove_store(), timeout=self.timeout)
+
+    @staticmethod
+    def _tend_order(rows):
+        # Haul queues use the first row: retain SDK priority/creation/id order.
+        # Missing dates cannot authorize a different dispatch head.
+        from datetime import datetime
+        def key(row):
+            value = row.get("created_at")
+            if not isinstance(value, str):
+                raise StoreUnproven("tend row lacks creation ordering evidence")
+            date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if date.tzinfo is None:
+                raise StoreUnproven("tend creation date lacks timezone")
+            return row["priority"], date, row["id"]
+        return sorted(rows, key=key)
+
+    def tend_rows(self, owners):
+        result = self.feed_rows(owners)
+        if result is None:
+            return None
+        ready, active = result
+        return self._tend_order(ready), self._tend_order(active)
+
+    def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
+        """Fresh active fields for the sweep's roster, including final barriers."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows
+        from .inbox import drop_parked
+        rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
+                          active_only=True, timeout=self.timeout).exact()
+        return Answer.complete_read(
+            self._tend_order([row for row in drop_parked(rows)
+                              if row["status"] == "in_progress"]),
+            how="fresh roster-scoped active fields")
+
+    def ready_count(self) -> int | None:
+        """Global utilization count from readiness metadata, not issue bodies."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import ready_count
+        return ready_count(self.prove_store(), timeout=self.timeout)
 
     def feed_rows(self, owners: list[str]) -> tuple[list[dict], list[dict]] | None:
         """Complete Rule Zero fields scoped to idle workers and unassigned work.
@@ -378,7 +422,7 @@ class SdTracker(BrTracker):
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                              timeout=self.timeout)
+                              timeout=self.timeout, **sdk_subprocess_options())
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

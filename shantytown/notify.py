@@ -732,10 +732,11 @@ class IdleFleetAlerter:
         # on every sweep, and this alerter's fail-open ate it: nk0e never fired
         # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
+        self._ready_scope = None
         self._bd_ready = bd_ready or (
-            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_ready(root, reg, self._ready_scope))
         self._bd_in_progress = bd_in_progress or (
-            lambda cwd: feed_check.bd_in_progress(cwd, root=root, reg=reg))
+            lambda cwd: feed_check.tend_active(root, reg))
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
         self._context_k = context_k or self._pane_context_k
@@ -925,6 +926,7 @@ class IdleFleetAlerter:
         # bd is the one external call; a hiccup FAILS OPEN (no push, no record —
         # so it retries next pass), never a block.
         try:
+            self._ready_scope = observed_idle
             ready_beads = self._bd_ready()
             self._audit.record(window_id, leg="feed", backend=backend,
                                attempted=True, acted_on=True,
@@ -1304,7 +1306,7 @@ class StalledAlerter:
         self._push = push
         from . import feed_check
         self._bd_in_progress = bd_in_progress or (
-            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_active(root, reg, roles=("worker",)))
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0

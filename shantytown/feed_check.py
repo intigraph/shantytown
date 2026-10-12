@@ -855,6 +855,30 @@ def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], li
         return ready_beads, []
 
 
+
+def tend_active(root, reg, *, roles=None):
+    """Fresh roster-scoped fields; never cache the final pre-feed anchor check."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if isinstance(tracker, SdTracker):
+        owners = [card.name for card in reg.all().exact()
+                  if roles is None or card.role in roles]
+        projected = tracker.active_rows(owners)
+        if projected is not None:
+            return projected.exact()
+    return bd_in_progress(bd_cwd(reg), root=root, reg=reg)
+
+
+def tend_ready(root, reg, owners):
+    """Only unassigned and observed-idle owners can affect the haul sweep."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if owners is not None and isinstance(tracker, SdTracker):
+        projected = tracker.tend_rows(owners)
+        if projected is not None:
+            return projected[0]
+    return _bd_ready(bd_cwd(reg), root=root, reg=reg)
+
 def main(argv: list[str] | None = None) -> int:
     """The standalone Rule Zero hook.
 

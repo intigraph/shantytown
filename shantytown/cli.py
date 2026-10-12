@@ -161,6 +161,7 @@ import time
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
+from .query_identity import declared_query_identity
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -7988,7 +7989,13 @@ def _ready_count(root, reg):
     """
     try:
         from . import feed_check
-        return len(feed_check.TrackerAdapter(root, reg).ready().exact())
+        adapter = feed_check.TrackerAdapter(root, reg)
+        count = getattr(adapter.tracker, "ready_count", None)
+        if callable(count):
+            projected = count()
+            if projected is not None:
+                return projected
+        return len(adapter.ready().exact())
     except Exception:
         return None
 
@@ -11852,6 +11859,7 @@ def _cmd_watch(a) -> int:
     return outcome.exit_code
 
 
+@declared_query_identity("st-tend")
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 
