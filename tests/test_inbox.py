@@ -210,7 +210,7 @@ def test_tracker_inbox_refuses_a_message_over_the_title_cap(tmp_path: Path):
     box = TrackerInbox(tracker, lambda: [])
     with pytest.raises(MessageTooLong) as ei:
         box.deliver("ellie", "x" * 494)          # "inbox: " + 494 = 501 > 500
-    assert "bead" in str(ei.value)
+    assert "item" in str(ei.value)
     assert tracker.created == [], "a refused message must not be written"
 
 

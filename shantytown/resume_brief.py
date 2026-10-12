@@ -95,7 +95,7 @@ def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
         lines.append(f"  {checkpoint}")
     pointers = []
     if checkpoint_bead:
-        pointers.append(f"  checkpoint bead: {checkpoint_bead} — `br show "
+        pointers.append(f"  checkpoint item: {checkpoint_bead} — `st work item show "
                         f"{checkpoint_bead}`. The full notes are a comment on it.")
     if item:
         pointers.append(f"  on your plate: {item} — it was re-dispatched to you "
@@ -107,7 +107,7 @@ def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
         # aegis-4hhqoe.12: labelled as a SUGGESTION, because it is one. Citing it
         # is the session's call, and that act is what the precision read counts.
         pointers.append(f"  suggested graph context: {suggested} — inferred by Jev "
-                        f"from the bead, not confirmed. Check it in quipu; if it is "
+                        f"from the item, not confirmed. Check it in quipu; if it is "
                         f"right, cite it with --quipu-node {suggested} on your next "
                         f"cycle.")
     for doc in docs:

@@ -177,6 +177,11 @@ def test_SHANTY_DARK_AGENTS_env_overrides_the_default_denylist(tmp_path, monkeyp
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
     monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: free)
+    # These hook-delivery tests inject opaque registry/tmux objects. Declare
+    # ungoverned candidate lanes too; real mixed-lane admission has its own
+    # paired tests in test_governor_rule_zero.
+    monkeypatch.setattr(feed_check, "worker_governor_admissions",
+                        lambda root, reg, workers: {w: lambda item: '' for w in workers})
     monkeypatch.setattr(feed_check, "bd_cwd", lambda reg: None)
     if bd_raises:
         def boom(cwd=None):
@@ -374,7 +379,7 @@ def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
                                        examples=TrackerExamples(("br",)))
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
     assert "st work defer aegis-9z9z" in msg      # the structured truly-park exit
-    assert "bead|human|access|external|parked" in msg
+    assert "<kind>" in msg
     assert "br close aegis-9z9z" in msg
     # and the correction that the whole bug turned on
     assert "re-pool" in msg.lower()          # clearing assignee only re-pools

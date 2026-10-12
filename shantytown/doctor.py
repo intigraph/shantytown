@@ -86,7 +86,7 @@ SPECS: tuple[ToolSpec, ...] = (
         "beads", "bd", ("bd", "version"), r"(\d+\.\d+\.\d+)",
         toolchain="go",
         installs_via="go build from source (no release binary is published)",
-        leverage="the beads tracker backend — st --backend beads",
+        leverage="the compatibility tracker adapter",
         release=None,
     ),
     ToolSpec(
@@ -109,7 +109,7 @@ SPECS: tuple[ToolSpec, ...] = (
         "reactor", "reactor", ("reactor", "--version"), r"(\d+\.\d+\.\d+)",
         toolchain="unknown",
         installs_via="no install mechanism yet — upstream has no release",
-        leverage="bead-lifecycle events feeding the harness",
+        leverage="item-lifecycle events feeding the harness",
         release=None,
         service_unit="reactor",
     ),

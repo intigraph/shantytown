@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from .br import BrTracker, _failure_reason
 from .answer import Answer
 from .protocols import WorkItem
-from .inbox import MESSAGE_PREFIXES, is_message
+from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
 
 #: Backends served by a br-compatible CLI. A site that asks "is this a tracker
 #: with plates, comments and hauls" asks THIS, so a new name cannot be missed in
@@ -189,15 +189,28 @@ class SdTracker(BrTracker):
         whole-board read on a remote store. Selection still uses br's ranking,
         readiness and partial-read rules; only the candidate set is narrower.
         """
+        # Most plate polls already hold work. Loading the open queue also
+        # hydrates every unread message, then discards it. Probe each held
+        # rank in precedence order; uncertainty keeps the full read path.
+        from .protocols import _PLATE_RANK
+        for status in sorted(_PLATE_RANK, key=_PLATE_RANK.get):
+            held = self._owner_rows(agent, status=status)
+            if not held.complete:
+                break
+            if any(not is_message(row.get("title", "")) and not is_unworkable(row)
+                   for row in held.exact()):
+                return held
         return self._owner_rows(agent)
 
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
-                    messages_only: bool = False) -> Answer[list[dict]]:
+                    messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
         for owner in dict.fromkeys((agent, agent.split("/")[-1])):
             for prefix in (MESSAGE_PREFIXES if messages_only else (None,)):
                 try:
                     arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
+                    if status is not None:
+                        arguments += ["--status", status]
                     if include_closed:
                         arguments.append("--all")
                     if prefix is not None:
@@ -274,7 +287,10 @@ class SdTracker(BrTracker):
 
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         self.prove_store()
-        cmd = [self._bin, *self._location(), *self._translate(args)]
+        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
+        identity = ["--actor", actor] if actor and not explicit_actor else []
+        cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout)
 

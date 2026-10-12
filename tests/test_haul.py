@@ -381,9 +381,9 @@ def test_a_repeat_of_the_same_bead_is_FLAGGED_when_it_is_re_served(tmp_path,
     """Bead item 4: the signal that was over-read twice."""
     root = _armed_root(tmp_path, spend_hours=0.5)
     _rc, first = _haul_at(monkeypatch, capsys, root, ready=READY)
-    assert "SAME bead" not in first["reason"]
+    assert "SAME item" not in first["reason"]
     _rc, again = _haul_at(monkeypatch, capsys, root, ready=READY)
-    assert "SAME bead" in again["reason"]
+    assert "SAME item" in again["reason"]
 
 
 def test_an_UNARMED_deployment_behaves_exactly_as_before(tmp_path, monkeypatch,
@@ -779,3 +779,21 @@ def test_stop_haul_passes_resolved_examples_to_both_messages(monkeypatch, capsys
                     in_progress=[item] if active else [])
     assert 'sd --quipu https://board.example --graph https://seeds.example/project/sample show sample-1' in block['reason']
     assert 'br ' not in block['reason']
+
+
+def test_pending_self_cycle_at_ceiling_never_reclaims_three_queued_items(
+        tmp_path, monkeypatch, capsys):
+    from shantytown.cycle import Requests
+    from shantytown import session_budget
+    queued = [{'id': f'work-{i}', 'assignee': 'billy'} for i in range(3)]
+    claims = []
+    _bd(monkeypatch, ready=queued, claims=claims)
+    Requests(tmp_path).request('billy', 'one durable handoff', 'handoff')
+    # A pending request must hold both new work and continuation before budget admission.
+    monkeypatch.setattr(session_budget, 'at_ceiling', lambda *a: 'items')
+    assert stop_event._haul(_Reg([WORKER]), _Panes({'p-b': '❯ '}),
+                            'billy', tmp_path) == 0
+    assert claims == []
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'cycle pending' in captured.err

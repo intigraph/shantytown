@@ -166,7 +166,7 @@ def decide(inp: Inputs) -> Verdict:
         # that goes silent is indistinguishable from a gate that is broken.
         return Verdict(False,
                        f"the fleet is STOOD DOWN ({len(inp.free_feedable)} free "
-                       f"worker(s) and {inp.dispatchable} ready bead(s) left "
+                       f"worker(s) and {inp.dispatchable} ready item(s) left "
                        f"alone). Clear `[fleet] stood_down` to resume dispatch.",
                        BY_STOOD_DOWN)
 
@@ -174,7 +174,7 @@ def decide(inp: Inputs) -> Verdict:
         return Verdict(False,
                        f"host load {inp.load_per_core:.1f}/core is over the "
                        f"{cap:.1f} ceiling — NOT demanding more dispatch onto a "
-                       f"saturated box. {inp.dispatchable} bead(s) wait.",
+                       f"saturated box. {inp.dispatchable} item(s) wait.",
                        BY_STOOD_DOWN)
 
     if inp.free_feedable and inp.dispatchable:
@@ -187,7 +187,7 @@ def decide(inp: Inputs) -> Verdict:
         return Verdict(True,
                        f"{len(inp.free_feedable)} free feedable worker(s) "
                        f"({', '.join(sorted(inp.free_feedable))}) and "
-                       f"{inp.dispatchable} dispatchable bead(s). Dispatch, or "
+                       f"{inp.dispatchable} dispatchable item(s). Dispatch, or "
                        f"say why not.{note}", BY_RULE_ZERO)
 
     # NOTHING PENDING IS NOT A HIBERNATION. It is the ordinary idle stop (rank 5),
@@ -205,7 +205,7 @@ def decide(inp: Inputs) -> Verdict:
             # empty queue and finds a full one. Name the throttle here too.
             why = ""
             if inp.throttled:
-                why = (f" ({inp.throttled} ready bead(s) held by the usage "
+                why = (f" ({inp.throttled} ready item(s) held by the usage "
                        f"governor's priority floor — idle is correct)")
             return Verdict(False,
                            f"nothing dispatchable{why}, nothing urgent. "
@@ -233,7 +233,7 @@ def decide(inp: Inputs) -> Verdict:
         return Verdict(False,
                        f"the usage governor is holding the queue: "
                        f"{len(inp.free_feedable)} idle worker(s) and "
-                       f"{inp.throttled} ready bead(s), 0 clearing the priority "
+                       f"{inp.throttled} ready item(s), 0 clearing the priority "
                        f"floor. IDLE IS CORRECT — the throttle is holding, not "
                        f"the feeder. Nothing here needs doing. "
                        f"{inp.throttled_why}".rstrip(),

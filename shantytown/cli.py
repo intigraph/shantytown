@@ -319,7 +319,7 @@ def _backend(a, default="files") -> str:
     if declared:
         if declared not in ("files", "beads", "br", "seeds", "forgejo"):
             raise SystemExit(f"  refused: SHANTY_BACKEND={declared!r} is not a "
-                             "backend (files|beads|br|seeds|forgejo). Fix [env] in "
+                             "supported backend. Fix [env] in "
                              "shantytown.toml (or the environment); a typo must "
                              "not silently mean files.")
         return declared
@@ -826,6 +826,28 @@ def _governor_for(cfg, governors, card, root):
     return harness, governors.get(harness, governors.get("base")), None
 
 
+def _governor_verdicts_for(a, cards):
+    """Read each card's usage lane once, using dispatch's account resolver."""
+    cfg, governors = _governors(a)
+    fleet = getattr(a, '_account_governor', None)
+    if fleet is not None and fleet.errors:
+        raise RuntimeError(fleet.fallback())
+    if not governors:
+        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+                for card in cards}
+    from . import account_state
+    verdicts, out = {}, {}
+    for card in cards:
+        if cfg.accounts:
+            card = account_state.process_card(a.root, card, cfg, _panes(a))
+        lane, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        if lane not in verdicts:
+            verdicts[lane] = (unconfigured if unconfigured is not None else
+                              governor.evaluate(persist=False))
+        out[card.name] = lane, verdicts[lane]
+    return out
+
+
 def _dispatch_gate(a):
     """The `st go` half of the governor: `item -> "" | refusal`.
 
@@ -1292,16 +1314,13 @@ def build_parser() -> argparse.ArgumentParser:
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
-                    help="tracker backend (identity is always files). #3. "
-                         "Unset means the deployment's SHANTY_BACKEND "
-                         "([env] in shantytown.toml, then env), else per-command "
-                         "default: files everywhere, EXCEPT `mail -d`, which "
-                         "defaults to beads because a must-survive message "
-                         "belongs in the shared store (dearing, qdal.2). Pass "
-                         "--backend files to force local.")
+                    help="tracker backend (identity is always files). Unset uses "
+                         "the deployment's SHANTY_BACKEND ([env] in shantytown.toml, "
+                         "then environment), otherwise the command default. An "
+                         "explicit option overrides deployment configuration.")
     ap.add_argument("--repo", default=None,
-                    help="store directory for --backend beads/br (unset: deployment's "
-                         "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the .beads walk-up)")
+                    help="store directory for compatibility tracker adapters (unset: deployment's "
+                         "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the configured store walk-up)")
     ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
                     help="identity backend: files (generated cards, the default), "
                          "quipu (the graph), or toml ([crew.<name>] in "
@@ -1364,7 +1383,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "Flattened to one line (the transport submits on "
                            "newline).")
     go.add_argument("--quipu-node", action="append", default=[], metavar="NAME",
-                    help="quipu node(s) relevant to this bead (repeatable). Rides "
+                    help="quipu node(s) relevant to this item (repeatable). Rides "
                          "the dispatch payload through the same triage gate as the "
                          "work, so the receiving agent starts from what the graph "
                          "already knows instead of re-deriving it")
@@ -1435,7 +1454,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="park an item with a required blocker kind and durable reason")
     df.add_argument("item")
     df.add_argument("kind", choices=tuple(BLOCKER_KIND_LABELS),
-                    help="bead|human|access|external are blockers; parked means "
+                    help="dependency, human, access and external kinds are blockers; parked means "
                          "deliberately set aside with no blocker")
     reason = df.add_mutually_exclusive_group(required=True)
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
@@ -1456,6 +1475,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--no-priority-advice", action="store_true",
+                    help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
                     help="print the full assigned title (default marks clipped titles with …)")
     cr.add_argument("--count", action="store_true",
@@ -1672,10 +1693,10 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("-n", "--dry-run", action="store_true",
                        help="verify and describe the transition; change nothing")
 
-    co = leaf("cost", help="per-bead costs from Camayoc and explicit focus bindings")
-    co.add_argument("bead", nargs="?")
+    co = leaf("cost", help="per-item costs from Camayoc and explicit focus bindings")
+    co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
-    co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-bead receipts")
+    co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -1717,8 +1738,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
     ib.add_argument("-d", "--durable", action="store_true",
-                    help="must-survive: deliver to the recipient's INBOX (a bead "
-                         "on the aegis store with --backend beads), then "
+                    help="must-survive: deliver to the recipient's INBOX (an item "
+                         "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
@@ -2005,7 +2026,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "step. Unwritten context is the only thing a cycle "
                          "destroys")
     cy.add_argument("--checkpoint-bead", default="",
-                    help="durable checkpoint bead id; required for administrators and read back before a self-cycle request")
+                    help="durable checkpoint item id; required for administrators and read back before a self-cycle request")
     _add_despite_hold(cy)
     # --checkpoint-file is Stiwi's "an st command that does the needful"
     # (aegis-x6yoq). Before it, a handoff was TWO hand-composed commands — a
@@ -2016,7 +2037,7 @@ def build_parser() -> argparse.ArgumentParser:
     # it is posted to the bead and its first line becomes the reason.
     cy.add_argument("--checkpoint-file", default="",
                     help="a file holding your checkpoint notes. Posted as a "
-                         "comment on the checkpoint/anchor bead, and its first "
+                         "comment on the checkpoint/anchor item, and its first "
                          "line becomes the reason. Use INSTEAD of -r: one "
                          "command, no hand-composed summary")
     # Stiwi, same directive: "would be nice to specify a quipu node(s) for the
@@ -2069,6 +2090,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `quipu` -> ~/gt/quipu")
     wt.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
+    wt.add_argument("--resume", action="store_true",
+                    help="explicitly resume an existing non-canonical branch; preserve its work")
     wt.add_argument("--gc", action="store_true",
                     help="remove the worktree IFF unchanged — never discards "
                          "uncommitted or unpushed work")
@@ -2081,6 +2104,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
     ph.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
+    ph.add_argument("--source-branch",
+                    help="explicit source branch; must match the selected worktree and caller")
     ph.add_argument("--branch", default="main",
                     help="destination branch on each remote (default: main)")
 
@@ -5945,7 +5970,7 @@ def _cmd_repool(a) -> int:
     except TrackerWriteLost as e:
         # The write was attempted and the read-back still disagrees. Do NOT
         # blind-retry: read the bead first — the row may hold half the update.
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`)"
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the item (`st work item show {a.item}`)"
               f" before retrying — the row may be half-updated.", file=sys.stderr)
         return CANNOT_TELL
     if r.noop:
@@ -5981,7 +6006,7 @@ def _cmd_defer(a) -> int:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     except (TrackerWriteLost, DeferUnconfirmed) as e:
-        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the bead (`br show {a.item}`) "
+        print(f"  ⚠ COULD NOT CONFIRM: {e}\n  Read the item (`st work item show {a.item}`) "
               "before retrying — the status and label may already have landed.",
               file=sys.stderr)
         return CANNOT_TELL
@@ -6265,6 +6290,7 @@ def _cmd_go(a) -> int:
     if a.worktree:
         try:
             wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+            _check_worktree_resume(Path(wt_path), a.agent)
         except WorkspaceError as e:
             print(f"  refused: worktree — {e}", file=sys.stderr)
             return REFUSED
@@ -6528,6 +6554,12 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    if getattr(a, "no_priority_advice", False) and (
+            not getattr(a, "local", False) or not getattr(a, "json", False)
+            or any(getattr(a, name, False) for name in ("pane_state", "count", "governor"))):
+        print("  refused: --no-priority-advice requires --local --json without "
+              "--pane-state/--count/--governor", file=sys.stderr)
+        return REFUSED
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
@@ -6651,8 +6683,10 @@ def _cmd_crew(a) -> int:
                               host=local or "local", complete=not peer_errors,
                               agents=local_rows + fleet_mod.rows(peer_results),
                               errors=peer_errors,
-                              priority_advisories=_priority_fleet_notes(
-                                  a, _registry(a), panes))))
+                              priority_advisories=(
+                                  ["governor: priority advisory not measured (--no-priority-advice)."]
+                                  if getattr(a, "no_priority_advice", False)
+                                  else _priority_fleet_notes(a, _registry(a), panes)))))
         return CANNOT_TELL if peer_errors else OK
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st agent new`.
@@ -6906,10 +6940,10 @@ def _cmd_crew(a) -> int:
               f"NOT zero")
     elif n_un:
         p1 = f", {n_p1} of them P1 or above" if n_p1 else ""
-        print(f"  {n_un} open bead(s) in NOBODY'S haul{p1} — unassigned, so they "
+        print(f"  {n_un} open item(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
               f"`br list --status open` and route by domain.")
-        print(f"    (includes any `decision-needed` beads, which are correctly "
+        print(f"    (includes any `decision-needed` items, which are correctly "
               f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
@@ -6919,7 +6953,7 @@ def _cmd_crew(a) -> int:
     # Evaluated ONLY when somebody is free: when the fleet is saturated the
     # answer changes nothing, and `st crew` must not grow a metric read on a path
     # where it cannot matter.
-    if free and (note := _throttled_idle_note(a)):
+    if free and (note := _throttled_idle_note(a, free)):
         print(note)
     # Unconditional, unlike the throttle note above: this one matters MOST when
     # the free list is empty, because an agent alive under another orchestrator is
@@ -6960,7 +6994,7 @@ def _cmd_crew(a) -> int:
         # changed meaning between two prompts got answered twice in one evening.
         print(f"    Read it:   st agent ask {waiting[0]}")
         print(f"    Answer it: st agent answer {waiting[0]} <N>")
-        print(f"    ...or tell them to put the decision on the bead with a "
+        print(f"    ...or tell them to put the decision on the item with a "
               f"recommendation and carry")
         print(f"    on — a question in a pane reaches nobody and dies with the "
               f"session.")
@@ -6991,7 +7025,7 @@ def _cmd_crew(a) -> int:
         print(f"    work cell). Remedy: the agent {handoff_text.coordinator_tag()}, "
               f"THEN takes the task. tend")
         # tend auto-cycles a checkpointed saturated agent (aegis-zl7jwm).
-        print(f"    cycles it at an idle turn once a checkpoint is on its plate bead; "
+        print(f"    cycles it at an idle turn once a checkpoint is on its plate item; "
               f"do NOT tell it")
         print(f"    to /clear (that drops bypass). Still here means no checkpoint "
               f"yet: `st agent advise <name>`.")
@@ -7527,7 +7561,7 @@ def _alive_elsewhere_note(agents, panes) -> str:
         return ""
 
 
-def _throttled_idle_note(a) -> str:
+def _throttled_idle_note(a, free) -> str:
     """The line that tells a free agent apart from a REACHABLE one, or "".
 
     FAILS TO SILENCE, always. No governor, an unreadable one, a signal we cannot
@@ -7537,22 +7571,24 @@ def _throttled_idle_note(a) -> str:
     for when things are already going wrong.
     """
     try:
-        gov = _governor(a)
-        if gov is None:
-            return ""
-        verdict = gov.evaluate(persist=False)
-        if verdict.signal_lost or verdict.tier is None:
-            return ""
-        if verdict.drains:
-            return ("    ⚠ THROTTLED-IDLE, not available: the usage governor is "
-                    "draining the fleet — nothing dispatches at any priority.")
-        if verdict.floor is None:
-            return ""
-        return (f"    ⚠ THROTTLED-IDLE, not fully available: the governor's "
-                f"{verdict.tier.at}% tier is engaged — {verdict.effect()}. Work "
-                f"below the floor cannot be dispatched to them; they are idle "
-                f"because the throttle is holding, not because nobody fed "
-                f"them.{_until(verdict)}")
+        cards = [card for card in _registry(a).all().exact() if card.name in free]
+        by_lane = {}
+        for name, (lane, verdict) in _governor_verdicts_for(a, cards).items():
+            if verdict is None or verdict.signal_lost or verdict.tier is None:
+                continue
+            if not verdict.drains and verdict.floor is None:
+                continue
+            from types import SimpleNamespace
+            if verdict.waives(SimpleNamespace(priority=None), name):
+                continue
+            names, _ = by_lane.setdefault(lane, ([], verdict))
+            names.append(name)
+        notes = []
+        for lane, (names, verdict) in sorted(by_lane.items()):
+            who = ', '.join(sorted(names))
+            notes.append(f"    ⚠ THROTTLED-IDLE [{lane}: {who}]: "
+                         f"{verdict.effect()}.{_until(verdict)}")
+        return '\n'.join(notes)
     except Exception:      # noqa: BLE001 — the roster never fails on capacity
         return ""
 
@@ -8766,7 +8802,7 @@ def _durable_checkpoint_gate(a, agent_name: str):
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
-        bead = _cycle_anchor_bead(a, agent_name)
+        bead = (getattr(a, "checkpoint_bead", "") or "").strip() or _cycle_anchor_bead(a, agent_name)
     except Exception as e:
         return cycle_mod.durable_gate(agent_name, "", since, [], error=f"plate unreadable ({e})")
     if not bead:
@@ -9034,7 +9070,7 @@ def _cmd_cycle(a) -> int:
                            "you are mid-task on, decisions made, the exact next "
                            "step>'). It is the only thing the cycle destroys.")
         if cycle_mod.requires_checkpoint_bead(role, checkpoint_bead):
-            missing.append("a durable bead: administrator cycles need "
+            missing.append("a durable item: administrator cycles need "
                            "--checkpoint-bead <id>, and you hold no plate item to "
                            "default to.")
         if missing:
@@ -9048,7 +9084,7 @@ def _cmd_cycle(a) -> int:
             try:
                 _tracker(a).get(checkpoint_bead)
             except Exception as e:
-                print(f"  refused: checkpoint bead {checkpoint_bead!r} could not be read ({e})",
+                print(f"  refused: checkpoint item {checkpoint_bead!r} could not be read ({e})",
                       file=sys.stderr)
                 return REFUSED
         # Post the checkpoint file to the bead BEFORE recording the request, so a
@@ -9081,7 +9117,7 @@ def _cmd_cycle(a) -> int:
                           f"but re-post the file when the tracker is reachable.",
                           file=sys.stderr)
             else:
-                print("  ⚠ no checkpoint bead and no active anchor to post to — "
+                print("  ⚠ no checkpoint item and no active anchor to post to — "
                       "the file's first line is recorded as the reason only.",
                       file=sys.stderr)
 
@@ -9255,7 +9291,7 @@ def _cmd_cycle(a) -> int:
     print(f"  {agent_name}: CYCLED via {performed} — context cleared, {kept}.")
     if brief_path:
         print(f"  resume brief written — its SessionStart hook injects the "
-              f"checkpoint, bead and graph nodes into the fresh context.")
+              f"checkpoint, item and graph nodes into the fresh context.")
     _redispatch_after_cycle(a, agent_name, getattr(a, "checkpoint_bead", ""), card, panes)
     return OK
 
@@ -9444,7 +9480,7 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
     except Exception as e:  # noqa: BLE001
         print(f"  ⚠ resume brief NOT written ({e}) — {agent_name} will come back "
               f"without its handoff in context. Its checkpoint is still on the "
-              f"bead and the stop record.", file=sys.stderr)
+              f"item and the stop record.", file=sys.stderr)
         return ""
 
 
@@ -9879,6 +9915,27 @@ def _kickoff_after_cycle(a, agent_name: str, checkpoint_bead: str,
               file=sys.stderr)
 
 
+def _check_worktree_resume(path: Path, agent: str, *, resume: bool = False) -> None:
+    """Require an explicit choice before refreshing an unrelated work branch."""
+    branch = _worktree_branch(path)
+    expected = f"wt/{agent}"
+    if branch == expected:
+        print(f"  worktree branch: {branch}")
+        return
+    observed = repr(branch) if branch is not None else "UNKNOWN or detached"
+    if not resume:
+        raise WorkspaceError(
+            f"existing worktree {path} is on {observed}, expected {expected!r}. "
+            "No refresh or branch change performed. Use st repo worktree with "
+            "--resume only to continue that work; for new work, use --gc first "
+            "(it keeps trees holding work), then provision again."
+        )
+    print(f"  RESUMING existing branch {observed} at {path}; not a new worktree")
+    if branch is not None:
+        print(f"  publish this branch through st repo push with --source-branch "
+              f"{branch!r} and an explicit --branch destination")
+
+
 def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
@@ -9903,6 +9960,7 @@ def _cmd_worktree(a) -> int:
             print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
             return OK
         path = ensure_worktree(repo, agent)
+        _check_worktree_resume(Path(path), agent, resume=getattr(a, "resume", False))
         # ENFORCE, HAVING JUST ASSISTED (aegis-xig5m). Provisioning a worktree is
         # the moment st KNOWS this shared checkout is in play — so it is the
         # moment to install the guard, and it costs nothing. Doing it here is why
@@ -9988,15 +10046,20 @@ def _cmd_push(a) -> int:
               f"first.", file=sys.stderr)
         return REFUSED
 
-    branch = f"wt/{agent}"
+    source_branch = getattr(a, "source_branch", None)
+    if source_branch == "":
+        print("  refused before push: explicit source branch is empty; "
+              "no remote was contacted.", file=sys.stderr)
+        return REFUSED
+    branch = source_branch if source_branch is not None else f"wt/{agent}"
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
-            f"{caller_path} differs from canonical '{branch}' at {dest}. "
+            f"{caller_path} differs from selected source '{branch}' at {dest}. "
             "No remote was contacted. Run st repo push from the canonical worktree, "
-            "or use an explicit git push after reviewing the exact ref.",
+            "or name the intended branch with --source-branch after reviewing the exact ref.",
             file=sys.stderr,
         )
         return REFUSED
@@ -10018,12 +10081,16 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
+    if source_branch is not None and checked_out is None:
+        print("  refused before push: explicit source branch cannot be verified; "
+              "no remote was contacted.", file=sys.stderr)
+        return REFUSED
     if checked_out is not None and checked_out != branch:
         print(f"  refused before push: {dest} is on '{checked_out}', but this would "
               f"push '{branch}' — a branch the worktree is not on, so it is not the "
               f"work you are looking at. No remote was contacted.\n"
               f"  Either check out '{branch}' there, or push '{checked_out}' "
-              f"deliberately with an explicit git push after reviewing the ref.",
+              f"deliberately with --source-branch after reviewing the ref.",
               file=sys.stderr)
         return REFUSED
     outcomes = push_every_remote(dest, branch, a.branch)
@@ -10102,7 +10169,7 @@ def _cmd_subscribe(a) -> int:
         try:
             item = tracker.create(title, assignee=admin)
         except Exception as e:
-            print(f"  could not create a bead for {w.iri}: {e}", file=sys.stderr)
+            print(f"  could not create an item for {w.iri}: {e}", file=sys.stderr)
             return
         mailed = ""
         if admin:
@@ -10134,7 +10201,7 @@ def _cmd_subscribe(a) -> int:
                     f"shuttle run {short} ({wf}) — state {r.state}", assignee=admin)
                 print(f"  shuttle run {short} -> {item.id}")
             except Exception as e:
-                print(f"  could not create a bead for {r.iri}: {e}", file=sys.stderr)
+                print(f"  could not create an item for {r.iri}: {e}", file=sys.stderr)
                 return
         if admin:
             try:
@@ -10230,16 +10297,16 @@ def _set_aside_tooling_block(path) -> str | None:
 
 
 def _restore_tooling_block(path, instructions) -> None:
-    """Put the projected block back after the pull. Never raises."""
+    """Restore and verify the projected block; report failures to the caller."""
     if instructions is None:
         return
-    try:
-        from .tooling import instruction_text
-        claude = Path(path) / "CLAUDE.md"
-        current = claude.read_text() if claude.is_file() else ""
-        claude.write_text(instruction_text(current, instructions))
-    except Exception:
-        pass
+    from .tooling import instruction_text
+    claude = Path(path) / "CLAUDE.md"
+    current = claude.read_text() if claude.is_file() else ""
+    expected = instruction_text(current, instructions)
+    claude.write_text(expected)
+    if claude.read_text() != expected:
+        raise OSError("generated instructions restoration read-back mismatch")
 
 
 def _refresh_clone(path) -> str | None:
@@ -10272,20 +10339,35 @@ def _refresh_clone(path) -> str | None:
                     return None
         mcp = Path(path) / ".mcp.json"
         saved = mcp.read_bytes() if mcp.is_file() else None
-        block = _set_aside_tooling_block(path)
-        # Process-GROUP timeout: a plain subprocess timeout kills `git pull`
-        # and orphans the `git fetch` + `ssh` it already spawned (aegis-ujz5gf).
-        from .workspace import run_with_group_timeout
-        r = run_with_group_timeout(
-            ["git", "-C", str(path), "pull", "--ff-only"], 60,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
-        if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
-            mcp.write_bytes(saved)
-        # Re-inject even when the pull FAILED: the block was removed to let the
-        # merge proceed, and leaving it out would strip the agent's tooling
-        # instructions as the price of a pull that achieved nothing.
-        _restore_tooling_block(path, block)
+        block = None
+        err = None
+        cleanup_errors = []
+        try:
+            block = _set_aside_tooling_block(path)
+            # Process-GROUP timeout: killing only git would orphan fetch/ssh.
+            from .workspace import run_with_group_timeout
+            r = run_with_group_timeout(
+                ["git", "-C", str(path), "pull", "--ff-only"], 60,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            err = None if r.returncode == 0 else (r.stderr or r.stdout).strip()
+        except Exception as e:
+            err = str(e)
+        finally:
+            # A timeout is a raised exception, not a returned refusal. Restore
+            # both surfaces on either path, even if one restoration fails.
+            try:
+                if saved is not None and (not mcp.is_file() or mcp.read_bytes() != saved):
+                    mcp.write_bytes(saved)
+                    if mcp.read_bytes() != saved:
+                        raise OSError("tool kit restoration read-back mismatch")
+            except Exception as e:
+                cleanup_errors.append(f"tool kit restoration failed: {e}")
+            try:
+                _restore_tooling_block(path, block)
+            except Exception as e:
+                cleanup_errors.append(f"instruction restoration failed: {e}")
+        if cleanup_errors:
+            return "\n".join(([err] if err else []) + cleanup_errors)
         return err
     except Exception as e:                       # not a repo, git absent, timeout
         return str(e)
@@ -11338,7 +11420,7 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
             and panes.exists(card.pane)):
         panes.send(card.pane, attribute(
             f"Work is on your hook: {item.id} — {cycle.title} — requested DREAM "
-            f"cycle; read the bead and execute one bounded pass.", "st work dream"))
+            f"cycle; read the item and execute one bounded pass.", "st work dream"))
     return cycle, item.id, "created"
 
 
@@ -12421,7 +12503,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         stale_blocked = _fleet_sweep("blocked-stale", lambda: notify_mod.BlockedStaleAlerter(
             Path(a.root), _registry(a), panes, log=_log).sweep())
         if stale_blocked:
-            print(f"  ⚠ re-surfaced {len(stale_blocked)} bead(s) blocked "
+            print(f"  ⚠ re-surfaced {len(stale_blocked)} item(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
@@ -12459,7 +12541,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())
         if misstatused:
-            print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked bead(s) "
+            print(f"  ⚠ found {len(misstatused)} MIS-STATUSED blocked item(s) "
                   f"whose dependencies are ALL CLOSED: {', '.join(misstatused)}",
                   file=sys.stderr)
         if skipped_fleet:

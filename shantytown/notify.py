@@ -122,7 +122,7 @@ def wake_recipient(reg, panes, worker: str, message: str, *, catalog=None) -> st
 def _message(worker: str, state: str) -> str:
     return (f"⚠ {worker} is BLOCKED ({state}) and needs you — it will NOT time out "
             f"or self-resolve. Look: `st agent log {worker}`. Answer the prompt, or tell "
-            f"it to put the decision on its bead with a recommendation and carry "
+            f"it to put the decision on its item with a recommendation and carry "
             f"on. (auto-notice from st fleet tend; you were not asked to sweep.)")
 
 
@@ -1062,7 +1062,7 @@ class IdleFleetAlerter:
             feedable = [b for b in beads
                         if b not in open_anchors.get(worker, ())]
             if not feedable:
-                self._log(f"haul: {worker} idle but every queued bead is its "
+                self._log(f"haul: {worker} idle but every queued item is its "
                           f"own open anchor — not fed this pass")
                 continue
             # THE SESSION CEILING, ON THIS TRIGGER TOO (aegis-xxae9). ONE
@@ -1178,7 +1178,7 @@ class IdleFleetAlerter:
                                    eligible=True, attempted=True, refused=True,
                                    reason="pane unreachable")
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "
-                          f"ready bead(s) but its pane was unreachable — NOT "
+                          f"ready item(s) but its pane was unreachable — NOT "
                           f"fed, will retry")
                 continue
             nudged.append(worker)
@@ -1190,7 +1190,7 @@ class IdleFleetAlerter:
                 state=("input_sent" if delivery_item else ""),
                 reason=("natural tend feed delivered" if delivery_item
                         else "handoff instruction delivered; no item fed"))
-            self._log(f"haul: fed {worker} its next bead ({feedable[0]}; "
+            self._log(f"haul: fed {worker} its next item ({feedable[0]}; "
                       f"{len(feedable) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
 
@@ -1215,7 +1215,7 @@ class IdleFleetAlerter:
             # engaged tier is the CORRECT state; the coordinator only needs to
             # be able to tell it from a broken feeder, which is what the log
             # line is for. No push: there is nothing for them to do.
-            self._log(f"idle-fleet: {len(held)} bead(s) ready and NONE clear the "
+            self._log(f"idle-fleet: {len(held)} item(s) ready and NONE clear the "
                       f"priority floor — {held[0][2]}. Correctly not alerting.")
         if not newly or not ready:
             # Nothing for the coordinator this pass. Record who was HANDLED
@@ -1253,9 +1253,9 @@ def _idle_fleet_message(free: list[str], newly: list[str], ready,
     lane = f" {balance_line}." if balance_line else ""
     return (
         f"⚠ st fleet tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
-        f"({', '.join(free)}){fresh} with {len(ready)} dispatchable bead(s) ready. "
+        f"({', '.join(free)}){fresh} with {len(ready)} dispatchable item(s) ready. "
         f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
-        f"`st go <bead> <worker>`. Top ready: {top}.{lane} "
+        f"`st go <item> <worker>`. Top ready: {top}.{lane} "
         f"(auto-alert from st fleet tend; you were not asked to sweep.)")
 
 
@@ -1473,11 +1473,11 @@ class StalledAlerter:
     def _nudge_message(items, mins) -> str:
         one = items[0]
         return (f"⚠ st fleet tend (self-heal) — you are idle holding {', '.join(items)} "
-                f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
-                f"haul until you resolve it. If it is DONE: `br close {one}`. If "
+                f"with no progress for {mins:.0f}m. An in_progress item DAMS your "
+                f"haul until you resolve it. If it is DONE: `st work item close {one} --reason-file <reason>`. If "
                 f"it is blocked or gated (nobody should work it yet): put why on "
-                f"the bead, then `st work defer {one} "
-                f"<bead|human|access|external|parked> --reason-file <file>` — "
+                f"the item, then `st work defer {one} "
+                f"<kind> --reason-file <file>` — "
                 f"that records the blocker kind and takes it OUT of the ready "
                 f"pool (clearing the assignee alone only re-pools it for the next "
                 f"idle agent). If you are mid-something this loop cannot see, "
@@ -1488,7 +1488,7 @@ class StalledAlerter:
         return (f"⚠ st fleet tend — NEGLECTED anchor unresolved: {name} has held "
                 f"{', '.join(items)} idle with no progress for {mins:.0f}m and "
                 f"did NOT act on a self-heal nudge. The haul is dammed. Reclaim "
-                f"the item or close it on the agent's behalf — a held bead nobody "
+                f"the item or close it on the agent's behalf — a held item nobody "
                 f"is working is invisible starvation.")
 
 
@@ -1915,11 +1915,11 @@ class BlockedStaleAlerter:
             if decision_hold:
                 classification = ("DELIBERATE HOLD: decision label present; "
                                   f"verified at {verified_at}. This standing "
-                                  "notice repeats only when the bead changes.")
+                                  "notice repeats only when the item changes.")
             elif kind == "work":
                 classification = (f"BLOCKED-ON-WORK: open issue blocker(s) "
                                   f"{', '.join(blockers)}. Chase that work; do "
-                                  f"not re-ask a human for the blocked bead.")
+                                  f"not re-ask a human for the blocked item.")
             else:
                 classification = ("BLOCKED-ON-HUMAN: no open issue blocker "
                                   "exists. A person must clear/correct the status "
@@ -1930,13 +1930,13 @@ class BlockedStaleAlerter:
                    f"(p{r.get('priority')}, assignee {who}) — created "
                    f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
                    f"{classification} "
-                   f"BLOCKED is invisible everywhere else — off br ready, off the "
+                   f"BLOCKED is invisible everywhere else — off the ready pool, off the "
                    f"Rule Zero sweep, off every capacity report — so it is STOPPED, "
                    f"not waiting. "
-                   f"(age is created_at, an UPPER bound — bd records no "
+                   f"(age is created_at, an UPPER bound — sd records no "
                    f"blocked-at timestamp.)")
             if held_back and i == min(BLOCKED_MAX_PER_PASS, len(due)) - 1:
-                msg += (f" [+{held_back} more aged blocked bead(s) held back this "
+                msg += (f" [+{held_back} more aged blocked item(s) held back this "
                         f"pass to avoid a wall; they surface on following passes.]")
             if self._push(self._reg, self._panes, msg):
                 ledger[bid] = ({"kind": "decision-hold", "verified_at": verified_at}
@@ -1993,7 +1993,7 @@ class BlockedMisstatusAlerter:
         try:
             rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd, root=self._root, reg=self._reg)
         except Exception as e:
-            self._log(f"blocked-misstatus: could not read blocked beads ({e!r})")
+            self._log(f"blocked-misstatus: could not read blocked items ({e!r})")
             return []
 
         try:
@@ -2030,7 +2030,7 @@ class BlockedMisstatusAlerter:
             del ledger[bid]
         surfaced = []
         for bid, row, deps in due:
-            msg = (f"⚠ MIS-STATUSED BLOCKED bead: {bid} has dependencies and "
+            msg = (f"⚠ MIS-STATUSED BLOCKED item: {bid} has dependencies and "
                    f"EVERY one is closed ({', '.join(deps)}). It is unblocked "
                    f"in fact but blocked on paper, so br ready and every feed "
                    f"path hide it. Clear/correct the status; do not chase a "
@@ -2090,7 +2090,7 @@ def _checkpoint_nudge(bead: str, since: str) -> str:
     return (f"You are past the cycle line. tend will cycle you at your next idle "
             f"turn once a checkpoint is on {bead} (any comment you write there "
             f"after {since}): state, landed-vs-local, exact next step. Write it "
-            f"now with `br comments add {bead} --file <notes>`, then stop.")
+            f"now with `st work item comment {bead} --file <notes>`, then stop.")
 
 
 class AutoCycler:
@@ -2218,7 +2218,7 @@ class AutoCycler:
             except Exception as e:  # noqa: BLE001
                 bead, why = "", f"plate unreadable ({e})"
             else:
-                why = "no plate bead to checkpoint onto"
+                why = "no plate item to checkpoint onto"
             if not bead:
                 if entry.get("noted") != why:
                     self._log(f"auto-cycle: {agent} is past the line but NOT "

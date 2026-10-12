@@ -677,10 +677,10 @@ def triage(panes, target: str, new_work: str) -> Decision:
              # aegis-x6yoq: names `st agent cycle --self`, never /clear. /clear drops
              # bypass and returns the agent undispatchable, so prescribing it here
              # made the remedy need its own remedy.
-             "remedy": "checkpoint to the bead, THEN `st agent cycle --self "
+             "remedy": "checkpoint to the item, THEN `st agent cycle --self "
                        "--checkpoint-file <notes>`, THEN take the task. Do NOT "
                        "/clear. tend cycles it at an idle turn only once it has "
-                       "checkpointed to its plate bead — an unsaved "
+                       "checkpointed to its plate item — an unsaved "
                        "checkpoint is the one thing a cycle destroys. Unconditional "
                        "on relatedness: past 400k, cycle before more work."})
 

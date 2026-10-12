@@ -238,10 +238,10 @@ class HasOpenBlocker(Exception):
             f"{item_id} is gated by {len(self.blockers)} unmet blocker(s): {names}. "
             f"Refusing to serve it to {requested} — dispatching it puts work on a "
             f"plate that cannot be advanced. Read from this item's own `blocks` "
-            f"dependencies, just now. If `br ready` offered you this item, the two "
-            f"disagree and THAT is worth a bead — do not assume either is stale. "
+            f"dependencies, just now. If the configured ready reader offered you this item, the two "
+            f"disagree and THAT is worth an item — do not assume either is stale. "
             f"Close the blocker, or drop the dependency if it is no longer real "
-            f"(`br dep remove {item_id} <blocker>`), then dispatch."
+            f"(`sd dep remove {item_id} <blocker>`), then dispatch."
         )
 
 
@@ -277,8 +277,8 @@ class Blocked(Exception):
             f"it would overwrite that status with in_progress and put an item "
             f"nobody can advance on an agent's plate — which is what cycles "
             f"agents. If the block is resolved, clear it deliberately "
-            f"(`br update {item_id} --status open`), then dispatch. If it is not, "
-            f"the bead's own comment says what it is waiting for."
+            f"(`st work item update {item_id} --status open`), then dispatch. If it is not, "
+            f"the item's own comment says what it is waiting for."
         )
 
 
@@ -303,7 +303,7 @@ class Closed(Exception):
             f"{item_id} is CLOSED; refusing to serve it to {requested}. Closed is "
             f"terminal — serving it would revert it to in_progress and re-do "
             f"finished work. If it must be worked again, reopen it deliberately "
-            f"(`br update {item_id} --status open`), then dispatch."
+            f"(`st work item update {item_id} --status open`), then dispatch."
         )
 
 
@@ -505,7 +505,7 @@ class Plan:
                 f"  would: ⚠ {self.unreadable_deps} dependency row(s) UNREADABLE "
                 f"— counted by the tracker, resolvable in no store reachable from "
                 f"here. If one of them is a `blocks` edge, this item is NOT ready "
-                f"and nothing can tell you so (`br show {self.item_id} --json`: "
+                f"and nothing can tell you so (`st work item show {self.item_id}`: "
                 f"compare dependency_count against dependencies)")
         lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
         return "\n".join(lines)
@@ -841,7 +841,7 @@ class Dispatcher:
             raise RepoolRefused(
                 f"{item_id} is closed — closed is terminal and there is nothing "
                 f"to hand back. Reopening is a deliberate act "
-                f"(`br update {item_id} --status open`), never a repool side effect.")
+                f"(`st work item update {item_id} --status open`), never a repool side effect.")
         if item.status == "blocked":
             raise RepoolRefused(
                 f"{item_id} is blocked — blocked is a decision, and repooling it "
