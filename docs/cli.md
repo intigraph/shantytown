@@ -86,7 +86,7 @@ st fleet                      the whole crew
   watch [--peer|--metrics]    one liveness pass on the PEER host's administrator
 st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>             what code should I be looking at? (bobbin)
   pr <owner/repo> --bead <id>  complete overlap inventory; --create records decisions then creates
 st ops                        the installation
@@ -2501,3 +2501,16 @@ PR before retrying. GitHub has no atomic expected-head create endpoint, so a bra
 race after the last read is detected on the result, not prevented. This command
 provides the crew creation path; it does not claim to intercept raw `gh` or other
 clients. Installing a mandatory external-client hook is a separate adoption step.
+
+### Explicit push destination
+
+`st repo push <repo> [agent]` (legacy alias `st push`) refuses an omitted or empty
+`--branch` before contacting any remote. Publish a candidate with
+`--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
+worktree is on that topic instead of its canonical agent branch. The source must
+match the selected worktree and caller. Existing authority, pre-push hooks and
+non-fast-forward checks still apply to every trusted peer.
+
+`--branch main` explicitly selects a destination; it does not establish independent
+review or successful CI. Land reviewed PRs through the normal merge helper rather
+than treating source publication as a reviewed merge.

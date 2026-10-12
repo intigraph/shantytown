@@ -106,7 +106,7 @@ st fleet                          the whole crew
   watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
 st repo                           a shared project repo
   worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]             push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>                 what code should I be looking at?
   pr <owner/repo> --bead <id>      complete overlap inventory; --create records decisions then creates
 st ops                            the installation

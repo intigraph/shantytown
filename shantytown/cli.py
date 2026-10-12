@@ -2106,8 +2106,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="whose worktree; defaults to $SHANTY_AGENT")
     ph.add_argument("--source-branch",
                     help="explicit source branch; must match the selected worktree and caller")
-    ph.add_argument("--branch", default="main",
-                    help="destination branch on each remote (default: main)")
+    ph.add_argument("--branch",
+                    help="required destination branch on each remote; no default. "
+                         "Use the feature branch for source publication; reviewed "
+                         "main merges use the merge helper")
 
     pr = leaf("pr", help="complete overlap preflight before creating a GitHub PR")
     pr.add_argument("repository", help="explicit GitHub owner/name")
@@ -10039,6 +10041,14 @@ def _cmd_push(a) -> int:
     intentional choice. Refuse when it differs from ``wt/<agent>`` rather than
     silently publishing the canonical branch and deferred work parked on it.
     """
+    # A correct source choice is not destination intent. Defaulting to main
+    # can publish an unreviewed feature even when every source guard passes.
+    if not getattr(a, "branch", None):
+        print("  refused before push: --branch must name an explicit destination; "
+              "no remote was contacted. Use --branch <feature-branch> to publish "
+              "source. This command does not replace the reviewed merge helper.",
+              file=sys.stderr)
+        return REFUSED
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
         print("  refused: no agent. `st repo push <repo> <agent>` or set "
