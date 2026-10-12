@@ -314,15 +314,6 @@ The four inferred outcomes are finished-unclosed (one close reminder per session
 
 ### Remote Seeds plate reads
 
-`st work item show <id>` reads the fields it displays and outgoing dependency
-classifications in one bounded native query, after the store and schema proofs.
-It does not hydrate comments or reverse dependencies that `WorkItem` discards.
-Missing identity, contradictory fields, shadow items across the two project
-graphs, unreadable transport, and capped responses refuse the display.
-An observed legacy schema retains the SDK adapter. Mutation preconditions and
-read-backs continue using the full SDK read; this projection grants no write
-or dispatch authority.
-
 `SdTracker` selects plate candidates and ready IDs by the requested owner,
 including both full and short owner spellings. The schema.org remote path reads
 only plate fields. Local stores and older revision ledgers check `hooked` and
