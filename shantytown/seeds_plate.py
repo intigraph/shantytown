@@ -40,7 +40,7 @@ def _iri(value: str) -> str:
     return "<" + value + ">"
 
 
-def _query(proof, query: str, timeout: int) -> dict:
+def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     # Same caller-declared attribution contract as the SDK, never credentials.
     for header, value in (
@@ -54,9 +54,12 @@ def _query(proof, query: str, timeout: int) -> dict:
     ):
         if value and value.isascii() and not any(c in value for c in "\r\n"):
             headers[header] = value
+    payload = {"query": query}
+    if verbose:
+        payload["verbose"] = True
     request = Request(
         proof.quipu_url.rstrip("/") + "/query",
-        data=json.dumps({"query": query}).encode(),
+        data=json.dumps(payload).encode(),
         headers=headers,
         method="POST",
     )
