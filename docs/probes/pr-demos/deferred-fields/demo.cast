@@ -1,0 +1,6 @@
+{"version": 2, "width": 100, "height": 16, "timestamp": 1791816467, "title": "Offline deferral candidate projection"}
+[0.05674, "o", "$ PYTHONPATH=. python3 docs/probes/pr-demos/deferred-fields/reproduce.py\r\nOffline frozen fixture: 50 deferred + 1 dated-open; no service calls.\r\n"]
+[0.061183, "o", "Before: full fixture rows -> 51 findings.\r\nAfter: 4 bounded candidate/field reads -> 51 identical findings.\r\n"]
+[0.061194, "o", "Order and condition notes preserved; unused bodies omitted.\r\n"]
+[0.061354, "o", "Unreadable control: UNKNOWN, no hydration fallback.\r\n"]
+[0.061358, "o", "Source fixture only; natural pass count, deployment and hourly rate unproven.\r\n"]
