@@ -657,7 +657,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads, active = queue_state(root, reg)
+    ready_beads, active = queue_state(root, reg, owners=free)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -826,11 +826,16 @@ def backend_kind(root, reg) -> str:
     return backend_adapter(root, reg).kind
 
 
-def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
+def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], list[dict]]:
     """Ready and active work from the deployment's selected tracker backend."""
     if tracker is None:
         tracker = _br_tracker(root, reg)
     if tracker is not None:
+        from .sd import SdTracker
+        if owners is not None and isinstance(tracker, SdTracker):
+            projected = tracker.feed_rows(owners)
+            if projected is not None:
+                return projected
         from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
         if isinstance(tracker, BrTracker):
             ready_beads = br_ready(tracker)
