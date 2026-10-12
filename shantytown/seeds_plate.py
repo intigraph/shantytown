@@ -23,6 +23,7 @@ FIELDS = {
     SCHEMA + "name": "title",
     SCHEMA + "agent": "assignee",
     SCHEMA + "dateModified": "updated_at",
+    SCHEMA + "dateCreated": "created_at",
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
@@ -266,6 +267,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if isinstance(value, dict):
                 if set(value) != {"datatype", "value"} or key not in (
                     "updated_at",
+                    "created_at",
                     "defer_until",
                 ):
                     raise ValueError("unsupported typed plate value")

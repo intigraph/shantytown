@@ -236,6 +236,28 @@ class SdTracker(BrTracker):
         from .seeds_plate import unassigned_counts
         return unassigned_counts(self.prove_store(), timeout=self.timeout)
 
+    @staticmethod
+    def _tend_order(rows):
+        # Haul queues use the first row: retain SDK priority/creation/id order.
+        # Missing dates cannot authorize a different dispatch head.
+        from datetime import datetime
+        def key(row):
+            value = row.get("created_at")
+            if not isinstance(value, str):
+                raise StoreUnproven("tend row lacks creation ordering evidence")
+            date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if date.tzinfo is None:
+                raise StoreUnproven("tend creation date lacks timezone")
+            return row["priority"], date, row["id"]
+        return sorted(rows, key=key)
+
+    def tend_rows(self, owners):
+        result = self.feed_rows(owners)
+        if result is None:
+            return None
+        ready, active = result
+        return self._tend_order(ready), self._tend_order(active)
+
     def active_rows(self, owners: list[str]) -> list[dict] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
         if not self._use_remote_projection():
@@ -244,7 +266,8 @@ class SdTracker(BrTracker):
         from .inbox import drop_parked
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
                           active_only=True, timeout=self.timeout).exact()
-        return [row for row in drop_parked(rows) if row["status"] == "in_progress"]
+        return self._tend_order([row for row in drop_parked(rows)
+                                 if row["status"] == "in_progress"])
 
     def ready_count(self) -> int | None:
         """Global utilization count from readiness metadata, not issue bodies."""

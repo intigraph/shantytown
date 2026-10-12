@@ -88,7 +88,7 @@ def test_active_projection_is_owner_scoped_not_open_unassigned(monkeypatch):
     monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
     monkeypatch.setattr(seeds_plate, 'uses_native_schema', lambda *a, **k: True)
     monkeypatch.setattr(seeds_plate, 'owner_shape_supported', lambda *a, **k: True)
-    base = dict(id='test-active', title='work', status='in_progress', assignee='worker', priority=1)
+    base = dict(id='test-active', title='work', status='in_progress', assignee='worker', priority=1, created_at='2026-01-01T00:00:00Z')
     inverse = {v:k for k,v in seeds_plate.FIELDS.items()}
     fields = [dict(subject=seeds_plate.SEEDS+'item/test-active', graph=G, predicate=inverse[k], value=v) for k,v in base.items()]
     seen = []
@@ -123,3 +123,22 @@ def test_projection_failure_never_falls_back_to_legacy(monkeypatch):
     monkeypatch.setattr(feed_check,'bd_in_progress', lambda *a, **k: pytest.fail('legacy fallback'))
     with pytest.raises(ValueError,match='unreadable'):
         feed_check.tend_active(None,reg)
+
+
+def test_legacy_ready_reader_does_not_add_active_reads(monkeypatch):
+    from shantytown import feed_check
+    monkeypatch.setattr(feed_check, '_br_tracker', lambda *a: None)
+    monkeypatch.setattr(feed_check, 'bd_cwd', lambda *a: None)
+    monkeypatch.setattr(feed_check, '_bd_ready', lambda *a, **kw: [{'id':'test-ready'}])
+    monkeypatch.setattr(feed_check, 'bd_in_progress', lambda *a, **kw: pytest.fail('unexpected active read'))
+    assert feed_check.tend_ready(None,None,['worker']) == [{'id':'test-ready'}]
+
+
+def test_tend_retains_priority_creation_id_order_and_missing_is_unknown():
+    from shantytown.sd import SdTracker, StoreUnproven
+    rows = [dict(id='test-new', priority=1, created_at='2026-01-02T00:00:00Z'),
+            dict(id='test-old', priority=1, created_at='2026-01-01T00:00:00Z'),
+            dict(id='test-urgent', priority=0, created_at='2026-01-02T00:00:00Z')]
+    assert [r['id'] for r in SdTracker._tend_order(rows)] == ['test-urgent','test-old','test-new']
+    with pytest.raises(StoreUnproven):
+        SdTracker._tend_order([dict(id='test-missing',priority=0)])

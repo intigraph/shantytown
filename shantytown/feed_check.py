@@ -871,7 +871,13 @@ def tend_active(root, reg, *, roles=None):
 
 def tend_ready(root, reg, owners):
     """Only unassigned and observed-idle owners can affect the haul sweep."""
-    return queue_state(root, reg, owners=owners)[0]
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if owners is not None and isinstance(tracker, SdTracker):
+        projected = tracker.tend_rows(owners)
+        if projected is not None:
+            return projected[0]
+    return _bd_ready(bd_cwd(reg), root=root, reg=reg)
 
 def main(argv: list[str] | None = None) -> int:
     """The standalone Rule Zero hook.
