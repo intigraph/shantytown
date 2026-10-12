@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "include-component-in-tag": false,
+      "draft": true,
+      "force-tag-creation": true,
+      "extra-files": [
+        "shantytown/__init__.py"
+      ],
+      "package-name": "shantytown"
+    }
+  },
+  "bootstrap-sha": "0a5cd6ac5083c8b86c1622b21d04375501e304c4"
+}
