@@ -162,6 +162,13 @@ class SdTracker(BrTracker):
 
     def deferred_rows(self) -> Answer[list[dict]]:
         """Both deferral representations, selecting dated open rows remotely."""
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds deferral format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import deferred_rows
+            return deferred_rows(self.prove_store(), timeout=self.timeout)
         rows = {}
         how = "sd list deferred + open --defer-until-present, --limit 0"
         try:

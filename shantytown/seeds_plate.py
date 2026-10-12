@@ -40,7 +40,7 @@ def _iri(value: str) -> str:
     return "<" + value + ">"
 
 
-def _query(proof, query: str, timeout: int) -> dict:
+def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     # Same caller-declared attribution contract as the SDK, never credentials.
     for header, value in (
@@ -54,9 +54,12 @@ def _query(proof, query: str, timeout: int) -> dict:
     ):
         if value and value.isascii() and not any(c in value for c in "\r\n"):
             headers[header] = value
+    payload = {"query": query}
+    if verbose:
+        payload["verbose"] = True
     request = Request(
         proof.quipu_url.rstrip("/") + "/query",
-        data=json.dumps({"query": query}).encode(),
+        data=json.dumps(payload).encode(),
         headers=headers,
         method="POST",
     )
@@ -398,6 +401,107 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
+
+
+def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
+    """Project evaluation fields; fresh full detail still gates every release."""
+    how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
+    fields = {**FIELDS, SEEDS + "ontology/notes": "notes"}
+    try:
+        graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        branches = []
+        for graph in graphs:
+            branches.append(
+                f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                f'<{SEEDS}ontology/status> "deferred" }} '
+                f'BIND({json.dumps(graph)} AS ?graph) }}'
+            )
+            for predicate in (SCHEMA + "scheduledTime", SEEDS + "ontology/deferUntil"):
+                branches.append(
+                    f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                    f'<{SEEDS}ontology/status> "open" ; {_iri(predicate)} ?date }} '
+                    f'BIND({json.dumps(graph)} AS ?graph) }}'
+                )
+        candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+                            + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
+        if len(candidates) >= 10000:
+            raise ValueError("deferral candidate budget reached")
+        selected = {}
+        for row in candidates:
+            subject, graph = row.get("subject"), row.get("graph")
+            if (not isinstance(subject, str) or not subject.startswith(SEEDS + "item/")
+                    or graph not in graphs):
+                raise ValueError("invalid deferral candidate")
+            if subject in selected and selected[subject] != graph:
+                raise ValueError("deferral candidate shadows another graph")
+            selected[subject] = graph
+        grouped = {subject: {"labels": [], "notes": None, "assignee": None,
+                             "defer_until": None} for subject in selected}
+        pairs = list(selected.items())
+        total = 0
+        for offset in range(0, len(pairs), 25):
+            branches = []
+            # Read both graphs for every selected subject: even a shadow with
+            # a different status must refuse, rather than hide a condition.
+            for subject, _ in pairs[offset:offset + 25]:
+                for graph in graphs:
+                    for predicate in fields:
+                        branches.append(
+                            f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} '
+                            f'BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) '
+                            f'BIND({json.dumps(graph)} AS ?graph) }}'
+                        )
+            wire = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph "
+                          "(STR(?p) AS ?predicate) ?value WHERE { "
+                          + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
+            total += len(wire)
+            if len(wire) >= 10000 or total >= 100000:
+                raise ValueError("deferral field budget reached")
+            expected = dict(pairs[offset:offset + 25])
+            seen = set()
+            for field in wire:
+                subject, graph, predicate, value = (
+                    field.get(k) for k in ("subject", "graph", "predicate", "value"))
+                if (subject not in expected or graph != expected[subject]
+                        or predicate not in fields):
+                    raise ValueError("invalid or shadowed deferral field")
+                key = fields[predicate]
+                if isinstance(value, dict):
+                    if set(value) != {"datatype", "value"} or key not in (
+                            "created_at", "updated_at", "defer_until"):
+                        raise ValueError("unsupported typed deferral field")
+                    value = value["value"]
+                if key == "assignee" and isinstance(value, str) and value.startswith(SEEDS + "principal/"):
+                    from urllib.parse import unquote
+                    value = unquote(value[len(SEEDS + "principal/"):])
+                row = grouped[subject]
+                if key == "labels":
+                    if not isinstance(value, str):
+                        raise ValueError("invalid deferral label")
+                    if value not in row[key]:
+                        row[key].append(value)
+                else:
+                    if (subject, key) in seen and row[key] != value:
+                        raise ValueError("ambiguous deferral field")
+                    seen.add((subject, key))
+                    row[key] = value
+        for subject, row in grouped.items():
+            if (not all(isinstance(row.get(k), str) for k in ("id", "title", "created_at", "status"))
+                    or not row["id"] or subject != SEEDS + "item/" + quote(row["id"], safe="")
+                    or type(row.get("priority")) is not int or not 0 <= row["priority"] <= 4
+                    or row["status"] not in ("deferred", "open")
+                    or (row["status"] == "open" and row["defer_until"] is None)
+                    or any(row[k] is not None and not isinstance(row[k], str)
+                           for k in ("notes", "assignee", "defer_until"))):
+                raise ValueError("incomplete or changed deferral candidate")
+            row["labels"].sort()
+        def ranking(row):
+            return row["priority"], row["created_at"], row["id"]
+        rows = [row for status in ("deferred", "open")
+                for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
+        return Answer.complete_read(rows, how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 
 
 def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
