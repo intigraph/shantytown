@@ -97,6 +97,35 @@ def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     return True
 
 
+def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
+    """Fresh exact status for a closed: condition, without dependency hydration."""
+    how = "Seeds exact condition status; shared and ephemeral graphs"
+    try:
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise ValueError("empty condition identifier")
+        subject = _iri(SEEDS + "item/" + quote(identifier, safe=""))
+        graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        branches = [
+            f"{{ GRAPH {_iri(graph)} {{ {subject} a <{SCHEMA}Action> . "
+            f"OPTIONAL {{ {subject} <{SCHEMA}identifier> ?id }} "
+            f"OPTIONAL {{ {subject} <{SEEDS}ontology/status> ?status }} }} "
+            f"BIND({json.dumps(graph)} AS ?graph) }}"
+            for graph in graphs
+        ]
+        rows = _query(proof, "SELECT ?graph ?id ?status WHERE { "
+                      + " UNION ".join(branches) + " } LIMIT 10", timeout)["rows"]
+        # No match, a shadow, or contradictory values are UNKNOWN, not unmet.
+        if len(rows) != 1 or rows[0].get("graph") not in graphs:
+            raise ValueError("condition status absent or ambiguous")
+        row = rows[0]
+        if row.get("id") != identifier or row.get("status") not in (
+                "open", "hooked", "in_progress", "blocked", "deferred", "closed"):
+            raise ValueError("condition identity or status unsupported")
+        return Answer.complete_read(row["status"] == "closed", how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped(False, how=how, caveat=f"condition status unreadable: {error}")
+
+
 def _feed_owner_clause(owners: tuple[str, ...]) -> str:
     # queue_state/hauls accepts any crew-path spelling ending in this worker.
     # Principal IRIs encode path slashes, so match both wire representations.

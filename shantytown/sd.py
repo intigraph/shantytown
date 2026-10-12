@@ -238,6 +238,12 @@ class SdTracker(BrTracker):
         from .seeds_plate import unassigned_counts
         return unassigned_counts(self.prove_store(), timeout=self.timeout)
 
+    def closed_status(self, identifier: str) -> Answer[bool] | None:
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import closed_status
+        return closed_status(self.prove_store(), identifier, timeout=self.timeout)
+
     @staticmethod
     def _tend_order(rows):
         # Haul queues use the first row: retain SDK priority/creation/id order.

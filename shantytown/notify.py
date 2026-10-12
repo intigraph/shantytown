@@ -1655,8 +1655,12 @@ class DeferralAlerter:
         def is_closed(bead: str):
             if bead not in cache:
                 try:
-                    cache[bead] = (self._is_closed(bead) if self._is_closed
-                                   else show(bead).get("status") == "closed")
+                    if self._is_closed is not None:
+                        cache[bead] = self._is_closed(bead)
+                    elif self._show is not None:
+                        cache[bead] = show(bead).get("status") == "closed"
+                    else:
+                        cache[bead] = backend().closed(bead).exact()
                 except Exception as e:
                     self._log(f"deferral-sweep: could not read {bead} ({e!r}); retry next pass")
                     cache[bead] = None
