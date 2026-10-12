@@ -1,0 +1,6 @@
+Private offline fixture: 436 candidates, 59 condition targets; no service calls.
+Before: 59 exact-status queries
+After:  3 bounded exact-status queries
+Verdicts and 258 findings identical.
+Positive controls: closed=True, open=False; missing/shadow/unsupported=UNKNOWN.
+Fresh pre-release single status read is separate; runtime adoption is unproven.

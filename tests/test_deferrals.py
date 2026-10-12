@@ -764,3 +764,62 @@ def test_failed_changed_summary_remains_retryable(tmp_path):
     assert _alerter(tmp_path, rows, push=lambda *_a: None).sweep() == []
     assert _alerter(tmp_path, rows, push=push).sweep() == ["aegis-new"]
     assert len(sent) == 2
+
+
+def test_candidate_batch_cannot_replace_fresh_release_condition(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    row = _row(notes='resume_when: closed:other')
+    h = MechanicalHarness(tmp_path, row)
+    calls = []
+    class Backend:
+        def closed_many(self, ids):
+            calls.append(('batch', tuple(ids)))
+            return Answer.complete_read({'other': True}, how='candidate fixture')
+        def closed(self, bead):
+            calls.append(('fresh', bead))
+            return Answer.complete_read(False, how='condition changed after candidate read')
+        def show(self, bead):
+            calls.append(('show', bead))
+            return Answer.complete_read(dict(row), how='fresh full detail')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert calls == [('batch', ('other',)), ('show', row['id']), ('fresh', 'other')]
+    assert not h.releases
+
+
+def test_unknown_candidate_batch_does_not_retry_individual_reads(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:other'))
+    class Backend:
+        def closed_many(self, ids):
+            return Answer.complete_read({'other': None}, how='explicit unknown fixture')
+        def closed(self, bead):
+            raise AssertionError('UNKNOWN batch must not trigger individual fallback')
+        def show(self, bead):
+            raise AssertionError('UNKNOWN batch must not hydrate')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert not h.releases
+
+
+def test_malformed_batch_verdict_is_unknown_not_truthy_release(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:other'))
+    class Backend:
+        def closed_many(self, ids):
+            return Answer.complete_read({'other': 'closed'}, how='malformed fixture')
+        def closed(self, bead):
+            raise AssertionError('malformed batch must not retry')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert not h.releases
+    assert any('invalid condition batch' in line for line in h.logs)
