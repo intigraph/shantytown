@@ -885,18 +885,3 @@ def test_human_surface_ready_work_does_not_trap_the_coordinator(label):
     from shantytown.priority_advisory import workable
     assert not workable(ready[0])
     assert workable(ready[1])
-
-
-def test_rule_zero_scope_is_only_used_for_seeds_gate(monkeypatch, tmp_path):
-    from shantytown.sd import SdTracker
-    tracker = SdTracker(quipu="https://example.test", prefix="test")
-    seen = []
-    result = ([{"id": "test-ready"}], [{"id": "test-owned"}])
-    monkeypatch.setattr(tracker, "feed_rows", lambda owners: seen.append(owners) or result)
-    assert feed_check.queue_state(tmp_path, _Reg([]), tracker, owners=["worker"]) == result
-    assert seen == [["worker"]]
-    # A general haul consumer must retain the existing complete queue path.
-    monkeypatch.setattr("shantytown.br.ready", lambda t: [])
-    monkeypatch.setattr("shantytown.br.in_progress", lambda t: [])
-    assert feed_check.queue_state(tmp_path, _Reg([]), tracker) == ([], [])
-    assert seen == [["worker"]]

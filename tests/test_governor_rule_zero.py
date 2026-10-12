@@ -229,7 +229,7 @@ def mixed_lanes(tmp_path, monkeypatch):
     reg = Registry()
     monkeypatch.setattr(cli, '_governors', lambda a: (cfg, governors))
     monkeypatch.setattr(cli, '_registry', lambda a: reg)
-    monkeypatch.setattr(feed_mod, 'queue_state', lambda *a, **kw: ([_bead('p2', 2)], []))
+    monkeypatch.setattr(feed_mod, 'queue_state', lambda *a: ([_bead('p2', 2)], []))
     return tmp_path, reg, cards, SimpleNamespace(root=tmp_path), governors
 
 
