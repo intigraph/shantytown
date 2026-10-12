@@ -244,6 +244,14 @@ class SdTracker(BrTracker):
         from .seeds_plate import closed_status
         return closed_status(self.prove_store(), identifier, timeout=self.timeout)
 
+    def closed_statuses(self, identifiers) -> Answer[dict[str, bool | None]] | None:
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import closed_statuses
+        return Answer.complete_read(
+            closed_statuses(self.prove_store(), identifiers, timeout=self.timeout),
+            how="candidate condition map; every requested target present, unknown verdicts explicit")
+
     @staticmethod
     def _tend_order(rows):
         # Haul queues use the first row: retain SDK priority/creation/id order.

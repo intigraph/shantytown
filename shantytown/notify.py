@@ -1668,6 +1668,28 @@ class DeferralAlerter:
 
         rows = [r for r in rows if isinstance(r, dict)
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
+        if rows and self._is_closed is None and self._show is None:
+            targets = []
+            for row in rows:
+                condition = pol.parse_condition(str(row.get("notes") or ""))
+                if condition is not None and condition.kind == "closed":
+                    targets.append(condition.arg)
+            if targets:
+                try:
+                    reader = getattr(backend(), "closed_many", None)
+                    answer = reader(targets) if callable(reader) else None
+                    if answer is not None:
+                        answers = answer.exact()
+                        if not isinstance(answers, dict) or any(
+                                value is not None and type(value) is not bool
+                                for value in answers.values()):
+                            raise ValueError("invalid condition batch verdicts")
+                        # Fill every requested key, including UNKNOWN. Never
+                        # turn a failed native batch into individual retries.
+                        cache.update({target: answers.get(target) for target in targets})
+                except Exception as e:
+                    self._log(f"deferral-sweep: condition batch unreadable ({e!r}); retry next pass")
+                    cache.update(dict.fromkeys(targets))
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
         reports, retry = [], set()
