@@ -2504,7 +2504,7 @@ clients. Installing a mandatory external-client hook is a separate adoption step
 
 ### Explicit push destination
 
-`st repo push <repo> [agent]` (legacy alias `st push`) refuses an omitted or empty
+`st repo push <repo> [agent]` and its deprecated top-level alias refuse an omitted or empty
 `--branch` before contacting any remote. Publish a candidate with
 `--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
 worktree is on that topic instead of its canonical agent branch. The source must
