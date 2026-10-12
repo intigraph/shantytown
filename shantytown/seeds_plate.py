@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
@@ -92,33 +93,52 @@ def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     return True
 
 
-def owner_shape_supported(proof, agent: str, *, timeout: int = 30) -> bool:
+def _feed_owner_clause(owners: tuple[str, ...]) -> str:
+    # queue_state/hauls accepts any crew-path spelling ending in this worker.
+    # Principal IRIs encode path slashes, so match both wire representations.
+    names = tuple(dict.fromkeys(a.split("/")[-1] for a in owners))
+    alternatives = "|".join(re.escape(n) for name in names
+                            for n in dict.fromkeys((name, quote(name, safe=""))))
+    if not alternatives:
+        return "FILTER(false) "
+    pattern = json.dumps(r"(^|/|%2F)(" + alternatives + r")$")
+    return f"?s <{SCHEMA}agent> ?owner . FILTER(REGEX(STR(?owner), {pattern})) "
+
+
+def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
     branches = []
+    if isinstance(agent, tuple):
+        clauses = [_feed_owner_clause(agent)] if agent else []
+    else:
+        clauses = [f"?s <{SCHEMA}agent> {term} . "
+                   for owner in dict.fromkeys((agent, agent.split("/")[-1]))
+                   for term in (json.dumps(owner),
+                                _iri(SEEDS + "principal/" + quote(owner, safe="")))]
+    if not clauses:
+        return True
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
-        for owner in dict.fromkeys((agent, agent.split("/")[-1])):
-            for term in (
-                json.dumps(owner),
-                _iri(SEEDS + "principal/" + quote(owner, safe="")),
-            ):
-                branches.append(
-                    f"{{ GRAPH {_iri(graph)} {{ ?s <{SCHEMA}agent> {term} ; a <{SCHEMA}Action> . "
-                    f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?state . "
-                    'FILTER(?state IN ("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")) } } }'
-                )
-    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)[
-        "result"
-    ]
+        for clause in clauses:
+            branches.append(
+                f"{{ GRAPH {_iri(graph)} {{ {clause} ?s a <{SCHEMA}Action> . "
+                f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?state . "
+                'FILTER(?state IN ("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")) } } }'
+            )
+    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
-def owner_rows(proof, agent: str | None, *, timeout: int = 30) -> Answer[list[dict]]:
+def owner_rows(proof, agent: str | None, *, timeout: int = 30,
+               feed_owners: tuple[str, ...] | None = None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
         else "Seeds ready/active priority fields"
     ) + "; shared and ephemeral graphs"
+    if feed_owners is not None:
+        how = "Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs"
     try:
-        if agent is not None and not owner_shape_supported(
-            proof, agent, timeout=timeout
+        scope = feed_owners if feed_owners is not None else agent
+        if scope is not None and not owner_shape_supported(
+            proof, scope, timeout=timeout
         ):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
@@ -128,6 +148,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30) -> Answer[list[di
             if agent is not None
             else ()
         )
+        if feed_owners is not None:
+            owners = tuple(dict.fromkeys(owner for a in feed_owners
+                                         for owner in (a, a.split("/")[-1])))
         branches = []
         for g in graphs:
             statuses = (
@@ -137,7 +160,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30) -> Answer[list[di
             )
             terms = (
                 [None]
-                if agent is None
+                if agent is None and feed_owners is None
                 else [
                     term
                     for owner in owners
@@ -147,8 +170,24 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30) -> Answer[list[di
                     )
                 ]
             )
+            if feed_owners is not None:
+                # Only unassigned open candidates and the candidate workers'
+                # own ready/active hauls can affect Rule Zero.
+                branches.append(
+                    f'{{ GRAPH {_iri(g)} {{ ?s a <{SCHEMA}Action> ; '
+                    f'<{SEEDS}ontology/status> "open" . '
+                    f'FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . '
+                    'FILTER(STR(?owner) != "") } '
+                    f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . '
+                    f'FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} }} '
+                    f'BIND({json.dumps(g)} AS ?graph) }}'
+                )
+            if feed_owners is not None:
+                terms = [None] if feed_owners else []
             for term in terms:
-                owner_clause = f"?s <{SCHEMA}agent> {term} . " if term else ""
+                owner_clause = (_feed_owner_clause(feed_owners)
+                                if feed_owners is not None
+                                else (f"?s <{SCHEMA}agent> {term} . " if term else ""))
                 for status in statuses:
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
@@ -252,6 +291,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30) -> Answer[list[di
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
                 or not row["id"].strip()
                 or (agent is not None and row.get("assignee") not in owners)
+                or (feed_owners is not None and row.get("assignee")
+                    and row["assignee"].split("/")[-1]
+                    not in {a.split("/")[-1] for a in feed_owners})
                 or ("assignee" in row and not isinstance(row["assignee"], str))
                 or type(row.get("priority")) is not int
                 or not 0 <= row["priority"] <= 4
