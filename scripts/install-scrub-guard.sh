@@ -171,6 +171,42 @@ is_owned_metric_fixture() {
   case "$hooks" in "$root"/*) return 0 ;; *) return 1 ;; esac
 }
 
+# Pytest's retention-managed generations can live under a short private TMPDIR
+# (Unix socket path limits). Names alone are not custody: require private owned
+# physical roots, pytest's current-generation link, and repository/hooks custody.
+is_owned_pytest_fixture() {
+  local dir="$1" physical generation parent tmp current common hooks uid user
+  physical="$(realpath -e -- "$dir" 2>/dev/null)" || return 1
+  [ "$physical" = "$dir" ] || return 1
+  generation="$physical"
+  while [[ "${generation##*/}" != pytest-[0-9]* ]]; do
+    [ "$generation" != / ] || return 1
+    generation="${generation%/*}"; [ -n "$generation" ] || return 1
+  done
+  [[ "${generation##*/}" =~ ^pytest-[0-9]+$ ]] || return 1
+  parent="${generation%/*}"; tmp="${parent%/*}"
+  user="$(id -un)"; uid="$(id -u)"
+  [ "${parent##*/}" = "pytest-of-$user" ] || return 1
+  case "$tmp" in "$HOME"/*) ;; *) return 1 ;; esac
+  for current in "$tmp" "$parent" "$generation"; do
+    [ ! -L "$current" ] || return 1
+    [ "$(stat -c '%u:%a' -- "$current" 2>/dev/null)" = "$uid:700" ] || return 1
+  done
+  [ -L "$parent/pytest-current" ] || return 1
+  [ "$(stat -c '%u' -- "$parent/pytest-current" 2>/dev/null)" = "$uid" ] || return 1
+  current="$(realpath -e -- "$parent/pytest-current" 2>/dev/null)" || return 1
+  [ "${current%/*}" = "$parent" ] || return 1
+  [[ "${current##*/}" =~ ^pytest-[0-9]+$ ]] || return 1
+  [ "$(stat -c '%u:%a' -- "$current" 2>/dev/null)" = "$uid:700" ] || return 1
+  common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
+  case "$common" in "$generation"/*) ;; *) return 1 ;; esac
+  hooks="$(git -C "$dir" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)" || return 1
+  hooks="$(realpath -e -- "$hooks" 2>/dev/null)" || return 1
+  [ -d "$hooks" ] || return 1
+  case "$hooks" in "$generation"/*) return 0 ;; *) return 1 ;; esac
+}
+
 repo_label() {
   # A stable, topology-free name for a metric label: the repo name from any
   # remote URL. Basenames of checkouts are agent names under a *-wt/ tree and
@@ -728,7 +764,7 @@ for ROOT in "${ROOTS[@]}"; do
   while IFS= read -r dir; do
     [ -n "$dir" ] || continue
     checkouts=$((checkouts+1))
-    if is_owned_metric_fixture "$dir"; then
+    if is_owned_metric_fixture "$dir" || is_owned_pytest_fixture "$dir"; then
       fixture_excluded=$((fixture_excluded+1)); continue
     fi
     if is_excluded "$dir"; then
@@ -769,7 +805,7 @@ echo
 # look at. Print the denominator's provenance next to the denominator.
 echo "  roots swept: ${ROOTS[*]} (any depth)"
 echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLUDE_PREFIXES[*]}; managed test HOME pre-commit caches)"
-echo "  owned metric fixtures excluded: $fixture_excluded (physical suite-XXXXXXXX, owner private0700, hooks contained)"
+echo "  owned metric fixtures excluded: $fixture_excluded (private metric suites or pytest generations, owned physical roots, hooks contained)"
 echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
 echo "  public armed: $armed   unarmed: $unarmed"
 # A --root run sees only its roots, so its counts are NOT the estate's coverage.
