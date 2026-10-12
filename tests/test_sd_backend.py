@@ -14,6 +14,7 @@ against the record shapes its methods already consume.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import stat
@@ -34,8 +35,12 @@ def _project(tmp_path: Path, prefix: str = "aegis") -> tuple[Path, Path]:
     proj = tmp_path / "proj"
     proj.mkdir()
     store = tmp_path / "board.db"
-    subprocess.run([SD, "--store", str(store), "init", "--prefix", prefix],
+    # New SDKs refuse routing flags on init: configuration belongs to this
+    # private project, then the explicit scratch store is created by a write.
+    subprocess.run([SD, "init", "--prefix", prefix],
                    cwd=proj, check=True, capture_output=True, text=True)
+    bootstrap = json.loads(_sd(proj, store, "create", "scratch bootstrap", "--json"))
+    _sd(proj, store, "close", bootstrap["id"], "--reason", "fixture bootstrap")
     return proj, store
 
 

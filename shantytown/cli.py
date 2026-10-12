@@ -6198,7 +6198,11 @@ def _priority_go_note(a):
 def _priority_fleet_notes(a, reg, panes):
     from . import priority_advisory as pa
     try:
-        ready, active = _priority_snapshot(a)
+        projection = getattr(_tracker(a), "priority_rows", None)
+        snapshot = (projection(ready_candidates=lambda ready, active:
+                               pa.fleet_waiters(ready, active, reg, panes))
+                    if callable(projection) else None)
+        ready, active = snapshot if snapshot is not None else _priority_snapshot(a)
         return pa.fleet_advice(ready, active, reg, panes)
     except Exception:
         return ["governor: higher-priority advisory unavailable; supervision continues."]
@@ -6510,6 +6514,10 @@ def _unassigned_open(a):
     """
     try:
         trk = _tracker(a, "beads")
+        projection = getattr(trk, "unassigned_open_counts", None)
+        counts = projection() if callable(projection) else None
+        if counts is not None:
+            return *counts, ""
         rows = _tracker_items(trk)
     except Exception as e:            # noqa: BLE001 — unreachable/misconfigured store
         return None, None, str(e)[:90]
