@@ -33,10 +33,10 @@ def workable(row):
                 or any(l.startswith(("blocked:", "parked:")) for l in labels))
 
 
-def advice(ready, selected, down=()):
+def untaken_ready(ready, selected, down=()):
     p = priority(selected)
     if p is None:
-        return ''
+        return []
     found = {}
     for r in drop_parked(ready):
         owner = (r.get('assignee') or '').split('/')[-1]
@@ -48,15 +48,21 @@ def advice(ready, selected, down=()):
         if r.get('id'):
             found[r['id']] = r
     rows = sorted(found.values(), key=lambda r: (priority(r), r['id']))
+    return rows
+
+
+def advice(ready, selected, down=()):
+    rows = untaken_ready(ready, selected, down)
     if not rows:
         return ''
+    p = priority(selected)
     names = ', '.join(f"{r['id']} (P{priority(r)})" for r in rows[:3])
     return (f"governor: {len(rows)} higher-priority ready item(s) sit untaken "
             f"while {selected.get('id', '?')} is P{p}: {names}. "
             "Advisory only; record the reason when choosing lower-priority work.")
 
 
-def fleet_advice(ready, active, reg, panes):
+def _fleet_running(active, reg, panes):
     cards = reg.all().exact()
     down = down_agents(reg, panes)
     live = set()
@@ -73,6 +79,17 @@ def fleet_advice(ready, active, reg, panes):
     # buries the actionable names in the roster. The lowest-priority live item
     # witnesses the widest set of neglected higher-priority work.
     running.sort(key=lambda r: (-priority(r), r.get('id', '')))
+    return running, down
+
+
+def fleet_waiters(ready, active, reg, panes):
+    """Candidates whose readiness can affect this fleet's priority advice."""
+    running, down = _fleet_running(active, reg, panes)
+    return untaken_ready(ready, running[0], down) if running else []
+
+
+def fleet_advice(ready, active, reg, panes):
+    running, down = _fleet_running(active, reg, panes)
     for row in running:
         if note := advice(ready, row, down):
             return [note]
