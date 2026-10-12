@@ -54,16 +54,9 @@ def _comment_body(row):
 
 
 def command(args, tracker):
-    if args.item_action == "show":
-        from .sd import SdTracker
-        if isinstance(tracker, SdTracker) and getattr(tracker, "quipu", None):
-            from .seeds_item import read_item
-            item = read_item(tracker, args.item)
-        else:
-            item = exact(tracker, args.item)
-        return asdict(item)
-    # Mutation preconditions and read-backs retain the full SDK read.
     item = exact(tracker, args.item)
+    if args.item_action == "show":
+        return asdict(item)
     if args.item_action == "comment":
         body = _body(args.file)
         if not args.dry_run:
