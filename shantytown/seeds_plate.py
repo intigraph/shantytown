@@ -7,6 +7,7 @@ shapes are UNKNOWN; a failed projection must not trigger full-board hydration.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 import os
 import re
 from urllib.parse import quote, urlsplit
@@ -128,7 +129,8 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
 
 
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
-               feed_owners: tuple[str, ...] | None = None) -> Answer[list[dict]]:
+               feed_owners: tuple[str, ...] | None = None,
+               active_only: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -137,6 +139,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     if feed_owners is not None:
         how = "Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs"
     try:
+        if active_only and feed_owners is None:
+            raise ValueError("active projection requires an owner scope")
         scope = feed_owners if feed_owners is not None else agent
         if scope is not None and not owner_shape_supported(
             proof, scope, timeout=timeout
@@ -155,6 +159,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("in_progress",) if active_only else
                 ("open", "in_progress")
                 if agent is None
                 else ("hooked", "in_progress", "open")
@@ -171,7 +176,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     )
                 ]
             )
-            if feed_owners is not None:
+            if feed_owners is not None and not active_only:
                 # Only unassigned open candidates and the candidate workers'
                 # own ready/active hauls can affect Rule Zero.
                 branches.append(
@@ -380,3 +385,58 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
             raise ValueError("invalid readiness response")
         result.update(r["id"] for r in wire)
     return result
+
+
+def ready_count(proof, *, timeout: int = 30, now=None) -> int:
+    """Count SDK-ready rows with only IDs and deferral dates.
+
+    Unlike work/plate selection, this existing utilization metric includes
+    messages. Preserve its semantics while avoiding payload hydration.
+    """
+    now = datetime.now(timezone.utc) if now is None else now
+    branches = []
+    graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+    for graph in graphs:
+        branches.append(
+            f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/status> "open" ; '
+            f'a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . '
+            f'OPTIONAL {{ ?s <{SCHEMA}scheduledTime> ?due }} '
+            f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
+            'FILTER NOT EXISTS { ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . '
+            f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
+            'FILTER(?bs != "closed" && ?bs != "tombstone") } } '
+            f'BIND({json.dumps(graph)} AS ?graph) }}'
+        )
+    query = 'SELECT (STR(?s) AS ?subject) ?graph ?id ?due ?legacy_due WHERE { '
+    query += ' UNION '.join(branches) + ' } LIMIT 10000'
+    rows = _query(proof, query, timeout)["rows"]
+    if len(rows) >= 10000:
+        raise ValueError("ready count metadata budget reached")
+    seen = {}
+    for row in rows:
+        identifier, graph = row.get("id"), row.get("graph")
+        if (not isinstance(identifier, str) or not identifier.strip()
+                or graph not in graphs
+                or row.get("subject") != SEEDS + "item/" + quote(identifier, safe="")):
+            raise ValueError("invalid ready count candidate")
+        dates = []
+        for field in ("due", "legacy_due"):
+            value = row.get(field)
+            if isinstance(value, dict):
+                if set(value) != {"datatype", "value"}:
+                    raise ValueError("invalid deferral date")
+                value = value["value"]
+            if value is not None:
+                if not isinstance(value, str):
+                    raise ValueError("invalid deferral date")
+                date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if date.tzinfo is None:
+                    raise ValueError("deferral date lacks timezone")
+                dates.append(date)
+        if len(set(dates)) > 1:
+            raise ValueError("ambiguous deferral dates")
+        observation = (graph, dates[0] if dates else None)
+        if identifier in seen and seen[identifier] != observation:
+            raise ValueError("ambiguous ready count candidate")
+        seen[identifier] = observation
+    return sum(date is None or date <= now for _, date in seen.values())

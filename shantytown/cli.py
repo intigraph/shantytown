@@ -7989,7 +7989,13 @@ def _ready_count(root, reg):
     """
     try:
         from . import feed_check
-        return len(feed_check.TrackerAdapter(root, reg).ready().exact())
+        adapter = feed_check.TrackerAdapter(root, reg)
+        count = getattr(adapter.tracker, "ready_count", None)
+        if callable(count):
+            projected = count()
+            if projected is not None:
+                return projected
+        return len(adapter.ready().exact())
     except Exception:
         return None
 

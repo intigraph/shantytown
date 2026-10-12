@@ -236,6 +236,23 @@ class SdTracker(BrTracker):
         from .seeds_plate import unassigned_counts
         return unassigned_counts(self.prove_store(), timeout=self.timeout)
 
+    def active_rows(self, owners: list[str]) -> list[dict] | None:
+        """Fresh active fields for the sweep's roster, including final barriers."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows
+        from .inbox import drop_parked
+        rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
+                          active_only=True, timeout=self.timeout).exact()
+        return [row for row in drop_parked(rows) if row["status"] == "in_progress"]
+
+    def ready_count(self) -> int | None:
+        """Global utilization count from readiness metadata, not issue bodies."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import ready_count
+        return ready_count(self.prove_store(), timeout=self.timeout)
+
     def feed_rows(self, owners: list[str]) -> tuple[list[dict], list[dict]] | None:
         """Complete Rule Zero fields scoped to idle workers and unassigned work.
 
