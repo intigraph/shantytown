@@ -865,7 +865,7 @@ def tend_active(root, reg, *, roles=None):
                   if roles is None or card.role in roles]
         projected = tracker.active_rows(owners)
         if projected is not None:
-            return projected
+            return projected.exact()
     return bd_in_progress(bd_cwd(reg), root=root, reg=reg)
 
 

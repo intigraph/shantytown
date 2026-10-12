@@ -1,12 +1,13 @@
 """Read metadata and caller identity preserve tend's uncertainty contract."""
 import json
+import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
 from shantytown import cli, seeds_plate
-from shantytown.query_identity import declared_query_identity
+from shantytown.query_identity import declared_query_identity, current_query_identity, sdk_subprocess_options
 from shantytown.sd import StoreProof
 
 G = 'https://example.test/project/test'
@@ -51,10 +52,9 @@ def test_tend_context_declares_read_caller_preserves_write_actor(monkeypatch):
     monkeypatch.setenv('SHANTY_AGENT', 'worker')
     monkeypatch.setenv('SEEDS_ACTOR', 'operator')
     seen = []
-    monkeypatch.setattr(cli, '_tend_status', lambda a: seen.append(__import__('os').environ['QUIPU_AGENT']) or 0)
+    monkeypatch.setattr(cli, '_tend_status', lambda a: seen.append((current_query_identity(), os.environ['QUIPU_AGENT'])) or 0)
     assert cli._cmd_tend(SimpleNamespace(retire=False, unretire=False, install=False, uninstall=False, status=True)) == 0
-    import os
-    assert seen == ['st-tend']
+    assert seen == [('st-tend', 'worker')]
     assert os.environ['QUIPU_AGENT'] == 'worker'
     assert os.environ['SHANTY_AGENT'] == 'worker'
     assert os.environ['SEEDS_ACTOR'] == 'operator'
@@ -64,7 +64,6 @@ def test_identity_restored_on_error(monkeypatch):
     monkeypatch.delenv('QUIPU_AGENT', raising=False)
     with pytest.raises(ValueError), declared_query_identity('st-tend'):
         raise ValueError('failed read')
-    import os
     assert 'QUIPU_AGENT' not in os.environ
 
 
@@ -93,7 +92,7 @@ def test_active_projection_is_owner_scoped_not_open_unassigned(monkeypatch):
     fields = [dict(subject=seeds_plate.SEEDS+'item/test-active', graph=G, predicate=inverse[k], value=v) for k,v in base.items()]
     seen = []
     monkeypatch.setattr(seeds_plate, '_query', lambda p,q,t: seen.append(q) or dict(rows=fields, count=len(fields), truncated=False))
-    assert tracker.active_rows(['worker'])[0]['id'] == 'test-active'
+    assert tracker.active_rows(['worker']).exact()[0]['id'] == 'test-active'
     assert '"in_progress"' in seen[0] and '"open"' not in seen[0]
     assert 'FILTER(STR(?owner) != "")' not in seen[0]
 
@@ -106,7 +105,7 @@ def test_active_barrier_is_fresh_on_every_call(monkeypatch):
     reg = SimpleNamespace(all=lambda: Answer.complete_read([SimpleNamespace(name='worker',role='worker')], how='fixture'))
     calls = []
     monkeypatch.setattr(feed_check, '_br_tracker', lambda *a: tracker)
-    monkeypatch.setattr(tracker, 'active_rows', lambda owners: calls.append(owners) or [{'id': 'test-'+str(len(calls))}])
+    monkeypatch.setattr(tracker, 'active_rows', lambda owners: calls.append(owners) or Answer.complete_read([{'id': 'test-'+str(len(calls))}], how='fixture'))
     assert feed_check.tend_active(None,reg) == [{'id':'test-1'}]
     assert feed_check.tend_active(None,reg) == [{'id':'test-2'}]
     assert calls == [['worker'], ['worker']]
@@ -142,3 +141,36 @@ def test_tend_retains_priority_creation_id_order_and_missing_is_unknown():
     assert [r['id'] for r in SdTracker._tend_order(rows)] == ['test-urgent','test-old','test-new']
     with pytest.raises(StoreUnproven):
         SdTracker._tend_order([dict(id='test-missing',priority=0)])
+
+
+def test_identity_only_reaches_sdk_children(monkeypatch):
+    monkeypatch.setenv("QUIPU_AGENT", "worker")
+    assert sdk_subprocess_options() == {}
+    with declared_query_identity("st-tend"):
+        assert sdk_subprocess_options()["env"]["QUIPU_AGENT"] == "st-tend"
+        assert os.environ["QUIPU_AGENT"] == "worker"
+        with declared_query_identity("nested"):
+            assert current_query_identity() == "nested"
+        assert current_query_identity() == "st-tend"
+    assert current_query_identity() is None
+
+
+@pytest.mark.real_store
+def test_sdk_transport_attaches_context_without_replacing_write_actor(monkeypatch):
+    from shantytown import sd
+    tracker = sd.SdTracker(quipu=PROOF.quipu_url, prefix='test')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
+    monkeypatch.setenv('SHANTY_AGENT', 'worker')
+    monkeypatch.setenv('QUIPU_AGENT', 'worker')
+    seen = []
+    def run(cmd, **options):
+        seen.append((cmd, options))
+        return SimpleNamespace(returncode=0, stdout='[]', stderr='')
+    monkeypatch.setattr(sd.subprocess, 'run', run)
+    with declared_query_identity('st-tend'):
+        tracker._bd_in(None, 'ready', '--json')
+        assert os.environ['QUIPU_AGENT'] == 'worker'
+    tracker._bd_in(None, 'ready', '--json')
+    assert seen[0][1]['env']['QUIPU_AGENT'] == 'st-tend'
+    assert seen[0][0][seen[0][0].index('--actor') + 1] == 'worker'
+    assert 'env' not in seen[1][1]

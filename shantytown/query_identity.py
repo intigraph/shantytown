@@ -1,17 +1,25 @@
 """Caller-declared read attribution; never a write actor or authorization."""
 from contextlib import contextmanager
+from contextvars import ContextVar
 import os
+
+_caller = ContextVar("query_caller", default=None)
+
+
+def current_query_identity():
+    return _caller.get()
+
+
+def sdk_subprocess_options():
+    """Give only SDK children the declared caller; agent launches stay untouched."""
+    name = current_query_identity()
+    return {"env": dict(os.environ, QUIPU_AGENT=name)} if name else {}
 
 
 @contextmanager
 def declared_query_identity(name: str):
-    """Scope SDK and native read headers without changing session/write identity."""
-    before = os.environ.get("QUIPU_AGENT")
-    os.environ["QUIPU_AGENT"] = name
+    token = _caller.set(name)
     try:
         yield
     finally:
-        if before is None:
-            os.environ.pop("QUIPU_AGENT", None)
-        else:
-            os.environ["QUIPU_AGENT"] = before
+        _caller.reset(token)

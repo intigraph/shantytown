@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from .answer import Answer
+from .query_identity import current_query_identity
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -45,7 +46,7 @@ def _query(proof, query: str, timeout: int) -> dict:
     for header, value in (
         (
             "X-Quipu-Agent",
-            os.environ.get("QUIPU_AGENT") or os.environ.get("SEEDS_AGENT_NAME")
+            current_query_identity() or os.environ.get("QUIPU_AGENT") or os.environ.get("SEEDS_AGENT_NAME")
             or os.environ.get("SHANTY_AGENT"),
         ),
         ("X-Quipu-Session", os.environ.get("SEEDS_SESSION")),
