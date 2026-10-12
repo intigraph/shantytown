@@ -31,8 +31,21 @@ def _decode(raw):
     return json.loads(raw, object_pairs_hook=unique, parse_constant=lambda value: (_ for _ in ()).throw(ValueError("non-finite JSON")))
 
 
+def _regular(path):
+    # A broken identity file must not block the lifecycle lock on a FIFO.
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+            raise ValueError('identity is not an owned regular file')
+        return os.fdopen(descriptor, 'rb')
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
 def _json(path, cap=65536):
-    with Path(path).open('rb') as fh:
+    with _regular(path) as fh:
         raw = fh.read(cap + 1)
     if len(raw) > cap:
         raise ValueError('identity size cap')
@@ -95,10 +108,10 @@ def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
     thread = payload.get('session_id')
     if not isinstance(thread, str) or str(uuid.UUID(thread)) != thread:
         raise ValueError('invalid session ID')
-    transcript = Path(payload['transcript_path'])
+    transcript = Path(payload['transcript_path']).resolve()
     if not transcript.resolve().is_relative_to((home / 'sessions').resolve()):
         raise ValueError('foreign transcript')
-    with transcript.open('rb') as fh:
+    with _regular(transcript) as fh:
         first = fh.readline(65537)
     if len(first) > 65536:
         raise ValueError('session header cap')
@@ -245,6 +258,8 @@ def _count(client, thread):
 
 def count(agent, root, *, timeout=3.0):
     """Return a fresh complete count, or None. Never cache an empty result."""
+    if not hasattr(socket, 'SO_PEERCRED') or not hasattr(os, 'O_NOFOLLOW'):
+        return None
     client = None
     try:
         before = _binding(agent, root)

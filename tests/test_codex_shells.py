@@ -225,3 +225,18 @@ def test_non_finite_json_is_not_an_empty_result():
 
 def test_codex_ui_zero_without_native_scope_is_unknown():
     assert 'zero is not visible' in notify.unattended_shell_block('0 shells still running', 'codex')
+
+
+@pytest.mark.parametrize('kind', ['fifo', 'symlink'])
+def test_nonregular_identity_never_blocks_or_authorizes(tmp_path, kind):
+    path = tmp_path / 'identity'
+    if kind == 'fifo': os.mkfifo(path)
+    else:
+        target = tmp_path / 'target'; target.write_text('{}'); path.symlink_to(target)
+    with pytest.raises((OSError, ValueError)): shells._json(path)
+
+
+def test_unsupported_peer_identity_is_unknown_without_binding(monkeypatch):
+    monkeypatch.delattr(socket, 'SO_PEERCRED')
+    monkeypatch.setattr(shells, '_binding', lambda *a: pytest.fail('unsupported platform must stay UNKNOWN'))
+    assert shells.count('worker', '/root') is None
