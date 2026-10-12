@@ -1,0 +1,3 @@
+SessionStart hook fixture: full terminal anchor output drops from 10 lines to zero while all 10 model-context lines remain unchanged. The anchor lookup is mocked; the actual hook main entrypoint runs. This is source behavior, not an installed-session demonstration.
+
+Run `python3 docs/demos/session-anchor/probe.py` from the repository root. The before source is retained main revision a8b6584; the after source is the checkout HEAD. Replay the output-only recording with `scriptreplay --log-out docs/demos/session-anchor/output.log --log-timing docs/demos/session-anchor/timing.log`. Download playback requires util-linux scriptreplay; no inline player is promised.
