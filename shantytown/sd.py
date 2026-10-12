@@ -236,6 +236,24 @@ class SdTracker(BrTracker):
         from .seeds_plate import unassigned_counts
         return unassigned_counts(self.prove_store(), timeout=self.timeout)
 
+    def feed_rows(self, owners: list[str]) -> tuple[list[dict], list[dict]] | None:
+        """Complete Rule Zero fields scoped to idle workers and unassigned work.
+
+        A failed native projection raises; it cannot authorize a hydration
+        fallback or an empty plate. Legacy transports keep their SDK path.
+        """
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .inbox import drop_parked
+        rows = drop_parked(owner_rows(self.prove_store(), None,
+                                    feed_owners=tuple(owners),
+                                    timeout=self.timeout).exact())
+        ready = [row for row in rows if row["status"] == "open"]
+        active = [row for row in rows if row["status"] == "in_progress"]
+        ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
+        return [row for row in ready if row["id"] in ids], active
+
     def priority_rows(self, *, ready_candidates=None) -> tuple[list[dict], list[dict]] | None:
         """Lean fields for fleet priority advice; never change mutation reads."""
         if not self._use_remote_projection():

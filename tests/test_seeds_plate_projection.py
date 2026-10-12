@@ -293,3 +293,51 @@ def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):
 
     monkeypatch.setattr(seeds_plate, "urlopen", send)
     assert seeds_plate.owner_rows(PROOF, "worker").exact() == []
+
+
+def test_feed_projection_scopes_idle_owners_and_unassigned(monkeypatch):
+    seen = []
+    wire = fields("test-owned", assignee="worker", status="in_progress")
+    wire += fields("test-unassigned", assignee="", status="open")
+
+    def query(proof, text, timeout):
+        seen.append(text)
+        return answer(wire)
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    rows = seeds_plate.owner_rows(PROOF, None, feed_owners=("rig/worker",)).exact()
+    assert {row["id"] for row in rows} == {"test-owned", "test-unassigned"}
+    discovery = seen[0]
+    assert "(^|/|%2F)(worker)$" in discovery
+    assert 'FILTER(STR(?owner) != "")' in discovery
+    assert G + "#seeds-ephemeral" in discovery
+    assert "description" not in discovery
+
+
+@pytest.mark.parametrize("fault", ["foreign", "disappeared", "offline"])
+def test_feed_incomplete_read_never_hydrates_or_claims_empty(monkeypatch, fault):
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
+    calls = []
+
+    def query(proof, text, timeout):
+        calls.append(text)
+        if fault == "offline":
+            raise OSError("unavailable")
+        if fault == "disappeared" and len(calls) > 1:
+            return answer([])
+        return answer(fields(assignee="other" if fault == "foreign" else "worker"))
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    from shantytown.answer import PartialAnswer
+    with pytest.raises(PartialAnswer):
+        tracker.feed_rows(["worker"])
+
+
+@pytest.mark.parametrize("owner", ["worker", "rig/crew/worker",
+                                    seeds_plate.SEEDS + "principal/rig%2Fcrew%2Fworker"])
+def test_feed_haul_preserves_short_and_crew_path_owners(monkeypatch, owner):
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(fields(assignee=owner)))
+    row = seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()[0]
+    assert row["assignee"].split("/")[-1] == "worker"
