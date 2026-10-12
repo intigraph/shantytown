@@ -161,6 +161,7 @@ import time
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
+from .query_identity import declared_query_identity
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -1475,6 +1476,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--no-priority-advice", action="store_true",
+                    help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
                     help="print the full assigned title (default marks clipped titles with …)")
     cr.add_argument("--count", action="store_true",
@@ -2104,8 +2107,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="whose worktree; defaults to $SHANTY_AGENT")
     ph.add_argument("--source-branch",
                     help="explicit source branch; must match the selected worktree and caller")
-    ph.add_argument("--branch", default="main",
-                    help="destination branch on each remote (default: main)")
+    ph.add_argument("--branch",
+                    help="required destination branch on each remote; no default. "
+                         "Use the feature branch for source publication; reviewed "
+                         "main merges use the merge helper")
 
     pr = leaf("pr", help="complete overlap preflight before creating a GitHub PR")
     pr.add_argument("repository", help="explicit GitHub owner/name")
@@ -6196,7 +6201,11 @@ def _priority_go_note(a):
 def _priority_fleet_notes(a, reg, panes):
     from . import priority_advisory as pa
     try:
-        ready, active = _priority_snapshot(a)
+        projection = getattr(_tracker(a), "priority_rows", None)
+        snapshot = (projection(ready_candidates=lambda ready, active:
+                               pa.fleet_waiters(ready, active, reg, panes))
+                    if callable(projection) else None)
+        ready, active = snapshot if snapshot is not None else _priority_snapshot(a)
         return pa.fleet_advice(ready, active, reg, panes)
     except Exception:
         return ["governor: higher-priority advisory unavailable; supervision continues."]
@@ -6508,6 +6517,10 @@ def _unassigned_open(a):
     """
     try:
         trk = _tracker(a, "beads")
+        projection = getattr(trk, "unassigned_open_counts", None)
+        counts = projection() if callable(projection) else None
+        if counts is not None:
+            return *counts, ""
         rows = _tracker_items(trk)
     except Exception as e:            # noqa: BLE001 — unreachable/misconfigured store
         return None, None, str(e)[:90]
@@ -6552,6 +6565,12 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    if getattr(a, "no_priority_advice", False) and (
+            not getattr(a, "local", False) or not getattr(a, "json", False)
+            or any(getattr(a, name, False) for name in ("pane_state", "count", "governor"))):
+        print("  refused: --no-priority-advice requires --local --json without "
+              "--pane-state/--count/--governor", file=sys.stderr)
+        return REFUSED
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
@@ -6675,8 +6694,10 @@ def _cmd_crew(a) -> int:
                               host=local or "local", complete=not peer_errors,
                               agents=local_rows + fleet_mod.rows(peer_results),
                               errors=peer_errors,
-                              priority_advisories=_priority_fleet_notes(
-                                  a, _registry(a), panes))))
+                              priority_advisories=(
+                                  ["governor: priority advisory not measured (--no-priority-advice)."]
+                                  if getattr(a, "no_priority_advice", False)
+                                  else _priority_fleet_notes(a, _registry(a), panes)))))
         return CANNOT_TELL if peer_errors else OK
     # --count answers BEFORE the empty-roster line: an empty roster is `0/0`, not
     # a sentence telling a status bar to run `st agent new`.
@@ -7970,7 +7991,13 @@ def _ready_count(root, reg):
     """
     try:
         from . import feed_check
-        return len(feed_check.TrackerAdapter(root, reg).ready().exact())
+        adapter = feed_check.TrackerAdapter(root, reg)
+        count = getattr(adapter.tracker, "ready_count", None)
+        if callable(count):
+            projected = count()
+            if projected is not None:
+                return projected
+        return len(adapter.ready().exact())
     except Exception:
         return None
 
@@ -8792,7 +8819,7 @@ def _durable_checkpoint_gate(a, agent_name: str):
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
-        bead = _cycle_anchor_bead(a, agent_name)
+        bead = (getattr(a, "checkpoint_bead", "") or "").strip() or _cycle_anchor_bead(a, agent_name)
     except Exception as e:
         return cycle_mod.durable_gate(agent_name, "", since, [], error=f"plate unreadable ({e})")
     if not bead:
@@ -9476,32 +9503,41 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
 
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
-    """Why an UNATTENDED cycle must not touch this pane now, or "" (aegis-zl7jwm).
-
-    Read once, fresh, under the lifecycle lock. Nobody asked at this moment, so
-    anything that is not a quiet, empty, shell-free ready prompt waits for the
-    next pass: a respawn would kill a turn, a clear would append to typed text,
-    and either would kill a background shell."""
+    """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
-        return ""   # nothing running to interrupt: the plan is a plain relaunch
+        return ""
+
+    def pane_refusal(screen):
+        plain = triage_mod.strip_attrs(screen)
+        state = triage_mod.work_state(
+            screen, runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain),
+            limited=limit_reached(runtime, plain))
+        limited_boundary = (allow_limited and state == triage_mod.LIMITED
+                            and runtime.shows_ready_ui(plain)
+                            and not asks_a_question(runtime, plain))
+        if state not in (triage_mod.IDLE, triage_mod.SATURATED) and not limited_boundary:
+            return f"pane reads {state}, not idle"
+        if not _cycle_input_empty(screen, card, root):
+            return "the input box is not empty"
+        return ""
+
     try:
         screen = panes.capture(session, attrs=True)
-    except Exception as e:  # noqa: BLE001 — unreadable is not idle
-        return f"pane unreadable ({e})"
-    plain = triage_mod.strip_attrs(screen)
-    state = triage_mod.work_state(
-        screen, runtime.shows_ready_ui(plain),
-        awaiting=asks_a_question(runtime, plain),
-        auth_dead=auth_expired(runtime, plain),
-        limited=limit_reached(runtime, plain))
-    limited_boundary = (allow_limited and state == triage_mod.LIMITED
-                        and runtime.shows_ready_ui(plain)
-                        and not asks_a_question(runtime, plain))
-    if state not in (triage_mod.IDLE, triage_mod.SATURATED) and not limited_boundary:
-        return f"pane reads {state}, not idle"
-    if not _cycle_input_empty(screen, card, root):
-        return "the input box is not empty"
-    return notify_mod.unattended_shell_block(plain, harness_mod.name_for(card, root))
+        if refusal := pane_refusal(screen):
+            return refusal
+        name = harness_mod.name_for(card, root)
+        refusal = notify_mod.unattended_shell_block(
+            triage_mod.strip_attrs(screen), name, agent=card.name, root=root)
+        if refusal or name != "codex":
+            return refusal
+        # The native read may wait on IPC. Recheck busy/input before mutation.
+        fresh = panes.capture(session, attrs=True)
+        return pane_refusal(fresh) or notify_mod._visible_shell_block(
+            triage_mod.strip_attrs(fresh))
+    except Exception as e:  # unreadable is never idle/zero
+        return f"cycle boundary unreadable ({type(e).__name__})"
 
 
 def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
@@ -10021,6 +10057,14 @@ def _cmd_push(a) -> int:
     intentional choice. Refuse when it differs from ``wt/<agent>`` rather than
     silently publishing the canonical branch and deferred work parked on it.
     """
+    # A correct source choice is not destination intent. Defaulting to main
+    # can publish an unreviewed feature even when every source guard passes.
+    if not getattr(a, "branch", None):
+        print("  refused before push: --branch must name an explicit destination; "
+              "no remote was contacted. Use --branch <feature-branch> to publish "
+              "source. This command does not replace the reviewed merge helper.",
+              file=sys.stderr)
+        return REFUSED
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
         print("  refused: no agent. `st repo push <repo> <agent>` or set "
@@ -11825,6 +11869,7 @@ def _cmd_watch(a) -> int:
     return outcome.exit_code
 
 
+@declared_query_identity("st-tend")
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 

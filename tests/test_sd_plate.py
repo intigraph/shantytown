@@ -5,7 +5,15 @@ import subprocess
 import pytest
 
 from shantytown import br
-from shantytown.sd import SdTracker
+from shantytown.sd import SdTracker, StoreProof
+
+
+@pytest.fixture(autouse=True)
+def legacy_cli_transport(monkeypatch):
+    # These controls exercise the retained local/older-SDK CLI adapter.
+    monkeypatch.setattr(SdTracker, "prove_store", lambda self: StoreProof(
+        "--quipu", None, "https://example.test", "test"))
+
 
 
 def tracker(monkeypatch, *, fail_owner=None, fail_ready=False):

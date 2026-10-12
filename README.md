@@ -9,9 +9,9 @@
 
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
+[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#-measured-against-gas-town)
 [![43 commands](https://img.shields.io/badge/commands-43-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-4366%20passing-blue)](docs/principles.md)
+[![tests](https://img.shields.io/badge/tests-5480%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -106,7 +106,7 @@ st fleet                          the whole crew
   watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
 st repo                           a shared project repo
   worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]             push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>                 what code should I be looking at?
   pr <owner/repo> --bead <id>      complete overlap inventory; --create records decisions then creates
 st ops                            the installation

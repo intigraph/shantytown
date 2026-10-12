@@ -3,7 +3,7 @@ import argparse
 
 import pytest
 
-from shantytown import cli, cycle, triage
+from shantytown import cli, cycle, triage, codex_shells
 from shantytown.protocols import Agent
 from shantytown.runtime import ClaudeRuntime
 
@@ -41,8 +41,13 @@ def test_known_dim_placeholder_passes_input_gate_but_retains_shell_visibility_ga
     assert 'zero is not visible' in refusal(screen())
 
 
-def test_known_dim_placeholder_with_visible_zero_is_accepted():
-    assert refusal(screen(footer='· 0 shells ·')) == ''
+def test_known_dim_placeholder_with_native_zero_is_accepted(monkeypatch):
+    monkeypatch.setattr(codex_shells, 'count', lambda *a: 0)
+    assert refusal(screen()) == ''
+
+
+def test_textual_zero_without_native_evidence_still_refuses():
+    assert 'zero is not visible' in refusal(screen(footer='· 0 shells ·'))
 
 
 @pytest.mark.parametrize('prompt', [
@@ -52,7 +57,8 @@ def test_known_dim_placeholder_with_visible_zero_is_accepted():
     '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m typed',
     '\x1b[1m›\x1b[0m \x1b[2mExplain this code\x1b[0m',  # unfamiliar ghost
 ])
-def test_unsafe_composers_refuse(prompt):
+def test_unsafe_composers_refuse(prompt, monkeypatch):
+    monkeypatch.setattr(codex_shells, "count", lambda *a: pytest.fail("input refusal must precede RPC"))
     assert refusal(screen(prompt, '· 0 shells ·'))
 
 
@@ -69,6 +75,7 @@ def test_placeholder_is_harness_specific():
 
 
 def test_plan_and_locked_execution_share_the_input_rule(tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_shells, 'count', lambda *a: 0)
     monkeypatch.setattr(cli, '_foreign_session_refusal', lambda *a, **k: None)
     monkeypatch.setattr(cli.harness_mod, 'clear_command_for', lambda *a: '/clear')
     panes = Panes(screen(footer='· 0 shells ·'))
