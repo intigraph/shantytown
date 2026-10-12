@@ -732,10 +732,11 @@ class IdleFleetAlerter:
         # on every sweep, and this alerter's fail-open ate it: nk0e never fired
         # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
+        self._ready_scope = None
         self._bd_ready = bd_ready or (
-            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_ready(root, reg, self._ready_scope))
         self._bd_in_progress = bd_in_progress or (
-            lambda cwd: feed_check.bd_in_progress(cwd, root=root, reg=reg))
+            lambda cwd: feed_check.tend_active(root, reg))
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
         self._context_k = context_k or self._pane_context_k
@@ -925,6 +926,7 @@ class IdleFleetAlerter:
         # bd is the one external call; a hiccup FAILS OPEN (no push, no record —
         # so it retries next pass), never a block.
         try:
+            self._ready_scope = observed_idle
             ready_beads = self._bd_ready()
             self._audit.record(window_id, leg="feed", backend=backend,
                                attempted=True, acted_on=True,
@@ -1304,7 +1306,7 @@ class StalledAlerter:
         self._push = push
         from . import feed_check
         self._bd_in_progress = bd_in_progress or (
-            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_active(root, reg, roles=("worker",)))
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0
@@ -1653,8 +1655,12 @@ class DeferralAlerter:
         def is_closed(bead: str):
             if bead not in cache:
                 try:
-                    cache[bead] = (self._is_closed(bead) if self._is_closed
-                                   else show(bead).get("status") == "closed")
+                    if self._is_closed is not None:
+                        cache[bead] = self._is_closed(bead)
+                    elif self._show is not None:
+                        cache[bead] = show(bead).get("status") == "closed"
+                    else:
+                        cache[bead] = backend().closed(bead).exact()
                 except Exception as e:
                     self._log(f"deferral-sweep: could not read {bead} ({e!r}); retry next pass")
                     cache[bead] = None
@@ -1662,6 +1668,28 @@ class DeferralAlerter:
 
         rows = [r for r in rows if isinstance(r, dict)
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
+        if rows and self._is_closed is None and self._show is None:
+            targets = []
+            for row in rows:
+                condition = pol.parse_condition(str(row.get("notes") or ""))
+                if condition is not None and condition.kind == "closed":
+                    targets.append(condition.arg)
+            if targets:
+                try:
+                    reader = getattr(backend(), "closed_many", None)
+                    answer = reader(targets) if callable(reader) else None
+                    if answer is not None:
+                        answers = answer.exact()
+                        if not isinstance(answers, dict) or any(
+                                value is not None and type(value) is not bool
+                                for value in answers.values()):
+                            raise ValueError("invalid condition batch verdicts")
+                        # Fill every requested key, including UNKNOWN. Never
+                        # turn a failed native batch into individual retries.
+                        cache.update({target: answers.get(target) for target in targets})
+                except Exception as e:
+                    self._log(f"deferral-sweep: condition batch unreadable ({e!r}); retry next pass")
+                    cache.update(dict.fromkeys(targets))
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
         reports, retry = [], set()
@@ -2064,16 +2092,26 @@ _SHELL_COUNT_COMPLETE = frozenset({"claude"})
 _BACKGROUND_TERMINAL = re.compile(r"background terminal", re.IGNORECASE)
 
 
-def unattended_shell_block(plain: str, harness_name: "str | None") -> str:
-    """Why background work forbids an UNATTENDED cycle now, or "".
-
-    A cycle kills every shell the session owns, so "cannot see" must refuse
-    unless this harness's silence is known to mean none."""
+def _visible_shell_block(plain: str) -> str:
     n = triage_mod.running_shells(plain)
     if n:
         return f"{n} background shell(s) still running"
     if _BACKGROUND_TERMINAL.search(triage_mod._tail(plain)):
         return "a background terminal is still running"
+    return ""
+
+
+def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None) -> str:
+    """An unattended cycle needs fresh runtime-owned zero on Codex."""
+    if visible := _visible_shell_block(plain):
+        return visible
+    if harness_name == "codex":
+        from . import codex_shells
+        count = codex_shells.count(agent, root)
+        if type(count) is int and count >= 0:
+            return f"{count} background terminal(s) still running" if count else ""
+        return "background shells cannot be read on the codex harness, so zero is not visible"
+    n = triage_mod.running_shells(plain)
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
                 f"{harness_name or 'unknown'} harness, so zero is not visible")
@@ -2124,6 +2162,7 @@ class AutoCycler:
 
     def __init__(self, root, panes, *, anchor, comments, requests, push,
                  reg=None, log=None, now=None, harness=None):
+        self._root = root
         self.path = Path(root) / "notify" / "auto-cycle.json"
         self._prompted = Path(root) / "notify" / "cycling.json"   # CycleDriver's
         self._panes = panes
@@ -2155,7 +2194,7 @@ class AutoCycler:
         try:
             card = next(c for c in self._agents if c.name == agent)
             plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-            return unattended_shell_block(plain, self._harness(card))
+            return unattended_shell_block(plain, self._harness(card), agent=card.name, root=self._root)
         except Exception as e:  # noqa: BLE001 — cannot tell is not clear
             return f"background shells unreadable ({e})"
 

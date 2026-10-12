@@ -657,7 +657,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads, active = queue_state(root, reg)
+    ready_beads, active = queue_state(root, reg, owners=free)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -804,6 +804,23 @@ class TrackerAdapter:
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
 
+    def closed_many(self, items) -> Answer[dict[str, bool | None]] | None:
+        """Optional native candidate batch; legacy readers retain single reads."""
+        projected = getattr(self.tracker, "closed_statuses", None)
+        return projected(items) if callable(projected) else None
+
+    def closed(self, item: str) -> Answer[bool]:
+        """Condition-only status; full detail remains required before release."""
+        projected = getattr(self.tracker, "closed_status", None)
+        if callable(projected):
+            answer = projected(item)
+            if answer is not None:
+                return answer
+        detail = self.show(item).exact()
+        if not isinstance(detail, dict) or detail.get("id") != item or not detail.get("status"):
+            raise ValueError(f"incomplete show for {item}")
+        return Answer.complete_read(detail["status"] == "closed", how=f"{self.kind} show status")
+
     def undefer(self, item: str) -> None:
         """Clear both historical status and timestamp representations."""
         if self.tracker is not None:
@@ -826,11 +843,16 @@ def backend_kind(root, reg) -> str:
     return backend_adapter(root, reg).kind
 
 
-def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
+def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], list[dict]]:
     """Ready and active work from the deployment's selected tracker backend."""
     if tracker is None:
         tracker = _br_tracker(root, reg)
     if tracker is not None:
+        from .sd import SdTracker
+        if owners is not None and isinstance(tracker, SdTracker):
+            projected = tracker.feed_rows(owners)
+            if projected is not None:
+                return projected
         from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
         if isinstance(tracker, BrTracker):
             ready_beads = br_ready(tracker)
@@ -849,6 +871,30 @@ def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
               "ready work only; haul filtering is degraded", file=sys.stderr)
         return ready_beads, []
 
+
+
+def tend_active(root, reg, *, roles=None):
+    """Fresh roster-scoped fields; never cache the final pre-feed anchor check."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if isinstance(tracker, SdTracker):
+        owners = [card.name for card in reg.all().exact()
+                  if roles is None or card.role in roles]
+        projected = tracker.active_rows(owners)
+        if projected is not None:
+            return projected.exact()
+    return bd_in_progress(bd_cwd(reg), root=root, reg=reg)
+
+
+def tend_ready(root, reg, owners):
+    """Only unassigned and observed-idle owners can affect the haul sweep."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if owners is not None and isinstance(tracker, SdTracker):
+        projected = tracker.tend_rows(owners)
+        if projected is not None:
+            return projected[0]
+    return _bd_ready(bd_cwd(reg), root=root, reg=reg)
 
 def main(argv: list[str] | None = None) -> int:
     """The standalone Rule Zero hook.
