@@ -2066,16 +2066,26 @@ _SHELL_COUNT_COMPLETE = frozenset({"claude"})
 _BACKGROUND_TERMINAL = re.compile(r"background terminal", re.IGNORECASE)
 
 
-def unattended_shell_block(plain: str, harness_name: "str | None") -> str:
-    """Why background work forbids an UNATTENDED cycle now, or "".
-
-    A cycle kills every shell the session owns, so "cannot see" must refuse
-    unless this harness's silence is known to mean none."""
+def _visible_shell_block(plain: str) -> str:
     n = triage_mod.running_shells(plain)
     if n:
         return f"{n} background shell(s) still running"
     if _BACKGROUND_TERMINAL.search(triage_mod._tail(plain)):
         return "a background terminal is still running"
+    return ""
+
+
+def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None) -> str:
+    """An unattended cycle needs fresh runtime-owned zero on Codex."""
+    if visible := _visible_shell_block(plain):
+        return visible
+    if harness_name == "codex":
+        from . import codex_shells
+        count = codex_shells.count(agent, root)
+        if type(count) is int and count >= 0:
+            return f"{count} background terminal(s) still running" if count else ""
+        return "background shells cannot be read on the codex harness, so zero is not visible"
+    n = triage_mod.running_shells(plain)
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
                 f"{harness_name or 'unknown'} harness, so zero is not visible")
@@ -2126,6 +2136,7 @@ class AutoCycler:
 
     def __init__(self, root, panes, *, anchor, comments, requests, push,
                  reg=None, log=None, now=None, harness=None):
+        self._root = root
         self.path = Path(root) / "notify" / "auto-cycle.json"
         self._prompted = Path(root) / "notify" / "cycling.json"   # CycleDriver's
         self._panes = panes
@@ -2157,7 +2168,7 @@ class AutoCycler:
         try:
             card = next(c for c in self._agents if c.name == agent)
             plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-            return unattended_shell_block(plain, self._harness(card))
+            return unattended_shell_block(plain, self._harness(card), agent=card.name, root=self._root)
         except Exception as e:  # noqa: BLE001 — cannot tell is not clear
             return f"background shells unreadable ({e})"
 

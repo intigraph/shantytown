@@ -9501,32 +9501,41 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
 
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
-    """Why an UNATTENDED cycle must not touch this pane now, or "" (aegis-zl7jwm).
-
-    Read once, fresh, under the lifecycle lock. Nobody asked at this moment, so
-    anything that is not a quiet, empty, shell-free ready prompt waits for the
-    next pass: a respawn would kill a turn, a clear would append to typed text,
-    and either would kill a background shell."""
+    """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
-        return ""   # nothing running to interrupt: the plan is a plain relaunch
+        return ""
+
+    def pane_refusal(screen):
+        plain = triage_mod.strip_attrs(screen)
+        state = triage_mod.work_state(
+            screen, runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(runtime, plain),
+            auth_dead=auth_expired(runtime, plain),
+            limited=limit_reached(runtime, plain))
+        limited_boundary = (allow_limited and state == triage_mod.LIMITED
+                            and runtime.shows_ready_ui(plain)
+                            and not asks_a_question(runtime, plain))
+        if state not in (triage_mod.IDLE, triage_mod.SATURATED) and not limited_boundary:
+            return f"pane reads {state}, not idle"
+        if not _cycle_input_empty(screen, card, root):
+            return "the input box is not empty"
+        return ""
+
     try:
         screen = panes.capture(session, attrs=True)
-    except Exception as e:  # noqa: BLE001 — unreadable is not idle
-        return f"pane unreadable ({e})"
-    plain = triage_mod.strip_attrs(screen)
-    state = triage_mod.work_state(
-        screen, runtime.shows_ready_ui(plain),
-        awaiting=asks_a_question(runtime, plain),
-        auth_dead=auth_expired(runtime, plain),
-        limited=limit_reached(runtime, plain))
-    limited_boundary = (allow_limited and state == triage_mod.LIMITED
-                        and runtime.shows_ready_ui(plain)
-                        and not asks_a_question(runtime, plain))
-    if state not in (triage_mod.IDLE, triage_mod.SATURATED) and not limited_boundary:
-        return f"pane reads {state}, not idle"
-    if not _cycle_input_empty(screen, card, root):
-        return "the input box is not empty"
-    return notify_mod.unattended_shell_block(plain, harness_mod.name_for(card, root))
+        if refusal := pane_refusal(screen):
+            return refusal
+        name = harness_mod.name_for(card, root)
+        refusal = notify_mod.unattended_shell_block(
+            triage_mod.strip_attrs(screen), name, agent=card.name, root=root)
+        if refusal or name != "codex":
+            return refusal
+        # The native read may wait on IPC. Recheck busy/input before mutation.
+        fresh = panes.capture(session, attrs=True)
+        return pane_refusal(fresh) or notify_mod._visible_shell_block(
+            triage_mod.strip_attrs(fresh))
+    except Exception as e:  # unreadable is never idle/zero
+        return f"cycle boundary unreadable ({type(e).__name__})"
 
 
 def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
