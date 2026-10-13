@@ -600,3 +600,90 @@ def test_explicit_empty_source_with_detached_tree_never_publishes_stale_canonica
         assert _sha(remote, 'main') == canonical
     assert _sha(wt, 'wt/ellie') == canonical
     assert _sha(wt, 'HEAD') != canonical
+
+
+def test_explicit_timeout_allows_real_slow_hook(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "slow-hook-feature")
+    hooks = Path(_git(wt, "rev-parse", "--git-path", "hooks"))
+    if not hooks.is_absolute():
+        hooks = wt / hooks
+    hook = hooks / "pre-push"
+    hook.write_text("#!/bin/sh\nsleep 61\nexit 0\n")
+    hook.chmod(0o755)
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "slow-feature",
+                 "--timeout", "90"]) == OK
+    assert _sha(origin, "slow-feature") == _sha(wt, "HEAD")
+    assert _sha(forge, "slow-feature") == _sha(wt, "HEAD")
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "3601"])
+def test_invalid_push_timeout_has_no_remote_write(two_remotes, timeout):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "must-stay-local")
+    before = [_sha(r, "main") for r in (origin, forge)]
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "main",
+                 "--timeout", timeout]) == REFUSED
+    assert [_sha(r, "main") for r in (origin, forge)] == before
+
+
+def test_timeout_is_indeterminate_and_stops_other_peers(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    calls = []
+    def timed_out(dest, *args):
+        calls.append(args)
+        return 124, "", "read back destination SHA before retry"
+    result = push_every_remote(wt, "wt/ellie", "feature", push_run=timed_out)
+    assert len(calls) == len(result) == 1
+    assert not result[0].ok and not result[0].non_ff
+    assert "INDETERMINATE" in result[0].reason
+    assert "read back" in result[0].reason
+
+
+def test_real_hook_timeout_keeps_destination_absent(two_remotes):
+    from shantytown.workspace import _git_push
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "blocked-by-hook")
+    hooks = Path(_git(wt, "rev-parse", "--git-path", "hooks"))
+    if not hooks.is_absolute():
+        hooks = wt / hooks
+    hook = hooks / "pre-push"
+    hook.write_text("#!/bin/sh\nsleep 5\nexit 0\n")
+    hook.chmod(0o755)
+    rc, stdout, stderr = _git_push(wt, "--porcelain", "origin",
+                                  "wt/ellie:refs/heads/feature", timeout=1)
+    assert rc == 124 and stdout == "" and "INDETERMINATE" in stderr
+    result = subprocess.run(["git", "-C", str(origin), "show-ref", "--verify",
+                             "refs/heads/feature"], capture_output=True)
+    assert result.returncode != 0
+
+
+def test_timeout_after_remote_commit_is_still_indeterminate(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "committed-before-lost-response")
+    calls = []
+    def committed_timeout(dest, *args):
+        calls.append(args)
+        _git(dest, "push", *args)
+        return 124, "", "read back destination SHA before retry"
+    result = push_every_remote(wt, "wt/ellie", "feature", push_run=committed_timeout)
+    assert len(calls) == len(result) == 1
+    assert not result[0].ok and "INDETERMINATE" in result[0].reason
+    # Read-back proves the first sorted peer committed despite the timeout.
+    assert _sha(forge, "feature") == _sha(wt, "HEAD")
+    missing = subprocess.run(["git", "-C", str(origin), "show-ref", "--verify",
+                              "refs/heads/feature"], capture_output=True)
+    assert missing.returncode != 0
+
+
+def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatch, capsys):
+    from shantytown import cli
+    from shantytown.workspace import PushOutcome
+    repo, wt, origin, forge = two_remotes
+    monkeypatch.setattr(cli, "push_every_remote", lambda *args: [
+        PushOutcome(remote="forge", ok=True),
+        PushOutcome(remote="origin", ok=False, reason="origin INDETERMINATE")])
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "feature"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "confirmed publication" in err and "Read back" in err
+    assert "did not" not in err
