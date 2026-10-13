@@ -97,11 +97,12 @@ def test_selective_preflight_refuses_all_before_any_close(tmp_path, monkeypatch,
     assert 'Nothing marked read' in capsys.readouterr().err
 
 
-def test_explicit_selection_is_not_truncated(tmp_path, monkeypatch):
+def test_explicit_selection_is_not_truncated(tmp_path, monkeypatch, capsys):
     _, box, messages = setup_box(tmp_path, monkeypatch, 20)
     a = args(); a.read = False; a.read_id = [m.id for m in messages[:18]]
     assert cli._inbox_read(a, 'reader') == cli.OK
     assert len(box.unread('reader')) == 2
+    assert 'Repeat `st inbox --read`' not in capsys.readouterr().out
 
 
 def test_dry_run_does_not_close(tmp_path, monkeypatch, capsys):

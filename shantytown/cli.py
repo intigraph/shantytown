@@ -5749,8 +5749,8 @@ def _inbox_read(a, me: str) -> int:
                 print(f"  [{index}/{len(selected)}] {m.id}: {result}", flush=True)
         print(f"\n  marked {len(marked)} message(s) read for {me}.", flush=True)
         if remaining:
-            print(f"  {remaining} snapshot message(s) not attempted. "
-                  "Repeat `st inbox --read` to continue.", flush=True)
+            next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
+            print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
         if failed:
             # A timed-out close may have landed. Keep its payload on stderr
             # too: consumers may retain the error channel separately.
