@@ -1,0 +1,110 @@
+# PR queue policy prototype
+
+The `shantytown.pr_queue` library implements read-only PR queue admission and stale-work policy.
+Its caller supplies a complete, fresh repository inventory and independently
+verified crew author bindings and exact-head review evidence. Shared forge login
+names do not establish who authored or reviewed a change.
+
+`evaluate(snapshot, now=..., cap=...)` returns open count, median age, per-author
+WIP admission, advisory eligibility and deterministic stale event keys. A cap is
+required; this prototype chooses no fleet-wide cap. Unknown author bindings block
+new admissions because their outstanding work cannot be counted reliably. Missing
+or invalid evidence does not make a PR eligible. Explicit hold clearance, exact
+head/base, independent named reviewer and a review digest are required. These
+inputs are assertions of the caller, not authentication performed by the library.
+The eventual adapter must use the deployed trusted helper to verify them again.
+
+`pending_events` keeps an event pending until verified delivery is acknowledged.
+The event identity includes repository, PR number and exact head. Attempts and
+lost responses must not be acknowledged as delivery; the sender must reconcile
+against a durable destination before retrying. This library sends no messages,
+starts no agent and enables no timer.
+
+Eligibility is separate from execution. The designated serialized writer and the
+trusted neutral merge helper retain complete green checks, fresh base and review
+verification, expected-head merge, holds/blackout/rollback gates and remote merge
+receipt checks. Native auto-merge is not enabled. A read-only queue policy cannot
+replace these controls.
+
+Acceptance remains open: integrate the author-bound registry, named
+review assignment, complete live inventory and metrics, verified event delivery,
+serialized helper execution and actual one-week under-cap observation. Unit
+controls establish the library boundary only. No dashboard or production
+activation is claimed.
+
+The private `pr_binding` library adds explicit primary-marker registration and a
+0600 journal under a private directory. A selected-board adapter must attest the
+reviewed graph identity and return fresh records for the known bound IDs only.
+The forge adapter must provide complete comments attributed to the registered
+crew writer, normalize exact head/state/body/draft, and implement draft conversion
+through the supported forge API. These adapters are not installed by this change.
+
+Registration rejects a closed bead, another owner or mismatched PR state. A
+reconcile request rereads the authoritative bead; an old event cannot close a
+currently open bead. Deferred beads draft their bound PR; closed beads close it.
+A public comment carries the bead ID and status; the full private reason remains
+in the journal. Intents survive lost responses and require read reconciliation
+before another write. Changed heads, primary markers, owners, reasons or board
+identity hold the pending action. There is no mass import or unregistered action.
+
+Pending journals record attempts separately for the comment and PR state writes,
+before each external call. An absent read after an attempt holds across restart;
+a positive read can permit the next unattempted action or complete reconciliation.
+Older pending journals without action records hold until positive completion or
+explicit owner resolution. An absent outcome never authorizes another write.
+
+Integration still required: CLI binding, known-ID selected Seeds reader, actual
+GitHub adapter, primary-marker CI admission, producer migration, disabled job
+entry and reviewed observed activation. The library tests are private harness
+controls, not real forge state mutation or scheduled-path acceptance.
+
+A foreground adapter is available with `python -m shantytown.pr_binding`.
+Supply the reviewed server/graph and a private registry path explicitly. Its
+`register` operation proves the known bead and exact existing PR, while
+`reconcile` applies only registered lifecycle actions. `create` composes the
+complete overlap preflight with author ownership and durable creation intent;
+ambiguous creation requires explicit verified registration before another create.
+Registration of a matching PR reconciles that intent without replaying the POST.
+None of these entries arms a job or intercepts other API clients.
+
+Observed private foreground control: PR189 registered to its author-owned active
+bead, followed by an empty lifecycle reconcile. No forge state or comment write
+was needed. This proves the read/registry entry, not the draft/close write path.
+
+`python -m shantytown.pr_queue --repo OWNER/REPO --cap N --prometheus` reads a
+complete bounded PR inventory twice, refuses head/number drift, and prints queue
+count, median age, stale count and unknown author count. It provides no review or
+CI clearance. Its advisory eligible count is therefore zero until a trusted
+receipt adapter exists. A supplied cap is explicit probe configuration; no fleet
+cap is selected or activated. The command writes no textfile or dashboard itself.
+
+The disabled lifecycle job template receives Quipu transaction notifications and
+calls the bound registry reconciler through a fixed argv. It does not interpolate
+incoming event bodies into a shell. Adoption must measure the real transaction
+source, batching/load behavior and scheduled action before enabling the job.
+
+The bound foreground creator now requires an explicit reviewer and cap. It checks
+complete author-bound WIP admission before posting, and queues a named independent
+review request in the private outbox. Missing existing author bindings prevent
+admission; they are not assigned from shared forge logins. Review assignment is
+not a passing review receipt.
+
+The private stale/review outbox records intent before a durable send. Delivery
+requires a control-proven destination lookup. After a lost response, a positive
+read can reconcile delivery; an absent read does not authorize an automatic
+retry. No sender adapter or event delivery is installed by this prototype.
+
+`pr_merge_slot.execute_one` is a separate default-off library. Activation requires
+the existing designated writer, fresh physical hold/blackout/rollback reads, the
+known author-bound exact head, independent named reviewer, signed receipt, and the
+installed ownership-neutral trusted helper. The verified physical-gate reader must
+return `trusted_helper`, an absolute path from reviewed deployment configuration;
+it must designate the actual neutral installed artifact, never a proposed or crew
+checkout helper. Missing configuration or a changed path refuses execution. The
+helper must attest current source
+and pass its full preflight. Physical conditions are read again after preflight.
+The helper's execute entry repeats CI/review/expected-head/writer gates. Only one
+candidate intent can occupy the designated registry; lost responses require
+remote exact-head and commit proof before the slot clears. Absence holds the
+intent. A real adapter must verify those remote proofs and designate the single
+fleet registry. This is not native auto-merge or activation authority.
