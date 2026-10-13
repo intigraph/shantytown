@@ -12,7 +12,9 @@ all consumed payloads, and reports 81 snapshot messages not attempted. Tests
 also kill the process during a close to check buffered-pipe output survives.
 
 Reproduce from the repository root: `sh docs/demos/inbox-read/run.sh`.
-The recording demonstrates the proposal containing these artifacts. Retain the
+The recording demonstrates runtime revision 4e88110. The subsequent correction
+restores the existing stderr payload copy for uncertain closes; it does not change
+the successful batch behavior shown here. Retain the
 small recording and readable output with the code for reproducibility.
 
 [Recorded output](output.log) and [timing](timing.log) form a terminal recording,

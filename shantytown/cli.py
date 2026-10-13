@@ -5752,13 +5752,17 @@ def _inbox_read(a, me: str) -> int:
             print(f"  {remaining} snapshot message(s) not attempted. "
                   "Repeat `st inbox --read` to continue.", flush=True)
         if failed:
-            # A timed-out close may have landed. The payload was already
-            # flushed; inspect the retained receipt before deciding to retry.
+            # A timed-out close may have landed. Keep its payload on stderr
+            # too: consumers may retain the error channel separately.
             print(f"\n  ⚠ UNCONFIRMED: {len(failed)} close(s) may or may not have "
                   "landed. Inspect `st inbox` before acknowledging the rest.",
                   file=sys.stderr, flush=True)
             for m, err in failed:
-                print(f"  {m.id}  [{err}]", file=sys.stderr, flush=True)
+                frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
+                print(f"\n  {m.id}{frm}  [{err}]", file=sys.stderr)
+                for line in (m.body or "").splitlines() or [""]:
+                    print(f"    {line}", file=sys.stderr)
+            sys.stderr.flush()
             return CANNOT_TELL
         return OK
 
