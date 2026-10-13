@@ -240,3 +240,41 @@ def test_unsupported_peer_identity_is_unknown_without_binding(monkeypatch):
     monkeypatch.delattr(socket, 'SO_PEERCRED')
     monkeypatch.setattr(shells, '_binding', lambda *a: pytest.fail('unsupported platform must stay UNKNOWN'))
     assert shells.count('worker', '/root') is None
+
+
+@pytest.mark.parametrize('filename', ['daemon.pid', 'app-server.pid'])
+def test_native_identity_variants_keep_exact_binding(binding_fixture, filename):
+    home = binding_fixture['home'] / 'app-server-daemon'
+    if filename != 'daemon.pid':
+        (home / 'daemon.pid').rename(home / filename)
+    value = binding(binding_fixture)
+    assert value['pid'] == 42 and value['thread'] == THREAD
+    assert value['identity_file'] == filename
+
+
+@pytest.mark.parametrize('fault', ['both', 'broken-current-link', 'malformed-legacy', 'no-record'])
+def test_identity_variants_never_fall_back_on_ambiguous_or_invalid(binding_fixture, fault):
+    home = binding_fixture['home'] / 'app-server-daemon'
+    current, legacy = home / 'daemon.pid', home / 'app-server.pid'
+    if fault == 'both':
+        legacy.write_bytes(current.read_bytes())
+    elif fault == 'broken-current-link':
+        current.rename(legacy)
+        current.symlink_to(home / 'absent')
+    elif fault == 'malformed-legacy':
+        current.rename(legacy)
+        legacy.write_text('{"pid":true}')
+    elif fault == 'no-record':
+        current.unlink()
+    with pytest.raises((OSError, ValueError)):
+        binding(binding_fixture)
+
+
+def test_identity_filename_changed_during_rpc_is_unknown(monkeypatch):
+    common = dict(pid=1, endpoint='/tmp/socket', thread=THREAD, generation='same-bytes')
+    bindings = iter([dict(common, identity_file='daemon.pid'),
+                     dict(common, identity_file='app-server.pid')])
+    monkeypatch.setattr(shells, '_binding', lambda *a: next(bindings))
+    monkeypatch.setattr(shells, '_Socket', lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(shells, '_count', lambda *a: 0)
+    assert shells.count('worker', '/tmp/root') is None
