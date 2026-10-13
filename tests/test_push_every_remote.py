@@ -566,6 +566,72 @@ def test_explicit_source_branch_publishes_exact_topic_to_both_peers(two_remotes)
         assert _sha(remote, 'main') != _sha(wt, 'HEAD')
 
 
+def test_explicit_extra_worktree_publishes_only_its_source_and_preserves_canonical(
+        two_remotes, monkeypatch):
+    repo, canonical, origin, forge = two_remotes
+    _git(canonical, 'checkout', '-b', 'ellie/old-held')
+    (canonical / 'uncommitted').write_text('preserve canonical')
+    before = (_sha(canonical, 'HEAD'), _git(canonical, 'status', '--porcelain'),
+              (repo / '.git' / 'config').read_bytes(),
+              (repo / '.git' / 'worktrees' / 'ellie' / 'index').read_bytes())
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    _commit(extra, 'extra-topic')
+    monkeypatch.chdir(extra)
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == OK
+    assert all(_sha(peer, 'ellie/topic') == _sha(extra, 'HEAD') for peer in (origin, forge))
+    assert all(_sha(peer, 'main') == before[0] for peer in (origin, forge))
+    after = (_sha(canonical, 'HEAD'), _git(canonical, 'status', '--porcelain'),
+             (repo / '.git' / 'config').read_bytes(),
+             (repo / '.git' / 'worktrees' / 'ellie' / 'index').read_bytes())
+    assert after == before
+    assert _git(canonical, 'branch', '--show-current') == 'ellie/old-held'
+
+
+@pytest.mark.parametrize('caller,source', [('canonical', 'ellie/topic'),
+                                         ('extra', 'wt/ellie')])
+def test_extra_worktree_retains_caller_and_source_branch_refusals(
+        two_remotes, monkeypatch, caller, source):
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    monkeypatch.chdir(canonical if caller == 'canonical' else extra)
+    monkeypatch.setattr(cli, 'push_every_remote', lambda *a: pytest.fail('must not contact any peer'))
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch', source,
+                 '--branch', 'ellie/topic']) == REFUSED
+    assert all(_sha(peer, 'main') == _sha(canonical, 'HEAD') for peer in (origin, forge))
+
+
+def test_extra_worktree_keeps_all_remote_trust_preflight(two_remotes, monkeypatch):
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    _commit(extra, 'held-topic')
+    _git(repo, 'config', 'remote.forge.st-push-allowed', 'false')
+    monkeypatch.chdir(extra)
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == REFUSED
+    for peer in (origin, forge):
+        assert _sha(peer, 'main') == _sha(canonical, 'HEAD')
+        assert subprocess.run(['git', '-C', str(peer), 'rev-parse', '--verify',
+                               'refs/heads/ellie/topic'], capture_output=True).returncode != 0
+
+
+@pytest.mark.parametrize('marker', ['malformed', 'copied'])
+def test_explicit_gitfile_cannot_alias_an_unregistered_root(two_remotes, marker):
+    from shantytown import cli
+    from shantytown.workspace import WorkspaceError
+    repo, canonical, _, _ = two_remotes
+    impostor = canonical.parent / 'ellie-impostor'
+    impostor.mkdir()
+    (impostor / '.git').write_text('not a gitdir' if marker == 'malformed'
+                                 else (canonical / '.git').read_text())
+    with pytest.raises(WorkspaceError, match='linked worktree identity'):
+        cli._resolve_push_worktree(str(impostor), 'ellie')
+
+
 def test_explicit_wrong_source_refuses_without_remote_write(two_remotes):
     repo, wt, origin, forge = two_remotes
     before = [_sha(remote, 'main') for remote in (origin, forge)]

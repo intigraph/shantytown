@@ -8722,6 +8722,32 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     """
     p = Path(repo).expanduser()
     if p.is_absolute() or "/" in repo:
+        # A linked worktree's literal root is already the selected source.
+        # worktree_for is a provisioning map, not its inverse: applying it to
+        # an approved extra worktree silently chooses the canonical old tree.
+        if (p / ".git").is_file():
+            import subprocess
+            try:
+                identity = subprocess.run(
+                    ["git", "-C", str(p), "rev-parse", "--path-format=absolute",
+                     "--git-dir", "--git-common-dir", "--show-toplevel"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                fields = identity.stdout.splitlines()
+                registered = subprocess.run(
+                    ["git", "-C", str(p), "worktree", "list", "--porcelain", "-z"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                roots = {Path(field.removeprefix("worktree ")).resolve()
+                         for field in registered.stdout.split("\0")
+                         if field.startswith("worktree ")}
+                if (identity.returncode or registered.returncode or len(fields) != 3
+                        or Path(fields[0]).resolve() == Path(fields[1]).resolve()
+                        or Path(fields[2]).resolve() != p.resolve() or p.resolve() not in roots):
+                    raise WorkspaceError("explicit linked worktree identity cannot be verified")
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkspaceError("explicit linked worktree identity cannot be read") from error
+            return p
         return worktree_for(p, agent)
 
     gt_root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))
