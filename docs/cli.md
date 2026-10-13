@@ -2354,6 +2354,15 @@ resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
+Each tend pass also writes notify/deferred-reading-list.json from the same
+admitted deferred snapshot. It retains items whose updated_at is at least30days
+old, including items with future deadlines, as a reading list. Age does not
+judge a claim wrong or authorize release. Missing, malformed or future touch
+timestamps remain listed as age UNKNOWN; an unreadable snapshot replaces the
+prior report with UNKNOWN. The report names its snapshot scope and observation
+time. This path adds no tracker query or pane wake, and preserves the existing
+priority and hold rules.
+
 The Stop hook consumes ordinary stop notices when their sender is currently
 busy, at any age, without waking the recipient. The on-disk event remains for
 audit. A later real stop creates a new notice. Urgent governance and risen
