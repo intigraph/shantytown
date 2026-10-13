@@ -32,6 +32,19 @@ def filesystem(path: Path) -> str:
     return max(matches)[1]
 
 
+def _private_shared_parent(durable: Path) -> None:
+    """Create the immediate shared parent explicitly; never chmod existing custody."""
+    parent = durable.parent
+    if parent.is_symlink():
+        raise RuntimeError("shared package parent must be a real private directory")
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    info = parent.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise RuntimeError("shared package parent must be user-owned mode0700; "
+                           "verify its ownership and set parent permissions to 0700 before retrying")
+
+
 def prepare(home: Path, durable: Path) -> None:
     """Create a shared user-private disk destination; refuse existing payload custody."""
     if not durable.is_absolute() or not home.is_absolute():
@@ -53,6 +66,7 @@ def prepare(home: Path, durable: Path) -> None:
         raise RuntimeError("daemon package destination is RAM-backed")
     if durable.is_symlink():
         raise RuntimeError("daemon package destination must be a real private directory")
+    _private_shared_parent(durable)
     durable.mkdir(parents=True, mode=0o700, exist_ok=True)
     info = durable.stat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
@@ -212,10 +226,7 @@ def migrate_stopped(home: Path, durable: Path) -> None:
         raise RuntimeError("daemon package destination is RAM-backed")
     if durable.is_symlink():
         raise RuntimeError("daemon package destination must be a real private directory")
-    durable.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    parent_info = durable.parent.stat()
-    if parent_info.st_uid != os.getuid() or stat.S_IMODE(parent_info.st_mode) != 0o700:
-        raise RuntimeError("shared package parent must be user-owned mode0700")
+    _private_shared_parent(durable)
     lock_path = durable.parent / ".daemon-package-provision.lock"
     if lock_path.exists() or lock_path.is_symlink():
         lock_info = lock_path.lstat()

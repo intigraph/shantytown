@@ -21,6 +21,49 @@ def test_fresh_private_packages_are_disk_backed_and_idempotent(tmp_path, disk):
     assert (link / "release").read_bytes() == b"payload"
 
 
+@pytest.mark.parametrize('mask', [0o002, 0o077])
+def test_fresh_home_shared_parent_is_explicitly_private_under_umask(tmp_path, disk, mask):
+    home = tmp_path / 'runtime'
+    durable = tmp_path / 'fresh-home' / '.local' / 'share' / 'cache' / 'packages' / 'daemon'
+    old_mask = os.umask(mask)
+    try:
+        packages.prepare(home, durable)
+    finally:
+        os.umask(old_mask)
+    assert durable.parent.stat().st_mode & 0o777 == 0o700
+    assert durable.stat().st_mode & 0o777 == 0o700
+    assert durable.parent.stat().st_uid == os.getuid()
+    assert (home / 'packages' / 'app-server-daemon').resolve() == durable
+    packages.prepare(home, durable)
+
+
+def test_existing_nonprivate_shared_parent_refuses_without_chmod_or_payload_creation(tmp_path, disk):
+    parent = tmp_path / 'packages'
+    parent.mkdir(mode=0o775)
+    parent.chmod(0o775)
+    sentinel = parent / 'retained'
+    sentinel.write_bytes(b'preserve')
+    identity = parent.stat().st_mtime_ns
+    with pytest.raises(RuntimeError, match='verify its ownership'):
+        packages.prepare(tmp_path / 'runtime', parent / 'daemon')
+    assert parent.stat().st_mode & 0o777 == 0o775
+    assert parent.stat().st_mtime_ns == identity
+    assert sentinel.read_bytes() == b'preserve'
+    assert not (parent / 'daemon').exists()
+    assert not (tmp_path / 'runtime').exists()
+
+
+def test_shared_parent_symlink_refuses_without_touching_real_target(tmp_path, disk):
+    target = tmp_path / 'private'
+    target.mkdir(mode=0o700)
+    parent = tmp_path / 'packages'
+    parent.symlink_to(target, target_is_directory=True)
+    with pytest.raises(RuntimeError, match='shared package parent must be a real'):
+        packages.prepare(tmp_path / 'runtime', parent / 'daemon')
+    assert list(target.iterdir()) == []
+    assert parent.is_symlink()
+
+
 def test_existing_runtime_payload_is_preserved_without_creating_disk_target(tmp_path, disk):
     home, durable = tmp_path / "runtime", tmp_path / "disk"
     existing = home / "packages" / "app-server-daemon"
@@ -169,6 +212,37 @@ def test_stopped_migration_shares_verified_bytes_and_retains_native_lock(tmp_pat
         receipt = json.loads(retained[0].with_name(retained[0].name + ".json").read_text())
         assert receipt["coverage"] == "ESTABLISHED" and receipt["soak"].startswith("HOLD")
         assert receipt["home"] == str(home) and receipt["quarantine"] == str(retained[0])
+
+
+def test_fresh_prepare_parent_also_passes_stopped_migration_guard(tmp_path, stopped):
+    import shutil
+    fresh, old_home = tmp_path / 'fresh-card', tmp_path / 'stopped-card'
+    durable = tmp_path / 'new-home' / '.local' / 'share' / 'cache' / 'packages' / 'daemon'
+    old = old_package(old_home)
+    previous = os.umask(0o002)
+    try:
+        packages.prepare(fresh, durable)
+    finally:
+        os.umask(previous)
+    assert durable.parent.stat().st_mode & 0o777 == 0o700
+    # Populate payload contents without copytree copying the old root's mode
+    # onto the already private shared destination (the native updater retains it).
+    for entry in old.iterdir():
+        target = durable / entry.name
+        if entry.is_symlink():
+            target.symlink_to(os.readlink(entry))
+        elif entry.is_dir():
+            shutil.copytree(entry, target, symlinks=True)
+        else:
+            shutil.copy2(entry, target)
+    assert durable.stat().st_mode & 0o777 == 0o700
+    expected = packages.manifest(old)
+    packages.migrate_stopped(old_home, durable)
+    assert old.is_symlink() and old.resolve() == durable
+    assert packages.manifest(durable) == expected
+    retained = list(old.parent.glob('.stopped-daemon-*'))
+    assert any(path.is_dir() and (path / 'current/bin/codex').read_bytes() == b'reviewed payload'
+               for path in retained)
 
 
 def test_live_package_refuses_before_copy(tmp_path, disk, monkeypatch):
