@@ -144,7 +144,7 @@ def old_package(home):
 
 @pytest.fixture
 def stopped(monkeypatch, disk):
-    monkeypatch.setattr(packages, "assert_quiescent", lambda root: None)
+    monkeypatch.setattr(packages, "quarantine_custody", lambda root: {"coverage": "ESTABLISHED"})
 
 
 def test_stopped_migration_shares_verified_bytes_and_retains_native_lock(tmp_path, stopped):
@@ -161,8 +161,14 @@ def test_stopped_migration_shares_verified_bytes_and_retains_native_lock(tmp_pat
     assert packages.manifest(durable) == expected
     assert (durable / "install.lock").stat().st_ino == native_inode
     assert (old1 / "current/bin/codex").read_bytes() == b"reviewed payload"
-    assert not list(first.glob("packages/.stopped-daemon-*"))
-    assert not list(second.glob("packages/.stopped-daemon-*"))
+    for home in (first, second):
+        retained = [p for p in home.glob("packages/.stopped-daemon-*") if p.is_dir()]
+        assert len(retained) == 1
+        assert (retained[0] / "current/bin/codex").read_bytes() == b"reviewed payload"
+        import json
+        receipt = json.loads(retained[0].with_name(retained[0].name + ".json").read_text())
+        assert receipt["coverage"] == "ESTABLISHED" and receipt["soak"].startswith("HOLD")
+        assert receipt["home"] == str(home) and receipt["quarantine"] == str(retained[0])
 
 
 def test_live_package_refuses_before_copy(tmp_path, disk, monkeypatch):
@@ -170,7 +176,7 @@ def test_live_package_refuses_before_copy(tmp_path, disk, monkeypatch):
     old = old_package(home)
     def live(root):
         raise RuntimeError("daemon package still has a live executable reference")
-    monkeypatch.setattr(packages, "assert_quiescent", live)
+    monkeypatch.setattr(packages, "quarantine_custody", live)
     with pytest.raises(RuntimeError, match="live executable"):
         packages.migrate_stopped(home, tmp_path / "disk" / "daemon")
     assert old.is_dir() and not old.is_symlink()
@@ -218,7 +224,7 @@ def test_late_reference_retains_backup_after_link_switch(tmp_path, stopped, monk
     def custody(root):
         if root.name.startswith(".stopped-daemon-"):
             raise RuntimeError("late live reference")
-    monkeypatch.setattr(packages, "assert_quiescent", custody)
+    monkeypatch.setattr(packages, "quarantine_custody", custody)
     with pytest.raises(RuntimeError, match="late live"):
         packages.migrate_stopped(home, parent / "daemon")
     assert old.is_symlink()
@@ -313,3 +319,94 @@ def test_malformed_uid_is_unknown_not_a_foreign_process(tmp_path, proc_fixture):
     (proc_fixture / "status").write_text("Uid:\n")
     with pytest.raises(RuntimeError, match="UID custody is UNKNOWN"):
         packages.assert_quiescent(tmp_path / "payload")
+
+
+@pytest.fixture
+def protected(proc_fixture, monkeypatch):
+    proc = proc_fixture
+    (proc / "comm").write_text("ssh-agent\n")
+    (proc / "cmdline").write_bytes(b"/usr/bin/ssh-agent\0")
+    (proc / "stat").write_text("12345 (ssh-agent) " + " ".join(["S"] + ["0"] * 18 + ["123"]) + "\n")
+    read_text = Path.read_text
+    def denied(path, *args, **kwargs):
+        if path == proc / "maps":
+            raise PermissionError("protected")
+        return read_text(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", denied)
+    return proc
+
+
+def test_identified_protected_process_permits_retention_only(tmp_path, protected):
+    root = tmp_path / "payload"
+    report = packages.quarantine_custody(root)
+    assert report["coverage"] == "BOUNDED" and report["deletion"] == "HOLD"
+    assert report["protected"] == [{"pid": 12345, "comm": "ssh-agent",
+                                    "start_ticks": 123, "denied": ["maps"], "coverage": "BOUNDED"}]
+    with pytest.raises(RuntimeError, match="custody is UNKNOWN"):
+        packages.assert_quiescent(root)
+
+
+@pytest.mark.parametrize("argv", [b"/usr/bin/codex\0", b"/usr/bin/worker\0PAYLOAD\0"])
+def test_protected_payload_consumer_is_hold(tmp_path, protected, argv):
+    root = tmp_path / "payload"
+    (protected / "cmdline").write_bytes(argv.replace(b"PAYLOAD", os.fsencode(root)))
+    with pytest.raises(RuntimeError, match="plausible payload consumer"):
+        packages.quarantine_custody(root)
+
+
+def test_protected_unknown_identity_is_hold(tmp_path, protected):
+    (protected / "stat").write_text("malformed")
+    with pytest.raises(RuntimeError, match="custody is UNKNOWN"):
+        packages.quarantine_custody(tmp_path / "payload")
+
+
+def test_protected_unreadable_cmdline_is_hold(tmp_path, protected, monkeypatch):
+    original = Path.open
+    def denied(path, *args, **kwargs):
+        if path == protected / "cmdline":
+            raise PermissionError("protected")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(RuntimeError, match="custody is UNKNOWN"):
+        packages.quarantine_custody(tmp_path / "payload")
+
+
+def test_denied_maps_does_not_hide_readable_payload_descriptor(tmp_path, protected):
+    root = tmp_path / "payload"
+    root.mkdir()
+    (root / "held").write_bytes(b"held")
+    (protected / "fd/3").symlink_to(root / "held")
+    with pytest.raises(RuntimeError, match="open descriptor"):
+        packages.quarantine_custody(root)
+
+
+def test_retained_absolute_links_restore_at_stopped_rollback(tmp_path, stopped):
+    home = tmp_path / "home"
+    old = old_package(home)
+    (old / "current").unlink()
+    (old / "current").symlink_to(old / "releases/version")
+    parent = tmp_path / "disk"
+    parent.mkdir(mode=0o700)
+    packages.migrate_stopped(home, parent / "daemon")
+    backup, = (p for p in old.parent.glob(".stopped-daemon-*") if p.is_dir())
+    assert (backup / "releases/version/bin/codex").read_bytes() == b"reviewed payload"
+    old.unlink()
+    backup.rename(old)
+    assert (old / "current/bin/codex").read_bytes() == b"reviewed payload"
+    assert (parent / "daemon/current/bin/codex").read_bytes() == b"reviewed payload"
+
+
+def test_protected_pid_reuse_is_hold(tmp_path, protected, monkeypatch):
+    original = Path.read_text
+    count = 0
+    def reused(path, *args, **kwargs):
+        nonlocal count
+        result = original(path, *args, **kwargs)
+        if path == protected / "stat":
+            count += 1
+            if count > 1:
+                result = result.replace("123\n", "124\n")
+        return result
+    monkeypatch.setattr(Path, "read_text", reused)
+    with pytest.raises(RuntimeError, match="identity changed"):
+        packages.quarantine_custody(tmp_path / "payload")

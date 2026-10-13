@@ -562,10 +562,17 @@ On Linux, provisioning refuses a destination on tmpfs or ramfs, an unknown
 mount, an unexpected package link, or a destination with foreign ownership or
 nonprivate permissions. Existing real package directories migrate only after the normal sanctioned
 Remote Control stop, before readiness starts a replacement. Linux process
-custody must show no same-user executable, mapping or open descriptor in the
-old tree. Unknown custody refuses. Copy manifests bind bytes, modes and internal
+custody checks every readable same-user executable, mapping and descriptor.
+Protected processes require readable cmdline, comm and start identity; plausible
+Codex/payload consumers or unknown identity refuse. Identified non-payload
+processes are reported as BOUNDED, never established deletion custody. Copy manifests bind bytes, modes and internal
 links; a conflicting shared version preserves the old directory. A late
-reference preserves the moved backup. The migration shares the native installer
+reference preserves the moved backup. Every successful migration also retains
+its original tree in same-filesystem quarantine and reports its path and coverage.
+No automatic deletion is provided. Keep quarantine for at least one full natural
+cycle of every live Codex card, recording failures and per-card evidence. At a
+sanctioned stopped boundary rollback by removing only the expected disk package
+symlink and renaming the retained tree back; preserve the shared disk payload. The migration shares the native installer
 lock inode and serializes provisioning; it never forces a cycle, deletes live
 releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
 calling the Linux migration helper there directly refuses.

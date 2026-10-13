@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import json
 import shutil
 import tempfile
 import time
@@ -63,17 +64,27 @@ def prepare(home: Path, durable: Path) -> None:
 
 
 def assert_quiescent(root: Path) -> None:
-    """Refuse any same-user executable, mapping or descriptor under this tree."""
+    """Strict custody remains required for any future destructive operation."""
+    scan_custody(root, bounded=False)
+
+
+def quarantine_custody(root: Path) -> dict:
+    """Identity-only coverage permits retention, never certifies deletion."""
+    return scan_custody(root, bounded=True)
+
+
+def scan_custody(root: Path, *, bounded: bool) -> dict:
     if not sys.platform.startswith("linux"):
         raise RuntimeError("stopped package custody cannot be verified on this platform")
-    prefix = str(root.resolve()) + os.sep
+    resolved = str(root.resolve())
     def inside(value):
         value = value.removesuffix(" (deleted)")
-        return value == str(root.resolve()) or value.startswith(prefix)
+        return value == resolved or value.startswith(resolved + os.sep)
     processes = sorted(Path("/proc").iterdir(), key=lambda p: p.name != str(os.getpid()))
     if len(processes) > 8192:
         raise RuntimeError("process custody exceeds its bounded inventory")
     deadline = time.monotonic() + 15
+    protected, established = [], 0
     for proc in processes:
         if time.monotonic() > deadline:
             raise RuntimeError("process custody exceeded its deadline")
@@ -82,37 +93,72 @@ def assert_quiescent(root: Path) -> None:
         try:
             status = (proc / "status").read_text()
             uid_line = next((line for line in status.splitlines() if line.startswith("Uid:")), None)
-            if uid_line is None:
-                raise RuntimeError("process UID custody is UNKNOWN")
-            uids = uid_line.split()[1:]
+            uids = uid_line.split()[1:] if uid_line else []
             if len(uids) != 4 or not all(value.isdecimal() for value in uids):
                 raise RuntimeError("process UID custody is UNKNOWN")
             if os.getuid() not in [int(value) for value in uids]:
                 continue
+            denied = []
             try:
                 executable = os.readlink(proc / "exe")
+                if inside(executable):
+                    raise RuntimeError("daemon package still has a live executable reference")
             except FileNotFoundError:
-                # A terminated thread leader can lack an exe link while its
-                # remaining threads still hold descriptors or mapped payloads.
-                executable = ""
-            if inside(executable):
-                raise RuntimeError("daemon package still has a live executable reference")
-            for descriptor in (proc / "fd").iterdir():
-                try:
-                    if inside(os.readlink(descriptor)):
-                        raise RuntimeError("daemon package still has an open descriptor")
-                except FileNotFoundError:
-                    continue
-            for line in (proc / "maps").read_text().splitlines():
-                parts = line.split(None, 5)
-                if len(parts) == 6 and inside(parts[5]):
-                    raise RuntimeError("daemon package still has a live mapped reference")
+                pass  # absent leader exe does not skip descriptors/maps
+            except PermissionError:
+                denied.append("exe")
+            try:
+                for descriptor in (proc / "fd").iterdir():
+                    try:
+                        if inside(os.readlink(descriptor)):
+                            raise RuntimeError("daemon package still has an open descriptor")
+                    except FileNotFoundError:
+                        continue
+                    except PermissionError:
+                        denied.append("fd-link")
+            except PermissionError:
+                denied.append("fd")
+            try:
+                for line in (proc / "maps").read_text().splitlines():
+                    parts = line.split(None, 5)
+                    if len(parts) == 6 and inside(parts[5]):
+                        raise RuntimeError("daemon package still has a live mapped reference")
+            except PermissionError:
+                denied.append("maps")
+            if denied:
+                if not bounded:
+                    raise RuntimeError("daemon package process custody is UNKNOWN")
+                # Read every remaining identity field; never print command arguments.
+                identity_before = (proc / "stat").read_text()
+                with (proc / "cmdline").open("rb") as stream:
+                    raw = stream.read(1024 * 1024 + 1)
+                if len(raw) > 1024 * 1024:
+                    raise RuntimeError("protected process identity exceeds its bound")
+                args = raw.split(b"\0")
+                argv0 = os.fsdecode(args[0])
+                comm = (proc / "comm").read_text().strip()
+                fields = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+                start = fields[19]
+                before_fields = identity_before.rsplit(")", 1)[1].split()
+                if before_fields[19] != start or (proc / "status").read_text() != status:
+                    raise RuntimeError("protected process identity changed during custody scan")
+                if not comm or not start.isdecimal():
+                    raise RuntimeError("protected process identity is UNKNOWN")
+                if "codex" in (comm + " " + argv0).lower() or any(inside(os.fsdecode(arg)) for arg in args):
+                    raise RuntimeError("protected process is a plausible payload consumer")
+                protected.append({"pid": int(proc.name), "comm": comm,
+                                  "start_ticks": int(start), "denied": sorted(set(denied)),
+                                  "coverage": "BOUNDED"})
+            else:
+                established += 1
         except FileNotFoundError as error:
             if proc.exists():
                 raise RuntimeError("existing process metadata custody is UNKNOWN") from error
-            continue  # confirmed process exit during bounded read
-        except PermissionError as error:
+        except (PermissionError, IndexError) as error:
             raise RuntimeError("daemon package process custody is UNKNOWN") from error
+    return {"root": str(root), "coverage": "BOUNDED" if protected else "ESTABLISHED",
+            "readable_processes": established, "protected": protected,
+            "deletion": "HOLD"}
 
 
 def manifest(root: Path) -> dict:
@@ -145,7 +191,7 @@ def manifest(root: Path) -> dict:
 def migrate_stopped(home: Path, durable: Path) -> None:
     """Called only AFTER the normal Remote Control stop, never to force a cycle.
 
-    A mismatched shared release or unproven process custody retains the old
+    A mismatched shared release or unidentified process retains the old
     directory. The same-user provisioning lock serializes migrations; the
     native install.lock is shared with the package updater.
     """
@@ -158,7 +204,7 @@ def migrate_stopped(home: Path, durable: Path) -> None:
     info = old.lstat()
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
         raise RuntimeError("existing package directory has unproven ownership")
-    assert_quiescent(old)
+    quarantine_custody(old)
     ancestor = durable
     while not ancestor.exists():
         ancestor = ancestor.parent
@@ -207,7 +253,7 @@ def migrate_stopped(home: Path, durable: Path) -> None:
             fcntl.flock(installer, fcntl.LOCK_EX | fcntl.LOCK_NB)
             if manifest(durable) != expected or manifest(old) != expected:
                 raise RuntimeError("shared package differs; preserve existing card package")
-            assert_quiescent(old)
+            quarantine_custody(old)
             backup = Path(tempfile.mkdtemp(prefix=".stopped-daemon-", dir=old.parent))
             backup.rmdir()
             old.rename(backup)
@@ -218,10 +264,19 @@ def migrate_stopped(home: Path, durable: Path) -> None:
                 raise
             # Recheck after the switch. A late reference retains the backup;
             # no unverified live payload is removed to reclaim capacity.
-            assert_quiescent(backup)
-            if manifest(backup) != expected or manifest(durable) != expected:
-                raise RuntimeError("post-switch package custody is UNKNOWN; backup retained")
-            shutil.rmtree(backup)
+            # The original tree stays on the same filesystem for a complete
+            # natural-card-cycle soak. No successful scan authorizes deletion.
+            report = quarantine_custody(backup)
+            receipt = {**report, "quarantine": str(backup), "home": str(home),
+                       "durable": str(durable), "observed_unix": time.time(),
+                       "rollback": "at stopped boundary: unlink expected package symlink, rename quarantine back",
+                       "soak": "HOLD: require one full natural cycle of every live Codex card"}
+            # Receipt creation must not overwrite a prior migration's evidence.
+            receipt_path = backup.with_name(backup.name + ".json")
+            with os.fdopen(os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as stream:
+                json.dump(receipt, stream, sort_keys=True)
+                stream.write("\n")
+            print(json.dumps(receipt), file=sys.stderr)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
