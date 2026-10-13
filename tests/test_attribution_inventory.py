@@ -58,6 +58,10 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("notify.py", "push_to_admin"): (
         ATTRIBUTED_HERE,
         "idle-fleet, blocked-stale and stalled escalations into the admin's pane."),
+    ("notify.py", "deliver_backstop"): (
+        ATTRIBUTED_HERE,
+        "Steve-ask escalation to Hammond from the existing tend pass; "
+        "attribute(text, ST_TEND) signs the verified recipient's pane message."),
     ("notify.py", "_deliver_agent"): (
         ATTRIBUTED_HERE,
         "StalledAlerter's self-heal nudge; the one tend push that does not route "
