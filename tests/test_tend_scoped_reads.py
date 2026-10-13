@@ -54,7 +54,7 @@ def test_tend_context_declares_read_caller_preserves_write_actor(monkeypatch):
     seen = []
     monkeypatch.setattr(cli, '_tend_status', lambda a: seen.append((current_query_identity(), os.environ['QUIPU_AGENT'])) or 0)
     assert cli._cmd_tend(SimpleNamespace(retire=False, unretire=False, install=False, uninstall=False, status=True)) == 0
-    assert seen == [('st-tend', 'worker')]
+    assert seen == [(None, 'worker')]
     assert os.environ['QUIPU_AGENT'] == 'worker'
     assert os.environ['SHANTY_AGENT'] == 'worker'
     assert os.environ['SEEDS_ACTOR'] == 'operator'
@@ -76,9 +76,9 @@ def test_native_header_matches_sdk_service_identity(monkeypatch):
         def read(self, size): return json.dumps(dict(rows=[], count=0, truncated=False)).encode()
     monkeypatch.setattr(seeds_plate, 'urlopen', lambda request, timeout: seen.append(request.get_header('X-quipu-agent')) or Response())
     monkeypatch.setenv('SEEDS_AGENT_NAME', 'worker')
-    with declared_query_identity('st-tend'):
+    with declared_query_identity(None, source='st-tend', operation='tend'):
         seeds_plate.ready_count(PROOF, now=NOW)
-    assert seen == ['st-tend']
+    assert seen == ['worker']
 
 
 def test_active_projection_is_owner_scoped_not_open_unassigned(monkeypatch):
@@ -171,6 +171,6 @@ def test_sdk_transport_attaches_context_without_replacing_write_actor(monkeypatc
         tracker._bd_in(None, 'ready', '--json')
         assert os.environ['QUIPU_AGENT'] == 'worker'
     tracker._bd_in(None, 'ready', '--json')
-    assert seen[0][1]['env']['QUIPU_AGENT'] == 'st-tend'
+    assert seen[0][1]['env']['QUIPU_AGENT'] == 'worker'
     assert seen[0][0][seen[0][0].index('--actor') + 1] == 'worker'
-    assert 'env' not in seen[1][1]
+    assert seen[1][1]['env']['QUIPU_AGENT'] == 'worker'

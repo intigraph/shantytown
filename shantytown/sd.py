@@ -120,7 +120,7 @@ class SdTracker(BrTracker):
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout,
-                               **sdk_subprocess_options())
+                               **sdk_subprocess_options(read_operation="where"))
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -443,7 +443,10 @@ class SdTracker(BrTracker):
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                              timeout=self.timeout, **sdk_subprocess_options())
+                              timeout=self.timeout, **sdk_subprocess_options(
+                                  read_operation=args[0] if args and args[0] in {
+                                      "show", "list", "ready", "where", "search", "count", "info", "stats"
+                                  } else None))
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

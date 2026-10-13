@@ -11934,7 +11934,7 @@ def _cmd_watch(a) -> int:
     return outcome.exit_code
 
 
-@declared_query_identity("st-tend")
+@declared_query_identity(None, source="st-tend", operation="tend")
 def _cmd_tend(a) -> int:
     """tend — one supervision pass, or manage the timer that runs them.
 
