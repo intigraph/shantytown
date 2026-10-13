@@ -116,3 +116,151 @@ def test_role_package_alias_is_preserved_and_refused(tmp_path, disk):
         packages.prepare(home, tmp_path / "private")
     assert (home / "packages").is_symlink()
     assert list(role.iterdir()) == []
+
+
+def test_two_cards_share_one_payload_and_native_install_lock(tmp_path, disk):
+    durable = tmp_path / "disk"
+    packages.prepare(tmp_path / "first", durable)
+    packages.prepare(tmp_path / "second", durable)
+    first = tmp_path / "first" / "packages" / "app-server-daemon"
+    second = tmp_path / "second" / "packages" / "app-server-daemon"
+    (first / "install.lock").write_bytes(b"lock")
+    (first / "release").write_bytes(b"payload")
+    assert (first / "install.lock").stat().st_ino == (second / "install.lock").stat().st_ino
+    assert (second / "release").read_bytes() == b"payload"
+    assert first.resolve() == second.resolve() == durable
+
+
+def old_package(home):
+    root = home / "packages" / "app-server-daemon"
+    binary = root / "releases" / "version" / "bin" / "codex"
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"reviewed payload")
+    binary.chmod(0o755)
+    (root / "current").symlink_to("releases/version")
+    (root / "install.lock").write_bytes(b"")
+    return root
+
+
+@pytest.fixture
+def stopped(monkeypatch, disk):
+    monkeypatch.setattr(packages, "assert_quiescent", lambda root: None)
+
+
+def test_stopped_migration_shares_verified_bytes_and_retains_native_lock(tmp_path, stopped):
+    first, second = tmp_path / "first", tmp_path / "second"
+    old1, old2 = old_package(first), old_package(second)
+    parent = tmp_path / "shared"
+    parent.mkdir(mode=0o700)
+    durable = parent / "daemon"
+    expected = packages.manifest(old1)
+    packages.migrate_stopped(first, durable)
+    native_inode = (durable / "install.lock").stat().st_ino
+    packages.migrate_stopped(second, durable)
+    assert old1.is_symlink() and old2.is_symlink()
+    assert packages.manifest(durable) == expected
+    assert (durable / "install.lock").stat().st_ino == native_inode
+    assert (old1 / "current/bin/codex").read_bytes() == b"reviewed payload"
+    assert not list(first.glob("packages/.stopped-daemon-*"))
+    assert not list(second.glob("packages/.stopped-daemon-*"))
+
+
+def test_live_package_refuses_before_copy(tmp_path, disk, monkeypatch):
+    home = tmp_path / "home"
+    old = old_package(home)
+    def live(root):
+        raise RuntimeError("daemon package still has a live executable reference")
+    monkeypatch.setattr(packages, "assert_quiescent", live)
+    with pytest.raises(RuntimeError, match="live executable"):
+        packages.migrate_stopped(home, tmp_path / "disk" / "daemon")
+    assert old.is_dir() and not old.is_symlink()
+    assert not (tmp_path / "disk").exists()
+
+
+def test_shared_version_mismatch_preserves_old_directory(tmp_path, stopped):
+    home = tmp_path / "home"
+    old = old_package(home)
+    parent = tmp_path / "disk"
+    parent.mkdir(mode=0o700)
+    durable = parent / "daemon"
+    durable.mkdir(mode=0o700)
+    (durable / "different").write_bytes(b"retained")
+    with pytest.raises(RuntimeError, match="shared package differs"):
+        packages.migrate_stopped(home, durable)
+    assert old.is_dir() and not old.is_symlink()
+    assert (durable / "different").read_bytes() == b"retained"
+
+
+def test_copy_corruption_preserves_source_and_removes_only_own_stage(tmp_path, stopped, monkeypatch):
+    home = tmp_path / "home"
+    old = old_package(home)
+    parent = tmp_path / "disk"
+    parent.mkdir(mode=0o700)
+    original = packages.shutil.copytree
+    def corrupt(source, destination, *args, **options):
+        value = original(source, destination, *args, **options)
+        if Path(source) == old:
+            (Path(destination) / "releases/version/bin/codex").write_bytes(b"corrupt")
+        return value
+    monkeypatch.setattr(packages.shutil, "copytree", corrupt)
+    with pytest.raises(RuntimeError, match="copy integrity"):
+        packages.migrate_stopped(home, parent / "daemon")
+    assert (old / "current/bin/codex").read_bytes() == b"reviewed payload"
+    assert not (parent / "daemon").exists()
+    assert not [path for path in parent.glob(".daemon-package-*") if path.is_dir()]
+
+
+def test_late_reference_retains_backup_after_link_switch(tmp_path, stopped, monkeypatch):
+    home = tmp_path / "home"
+    old = old_package(home)
+    parent = tmp_path / "disk"
+    parent.mkdir(mode=0o700)
+    def custody(root):
+        if root.name.startswith(".stopped-daemon-"):
+            raise RuntimeError("late live reference")
+    monkeypatch.setattr(packages, "assert_quiescent", custody)
+    with pytest.raises(RuntimeError, match="late live"):
+        packages.migrate_stopped(home, parent / "daemon")
+    assert old.is_symlink()
+    backups = list(old.parent.glob(".stopped-daemon-*"))
+    assert len(backups) == 1
+    assert (backups[0] / "current/bin/codex").read_bytes() == b"reviewed payload"
+
+
+def test_manifest_normalizes_internal_absolute_current_link(tmp_path):
+    old = old_package(tmp_path / "home")
+    (old / "current").unlink()
+    (old / "current").symlink_to(old / "releases/version")
+    assert packages.manifest(old)["current"] == ["link", "releases/version"]
+
+
+def test_manifest_refuses_external_payload_link(tmp_path):
+    old = old_package(tmp_path / "home")
+    (old / "external").symlink_to(tmp_path)
+    with pytest.raises(RuntimeError, match="escapes"):
+        packages.manifest(old)
+
+
+def test_actual_open_descriptor_positive_control(tmp_path):
+    root = tmp_path / "payload"
+    root.mkdir()
+    file = root / "held"
+    file.write_bytes(b"held")
+    with file.open("rb"):
+        with pytest.raises(RuntimeError, match="open descriptor"):
+            packages.assert_quiescent(root)
+
+
+def test_native_installer_lock_contention_refuses_without_changing_card(tmp_path, stopped):
+    home = tmp_path / "home"
+    old = old_package(home)
+    parent = tmp_path / "disk"
+    parent.mkdir(mode=0o700)
+    durable = parent / "daemon"
+    packages.shutil.copytree(old, durable, symlinks=True)
+    durable.chmod(0o700)
+    with (durable / "install.lock").open("a+b") as held:
+        packages.fcntl.flock(held, packages.fcntl.LOCK_EX | packages.fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            packages.migrate_stopped(home, durable)
+    assert old.is_dir() and not old.is_symlink()
