@@ -1,0 +1,107 @@
+Script started on 2026-10-13 14:59:10-04:00 [COMMAND="sh docs/demos/inbox-read/run.sh" <not executed on terminal>]
+BASE c220066: 96-message scratch probe, 1.2s hard deadline
+{"closed": 30, "elapsed": 1.204, "exit": -9, "initial": 96, "interrupted": true, "payloads_visible": 0, "stderr_bytes": 0, "stdout_bytes": 0, "target": "source checkout with synthetic tracker", "unread": 66, "utc": "2026-10-13T18:59:11Z"}
+
+
+
+BASE positive control: 3 messages
+{"closed": 3, "elapsed": 0.224, "exit": 0, "initial": 3, "interrupted": false, "payloads_visible": 3, "stderr_bytes": 0, "stdout_bytes": 132, "target": "source checkout with synthetic tracker", "unread": 0, "utc": "2026-10-13T18:59:11Z"}
+
+  probe-0
+    payload probe-0
+
+  probe-1
+    payload probe-1
+
+  probe-2
+    payload probe-2
+
+  marked 3 message(s) read for probe.
+
+
+
+CANDIDATE: same 96-message scratch probe and deadline
+{"closed": 15, "elapsed": 0.646, "exit": 0, "initial": 96, "interrupted": false, "payloads_visible": 15, "stderr_bytes": 0, "stdout_bytes": 1667, "target": "source checkout with synthetic tracker", "unread": 81, "utc": "2026-10-13T18:59:12Z"}
+  acknowledging 15 message(s) for probe; closes are independent, not atomic.
+
+  probe-0
+    payload probe-0
+  [1/15] acknowledging probe-0 ...
+  [1/15] probe-0: marked read
+
+  probe-1
+    payload probe-1
+  [2/15] acknowledging probe-1 ...
+  [2/15] probe-1: marked read
+
+  probe-2
+    payload probe-2
+  [3/15] acknowledging probe-2 ...
+  [3/15] probe-2: marked read
+
+  probe-3
+    payload probe-3
+  [4/15] acknowledging probe-3 ...
+  [4/15] probe-3: marked read
+
+  probe-4
+    payload probe-4
+  [5/15] acknowledging probe-4 ...
+  [5/15] probe-4: marked read
+
+  probe-5
+    payload probe-5
+  [6/15] acknowledging probe-5 ...
+  [6/15] probe-5: marked read
+
+  probe-6
+    payload probe-6
+  [7/15] acknowledging probe-6 ...
+  [7/15] probe-6: marked read
+
+  probe-7
+    payload probe-7
+  [8/15] acknowledging probe-7 ...
+  [8/15] probe-7: marked read
+
+  probe-8
+    payload probe-8
+  [9/15] acknowledging probe-8 ...
+  [9/15] probe-8: marked read
+
+  probe-9
+    payload probe-9
+  [10/15] acknowledging probe-9 ...
+  [10/15] probe-9: marked read
+
+  probe-10
+    payload probe-10
+  [11/15] acknowledging probe-10 ...
+  [11/15] probe-10: marked read
+
+  probe-11
+    payload probe-11
+  [12/15] acknowledging probe-11 ...
+  [12/15] probe-11: marked read
+
+  probe-12
+    payload probe-12
+  [13/15] acknowledging probe-12 ...
+  [13/15] probe-12: marked read
+
+  probe-13
+    payload probe-13
+  [14/15] acknowledging probe-13 ...
+  [14/15] probe-13: marked read
+
+  probe-14
+    payload probe-14
+  [15/15] acknowledging probe-14 ...
+  [15/15] probe-14: marked read
+
+  marked 15 message(s) read for probe.
+  81 snapshot message(s) not attempted. Repeat `st inbox --read` to continue.
+
+
+
+Script done on 2026-10-13 14:59:12-04:00 [COMMAND_EXIT_CODE="0"]
