@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-import os
 import re
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from .answer import Answer
-from .query_identity import current_query_identity
+from .query_identity import read_headers, declared_read_operation
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -42,18 +41,7 @@ def _iri(value: str) -> str:
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
-    # Same caller-declared attribution contract as the SDK, never credentials.
-    for header, value in (
-        (
-            "X-Quipu-Agent",
-            current_query_identity() or os.environ.get("QUIPU_AGENT") or os.environ.get("SEEDS_AGENT_NAME")
-            or os.environ.get("SHANTY_AGENT"),
-        ),
-        ("X-Quipu-Session", os.environ.get("SEEDS_SESSION")),
-        ("X-Quipu-Task", os.environ.get("SEEDS_TASK")),
-    ):
-        if value and value.isascii() and not any(c in value for c in "\r\n"):
-            headers[header] = value
+    headers.update(read_headers())
     payload = {"query": query}
     if verbose:
         payload["verbose"] = True
@@ -87,6 +75,7 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     return result
 
 
+@declared_read_operation("uses-native-schema")
 def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     """A positive legacy revision marker retains the SDK adapter.
 
@@ -100,6 +89,7 @@ def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     return True
 
 
+@declared_read_operation("closed-status")
 def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
     """Fresh exact status for a closed: condition, without dependency hydration."""
     how = "Seeds exact condition status; shared and ephemeral graphs"
@@ -129,6 +119,7 @@ def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
         return Answer.capped(False, how=how, caveat=f"condition status unreadable: {error}")
 
 
+@declared_read_operation("closed-statuses")
 def closed_statuses(proof, identifiers, *, timeout: int = 30) -> dict[str, bool | None]:
     """Bounded candidate-only conditions; never a pre-mutation freshness check.
 
@@ -186,6 +177,7 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
     return f"?s <{SCHEMA}agent> ?owner . FILTER(REGEX(STR(?owner), {pattern})) "
 
 
+@declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
     branches = []
     if isinstance(agent, tuple):
@@ -207,6 +199,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
     return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
+@declared_read_operation("owner-rows")
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False) -> Answer[list[dict]]:
@@ -403,6 +396,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
 
 
+@declared_read_operation("deferred-rows")
 def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
@@ -504,6 +498,7 @@ def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
         return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 
 
+@declared_read_operation("unassigned-counts")
 def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
     """Exact open/unassigned counts without fetching any issue payload."""
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
@@ -535,6 +530,7 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
     return tuple(counts)
 
 
+@declared_read_operation("unblocked-ids")
 def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """SDK-native readiness test on already projected IDs, in bounded batches.
 
@@ -568,6 +564,7 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     return result
 
 
+@declared_read_operation("ready-count")
 def ready_count(proof, *, timeout: int = 30, now=None) -> int:
     """Count SDK-ready rows with only IDs and deferral dates.
 
