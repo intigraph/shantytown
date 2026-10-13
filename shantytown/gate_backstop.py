@@ -116,21 +116,32 @@ class Backstop:
             # A cycle has no parentless root: choose one stable representative.
             return bool(visited) and identifier == min(visited) and len(visited) <= 25
         active, delivered = {}, []
-        delivered_count = 0
-        def send(recipient, message):
-            nonlocal delivered_count
-            if delivered_count >= 12:
-                self.log("gate-backstop delivery budget reached; remaining events pending")
-                return False
-            outcome = self.deliver(recipient, message)
-            if outcome:
-                delivered_count += 1
-            return outcome
+        pending = {}
+        selected = 0
+        def queue(recipient, message, entry, field_name, value, identifier):
+            nonlocal selected
+            # Bound events and digest bytes without creating one admin turn per
+            # chain. Unselected and failed delivery entries remain pending.
+            group = pending.setdefault(recipient, [])
+            encoded = message.encode('utf-8')
+            if len(encoded) > 768:
+                message = encoded[:720].decode('utf-8', errors='ignore') + '… [details on ' + identifier + ']'
+            if selected >= 12 or sum(len(x[0].encode('utf-8')) + 1 for x in group) + len(message.encode('utf-8')) > 6000:
+                return
+            group.append((message, entry, field_name, value, identifier))
+            selected += 1
         for row in ordered:
             if not isinstance(row, dict) or not row.get('id'):
                 continue
             notes = row.get('notes') or ''
             gate = closed_gate(notes)
+            raw_verdict_at = field(notes, 'gate_verdict_at')
+            verdict_at = (parse_stamp(raw_verdict_at) if raw_verdict_at and re.fullmatch(
+                r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z', raw_verdict_at) else None)
+            cooling = bool(field(notes, 'gate_verdict') and
+                           field(notes, 'gate_verdict_by') == 'sattler' and
+                           verdict_at is not None and
+                           timedelta(0) <= self.now - verdict_at < timedelta(hours=24))
             blocked = row.get('status') in ('deferred', 'blocked') or bool(row.get('defer_until')) or any(
                 str(x).startswith('blocked:') for x in row.get('labels', []))
             if gate and blocked and chain_root(row["id"]):
@@ -189,9 +200,9 @@ class Backstop:
                     stalled = any('deferred/blocked' in reason or '48h' in reason
                                   or 'cycle' in reason for reason in reasons)
                     prefix = 'STALL ' if stalled else 'GATE SCOPE '
-                    if not entry['delivered'] and send('sattler', prefix + ' -> '.join(chain) + ': ' + '; '.join(dict.fromkeys(reasons))):
-                        entry['delivered'] = True
-                        delivered.append(row['id'])
+                    if not entry['delivered'] and not cooling:
+                        queue('sattler', prefix + ' -> '.join(chain) + ': ' + '; '.join(dict.fromkeys(reasons)),
+                              entry, 'delivered', True, row['id'])
                     active[key] = entry
             ask = steve_ask(notes)
             if ask is not None and ask > self.now:
@@ -204,20 +215,34 @@ class Backstop:
                 previous = self.state.get(key, {})
                 stage = previous.get('stage', 0)
                 message = f"STEVE ASK NOT STARTED {row['id']} since {ask.isoformat()}; source: {field(notes,'steve_source')}; quote: {field(notes,'steve_quote')}"
-                if stage == 0 and send('sattler', message):
-                    stage = 1
-                    delivered.append(row['id'])
-                elif stage == 1 and send('hammond', message + '; prior Sattler delivery verified'):
-                    stage = 2
-                    delivered.append(row['id'])
-                active[key] = {'root':row['id'], 'stage':stage}
+                entry = {'root':row['id'], 'stage':stage}
+                if not cooling:
+                    if stage == 0:
+                        queue('sattler', message, entry, 'stage', 1, row['id'])
+                    elif stage == 1:
+                        queue('hammond', message + '; prior Sattler delivery verified',
+                              entry, 'stage', 2, row['id'])
+                active[key] = entry
             elif field(notes,'steve_quote') and not ask:
                 key = 'ask-unknown:' + row['id']
                 entry = {'root':row['id'], 'delivered':self.state.get(key, {}).get('delivered',False)}
-                if not entry['delivered'] and send('sattler', f"STEVE ASK PROVENANCE UNKNOWN {row['id']}: original quote/time/source required; age is UNKNOWN"):
-                    entry['delivered'] = True
-                    delivered.append(row['id'])
+                if not entry['delivered'] and not cooling:
+                    queue('sattler', f"STEVE ASK PROVENANCE UNKNOWN {row['id']}: original quote/time/source required; age is UNKNOWN",
+                          entry, 'delivered', True, row['id'])
                 active[key] = entry
+        for recipient, group in pending.items():
+            if not group:
+                continue
+            digest = f"GATE BACKSTOP DIGEST ({len(group)} events)\n" + '\n'.join(event[0] for event in group)
+            try:
+                outcome = self.deliver(recipient, digest)
+            except Exception as exc:
+                self.log(f"gate-backstop digest delivery UNKNOWN ({type(exc).__name__}); events remain pending")
+                outcome = False
+            if outcome:
+                for _, entry, field_name, value, identifier in group:
+                    entry[field_name] = value
+                    delivered.append(identifier)
         active['_cursor'] = {'offset':(offset + 25) % len(rows) if rows else 0}
         self.path.parent.mkdir(parents=True,exist_ok=True)
         write_json_atomic(self.path, active)
