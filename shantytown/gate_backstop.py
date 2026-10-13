@@ -176,12 +176,20 @@ class Backstop:
                     self.log(f"gate-backstop {row['id']}: UNKNOWN ({exc}); no release")
                     # Preserve delivery state across unreadable passes.
                     active.update({k:v for k,v in self.state.items() if v.get('root') == row['id']})
-                    continue
+                    if not reasons:
+                        continue
+                    reasons.append('further chain UNKNOWN; known prefix only')
                 if reasons:
-                    key = 'chain:' + hashlib.sha256('|'.join(chain).encode()).hexdigest()
+                    # Later unreadable links cannot erase a proved direct stall.
+                    # Identity is the active waiting edge, so filling its unknown
+                    # suffix does not wake the coordinator a second time.
+                    key = 'chain:' + hashlib.sha256((row['id'] + '|' + gate).encode()).hexdigest()
                     previous = active.get(key, self.state.get(key, {}))
                     entry = {'root':row['id'], 'delivered':previous.get('delivered', False)}
-                    if not entry['delivered'] and send('sattler', 'STALL ' + ' -> '.join(chain) + ': ' + '; '.join(dict.fromkeys(reasons))):
+                    stalled = any('deferred/blocked' in reason or '48h' in reason
+                                  or 'cycle' in reason for reason in reasons)
+                    prefix = 'STALL ' if stalled else 'GATE SCOPE '
+                    if not entry['delivered'] and send('sattler', prefix + ' -> '.join(chain) + ': ' + '; '.join(dict.fromkeys(reasons))):
                         entry['delivered'] = True
                         delivered.append(row['id'])
                     active[key] = entry

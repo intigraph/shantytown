@@ -116,3 +116,12 @@ def test_bounded_reads_rotate_candidates_without_starvation(tmp_path):
   assert len(reads)-before<=25
  assert len(calls)==60
  assert len({a[1] for a in calls})==60
+def test_known_deferred_prefix_survives_unknown_suffix_without_duplicate(tmp_path):
+ r=rows();r[1]['notes']='resume_when: closed:missing';calls=[]
+ deliver=lambda *a:calls.append(a) or True
+ assert Backstop(tmp_path,NOW,deliver).run(r,lambda _:None)==['aegis-s9sjf.8']
+ assert 'further chain UNKNOWN' in calls[0][1] and 'gate target is deferred/blocked' in calls[0][1]
+ r.append({'id':'missing','status':'open','updated_at':NOW.isoformat(),'notes':'repo: paper'})
+ assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('same waiting edge')).run(r,lambda _:None)==[]
+def test_unknown_first_target_cannot_claim_a_stall(tmp_path):
+ assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('unknown target')).run(rows()[:1],lambda _:None)==[]

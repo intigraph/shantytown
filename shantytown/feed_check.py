@@ -777,13 +777,18 @@ class TrackerAdapter:
                                  "--json", "--limit", "0")
         return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
 
-    def deferred(self, *, include_asks=False) -> Answer[list[dict]]:
+    def backstop_rows(self) -> Answer[list[dict]]:
+        """Optional expanded candidate seam; old deferred() adapters stay valid."""
+        scoped = getattr(self.tracker, "backstop_rows", None)
+        return scoped() if callable(scoped) else self.deferred()
+
+    def deferred(self) -> Answer[list[dict]]:
         """Deferred AND open rows — the deferral sweep keys off `defer_until`,
         which lives under both statuses since the cutover (aegis-boj8a2)."""
         if self.tracker is not None:
             scoped = getattr(self.tracker, "deferred_rows", None)
             if callable(scoped):
-                return scoped(include_asks=True) if include_asks else scoped()
+                return scoped()
             from .br import deferred
             value = deferred(self.tracker)
         else:

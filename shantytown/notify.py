@@ -1632,7 +1632,8 @@ class DeferralAlerter:
             if self._read is not None:
                 rows = self._read()
             else:
-                rows = backend().deferred(include_asks=True).exact()
+                reader = getattr(backend(), "backstop_rows", None)
+                rows = (reader() if callable(reader) else backend().deferred()).exact()
         except Exception as e:                       # FAIL OPEN
             self._log(f"deferral-sweep: could not read the store ({e!r})")
             rows, store_error = [], True

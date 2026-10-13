@@ -176,6 +176,9 @@ class SdTracker(BrTracker):
             raise ValueError("gate target metadata UNKNOWN")
         return rows[identifier]
 
+    def backstop_rows(self) -> Answer[list[dict]]:
+        return self.deferred_rows(include_asks=True)
+
     def deferred_rows(self, *, include_asks=False) -> Answer[list[dict]]:
         """Both deferral representations, selecting dated open rows remotely."""
         try:
