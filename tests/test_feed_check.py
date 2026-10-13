@@ -177,6 +177,11 @@ def test_SHANTY_DARK_AGENTS_env_overrides_the_default_denylist(tmp_path, monkeyp
 
 def _wire_main(monkeypatch, free, ready_beads=None, bd_raises=False):
     monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: free)
+    # These hook-delivery tests inject opaque registry/tmux objects. Declare
+    # ungoverned candidate lanes too; real mixed-lane admission has its own
+    # paired tests in test_governor_rule_zero.
+    monkeypatch.setattr(feed_check, "worker_governor_admissions",
+                        lambda root, reg, workers: {w: lambda item: '' for w in workers})
     monkeypatch.setattr(feed_check, "bd_cwd", lambda reg: None)
     if bd_raises:
         def boom(cwd=None):
@@ -369,10 +374,12 @@ def test_no_root_means_no_ownership_gate(tmp_path):
 # alone is not enough) so a future edit can't quietly drop the load-bearing half.
 
 def test_haul_feed_message_names_the_release_exit_with_the_actual_id():
-    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2)
+    from shantytown.tracker_examples import TrackerExamples
+    msg = feed_check.haul_feed_message("aegis-9z9z", "some title", 2,
+                                       examples=TrackerExamples(("br",)))
     # the working mechanism, spelled with THIS bead's id so it is copy-pasteable
     assert "st work defer aegis-9z9z" in msg      # the structured truly-park exit
-    assert "bead|human|access|external|parked" in msg
+    assert "<kind>" in msg
     assert "br close aegis-9z9z" in msg
     # and the correction that the whole bug turned on
     assert "re-pool" in msg.lower()          # clearing assignee only re-pools
@@ -864,3 +871,32 @@ def test_after_turn_hold_gates_live_idle_worker_until_explicit_relaunch(tmp_path
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == []
     agent_hold.clear(tmp_path, "weaver")
     assert feed_check.free_feedable_workers(reg, panes, _Runtime(), tmp_path) == ["weaver"]
+
+
+@pytest.mark.parametrize("label", ["desk", "needs-stiwi", " DESK ", " Needs-Stiwi "])
+def test_human_surface_ready_work_does_not_trap_the_coordinator(label):
+    ready = [
+        {"id": "human", "title": "operator account action", "labels": [label]},
+        {"id": "crew", "title": "implement desk display", "labels": ["infra"]},
+    ]
+    # The word in a title is not a human-only marker; ordinary crew work survives.
+    assert feed_check.dispatchable({"weaver"}, ready) == [("crew", "implement desk display")]
+    assert feed_check.dispatchable({"weaver"}, ready[:1]) == []
+    from shantytown.priority_advisory import workable
+    assert not workable(ready[0])
+    assert workable(ready[1])
+
+
+def test_rule_zero_scope_is_only_used_for_seeds_gate(monkeypatch, tmp_path):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(quipu="https://example.test", prefix="test")
+    seen = []
+    result = ([{"id": "test-ready"}], [{"id": "test-owned"}])
+    monkeypatch.setattr(tracker, "feed_rows", lambda owners: seen.append(owners) or result)
+    assert feed_check.queue_state(tmp_path, _Reg([]), tracker, owners=["worker"]) == result
+    assert seen == [["worker"]]
+    # A general haul consumer must retain the existing complete queue path.
+    monkeypatch.setattr("shantytown.br.ready", lambda t: [])
+    monkeypatch.setattr("shantytown.br.in_progress", lambda t: [])
+    assert feed_check.queue_state(tmp_path, _Reg([]), tracker) == ([], [])
+    assert seen == [["worker"]]

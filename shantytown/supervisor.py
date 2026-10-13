@@ -158,7 +158,7 @@ SuccessExitStatus=2
 # the command line but does not reach the env the journal reader consults.
 #
 # That is an AUDIT hole, not a cosmetic one: the supervisor types into agent
-# panes (cycle prompts, self-heal nudges, re-surfaced beads), and unattributed
+# panes (cycle prompts, self-heal nudges, re-surfaced items), and unattributed
 # pane input is exactly what the injection-audit work exists to make impossible.
 # The one process on this host that types into the most panes was the one
 # recording none of it.

@@ -285,7 +285,9 @@ def test_an_already_idle_hauler_is_FED_its_next_bead_not_the_coordinator(tmp_pat
     assert "p-billy" in targets, "the worker must be fed"
     assert "p-admin" not in targets, "the coordinator must hear nothing"
     (_, msg), = [x for x in panes.sent if x[0] == "p-billy"]
-    assert "HAUL" in msg and "aegis-9" in msg and "br show aegis-9" in msg
+    assert "HAUL" in msg and "aegis-9" in msg
+    # This fixture supplies rows, not a configured tracker. Never guess a board.
+    assert "routing is unproven" in msg and "br show" not in msg
     assert claims == ["aegis-9"], "the fed bead is claimed in_progress"
 
 
@@ -542,3 +544,16 @@ def test_appending_behind_same_next_item_does_not_repeat_delivery(tmp_path, monk
     ready.append({"id": "work-2", "assignee": "billy"})
     alerter.sweep([])
     assert claims == ["work-1"] and len(panes.sent) == 1
+
+
+def test_tend_haul_advance_delivers_and_logs_priority_advice(tmp_path, monkeypatch):
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, claims=[], ready=[
+        {'id': 'low', 'priority': 2, 'assignee': 'billy'},
+        {'id': 'high', 'priority': 1},
+    ])
+    logs = []
+    alerter._log = logs.append
+    assert alerter.sweep(alerter._reg.all().exact()) == ['billy']
+    messages = [text for pane, text in panes.sent if pane == 'p-billy']
+    assert any('high (P1)' in text for text in messages)
+    assert any('high (P1)' in text for text in logs)

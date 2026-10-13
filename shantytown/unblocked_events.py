@@ -246,7 +246,7 @@ class UnblockedEventConsumer:
                      f"✓ UNBLOCKED {bead}: status blocked -> open (every blocker closed; "
                      f"chaski event {at}). It is in br ready now. {title}")
             elif verdict in ("held", "mismatch"):
-                msg = (f"⚠ {bead}: its bead-blockers all resolved (chaski event {at}) but "
+                msg = (f"⚠ {bead}: its item-blockers all resolved (chaski event {at}) but "
                        f"{reason} still holds it. Lift it, or record why it stays. {title}"
                        if verdict == "held" else
                        f"⚠ UNBLOCKED-EVENT MISMATCH {bead}: chaski fired at {at} but "

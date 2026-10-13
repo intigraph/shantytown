@@ -114,6 +114,9 @@ def haul_hold_reason(root, agent: str) -> str:
     """A deliberate stop or gaming hold must precede claims and continuation."""
     if root is None:
         return ""
+    from .cycle import Requests
+    if agent in Requests(Path(root)).pending():
+        return "context cycle pending; keep the haul queued until the cycle completes"
     from . import agent_hold
     if held := agent_hold.reason(root, agent):
         return held
@@ -372,7 +375,7 @@ def _bd_ready(cwd: str | None = None, root=None, reg=None) -> list[dict]:
     r = subprocess.run(["bd", "ready", "--json", "--limit", "0"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd ready failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker ready failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -540,7 +543,7 @@ def held_reason(free: list[str], held: list[tuple[str, str, str]]) -> str:
     why = held[0][2] if held else ""
     return (f"RULE ZERO YIELDS to the usage governor: {len(free)} idle "
             f"worker(s) ({', '.join(sorted(free))}) and {len(held)} ready "
-            f"bead(s), 0 of which clear the priority floor. IDLE IS THE CORRECT "
+            f"item(s), 0 of which clear the priority floor. IDLE IS THE CORRECT "
             f"STATE — the throttle is holding, the feeder is not broken, and the "
             f"work is untouched. Nothing here needs doing. Governor says: {why}")
 
@@ -549,8 +552,8 @@ def _reason(free: list[str], ready: list[tuple[str, str]]) -> str:
     top = "; ".join(f"{bid} {title}"[:70] for bid, title in ready[:3])
     return (
         f"RULE ZERO — do not stop with the fleet idle. {len(free)} feedable "
-        f"worker(s) IDLE ({', '.join(free)}) and {len(ready)} dispatchable bead(s) "
-        f"ready. Dispatch before you stop (`st go <bead> <worker>`), then this stop "
+        f"worker(s) IDLE ({', '.join(free)}) and {len(ready)} dispatchable item(s) "
+        f"ready. Dispatch before you stop (`st go <item> <worker>`), then this stop "
         f"is allowed. Top ready: {top}.")
 
 
@@ -596,6 +599,25 @@ def haul_governor_verdict(root, card):
             governor.evaluate(persist=False))
 
 
+def worker_governor_admissions(root, reg, workers):
+    """Usage admission per candidate card; no base-lane opinion for the fleet."""
+    from types import SimpleNamespace
+    from .cli import _governor_verdicts_for
+    from . import quiet_time
+    hold = quiet_time.read(Path(root))
+    cards = [card for card in reg.all().exact() if card.name in workers]
+    if hold.held:
+        return {card.name: lambda item, reason=hold.refusal: reason for card in cards}
+    verdicts = _governor_verdicts_for(SimpleNamespace(root=Path(root)), cards)
+    def admission(name, lane, verdict):
+        def check(item):
+            why = verdict.admits(item, name) if verdict is not None else ''
+            return f'{lane} ({name}): {why}' if why else ''
+        return check
+    return {name: admission(name, lane, verdict)
+            for name, (lane, verdict) in verdicts.items()}
+
+
 def admitted_haul(beads, card, verdict, log):
     """Keep refused work queued; both haul triggers use dispatch's own rule."""
     admitted = []
@@ -635,7 +657,7 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads, active = queue_state(root, reg)
+    ready_beads, active = queue_state(root, reg, owners=free)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -657,9 +679,27 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # filter — so `held` names exactly the work that WOULD have been dispatched
     # and is not, which is the number the coordinator needs to tell a holding
     # throttle from a broken feeder.
-    ok, held = throttle(dispatchable(set(free), ready_beads), ready_beads,
-                        admits if admits is not None else governor_admits(root))
-    return free, ok, held
+    ready = dispatchable(set(free), ready_beads)
+    if admits is not None:
+        ok, held = throttle(ready, ready_beads, admits)
+        return free, ok, held
+    checks = worker_governor_admissions(root, reg, free)
+    by_id = {bead.get('id'): bead for bead in ready_beads}
+    ok, held, targets = [], [], set()
+    for bid, title in ready:
+        item = _Item(by_id[bid])
+        reasons, eligible = [], []
+        for worker in free:
+            if worker not in checks:
+                raise RuntimeError(f'usage lane unavailable for {worker}')
+            why = checks[worker](item)
+            (reasons if why else eligible).append(why if why else worker)
+        if eligible:
+            ok.append((bid, title))
+            targets.update(eligible)
+        else:
+            held.append((bid, title, '; '.join(reasons)))
+    return sorted(targets) if ok else free, ok, held
 
 
 def _br_tracker(root, reg):
@@ -741,6 +781,9 @@ class TrackerAdapter:
         """Deferred AND open rows — the deferral sweep keys off `defer_until`,
         which lives under both statuses since the cutover (aegis-boj8a2)."""
         if self.tracker is not None:
+            scoped = getattr(self.tracker, "deferred_rows", None)
+            if callable(scoped):
+                return scoped()
             from .br import deferred
             value = deferred(self.tracker)
         else:
@@ -760,6 +803,23 @@ class TrackerAdapter:
             value = self._legacy("bd", "show", item, "--json")
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
+
+    def closed_many(self, items) -> Answer[dict[str, bool | None]] | None:
+        """Optional native candidate batch; legacy readers retain single reads."""
+        projected = getattr(self.tracker, "closed_statuses", None)
+        return projected(items) if callable(projected) else None
+
+    def closed(self, item: str) -> Answer[bool]:
+        """Condition-only status; full detail remains required before release."""
+        projected = getattr(self.tracker, "closed_status", None)
+        if callable(projected):
+            answer = projected(item)
+            if answer is not None:
+                return answer
+        detail = self.show(item).exact()
+        if not isinstance(detail, dict) or detail.get("id") != item or not detail.get("status"):
+            raise ValueError(f"incomplete show for {item}")
+        return Answer.complete_read(detail["status"] == "closed", how=f"{self.kind} show status")
 
     def undefer(self, item: str) -> None:
         """Clear both historical status and timestamp representations."""
@@ -783,11 +843,16 @@ def backend_kind(root, reg) -> str:
     return backend_adapter(root, reg).kind
 
 
-def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
+def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], list[dict]]:
     """Ready and active work from the deployment's selected tracker backend."""
     if tracker is None:
         tracker = _br_tracker(root, reg)
     if tracker is not None:
+        from .sd import SdTracker
+        if owners is not None and isinstance(tracker, SdTracker):
+            projected = tracker.feed_rows(owners)
+            if projected is not None:
+                return projected
         from .br import BrTracker, in_progress as br_in_progress, ready as br_ready
         if isinstance(tracker, BrTracker):
             ready_beads = br_ready(tracker)
@@ -806,6 +871,30 @@ def queue_state(root, reg, tracker=None) -> tuple[list[dict], list[dict]]:
               "ready work only; haul filtering is degraded", file=sys.stderr)
         return ready_beads, []
 
+
+
+def tend_active(root, reg, *, roles=None):
+    """Fresh roster-scoped fields; never cache the final pre-feed anchor check."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if isinstance(tracker, SdTracker):
+        owners = [card.name for card in reg.all().exact()
+                  if roles is None or card.role in roles]
+        projected = tracker.active_rows(owners)
+        if projected is not None:
+            return projected.exact()
+    return bd_in_progress(bd_cwd(reg), root=root, reg=reg)
+
+
+def tend_ready(root, reg, owners):
+    """Only unassigned and observed-idle owners can affect the haul sweep."""
+    from .sd import SdTracker
+    tracker = _br_tracker(root, reg)
+    if owners is not None and isinstance(tracker, SdTracker):
+        projected = tracker.tend_rows(owners)
+        if projected is not None:
+            return projected[0]
+    return _bd_ready(bd_cwd(reg), root=root, reg=reg)
 
 def main(argv: list[str] | None = None) -> int:
     """The standalone Rule Zero hook.
@@ -863,7 +952,7 @@ if __name__ == "__main__":
 # claim, same handoff line — built here so the two can never drift.
 
 def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
-                      repeats: int = 0) -> str:
+                      repeats: int = 0, advisory: str = "", *, examples=None) -> str:
     """The advance instruction: the specific next bead, claimed and named.
 
     The last line is the RELEASE affordance (aegis-tgvtg). The haul re-serves any
@@ -888,28 +977,36 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
     means nothing at all. Saying so where it happens is the whole fix.
     """
     from .task_order import instruction
+    from .tracker_examples import TrackerExamples
+    examples = examples or TrackerExamples()
     t = (title or "")[:80]
     # A repeat must READ as a repeat — being handed the same bead back looks like
     # an instruction to persist, when it only means you have not released it. One
     # line; the rule itself is in `st ops help haul`.
-    again = (f"(SAME bead, served {'twice' if repeats > 1 else 'once'} already — "
+    again = (f"(SAME item, served {'twice' if repeats > 1 else 'once'} already — "
              f"that is the re-serve rule, not a verdict. Release it below.) "
              if repeats else "")
     # No budget declared -> say nothing about headroom. A caveat with no number
     # behind it is noise to learn to skip.
     authority = f"Yours to work — {headroom}. " if headroom else "Yours to work. "
+    if not examples.argv:
+        return ((f"{advisory}\n" if advisory else "")
+                + f"HAUL: {nid} ({t}), execute, close to advance ({rest} more). "
+                + again + authority + examples.diagnostic + " "
+                + instruction(nid) + handoff_text.deep_context_hint())
     return (
-        f"HAUL: {nid} ({t}) — `br show {nid}`, execute, close to advance "
+        (f"{advisory}\n" if advisory else "")
+        + f"HAUL: {nid} ({t}) — `{examples.show(nid)}`, execute, close to advance "
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
-        f"Not this one? done -> `br close {nid}` · gated -> `st work defer {nid} "
-        f"<bead|human|access|external|parked> --reason-file <f>` · not yours -> "
-        f"`br update {nid} -a \"\"`. "
+        f"Not this one? done -> `{examples.close(nid)}` · gated -> `st work defer {nid} "
+        f"<kind> --reason-file <f>` · not yours -> "
+        f"`{examples.unassign(nid)}`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
         f"assignee only re-pools it.) Options: `st ops help haul`.")
 
 
-def haul_resume_message(nid: str, title: str) -> str:
+def haul_resume_message(nid: str, title: str, *, examples=None) -> str:
     """Keep a Codex worker's active anchor moving across turn boundaries.
 
     Codex allows the stop after every completed model turn.  Without a new block
@@ -919,13 +1016,18 @@ def haul_resume_message(nid: str, title: str) -> str:
     it by the resolved harness.
     """
     from .task_order import instruction
+    from .tracker_examples import TrackerExamples
+    examples = examples or TrackerExamples()
     t = (title or "")[:80]
+    if not examples.argv:
+        return (f"HAUL RESUME: {nid} ({t}) is still your active anchor. "
+                f"Continue it now. {examples.diagnostic} {instruction(nid)}")
     return (
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
-        f"(`br show {nid}`), execute the remaining work, verify it, and close it "
+        f"(`{examples.show(nid)}`), execute the remaining work, verify it, and close it "
         f"when done so the haul can advance. If it is genuinely gated, record "
         f"the evidence, then use `st work defer {nid} "
-        f"<bead|human|access|external|parked> --reason-file <file>`; if it is not "
+        f"<kind> --reason-file <file>`; if it is not "
         f"yours, clear the assignee. "
         f"Do not stop merely because the previous model turn ended. {instruction(nid)}")
 
@@ -955,7 +1057,7 @@ def bd_in_progress(cwd: str | None, root=None, reg=None) -> list[dict]:
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker list failed: {r.stderr.strip()}")
     from .inbox import drop_parked      # parked is not active (aegis-1d3fze)
     return drop_parked(json.loads(r.stdout))
 
@@ -977,7 +1079,7 @@ def bd_blocked(cwd: str | None, root=None, reg=None) -> list[dict]:
                         "--limit", "0"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd list failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker list failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -994,7 +1096,7 @@ def bd_show(cwd: str | None, bead_id: str, root=None, reg=None) -> dict:
     r = subprocess.run(["bd", "show", bead_id, "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd show {bead_id} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker show {bead_id} failed: {r.stderr.strip()}")
     value = json.loads(r.stdout)
     return value[0] if isinstance(value, list) else value
 
@@ -1014,4 +1116,4 @@ def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd update failed: {r.stderr.strip()}")
+        raise RuntimeError(f"configured tracker update failed: {r.stderr.strip()}")

@@ -21,6 +21,7 @@ into the harness.
 """
 from __future__ import annotations
 import os
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,52 @@ OPTION_KEYS = frozenset("123456789")
 # is a message that is never delivered while the sender is told it was.
 _SEND_CHUNK = 512
 _SEND_CHUNK_GAP_S = 0.05
+_CODEX_SETTLE_S = 0.5
+_CODEX_POLL_S = 0.15
+_CODEX_POLLS = 8
+_CODEX_ATTEMPTS = 8
+_CODEX_DEADLINE_S = 25
+
+
+def _codex_owned_input(screen: str, text: str) -> bool:
+    """Retry Enter only while the rendered composer still contains our body.
+
+    Wrapped rows change whitespace, so compare visible words. A clipped
+    composer, a paste placeholder, or someone else's text cannot authorize a
+    retry. Never accept the dim suggestion as typed input.
+    """
+    from . import triage
+    if not text or triage.input_state(screen) == triage.INPUT_PLACEHOLDER:
+        return False
+    lines = triage.strip_attrs(screen).rstrip().splitlines()
+    prompts = [i for i, line in enumerate(lines) if line.lstrip().startswith("›")]
+    if not prompts:
+        return False
+    start = prompts[-1]
+    rows = [lines[start].lstrip()[1:]]
+    tail = lines[start + 1:]
+    footers = [i for i, line in enumerate(tail) if
+               re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+[·.]\s+(?:~|/)", line)
+               or ("tab to queue message" in line and "context left" in line)]
+    if not footers:
+        return False
+    # Use the final footer. Footer-looking words inside an input body must
+    # not hide an appended foreign suffix and authorize its submission.
+    rows.extend(tail[:footers[-1]])
+    return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
+
+
+def _codex_queued(screen: str, text: str) -> bool:
+    """Measured queue chrome, paired with this message's preview."""
+    from .triage import strip_attrs
+    plain = strip_attrs(screen)
+    marker = "Messages to be submitted after next tool call"
+    if marker not in plain or not text.strip():
+        return False
+    queue = plain.split(marker)[-1].split("›")[0]
+    preview = " ".join(queue.split()).split("↳", 1)
+    prefix = " ".join(text.split())[:64]
+    return len(preview) == 2 and preview[1].lstrip().startswith(prefix)
 
 
 def _journal_send(pane: str, text: str) -> None:
@@ -216,6 +263,10 @@ class PaneTaskList(PaneNotAgent):
     """No existing task is selected, so message input would create a task."""
 
 
+class PaneSubmissionUnverified(PaneNotAgent):
+    """Keystrokes may have arrived; submission is not confirmed. Do not resend."""
+
+
 def _refuse_task_list(pane: str, screen: str) -> None:
     from .harness import task_list_evidence
     if task_list_evidence(screen):
@@ -241,6 +292,25 @@ def _refuse_task_list(pane: str, screen: str) -> None:
 # had exited read `bash`.
 SHELL_COMMANDS = frozenset({"bash", "sh", "zsh", "fish", "dash", "ksh", "csh",
                             "tcsh", "-bash", "-sh", "-zsh"})
+
+
+def shell_foreground(panes, pane: str) -> str | None:
+    """Return a positively observed login shell; unreadable is not DOWN.
+
+    Reuse the send guard's measured foreground evidence (aegis-kc1f0i).
+    Runtime tool subprocesses do not own the terminal, and old UI text can
+    remain on screen after the runtime exits. Existence and scrollback alone
+    therefore cannot distinguish a living agent from its surviving shell.
+    Adapters without this optional reader retain their existing semantics.
+    """
+    reader = getattr(panes, "foreground", None)
+    if not callable(reader):
+        return None
+    try:
+        command = reader(pane)
+    except Exception:
+        return None
+    return command if isinstance(command, str) and command in SHELL_COMMANDS else None
 
 
 class Tmux:
@@ -450,6 +520,7 @@ class Tmux:
         # would make st unable to start an agent at all. Opting in is explicit
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
+        codex = False
         if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
@@ -457,7 +528,21 @@ class Tmux:
                     f"pane {pane} is running {fg!r}, not an agent runtime — its "
                     f"agent has exited. NOT DELIVERED: typing here would execute "
                     f"the message as a shell command.")
-            _refuse_task_list(pane, self.capture(pane))
+            before = self.capture(pane, attrs=True)
+            _refuse_task_list(pane, before)
+            codex = self._confirmed_codex(pane, fg)
+            if codex:
+                from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+                if _codex_owned_input(before, text):
+                    # An explicit resend can find the previous attempt stranded
+                    # after a slow Stop hook. Submit only this exact body; never
+                    # append it again or commit unrelated operator input.
+                    _journal_send(pane, "<retry-pending:" + text + ">")
+                    self._verify_codex_submission(pane, text, before)
+                    return
+                if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                    raise PaneSubmissionUnverified(
+                        f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
@@ -520,7 +605,86 @@ class Tmux:
                            check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
+        if codex:
+            # A key inside the terminal's paste burst can become text instead
+            # of a submit. Chunking alone does not separate the final Enter.
+            time.sleep(_CODEX_SETTLE_S)
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
+        if codex:
+            self._verify_codex_submission(pane, text, before)
+
+    def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
+        """Recover an existing body without ever appending or replacing input."""
+        if not self._confirmed_codex(pane, self.foreground(pane)):
+            raise PaneSubmissionUnverified('UNVERIFIED: runtime is not Codex')
+        before = self.capture(pane, attrs=True, timeout=2)
+        if not _codex_owned_input(before, text):
+            raise PaneSubmissionUnverified('UNVERIFIED: composer ownership changed')
+        _journal_send(pane, '<recover-pending:' + text + '>')
+        self._verify_codex_submission(pane, text, before, deadline=deadline)
+
+    def _confirmed_codex(self, pane: str, foreground: str | None) -> bool:
+        if foreground == "codex":
+            return True
+        if foreground == "node":
+            from .harness import running_name
+            try:
+                return running_name(self.cmdline(pane)) == "codex"
+            except (OSError, subprocess.SubprocessError):
+                return False
+        return False
+
+    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
+        from . import triage
+        was_busy = triage.mid_flight(before)
+        local_deadline = time.monotonic() + _CODEX_DEADLINE_S
+        deadline = local_deadline if deadline is None else min(deadline, local_deadline)
+        def observed(screen):
+            return (triage.input_state(screen) in
+                    (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
+                    ((_codex_queued(screen, text) and not _codex_queued(before, text)) or
+                     (not was_busy and triage.mid_flight(screen))))
+        for attempt in range(_CODEX_ATTEMPTS):
+            screen = ""
+            for _ in range(_CODEX_POLLS):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(_CODEX_POLL_S)
+                try:
+                    screen = self.capture(pane, attrs=True, timeout=2)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise PaneSubmissionUnverified(
+                        f"UNVERIFIED: cannot observe Codex submission in {pane}") from exc
+                # Existing activity alone proves nothing: the new body can
+                # remain typed while an older turn is still working.
+                if observed(screen):
+                    return
+            if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
+                    and _codex_owned_input(screen, text)):
+                # Submit only the exact body we own. Busy Codex queues with
+                # Tab; waiting for the old turn to end can strand this body.
+                try:
+                    screen = self.capture(pane, attrs=True, timeout=2)
+                except (OSError, subprocess.SubprocessError):
+                    screen = ""
+                if observed(screen):
+                    return
+                if not _codex_owned_input(screen, text):
+                    break
+                # Initial identification cannot authorize a later keystroke:
+                # the runtime may have exited or become unreadable meanwhile.
+                if not self._confirmed_codex(pane, self.foreground(pane)):
+                    break
+                busy = triage.mid_flight(screen)
+                subprocess.run(self._cmd("send-keys", "-t", pane,
+                                         "Tab" if busy else "Enter"), check=True)
+                was_busy = busy
+            else:
+                break
+        raise PaneSubmissionUnverified(
+            f"UNVERIFIED: Codex submission in {pane} not observed; "
+            f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
+            "body was not resent, do not blindly resend")
 
     def control(self, pane: str, key: str) -> None:
         """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.

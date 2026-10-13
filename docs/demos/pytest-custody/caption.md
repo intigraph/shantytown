@@ -1,0 +1,5 @@
+A completed pytest generation must not inflate the watched repository count. The same isolated two-repository probe reports public/armed2/2, fixtures0 on base49ce946 and public/armed1/1, fixtures1 on the candidate. Missing remains0, and the adjacent ordinary repository receives its guard in both runs. The temporary root, pytest parent and generation are privately owned; Git storage and effective hooks must stay inside the generation. Similar names, shared Git storage, redirected hooks and unknown custody remain watched.
+
+This is source-fixture evidence, not a production sweep or installed result. Repeat `python3 docs/demos/pytest-custody/probe.py scripts/install-scrub-guard.sh`. Native installer selftest and ten actual Git custody controls pass under the HOME escape watcher.
+
+Replayable output-only terminal recording: [output.log](output.log) + [timing.log](timing.log). Replay with `scriptreplay --log-out docs/demos/pytest-custody/output.log --log-timing docs/demos/pytest-custody/timing.log`; actual invocation is `python3 docs/demos/pytest-custody/run.py`.

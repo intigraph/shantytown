@@ -1,0 +1,27 @@
+Actual source-checkout transcript; no installed fleet mutation.
+Trigger: a missing work pointer and a post-cycle checkpoint pointer.
+Base: 974b6c13751ac8dc2d3c5d8368108267c51e3552. Candidate: this commit.
+Recorder unavailable: asciinema is not installed; this is real stdout, not a video.
+Reproduce: run the _how_to_hook(worker, lead) and compose(worker, checkpoint_bead=st-fixture) calls at each revision.
+
+BEFORE
+  · `bd create "<what you are actually doing>" -p 2` then `br update <id> --assignee=worker --status=in_progress`
+  · or ask lead to dispatch you one: `st go <id> worker`
+
+[st cycle resume brief] Your context was just cleared by `st agent cycle`. The runtime, your tools and your permissions are unchanged; only the conversation is gone. You are still worker.
+
+WHERE THE REST OF IT IS WRITTEN DOWN:
+  checkpoint bead: st-fixture — `br show st-fixture`. The full notes are a comment on it.
+
+START BY READING THE POINTERS ABOVE, not by re-deriving what they already hold. Then `st anchor` to confirm the work on your hook. Do NOT re-do work the checkpoint says is done.
+
+AFTER
+  · `st task "<what you are actually doing>" --assignee worker` then `st work item update <id> --status in_progress`
+  · or ask lead to dispatch you one: `st go <id> worker`
+
+[st cycle resume brief] Your context was just cleared by `st agent cycle`. The runtime, your tools and your permissions are unchanged; only the conversation is gone. You are still worker.
+
+WHERE THE REST OF IT IS WRITTEN DOWN:
+  checkpoint item: st-fixture — `st work item show st-fixture`. The full notes are a comment on it.
+
+START BY READING THE POINTERS ABOVE, not by re-deriving what they already hold. Then `st anchor` to confirm the work on your hook. Do NOT re-do work the checkpoint says is done.

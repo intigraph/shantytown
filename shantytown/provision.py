@@ -45,6 +45,7 @@ import tempfile
 from pathlib import Path
 
 from .protocols import Agent
+from .files import write_text_atomic
 from . import tooling
 
 
@@ -297,7 +298,7 @@ def link_instructions(ws, harness: str | None) -> bool:
     source = ws / "CLAUDE.md"
     if not source.is_file():
         return False
-    if harness != "codex":
+    if harness not in ("codex", "opencode"):
         return True
     target = ws / "AGENTS.md"
     if target.exists() and source.resolve() == target.resolve():
@@ -474,6 +475,14 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             have = None
         if have != want:
             gaps.append("codex-mcp(Quipu drift)")
+    elif card.harness == "opencode":
+        from .opencode import config_path, translate_servers
+        try:
+            have = json.loads(config_path(card, root).read_text()).get("mcp", {})
+            if have != translate_servers(rendered):
+                gaps.append("opencode-mcp(Quipu drift)")
+        except (OSError, ValueError):
+            gaps.append("opencode-mcp(unreadable)")
     else:
         try:
             consent = json.loads((ws / ".claude" / CONSENT_TEMPLATE).read_text())
@@ -509,7 +518,7 @@ def missing_kit(card: Agent, root, *, manifest=_UNREAD) -> list[str]:
     have = servers_in(ws / ".mcp.json")
     if want and sorted(have) != sorted(want):
         gaps.append(f"mcp({','.join(sorted(set(want) - set(have))) or 'mismatch'})")
-    if card.harness != "codex" and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
+    if card.harness not in ("codex", "opencode") and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
         gaps.append("mcp-consent")
     # SKILLS ARE KIT TOO — and this is the "wire the detector to something that
     # runs" half of aegis-qvxd. The standing guard for skill drift was a shell
@@ -946,6 +955,19 @@ def headerless_quipu(servers: dict) -> list[str]:
     return sorted(out)
 
 
+def _refresh_opencode_bridge(card, root, settings_path):
+    """Refresh the actual launch artifact, including stores without an MCP kit."""
+    if card.harness != "opencode":
+        return
+    from .harness import get
+    from .opencode import config_path
+    selected = settings_path or config_path(card, root)
+    try:
+        get("opencode").provision(str(selected), root=root)
+    except (OSError, ValueError) as exc:
+        raise ProvisionError(f"cannot refresh OpenCode bridge: {exc}") from None
+
+
 def provision(card: Agent, root, *, secrets=None, settings_path=None,
               require_manifest=False) -> list[str]:
     """Equip the agent's workspace. Returns the server names it can now reach.
@@ -955,7 +977,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     the caller is a launcher that runs every time an agent starts.
     """
     if not card.workspace:
-        return []                       # no workspace elected — nothing to equip
+        _refresh_opencode_bridge(card, root, settings_path)
+        return []                       # no workspace elected — no workspace kit
     ws = Path(card.workspace).expanduser()
     if not ws.is_dir():
         raise ProvisionError(
@@ -964,33 +987,44 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     # A role config is shared by all agents in that role. A named credential
     # must never be projected into it, including through a per-agent symlink.
-    if secrets is None and card.harness == "codex":
+    if secrets is None and card.harness in ("codex", "opencode"):
         from .provision_credentials import agent_overrides
         try:
             named = bool(agent_overrides(root, card.name))
         except ValueError as exc:
             raise ProvisionError(str(exc)) from None
         if named:
-            parent = Path(root) / "settings" / "codex"
-            config = parent / f"agent-{card.name}" / "config.toml"
+            filename = "config.toml" if card.harness == "codex" else "opencode.json"
+            parent = Path(root) / "settings" / card.harness
+            config = parent / f"agent-{card.name}" / filename
             if (not config.is_file()
-                    or any(p.resolve() == config.resolve() for p in parent.glob("*/config.toml")
+                    or any(p.resolve() == config.resolve() for p in parent.glob("*/" + filename)
                            if p != config)
                     or (settings_path is not None
                         and Path(settings_path).resolve() != config.resolve())):
-                raise ProvisionError("named credentials require an independent per-agent Codex config")
+                program = "Codex" if card.harness == "codex" else "OpenCode"
+                raise ProvisionError(f"named credentials require an independent per-agent {program} config")
 
     # Establish the authority before touching any realized kit. A graph outage
     # must never silently fall back to a stale, locally consistent template.
     try:
-        manifest = tooling.load(root)
+        from . import config as config_mod, instructions
+        from .harness import name_for
+        instruction_cfg = config_mod.load(root, refresh_source=True)
+        instruction_plan = instructions.prepare(ws, card, instruction_cfg,
+                                                harness=name_for(card, root))
+        manifest = (tooling.load(root, last_good=True)
+                    if instruction_cfg.source_document is not None else tooling.load(root))
         if require_manifest and (manifest is None or not manifest.mcp):
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "
                 "configure SHANTY_TOOLING_MANIFEST in the deployment first")
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
+        for path, text in instruction_plan.updates.items():
+            updates[path] = (tooling.instruction_text(text, manifest.instructions)
+                             if manifest is not None else text)
         retired = tooling.retired_links(ws, manifest) if manifest is not None else []
-    except tooling.ToolingError as e:
+    except (tooling.ToolingError, config_mod.ConfigError, ValueError) as e:
         raise ProvisionError(str(e)) from None
     template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
     rendered = None
@@ -999,7 +1033,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         consent_path = provision_dir(root) / CONSENT_TEMPLATE
         if consent_path.is_file():
             canonical_consent = _manifest_consent(consent_path.read_text(), manifest)
-        elif card.harness != "codex":
+        elif card.harness not in ("codex", "opencode"):
             raise ProvisionError("canonical MCP consent template is missing")
         rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)))
         try:
@@ -1023,7 +1057,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                     raise ProvisionError(f"refusing to replace personal skill: {name}")
         for path, text in updates.items():
             if not path.is_file() or path.read_text() != text:
-                path.write_text(text)
+                write_text_atomic(path, text)
         for name, src in manifest.sources(ws):
             for runtime in (SKILLS_RUNTIME, CODEX_SKILLS_RUNTIME):
                 link = ws.joinpath(*runtime, name)
@@ -1042,6 +1076,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # MCP template still has a workspace full of skills the runtime cannot see,
     # and the skill links depend on nothing but the clone itself.
     if manifest is None:
+        for path, text in updates.items():
+            write_text_atomic(path, text)
         link_skills(ws)
         link_instructions(ws, card.harness)
 
@@ -1088,6 +1124,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                 f"every surface. Restore {tmpl}, or empty {d} to declare that this "
                 f"fleet wants no MCP servers.")
         _provision_capture_without_kit(card, root, ws, settings_path)
+        _refresh_opencode_bridge(card, root, settings_path)
         return []
 
     if rendered is None:
@@ -1117,6 +1154,9 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         finally:
             temporary.unlink(missing_ok=True)
     _project_codex_mcp(card, root, rendered, template)
+    if card.harness == "opencode":
+        from .opencode import project_mcp
+        project_mcp(card, root, rendered, replace=template is not None)
 
     consent = d / CONSENT_TEMPLATE
     if consent.is_file():
@@ -1145,4 +1185,5 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         gaps = _manifest_gaps(card, root, manifest, secrets)
         if gaps:
             raise ProvisionError("provisioned tooling failed verification: " + ", ".join(gaps))
+    _refresh_opencode_bridge(card, root, settings_path)
     return got

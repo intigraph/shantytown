@@ -305,3 +305,36 @@ Note what that run proves and what it doesn't: it proves *the core doesn't impor
 license shipping the flat registry — quipu is the default because identity wants provenance, history,
 and one place to ask. The flat registry exists to keep the boundary honest, the same way the `files`
 tracker does.
+
+### Stop intent
+
+An optional `SHANTY_STOP_JEV_COMMAND` classifies an open anchor at Stop send using only the hook payload’s `last_assistant_message` and tracker status. It does not read a transcript path or the pane. The message is credential-masked before its bounded tail reaches the canonical Jev MCP server. Calls have a five-second total deadline; absent input/configuration, low confidence, none-of-these and transport/log failures preserve existing routing.
+
+The four inferred outcomes are finished-unclosed (one close reminder per session and item), blocked on a named dependency (evidence reaches the lead), gave-up/looping (needs-decision escalation through the existing administrator route), and mid-work (a turn boundary). It never closes a bead, assigns work, pages or restarts anything. Existing haul and session-budget gates still apply. The stop event carries explicitly dated inferred advice; the drain labels it historical if the current anchor differs. Private verdict metadata under the deployment root’s `stop_outcomes` includes input/question hashes, probabilities, model, usage and latency for evaluation, without storing the message. Disable by unsetting the command.
+
+### Remote Seeds plate reads
+
+`SdTracker` selects plate candidates and ready IDs by the requested owner,
+including both full and short owner spellings. The schema.org remote path reads
+only plate fields. Local stores and older revision ledgers check `hooked` and
+then `in_progress` first; a complete held rank ends discovery, otherwise they
+retain the owner lookup. Held items do not need a readiness read.
+Both paths use the same ranking and
+blocker checks as `BrTracker`, and keeps failed candidate reads visible as an
+incomplete plate. A roster caches each owner's candidates and readiness for
+one render. Ordinary br trackers continue sharing their single board snapshot. Remote Seeds
+inboxes also query the recipient and message-title prefix; receipt lookup includes
+closed messages and refuses any incomplete response.
+
+Remote schema.org Seeds plates use an owner-scoped projection of identity, title,
+status, priority, labels and deferral dates. It covers the project's shared and
+ephemeral graphs without hydrating descriptions, comments or import payloads.
+Readiness remains the native `blockedOn` test on those candidate IDs. Fleet
+priority advice reads only open/active fields, and the unassigned summary uses
+aggregate counts. These are observations, never mutation or inbox lookup paths.
+
+The graph comes from the verified `sd where` result. Local stores and a positively
+identified legacy revision ledger retain the SDK adapter. A failed format probe,
+malformed field, ambiguous graph membership, truncated response or exhausted
+field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
+The projection sends the SDK's caller-declared attribution headers when present.

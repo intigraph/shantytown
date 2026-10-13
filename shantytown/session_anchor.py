@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import re
 import sys
@@ -57,10 +58,12 @@ _BY_ROLE = {
 }
 
 
-def startup_lines(role: str, plate_empty: bool) -> list[str]:
+def startup_lines(role: str, plate_empty: bool, plate_stale: bool = False) -> list[str]:
     """The role's startup instructions. Generic by design: no deployment names,
     because this ships in a public package and every deployment reads it."""
     lines = list(_ALL)
+    if plate_stale:
+        lines[1] = "    Verify the stale plate item's current status before executing it."
     if plate_empty:
         lines.append(_EMPTY)
     lines += _BY_ROLE.get(role, ())
@@ -94,21 +97,36 @@ def main(argv=None) -> int:
         # that complains on every non-fleet session start gets removed.
         return 0
     try:
+        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+        from .context_hint import session_start
+        from .files import FilesRegistry
+        session_start(root, FilesRegistry(os.path.join(root, "crew")).get(agent), payload)
+    except Exception:  # noqa: BLE001 — malformed hook input must not hide the anchor
+        pass
+    text = render(root, agent)
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": text,
+        },
+    }, ensure_ascii=False))
+    return 0
+
+
+def render(root: str, agent: str) -> str:
+    """The same context for hook output and verified launch-time delivery."""
+    try:
         rc, text = _run_anchor(root, agent)
-    except Exception:  # noqa: BLE001 — FAIL-OPEN, see the module docstring
+    except Exception:  # noqa: BLE001 -- a failed lookup must not hide the launch
         rc, text = 2, ""
     if rc != 0 or not text.strip():
-        print(f"{BANNER} {agent}: could not read your plate at session start "
-              f"(anchor exit {rc}). Run `st anchor` before you pick up work.")
-        return 0
+        return (f"{BANNER} {agent}: could not read your plate at session start "
+                f"(anchor exit {rc}). Run `st anchor` before you pick up work.")
     m = _ROLE_RE.search(text)
     role = m.group(1) if m else ""
     empty = "ON YOUR PLATE\n    nothing." in text
-    print(BANNER)
-    print(text.rstrip())
-    print()
-    print("\n".join(startup_lines(role, empty)))
-    return 0
+    stale = "\n      STALE PLATE:" in text
+    return "\n".join((BANNER, text.rstrip(), "",
+                       "\n".join(startup_lines(role, empty, stale))))
 
 
 if __name__ == "__main__":

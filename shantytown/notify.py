@@ -122,7 +122,7 @@ def wake_recipient(reg, panes, worker: str, message: str, *, catalog=None) -> st
 def _message(worker: str, state: str) -> str:
     return (f"⚠ {worker} is BLOCKED ({state}) and needs you — it will NOT time out "
             f"or self-resolve. Look: `st agent log {worker}`. Answer the prompt, or tell "
-            f"it to put the decision on its bead with a recommendation and carry "
+            f"it to put the decision on its item with a recommendation and carry "
             f"on. (auto-notice from st fleet tend; you were not asked to sweep.)")
 
 
@@ -732,10 +732,11 @@ class IdleFleetAlerter:
         # on every sweep, and this alerter's fail-open ate it: nk0e never fired
         # once in two days (aegis-arma follow-up, measured).
         from . import feed_check
+        self._ready_scope = None
         self._bd_ready = bd_ready or (
-            lambda: feed_check._bd_ready(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_ready(root, reg, self._ready_scope))
         self._bd_in_progress = bd_in_progress or (
-            lambda cwd: feed_check.bd_in_progress(cwd, root=root, reg=reg))
+            lambda cwd: feed_check.tend_active(root, reg))
         # The worker's context depth off its live pane (the same footer read
         # saturation uses); injected for tests. None = unreadable = never over.
         self._context_k = context_k or self._pane_context_k
@@ -772,12 +773,18 @@ class IdleFleetAlerter:
 
         The claude -> 'base' mapping is FleetGovernor.lane's, restated here because
         this class deliberately does not hold a FleetGovernor (building one does
-        remote collection, and this runs on the tend timer). If a third lane ever
-        exists, `balance` already refuses to rate it, so this cannot silently start
-        preferring the wrong one.
+        remote collection, and this runs on the tend timer). Named accounts use
+        their launch identity, including while the card queues a future change.
         """
         try:
             card = self._reg.get(worker)
+            from . import config, accounts, account_state
+            cfg = config.load(self._shanty_root) if self._shanty_root is not None else config.Config()
+            if cfg.accounts:
+                card = account_state.process_card(self._shanty_root, card, cfg, self._panes)
+                account = accounts.selected(card, cfg)
+                if account is not None:
+                    return account.name
             harness = harness_mod.name_for(card, root=self._shanty_root)
         except Exception:                 # noqa: BLE001
             return ''
@@ -919,6 +926,7 @@ class IdleFleetAlerter:
         # bd is the one external call; a hiccup FAILS OPEN (no push, no record —
         # so it retries next pass), never a block.
         try:
+            self._ready_scope = observed_idle
             ready_beads = self._bd_ready()
             self._audit.record(window_id, leg="feed", backend=backend,
                                attempted=True, acted_on=True,
@@ -1041,11 +1049,13 @@ class IdleFleetAlerter:
             own_active = [b for b in active
                           if (b.get("assignee") or "").split("/")[-1] == worker]
             if worker in resumable and own_active:
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 bead = own_active[0]
                 target = push_to_own_pane(
                     self._reg, self._panes, worker,
                     feed_check.haul_resume_message(
-                        bead.get("id", "?"), bead.get("title") or ""))
+                        bead.get("id", "?"), bead.get("title") or "", examples=examples))
                 if target is not None:
                     nudged.append(worker)
                     self._log(f"haul: resumed idle Codex {worker} on active "
@@ -1054,7 +1064,7 @@ class IdleFleetAlerter:
             feedable = [b for b in beads
                         if b not in open_anchors.get(worker, ())]
             if not feedable:
-                self._log(f"haul: {worker} idle but every queued bead is its "
+                self._log(f"haul: {worker} idle but every queued item is its "
                           f"own open anchor — not fed this pass")
                 continue
             # THE SESSION CEILING, ON THIS TRIGGER TOO (aegis-xxae9). ONE
@@ -1147,9 +1157,21 @@ class IdleFleetAlerter:
                 repeats = sb.times_served(self._shanty_root, worker, nid,
                                           spend.started)
                 sb.record_item(self._shanty_root, worker, spend.session, nid)
+                from . import priority_advisory as pa
+                selected = next((b for b in ready_beads if b.get("id") == nid), {})
+                try:
+                    advisory = pa.advice(ready_beads, selected,
+                                         pa.down_agents(self._reg, self._panes))
+                except Exception:
+                    advisory = "governor: higher-priority advisory unavailable; haul continues."
+                if advisory:
+                    self._log(advisory)
+                from .tracker_examples import for_deployment
+                examples = for_deployment(self._root, self._reg)
                 message = feed_check.haul_feed_message(
                     nid, "", len(feedable) - 1,
-                    headroom=sb.headroom(limits, spend), repeats=repeats)
+                    headroom=sb.headroom(limits, spend), repeats=repeats,
+                    advisory=advisory, examples=examples)
                 message += f" — [st serve:{serve_id} worker:{worker}]"
             target = push_to_own_pane(self._reg, self._panes, worker, message)
             if target is None:
@@ -1158,7 +1180,7 @@ class IdleFleetAlerter:
                                    eligible=True, attempted=True, refused=True,
                                    reason="pane unreachable")
                 self._log(f"haul: {worker} is idle with {len(beads)} assigned "
-                          f"ready bead(s) but its pane was unreachable — NOT "
+                          f"ready item(s) but its pane was unreachable — NOT "
                           f"fed, will retry")
                 continue
             nudged.append(worker)
@@ -1170,7 +1192,7 @@ class IdleFleetAlerter:
                 state=("input_sent" if delivery_item else ""),
                 reason=("natural tend feed delivered" if delivery_item
                         else "handoff instruction delivered; no item fed"))
-            self._log(f"haul: fed {worker} its next bead ({feedable[0]}; "
+            self._log(f"haul: fed {worker} its next item ({feedable[0]}; "
                       f"{len(feedable) - 1} more queued) — coordinator "
                       f"deliberately not pinged")
 
@@ -1195,7 +1217,7 @@ class IdleFleetAlerter:
             # engaged tier is the CORRECT state; the coordinator only needs to
             # be able to tell it from a broken feeder, which is what the log
             # line is for. No push: there is nothing for them to do.
-            self._log(f"idle-fleet: {len(held)} bead(s) ready and NONE clear the "
+            self._log(f"idle-fleet: {len(held)} item(s) ready and NONE clear the "
                       f"priority floor — {held[0][2]}. Correctly not alerting.")
         if not newly or not ready:
             # Nothing for the coordinator this pass. Record who was HANDLED
@@ -1233,9 +1255,9 @@ def _idle_fleet_message(free: list[str], newly: list[str], ready,
     lane = f" {balance_line}." if balance_line else ""
     return (
         f"⚠ st fleet tend — RULE ZERO: {len(free)} feedable worker(s) IDLE "
-        f"({', '.join(free)}){fresh} with {len(ready)} dispatchable bead(s) ready. "
+        f"({', '.join(free)}){fresh} with {len(ready)} dispatchable item(s) ready. "
         f"DISPATCH — a free worker while work is ready is the coordinator's stall. "
-        f"`st go <bead> <worker>`. Top ready: {top}.{lane} "
+        f"`st go <item> <worker>`. Top ready: {top}.{lane} "
         f"(auto-alert from st fleet tend; you were not asked to sweep.)")
 
 
@@ -1284,7 +1306,7 @@ class StalledAlerter:
         self._push = push
         from . import feed_check
         self._bd_in_progress = bd_in_progress or (
-            lambda: feed_check.bd_in_progress(feed_check.bd_cwd(reg), root=root, reg=reg))
+            lambda: feed_check.tend_active(root, reg, roles=("worker",)))
         env = os.environ.get("SHANTY_STALL_MIN")
         self._threshold_s = (threshold_min if threshold_min is not None
                              else float(env) if env else 15.0) * 60.0
@@ -1453,11 +1475,11 @@ class StalledAlerter:
     def _nudge_message(items, mins) -> str:
         one = items[0]
         return (f"⚠ st fleet tend (self-heal) — you are idle holding {', '.join(items)} "
-                f"with no progress for {mins:.0f}m. An in_progress bead DAMS your "
-                f"haul until you resolve it. If it is DONE: `br close {one}`. If "
+                f"with no progress for {mins:.0f}m. An in_progress item DAMS your "
+                f"haul until you resolve it. If it is DONE: `st work item close {one} --reason-file <reason>`. If "
                 f"it is blocked or gated (nobody should work it yet): put why on "
-                f"the bead, then `st work defer {one} "
-                f"<bead|human|access|external|parked> --reason-file <file>` — "
+                f"the item, then `st work defer {one} "
+                f"<kind> --reason-file <file>` — "
                 f"that records the blocker kind and takes it OUT of the ready "
                 f"pool (clearing the assignee alone only re-pools it for the next "
                 f"idle agent). If you are mid-something this loop cannot see, "
@@ -1468,7 +1490,7 @@ class StalledAlerter:
         return (f"⚠ st fleet tend — NEGLECTED anchor unresolved: {name} has held "
                 f"{', '.join(items)} idle with no progress for {mins:.0f}m and "
                 f"did NOT act on a self-heal nudge. The haul is dammed. Reclaim "
-                f"the item or close it on the agent's behalf — a held bead nobody "
+                f"the item or close it on the agent's behalf — a held item nobody "
                 f"is working is invisible starvation.")
 
 
@@ -1576,7 +1598,24 @@ class DeferralAlerter:
         self._log = log or (lambda msg: None)
 
     def sweep(self) -> list:
-        """One pass. Returns the bead ids actually reported (usually none)."""
+        """Serialize observation/delivery/recording so overlapping passes send once."""
+        import fcntl
+        lock = Path(self._root) / "notify" / "deferral-sweep.lock"
+        try:
+            lock.parent.mkdir(parents=True, exist_ok=True)
+            with lock.open("a") as held:
+                try:
+                    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    self._log("deferral-sweep: already running; no duplicate wake")
+                    return []
+                return self._sweep()
+        except OSError as error:
+            self._log(f"deferral-sweep: lock unavailable ({error!r}); no push")
+            return []
+
+    def _sweep(self) -> list:
+        """One serialized pass. Returns the bead ids actually reported."""
         from datetime import datetime, timezone
         from . import deferrals as pol
         from .feed_check import backend_adapter
@@ -1616,8 +1655,12 @@ class DeferralAlerter:
         def is_closed(bead: str):
             if bead not in cache:
                 try:
-                    cache[bead] = (self._is_closed(bead) if self._is_closed
-                                   else show(bead).get("status") == "closed")
+                    if self._is_closed is not None:
+                        cache[bead] = self._is_closed(bead)
+                    elif self._show is not None:
+                        cache[bead] = show(bead).get("status") == "closed"
+                    else:
+                        cache[bead] = backend().closed(bead).exact()
                 except Exception as e:
                     self._log(f"deferral-sweep: could not read {bead} ({e!r}); retry next pass")
                     cache[bead] = None
@@ -1625,6 +1668,28 @@ class DeferralAlerter:
 
         rows = [r for r in rows if isinstance(r, dict)
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
+        if rows and self._is_closed is None and self._show is None:
+            targets = []
+            for row in rows:
+                condition = pol.parse_condition(str(row.get("notes") or ""))
+                if condition is not None and condition.kind == "closed":
+                    targets.append(condition.arg)
+            if targets:
+                try:
+                    reader = getattr(backend(), "closed_many", None)
+                    answer = reader(targets) if callable(reader) else None
+                    if answer is not None:
+                        answers = answer.exact()
+                        if not isinstance(answers, dict) or any(
+                                value is not None and type(value) is not bool
+                                for value in answers.values()):
+                            raise ValueError("invalid condition batch verdicts")
+                        # Fill every requested key, including UNKNOWN. Never
+                        # turn a failed native batch into individual retries.
+                        cache.update({target: answers.get(target) for target in targets})
+                except Exception as e:
+                    self._log(f"deferral-sweep: condition batch unreadable ({e!r}); retry next pass")
+                    cache.update(dict.fromkeys(targets))
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
         reports, retry = [], set()
@@ -1699,16 +1764,33 @@ class DeferralAlerter:
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
+        import hashlib
+        import json
+        from .files import write_json_atomic
+        summary_path = Path(self._root) / "notify" / "deferral-summary.json"
+        try:
+            summary = json.loads(summary_path.read_text())
+            previous_summary = summary.get("digest") if isinstance(summary, dict) else None
+        except (OSError, ValueError):
+            previous_summary = None
         if fresh:
-            lines = pol.report(fresh)
-            # RECORD ONLY ON A DELIVERED PUSH. Marking these said when the admin's
-            # pane was unreachable would lose them permanently — the state does not
-            # change again, so nothing would ever re-report it. Same rule
-            # push_to_admin keeps by returning None rather than a silent success.
-            if self._push(self._reg, self._panes, "\n".join(lines)) is None:
-                self._log("deferral-sweep: no admin pane — nothing recorded, "
-                          "these re-report next pass")
-                return []
+            text = "\n".join(pol.report(fresh))
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            if digest == previous_summary:
+                # A changed/reset finding ledger can still render the identical
+                # delivered summary. Record its state, without another LLM turn.
+                self._log("deferral-sweep: identical delivered summary suppressed")
+                fresh = []
+            else:
+                # Failed delivery consumes neither the summary nor finding state.
+                if self._push(self._reg, self._panes, text) is None:
+                    self._log("deferral-sweep: no admin pane — nothing recorded, "
+                              "these re-report next pass")
+                    return []
+                write_json_atomic(summary_path, {"digest": digest})
+        elif not findings and not retry and not store_error:
+            # A positively read resolution permits a future genuine recurrence.
+            write_json_atomic(summary_path, {})
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
@@ -1861,11 +1943,11 @@ class BlockedStaleAlerter:
             if decision_hold:
                 classification = ("DELIBERATE HOLD: decision label present; "
                                   f"verified at {verified_at}. This standing "
-                                  "notice repeats only when the bead changes.")
+                                  "notice repeats only when the item changes.")
             elif kind == "work":
                 classification = (f"BLOCKED-ON-WORK: open issue blocker(s) "
                                   f"{', '.join(blockers)}. Chase that work; do "
-                                  f"not re-ask a human for the blocked bead.")
+                                  f"not re-ask a human for the blocked item.")
             else:
                 classification = ("BLOCKED-ON-HUMAN: no open issue blocker "
                                   "exists. A person must clear/correct the status "
@@ -1876,13 +1958,13 @@ class BlockedStaleAlerter:
                    f"(p{r.get('priority')}, assignee {who}) — created "
                    f"{age:.0f}d ago, still blocked. {(r.get('title') or '')[:90]}. "
                    f"{classification} "
-                   f"BLOCKED is invisible everywhere else — off br ready, off the "
+                   f"BLOCKED is invisible everywhere else — off the ready pool, off the "
                    f"Rule Zero sweep, off every capacity report — so it is STOPPED, "
                    f"not waiting. "
-                   f"(age is created_at, an UPPER bound — bd records no "
+                   f"(age is created_at, an UPPER bound — sd records no "
                    f"blocked-at timestamp.)")
             if held_back and i == min(BLOCKED_MAX_PER_PASS, len(due)) - 1:
-                msg += (f" [+{held_back} more aged blocked bead(s) held back this "
+                msg += (f" [+{held_back} more aged blocked item(s) held back this "
                         f"pass to avoid a wall; they surface on following passes.]")
             if self._push(self._reg, self._panes, msg):
                 ledger[bid] = ({"kind": "decision-hold", "verified_at": verified_at}
@@ -1939,7 +2021,7 @@ class BlockedMisstatusAlerter:
         try:
             rows = self._bd_blocked() if self._bd_blocked else bd_blocked(cwd, root=self._root, reg=self._reg)
         except Exception as e:
-            self._log(f"blocked-misstatus: could not read blocked beads ({e!r})")
+            self._log(f"blocked-misstatus: could not read blocked items ({e!r})")
             return []
 
         try:
@@ -1976,7 +2058,7 @@ class BlockedMisstatusAlerter:
             del ledger[bid]
         surfaced = []
         for bid, row, deps in due:
-            msg = (f"⚠ MIS-STATUSED BLOCKED bead: {bid} has dependencies and "
+            msg = (f"⚠ MIS-STATUSED BLOCKED item: {bid} has dependencies and "
                    f"EVERY one is closed ({', '.join(deps)}). It is unblocked "
                    f"in fact but blocked on paper, so br ready and every feed "
                    f"path hide it. Clear/correct the status; do not chase a "
@@ -2010,16 +2092,26 @@ _SHELL_COUNT_COMPLETE = frozenset({"claude"})
 _BACKGROUND_TERMINAL = re.compile(r"background terminal", re.IGNORECASE)
 
 
-def unattended_shell_block(plain: str, harness_name: "str | None") -> str:
-    """Why background work forbids an UNATTENDED cycle now, or "".
-
-    A cycle kills every shell the session owns, so "cannot see" must refuse
-    unless this harness's silence is known to mean none."""
+def _visible_shell_block(plain: str) -> str:
     n = triage_mod.running_shells(plain)
     if n:
         return f"{n} background shell(s) still running"
     if _BACKGROUND_TERMINAL.search(triage_mod._tail(plain)):
         return "a background terminal is still running"
+    return ""
+
+
+def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None) -> str:
+    """An unattended cycle needs fresh runtime-owned zero on Codex."""
+    if visible := _visible_shell_block(plain):
+        return visible
+    if harness_name == "codex":
+        from . import codex_shells
+        count = codex_shells.count(agent, root)
+        if type(count) is int and count >= 0:
+            return f"{count} background terminal(s) still running" if count else ""
+        return "background shells cannot be read on the codex harness, so zero is not visible"
+    n = triage_mod.running_shells(plain)
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
                 f"{harness_name or 'unknown'} harness, so zero is not visible")
@@ -2036,7 +2128,7 @@ def _checkpoint_nudge(bead: str, since: str) -> str:
     return (f"You are past the cycle line. tend will cycle you at your next idle "
             f"turn once a checkpoint is on {bead} (any comment you write there "
             f"after {since}): state, landed-vs-local, exact next step. Write it "
-            f"now with `br comments add {bead} --file <notes>`, then stop.")
+            f"now with `st work item comment {bead} --file <notes>`, then stop.")
 
 
 class AutoCycler:
@@ -2070,6 +2162,7 @@ class AutoCycler:
 
     def __init__(self, root, panes, *, anchor, comments, requests, push,
                  reg=None, log=None, now=None, harness=None):
+        self._root = root
         self.path = Path(root) / "notify" / "auto-cycle.json"
         self._prompted = Path(root) / "notify" / "cycling.json"   # CycleDriver's
         self._panes = panes
@@ -2101,7 +2194,7 @@ class AutoCycler:
         try:
             card = next(c for c in self._agents if c.name == agent)
             plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-            return unattended_shell_block(plain, self._harness(card))
+            return unattended_shell_block(plain, self._harness(card), agent=card.name, root=self._root)
         except Exception as e:  # noqa: BLE001 — cannot tell is not clear
             return f"background shells unreadable ({e})"
 
@@ -2164,7 +2257,7 @@ class AutoCycler:
             except Exception as e:  # noqa: BLE001
                 bead, why = "", f"plate unreadable ({e})"
             else:
-                why = "no plate bead to checkpoint onto"
+                why = "no plate item to checkpoint onto"
             if not bead:
                 if entry.get("noted") != why:
                     self._log(f"auto-cycle: {agent} is past the line but NOT "

@@ -1,0 +1,7 @@
+$ PYTHONPATH=. python3 docs/probes/pr-demos/deferred-fields/reproduce.py
+Offline frozen fixture: 50 deferred + 1 dated-open; no service calls.
+Before: full fixture rows -> 51 findings.
+After: 4 bounded candidate/field reads -> 51 identical findings.
+Order and condition notes preserved; unused bodies omitted.
+Unreadable control: UNKNOWN, no hydration fallback.
+Source fixture only; natural pass count, deployment and hourly rate unproven.

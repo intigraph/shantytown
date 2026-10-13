@@ -48,6 +48,7 @@ import sys
 import time
 from pathlib import Path
 
+from .tmux import shell_foreground
 from . import triage
 from . import workflow
 from .answer import PartialAnswer
@@ -264,7 +265,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path):
+def _plate_reader(root: Path, *, require_complete: bool = False):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -286,6 +287,9 @@ def _plate_reader(root: Path):
         from .br import plate as br_plate
         from .sd import br_like_tracker
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(sd_tracker, require_complete=True)
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -294,6 +298,9 @@ def _plate_reader(root: Path):
                                   or deployment_default(root, "SHANTY_BEADS_REPO")),
                             extra_repos=parse_extra_repos(
                                 deployment_default(root, EXTRA_REPOS_KEY)))
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(tracker, require_complete=True)
         return lambda who, warn=None: br_plate(tracker, who, warn=warn)
     return lambda who, warn=None: files_plate(FilesTracker(root / "items"), who)
 
@@ -326,7 +333,7 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
-          root: Path | None = None) -> int:
+          root: Path | None = None, *, payload: dict | None = None) -> int:
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -340,12 +347,49 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     context_k = _my_context_k(reg, panes, me)
     item, item_status, plate_notes = (
         _plate_of(root, me) if root is not None else (None, "?", []))
+    outcome = {"label": "unavailable"}
+    detail = routing.detail or None
+    if root is not None and item:
+        from . import stop_outcome
+        command = deployment_default(root, "SHANTY_STOP_JEV_COMMAND")
+        if command:
+            payload = stop_outcome.read_payload() if payload is None else payload
+            outcome = stop_outcome.advise(root, me, item, item_status, payload, command)
+            label = outcome["label"]
+            if label in stop_outcome.CHOICES:
+                action = {"finished-unclosed": "prompt the author to close after verifying acceptance",
+                          "blocked": "lead: resolve the named blocker",
+                          "gave-up": "escalate: work was abandoned or is looping",
+                          "mid-work": "a turn boundary; the author intends to continue"}[label]
+                note = f"Stop intent (Jev inferred, as of stop): {label}; {action}"
+                if label == "blocked":
+                    note += "; assistant evidence (data): " + json.dumps(outcome.get("evidence", ""))
+                detail = " · ".join(s for s in (detail, note) if s)
+                if label == "gave-up" and not routing.rose:
+                    # Existing authority routing, never a service/page side effect.
+                    from .tier import find_administrator, Reason
+                    try:
+                        admin = find_administrator(reg)
+                    except Exception:
+                        admin = None  # A failed advisory lookup cannot lose the event.
+                    if admin and admin != me:
+                        routing.to, routing.rose = admin, True
+                        reason = Reason.NEEDS_DECISION.value
     # Carry WHY the rise happened, not just that it did (aegis-jms5s8). route_stop
     # already computed it from tier.LeadStatus; dropping it here is what made five
     # rises in one evening indistinguishable from each other and from a real one.
     ev = events.persist(to=routing.to, frm=me, reason=reason, rose=routing.rose,
                         shells=shells, item=item, item_status=item_status,
-                        context_k=context_k, detail=routing.detail or None)
+                        context_k=context_k, detail=detail)
+    if outcome["label"] == "finished-unclosed":
+        try:
+            if stop_outcome.close_prompt(root, me, item, payload):
+                print(json.dumps({"decision": "block", "reason":
+                    f"Jev inferred that {item} is finished but still {item_status}. "
+                    "Verify acceptance and close it with evidence, or record what remains. "
+                    "This is one reminder, not an automatic close."}))
+        except Exception:
+            pass  # A log/marker failure cannot trap a stopping agent.
     samples_path = deployment_default(root, "SHANTY_STOP_SAMPLES") if root is not None else None
     if samples_path:
         from .stop_samples import collect
@@ -458,7 +502,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd {' '.join(args)} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"compatibility tracker command {' '.join(args)} failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -582,7 +626,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # ADMINISTRATORS ARE STILL EXCLUDED, deliberately: the coordinator's
         # assigned beads are not a haul, and feeding them would put the person
         # who dispatches work head-down in a bead.
-        if card.role not in ("worker", "lead"):
+        if card.role not in ("worker", "lead", "keeper"):
             return 0
         from .feed_check import bd_cwd, haul_hold_reason
         if reason := haul_hold_reason(root, me):
@@ -624,12 +668,15 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
                 return 0
             _mark_haul_resume(root, me, rid)
             title = resume.get("title") or ""
+            from .tracker_examples import for_deployment
+            examples = for_deployment(root, reg)
             print(json.dumps({"decision": "block",
-                              "reason": haul_resume_message(rid, title)}))
+                              "reason": haul_resume_message(rid, title, examples=examples)}))
             return 0
         mine = []
         if resume is None:
-            mine = _assigned_to(me, _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg))
+            all_ready = _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg)
+            mine = _assigned_to(me, all_ready)
             if not mine:
                 return 0
             # A ready assignment is not governor admission (aegis-4kd6ux).
@@ -670,6 +717,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             return 0
 
         nxt = mine[0]
+        from . import priority_advisory as pa
+        try:
+            advisory = pa.advice(all_ready, nxt, pa.down_agents(reg, panes))
+        except Exception:
+            advisory = "governor: higher-priority advisory unavailable; haul continues."
         nid = nxt.get("id", "?")
         title = (nxt.get("title") or "")[:80]
         rest = len(mine) - 1
@@ -686,10 +738,13 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
         except Exception:
             pass
+        from .tracker_examples import for_deployment
+        examples = for_deployment(root, reg)
         print(json.dumps({"decision": "block",
                           "reason": "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
-                                              headroom=headroom, repeats=repeats)}))
+                                              headroom=headroom, repeats=repeats,
+                                              advisory=advisory, examples=examples)}))
         return 0
     except Exception:
         return 0                     # fail-open: never trap a worker's stop
@@ -715,7 +770,8 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
         card = reg.get(name)
     except Exception:
         return DOWN
-    if not card.pane or not panes.exists(card.pane):
+    if (not card.pane or not panes.exists(card.pane)
+            or shell_foreground(panes, card.pane)):
         return DOWN
     # attrs=True IS LOad-BEARING (aegis-c6hli). work_state asks input_state what
     # is in the box, and input_state can only tell a dim suggestion from typed
@@ -809,9 +865,9 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         latest[e.frm] = e
     lines = [f"⚠ {len(latest)} agent(s) WORKING UNTRACKED — they have NOT stopped. "
-             f"Each has been acting with an EMPTY HOOK (no open bead assigned) and "
+             f"Each has been acting with an EMPTY HOOK (no open item assigned) and "
              f"was warned in its own context first. Untracked work is invisible to "
-             f"you and does not survive their session: give each one a bead "
+             f"you and does not survive their session: give each one an item "
              f"(`st go <id> <agent>`), or confirm the work is legitimately "
              f"untracked and say so:"]
     for name in sorted(latest):
@@ -892,12 +948,17 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         if verdicts.get(name) == triage.WAITING:
             tag += (" — BLOCKED ON A QUESTION in its pane: it is stopped until "
                     "someone answers. Answer it, or tell it to put the decision on "
-                    "the bead and carry on")
+                    "the item and carry on")
         age = _age(e.ts, now)
         current = (current_items or {}).get(name)
         lines.append(f"  - {name} stopped {age} — now: "
                      f"{verdicts.get(name, '?')} · "
                      f"{_item_note(e, age, current)}{tag}{more}")
+        if e.detail and "Stop intent (Jev inferred, as of stop):" in e.detail:
+            # A new anchor supersedes the action; keep this explicitly historical.
+            stale = current is not None and current != _item_snapshot(e)
+            lines.append("    " + ("Historical, recheck before acting: " if stale else "")
+                         + e.detail)
     return "\n".join(lines)
 
 
@@ -1061,7 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
-    plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
