@@ -2543,3 +2543,19 @@ the default remains 60 seconds. Hooks and publication guards still run.
 A timeout leaves publication indeterminate: read back that peer's exact
 remote destination SHA before deciding whether any retry is needed. Remaining
 peers are not attempted after a timeout, and earlier successful peers stay published.
+
+### Technical gates and Steve asks
+
+`st work defer ITEM bead --reason 'resume_when: closed:TARGET' --dependency-reason 'Required API/schema/artifact from TARGET'` requires a one-line technical dependency. Queue order belongs on the plate. The target inherits the waiting item's priority before the item is deferred; an unconfirmed priority write stops without replaying it. A Steve ask behind a lower-priority target requires Sattler's `--sattler-reason`, recorded with the deferral. Dry runs write nothing.
+
+Declare `repo: NAME` and/or `epic: ID` on separate notes lines. Different or unknown scopes flag Sattler through the existing natural tend pass. The pass follows at most eight gate links and performs at most 25 additional exact metadata reads; unreadable/truncated/cyclic chains retain UNKNOWN or a cycle finding and never release work based on those findings. Stall events are delivered once per chain until resolution, with a persistent delivery ledger. No additional timer is installed.
+
+For an original Steve ask, retain these notes using the normal exact item notes update:
+
+```text
+steve_quote: Exact requested work
+steve_source: Original request reference
+steve_ask_at: 2026-10-05T12:00:00Z
+```
+
+Use the original full UTC timestamp, never the item's creation/modification date. Optional `work_started_at: ...Z` records actual work start; an `in_progress` item also counts as started. After 72 hours without work the existing tend pass delivers one event to Sattler, then Hammond on the next still-unstarted pass. Failed deliveries stay pending. A quote without complete time/source gets one provenance-UNKNOWN notice to Sattler, without an age claim. Historical unannotated prose is not a registered ask; preserve and annotate its original provenance to track it.
