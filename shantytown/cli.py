@@ -2106,6 +2106,9 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
     ph.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
+    ph.add_argument("--timeout", type=int, default=60, metavar="SECONDS",
+                    help="per-peer push deadline, 1–3600 seconds (default 60); "
+                         "includes normal pre-push hooks")
     ph.add_argument("--source-branch",
                     help="explicit source branch; must match the selected worktree and caller")
     ph.add_argument("--branch",
@@ -10171,7 +10174,18 @@ def _cmd_push(a) -> int:
               f"deliberately with --source-branch after reviewing the ref.",
               file=sys.stderr)
         return REFUSED
-    outcomes = push_every_remote(dest, branch, a.branch)
+    timeout = getattr(a, "timeout", 60)
+    if not 1 <= timeout <= 3600:
+        print("  refused before push: --timeout must be 1–3600 seconds; "
+              "no remote was contacted.", file=sys.stderr)
+        return REFUSED
+    if timeout == 60:
+        outcomes = push_every_remote(dest, branch, a.branch)
+    else:
+        from functools import partial
+        from .workspace import _git_push
+        outcomes = push_every_remote(dest, branch, a.branch,
+                                     push_run=partial(_git_push, timeout=timeout))
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
               file=sys.stderr)
@@ -10191,10 +10205,15 @@ def _cmd_push(a) -> int:
             # SAY THIS OUT LOUD. A partial push is the state most likely to be
             # misread as "the push failed" and retried blindly, and the remotes
             # are now diverged BY THIS COMMAND until the refusal is resolved.
-            print(f"  ⚠ PARTIAL: {', '.join(landed)} took it, "
-                  f"{', '.join(o.remote for o in refused)} did not. The remotes "
-                  f"are diverged until you resolve the refusal above. Nothing is "
-                  f"unwound — un-pushing is a rewrite.", file=sys.stderr)
+            if any("INDETERMINATE" in o.reason for o in refused):
+                print(f"  ⚠ PARTIAL: {', '.join(landed)} confirmed publication; "
+                      "another peer is indeterminate. Read back exact remote SHAs; "
+                      "earlier publications were not unwound.", file=sys.stderr)
+            else:
+                print(f"  ⚠ PARTIAL: {', '.join(landed)} took it, "
+                      f"{', '.join(o.remote for o in refused)} did not. The remotes "
+                      f"are diverged until you resolve the refusal above. Nothing is "
+                      f"unwound — un-pushing is a rewrite.", file=sys.stderr)
         return REFUSED
     return OK
 
