@@ -403,7 +403,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
 
 
-def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
+def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=None) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
     fields = {**FIELDS, SEEDS + "ontology/notes": "notes"}
@@ -422,6 +422,35 @@ def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
                     f'<{SEEDS}ontology/status> "open" ; {_iri(predicate)} ?date }} '
                     f'BIND({json.dumps(graph)} AS ?graph) }}'
                 )
+        if include_asks:
+            for graph in graphs:
+                for status in ("open", "blocked", "in_progress"):
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                        f'<{SEEDS}ontology/notes> ?askNotes . '
+                        'FILTER(CONTAINS(?askNotes, "steve_quote:")) } '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}')
+        if include_asks:
+            for graph in graphs:
+                for status in ("open", "blocked"):
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                        f'<{SEEDS}ontology/notes> ?gateNotes . '
+                        'FILTER(CONTAINS(?gateNotes, "resume_when:")) } '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}')
+        if target_ids is not None:
+            if not target_ids or len(target_ids) > 25:
+                raise ValueError("gate target batch must contain 1..25 IDs")
+            branches = []
+            for identifier in target_ids:
+                if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", identifier):
+                    raise ValueError("invalid gate target ID")
+                subject = SEEDS + "item/" + quote(identifier, safe="")
+                for graph in graphs:
+                    branches.append(f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} a <{SCHEMA}Action> }} '
+                                    f'BIND({_iri(subject)} AS ?s) BIND({json.dumps(graph)} AS ?graph) }}')
         candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
                             + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
         if len(candidates) >= 10000:
@@ -485,19 +514,25 @@ def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
                         raise ValueError("ambiguous deferral field")
                     seen.add((subject, key))
                     row[key] = value
+        statuses = (("closed", "tombstone", "deferred", "open", "blocked", "in_progress")
+                    if target_ids is not None else
+                    ("deferred", "open", "blocked", "in_progress") if include_asks else
+                    ("deferred", "open"))
         for subject, row in grouped.items():
             if (not all(isinstance(row.get(k), str) for k in ("id", "title", "created_at", "status"))
                     or not row["id"] or subject != SEEDS + "item/" + quote(row["id"], safe="")
                     or type(row.get("priority")) is not int or not 0 <= row["priority"] <= 4
-                    or row["status"] not in ("deferred", "open")
-                    or (row["status"] == "open" and row["defer_until"] is None)
+                    or row["status"] not in statuses
+                    or (target_ids is None and row["status"] != "deferred" and row["defer_until"] is None
+                        and not (include_asks and any(marker in (row["notes"] or "")
+                                                     for marker in ("steve_quote:", "resume_when:"))))
                     or any(row[k] is not None and not isinstance(row[k], str)
                            for k in ("notes", "assignee", "defer_until"))):
                 raise ValueError("incomplete or changed deferral candidate")
             row["labels"].sort()
         def ranking(row):
             return row["priority"], row["created_at"], row["id"]
-        rows = [row for status in ("deferred", "open")
+        rows = [row for status in statuses
                 for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:

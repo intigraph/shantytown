@@ -1468,6 +1468,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "timestamps are refused, including in -n dry runs. Written to "
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
+    df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
@@ -6008,7 +6010,10 @@ def _cmd_defer(a) -> int:
     d = _wire(a)
     try:
         r = d.defer(a.item, a.kind, reason, dry_run=a.dry_run,
-                    until=getattr(a, "until", "") or "")
+                    until=getattr(a, "until", "") or "",
+                    dependency_reason=getattr(a, "dependency_reason", ""),
+                    sattler_reason=getattr(a, "sattler_reason", ""),
+                    gate_authority=_me(a) or "")
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -6017,13 +6022,15 @@ def _cmd_defer(a) -> int:
               "before retrying — the status and label may already have landed.",
               file=sys.stderr)
         return CANNOT_TELL
+    if "gate_scope_flag:" in r.reason:
+        print("  ⚠ gate scope flagged for Sattler on the next natural tend pass.", file=sys.stderr)
     if r.noop:
         print(f"  {a.item} is already deferred as {r.label} — nothing to write.")
         return OK
     if a.dry_run:
         print(f"  would defer {a.item}: verify reason and resume condition "
               f"{r.condition!r} first, then {r.was_status} -> deferred with "
-              f"{r.label}. 1 tracker read, 0 writes.")
+              f"{r.label}. Item and gate reads only; 0 writes.")
         return OK
     print(f"  ✓ {a.item} deferred as {r.label}; reason, resume condition "
           f"{r.condition!r}, and exactly one blocker kind verified by read-back.")

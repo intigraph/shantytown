@@ -1,0 +1,9 @@
+Script started on 2026-10-13 12:27:20-04:00 [COMMAND="bash docs/probes/pr-demos/gate-backstop/record.sh" <not executed on terminal>]
+Private fixture: exact paper -> release chain; target explicitly deferred.
+BASE 28a4f7fc: same probe, no live store or pane writes
+{"unreasoned_gate_refused": false, "exact_chain_events_first_pass": 0, "exact_chain_events_two_passes": 0, "positive_control_target_status": "deferred", "private_fixture_only": true}
+CANDIDATE: same probe, explicit technical gate lint plus persisted chain event
+REFUSAL closed gate requires --dependency-reason: one-line technical dependency; queue order is not a gate
+{"unreasoned_gate_refused": true, "exact_chain_events_first_pass": 1, "exact_chain_events_two_passes": 1, "positive_control_target_status": "deferred", "private_fixture_only": true}
+
+Script done on 2026-10-13 12:27:21-04:00 [COMMAND_EXIT_CODE="0"]

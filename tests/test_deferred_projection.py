@@ -69,3 +69,22 @@ def test_empty_success_and_native_adapter(monkeypatch):
     monkeypatch.setattr(seeds_plate,'_query',lambda *a:dict(rows=[],count=0,truncated=False))
     monkeypatch.setattr(tracker,'_bd',lambda *a:pytest.fail('hydration escaped'))
     assert tracker.deferred_rows().exact()==[]
+def test_original_ask_candidates_are_scoped_without_description(monkeypatch):
+ calls=[]
+ def query(proof,q,timeout):
+  calls.append(q)
+  return dict(rows=wire(status='open',notes='steve_quote: Data\nsteve_ask_at: 2026-10-05T12:00:00Z\nsteve_source: original') if 'AS ?predicate' in q else [dict(subject=S,graph=G)])
+ monkeypatch.setattr(seeds_plate,'_query',query)
+ rows=seeds_plate.deferred_rows(PROOF,include_asks=True).exact()
+ assert rows[0]['status']=='open' and 'CONTAINS(?askNotes, "steve_quote:")' in calls[0]
+ assert all('description' not in q and '?s ?p ?o' not in q for q in calls)
+def test_gate_target_metadata_closed_and_batch_bound(monkeypatch):
+ calls=[]
+ def query(proof,q,timeout):
+  calls.append(q)
+  return dict(rows=wire(status='closed') if 'AS ?predicate' in q else [dict(subject=S,graph=G)])
+ monkeypatch.setattr(seeds_plate,'_query',query)
+ assert seeds_plate.deferred_rows(PROOF,target_ids=['test-one']).exact()[0]['status']=='closed'
+ assert S in calls[0] and '"deferred"' not in calls[0]
+ with pytest.raises(PartialAnswer):seeds_plate.deferred_rows(PROOF,target_ids=['x']*26).exact()
+ assert len(calls)==2

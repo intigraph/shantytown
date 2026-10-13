@@ -160,7 +160,23 @@ class SdTracker(BrTracker):
                                  graph=w.get("graph"))
         return self._proof
 
-    def deferred_rows(self) -> Answer[list[dict]]:
+    def gate_details(self, identifiers):
+        """Exact candidate metadata only; no imported payload or SDK snapshot."""
+        if self._use_remote_projection():
+            from .seeds_plate import deferred_rows
+            rows = deferred_rows(self.prove_store(), timeout=self.timeout,
+                                 target_ids=identifiers).exact()
+            return {row["id"]:row for row in rows}
+        from .br import show
+        return {identifier:show(self, identifier) for identifier in identifiers}
+
+    def gate_detail(self, identifier):
+        rows = self.gate_details([identifier])
+        if identifier not in rows:
+            raise ValueError("gate target metadata UNKNOWN")
+        return rows[identifier]
+
+    def deferred_rows(self, *, include_asks=False) -> Answer[list[dict]]:
         """Both deferral representations, selecting dated open rows remotely."""
         try:
             projected = self._use_remote_projection()
@@ -168,7 +184,7 @@ class SdTracker(BrTracker):
             return Answer.capped([], how="Seeds deferral format proof", caveat=str(error))
         if projected:
             from .seeds_plate import deferred_rows
-            return deferred_rows(self.prove_store(), timeout=self.timeout)
+            return deferred_rows(self.prove_store(), timeout=self.timeout, include_asks=include_asks)
         rows = {}
         how = "sd list deferred + open --defer-until-present, --limit 0"
         try:

@@ -777,13 +777,13 @@ class TrackerAdapter:
                                  "--json", "--limit", "0")
         return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
 
-    def deferred(self) -> Answer[list[dict]]:
+    def deferred(self, *, include_asks=False) -> Answer[list[dict]]:
         """Deferred AND open rows — the deferral sweep keys off `defer_until`,
         which lives under both statuses since the cutover (aegis-boj8a2)."""
         if self.tracker is not None:
             scoped = getattr(self.tracker, "deferred_rows", None)
             if callable(scoped):
-                return scoped()
+                return scoped(include_asks=True) if include_asks else scoped()
             from .br import deferred
             value = deferred(self.tracker)
         else:
@@ -803,6 +803,14 @@ class TrackerAdapter:
             value = self._legacy("bd", "show", item, "--json")
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
+
+    def gate_details(self, items):
+        reader = getattr(self.tracker, "gate_details", None)
+        return reader(items) if callable(reader) else {item:self.show(item).exact() for item in items}
+
+    def gate_detail(self, item):
+        reader = getattr(self.tracker, "gate_detail", None)
+        return reader(item) if callable(reader) else self.show(item).exact()
 
     def closed_many(self, items) -> Answer[dict[str, bool | None]] | None:
         """Optional native candidate batch; legacy readers retain single reads."""
