@@ -2559,3 +2559,28 @@ steve_ask_at: 2026-10-05T12:00:00Z
 ```
 
 Use the original full UTC timestamp, never the item's creation/modification date. Optional `work_started_at: ...Z` records actual work start; an `in_progress` item also counts as started. After 72 hours without work the existing tend pass delivers one event to Sattler, then Hammond on the next still-unstarted pass. Failed deliveries stay pending. A quote without complete time/source gets one provenance-UNKNOWN notice to Sattler, without an age claim. Historical unannotated prose is not a registered ask; preserve and annotate its original provenance to track it.
+
+
+### Gate backstop digests and verdict cooldown
+
+The existing natural `st fleet tend` pass sends at most one gate-backstop digest
+per recipient per pass. Sattler receives the selected stalled chains and pending
+Steve asks together; a verified ask escalation to Hammond remains a later pass.
+The 12-event and metadata-read budgets remain in force. Pending events and ask
+stages advance only after confirmed digest delivery; failed or indeterminate
+sends retain pending state without retrying within that pass.
+
+To record a verdict on the waiting item, retain its existing notes and add:
+
+```text
+gate_verdict: Keep this gate: required API is still pending
+gate_verdict_by: sattler
+gate_verdict_at: 2026-10-13T22:00:00Z
+```
+
+These are declared item metadata, not authenticated actor identity. A nonempty
+verdict attributed to Sattler with a valid timestamp suppresses new gate-backstop
+notifications for that item for 24 hours. Future, absent, invalid, or differently
+attributed timestamps do not arm the cooldown. Pending delivery and prior ask
+stages remain recorded; normal eligibility resumes when the cooldown expires.
+The verdict does not release an item, rewrite priorities, or clear its gate.

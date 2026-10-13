@@ -106,16 +106,18 @@ def test_batch_failure_never_falls_back_to_single_reads(tmp_path):
  assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('unknown')).run(r,lambda _:pytest.fail('fallback'),lookup_many=fail)==[]
 def test_bounded_reads_rotate_candidates_without_starvation(tmp_path):
  r=[{'id':f'wait-{i:03}', 'status':'deferred','notes':f'repo: paper\nresume_when: closed:target-{i:03}'} for i in range(60)]
- calls=[];reads=[]
+ calls=[];reads=[];reported=[]
  def detail(identifier):
   reads.append(identifier);return {'id':identifier,'status':'open','notes':'repo: paper','updated_at':'2026-10-08T00:00:00Z'}
  def batch(ids):return {identifier:detail(identifier) for identifier in ids}
  for _ in range(12):
   before=len(reads)
-  Backstop(tmp_path,NOW,lambda *a:calls.append(a) or True).run(r,detail,lookup_many=batch)
+  prior=len(calls)
+  reported.extend(Backstop(tmp_path,NOW,lambda *a:calls.append(a) or True).run(r,detail,lookup_many=batch))
   assert len(reads)-before<=25
- assert len(calls)==60
- assert len({a[1] for a in calls})==60
+  assert len(calls)-prior<=1
+ assert len(reported)==60
+ assert len(set(reported))==60
 def test_known_deferred_prefix_survives_unknown_suffix_without_duplicate(tmp_path):
  r=rows();r[1]['notes']='resume_when: closed:missing';calls=[]
  deliver=lambda *a:calls.append(a) or True
@@ -125,3 +127,77 @@ def test_known_deferred_prefix_survives_unknown_suffix_without_duplicate(tmp_pat
  assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('same waiting edge')).run(r,lambda _:None)==[]
 def test_unknown_first_target_cannot_claim_a_stall(tmp_path):
  assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('unknown target')).run(rows()[:1],lambda _:None)==[]
+
+
+def test_digest_failure_preserves_all_events_and_ask_stage(tmp_path):
+ r=rows()+[{'id':'ask','status':'open','notes':ASK}]
+ calls=[]
+ assert Backstop(tmp_path,NOW,lambda *a:calls.append(a) or False).run(r,lambda _:None)==[]
+ assert len(calls)==1 and 'STALL' in calls[0][1] and 'STEVE ASK NOT STARTED' in calls[0][1]
+ state=Backstop(tmp_path,NOW,lambda *a:True).state
+ assert any(v.get('stage')==0 for v in state.values())
+ assert not any(v.get('delivered') for v in state.values())
+ delivered=[]
+ assert set(Backstop(tmp_path,NOW,lambda *a:delivered.append(a) or True).run(r,lambda _:None))=={'aegis-s9sjf.8','ask'}
+ assert len(delivered)==1
+ # Escalation to Hammond stays a later pass, after confirmed Sattler digest.
+ second=[]
+ assert Backstop(tmp_path,NOW,lambda *a:second.append(a) or True).run(r,lambda _:None)==['ask']
+ assert len(second)==1 and second[0][0]=='hammond'
+
+
+def test_digest_exception_does_not_advance_delivery(tmp_path):
+ def fail(*args):raise TimeoutError('indeterminate')
+ assert Backstop(tmp_path,NOW,fail).run(rows(),lambda _:None)==[]
+ assert Backstop(tmp_path,NOW,lambda *a:True).run(rows(),lambda _:None)==['aegis-s9sjf.8']
+
+
+@pytest.mark.parametrize('stamp,authority,cooling',[
+ ('2026-10-13T15:00:00Z','sattler',True),
+ ('2026-10-12T16:00:00Z','sattler',False),
+ ('2026-10-13T17:00:00Z','sattler',False),
+ ('not-a-time','sattler',False),
+ ('2026-10-13','sattler',False),
+ ('2026-10-13T15:00:00Z','arnold',False),
+])
+def test_recorded_verdict_cooldown_and_expiry(tmp_path,stamp,authority,cooling):
+ r=rows();r[0]['notes']+=f'\ngate_verdict: Keep this real dependency\ngate_verdict_by: {authority}\ngate_verdict_at: {stamp}'
+ calls=[]
+ first=Backstop(tmp_path,NOW,lambda *a:calls.append(a) or True).run(r,lambda _:None)
+ assert (first==[]) is cooling
+ assert len(calls)==(0 if cooling else 1)
+ if cooling:
+  assert Backstop(tmp_path,NOW+timedelta(hours=24),lambda *a:True).run(r,lambda _:None)==['aegis-s9sjf.8']
+
+
+def test_digest_utf8_bound_and_pending_delivery(tmp_path):
+ r=[]
+ for i in range(24):
+  r.extend([{'id':f'w{i}','status':'blocked','notes':f'resume_when: closed:t{i}'},
+            {'id':f't{i}','status':'blocked','notes':''}])
+ calls=[];reported=[]
+ for _ in range(8):
+  reported.extend(Backstop(tmp_path,NOW,lambda *a:calls.append(a) or True).run(r,lambda _:None))
+ assert len(reported)==len(set(reported))==24
+ assert all(len(msg.encode('utf-8'))<6100 for _,msg in calls)
+
+
+
+def test_large_unicode_ask_remains_one_bounded_digest(tmp_path):
+ note=ASK.replace('Give me ARM F backing data','界'*10000)
+ calls=[]
+ assert Backstop(tmp_path,NOW,lambda *a:calls.append(a) or True).run(
+  [{'id':'large-ask','status':'open','notes':note}],lambda _:None)==['large-ask']
+ assert len(calls)==1 and 'large-ask' in calls[0][1]
+ assert len(calls[0][1].encode('utf-8'))<6100
+ assert '[details on large-ask]' in calls[0][1]
+
+
+def test_verdict_cools_pending_ask_escalation_without_resetting_stage(tmp_path):
+ r=[{'id':'ask','status':'open','notes':ASK}]
+ assert Backstop(tmp_path,NOW,lambda *a:True).run(r,lambda _:None)==['ask']
+ r[0]['notes']+='\ngate_verdict: Working on it\ngate_verdict_by: sattler\ngate_verdict_at: 2026-10-13T16:00:00Z'
+ assert Backstop(tmp_path,NOW,lambda *a:pytest.fail('cooldown')).run(r,lambda _:None)==[]
+ calls=[]
+ assert Backstop(tmp_path,NOW+timedelta(hours=24),lambda *a:calls.append(a) or True).run(r,lambda _:None)==['ask']
+ assert len(calls)==1 and calls[0][0]=='hammond'
