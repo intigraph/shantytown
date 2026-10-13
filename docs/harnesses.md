@@ -550,7 +550,7 @@ receive a changed group.
 
 ### Daemon package storage
 
-Remote Control keeps each card's socket and transient control state in its short
+On Linux, Remote Control keeps each card's socket and transient control state in its short
 runtime home. Its app-server daemon package directory points to one user-owned,
 mode 0700 directory under `XDG_DATA_HOME/shantytown/codex/packages/`
 (defaulting to `~/.local/share`). The package, current pointer and native
@@ -567,5 +567,5 @@ old tree. Unknown custody refuses. Copy manifests bind bytes, modes and internal
 links; a conflicting shared version preserves the old directory. A late
 reference preserves the moved backup. The migration shares the native installer
 lock inode and serializes provisioning; it never forces a cycle, deletes live
-releases or falls back to downloading into RAM. Existing-package migration on
-other platforms refuses until process custody can be verified there.
+releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
+calling the Linux migration helper there directly refuses.

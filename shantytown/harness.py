@@ -1177,8 +1177,14 @@ class CodexHarness:
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
             # Only a sanctioned normal launch reaches this stop/start path.
             # Existing package custody is verified after stop; no live cleanup.
+            # The measured runtime-tmpfs failure and /proc custody proof are
+            # Linux-specific. Preserve other platforms' existing launch path.
+            packages_after_stop = (
+                f"{package_setup} --migrate-stopped && "
+                if sys.platform.startswith("linux") else ""
+            )
             daemon_start = (f"{bootstrap} && {stop} && "
-                            f"{package_setup} --migrate-stopped && {sessions_setup} && "
+                            f"{packages_after_stop}{sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
             flags += f" --remote unix://{socket}"
