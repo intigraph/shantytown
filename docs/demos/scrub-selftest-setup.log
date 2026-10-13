@@ -1,0 +1,7 @@
+Script started on 2026-10-13 10:17:45-04:00 [COMMAND="python3 docs/demos/scrub-selftest-setup.py" <not executed on terminal>]
+{"revision": "before", "fault": "clone", "fault_observed": true, "exit": 1, "caller_changed_paths": 12, "positive_controls": 38}
+{"revision": "before", "fault": "none", "fault_observed": false, "exit": 0, "caller_changed_paths": 0, "positive_controls": 40}
+{"revision": "after", "fault": "clone", "fault_observed": true, "exit": 1, "caller_changed_paths": 0, "positive_controls": 38}
+{"revision": "after", "fault": "none", "fault_observed": false, "exit": 0, "caller_changed_paths": 0, "positive_controls": 40}
+
+Script done on 2026-10-13 10:17:53-04:00 [COMMAND_EXIT_CODE="0"]
