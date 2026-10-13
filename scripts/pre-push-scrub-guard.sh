@@ -232,8 +232,20 @@ if [ "${1:-}" = "--selftest" ]; then
   # Synthesises its own config, so the controls run without the real names ever
   # appearing in this repo — and so the test proves the MECHANISM, which is the
   # only thing this file is now responsible for.
-  SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")   # abs path; the reachability test cd's away
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  SELF=$(cd "$(dirname "$0")" && printf '%s/%s\n' "$PWD" "$(basename "$0")") || exit 1
+  tmp=$(mktemp -d) || { echo "FAIL selftest temporary allocation" >&2; exit 1; }
+  [ -n "$tmp" ] && [ -d "$tmp" ] || { echo "FAIL selftest temporary directory" >&2; exit 1; }
+  trap 'rm -rf "$tmp"' EXIT
+  # All fixtures belong to the checked allocation. Setup commands need explicit
+  # checks: these subshells are followed by `|| fail=1`, which suppresses errexit.
+  # A failed clone/cd must never leave Git commands in the invoking checkout.
+  selftest_fixture() {
+    local fixture
+    fixture=$(mktemp -d "$tmp/fixture.XXXXXX") || return 1
+    case "$fixture" in "$tmp"/fixture.*) ;; *) return 1 ;; esac
+    [ -d "$fixture" ] || return 1
+    printf '%s\n' "$fixture"
+  }
   # Synthetic config: the controls must prove the MECHANISM without the estate's
   # real names ever appearing in this public file. Reserved names only
   # (RFC 2606 .invalid, RFC 5737 198.51.100.0/24).
@@ -336,13 +348,14 @@ if [ "${1:-}" = "--selftest" ]; then
   # already-public history must ADD nothing; a new branch with a new leak must
   # still be caught. Reserved .invalid names only.
   if command -v git >/dev/null 2>&1; then
-    r=$(mktemp -d); (
+    r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }; (
       cf="$r/scrub.conf"
       printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\n' > "$cf"
-      git init -q --bare "$r/pub.git"
-      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
-      cd "$r/w"
-      git config user.email t@t; git config user.name t
+      git init -q --bare "$r/pub.git" || exit 1
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
+      cd "$r/w" || exit 1
+      git config user.email t@t || exit 1
+      git config user.name t || exit 1
       echo "host old-thing.invalid" > f.txt   # existing public debt
       git add f.txt; git commit -qm "seed old-thing.invalid"
       git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
@@ -371,12 +384,13 @@ if [ "${1:-}" = "--selftest" ]; then
   # Each of the three was measured ALLOWING this exact push before the fix.
   # Reserved space only: 192.168.255.1 is top-of-range RFC1918, on no estate.
   if command -v git >/dev/null 2>&1; then
-    r=$(mktemp -d); (
+    r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }; (
       set -e
-      git init -q --bare "$r/pub.git"
-      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
-      cd "$r/w"
-      git config user.email t@t; git config user.name t
+      git init -q --bare "$r/pub.git" || exit 1
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
+      cd "$r/w" || exit 1
+      git config user.email t@t || exit 1
+      git config user.name t || exit 1
       echo "seed" > f.txt; git add f.txt; git commit -qm seed
       git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
       git checkout -q -b leak
@@ -454,14 +468,15 @@ if [ "${1:-}" = "--selftest" ]; then
   # A rule proven only to stay quiet is indistinguishable from a rule that was
   # switched off.
   if command -v git >/dev/null 2>&1; then
-    r=$(mktemp -d); (
+    r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }; (
       cf="$r/scrub.conf"
       # Ticket rule SCOPED to user-facing artefacts; host rule unscoped as always.
       printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\nticket_patterns=\\bzz-[a-z0-9]{3,6}\\b\nticket_exempt_path_re=\\.(py|rs|sh)$\n' > "$cf"
-      git init -q --bare "$r/pub.git"
-      git clone -q "$r/pub.git" "$r/w" 2>/dev/null
-      cd "$r/w"
-      git config user.email t@t; git config user.name t
+      git init -q --bare "$r/pub.git" || exit 1
+      git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
+      cd "$r/w" || exit 1
+      git config user.email t@t || exit 1
+      git config user.name t || exit 1
       echo seed > seed.txt; git add seed.txt; git commit -qm seed
       git push -q origin HEAD:main; git fetch -q origin 2>/dev/null
       Z=0000000000000000000000000000000000000000
@@ -510,7 +525,7 @@ if [ "${1:-}" = "--selftest" ]; then
       #    attribution is to tell them apart — and a banner that always prints is
       #    worse than none, since it would excuse a real leak.
       git remote add internal "$r/forge.git" 2>/dev/null || true
-      git init -q --bare "$r/forge.git"
+      git init -q --bare "$r/forge.git" || exit 1
       git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
       git checkout -q -b shared; mkdir -p pkg
       echo '# talks to other-host.invalid' > pkg/shared.py
@@ -567,12 +582,13 @@ if [ "${1:-}" = "--selftest" ]; then
   #   unconfigured — the scrub's own fail-open path must still run the chain, or
   #                deleting a config file disarms every guard hanging off it
   if command -v git >/dev/null 2>&1; then
-    r=$(mktemp -d)
-    git init -q "$r/w"
+    r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }
+    git init -q "$r/w" || { echo "FAIL selftest fixture init" >&2; exit 1; }
     cf="$r/scrub.conf"
     printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\n' > "$cf"
-    ( cd "$r/w"
-      git config user.email t@t; git config user.name t
+    ( cd "$r/w" || exit 1
+      git config user.email t@t || exit 1
+      git config user.name t || exit 1
       echo seed > f.txt; git add f.txt; git commit -qm seed
       d="$(git rev-parse --git-path hooks)"; case "$d" in /*) ;; *) d="$r/w/$d" ;; esac
       mkdir -p "$d/pre-push.d"
@@ -614,12 +630,12 @@ PROBE
   fi
 
   # Exercise the exact artifact exception through the real hook and matcher.
-  r=$(mktemp -d)
+  r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }
   (
     cd "$r" || exit 1
-    git init -q
-    git config user.name test
-    git config user.email test@example.invalid
+    git init -q || exit 1
+    git config user.name test || exit 1
+    git config user.email test@example.invalid || exit 1
     git -c core.hooksPath=/dev/null commit -qm base --allow-empty
     base=$(git rev-parse HEAD)
     cf="$r/patterns.conf"
