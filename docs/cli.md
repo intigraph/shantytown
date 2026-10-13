@@ -2544,6 +2544,19 @@ A timeout leaves publication indeterminate: read back that peer's exact
 remote destination SHA before deciding whether any retry is needed. Remaining
 peers are not attempted after a timeout, and earlier successful peers stay published.
 
+### Replacing work-item text
+
+`st work item update ITEM --notes-file FILE` fills empty notes or verifies an
+identical body. Seeds and br protect existing text from replacement. To replace
+it deliberately, read back the item, preserve its evidence and use
+`--notes-file FILE --replace-text`. The same option applies to
+`--description-file`; it is refused without a text file. It affects only the
+explicit update and does not weaken ordinary tracker or deferral writes.
+
+The command writes once and verifies the exact new text. A timeout or failed
+read-back can follow a committed write: inspect the item before deciding on any
+retry. `--dry-run` performs no write, even with explicit replacement.
+
 ### Technical gates and Steve asks
 
 `st work defer ITEM bead --reason 'resume_when: closed:TARGET' --dependency-reason 'Required API/schema/artifact from TARGET'` requires a one-line technical dependency. Queue order belongs on the plate. The target inherits the waiting item's priority before the item is deferred; an unconfirmed priority write stops without replaying it. A Steve ask behind a lower-priority target requires Sattler's `--sattler-reason`, recorded with the deferral. Dry runs write nothing.
