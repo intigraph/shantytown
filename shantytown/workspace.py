@@ -549,10 +549,18 @@ def _git(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str]"
     return r.returncode, (r.stdout or "").strip()
 
 
-def _git_push(dest: Path | str, *args: str) -> "tuple[int, str, str]":
-    r = run_with_group_timeout(["git", "-C", str(dest), "push", *args], 60,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True)
+def _git_push(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str, str]":
+    if not 1 <= timeout <= 3600:
+        raise ValueError("push timeout must be between 1 and 3600 seconds")
+    try:
+        r = run_with_group_timeout(["git", "-C", str(dest), "push", *args], timeout,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   text=True)
+    except subprocess.TimeoutExpired:
+        # The remote may have committed before our deadline. Never classify this
+        # as a rejection or recommend retrying without an exact remote read-back.
+        return 124, "", (f"INDETERMINATE: push exceeded {timeout:g} seconds; "
+                         "read back the remote destination SHA before any retry.")
     return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
 
 
@@ -1673,6 +1681,10 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                 remote=remote, ok=True,
                 up_to_date=any(ln.startswith("=") for ln in out.splitlines())))
             continue
+        if rc == 124:
+            outcomes.append(PushOutcome(remote=remote, ok=False,
+                reason=f"{remote} INDETERMINATE: {err}; remaining peers were not attempted."))
+            break
         # CLASSIFY FROM STDOUT, SHOW BOTH STREAMS (aegis-mmq38). Git's porcelain
         # ref status is the only place that says whether GIT rejected the ref,
         # and a pre-push hook decline leaves it empty precisely because Git never
