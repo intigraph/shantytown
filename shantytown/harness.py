@@ -1067,8 +1067,12 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
-            durable_packages = (state_base / "shantytown" / "codex"
-                                / card.name / "packages" / "app-server-daemon")
+            data_base = Path(os.environ.get(
+                "XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            # Share the daemon package INCLUDING its native installer lock.
+            # Only daemon control/socket/session state remains card-specific.
+            durable_packages = (data_base / "shantytown" / "codex"
+                                / "packages" / "app-server-daemon")
             package_setup = (
                 f"{shlex.quote(sys.executable)} -m shantytown.codex_packages "
                 f"--home {shlex.quote(str(daemon_home))} "
@@ -1093,7 +1097,6 @@ class CodexHarness:
                 f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'releases'))}",
                 f"ln -sfn {shlex.quote(daemon_current_target)} "
                 f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'current'))}",
-                package_setup,
             ))
             # THE CARD'S PERMISSION OPT-IN HAS TO REACH THE DAEMON, NOT ONLY THE
             # TUI (aegis-7okaae). Under Remote Control the model's shell commands
@@ -1172,7 +1175,10 @@ class CodexHarness:
             # (sessions/sessions), and rollouts would keep going to tmpfs with
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
-            daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
+            # Only a sanctioned normal launch reaches this stop/start path.
+            # Existing package custody is verified after stop; no live cleanup.
+            daemon_start = (f"{bootstrap} && {stop} && "
+                            f"{package_setup} --migrate-stopped && {sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
             flags += f" --remote unix://{socket}"
