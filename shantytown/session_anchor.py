@@ -105,7 +105,6 @@ def main(argv=None) -> int:
         pass
     text = render(root, agent)
     print(json.dumps({
-        "systemMessage": text,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart", "additionalContext": text,
         },
