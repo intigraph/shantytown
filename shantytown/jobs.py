@@ -683,7 +683,7 @@ class Sources:
 
     def beads(self) -> list[dict]:
         if self._bead_rows is None:
-            raise RuntimeError("no tracker wired for bead events")
+            raise RuntimeError("no tracker wired for item events")
         if self._beads_cache is None:
             rows = []
             for x in self._bead_rows():
@@ -845,7 +845,7 @@ def _poll(job: Job, st: dict, sources: Sources) -> tuple[list, dict, str]:
         ids = {r["id"] for r in rows if not want_closed or r["status"] == "closed"}
         seen = set(st.get("seen") or [])
         if not seeded:
-            return [], {"seen": sorted(ids), "seeded": True}, f"seeded with {len(ids)} bead(s)"
+            return [], {"seen": sorted(ids), "seeded": True}, f"seeded with {len(ids)} item(s)"
         new = [r for r in rows if r["id"] in ids - seen]
         fires = [{"reason": f"{t.source} {r['id']}", "event": r}
                  for r in sorted(new, key=lambda r: r["id"]) if _matches(t, r)]

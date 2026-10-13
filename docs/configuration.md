@@ -105,6 +105,10 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `ST_REPORTS_TO` | its lead, for an agent that wants it without re-reading its card. Omitted when absent. |
 | `QUIPU_SERVER` | quipu, for `--registry quipu`, `st fleet roles sync`, or `st ops subscribe` | `http://localhost:3030` |
 | `SHANTY_ONTO_NS` | the ontology IRI base your graph is keyed under | required for CLI graph access |
+| `SHANTY_CONFIG_ENTITY` | Opt-in Quipu entity with a single versioned JSON configuration value. Local TOML wins per key; unavailable reads visibly retain source-bound last-good data. See [graph configuration](config-source.md). | unset |
+| `SHANTY_CONFIG_FRAGMENT_CLASS` | Absolute governed fragment class IRI, selected locally. References are read through this class, never treated as untyped embedded policy. | unset |
+| `SHANTY_CONFIG_SERVER` | Explicit server for the configuration source; the graph cannot redirect its own bootstrap reader. | unset |
+| `SHANTY_INSTRUCTIONS_MODE` | `compare` reports byte-level migration differences; `apply` realizes the reviewed fragment body during provision. Local identity files stay untouched. | compare |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
@@ -119,6 +123,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_CYCLE_STUCK_AFTER` | seconds a pending, un-refused cycle request may read as `cycling` in `st crew` (aegis-az0a40.1). After it, the request is not treated as in flight: the agent is judged by its pane (up/down), the JSON rows carry `cycle_request_stale: true` and `cycle_request_age`, and the table names it. A bad or non-positive value falls back to the default. | 1800 |
 | `SHANTY_AUTO_CYCLE` | `0`/`off`/`false`/`no` turns OFF tend's auto-cycle (aegis-zl7jwm). When on, an agent idle past the 400k cycle line that has commented on its plate bead since tend's cycle prompt gets a cycle request, served at an idle turn; without that checkpoint it is nudged once to write one and is never cycled. | on |
 | `SHANTY_SELF_CYCLE_SERVE` | `0`/`off`/`false`/`no` stops `st agent cycle --self` from starting its detached single-agent waiter (aegis-oj2z7m), leaving the request to `st fleet tend`. The waiter performs the request at the agent's next idle turn and gives up after 20 minutes. | on |
+| `SHANTY_CHECKPOINT_JEV_COMMAND` | installed Jev MCP server command for checkpoint-only handoff quality advice before cycling. Five-second judge deadline; one rewrite opportunity per launch below measured cycle depth; unknown or saturated depth proceeds. Usually set in `[env]`. | `SHANTY_CREATE_JEV_COMMAND`, otherwise UNKNOWN advice |
 | `SHANTY_ESCALATE_COMMAND` | the human-escalation command `st fleet watch` runs when a peer administrator stays down past `--escalate-after` or a repair fails (aegis-az0a40). Invoked as `<command> -s <severity> "<description>"`; its exit code is the verdict (0 paged, 1 fallback attempted, 2 nobody paged). Usually set in `[env]`. Unset = the watch alerts and repairs but says `escalation NOT CONFIGURED` and pages nobody. | — |
 | `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
@@ -207,3 +212,24 @@ projection and an explicit `false` disables failover. Role harness pins and brow
 capabilities remain admission constraints. Live acceptance requires operator
 provisioned accounts and an authorized observed launch; fixture tests do not
 establish that a real subscription or its native refresh works.
+
+### Context reminders
+
+`[session_budget] context_threshold_pct` configures the advisory context reminder;
+`context_window` supplies capacity when the transcript does not report it. Role
+and agent overrides use the existing `context_by_role` and `context_by_agent`
+tables. A threshold crossing produces one visible hook message and one model
+instruction to checkpoint and request `st agent cycle --self`. Remaining above
+the threshold does not repeatedly wake the agent; dropping below it or beginning
+a new session re-arms the reminder. It never schedules a cycle automatically.
+
+SessionStart binds the hook's exact session and transcript before the anchor is
+rendered. Until the new transcript contains usage, occupancy is UNKNOWN, rather
+than the previous session's percentage. After a cycle, a failed/empty plate read
+submits a guarded anchor/resume prompt; it does not assign the checkpoint pointer
+as work or modify an unreadable tracker.
+
+A governor refusal is terminal for post-cycle redispatch. The fallback itself
+requires the existing governor to admit a lowest-priority status prompt; it
+cannot borrow a checkpoint's priority when the current plate is unreadable.
+The recovery prompt asks for verification before work, and creates no work item.

@@ -197,7 +197,7 @@ def test_durable_REFUSES_a_too_long_message_and_does_not_call_it_cannot_tell(tmp
     assert "494" in err, "the refusal states the actual length that overflowed"
     assert "'[from dearing] ' signature" in err and "budget is 478" in err
     assert "your budget is 478 bytes, you typed 494" in err
-    assert "bead" in err, "the refusal must name the remedy (put it in a bead)"
+    assert "item" in err, "the refusal must name the remedy (put it in a bead)"
     assert "could not tell" not in err, "must not read as a transient store outage"
     assert tracker.created == [], "a refused message must NOT be written to the store"
 

@@ -249,7 +249,7 @@ def test_the_stop_message_does_not_hand_over_the_next_bead():
     c = sb.verdict(ARMED, sb.Spend(hours=7.0, items=4, risk=3))
     msg = sb.stop_message(c, next_bead="aegis-1jfa0")
     assert "SESSION CEILING" in msg
-    assert "push" in msg and "bead trail" in msg and "stop cleanly" in msg
+    assert "push" in msg and "item trail" in msg and "stop cleanly" in msg
     assert "finish the thought" in msg           # names the actual failure mode
     assert "next on your haul" not in msg
 
@@ -278,8 +278,8 @@ def test_a_re_serve_is_visibly_a_re_serve():
     actually just the re-serve rule and carries no intent at all."""
     plain = haul_feed_message("aegis-1", "t", 2)
     again = haul_feed_message("aegis-1", "t", 2, repeats=2)
-    assert "SAME bead" not in plain
-    assert "SAME bead" in again and "twice" in again
+    assert "SAME item" not in plain
+    assert "SAME item" in again and "twice" in again
     assert "not a verdict" in again
 
 

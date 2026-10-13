@@ -284,6 +284,11 @@ class WorkItem:
 
 
     description: str | None = None  # None means this reader did not supply it.
+    # Tracker-supplied modification time. Absence is unknown, never a claim
+    # that an item is fresh. Appended to preserve positional construction.
+    updated_at: str | None = None
+    # Terminal evidence is data, appended to preserve positional construction.
+    close_reason: str | None = None
 
 
 @runtime_checkable

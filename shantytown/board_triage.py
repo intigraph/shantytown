@@ -275,7 +275,7 @@ def run(args, tracker, registry):
                 if not any(c.get('text', c.get('body')) == body for c in existing):
                     append_comment(tracker, row['id'], body)
                     if not any(c.get('text', c.get('body')) == body for c in comments(tracker, row['id'])):
-                        raise TriageError('Comment write indeterminate; inspect bead before retrying')
+                        raise TriageError('Comment write indeterminate; inspect item before retrying')
                 result['published'] = True
             results.append(result)
     return dict(suggestions=results, missing_domains=missing)

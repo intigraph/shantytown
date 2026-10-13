@@ -1289,3 +1289,15 @@ min_priority = 0
     cli._tend_once(_Args(root))
     assert seen["claude-worker"] == ""
     assert seen["codex-worker"]
+
+
+def test_tend_pass_invokes_inbox_recovery_but_dry_run_does_not(tmp_path, monkeypatch):
+    from shantytown import inbox_recovery
+    root = _roster(tmp_path, {'ellie': {'role': 'worker', 'pane': 'p-ellie', 'retired': True}})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes(live=set()))
+    calls = []
+    monkeypatch.setattr(inbox_recovery, 'sweep', lambda agents, panes, box, **kw: calls.append([c.name for c in agents]))
+    assert cli._cmd_tend(_Args(root, dry_run=True)) == cli.OK
+    assert calls == []
+    assert cli._cmd_tend(_Args(root)) == cli.OK
+    assert calls == [['ellie']]

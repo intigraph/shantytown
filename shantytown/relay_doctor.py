@@ -77,7 +77,7 @@ def check(root: Path, *, backend: str | None = None) -> tuple[int, str]:
     elif expected_backend in BACKENDS:
         rows.append("  export SHANTY_BACKEND=" + shlex.quote(expected_backend))
     else:
-        rows.append("  Choose --backend files|beads|br|forgejo before setting SHANTY_BACKEND.")
+        rows.append("  Choose a supported --backend before setting SHANTY_BACKEND.")
     rows += ["", "Install missing st/tmux first. For other shells, use their non-interactive startup mechanism.",
              "Verify from the sending host (replace user@peer):",
              "  ssh -o BatchMode=yes user@peer " + shlex.quote(

@@ -9,9 +9,9 @@
 
 *Create a work item. Tell an agent to go get it. That's the whole idea.*
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#measured-against-gas-town)
-[![41 commands](https://img.shields.io/badge/commands-41-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-4366%20passing-blue)](docs/principles.md)
+[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#-measured-against-gas-town)
+[![43 commands](https://img.shields.io/badge/commands-43-blue)](#-the-whole-surface)
+[![tests](https://img.shields.io/badge/tests-5480%20passing-blue)](docs/principles.md)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
 [![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
 [![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -63,10 +63,12 @@ st task <title>                   create work, get an id back
 st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
 st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>        a message into a pane. send-keys, nothing more.
-st crew                           who exists, what state, what role
+st crew                           who exists, what state, tree roles and deployment traits
 st anchor                         who am I, what's on my plate      ← the anchor
 st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
 st work                           the item and the board
+  item <show|update|comment|close> <id>
+                              exact-ID operations on the configured work tracker
   repool <item>                   hand an item back: status -> open AND assignee cleared, verified
   defer <item> <kind> --reason-file <path|->
                                   park it with one blocker-kind label + durable reason, verified
@@ -104,8 +106,9 @@ st fleet                          the whole crew
   watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
 st repo                           a shared project repo
   worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]             push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>                 what code should I be looking at?
+  pr <owner/repo> --bead <id>      complete overlap inventory; --create records decisions then creates
 st ops                            the installation
   doctor [--install]              what's installed, what's stale, what's missing
   provision [agent]           register Quipu tooling for local crew without launching
@@ -114,7 +117,7 @@ st ops                            the installation
   help <topic>                    rationale pages: handoff/cycle, haul, inbox
 ```
 
-Forty-one, and the count is load-bearing: seven verbs and thirty-four grouped commands under five
+Forty-three, and the count is load-bearing: seven verbs and thirty-six grouped commands under five
 groups, and a test pins this block AND this sentence to the parser, so the next command either updates
 both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
 before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on

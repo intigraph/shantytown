@@ -21,7 +21,7 @@ DIRECTIVE = (
     "\U0001F50E QUERY-FIRST (knowledge graph): before you start a task, ask "
     "quipu what is already known about what you're about to touch — prior "
     "incidents, decided facts, provenance — instead of re-deriving it or "
-    "grepping beads. It is a live query, not a doc:\n"
+    "grepping items. It is a live query, not a doc:\n"
     "  Use the provisioned homelab MCP tool quipu_search with "
     "{\"query\":\"<subject>\"}. Use quipu_query for SPARQL and quipu_ask "
     "for stored queries.\n"

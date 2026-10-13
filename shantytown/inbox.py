@@ -575,8 +575,8 @@ class TrackerInbox:
             # character count and is refused a second time.
             raise MessageTooLong(
                 f"too long: {typed_size} {unit}, cap {budget}. Keep qualifiers and evidence "
-                f"in the bead; send the pointer: `st inbox {to} 'see <bead-id>'` "
-                f"(`br comments add <id> --file` for the body). `st ops help inbox`."
+                f"in the item; send the pointer: `st inbox {to} 'see <item-id>'` "
+                f"(`st work item comment <id> --file` for the body). `st ops help inbox`."
                 f"{note}",
                 budget=budget,
                 unit=unit,

@@ -12,6 +12,7 @@ from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
 from .protocols import is_blocked
 from .inbox import drop_parked, is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
+from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
 
 class BrTracker(BeadsTracker):
@@ -60,7 +61,7 @@ class BrTracker(BeadsTracker):
         except Exception:
             return reason, False
         merged, force = merge_notes(existing, reason)
-        if force and existing and existing not in merged:
+        if force and existing and existing not in merged and historical_notes(existing) not in merged:
             # Belt and braces: never force a write that drops what was there.
             return reason, False
         return merged, force
@@ -79,7 +80,11 @@ class BrTracker(BeadsTracker):
 
         # br protects terminal transitions behind dedicated verbs.
         if status == "closed":
-            r = self._bd_for(item_id, "close", item_id, "--json")
+            close_reason = fields.pop("close_reason", None)
+            close_args = ["close", item_id, "--json"]
+            if close_reason is not None:
+                close_args.extend(["--reason", close_reason])
+            r = self._bd_for(item_id, *close_args)
             if r.returncode != 0:
                 raise RuntimeError(
                     f"br close {item_id} failed: {r.stderr.strip()[:120]}")
@@ -131,9 +136,12 @@ def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
     machine-readable `resume_when` gate and the only record of how to re-test.
     The br guard is right; what was wrong is replacing instead of appending.
 
-    So force is returned ONLY alongside content that provably contains the
-    original, and the caller asserts that before writing.
+    Ordinary prose retains the original verbatim. A new resume marker retains
+    the original prose with old marker prefixes made inert; the caller verifies
+    that preserved history before permitting force.
     """
+    if MARKER_PREFIX.search(addition):
+        return merge_deferral_notes(existing, addition)
     old = existing or ""
     if not old.strip():
         return addition, False
@@ -336,13 +344,16 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     # degrades to None (previous ordering) rather than to an empty set — the
     # could-not-look-is-not-empty rule this function's docstring is built on
     # applies to the readiness call exactly as it does to the rows.
-    ready_ids = read_ready()
+    # In-hand ranks precede every open item and ignore readiness in plate_key.
+    # A remote ready poll hydrates the open queue; it cannot change this choice.
+    ready_ids = None if any(row.get("status") in _PLATE_RANK for row in mine) else read_ready()
     mine.sort(key=lambda row: plate_key(row.get("status"), _priority(row),
                                         row.get("id", ""), ready_ids))
     row = mine[0]
     item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),
-                    assignee=row.get("assignee"), priority=_priority(row))
+                    assignee=row.get("assignee"), priority=_priority(row),
+                    updated_at=row.get("updated_at"))
     # Same rule as beads.plate: a blocked plate must name its blocker. One extra
     # read, only in the case that would otherwise burn a whole turn.
     if is_blocked(row.get("status"), row.get("id", ""), ready_ids):

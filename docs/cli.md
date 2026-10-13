@@ -22,6 +22,8 @@ st crew [--count] [--wide]    who exists, state, role, assigned title, WHO IS FR
 st attach [agent]             attach to a crew member — STARTING them if down (pane+socket resolved)
 st attach --no-start          attach only if already running; never create a session
 st work                       the item and the board
+  item <show|update|comment|close> <id>
+                              exact-ID operations on the configured work tracker
   repool <item>               hand an item back to the pool: status -> open AND
                               assignee cleared, one verified write. Clearing the
                               assignee alone leaves it in_progress — off `bd ready`,
@@ -84,8 +86,9 @@ st fleet                      the whole crew
   watch [--peer|--metrics]    one liveness pass on the PEER host's administrator
 st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>             what code should I be looking at? (bobbin)
+  pr <owner/repo> --bead <id>  complete overlap inventory; --create records decisions then creates
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
@@ -191,6 +194,28 @@ session opens small and knows where to look rather than opening large. It is
 delivered exactly once: a brief that survived its own delivery would be re-read
 at every later session start, telling an agent to resume work it finished two
 sessions ago.
+
+Before accepting a self-cycle, optional Jev advice checks the checkpoint's exact
+next step, landed versus local work, and decisions made. Configure
+`SHANTY_CHECKPOINT_JEV_COMMAND` as the installed Jev MCP server command in `[env]`;
+it falls back to `SHANTY_CREATE_JEV_COMMAND`. The judge sees only checkpoint text,
+at most 8192 characters, with a five-second total transport deadline. Its yes
+probability must reach 0.75; a lower result triggers bounded missing-piece checks.
+These are inferred judgments, not proof that a handoff is correct.
+
+A thin handoff gets one rewrite opportunity per launch when the pane reports
+context below the cycle line. Re-running the cycle then proceeds even if the
+handoff is still thin. At or past the cycle line, with unknown depth or launch
+identity, or when Jev or its telemetry is unavailable, advice never refuses the
+cycle. `--allow-loss` also skips the rewrite delay. Existing durable-checkpoint
+and work-preservation gates still apply. Automatic servicing does not rejudge
+an accepted request; dry runs make no judge calls or quality-ledger writes.
+
+Verdicts are recorded privately in `<root>/checkpoint-quality.jsonl`, including
+question/input provenance, probabilities, model, usage, latency, and whether a
+rewrite was offered. This ledger is available to decision evaluation tooling;
+it does not promote inferred judgments into the knowledge graph.
+
 `st anchor` shows context measurement at startup, and `st crew` shows occupancy
 from that session's most recent hook transcript plus a named summary of live
 agents with unmeasured context. An agent without a current Stop observation is
@@ -243,7 +268,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-one. Seven verbs at the top level and thirty-four grouped commands under five groups
+Forty-three. Seven verbs at the top level and thirty-six grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -265,16 +290,16 @@ said "eight" while the code had twelve, and a count nobody enforces is a comment
 whose whole pitch is the exact count, that was the bug.
 
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
-background reflection. It is not hidden behind `tend` because scheduling is a
-write while status is a read, and an operator must be able to see the due time,
-rotation, and capacity refusal without running supervision.
+background reflection. Cycles require explicit admission; `tend` never creates
+them because an interval elapsed. Status shows the last cycle, rotation and
+capacity policy without running supervision.
 
 The twenty-seventh is **defer**: the tracker already knew how to hide work, but bare
 deferral did not require the deferrer to state whether the blocker was a bead, human,
 access capability, external event, or no blocker at all. `st work defer` records that kind
 and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
 `--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
-`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. It
+`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
@@ -428,6 +453,20 @@ silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
 
+Codex and administrator launches also deliver the same anchor render through the
+verified startup input, together with any unread mail in one message. Any other
+launch with an empty inbox submits this initial anchor turn too: SessionStart
+context alone cannot start work. A unique completion marker verifies delivery; failed delivery
+keeps mail unread and reports the missing context. This covers Remote Control
+sessions where a configured SessionStart hook does not supply visible context.
+The hook remains configured for subsequent session lifecycle events.
+
+An explicit tracker `updated_at` older than 48 hours marks the plate **STALE**.
+Startup then asks the agent to verify that item's current status before acting,
+and to close completed work or defer/repool it as appropriate. Anchor still only
+reads: age never automatically closes or reassigns work. Missing, malformed, or
+timezone-free timestamps cannot establish age and do not produce a stale claim.
+
 ## `st sling` — design handoff
 
 Design → bead (epic and children) → `st sling <bead>`. The executive administrator
@@ -466,6 +505,11 @@ After an indeterminate write, inspect that marker before retrying; changed conte
 is a new handoff. The structured comment provides the same provenance on the bead.
 
 ## `st go` — dispatch
+
+Explicitly dispatching deferred work clears its old deadline after delivery is
+confirmed, together with the verified active assignment. A dry run, refusal, or
+unverified delivery leaves the deferral intact. Dependency and governor gates
+still apply; activation does not remove the item's notes or review conditions.
 
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before
@@ -2328,6 +2372,11 @@ choice is appropriate. Prefer `--note-file` for longer explanations.
 Both haul advance triggers include the same advisory in the next-work message;
 tend also logs it. The crew and tend reports name waiters when a live agent has
 lower-priority active work. `crew --json` includes `priority_advisories`.
+
+Observation-only consumers may use `crew --local --json --no-priority-advice`
+to omit the optional board-wide priority scan. The field explicitly says the
+advisory was not measured; pane, assignment and unknown-state checks still run.
+The flag is refused with other modes. Default crew and dispatch advice is unchanged.
 Deferred, dependency-blocked, decision, record, and anchor beads are excluded.
 An assigned owner whose liveness cannot be read does not count as down. An
 unreadable queue produces an unavailable advisory, never a zero-waiting claim.
@@ -2395,6 +2444,12 @@ Writable file cards are the selection authority. Graph identity may be projected
 into them without clearing an existing account or explicit failover setting;
 a read-only TOML registry or identity-only graph registry refuses selection writes.
 
+Deferral summaries are serialized per deployment root and compared with the
+last successfully delivered summary. Overlapping passes and identical rendered
+summaries do not cause additional coordinator wakes. Failed delivery consumes
+neither the finding state nor the summary, so a reachable recipient can receive
+it later. A positively observed resolution re-arms a genuine later recurrence.
+
 ## Tracker commands in haul instructions
 
 The haul feed, active-anchor resume, and `st ops help haul` render command examples
@@ -2420,3 +2475,64 @@ After a deployment switches its board to Seeds, use its reviewed default backend
 or explicitly select `--backend seeds`. Explicit `--backend beads` still selects
 the br transport; it is not a Seeds alias. A missing ID on that explicitly
 selected board is not permission to retry against another board.
+
+## PR overlap preflight
+
+`st repo pr` earns a separate slot because it creates an external review object;
+`repo context` remains a read. Use the guarded creation path after committing and
+pushing the candidate branch. It requires the explicit GitHub repository to match
+`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+Forgejo creation is not implemented by this command.
+
+```sh
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
+st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
+  --create --title 'Concrete change' --body-file /tmp/pr-body.md \
+  --dispositions-file /tmp/overlaps.json --dry-run
+```
+
+Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
+paths and explicit bead-family relationships count (`--bead-family project-epic`
+adds an otherwise unrelated parent). Dotted child IDs share their root family.
+Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
+a file count mismatch, or a candidate that differs from its remote branch refuses.
+The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
+hit is unknown coverage, never an empty result.
+
+The dispositions file is a JSON list; every overlapping PR needs its exact head
+and a reason. For example:
+
+```json
+[{"number": 12, "head": "<exact-other-head>", "action": "independent",
+  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
+```
+
+`stack` requires the other PR's exact head as the candidate base and proves its
+ancestry. `absorb` requires the referenced PR already closed at that exact head;
+this command never closes other authors' work. `independent` records the author's
+reason rather than pretending file overlap proves a semantic conflict. Duplicate,
+stale, missing or short-reason dispositions refuse before creation.
+
+Creation checks the inventory and local/remote candidate again immediately before
+posting. It appends the primary `Bead:` and exact-head dispositions to the body.
+`--dry-run` exercises all gates and previews the body without posting. An existing
+PR for the candidate branch is identified and excluded from its own overlap report
+in read mode; creation still refuses a duplicate. A lost create response or
+mismatched resulting head/base is reported **indeterminate**: inspect the remote
+PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
+race after the last read is detected on the result, not prevented. This command
+provides the crew creation path; it does not claim to intercept raw `gh` or other
+clients. Installing a mandatory external-client hook is a separate adoption step.
+
+### Explicit push destination
+
+`st repo push <repo> [agent]` and its deprecated top-level alias refuse an omitted or empty
+`--branch` before contacting any remote. Publish a candidate with
+`--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
+worktree is on that topic instead of its canonical agent branch. The source must
+match the selected worktree and caller. Existing authority, pre-push hooks and
+non-fast-forward checks still apply to every trusted peer.
+
+`--branch main` explicitly selects a destination; it does not establish independent
+review or successful CI. Land reviewed PRs through the normal merge helper rather
+than treating source publication as a reviewed merge.

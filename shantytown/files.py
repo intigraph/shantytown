@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from .answer import Answer
+from .deferral_notes import MARKER_PREFIX, merge_deferral_notes
 from .inbox import is_message, is_unworkable
 from .protocols import (Agent, BLOCKER_KIND_LABELS, WorkItem, blocker_kind,
                         _PLATE_RANK, plate_key)
@@ -314,6 +315,7 @@ class FilesTracker:
         from .beads import _priority          # ONE reading of "priority", shared
         return WorkItem(
             id=item_id,
+            close_reason=d.get("close_reason"),
             title=d.get("title", ""),
             status=d.get("status", "open"),
             description=(None if "description" not in d else
@@ -323,6 +325,7 @@ class FilesTracker:
             blocker_kind=blocker_kind(d.get("labels")),
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
+            updated_at=d.get("updated_at"),
         )
 
     def update(self, item_id: str, **fields) -> None:
@@ -338,7 +341,8 @@ class FilesTracker:
             d["labels"] = labels
         if reason is not None:
             notes = (d.get("notes") or "").rstrip()
-            d["notes"] = f"{notes}\n{reason}".strip()
+            d["notes"] = (merge_deferral_notes(notes, reason)[0]
+                          if MARKER_PREFIX.search(reason) else f"{notes}\n{reason}".strip())
         d.update({k: v for k, v in fields.items() if v is not None})
         p.write_text(json.dumps(d, indent=2, sort_keys=True))
 

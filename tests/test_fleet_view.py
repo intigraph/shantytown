@@ -54,6 +54,28 @@ def test_transport_failure_is_not_zero_agents(monkeypatch, failure):
     assert fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))['error']
 
 
+@pytest.mark.parametrize('sources', ['worker', None, {'tree': 7},
+    {'traits': 'gaming'}, {'declared': [1]}, {'tree': ['worker', None]}])
+def test_invalid_optional_role_sources_is_unreachable(monkeypatch, sources):
+    payload = dict(snapshot(), agents=[dict(row(), role_sources=sources)])
+    monkeypatch.setattr(fleet.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=''))
+    result = fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))
+    assert result['error']
+    assert result['agents'] == []
+
+
+@pytest.mark.parametrize('sources', [{}, {'tree': ['worker'], 'traits': ['gaming']},
+                                      {'declared': ['worker', 'gaming']}])
+def test_valid_optional_role_sources_survive_peer_boundary(monkeypatch, sources):
+    payload = dict(snapshot(), agents=[dict(row(), role_sources=sources)])
+    monkeypatch.setattr(fleet.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=''))
+    result = fleet.read_peer(HostPeer('laptop', 'user@example.com', '/tmp/root'))
+    assert result['error'] is None
+    assert result['agents'][0]['role_sources'] == sources
+
+
 def setup(tmp_path, monkeypatch):
     root = _roster(tmp_path, {'local': 'local-pane'})
     (root / 'shantytown.toml').write_text(
@@ -92,6 +114,38 @@ def test_count_includes_remote_content(tmp_path, monkeypatch, capsys):
     args.count = True
     assert cli._cmd_crew(args) == 0
     assert capsys.readouterr().out.strip() == '1/2'
+
+
+def test_observation_preserves_roster_and_marks_priority_unmeasured(tmp_path, monkeypatch, capsys):
+    args = setup(tmp_path, monkeypatch)
+    args.local = args.json = True
+    notice = 'governor: 1 higher-priority ready item sits untaken'
+    monkeypatch.setattr(cli, '_priority_fleet_notes', lambda *a: [notice])
+    assert cli._cmd_crew(args) == 0
+    full = json.loads(capsys.readouterr().out)
+    assert full['priority_advisories'] == [notice]
+    args.no_priority_advice = True
+    monkeypatch.setattr(cli, '_priority_fleet_notes', lambda *a: pytest.fail('optional board scan'))
+    monkeypatch.setattr(fleet, 'collect', lambda *a: pytest.fail('peer poll'))
+    assert cli._cmd_crew(args) == 0
+    observation = json.loads(capsys.readouterr().out)
+    assert observation['agents'] == full['agents']
+    assert observation['complete'] is True and observation['errors'] == []
+    assert observation['priority_advisories'] == [
+        'governor: priority advisory not measured (--no-priority-advice).']
+
+
+@pytest.mark.parametrize('change', [dict(local=False), dict(json=False),
+                                  dict(pane_state=True), dict(count=True), dict(governor=True)])
+def test_observation_rejects_other_modes_before_reading(tmp_path, monkeypatch, capsys, change):
+    args = setup(tmp_path, monkeypatch)
+    args.local = args.json = args.no_priority_advice = True
+    for key, value in change.items():
+        setattr(args, key, value)
+    monkeypatch.setattr(cli, '_registry', lambda *a: pytest.fail('registry read'))
+    monkeypatch.setattr(fleet, 'collect', lambda *a: pytest.fail('peer poll'))
+    assert cli._cmd_crew(args) == cli.REFUSED
+    assert 'requires --local --json' in capsys.readouterr().err
 
 
 @pytest.mark.parametrize('mode', ['table', 'json', 'count', 'governor'])

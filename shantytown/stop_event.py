@@ -265,7 +265,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path):
+def _plate_reader(root: Path, *, require_complete: bool = False):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -287,6 +287,9 @@ def _plate_reader(root: Path):
         from .br import plate as br_plate
         from .sd import br_like_tracker
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(sd_tracker, require_complete=True)
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -295,6 +298,9 @@ def _plate_reader(root: Path):
                                   or deployment_default(root, "SHANTY_BEADS_REPO")),
                             extra_repos=parse_extra_repos(
                                 deployment_default(root, EXTRA_REPOS_KEY)))
+        if require_complete:
+            from .br import plate_reader
+            return plate_reader(tracker, require_complete=True)
         return lambda who, warn=None: br_plate(tracker, who, warn=warn)
     return lambda who, warn=None: files_plate(FilesTracker(root / "items"), who)
 
@@ -496,7 +502,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     r = subprocess.run(["bd", *args, "--json"], capture_output=True, text=True,
                        timeout=20, cwd=cwd)
     if r.returncode != 0:
-        raise RuntimeError(f"bd {' '.join(args)} failed: {r.stderr.strip()}")
+        raise RuntimeError(f"compatibility tracker command {' '.join(args)} failed: {r.stderr.strip()}")
     return json.loads(r.stdout)
 
 
@@ -620,7 +626,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # ADMINISTRATORS ARE STILL EXCLUDED, deliberately: the coordinator's
         # assigned beads are not a haul, and feeding them would put the person
         # who dispatches work head-down in a bead.
-        if card.role not in ("worker", "lead"):
+        if card.role not in ("worker", "lead", "keeper"):
             return 0
         from .feed_check import bd_cwd, haul_hold_reason
         if reason := haul_hold_reason(root, me):
@@ -859,9 +865,9 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         latest[e.frm] = e
     lines = [f"⚠ {len(latest)} agent(s) WORKING UNTRACKED — they have NOT stopped. "
-             f"Each has been acting with an EMPTY HOOK (no open bead assigned) and "
+             f"Each has been acting with an EMPTY HOOK (no open item assigned) and "
              f"was warned in its own context first. Untracked work is invisible to "
-             f"you and does not survive their session: give each one a bead "
+             f"you and does not survive their session: give each one an item "
              f"(`st go <id> <agent>`), or confirm the work is legitimately "
              f"untracked and say so:"]
     for name in sorted(latest):
@@ -942,7 +948,7 @@ def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
         if verdicts.get(name) == triage.WAITING:
             tag += (" — BLOCKED ON A QUESTION in its pane: it is stopped until "
                     "someone answers. Answer it, or tell it to put the decision on "
-                    "the bead and carry on")
+                    "the item and carry on")
         age = _age(e.ts, now)
         current = (current_items or {}).get(name)
         lines.append(f"  - {name} stopped {age} — now: "
@@ -1116,7 +1122,7 @@ def main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
-    plate = _plate_reader(root)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
