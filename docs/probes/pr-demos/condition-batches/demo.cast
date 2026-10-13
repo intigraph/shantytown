@@ -1,0 +1,7 @@
+{"version": 2, "width": 100, "height": 16, "timestamp": 1791807129, "title": "Private condition-status batch fixture"}
+[0.095648, "o", "Private offline fixture: 436 candidates, 59 condition targets; no service calls.\r\n"]
+[0.09567, "o", "Before: 59 exact-status queries\r\n"]
+[0.095674, "o", "After:  3 bounded exact-status queries\r\n"]
+[0.095676, "o", "Verdicts and 258 findings identical.\r\n"]
+[0.095678, "o", "Positive controls: closed=True, open=False; missing/shadow/unsupported=UNKNOWN.\r\n"]
+[0.09568, "o", "Fresh pre-release single status read is separate; runtime adoption is unproven.\r\n"]

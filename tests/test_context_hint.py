@@ -44,6 +44,7 @@ def test_actual_stop_paths_emit_once_even_with_active_work(tmp_path, monkeypatch
         stop_event._haul(Reg(), None, card.name, tmp_path)
     message = json.loads(capsys.readouterr().out)
     assert message["decision"] == "block"
+    assert message["systemMessage"] == message["reason"]
     assert "70%" in message["reason"]
     assert "st agent cycle --self --checkpoint-file <notes-file>" in message["reason"]
     assert "advisory" in message["reason"]
@@ -52,6 +53,32 @@ def test_actual_stop_paths_emit_once_even_with_active_work(tmp_path, monkeypatch
     assert not (tmp_path / "notify/cycle-requests.json").exists()
     assert not (tmp_path / "session_budget").exists(), "never latch a work ceiling"
     assert sb.gate(tmp_path, card.name)[2] is None
+
+
+def test_session_start_rebinds_before_first_stop_without_guessing_usage(tmp_path, monkeypatch):
+    card, payload = world(tmp_path)
+    ch.emit(tmp_path, card, payload)
+    fresh = tmp_path / "fresh.jsonl"
+    fresh.write_text("{}\n")
+    new = {"session_id": "after-clear", "transcript_path": str(fresh)}
+    monkeypatch.setattr(sb, "current_session", lambda *_: "session-one")
+    ch.session_start(tmp_path, card, new)
+    snapshot = ch._load(ch._path(tmp_path, card))
+    assert snapshot["payload"] == new
+    assert snapshot["reported"] is None
+    assert "UNKNOWN" in ch.crew_label(tmp_path, card)
+    assert "70%" not in ch.crew_label(tmp_path, card)
+    turn(fresh, 120)
+    assert "12%" in ch.crew_label(tmp_path, card)
+
+
+def test_repeated_session_start_does_not_rearm_a_reported_crossing(tmp_path, capsys):
+    card, payload = world(tmp_path)
+    assert ch.emit(tmp_path, card, payload)
+    capsys.readouterr()
+    ch.session_start(tmp_path, card, payload)
+    assert not ch.emit(tmp_path, card, payload)
+    assert capsys.readouterr().out == ""
 
 
 def test_below_threshold_rearms_and_new_session_rearms(tmp_path, capsys):

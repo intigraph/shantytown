@@ -19,7 +19,7 @@ st fleet init
 
 Five questions, each with a default that Enter accepts: the administrator's name, worker names, where
 agents should work, the startup mode, and whether the admin may
-[hibernate](cli.md#hibernate--when-the-administrators-stop-may-stay-stopped). It shows every path
+[hibernate](cli.md#hibernate). It shows every path
 it would write, waits for a yes, then creates:
 
 ```text

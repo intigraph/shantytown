@@ -115,7 +115,7 @@ def test_empty_hook_warns_in_band(tmp_path):
     assert v.action == WARN
     assert "UNTRACKED WORK" in v.text
     # It must say WHAT TO DO, and name the lead it would escalate to.
-    assert "bd create" in v.text and "sattler" in v.text
+    assert "st task" in v.text and "--assignee weaver" in v.text and "sattler" in v.text
     # ...and be honest that it is not a block (the directive: nudge first).
     assert "NUDGE, not a block" in v.text
 

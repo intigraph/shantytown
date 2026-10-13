@@ -496,6 +496,7 @@ class DurableGate:
     since: str = ""
     ok: "bool | None" = None
     note: str = ""
+    checkpoint: str = ""
 
     def render(self) -> str:
         if self.ok:
@@ -505,8 +506,8 @@ class DurableGate:
         return (
             f"no durable handoff on {self.bead} since this session launched "
             f"({self.since or 'unknown'}). The --reason line dies with this "
-            f"terminal; the next session reads the BEAD. Write one first:\n"
-            f"    br comments add {self.bead} --file <notes>\n"
+            f"terminal; the next session reads the ITEM. Write one first:\n"
+            f"    st work item comment {self.bead} --file <notes>\n"
             f"  (state, landed-vs-local, exact next step, rollback). Or "
             f"`st agent cycle --self --checkpoint-file <notes>`, which posts it for "
             f"you. --allow-loss overrides, and spends the reasoning.")
@@ -523,12 +524,16 @@ def durable_gate(agent: str, bead: str, since, comments, error: str = "") -> Dur
         return DurableGate(agent, bead, str(since or ""), None, error)
     if not bead:
         return DurableGate(agent, bead, str(since or ""), None,
-                           "no held bead — nothing to checkpoint onto")
+                           "no held item — nothing to checkpoint onto")
     if not since:
         return DurableGate(agent, bead, "", None,
                            "no launch stamp — cannot date 'since the last relaunch'")
     ok = checkpoint_since(comments, agent, since)
-    return DurableGate(agent, bead, str(since), ok, "")
+    candidates = [c for c in comments or [] if isinstance(c, dict)
+                  and c.get("author") == agent and _parse_ts(c.get("created_at"))
+                  and _parse_ts(c["created_at"]) >= _parse_ts(since)] if ok else []
+    latest = max(candidates, key=lambda c: _parse_ts(c["created_at"]), default={})
+    return DurableGate(agent, bead, str(since), ok, "", latest.get("text", ""))
 
 
 STUCK_AFTER_DEFAULT = 30 * 60

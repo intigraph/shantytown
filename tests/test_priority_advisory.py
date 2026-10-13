@@ -43,7 +43,7 @@ def _store(tmp_path):
 def test_real_go_dispatch_warns_and_still_succeeds(tmp_path, monkeypatch, capsys):
     _store(tmp_path)
     monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: NullPanes(screen=''))
-    monkeypatch.setattr(cli.entity_suggest, 'suggest', lambda *a: None)
+    monkeypatch.setattr(cli.entity_suggest, 'suggest', lambda *a, **kw: None)
     rc = cli.main(['--root', str(tmp_path), '--backend', 'files', 'go', 'low', 'worker', '--reason', 'specialized work'])
     out = capsys.readouterr()
     assert rc == 0
@@ -113,3 +113,18 @@ def test_dispatch_advisory_uses_the_deployments_pane_adapter(monkeypatch):
         raise AssertionError("bare tmux must not classify deployment owners")
     monkeypatch.setattr(cli, "Tmux", bare_tmux)
     assert cli._priority_go_note(SimpleNamespace(item="low")) == ""
+
+
+def test_readiness_probe_candidates_exclude_live_owned_and_decision_work():
+    from shantytown.answer import Answer
+    from shantytown.protocols import Agent
+    reg = SimpleNamespace(all=lambda: Answer.complete_read(
+        [Agent(name='live',pane='p'),Agent(name='down',pane='missing')],how='fixture'))
+    panes=SimpleNamespace(exists=lambda p:p=='p')
+    active=[LOW | {'status':'in_progress','assignee':'live'}]
+    ready=[HIGH | {'id':'unassigned'},HIGH | {'id':'down-owned','assignee':'down'},
+           HIGH | {'id':'live-owned','assignee':'live'},
+           HIGH | {'id':'decision','labels':['decision-needed']},LOW | {'id':'equal-priority'}]
+    candidates=pa.fleet_waiters(ready,active,reg,panes)
+    assert {r['id'] for r in candidates}=={'unassigned','down-owned'}
+    assert pa.fleet_advice(candidates,active,reg,panes)==pa.fleet_advice(ready,active,reg,panes)

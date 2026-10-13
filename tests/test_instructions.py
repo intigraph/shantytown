@@ -1,0 +1,150 @@
+import json
+
+import pytest
+
+from shantytown import config_source, instructions
+from shantytown.config import Config
+from shantytown.protocols import Agent
+
+
+def cfg(text, mode="compare"):
+    doc = config_source.parse(json.dumps({"version": 1, "settings": {}, "fragments": [
+        {"id": "urn:test:fleet", "scope": "fleet", "selector": "", "text": text}]}))
+    return Config(env={"SHANTY_INSTRUCTIONS_MODE": mode}, source_document=doc)
+
+
+def test_migration_compares_bytes_and_keeps_local_identity(tmp_path):
+    (tmp_path / "CLAUDE.md").write_bytes(b"exact\n")
+    (tmp_path / "AGENTS.md").symlink_to("CLAUDE.md")
+    identity = tmp_path / "CLAUDE.local.md"
+    identity.write_bytes(b"private identity")
+    for harness in ("claude", "codex", "opencode"):
+        plan = instructions.prepare(tmp_path, Agent("alice", harness=harness), cfg("exact\n"))
+        assert not plan.updates
+        assert all(c["equal"] for c in plan.comparisons.values())
+    assert identity.read_bytes() == b"private identity"
+
+
+def test_compare_mode_never_overwrites_real_work(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("existing work")
+    plan = instructions.prepare(tmp_path, Agent("alice"), cfg("proposed"))
+    assert not plan.updates
+    assert not plan.comparisons["CLAUDE.md"]["equal"]
+    assert (tmp_path / "CLAUDE.md").read_text() == "existing work"
+
+
+def test_apply_plan_is_one_body_and_never_a_live_external_symlink(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("old")
+    (tmp_path / "AGENTS.md").symlink_to("CLAUDE.md")
+    plan = instructions.prepare(tmp_path, Agent("alice"), cfg("new", "apply"))
+    assert plan.updates == {tmp_path / "CLAUDE.md": "new"}
+    (tmp_path / "AGENTS.md").unlink()
+    (tmp_path / "AGENTS.md").symlink_to(tmp_path.parent / "outside-instructions")
+    with pytest.raises(ValueError, match="leaves"):
+        instructions.prepare(tmp_path, Agent("alice"), cfg("new", "apply"))
+
+
+def test_no_graph_document_keeps_existing_files(tmp_path):
+    assert instructions.prepare(tmp_path, Agent("alice"), Config()).updates == {}
+    assert not list(tmp_path.iterdir())
+
+
+def test_effective_harness_selector_comes_from_canonical_caller(tmp_path):
+    doc = cfg("fleet").source_document
+    doc["fragments"].append({"id": "urn:test:codex", "scope": "harness",
+                             "selector": "codex", "text": "codex"})
+    plan = instructions.prepare(tmp_path, Agent("alice"),
+                                Config(env={"SHANTY_INSTRUCTIONS_MODE": "apply"},
+                                       source_document=doc), harness="codex")
+    assert set(plan.updates.values()) == {"fleetcodex"}
+
+
+def test_actual_provision_consumes_one_fleet_edit_for_two_harnesses(tmp_path, monkeypatch):
+    from shantytown import config, provision
+    root = tmp_path / "root"; root.mkdir()
+    (root / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_CONFIG_ENTITY="urn:test:config"\n'
+        'SHANTY_CONFIG_SERVER="https://graph.example"\n')
+    cards = []
+    for name, harness in (("alice", "claude"), ("bob", "codex")):
+        ws = tmp_path / name; ws.mkdir()
+        (ws / "CLAUDE.md").write_text("before")
+        (ws / "CLAUDE.local.md").write_text("identity")
+        cards.append(Agent(name, harness=harness, workspace=str(ws)))
+    for text in ("first\n", "second\n"):
+        doc = cfg(text, "apply").source_document
+        doc["settings"] = {"env": {"SHANTY_INSTRUCTIONS_MODE": "apply"}}
+        monkeypatch.setattr(config_source, "_fetch", lambda *args: json.dumps(doc))
+        for card in cards:
+            provision.provision(card, root)
+            ws = __import__("pathlib").Path(card.workspace)
+            assert (ws / "CLAUDE.md").read_text() == text
+            assert (ws / "AGENTS.md").read_text() == text
+            assert (ws / "CLAUDE.local.md").read_text() == "identity"
+
+
+def test_actual_instruction_apply_fault_preserves_old_body(tmp_path, monkeypatch):
+    import errno
+    import io
+    import os
+    from pathlib import Path
+    from shantytown import config, provision
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / config.CONFIG_NAME).write_text(
+        '[env]\nSHANTY_CONFIG_ENTITY="urn:test:config"\n'
+        'SHANTY_CONFIG_SERVER="https://graph.example"\n')
+    ws = tmp_path / "agent"
+    ws.mkdir()
+    target = ws / "CLAUDE.md"
+    target.write_bytes(b"previous accepted body\n")
+    target.chmod(0o600)
+    (ws / "AGENTS.md").symlink_to("CLAUDE.md")
+    identity = ws / "CLAUDE.local.md"
+    identity.write_bytes(b"local identity")
+    before = target.read_bytes()
+    doc = cfg("replacement", "apply").source_document
+    doc["settings"] = {"env": {"SHANTY_INSTRUCTIONS_MODE": "apply"}}
+    monkeypatch.setattr(config_source, "_fetch", lambda *args: json.dumps(doc))
+    original_open, original_fdopen = io.open, os.fdopen
+    calls = []
+
+    class Fault:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+        def write(self, text):
+            calls.append(1)
+            raise OSError(errno.ENOSPC, "owned instruction write fault")
+
+    def owned(path):
+        if not isinstance(path, (str, os.PathLike)):
+            return False
+        path = Path(path)
+        return path.parent == ws and path.name.startswith("CLAUDE.md")
+
+    def fault_open(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        return Fault(stream) if "w" in mode and owned(path) else stream
+
+    def fault_fdopen(fd, mode="r", *args, **kwargs):
+        path = os.readlink(f"/proc/self/fd/{fd}")
+        stream = original_fdopen(fd, mode, *args, **kwargs)
+        return Fault(stream) if "w" in mode and owned(path) else stream
+
+    monkeypatch.setattr(io, "open", fault_open)
+    monkeypatch.setattr(os, "fdopen", fault_fdopen)
+    with pytest.raises(OSError, match="owned instruction write fault"):
+        provision.provision(Agent("alice", workspace=str(ws)), root)
+    assert calls == [1]
+    assert target.read_bytes() == before
+    assert (ws / "AGENTS.md").read_bytes() == before
+    assert (ws / "AGENTS.md").is_symlink()
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert identity.read_bytes() == b"local identity"

@@ -494,3 +494,42 @@ def test_crew_displays_after_turn_hold_actor_and_time(tmp_path, monkeypatch, cap
     assert cli._cmd_crew(_Args(root)) == cli.OK
     out = capsys.readouterr().out
     assert "held (by lead, since " in out
+
+
+def test_typed_codex_input_is_visible_as_stranded_not_free(tmp_path, monkeypatch, capsys):
+    from test_codex_submission import OWNED
+    root = _roster(tmp_path, {'ellie': 'p-ellie'})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes({'p-ellie': OWNED}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    out = capsys.readouterr().out
+    assert 'stranded input' in out
+    assert '1 with UNSUBMITTED text' in out
+    assert 'free: ellie' not in out
+
+
+def test_roster_mixed_governor_warning_does_not_throttle_codex(tmp_path, monkeypatch, capsys):
+    from shantytown import config, governor
+    root = _roster(tmp_path, {'claude_worker': 'p-c', 'codex_worker': 'p-x'})
+    for name, harness in [('claude_worker', 'claude'), ('codex_worker', 'codex')]:
+        path = root / 'crew' / f'{name}.json'
+        card = json.loads(path.read_text())
+        card['harness'] = harness
+        path.write_text(json.dumps(card))
+    (root / 'shantytown.toml').write_text(
+        '[governor]\nsource="stub"\nstub_pct=83\n'
+        '[[governor.tier]]\nat=70\nmin_priority=1\n'
+        '[governor.by_harness.codex]\nsource="stub"\nstub_pct=10\n')
+    cfg = config.load(root)
+    governors = {
+        name: governor.Governor(policy, governor.reader_for(policy),
+                                governor.FilesGovernorState(root, None if name == 'base' else name))
+        for name, policy in [('base', cfg.governor), ('codex', cfg.governor.by_harness['codex'])]
+    }
+    monkeypatch.setattr(cli, '_governors', lambda a: (cfg, governors))
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: _Panes({'p-c': IDLE_SCREEN, 'p-x': IDLE_SCREEN}))
+    assert cli._cmd_crew(_Args(root)) == cli.OK
+    text = capsys.readouterr().out
+    assert '2 free: claude_worker, codex_worker' in text
+    notes = [line for line in text.splitlines() if 'THROTTLED-IDLE' in line]
+    assert len(notes) == 1 and '[claude: claude_worker]' in notes[0]
+    assert 'P1' in notes[0] and 'codex_worker' not in notes[0]
