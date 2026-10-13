@@ -1178,7 +1178,8 @@ def _cmd_hooks(a) -> int:
     hb.apply_live(res, running)
     from . import stats as _stats
     hb.apply_firing(res, hb.load(root), running=running,
-                    last_active=_stats.last_activity(Path(root)))
+                    last_active=_stats.last_activity(Path(root)),
+                    last_stopped=_stats.last_activity(Path(root), kind="stop"))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -6584,6 +6585,7 @@ def _cmd_crew(a) -> int:
     if getattr(a, 'governor', False) and (getattr(a, 'json', False)
                                         or cfg.host_peers and not getattr(a, 'local', False)):
         return _crew_account_governor(a)
+    from .dashboard import crew_role_sources, crew_role_cell
     peer_results = (fleet_mod.collect(cfg.host_peers)
                     if not getattr(a, "local", False) else [])
     a.crew_peers = peer_results
@@ -6685,6 +6687,7 @@ def _cmd_crew(a) -> int:
                 cycle_request_stale=ag.name in cycle_stale,
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
                 tree_role=ag.role, retired=bool(ag.retired),
+                role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
@@ -6737,11 +6740,18 @@ def _cmd_crew(a) -> int:
              else (lambda pane: None))
     from . import dashboard as dash_mod
     import shutil
+    local_roles = {ag.name: crew_role_cell(crew_role_sources(ag, cfg.roles))
+                   for ag in agents}
+    peer_rows = fleet_mod.rows(peer_results)
+    peer_roles = [crew_role_cell(row.get("role_sources") or
+                                {"declared": row["role"].split(",")})
+                  for row in peer_rows]
+    role_width = max([14, *(len(cell) for cell in [*local_roles.values(), *peer_roles])])
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
     print()
     if peer_results:
-        print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<14} {'STATE':<13} "
+        print(f"  {'HOST':<22} {'AGENT':<11} {'ROLE':<{role_width}} {'STATE':<13} "
               f"{'SETTINGS':<8} {'TREE':<9} {'WORK':<16} {'POSTURE':<7} PANE")
     for ag, state, work, posture in _crew_states(
             agents, panes, runtime, cycling=cycling, untracked_root=a.root,
@@ -6830,9 +6840,9 @@ def _cmd_crew(a) -> int:
         # datum that says keeper outranks worker, and inventing one here would
         # reintroduce that tie-break in the renderer. An undeclared member falls
         # back to its tree position, so an un-migrated fleet looks exactly as before.
-        role_cell = ",".join(ag.effective_roles())
+        role_cell = local_roles[ag.name]
         host_cell = f"{local or 'local':<22} " if peer_results else ""
-        print(f"  {host_cell}{ag.name:<11} {role_cell:<14} {state:<13} {verdict:<8} "
+        print(f"  {host_cell}{ag.name:<11} {role_cell:<{role_width}} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
         if state == "up":
             try:
@@ -6849,8 +6859,8 @@ def _cmd_crew(a) -> int:
                 print(f"    {context_label}")
                 if context_label.startswith("context UNKNOWN"):
                     context_unknown.append(ag.name)
-    for row in fleet_mod.rows(peer_results):
-        print(f"  {row['host']:<22} {row['name']:<11} {row['role']:<14} "
+    for row, role_cell in zip(peer_rows, peer_roles):
+        print(f"  {row['host']:<22} {row['name']:<11} {role_cell:<{role_width}} "
               f"{row['state']:<13} {row['settings']:<8} {row['tree']:<9} "
               f"{row['work']:<16} {row['posture']:<7} {row['pane']}")
     for error in peer_errors:
@@ -8837,6 +8847,24 @@ def _durable_checkpoint_gate(a, agent_name: str):
     return cycle_mod.durable_gate(agent_name, bead, since, got)
 
 
+def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
+    """Optional Jev advice uses only the handoff, never the conversation."""
+    from . import checkpoint_quality
+    command = (_deployment_default(a, "SHANTY_CHECKPOINT_JEV_COMMAND")
+               or _deployment_default(a, "SHANTY_CREATE_JEV_COMMAND"))
+    depth = None
+    if command and not getattr(a, "allow_loss", False):
+        try:
+            card = _registry(a).get(agent_name)
+            if card.pane:
+                panes = _panes(a)
+                depth = triage_mod.context_tokens_k(panes.capture(card.pane))
+        except Exception:  # noqa: BLE001 — unknown depth must never trap a cycle
+            pass
+    return checkpoint_quality.review(a.root, agent_name, checkpoint, session,
+                                     command, depth, triage_mod.CYCLE_THRESHOLD_K)
+
+
 def _advise_situation(a, agent: str, cfg):
     """The measured half of cycle_advice: depth and cache timing from the transcript
     the Stop hook last recorded (context_hint), and the next task from the plate."""
@@ -9151,6 +9179,14 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
+        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        quality_ok, quality_note = _checkpoint_quality_gate(
+            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
+            quality_gate.since)
+        if quality_note:
+            print(f"  ⚠ {quality_note}", file=sys.stderr)
+        if not quality_ok:
+            return REFUSED
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
@@ -9259,6 +9295,14 @@ def _cmd_cycle(a) -> int:
         print(f"  ⚠ cycling over a missing durable handoff (--allow-loss): "
               f"{gate.bead} has no comment from {agent_name} since "
               f"{gate.since}. That reasoning is being spent.", file=sys.stderr)
+
+    if not a.dry_run and not getattr(a, "_automatic_cycle", False):
+        quality_ok, quality_note = _checkpoint_quality_gate(
+            a, agent_name, gate.checkpoint or a.reason, gate.since)
+        if quality_note:
+            print(f"  ⚠ {quality_note}", file=sys.stderr)
+        if not quality_ok:
+            return REFUSED
 
     # WHICH MECHANISM. Decided from observed pane facts, never assumed — see
     # cycle.plan for what each precondition costs if it is wrong.
@@ -11714,7 +11758,9 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
         return creel_advisory_mod.Alerter(
             Path(a.root), reg if reg is not None else _registry(a),
             panes if panes is not None else _panes(a), filename="gaming_hold.json",
-            label="quiet-time governor").sweep({"local": creel_advisory_mod.Advice(status.render(), key)})
+            label="quiet-time governor").sweep({"local": creel_advisory_mod.Advice(
+                status.render(), key, failure=status.state == "unknown",
+                risk=2 if status.state == "unknown" else 0)})
     except Exception as exc:
         print(f"  gaming advisory delivery failed: {exc}", file=sys.stderr)
         return []
@@ -12060,8 +12106,8 @@ def _tend_once(a, quiet: bool = False) -> int:
             readings, running=running, cap=verdicts[name].max_agents,
             max_age=gov.policy.max_age_seconds, paces=gov.policy.paces,
             probe=cfg.env.get(creel_advisory_mod.PROBE_ENV))
-        setpoint_advisories[name] = line
-        # Unavailability is pushed once through the deduped alerter below.  A
+        setpoint_advisories[name] = creel_advisory_mod._creel_advice(line, live=running)
+        # Live-lane unavailability is pushed once by the deduped alerter. A
         # permanent warning on every tend heartbeat trains the admin to ignore
         # this channel and therefore un-builds the advisory when it returns.
         if not line.startswith("advisory unavailable:"):
@@ -12156,7 +12202,7 @@ def _tend_once(a, quiet: bool = False) -> int:
     _lanes = [
         _hswitch.Lane(
             name=_n,
-            delta=creel_advisory_mod.recommended_delta(setpoint_advisories[_n]),
+            delta=creel_advisory_mod.recommended_delta(setpoint_advisories[_n].line),
             held=bool(verdicts[_n].held) and not verdicts[_n].signal_lost,
             live=live_by_gov.get(_n, 0),
             candidates=tuple(sorted(_by_lane.get(_n, []))),

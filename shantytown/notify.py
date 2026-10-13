@@ -1562,7 +1562,7 @@ def _blocked_kind(detail: dict) -> tuple[str, list[str]]:
 
 
 class DeferralAlerter:
-    """Surface a deferral whose DATE has lapsed or whose CONDITION has been met.
+    """Record lapsed/met deferrals; interrupt for urgent or unreadable findings.
 
     The sibling of BlockedStaleAlerter, for the population one step further out of
     sight. Blocked beads at least appear in `br list --status blocked`; a deferred
@@ -1692,10 +1692,11 @@ class DeferralAlerter:
                     cache.update(dict.fromkeys(targets))
         findings = pol.evaluate(rows, now, is_closed=is_closed)
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
-        reports, retry = [], set()
+        reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
             if budget.failed(finding.bead):
+                persistent_failures.add(finding.bead)
                 from dataclasses import replace
                 reports.append(replace(finding, met=False, read_error=False,
                     untestable="read/release failed for 3 consecutive scheduled passes"
@@ -1764,38 +1765,53 @@ class DeferralAlerter:
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)
+        from .notification_risk import deferred_risk, interrupts
         import hashlib
         import json
         from .files import write_json_atomic
+
+        def is_loud(finding):
+            risk = (3 if finding.read_error or finding.bead == "tracker-store"
+                    or finding.bead in persistent_failures
+                    else deferred_risk(finding.priority))
+            return interrupts(failure=True, risk=risk)
+
+        loud = [finding for finding in fresh if is_loud(finding)]
+        quiet = [finding for finding in fresh if not is_loud(finding)]
+        if quiet:
+            self._log("deferral log: " + "\n".join(pol.report(quiet)))
         summary_path = Path(self._root) / "notify" / "deferral-summary.json"
         try:
             summary = json.loads(summary_path.read_text())
             previous_summary = summary.get("digest") if isinstance(summary, dict) else None
         except (OSError, ValueError):
             previous_summary = None
-        if fresh:
-            text = "\n".join(pol.report(fresh))
+        if loud:
+            text = "\n".join(pol.report(loud))
             digest = hashlib.sha256(text.encode()).hexdigest()
             if digest == previous_summary:
                 # A changed/reset finding ledger can still render the identical
                 # delivered summary. Record its state, without another LLM turn.
                 self._log("deferral-sweep: identical delivered summary suppressed")
-                fresh = []
+                loud = []
             else:
                 # Failed delivery consumes neither the summary nor finding state.
                 if self._push(self._reg, self._panes, text) is None:
-                    self._log("deferral-sweep: no admin pane — nothing recorded, "
-                              "these re-report next pass")
+                    seen.record([f for f in findings if f not in loud],
+                                preserve=retry | {f.bead for f in loud})
+                    self._log("deferral-sweep: no admin pane — failures remain pending; "
+                              "routine findings recorded in the log")
                     return []
                 write_json_atomic(summary_path, {"digest": digest})
-        elif not findings and not retry and not store_error:
-            # A positively read resolution permits a future genuine recurrence.
+        elif not any(is_loud(f) for f in findings) and not retry and not store_error:
+            # Quiet findings do not prevent a positively read urgent resolution
+            # from permitting a future genuine recurrence.
             write_json_atomic(summary_path, {})
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
         seen.record(findings, preserve=retry)
-        return [f.bead for f in fresh]
+        return [f.bead for f in loud]
 
 
 class BlockedStaleAlerter:
