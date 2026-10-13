@@ -245,33 +245,34 @@ def _no_ambient_agent(monkeypatch):
     monkeypatch.delenv("TMUX_PANE", raising=False)
 
 
+def _runtime_parent(value):
+    """Refuse an absent, shared or foreign native runtime directory."""
+    import os, stat
+    if not value:
+        raise RuntimeError("XDG_RUNTIME_DIR is required for isolated socket fixtures")
+    parent = Path(value)
+    if (not parent.is_absolute() or parent.is_symlink() or not parent.is_dir()
+            or parent.resolve() != parent
+            or parent.stat().st_uid != os.getuid()
+            or stat.S_IMODE(parent.stat().st_mode) != 0o700):
+        raise RuntimeError("socket fixture runtime parent must be owned and mode 0700")
+    return parent
+
+
 @pytest.fixture(scope="session")
 def _xdg_runtime_base():
-    """One SHORT base dir for the isolated runtime dirs, removed at session end.
+    """Use an empty private child of the validated native runtime directory.
 
-    Short is a requirement, not tidiness. A Unix-domain socket path has a 107-byte
-    ceiling and `harness` refuses above it by design, so pointing
-    $XDG_RUNTIME_DIR at pytest's own tmp_path (`/tmp/pytest-of-<user>/pytest-N/
-    <name>0`) makes the codex socket 120 bytes and eleven tests fail on a refusal
-    that production never hits — the real `/run/user/1000` is fourteen characters.
-    Isolating the variable is only correct if the isolated value is REPRESENTATIVE.
-
-    Session-scoped with per-test subdirectories: one dir per test would be ~3200
-    of them, and this session has already spent an evening on /tmp litter.
+    Socket fixtures need a short path while remaining separate from live cards.
+    No production temporary root, privileged provisioning or fallback is used.
     """
-    import shutil, tempfile
-    base = None
-    for parent in ("/tmp", "/var/tmp", None):
-        try:
-            base = tempfile.mkdtemp(prefix="stx", dir=parent)
-            break
-        except OSError:
-            continue
-    base = Path(base)
+    import os, shutil, tempfile
+    parent = _runtime_parent(os.environ.get("XDG_RUNTIME_DIR"))
+    base = Path(tempfile.mkdtemp(prefix="stx", dir=parent))
     try:
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        shutil.rmtree(base)
 
 
 _XDG_SEQ = itertools.count()
@@ -311,9 +312,20 @@ def _no_ambient_runtime_dir(_xdg_runtime_base, monkeypatch):
     one under this same variable — monkeypatch.setenv in the test body runs after
     this fixture and wins, which is how test_codex_harness.py already works.
     """
+    import tempfile
+    parent = _runtime_parent(str(_xdg_runtime_base.parent))
     d = _xdg_runtime_base / f"r{next(_XDG_SEQ)}"
-    d.mkdir(parents=True, exist_ok=True)
+    d.mkdir(mode=0o700)
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(d))
+    # These launch fixtures previously nested a second long directory below
+    # TMPDIR. Keep their empty contexts short, private and automatically removed.
+    original = tempfile.TemporaryDirectory
+    def private_runtime(*args, **kwargs):
+        if (not args and kwargs.get("dir") is None
+                and kwargs.get("prefix") in {"st-rc-", "group-env-", "model-env-"}):
+            kwargs = dict(kwargs, prefix="r", dir=_runtime_parent(str(parent)))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", private_runtime)
 
 
 @pytest.fixture(autouse=True)
