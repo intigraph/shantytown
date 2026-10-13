@@ -1067,6 +1067,13 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
+            durable_packages = (state_base / "shantytown" / "codex"
+                                / card.name / "packages" / "app-server-daemon")
+            package_setup = (
+                f"{shlex.quote(sys.executable)} -m shantytown.codex_packages "
+                f"--home {shlex.quote(str(daemon_home))} "
+                f"--durable {shlex.quote(str(durable_packages))}"
+            )
             bootstrap = " && ".join((
                 path_shim_setup,
                 f"mkdir -p {shlex.quote(str(daemon_home))}",
@@ -1086,6 +1093,7 @@ class CodexHarness:
                 f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'releases'))}",
                 f"ln -sfn {shlex.quote(daemon_current_target)} "
                 f"{shlex.quote(str(daemon_home / 'packages' / 'standalone' / 'current'))}",
+                package_setup,
             ))
             # THE CARD'S PERMISSION OPT-IN HAS TO REACH THE DAEMON, NOT ONLY THE
             # TUI (aegis-7okaae). Under Remote Control the model's shell commands

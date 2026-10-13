@@ -547,3 +547,19 @@ the local client and the Remote Control daemon so Stop-hook children inherit
 the configured capture group. Values are shell quoted; credentials are not
 part of this allowlist. Already-running sessions need a normal relaunch to
 receive a changed group.
+
+### Daemon package storage
+
+Remote Control keeps each card's socket and transient control state in its short
+runtime home. Its app-server daemon package directory points to a private,
+mode 0700 directory under `XDG_STATE_HOME/shantytown/codex/<card>/packages/`
+(defaulting to `~/.local/state`). This keeps downloaded daemon releases off the
+runtime filesystem while retaining separate updater state for each card. The
+standalone CLI release sharing remains unchanged.
+
+On Linux, provisioning refuses a destination on tmpfs or ramfs, an unknown
+mount, an unexpected package link, or a destination with foreign ownership or
+nonprivate permissions. Existing real package directories are preserved and
+require a separately authorized migration after the owning daemon is stopped.
+Provisioning refuses before stopping a daemon in that case; it never deletes
+live releases or silently falls back to downloading them into RAM.

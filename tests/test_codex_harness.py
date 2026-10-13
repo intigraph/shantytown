@@ -100,6 +100,10 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
     assert "--cd '/work with space'" in launch
     assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
     assert f"ln -sfn {cfg.parent / 'auth.json'} {daemon_home / 'auth.json'}" in launch
+    durable = Path(os.environ.get(
+        "XDG_STATE_HOME", Path.home() / ".local" / "state")) / "shantytown" / "codex" / "ellie" / "packages" / "app-server-daemon"
+    assert f"-m shantytown.codex_packages --home {daemon_home} --durable {durable}" in launch
+    assert launch.index("-m shantytown.codex_packages") < launch.index("codex remote-control stop")
     daemon_standalone = daemon_home / "packages" / "standalone"
     assert f"ln -sfn {cfg.parent / 'packages' / 'standalone' / 'releases'} " \
            f"{daemon_standalone / 'releases'}" in launch
