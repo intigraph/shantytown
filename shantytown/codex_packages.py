@@ -84,12 +84,17 @@ def assert_quiescent(root: Path) -> None:
             uid_line = next((line for line in status.splitlines() if line.startswith("Uid:")), None)
             if uid_line is None:
                 raise RuntimeError("process UID custody is UNKNOWN")
-            if os.getuid() not in [int(value) for value in uid_line.split()[1:]]:
+            uids = uid_line.split()[1:]
+            if len(uids) != 4 or not all(value.isdecimal() for value in uids):
+                raise RuntimeError("process UID custody is UNKNOWN")
+            if os.getuid() not in [int(value) for value in uids]:
                 continue
             try:
                 executable = os.readlink(proc / "exe")
             except FileNotFoundError:
-                continue  # exited process or a kernel thread
+                # A terminated thread leader can lack an exe link while its
+                # remaining threads still hold descriptors or mapped payloads.
+                executable = ""
             if inside(executable):
                 raise RuntimeError("daemon package still has a live executable reference")
             for descriptor in (proc / "fd").iterdir():
@@ -102,8 +107,10 @@ def assert_quiescent(root: Path) -> None:
                 parts = line.split(None, 5)
                 if len(parts) == 6 and inside(parts[5]):
                     raise RuntimeError("daemon package still has a live mapped reference")
-        except FileNotFoundError:
-            continue  # process exited during bounded read
+        except FileNotFoundError as error:
+            if proc.exists():
+                raise RuntimeError("existing process metadata custody is UNKNOWN") from error
+            continue  # confirmed process exit during bounded read
         except PermissionError as error:
             raise RuntimeError("daemon package process custody is UNKNOWN") from error
 

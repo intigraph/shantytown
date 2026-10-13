@@ -264,3 +264,52 @@ def test_native_installer_lock_contention_refuses_without_changing_card(tmp_path
         with pytest.raises(BlockingIOError):
             packages.migrate_stopped(home, durable)
     assert old.is_dir() and not old.is_symlink()
+
+
+@pytest.fixture
+def proc_fixture(tmp_path, monkeypatch):
+    proc = tmp_path / "12345"
+    proc.mkdir()
+    (proc / "status").write_text("Uid: " + " ".join([str(os.getuid())] * 4) + "\n")
+    (proc / "fd").mkdir()
+    (proc / "maps").write_text("")
+    original = Path.iterdir
+    monkeypatch.setattr(Path, "iterdir", lambda path: iter([proc]) if path == Path("/proc") else original(path))
+    return proc
+
+
+def test_missing_exe_still_checks_existing_descriptor(tmp_path, proc_fixture):
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    file = payload / "held"
+    file.write_bytes(b"held")
+    (proc_fixture / "fd/3").symlink_to(file)
+    with pytest.raises(RuntimeError, match="open descriptor"):
+        packages.assert_quiescent(payload)
+
+
+def test_missing_exe_still_checks_mapped_payload(tmp_path, proc_fixture):
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    file = payload / "held"
+    file.write_bytes(b"held")
+    (proc_fixture / "maps").write_text(f"1-2 r-xp 0 0:1 1 {file}\n")
+    with pytest.raises(RuntimeError, match="mapped reference"):
+        packages.assert_quiescent(payload)
+
+
+def test_existing_process_with_missing_metadata_refuses(tmp_path, proc_fixture):
+    (proc_fixture / "status").unlink()
+    with pytest.raises(RuntimeError, match="metadata custody is UNKNOWN"):
+        packages.assert_quiescent(tmp_path / "payload")
+
+
+def test_confirmed_exited_process_is_not_a_live_reference(tmp_path, proc_fixture):
+    packages.shutil.rmtree(proc_fixture)
+    packages.assert_quiescent(tmp_path / "payload")
+
+
+def test_malformed_uid_is_unknown_not_a_foreign_process(tmp_path, proc_fixture):
+    (proc_fixture / "status").write_text("Uid:\n")
+    with pytest.raises(RuntimeError, match="UID custody is UNKNOWN"):
+        packages.assert_quiescent(tmp_path / "payload")
