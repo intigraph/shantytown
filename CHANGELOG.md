@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.0](https://github.com/scbrown/shantytown/compare/v0.5.0...v0.6.0) (2026-10-13)
+
+
+### Features
+
+* **cycle:** check checkpoint quality before accepting handoffs ([#154](https://github.com/scbrown/shantytown/issues/154)) ([dab9dd2](https://github.com/scbrown/shantytown/commit/dab9dd283a0345618b38eef16b259b800495faf8))
+
+
+### Bug Fixes
+
+* **hooks:** stop printing the full session anchor to the terminal ([#228](https://github.com/scbrown/shantytown/issues/228)) ([f42903b](https://github.com/scbrown/shantytown/commit/f42903ba33f13de4dffbe65eda1f17a561e642ce))
+* **notify:** interrupt only for actionable warning failures ([#177](https://github.com/scbrown/shantytown/issues/177)) ([68c29ba](https://github.com/scbrown/shantytown/commit/68c29bae2e3abc6d50700be281e1043108860f75))
+* require explicit destination for source pushes ([#214](https://github.com/scbrown/shantytown/issues/214)) ([c2b463a](https://github.com/scbrown/shantytown/commit/c2b463a0ec5eb42a6d84314fb870ec8f118eccaa))
+
 ## [0.5.0](https://github.com/scbrown/shantytown/compare/v0.4.0...v0.5.0) (2026-10-12)
 
 
