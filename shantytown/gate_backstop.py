@@ -131,7 +131,7 @@ class Backstop:
                 continue
             notes = row.get('notes') or ''
             gate = closed_gate(notes)
-            blocked = row.get('status') == 'deferred' or bool(row.get('defer_until')) or any(
+            blocked = row.get('status') in ('deferred', 'blocked') or bool(row.get('defer_until')) or any(
                 str(x).startswith('blocked:') for x in row.get('labels', []))
             if gate and blocked and chain_root(row["id"]):
                 chain, current, reasons = [row['id']], row, []

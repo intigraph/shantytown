@@ -88,3 +88,44 @@ def test_gate_target_metadata_closed_and_batch_bound(monkeypatch):
  assert S in calls[0] and '"deferred"' not in calls[0]
  with pytest.raises(PartialAnswer):seeds_plate.deferred_rows(PROOF,target_ids=['x']*26).exact()
  assert len(calls)==2
+
+@pytest.mark.parametrize('target_status,expected', [('blocked', 1), ('open', 0), ('closed', 0), (None, 0)])
+def test_status_only_blocked_waiter_native_tend_once_across_restart(monkeypatch, tmp_path, target_status, expected):
+    from datetime import datetime, timezone
+    from shantytown import notify, feed_check
+    now = datetime(2026, 10, 13, 16, tzinfo=timezone.utc)
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix='test')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
+    monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
+    monkeypatch.setattr(tracker, '_bd', lambda *a: pytest.fail('SDK fallback escaped'))
+    target = seeds_plate.SEEDS + 'item/test-two'
+    candidate_queries = []
+    def query(proof, q, timeout):
+        is_target = target in q
+        if 'AS ?predicate' in q:
+            if is_target:
+                fields = wire(id='test-two', status=target_status, notes='repo: same', updated_at=now.isoformat())
+                for field in fields:
+                    field['subject'] = target
+            else:
+                fields = wire(status='blocked', notes='repo: same\nresume_when: closed:test-two')
+            return dict(rows=fields, count=len(fields), truncated=False)
+        if not is_target:
+            candidate_queries.append(q)
+            assert '"blocked"' in q and 'CONTAINS(?gateNotes, "resume_when:")' in q
+        found = [] if is_target and target_status is None else [dict(subject=target if is_target else S, graph=G)]
+        return dict(rows=found, count=len(found), truncated=False)
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *a: tracker)
+    candidates = tracker.backstop_rows().exact()
+    assert candidates[0]['status'] == 'blocked'
+    assert candidates[0]['labels'] == [] and candidates[0]['defer_until'] is None
+    calls = []
+    for _ in range(3):
+        alert = notify.DeferralAlerter(tmp_path, None, None, now=now,
+                                     push=lambda *a: calls.append(a[-1]) or 'sattler')
+        alert.sweep()
+    assert len(calls) == expected
+    if expected:
+        assert 'test-one -> test-two' in calls[0] and 'gate target is deferred/blocked' in calls[0]
+    assert len(candidate_queries) == 4
