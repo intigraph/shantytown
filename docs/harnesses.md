@@ -547,3 +547,32 @@ the local client and the Remote Control daemon so Stop-hook children inherit
 the configured capture group. Values are shell quoted; credentials are not
 part of this allowlist. Already-running sessions need a normal relaunch to
 receive a changed group.
+
+### Daemon package storage
+
+On Linux, Remote Control keeps each card's socket and transient control state in its short
+runtime home. Its app-server daemon package directory points to one user-owned,
+mode 0700 directory under `XDG_DATA_HOME/shantytown/codex/packages/`
+(defaulting to `~/.local/share`). The package, current pointer and native
+installer lock are shared; socket, daemon control and session state remain
+separate per card. This keeps downloaded releases off the runtime filesystem
+and avoids duplicate payloads. Standalone CLI release sharing is unchanged.
+
+On Linux, provisioning refuses a destination on tmpfs or ramfs, an unknown
+mount, an unexpected package link, or a destination with foreign ownership or
+nonprivate permissions. Existing real package directories migrate only after the normal sanctioned
+Remote Control stop, before readiness starts a replacement. Linux process
+custody checks every readable same-user executable, mapping and descriptor.
+Protected processes require readable cmdline, comm and start identity; plausible
+Codex/payload consumers or unknown identity refuse. Identified non-payload
+processes are reported as BOUNDED, never established deletion custody. Copy manifests bind bytes, modes and internal
+links; a conflicting shared version preserves the old directory. A late
+reference preserves the moved backup. Every successful migration also retains
+its original tree in same-filesystem quarantine and reports its path and coverage.
+No automatic deletion is provided. Keep quarantine for at least one full natural
+cycle of every live Codex card, recording failures and per-card evidence. At a
+sanctioned stopped boundary rollback by removing only the expected disk package
+symlink and renaming the retained tree back; preserve the shared disk payload. The migration shares the native installer
+lock inode and serializes provisioning; it never forces a cycle, deletes live
+releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
+calling the Linux migration helper there directly refuses.
