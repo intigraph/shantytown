@@ -59,7 +59,16 @@ def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
     if root is None or not re.fullmatch(r'[A-Za-z0-9_-]+', agent):
         raise ValueError('missing card binding')
     home = Path(runtime_dir or os.environ.get('XDG_RUNTIME_DIR', Path.home() / '.cache')) / 'shantytown' / 'codex' / agent
-    record, generation = _json(home / 'app-server-daemon' / 'daemon.pid')
+    # Native standalone and updater daemons use different identity filenames.
+    # Exactly one must exist; a malformed/symlink current record must never
+    # fall through to another record. Bind the filename across the RPC too.
+    identities = [home / 'app-server-daemon' / name
+                  for name in ('daemon.pid', 'app-server.pid')]
+    present = [path for path in identities if os.path.lexists(path)]
+    if len(present) != 1:
+        raise ValueError('missing or ambiguous daemon identity')
+    identity = present[0]
+    record, generation = _json(identity)
     pid = record.get('pid')
     if type(pid) is not int or pid <= 0:
         raise ValueError('missing daemon PID')
@@ -119,7 +128,8 @@ def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
     if not isinstance(header, dict) or not isinstance(header.get('payload'), dict) or header.get('type') != 'session_meta' or header['payload'].get('id') != thread:
         raise ValueError('session header mismatch')
     return dict(pid=pid, start=start, endpoint=str(endpoint), thread=thread,
-                generation=generation, context_generation=context_generation)
+                generation=generation, identity_file=identity.name,
+                context_generation=context_generation)
 
 
 class _Socket:
