@@ -124,7 +124,7 @@ def test_no_launch_stamp_is_cannot_tell_not_a_pass():
 def test_the_refusal_names_the_remedy_and_the_override():
     g = cycle_mod.durable_gate("dearing", "aegis-902vnu", "2026-09-04T01:00:00Z", [])
     text = g.render()
-    assert "br comments add aegis-902vnu" in text
+    assert "st work item comment aegis-902vnu" in text
     assert "st agent cycle --self --checkpoint-file" in text
     assert "--allow-loss" in text
 

@@ -1,0 +1,14 @@
+Script started on 2026-10-11 01:25:13-04:00 [COMMAND="python3 -u docs/demos/cycle-resume/demo.py c711a07" <not executed on terminal>]
+BASE: same simulated HTTP 408 after a clear
+  note: could not read worker's plate to re-dispatch (simulated HTTP 408). It will pick its work up from `st anchor`.
+submitted prompts: 0
+HEAD: same simulated HTTP 408 after a clear
+  note: worker's plate UNKNOWN after cycle (simulated HTTP 408).
+  submitted cycle resume kickoff -> worker
+submitted prompts: 1
+HEAD prompt: [from st agent cycle] [st cycle resume] [resume-id:99c62f2050b74e8c9520dcc68778a56f] Run `st anchor worker` and read your resume brief. Confirm current status, assignment, and governor admission before resuming work. A failed plate read is UNKNOWN, not an empty plate. Checkpoint pointer: x-checkpoint; confirm its current status and assignment before resuming it.
+HEAD visible plate: True
+HEAD model plate: True
+HEAD threshold hint: first= True repeat= False
+
+Script done on 2026-10-11 01:25:13-04:00 [COMMAND_EXIT_CODE="0"]

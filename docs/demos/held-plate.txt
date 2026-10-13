@@ -1,0 +1,12 @@
+Before (faca10f)
+Input: one in_progress task and 200 unread notifications.
+Selected plate: held
+  sd list, status=None: 201 rows
+  sd ready, status=None: 200 rows
+
+Candidate
+Input: one in_progress task and 200 unread notifications.
+Selected plate: held
+  sd list, status=hooked: 0 rows
+  sd list, status=in_progress: 1 rows
+

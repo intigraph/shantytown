@@ -46,6 +46,28 @@ def test_a_future_deferral_is_silent():
     assert deferrals.evaluate(rows, NOW) == []
 
 
+def test_same_day_recheck_lapses_at_the_full_timestamp_boundary():
+    until = NOW + timedelta(hours=2)
+    # Two spellings of the same instant, across both tracker status shapes.
+    for stamp in (until.isoformat().replace("+00:00", "Z"),
+                  until.astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat()):
+        for status in ("open", "deferred"):
+            rows = [_row(defer_until=stamp, status=status)]
+            for clock in (NOW, until - timedelta(microseconds=1)):
+                assert deferrals.evaluate(rows, clock) == []
+            for clock in (until, until + timedelta(seconds=1)):
+                findings = deferrals.evaluate(rows, clock)
+                assert len(findings) == 1 and findings[0].lapsed_at
+                assert "2026-09-03T15:00:00Z" in findings[0].render()
+
+
+def test_bare_date_keeps_its_existing_midnight_utc_boundary():
+    midnight = NOW.replace(hour=0)
+    rows = [_row(defer_until=midnight.date().isoformat())]
+    assert deferrals.evaluate(rows, midnight - timedelta(microseconds=1)) == []
+    assert deferrals.evaluate(rows, midnight)[0].lapsed_at == midnight
+
+
 def test_lapsed_reports_the_age_because_age_is_the_argument():
     rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
     f = deferrals.evaluate(rows, NOW)[0]
@@ -727,3 +749,117 @@ def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):
     rows[0]['priority'] = 1
     assert a.sweep() == ['aegis-1']
     assert len(sent) == 1
+
+def test_overlapping_sweeps_deliver_one_identical_summary(tmp_path):
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
+    sent = []
+    def push(_reg, _panes, text):
+        sent.append(text)
+        if len(sent) == 1:
+            _alerter(tmp_path, rows, push=lambda _r, _p, m: sent.append(m) or "admin").sweep()
+        return "admin"
+    _alerter(tmp_path, rows, push=push).sweep()
+    assert len(sent) == 1
+    for _ in range(20):
+        assert _alerter(tmp_path, rows, push=push).sweep() == []
+    assert len(sent) == 1
+
+
+def test_identical_delivered_summary_survives_finding_ledger_reset(tmp_path):
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
+    sent = []
+    push = lambda _r, _p, m: sent.append(m) or "admin"
+    assert _alerter(tmp_path, rows, push=push).sweep() == ["aegis-1"]
+    (tmp_path / "notify/deferral-sweep.json").write_text("{}")
+    assert _alerter(tmp_path, rows, push=push).sweep() == []
+    assert len(sent) == 1
+    rows.append(_row("aegis-new", defer_until=_iso(timedelta(days=-2)), labels=["needs-human"]))
+    assert _alerter(tmp_path, rows, push=push).sweep() == ["aegis-new"]
+    assert len(sent) == 2 and sent[0] != sent[1]
+
+
+def test_failed_changed_summary_remains_retryable(tmp_path):
+    rows = [_row(defer_until=_iso(timedelta(days=-26)), labels=["needs-human"])]
+    sent = []
+    push = lambda _r, _p, m: sent.append(m) or "admin"
+    _alerter(tmp_path, rows, push=push).sweep()
+    rows.append(_row("aegis-new", defer_until=_iso(timedelta(days=-2)), labels=["needs-human"]))
+    assert _alerter(tmp_path, rows, push=lambda *_a: None).sweep() == []
+    assert _alerter(tmp_path, rows, push=push).sweep() == ["aegis-new"]
+    assert len(sent) == 2
+
+
+def test_candidate_batch_cannot_replace_fresh_release_condition(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    row = _row(notes='resume_when: closed:other')
+    h = MechanicalHarness(tmp_path, row)
+    calls = []
+    class Backend:
+        def closed_many(self, ids):
+            calls.append(('batch', tuple(ids)))
+            return Answer.complete_read({'other': True}, how='candidate fixture')
+        def closed(self, bead):
+            calls.append(('fresh', bead))
+            return Answer.complete_read(False, how='condition changed after candidate read')
+        def show(self, bead):
+            calls.append(('show', bead))
+            return Answer.complete_read(dict(row), how='fresh full detail')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert calls == [('batch', ('other',)), ('show', row['id']), ('fresh', 'other')]
+    assert not h.releases
+
+
+def test_unknown_candidate_batch_does_not_retry_individual_reads(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:other'))
+    class Backend:
+        def closed_many(self, ids):
+            return Answer.complete_read({'other': None}, how='explicit unknown fixture')
+        def closed(self, bead):
+            raise AssertionError('UNKNOWN batch must not trigger individual fallback')
+        def show(self, bead):
+            raise AssertionError('UNKNOWN batch must not hydrate')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert not h.releases
+
+
+def test_malformed_batch_verdict_is_unknown_not_truthy_release(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    from shantytown.answer import Answer
+    h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:other'))
+    class Backend:
+        def closed_many(self, ids):
+            return Answer.complete_read({'other': 'closed'}, how='malformed fixture')
+        def closed(self, bead):
+            raise AssertionError('malformed batch must not retry')
+    monkeypatch.setattr(feed_check, 'backend_adapter', lambda *args: Backend())
+    h.alerter._show = None
+    h.alerter._is_closed = None
+    h.alerter.sweep()
+    assert not h.releases
+    assert any('invalid condition batch' in line for line in h.logs)
+
+
+def test_urgent_recurrence_survives_remaining_quiet_finding(tmp_path):
+    quiet = _row('routine', priority=2, labels=['needs-human'],
+                 defer_until=_iso(timedelta(days=-1)))
+    urgent = _row('urgent', priority=1, labels=['needs-human'],
+                  defer_until=_iso(timedelta(days=-1)))
+    rows = [quiet, urgent]
+    sent = []
+    a = _alerter(tmp_path, rows, push=lambda _r, _p, msg: sent.append(msg) or 'admin')
+    assert a.sweep() == ['urgent']
+    rows.remove(urgent)
+    assert a.sweep() == []
+    rows.append(urgent)
+    assert a.sweep() == ['urgent']
+    assert len(sent) == 2 and sent[0] == sent[1]
+    assert 'routine' not in sent[0]

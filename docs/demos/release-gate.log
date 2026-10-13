@@ -1,0 +1,12 @@
+Script started on 2026-10-11 23:09:47-04:00 [COMMAND="python3 docs/demos/release-gate.py" <not executed on terminal>]
+Sandbox: actual tag/identity shell gates; no release API writer
+Base 0a5cd6ac5083c8b86c1622b21d04375501e304c4; candidate source 80bc60e
+Input: valid identity
+base: exit 0 tag v0.4.1 matches declared version 0.4.1
+candidate: exit 0 tag v0.4.1 matches declared version 0.4.1 and triggering SHA
+Input: wrong triggering commit
+base: exit 0 tag v0.4.1 matches declared version 0.4.1
+candidate: exit 1 release tag differs from the triggering commit
+PASS: valid identity preserved; wrong triggering commit newly refused
+
+Script done on 2026-10-11 23:09:48-04:00 [COMMAND_EXIT_CODE="0"]

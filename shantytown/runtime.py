@@ -1001,6 +1001,15 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
     # that makes a stop legible at all, and it does not block.
     history = _history_cmd(root)
 
+    if role == "keeper":
+        from .protocols import Agent
+        from .tier import deployment_catalog
+        from .traits import receives_stops
+        catalog = deployment_catalog(root)
+        if catalog is None or "keeper" not in catalog.roles or not receives_stops(
+                Agent(name="keeper-emission", role="keeper"), catalog):
+            raise ValueError("keeper requires a deployment-declared absorbing role")
+
     if role == "worker":
         # send FIRST (the stop event persists whatever happens), then the HAUL
         # advance — the self-feed for a worker whose queue is already assigned
@@ -1009,7 +1018,7 @@ def role_stop_hooks(role: str, root=None) -> list[dict]:
         if history:
             stop.append(history)
         stop.append(_stop_cmd("haul", root))
-    elif role == "lead":
+    elif role in {"lead", "keeper"}:
         # A Codex lead owns work AND receives reports. Its own active anchor must
         # resume before drain: Codex stops after the first blocking Stop hook, so
         # drain-first can consume the boundary and strand the lead's haul. Claude
@@ -1740,12 +1749,17 @@ class ClaudeRuntime:
         # one the moment a second harness exists.
         assert program.carries_settings(launch, settings_path), \
             "compose produced a settings-less launch"
-        return launch
+        from .account_auth import wrap
+        return wrap(card, launch, self._root)
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
-        return self._resolve(card)
+        from .account_auth import settings_path
+        return settings_path(card, self._resolve(card), self._root)
 
+    def prepare_account_settings(self, card: Agent) -> None:
+        from .account_auth import settings_path
+        settings_path(card, self._resolve(card), self._root, prepare=True)
 
     def start(self, card: Agent, pane: str) -> None:
         """The seam: compose (may refuse) THEN deliver via Panes. Panes stays
@@ -1764,6 +1778,7 @@ class ClaudeRuntime:
         # purpose — that is what starting an agent IS. The send guard
         # (tmux.PaneNotAgent) refuses shells for message traffic, and this
         # is the one caller for which a shell is the correct target.
+        self.prepare_account_settings(card)
         self._panes.send(pane, self.compose(card), allow_shell=True)
 
     def is_live(self, screen: str) -> bool:

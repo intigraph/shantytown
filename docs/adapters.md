@@ -315,9 +315,26 @@ The four inferred outcomes are finished-unclosed (one close reminder per session
 ### Remote Seeds plate reads
 
 `SdTracker` selects plate candidates and ready IDs by the requested owner,
-including both full and short owner spellings. It uses the same ranking and
+including both full and short owner spellings. The schema.org remote path reads
+only plate fields. Local stores and older revision ledgers check `hooked` and
+then `in_progress` first; a complete held rank ends discovery, otherwise they
+retain the owner lookup. Held items do not need a readiness read.
+Both paths use the same ranking and
 blocker checks as `BrTracker`, and keeps failed candidate reads visible as an
 incomplete plate. A roster caches each owner's candidates and readiness for
 one render. Ordinary br trackers continue sharing their single board snapshot. Remote Seeds
 inboxes also query the recipient and message-title prefix; receipt lookup includes
 closed messages and refuses any incomplete response.
+
+Remote schema.org Seeds plates use an owner-scoped projection of identity, title,
+status, priority, labels and deferral dates. It covers the project's shared and
+ephemeral graphs without hydrating descriptions, comments or import payloads.
+Readiness remains the native `blockedOn` test on those candidate IDs. Fleet
+priority advice reads only open/active fields, and the unassigned summary uses
+aggregate counts. These are observations, never mutation or inbox lookup paths.
+
+The graph comes from the verified `sd where` result. Local stores and a positively
+identified legacy revision ledger retain the SDK adapter. A failed format probe,
+malformed field, ambiguous graph membership, truncated response or exhausted
+field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
+The projection sends the SDK's caller-declared attribution headers when present.

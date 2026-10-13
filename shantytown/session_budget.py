@@ -760,7 +760,7 @@ def stop_message(c: Ceiling, next_bead: str | None = None) -> str:
         f"unattended, and the haul is NOT serving another item.{claimed}{still}\n"
         f"Do this now, in order: (1) commit and push anything unpushed — work "
         f"stranded on one box is the cost this exists to avoid; (2) write what "
-        f"you did and what is left onto the bead trail, so the next session "
+        f"you did and what is left onto the item trail, so the next session "
         f"starts informed rather than re-deriving it; (3) stop cleanly, so your "
         f"stop event fires and the coordinator learns you are free.\n"
         f"Do NOT pick up more work to 'finish the thought' — the aggregate is "

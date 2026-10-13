@@ -33,9 +33,10 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
+from .query_identity import sdk_subprocess_options
 from .answer import Answer
 from .protocols import WorkItem
-from .inbox import MESSAGE_PREFIXES, is_message
+from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
 
 #: Backends served by a br-compatible CLI. A site that asks "is this a tracker
 #: with plates, comments and hauls" asks THIS, so a new name cannot be missed in
@@ -56,6 +57,7 @@ class StoreProof:
     database_path: "str | None"
     quipu_url: "str | None"
     prefix: "str | None"
+    graph: "str | None" = None
 
 
 class SdTracker(BrTracker):
@@ -72,6 +74,8 @@ class SdTracker(BrTracker):
         self.quipu = quipu or None
         self.prefix = prefix or None
         self._proof: "StoreProof | None" = None
+        self._plate_projection_candidates: dict[str, list[dict]] = {}
+        self._native_projection: bool | None = None
 
     @property
     def _bin(self) -> str:
@@ -115,7 +119,8 @@ class SdTracker(BrTracker):
                 "only the prefix check can tell it from the real board")
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
-                               capture_output=True, text=True, timeout=self.timeout)
+                               capture_output=True, text=True, timeout=self.timeout,
+                               **sdk_subprocess_options())
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -151,11 +156,19 @@ class SdTracker(BrTracker):
                 f"expected {self.prefix!r}")
         self._proof = StoreProof(location_source=source,
                                  database_path=w.get("database_path"),
-                                 quipu_url=w.get("quipu_url"), prefix=w.get("prefix"))
+                                 quipu_url=w.get("quipu_url"), prefix=w.get("prefix"),
+                                 graph=w.get("graph"))
         return self._proof
 
     def deferred_rows(self) -> Answer[list[dict]]:
         """Both deferral representations, selecting dated open rows remotely."""
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds deferral format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import deferred_rows
+            return deferred_rows(self.prove_store(), timeout=self.timeout)
         rows = {}
         how = "sd list deferred + open --defer-until-present, --limit 0"
         try:
@@ -182,6 +195,17 @@ class SdTracker(BrTracker):
             return Answer.capped(list(rows.values()), how=how,
                                  caveat=f"deferral candidates unreadable: {error}")
 
+    def _use_remote_projection(self) -> bool:
+        if not self.quipu or not self.prove_store().graph:
+            return False
+        if self._native_projection is None:
+            from .seeds_plate import uses_native_schema
+            try:
+                self._native_projection = uses_native_schema(self.prove_store(), timeout=self.timeout)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                raise StoreUnproven(f"seeds plate format unproven: {error}") from error
+        return self._native_projection
+
     def plate_rows(self, agent: str) -> Answer[list[dict]]:
         """Query both accepted owner spellings before selecting the plate.
 
@@ -189,15 +213,137 @@ class SdTracker(BrTracker):
         whole-board read on a remote store. Selection still uses br's ranking,
         readiness and partial-read rules; only the candidate set is narrower.
         """
+        # Remote plates need candidate fields, not bodies/comments/dependency
+        # hydration. Local and older SDK transports retain their CLI contract.
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds owner plate format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import owner_rows
+            self._plate_projection_candidates.pop(agent, None)
+            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout)
+            if answer.complete:
+                self._plate_projection_candidates[agent] = answer.exact()
+            return answer
+        # Most plate polls already hold work. Loading the open queue also
+        # hydrates every unread message, then discards it. Probe each held
+        # rank in precedence order; uncertainty keeps the full read path.
+        from .protocols import _PLATE_RANK
+        for status in sorted(_PLATE_RANK, key=_PLATE_RANK.get):
+            held = self._owner_rows(agent, status=status)
+            if not held.complete:
+                break
+            if any(not is_message(row.get("title", "")) and not is_unworkable(row)
+                   for row in held.exact()):
+                return held
         return self._owner_rows(agent)
 
+    def unassigned_open_counts(self) -> tuple[int, int] | None:
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import unassigned_counts
+        return unassigned_counts(self.prove_store(), timeout=self.timeout)
+
+    def closed_status(self, identifier: str) -> Answer[bool] | None:
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import closed_status
+        return closed_status(self.prove_store(), identifier, timeout=self.timeout)
+
+    def closed_statuses(self, identifiers) -> Answer[dict[str, bool | None]] | None:
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import closed_statuses
+        return Answer.complete_read(
+            closed_statuses(self.prove_store(), identifiers, timeout=self.timeout),
+            how="candidate condition map; every requested target present, unknown verdicts explicit")
+
+    @staticmethod
+    def _tend_order(rows):
+        # Haul queues use the first row: retain SDK priority/creation/id order.
+        # Missing dates cannot authorize a different dispatch head.
+        from datetime import datetime
+        def key(row):
+            value = row.get("created_at")
+            if not isinstance(value, str):
+                raise StoreUnproven("tend row lacks creation ordering evidence")
+            date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if date.tzinfo is None:
+                raise StoreUnproven("tend creation date lacks timezone")
+            return row["priority"], date, row["id"]
+        return sorted(rows, key=key)
+
+    def tend_rows(self, owners):
+        result = self.feed_rows(owners)
+        if result is None:
+            return None
+        ready, active = result
+        return self._tend_order(ready), self._tend_order(active)
+
+    def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
+        """Fresh active fields for the sweep's roster, including final barriers."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows
+        from .inbox import drop_parked
+        rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
+                          active_only=True, timeout=self.timeout).exact()
+        return Answer.complete_read(
+            self._tend_order([row for row in drop_parked(rows)
+                              if row["status"] == "in_progress"]),
+            how="fresh roster-scoped active fields")
+
+    def ready_count(self) -> int | None:
+        """Global utilization count from readiness metadata, not issue bodies."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import ready_count
+        return ready_count(self.prove_store(), timeout=self.timeout)
+
+    def feed_rows(self, owners: list[str]) -> tuple[list[dict], list[dict]] | None:
+        """Complete Rule Zero fields scoped to idle workers and unassigned work.
+
+        A failed native projection raises; it cannot authorize a hydration
+        fallback or an empty plate. Legacy transports keep their SDK path.
+        """
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .inbox import drop_parked
+        rows = drop_parked(owner_rows(self.prove_store(), None,
+                                    feed_owners=tuple(owners),
+                                    timeout=self.timeout).exact())
+        ready = [row for row in rows if row["status"] == "open"]
+        active = [row for row in rows if row["status"] == "in_progress"]
+        ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
+        return [row for row in ready if row["id"] in ids], active
+
+    def priority_rows(self, *, ready_candidates=None) -> tuple[list[dict], list[dict]] | None:
+        """Lean fields for fleet priority advice; never change mutation reads."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        rows = owner_rows(self.prove_store(), None, timeout=self.timeout).exact()
+        from .inbox import drop_parked
+        rows = drop_parked(rows)
+        ready = [row for row in rows if row["status"] == "open"]
+        active = [row for row in rows if row["status"] == "in_progress"]
+        # The advice consumer may prove most open items irrelevant before the
+        # dependency read. Active rows preserve the SDK list semantics.
+        candidates = ready_candidates(ready, active) if ready_candidates else ready
+        unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        return [row for row in candidates if row["id"] in unblocked], active
+
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
-                    messages_only: bool = False) -> Answer[list[dict]]:
+                    messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
         for owner in dict.fromkeys((agent, agent.split("/")[-1])):
             for prefix in (MESSAGE_PREFIXES if messages_only else (None,)):
                 try:
                     arguments = ["list", "--assignee", owner, "--json", "--limit", "0"]
+                    if status is not None:
+                        arguments += ["--status", status]
                     if include_closed:
                         arguments.append("--all")
                     if prefix is not None:
@@ -240,6 +386,24 @@ class SdTracker(BrTracker):
 
     def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
         """Read readiness only for the owner spellings used by plate selection."""
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, TypeError, RuntimeError) as error:
+            return Answer.capped(set(), how="Seeds owner readiness format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import owner_rows, unblocked_ids
+            from .answer import PartialAnswer
+            from .inbox import drop_parked
+            try:
+                rows = self._plate_projection_candidates.get(agent)
+                if rows is None:
+                    rows = owner_rows(self.prove_store(), agent, timeout=self.timeout).exact()
+                candidates = [row for row in drop_parked(rows)
+                              if row["status"] == "open" and not is_message(row["title"])]
+                ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+                return Answer.complete_read(ready, how="Seeds scoped readiness of projected owner IDs")
+            except (OSError, ValueError, RuntimeError, PartialAnswer) as error:
+                return Answer.capped(set(), how="Seeds scoped readiness", caveat=str(error))
         ready = set()
         how = f"sd ready --assignee for {agent!r} and its short spelling, --limit 0"
         try:
@@ -274,9 +438,12 @@ class SdTracker(BrTracker):
 
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         self.prove_store()
-        cmd = [self._bin, *self._location(), *self._translate(args)]
+        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
+        identity = ["--actor", actor] if actor and not explicit_actor else []
+        cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                              timeout=self.timeout)
+                              timeout=self.timeout, **sdk_subprocess_options())
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

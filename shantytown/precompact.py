@@ -110,7 +110,7 @@ SUMMARY_INSTRUCTIONS = (
     "Preserve, verbatim where possible: (a) which changes are LANDED (committed "
     "and pushed, with shas) versus LOCAL (working tree only); (b) the exact next "
     "step, as a command or a file:line, not a paraphrase; (c) the rollback for "
-    "anything already deployed; (d) the id of the bead being held. Prefer these "
+    "anything already deployed; (d) the id of the item being held. Prefer these "
     "over narrative."
 )
 
@@ -430,7 +430,7 @@ def _tracker(root: Path):
         from .sd import br_like_tracker
         return br_like_tracker(lambda k: deployment_default(root, k), "seeds")
     if (deployment_default(root, "SHANTY_BACKEND") or "files") not in ("beads", "br"):
-        raise RuntimeError("deployment backend is not beads/br/seeds; cannot comment")
+        raise RuntimeError("deployment backend does not support comments; cannot comment")
     return BrTracker(repo=(deployment_default(root, "SHANTY_BR_REPO")
                            or deployment_default(root, "SHANTY_BEADS_REPO")),
                      extra_repos=parse_extra_repos(
@@ -477,7 +477,7 @@ def main(argv: list[str] | None = None) -> int:
 
     bead = _held_bead(Path(root), me)
     if not bead:
-        print("precompact: no held bead — measurement recorded, no checkpoint",
+        print("precompact: no held item — measurement recorded, no checkpoint",
               file=sys.stderr)
         _outcome(log, session_id, me, "", OUTCOME_NO_BEAD)
         return 0

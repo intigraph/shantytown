@@ -1,0 +1,16 @@
+Script started on 2026-10-10 20:37:24-04:00 [COMMAND="sh docs/demos/wheel-checksums/run.sh" <not executed on terminal>]
+BEFORE: unchanged released pair has no checksum manifest
+sha256sum: SHA256SUMS: No such file or directory
+AFTER: actual producer selects matching wheel/source metadata
+/tmp/shantytown-checksum-demo.6LXCN3/SHA256SUMS
+afd52cb5e2b8c67eef8fa7e3aa4e8c725419d0f1f3e84184d6a01b52134ca8ac  shantytown-0.4.0-py3-none-any.whl
+624d4b2e7422ca44874f1c7b02cbc102a42b20d05ddf98fe48671db60a922192  shantytown-0.4.0.tar.gz
+shantytown-0.4.0-py3-none-any.whl: OK
+shantytown-0.4.0.tar.gz: OK
+NEGATIVE CONTROL: mutate wheel; the same manifest must reject
+shantytown-0.4.0-py3-none-any.whl: FAILED
+shantytown-0.4.0.tar.gz: OK
+sha256sum: WARNING: 1 computed checksum did NOT match
+Tampered wheel rejected (expected).
+
+Script done on 2026-10-10 20:37:24-04:00 [COMMAND_EXIT_CODE="0"]

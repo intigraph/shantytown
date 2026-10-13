@@ -238,10 +238,10 @@ class HasOpenBlocker(Exception):
             f"{item_id} is gated by {len(self.blockers)} unmet blocker(s): {names}. "
             f"Refusing to serve it to {requested} — dispatching it puts work on a "
             f"plate that cannot be advanced. Read from this item's own `blocks` "
-            f"dependencies, just now. If `br ready` offered you this item, the two "
-            f"disagree and THAT is worth a bead — do not assume either is stale. "
+            f"dependencies, just now. If the configured ready reader offered you this item, the two "
+            f"disagree and THAT is worth an item — do not assume either is stale. "
             f"Close the blocker, or drop the dependency if it is no longer real "
-            f"(`br dep remove {item_id} <blocker>`), then dispatch."
+            f"(`sd dep remove {item_id} <blocker>`), then dispatch."
         )
 
 
@@ -277,8 +277,8 @@ class Blocked(Exception):
             f"it would overwrite that status with in_progress and put an item "
             f"nobody can advance on an agent's plate — which is what cycles "
             f"agents. If the block is resolved, clear it deliberately "
-            f"(`br update {item_id} --status open`), then dispatch. If it is not, "
-            f"the bead's own comment says what it is waiting for."
+            f"(`st work item update {item_id} --status open`), then dispatch. If it is not, "
+            f"the item's own comment says what it is waiting for."
         )
 
 
@@ -303,7 +303,7 @@ class Closed(Exception):
             f"{item_id} is CLOSED; refusing to serve it to {requested}. Closed is "
             f"terminal — serving it would revert it to in_progress and re-do "
             f"finished work. If it must be worked again, reopen it deliberately "
-            f"(`br update {item_id} --status open`), then dispatch."
+            f"(`st work item update {item_id} --status open`), then dispatch."
         )
 
 
@@ -505,7 +505,7 @@ class Plan:
                 f"  would: ⚠ {self.unreadable_deps} dependency row(s) UNREADABLE "
                 f"— counted by the tracker, resolvable in no store reachable from "
                 f"here. If one of them is a `blocks` edge, this item is NOT ready "
-                f"and nothing can tell you so (`br show {self.item_id} --json`: "
+                f"and nothing can tell you so (`st work item show {self.item_id}`: "
                 f"compare dependency_count against dependencies)")
         lines.append("  would NOT: create a convoy, spawn a session, wait for ack")
         return "\n".join(lines)
@@ -632,6 +632,11 @@ class Dispatcher:
         from .task_order import instruction
         text = f"Work is on your hook: {item_id} — {item.title}"
         text += " — " + instruction(item_id)
+        # Put measurement where work arrives, without reading the board again.
+        text += (" — Before a fix or improvement, record a BASELINE on this item"
+                 " before the first change: time, version, probe and result."
+                 " Choose the success metric now; rerun the same probe afterwards."
+                 " If measurement is impossible, record why.")
         # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
         # host with 125 bd stores — they are a riddle, and the receiving agent has
         # no signal that the question is even open. The tag rides HERE, inside
@@ -689,11 +694,17 @@ class Dispatcher:
         text = attribute(text, self.sender)
         if serve_id:
             text += f" — [st serve:{serve_id} worker:{agent_name}]"
+        updates = {"status": "in_progress", "assignee": agent_name}
+        if getattr(item, "defer_until", None):
+            # Explicit dispatch resumes deferred work. Clear its old deadline
+            # only after a verified handoff, in the same read-back-checked write.
+            # Otherwise the plate still excludes the newly active assignment.
+            updates["defer_until"] = ""
         return Plan(
             item_id=item_id,
             agent=agent_name,
             pane=agent.pane,
-            updates={"status": "in_progress", "assignee": agent_name},
+            updates=updates,
             text=text,
             note=flat,
             store=tag,
@@ -830,7 +841,7 @@ class Dispatcher:
             raise RepoolRefused(
                 f"{item_id} is closed — closed is terminal and there is nothing "
                 f"to hand back. Reopening is a deliberate act "
-                f"(`br update {item_id} --status open`), never a repool side effect.")
+                f"(`st work item update {item_id} --status open`), never a repool side effect.")
         if item.status == "blocked":
             raise RepoolRefused(
                 f"{item_id} is blocked — blocked is a decision, and repooling it "
@@ -855,7 +866,8 @@ class Dispatcher:
         work without a way back (aegis-wuy1j7).
         """
         from .deferrals import (named_conditions, parse_condition,
-                                parse_conditions, parse_stamp)
+                                parse_conditions, parse_stamp, Condition)
+        from .deferral_notes import canonical_reason, MARKER_PREFIX
 
         label = BLOCKER_KIND_LABELS.get(kind)
         if label is None:
@@ -887,7 +899,14 @@ class Dispatcher:
                   "conjunction as dependency edges instead — `br dep add "
                   f"{item_id} <blocker>` for each — and defer with the one "
                   "condition that actually gates the restart, or with --until.")
-        marker = parse_condition((item.notes or "") + "\n\n" + reason)
+        written = parse_conditions(reason)
+        marker = written[0] if written else parse_condition(item.notes or "")
+        write_until = until
+        if not until and written and marker.kind == "date" and item.defer_until:
+            stamp = parse_stamp(marker.arg)
+            if stamp is not None:
+                date = marker.arg if _is_bare_date(marker.arg) else stamp.isoformat().replace("+00:00", "Z")
+                write_until = date
         if date:
             expected = parse_stamp(date)
             if expected is None or (until and not _valid_br_defer_until(until)):
@@ -897,28 +916,21 @@ class Dispatcher:
             condition = date
         elif marker and marker.testable() and (
                 marker.kind != "date" or parse_stamp(marker.arg) is not None):
-            # A STALE MARKER IN THE NOTES MUST NOT OUTRANK THE REASON BEING
-            # WRITTEN NOW. `marker` is parsed from notes + reason and
-            # `parse_condition` takes the FIRST match, so a bead deferred BEFORE
-            # carries its old `resume_when:` earlier in the notes and wins —
-            # measured on aegis-nrajcw, where the author's reason named
-            # `closed:aegis-mzdcm0` and st recorded the previous deferral's
-            # `closed:aegis-nt4rap`, reporting success. The author has no way to
-            # see it: the confirmation echoes the id that won, not the one they
-            # wrote. Refuse and name both, rather than silently re-deferring a
-            # bead on a condition nobody chose this time.
-            written = parse_conditions(reason)
-            if written and marker not in written:
-                raise DeferRefused(
-                    f"your reason names {written[0].render()}, but {item_id} already "
-                    f"carries an earlier `resume_when: {marker.render()}` in its notes "
-                    "and that one is what would be recorded. Clear or correct the stale "
-                    "marker in the notes first, or pass --until, so the condition that "
-                    "gates the restart is the one you just wrote.")
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
                                "or resume_when: closed:<id> / date:<ISO date>")
+
+        # A new explicit condition replaces the old one; --until supplies a
+        # date marker when the reason names no condition. Old prose stays inert.
+        if not written and not until and len(MARKER_PREFIX.findall(item.notes or "")) > 1:
+            raise DeferRefused("existing notes have multiple resume markers; name one new condition or pass --until")
+        active = (Condition("date", until) if until and (not written or marker.kind == "date")
+                  else marker if marker else Condition("date", date) if date else None)
+        if active is None or not active.testable() or (
+                active.kind == "date" and parse_stamp(active.arg) is None):
+            raise DeferRefused("resume_when must name a testable closed:<id> or date:<ISO date>")
+        reason = canonical_reason(reason, active.render())
 
         def missing(current, final=False):
             absent = {}
@@ -950,8 +962,9 @@ class Dispatcher:
                     ok = got == expected
                 if not ok:
                     absent["defer_until"] = (current.defer_until, date)
-            elif parse_condition(current.notes or "") != marker:
-                absent["resume_when"] = (current.notes, marker.render())
+            if (parse_condition(current.notes or "") != active
+                    or len(MARKER_PREFIX.findall(current.notes or "")) != 1):
+                absent["resume_when"] = (current.notes, active.render())
             if final:
                 for key, want in (("status", "deferred"), ("blocker_kind", label)):
                     if getattr(current, key) != want:
@@ -987,8 +1000,8 @@ class Dispatcher:
                 raise TrackerWriteLost(item_id, absent, 1)
 
         fields = {"defer_reason": reason}
-        if until:
-            fields["defer_until"] = until
+        if write_until:
+            fields["defer_until"] = write_until
         write_verified(fields)
         # Never send condition/reason again with the status write: a backend
         # interrupted after status is safe because those fields already exist.

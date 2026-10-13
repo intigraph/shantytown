@@ -34,7 +34,7 @@ def test_a_codex_card_carries_the_tooling_model():
     assert "YOUR TOOLS (codex)" in out
     assert "approval policy is never" in out, "the card must quote the refusal it explains"
     assert "not a" in out and "lost permission" in out
-    for cli in ("git", "gh", "br"):
+    for cli in ("git", "gh", "st work item"):
         assert cli in out, f"the card must name {cli} as a working path"
 
 
@@ -104,5 +104,7 @@ def test_the_tooling_model_survives_in_both_branches():
     for pre in ((), ("homelab",)):
         out = _card("codex", pre).render()
         assert "Do NOT" in out and "stop and wait" in out
-        for cli in ("git", "gh", "br"):
+        for cli in ("git", "gh", "st work item"):
             assert cli in out
+        assert "write beads with br" not in out
+        assert "merge with gh" not in out

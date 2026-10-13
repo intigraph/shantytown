@@ -1,0 +1,7 @@
+Script started on 2026-10-12 11:03:31-04:00 [COMMAND="python3 docs/demos/pytest-custody/run.py" <not executed on terminal>]
+BASE49ce946: same isolated private pytest fixture + ordinary adjacent repository
+{"armed": "2", "exit": 0, "fixtures": "0", "missing": "0", "ordinary_hook": true, "public": "2"}
+CANDIDATE: same isolated inputs; ordinary repository must remain armed
+{"armed": "1", "exit": 0, "fixtures": "1", "missing": "0", "ordinary_hook": true, "public": "1"}
+
+Script done on 2026-10-12 11:03:31-04:00 [COMMAND_EXIT_CODE="0"]
