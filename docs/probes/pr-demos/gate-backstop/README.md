@@ -1,7 +1,7 @@
 # Technical gate and stalled chain
 
-Replayable terminal recording: [output.log](output.log), [timing.log](timing.log).
-Run `scriptreplay --log-out output.log --log-timing timing.log` from this directory.
+Replayable terminal recording: [output.log.gz](output.log.gz), [readable transcript](transcript.txt), [timing.log](timing.log).
+Run `gzip -dc output.log.gz > replay.log` then `scriptreplay --log-out replay.log --log-timing timing.log` from this directory. Raw recorder bytes and timing are preserved; the text transcript only normalizes terminal CRLF.
 
 The same private fixture calls the real Dispatcher and DeferralAlerter. Before (base 28a4f7fc7965acc13978b6384ef434fc7d3ccdaf), an unreasoned gate is accepted and the exact paper → deferred release chain produces zero events across two passes. In this proposal, the gate is refused and the chain produces exactly one event across two passes. The target's explicit deferred state is the positive control. All items, notification delivery and ledger storage are disposable fixtures; this proves source behavior, not an installed tend pass.
 
