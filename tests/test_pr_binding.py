@@ -203,3 +203,71 @@ def test_disabled_job_parses_and_never_sends_event_body_to_shell():
     assert job.action.kind=='exec'
     assert job.action.command[:3]==('python3','-m','shantytown.pr_binding')
     assert all('{{' not in part for part in job.action.command)
+
+
+def test_lost_comment_absent_read_holds_across_restart_then_positive(setup):
+    r,f,item,read=setup;item.update(status='closed',close_reason='private')
+    f.lose='comment';visible=[False]
+    f.comments=lambda *args:list(f.messages) if visible[0] else []
+    with pytest.raises(Indeterminate):reconcile(r,BOARD,read,f)
+    f.lose=None
+    restarted=Registry(r.root,BOARD)
+    with pytest.raises(Indeterminate):reconcile(restarted,BOARD,read,f)
+    assert f.writes==['comment']
+    visible[0]=True
+    assert len(reconcile(restarted,BOARD,read,f))==1
+    assert f.writes==['comment','close']
+
+
+@pytest.mark.parametrize('action',['close','draft'])
+def test_lost_state_absent_read_holds_across_restart_then_positive(setup,action):
+    r,f,item,read=setup
+    item.update(status='closed' if action=='close' else 'deferred',close_reason='private')
+    before=deepcopy(f.pull);visible=[False];f.lose=action
+    f.read=lambda *args:deepcopy(f.pull if visible[0] or action not in f.writes else before)
+    with pytest.raises(Indeterminate):reconcile(r,BOARD,read,f)
+    f.lose=None
+    restarted=Registry(r.root,BOARD)
+    with pytest.raises(Indeterminate):reconcile(restarted,BOARD,read,f)
+    assert f.writes==['comment',action]
+    visible[0]=True
+    assert len(reconcile(restarted,BOARD,read,f))==1
+    assert f.writes==['comment',action]
+
+
+@pytest.mark.parametrize('action',['comment','close','draft'])
+def test_attempt_is_durable_before_external_write(setup,action):
+    import json
+    r,f,item,read=setup
+    item.update(status='deferred' if action=='draft' else 'closed',close_reason='private')
+    original=getattr(f,action);seen=[]
+    def write(*args):
+        pending=json.loads((r.root/'registry.json').read_text())['bindings']['example/project#1']['pending']
+        assert action in pending['attempted'];seen.append(action)
+        return original(*args)
+    setattr(f,action,write)
+    reconcile(r,BOARD,read,f)
+    assert seen==[action]
+
+
+def test_legacy_pending_intent_absence_refuses_and_positive_reads_complete(setup):
+    r,f,item,read=setup;item.update(status='closed',close_reason='private');f.lose='comment'
+    with pytest.raises(Indeterminate):reconcile(r,BOARD,read,f)
+    with r.locked() as data:
+        del data['bindings']['example/project#1']['pending']['attempted'];r.save(data)
+    message=f.messages.pop();f.lose=None
+    with pytest.raises(Indeterminate):reconcile(Registry(r.root,BOARD),BOARD,read,f)
+    assert f.writes==['comment']
+    f.messages.append(message);f.pull['state']='closed'
+    assert len(reconcile(Registry(r.root,BOARD),BOARD,read,f))==1
+    assert f.writes==['comment']
+
+
+@pytest.mark.parametrize('attempted',[None,True,['other'],['comment','comment']])
+def test_malformed_attempt_journal_refuses_before_more_writes(setup,attempted):
+    r,f,item,read=setup;item.update(status='closed',close_reason='private');f.lose='comment'
+    with pytest.raises(Indeterminate):reconcile(r,BOARD,read,f)
+    with r.locked() as data:
+        data['bindings']['example/project#1']['pending']['attempted']=attempted;r.save(data)
+    with pytest.raises(Refused):reconcile(Registry(r.root,BOARD),BOARD,read,f)
+    assert f.writes==['comment']

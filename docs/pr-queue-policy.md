@@ -47,6 +47,12 @@ in the journal. Intents survive lost responses and require read reconciliation
 before another write. Changed heads, primary markers, owners, reasons or board
 identity hold the pending action. There is no mass import or unregistered action.
 
+Pending journals record attempts separately for the comment and PR state writes,
+before each external call. An absent read after an attempt holds across restart;
+a positive read can permit the next unattempted action or complete reconciliation.
+Older pending journals without action records hold until positive completion or
+explicit owner resolution. An absent outcome never authorizes another write.
+
 Integration still required: CLI binding, known-ID selected Seeds reader, actual
 GitHub adapter, primary-marker CI admission, producer migration, disabled job
 entry and reviewed observed activation. The library tests are private harness

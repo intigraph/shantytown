@@ -79,7 +79,12 @@ class Registry:
                         or not isinstance(pending.get('digest'), str)
                         or not re.fullmatch(r'[0-9a-f]{64}', pending['digest'])
                         or pending.get('state') not in ('closed', 'deferred')
-                        or not isinstance(pending.get('reason'), str)):
+                        or not isinstance(pending.get('reason'), str)
+                        or ('attempted' in pending and (
+                            not isinstance(pending['attempted'], list)
+                            or any(action not in ('comment', 'draft', 'close')
+                                   for action in pending['attempted'])
+                            or len(pending['attempted']) != len(set(pending['attempted']))))):
                     raise Refused('registry pending intent unreadable')
             creates = data.get('creates', {})
             if not isinstance(creates, dict):
@@ -179,13 +184,26 @@ def reconcile(registry, board, read_bead, forge):
                 raise Refused('lifecycle reason missing')
             identity = f"{record['repo']}:{record['number']}:{record['head']}:{state}:{reason}"
             digest = hashlib.sha256(identity.encode()).hexdigest()
-            if pending and pending['digest'] != digest:
+            if pending and (pending['digest'] != digest
+                            or pending['state'] != state or pending['reason'] != reason):
                 raise Refused('work item changed while lifecycle write is pending')
             if digest in record['done']: continue
             pull = checked_pull(forge, record['repo'], record['number'],
                                 record['bead'], record['head'])
             if not pending:
-                record['pending'] = {'digest': digest, 'state': state, 'reason': reason}
+                pending = {'digest': digest, 'state': state, 'reason': reason,
+                           'attempted': []}
+                record['pending'] = pending
+                registry.save(data)
+            elif 'attempted' not in pending:
+                # Legacy pending intents cannot establish which writes occurred.
+                # Positive reads may reconcile them; absence permits no replay.
+                pending['attempted'] = ['comment', 'close' if state == 'closed' else 'draft']
+                registry.save(data)
+            def attempt(action):
+                if action in pending['attempted']:
+                    raise Indeterminate('attempted lifecycle write needs positive reconciliation')
+                pending['attempted'].append(action)
                 registry.save(data)
             marker = f'<!-- {_LIFECYCLE_MARKER}:{digest} -->'
             # Private reason remains in the journal; do not publish arbitrary notes.
@@ -195,6 +213,7 @@ def reconcile(registry, board, read_bead, forge):
                 if not isinstance(comments,list) or any(not isinstance(c,str) for c in comments):
                     raise Refused('comment coverage unknown')
                 if not any(marker in comment for comment in comments):
+                    attempt('comment')
                     forge.comment(record['repo'],record['number'],text)
                     comments = forge.comments(record['repo'],record['number'])
                     if not isinstance(comments,list) or not any(
@@ -206,9 +225,11 @@ def reconcile(registry, board, read_bead, forge):
                 pull = checked_pull(forge,record['repo'],record['number'],
                                     record['bead'],record['head'])
                 if state == 'closed' and pull['state'] != 'closed':
+                    attempt('close')
                     forge.close(record['repo'],record['number'])
                 elif state == 'deferred' and not pull['draft']:
                     if pull['state'] != 'open': raise Refused('closed PR cannot be drafted')
+                    attempt('draft')
                     forge.draft(record['repo'],record['number'])
                 actual = checked_pull(forge,record['repo'],record['number'],
                                       record['bead'],record['head'])
@@ -216,7 +237,7 @@ def reconcile(registry, board, read_bead, forge):
                     (state == 'deferred' and not actual['draft'])):
                     raise Refused('lifecycle outcome unverified')
             except Exception as error:
-                raise Indeterminate('lifecycle intent pending; reconcile before any retry') from error
+                raise Indeterminate('lifecycle intent pending; require positive reconciliation before another write') from error
             record['done'].append(digest)
             record['pending'] = None
             registry.save(data)
