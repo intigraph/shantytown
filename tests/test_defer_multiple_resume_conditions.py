@@ -32,6 +32,9 @@ from shantytown.tmux import NullPanes
 def world(tmp_path: Path):
     tracker = FilesTracker(tmp_path / "items")
     tracker.update("item-1", title="a blocked thing", status="open", assignee="kelly")
+    tracker.update("item-1", priority=2)
+    for target in ("aegis-mzdcm0", "aegis-nt4rap", "gate-1", "landed-1"):
+        tracker.update(target, status="open", priority=2)
     return Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes()), tracker
 
 
@@ -41,7 +44,7 @@ def test_a_reason_naming_TWO_blockers_is_REFUSED_not_silently_halved(world):
     d, _ = world
     with pytest.raises(DeferRefused) as e:
         d.defer("item-1", "bead",
-                "resume_when: closed:aegis-mzdcm0 (and closed:aegis-nt4rap - BOTH required)")
+                "resume_when: closed:aegis-mzdcm0 (and closed:aegis-nt4rap - BOTH required)", dependency_reason="Required tested code path")
     msg = str(e.value)
     assert "closed:aegis-mzdcm0" in msg and "closed:aegis-nt4rap" in msg, (
         "the refusal must name BOTH ids — the author's whole problem is that one "
@@ -53,7 +56,7 @@ def test_a_STALE_marker_in_the_notes_cannot_outrank_the_reason_being_written(wor
     """Defect 2: the specimen that actually fired on nrajcw."""
     d, tracker = world
     tracker.update("item-1", notes="an earlier deferral\nresume_when: closed:aegis-nt4rap\n")
-    d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0")
+    d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0", dependency_reason="Required tested code path")
     notes = tracker.get("item-1").notes
     assert parse_condition(notes).render() == "closed:aegis-mzdcm0"
     assert notes.count("resume_when:") == 1
@@ -63,7 +66,7 @@ def test_a_STALE_marker_in_the_notes_cannot_outrank_the_reason_being_written(wor
 def test_ONE_condition_still_defers_normally(world):
     """CONTROL. The refusals must not break the ordinary single-blocker defer."""
     d, tracker = world
-    d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0")
+    d.defer("item-1", "bead", "resume_when: closed:aegis-mzdcm0", dependency_reason="Required tested code path")
     assert parse_condition(tracker.get("item-1").notes or "").render() == "closed:aegis-mzdcm0"
 
 
@@ -72,7 +75,7 @@ def test_RE_deferring_on_the_SAME_condition_is_not_an_ambiguity(world):
     unchanged, not conflicting — dedup must keep that quiet."""
     d, tracker = world
     tracker.update("item-1", notes="resume_when: closed:aegis-nt4rap\n")
-    d.defer("item-1", "bead", "resume_when: closed:aegis-nt4rap")
+    d.defer("item-1", "bead", "resume_when: closed:aegis-nt4rap", dependency_reason="Required tested code path")
     assert tracker.get("item-1").status == "deferred"
 
 
