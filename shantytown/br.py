@@ -67,6 +67,10 @@ class BrTracker(BeadsTracker):
         return merged, force
 
     def update(self, item_id: str, **fields) -> None:
+        replace_text = fields.pop("replace_text", False)
+        if type(replace_text) is not bool or (replace_text and not any(
+                isinstance(fields.get(key), str) for key in ("notes", "description"))):
+            raise ValueError("text replacement requires explicit notes or description")
         selected = fields.pop("blocker_kind", None)
         reason = fields.pop("defer_reason", None)
         status = fields.pop("status", None)
@@ -92,6 +96,8 @@ class BrTracker(BeadsTracker):
                 return
 
         args = ["update", item_id]
+        if replace_text:
+            args.append("--force")
         if status is not None and status != "closed":
             args.append(f"--status={status}")
         for key, value in fields.items():

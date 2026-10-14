@@ -55,6 +55,25 @@ def _tracker(proj, store, prefix="aegis"):
     return SdTracker(repo=str(proj), store=str(store), prefix=prefix)
 
 
+def test_explicit_notes_replacement_in_real_scratch_seeds_store(tmp_path):
+    from argparse import Namespace
+    from shantytown.work_item import command
+    proj, store = _project(tmp_path)
+    item = json.loads(_sd(proj, store, "create", "notes control", "--json"))
+    tracker = _tracker(proj, store)
+    tracker.update(item["id"], notes="prior evidence\nresume_when: closed:old")
+    body = tmp_path / "notes.txt"
+    body.write_text("prior evidence\nhistorical gate cleared\n")
+    args = Namespace(item=item["id"], item_action="update", dry_run=False,
+                     notes_file=body, replace_text=False)
+    with pytest.raises(ValueError, match="requires --replace-text"):
+        command(args, tracker)
+    assert "resume_when:" in tracker.get(item["id"]).notes
+    args.replace_text = True
+    assert command(args, tracker)["result"] == "verified"
+    assert tracker.get(item["id"]).notes == body.read_text()
+
+
 # 1. NO SILENT EMPTY BOARD ---------------------------------------------------
 
 

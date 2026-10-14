@@ -777,6 +777,11 @@ class TrackerAdapter:
                                  "--json", "--limit", "0")
         return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
 
+    def backstop_rows(self) -> Answer[list[dict]]:
+        """Optional expanded candidate seam; old deferred() adapters stay valid."""
+        scoped = getattr(self.tracker, "backstop_rows", None)
+        return scoped() if callable(scoped) else self.deferred()
+
     def deferred(self) -> Answer[list[dict]]:
         """Deferred AND open rows — the deferral sweep keys off `defer_until`,
         which lives under both statuses since the cutover (aegis-boj8a2)."""
@@ -803,6 +808,14 @@ class TrackerAdapter:
             value = self._legacy("bd", "show", item, "--json")
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
+
+    def gate_details(self, items):
+        reader = getattr(self.tracker, "gate_details", None)
+        return reader(items) if callable(reader) else {item:self.show(item).exact() for item in items}
+
+    def gate_detail(self, item):
+        reader = getattr(self.tracker, "gate_detail", None)
+        return reader(item) if callable(reader) else self.show(item).exact()
 
     def closed_many(self, items) -> Answer[dict[str, bool | None]] | None:
         """Optional native candidate batch; legacy readers retain single reads."""
