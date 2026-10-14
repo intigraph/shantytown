@@ -7,6 +7,12 @@ name: Release
 # the same test, metadata, built-wheel and checksum publication path.
 
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing published stable release to backfill to PyPI (for example v0.6.0)'
+        required: true
+        type: string
   push:
     branches: [main]
     tags:
@@ -17,7 +23,7 @@ permissions:
 
 jobs:
   release-please:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -60,7 +66,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest build
+          python -m pip install pytest build twine
 
       # THE GATE. Publishing over a red suite is how a broken harness reaches
       # every consumer with a version number that implies somebody checked.
@@ -92,6 +98,9 @@ jobs:
       - name: Build sdist and wheel
         run: python -m build
 
+      - name: Check distribution metadata
+        run: python -m twine check dist/*.whl dist/*.tar.gz
+
       - name: Generate and verify release checksums
         run: |
           python scripts/release-checksums.py dist
@@ -118,6 +127,16 @@ jobs:
       - name: Recheck artifacts before publication
         run: (cd dist && sha256sum -c SHA256SUMS)
 
+      - name: Retain verified distributions for PyPI
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pypi-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,3 +153,78 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "$RELEASE_TAG" --generate-notes dist/*
           fi
+
+  pypi-backfill:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch a published stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PYCODE'
+          import os, re
+          if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", os.environ["RELEASE_TAG"]):
+              raise SystemExit("Expected a stable release tag")
+          PYCODE
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease > release.json
+          python - <<'PYCODE'
+          import json, os
+          with open("release.json") as stream:
+              release = json.load(stream)
+          if (release["tagName"] != os.environ["RELEASE_TAG"] or
+                  release["isDraft"] or release["isPrerelease"]):
+              raise SystemExit("Expected an existing published stable release")
+          PYCODE
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern 'shantytown-*.whl' --pattern 'shantytown-*.tar.gz' --pattern SHA256SUMS
+          python scripts/verify-pypi-release.py dist "$RELEASE_TAG"
+      - name: Check metadata and installed release
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*.whl dist/*.tar.gz
+          python -m venv /tmp/pypi-backfill-check
+          /tmp/pypi-backfill-check/bin/pip install --quiet --no-deps dist/*.whl
+          /tmp/pypi-backfill-check/bin/st --version
+          /tmp/pypi-backfill-check/bin/st --help
+      - name: Retain verified distributions for PyPI
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pypi-distributions
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  pypi:
+    needs: [release, pypi-backfill]
+    if: >-
+      ${{ always() && !cancelled() &&
+          (needs.release.result == 'success' || needs.pypi-backfill.result == 'success') }}
+    runs-on: ubuntu-22.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/shantytown/
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # This job executes no repository code and receives only checked distributions.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pypi-distributions
+          path: dist
+      - name: Publish to PyPI through the registered Trusted Publisher
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
