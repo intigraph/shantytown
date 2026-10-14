@@ -391,9 +391,9 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False, require_complete=False, owners=None):
+def _plate(a, *, snapshot=False, require_complete=False, owners=None, tracker=None):
     """The plate reader matching the selected tracker."""
-    trk = _tracker(a)
+    trk = tracker if tracker is not None else _tracker(a)
     if _backend(a) in BR_LIKE:
         from .br import plate as br_plate, plate_reader
         return (plate_reader(trk, require_complete=require_complete, owners=owners) if snapshot
@@ -6826,14 +6826,16 @@ def _cmd_crew(a) -> int:
     def unavailable_plate(_who):
         raise RuntimeError("assignment unavailable")
 
+    capacity_tracker = _tracker(a)
+    from .seeds_plate import RenderShapeReads
+    capacity_tracker.render_shape_reads = RenderShapeReads()
     try:
         plate = _plate(a, snapshot=True, require_complete=True,
-                       owners=[ag.name for ag in agents])
+                       owners=[ag.name for ag in agents], tracker=capacity_tracker)
     except Exception:
         plate = unavailable_plate
     from .plate_capacity import observed_size, MAX_ACTIVE
     from functools import cache
-    capacity_tracker = _tracker(a)
     plate_sizes = cache(lambda who: observed_size(capacity_tracker, who))
     if getattr(a, "json", False):
         launches = _launches(a)
