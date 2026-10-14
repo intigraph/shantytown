@@ -3234,6 +3234,106 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
     return protected
 
 
+def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
+                            owner_count=None, ceiling=None, gaming=None,
+                            log=None):
+    """Move work held by an agent at a ceiling to a claude agent with headroom.
+
+    Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
+    claude". The decisions live in `ceiling_transfer`; this binds the reads and
+    hands every move to the ordinary dispatcher, which refuses busy panes,
+    verifies the send and reads its write back. Every seam is injectable so a
+    hermetic test can drive it.
+    """
+    from . import ceiling_transfer as ct
+    log = log or (lambda msg: print(f"  {msg}", file=sys.stderr))
+    gaming = gaming if gaming is not None else quiet_time_mod.read(Path(a.root))
+    if gaming.held:
+        return []
+    from . import session_budget as _sb
+    ceiling = ceiling or (lambda name: _sb.at_ceiling(a.root, name))
+    findings = {f.agent: f for f in getattr(rep, "findings", ())}
+    plate = plate or _plate(a)
+
+    holders = []
+    for card in agents:
+        if card.retired:
+            continue
+        hit = ceiling(card.name)
+        f = findings.get(card.name)
+        if hit is not None:
+            why, evidence = "session ceiling", hit.label()
+        elif f is not None and f.verdict == tend_mod.LIMITED and not f.acted:
+            why, evidence = "usage limit", "pane shows the usage-limit banner and no fallback model is declared"
+        else:
+            continue
+        item = plate(card.name)
+        if item is not None and (item.status or "") != "closed":
+            holders.append(ct.Holder(card.name, item.id, why, evidence))
+    if not holders:
+        return []
+
+    if owner_count is None:
+        trk = _tracker(a)
+
+        def owner_count(name):
+            reader = getattr(trk, "_owner_rows", None)
+            if reader is None:
+                return None
+            answer = reader(name)
+            if not answer.complete:
+                return None
+            return sum(1 for row in answer.exact()
+                       if (row.get("status") or "") != "closed")
+
+    candidates = []
+    for card in agents:
+        unavailable = ""
+        f = findings.get(card.name)
+        harness = harness_mod.name_for(card, root=a.root)
+        if card.retired:
+            unavailable = "retired"
+        elif f is None or f.state != "up" or f.verdict in tend_mod._FAULTS:
+            unavailable = "not live"
+        elif ceiling(card.name) is not None:
+            unavailable = "at its own ceiling"
+        elif agent_hold.reason(a.root, card.name):
+            unavailable = "held"
+        count = None
+        if not unavailable and harness == ct.TARGET_HARNESS:
+            count = owner_count(card.name)
+            if count is None:
+                unavailable = "plate count unknown"
+        candidates.append(ct.Candidate(card.name, harness, count or 0, unavailable))
+
+    p = ct.plan(holders, candidates)
+    for stay in p.stays:
+        log(f"ceiling-transfer: {stay.item} stays with {stay.frm}: {stay.why}")
+    if a.dry_run:
+        for m in p.moves:
+            log(f"ceiling-transfer: would move {m.item} {m.frm} -> {m.to} ({m.why})")
+        return []
+
+    dispatcher = dispatcher or _wire(a)
+    ledger = Path(a.root) / "ceiling-transfers.jsonl"
+
+    def _comment(item_id, body):
+        from .work_item import _comment_body, _comments
+        trk = dispatcher.tracker
+        _comments(trk, item_id, body)
+        if not any(_comment_body(row) == body for row in _comments(trk, item_id)):
+            raise RuntimeError("comment readback unproven")
+
+    def _emit(event):
+        with ledger.open("a") as fh:
+            fh.write(json.dumps(dict(event, ts=time.time())) + "\n")
+
+    return ct.apply(
+        p.moves,
+        dispatch=lambda item, to, note: dispatcher.go(item, to, note=note, reassign=True),
+        comment=_comment, emit=_emit, log=log)
+
+
 def unobserved_launch_report(agent: str, harness: str, session: str,
                              inspect=None) -> str:
     """The line printed when a launch was NOT observed live.
@@ -12496,6 +12596,10 @@ def _tend_once(a, quiet: bool = False) -> int:
             return []
 
         _fleet_sweep("priority-advisory", _priority_report)
+        # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
+        # fleet sweep: it reads the shared board and must run on one host only.
+        _fleet_sweep("ceiling-transfer",
+                     lambda: _ceiling_transfer_sweep(a, agents, rep, log=_log))
 
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
