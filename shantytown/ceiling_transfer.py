@@ -113,6 +113,32 @@ class Plan:
     stays: list[Stay] = field(default_factory=list)
 
 
+def receiver_budget(limits, spend, ceiling) -> str:
+    """Why a receiver's session budget does NOT show headroom ("" when it does).
+
+    Reads the whole `session_budget.gate` tuple, never `at_ceiling` alone.
+    `at_ceiling` is fail-open by design (an agent must never be kept from its OWN
+    work because a budget could not be read), so its None means "not withheld",
+    not "has room". Moving someone ELSE's work onto an agent needs the positive
+    fact, so an unknown budget refuses the move (wu review of ST248). The
+    ordinary haul's fail-open policy is untouched; this only gates transfers.
+
+    The order matters: gate()'s own error path returns INACTIVE limits with
+    signal_lost=True, so signal_lost must be read before the inactive-policy
+    case or a failed read would pass as "no budget declared".
+    """
+    if ceiling is not None:
+        return "at its own ceiling"
+    if spend.signal_lost:
+        return "session budget UNKNOWN (signal lost)"
+    if not limits.active:
+        # No [session_budget] limit is declared: a known policy, not a failed read.
+        return ""
+    if not spend.session:
+        return "session budget UNKNOWN (no attributable current session)"
+    return ""
+
+
 def plan(holders, candidates, *, cap: int = PLATE_CAP,
          harness: str = TARGET_HARNESS) -> Plan:
     """Decide the moves. Pure: no reads, no writes."""
@@ -144,10 +170,20 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
     failure after a delivered move is logged loudly and never undoes the move:
     the work has moved, and only the record is missing.
     """
+    from .dispatch import DispatchedButUntracked
     results = []
     for m in moves:
         try:
             dispatch(m.item, m.to, m.note())
+        except DispatchedButUntracked as exc:
+            # The send WAS confirmed on the receiver's pane; only the tracker
+            # write is unproven. Saying "stays with" here would be false, and a
+            # resend would deliver the work twice.
+            detail = f"{type(exc).__name__}: {exc}"
+            log(f"ceiling-transfer: {m.item} was DELIVERED to {m.to} but the tracker "
+                f"write is unproven; do not resend, repair the assignee ({detail})")
+            results.append(Outcome(m, False, detail))
+            continue
         except Exception as exc:  # noqa: BLE001 - every refusal is reported, none retried
             detail = f"{type(exc).__name__}: {exc}"
             log(f"ceiling-transfer: {m.item} stays with {m.frm}; moving it to "

@@ -8,6 +8,8 @@ import pytest
 
 from shantytown import ceiling_transfer as ct
 from shantytown import cli, tend
+from shantytown import session_budget as sb
+from shantytown.dispatch import DispatchedButUntracked
 from shantytown.protocols import Agent, WorkItem
 
 
@@ -93,13 +95,19 @@ def test_a_comment_failure_after_a_move_is_loud_and_keeps_the_move():
 
 # ---- the tend sweep, every seam injected -----------------------------------
 
-class _Ceiling:
-    def label(self):
-        return "4 haul items this session — the ceiling is 4"
+LIMITS = sb.Limits(max_items=4)
+
+
+def _known(name, ceilinged):
+    if name in ceilinged:
+        spent = sb.Spend(session=name, items=4)
+        return LIMITS, spent, sb.Ceiling("items", 4, 4, spent)
+    return LIMITS, sb.Spend(session=name, items=0), None
 
 
 def _sweep(tmp_path, *, ceilinged=("kelly",), findings=None, gaming=False,
-           dry_run=False, counts=None, dispatch_raises=None, agents=None):
+           dry_run=False, counts=None, dispatch_raises=None, agents=None,
+           budget=None):
     agents = agents or [Agent(name="kelly", harness="codex"),
                         Agent(name="ellie", harness="claude"),
                         Agent(name="wu", harness="codex")]
@@ -136,7 +144,7 @@ def _sweep(tmp_path, *, ceilinged=("kelly",), findings=None, gaming=False,
                    plate=lambda name: WorkItem(id=f"item-{name}", status="in_progress",
                                                assignee=name),
                    owner_count=lambda name: (counts or {}).get(name, 0),
-                   ceiling=lambda name: _Ceiling() if name in ceilinged else None,
+                   budget=budget or (lambda name: _known(name, ceilinged)),
                    gaming=SimpleNamespace(held=gaming), log=log.append)
     finally:
         wi._comments, wi._comment_body = saved
@@ -203,7 +211,7 @@ def _sweep_unknown(tmp_path):
         dispatcher=Disp(),
         plate=lambda n: WorkItem(id="item-kelly", status="in_progress", assignee=n),
         owner_count=lambda n: None,
-        ceiling=lambda n: _Ceiling() if n == "kelly" else None,
+        budget=lambda n: _known(n, ("kelly",)),
         gaming=SimpleNamespace(held=False), log=lambda m: None)
     return None, sent, [], None
 
@@ -220,3 +228,50 @@ def test_dry_run_dispatches_nothing(tmp_path):
     out, sent, comments, log = _sweep(tmp_path, dry_run=True)
     assert sent == [] and comments == []
     assert any("would move item-kelly kelly -> ellie" in line for line in log)
+
+
+# ---- receiver budget must be POSITIVELY known (wu review of ST248) ----------
+
+@pytest.mark.parametrize("state,moves", [
+    ("known-headroom", True),
+    ("inactive-policy", True),
+    ("exhausted", False),
+    ("signal-lost", False),
+    ("no-session", False),
+    ("corrupt-read", False),
+])
+def test_receiver_budget_states(tmp_path, state, moves):
+    def budget(name):
+        if name != "ellie":
+            return _known(name, ("kelly",))
+        return {
+            "known-headroom": (LIMITS, sb.Spend(session="ellie", items=1), None),
+            "inactive-policy": (sb.Limits(), sb.Spend(), None),
+            "exhausted": _known("ellie", ("ellie",)),
+            "signal-lost": (LIMITS, sb.Spend(session="", signal_lost=True), None),
+            "no-session": (LIMITS, sb.Spend(session=""), None),
+            # gate()'s own exception path: INACTIVE limits with signal_lost.
+            "corrupt-read": (sb.Limits(), sb.Spend(signal_lost=True), None),
+        }[state]
+    _, sent, _, _ = _sweep(tmp_path, budget=budget)
+    assert sent == ([("item-kelly", "ellie", True)] if moves else [])
+
+
+def test_receiver_budget_pure_order():
+    assert ct.receiver_budget(sb.Limits(), sb.Spend(signal_lost=True), None)
+    assert ct.receiver_budget(sb.Limits(), sb.Spend(), None) == ""
+
+
+def test_delivered_but_untracked_is_not_reported_as_staying():
+    log = []
+    exc = DispatchedButUntracked("x-1", "ellie", "%9", OSError("store"))
+
+    def raise_(*c):
+        raise exc
+
+    out = ct.apply([ct.Move("x-1", "kelly", "ellie", "usage limit", "banner")],
+                   dispatch=raise_, comment=lambda *c: None,
+                   emit=lambda e: None, log=log.append)
+    assert not out[0].moved
+    assert "DELIVERED to ellie" in log[0] and "do not resend" in log[0]
+    assert "stays with" not in log[0]

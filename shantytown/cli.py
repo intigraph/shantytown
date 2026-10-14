@@ -3235,7 +3235,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
 
 
 def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
-                            owner_count=None, ceiling=None, gaming=None,
+                            owner_count=None, budget=None, gaming=None,
                             log=None):
     """Move work held by an agent at a ceiling to a claude agent with headroom.
 
@@ -3251,7 +3251,16 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     if gaming.held:
         return []
     from . import session_budget as _sb
-    ceiling = ceiling or (lambda name: _sb.at_ceiling(a.root, name))
+    # The FULL gate tuple, read once per agent. A source needs a measured
+    # ceiling; a receiver needs positive headroom, so UNKNOWN refuses it there
+    # (ceiling_transfer.receiver_budget) instead of at_ceiling's fail-open None.
+    budget = budget or (lambda name: _sb.gate(Path(a.root), name))
+    budgets = {}
+
+    def _budget(name):
+        if name not in budgets:
+            budgets[name] = budget(name)
+        return budgets[name]
     findings = {f.agent: f for f in getattr(rep, "findings", ())}
     plate = plate or _plate(a)
 
@@ -3259,7 +3268,7 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     for card in agents:
         if card.retired:
             continue
-        hit = ceiling(card.name)
+        hit = _budget(card.name)[2]
         f = findings.get(card.name)
         if hit is not None:
             why, evidence = "session ceiling", hit.label()
@@ -3295,11 +3304,11 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             unavailable = "retired"
         elif f is None or f.state != "up" or f.verdict in tend_mod._FAULTS:
             unavailable = "not live"
-        elif ceiling(card.name) is not None:
-            unavailable = "at its own ceiling"
         elif agent_hold.reason(a.root, card.name):
             unavailable = "held"
         count = None
+        if not unavailable and harness == ct.TARGET_HARNESS:
+            unavailable = ct.receiver_budget(*_budget(card.name))
         if not unavailable and harness == ct.TARGET_HARNESS:
             count = owner_count(card.name)
             if count is None:
