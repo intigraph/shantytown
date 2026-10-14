@@ -120,6 +120,25 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
             fresh = br.plate_reader(tracker(), require_complete=True, owners=["agent0"])
             assert fresh("agent0").id != "test-0"
             print("fresh observation deletion PASS")
+            # Malformed held rows cannot vanish from the roster through the
+            # status-first optimization, on either graph or owner spelling.
+            def update(text):
+                request = urllib.request.Request(
+                    url + "/update", data=urllib.parse.urlencode({"update": text}).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded",
+                             "X-Quipu-Client": "seeds"})
+                urllib.request.urlopen(request, timeout=5).close()
+            for graph, owner in ((G, '"agent0"'),
+                                 (G + "#seeds-ephemeral", f'<{N}principal/crew%2Fagent0>')):
+                sub = f"<{N}item/malformed>"
+                update(f"INSERT DATA {{ GRAPH <{graph}> {{ {sub} a <{S}Action> ; <{S}agent> {owner} . }} }}")
+                assert not seeds_plate.owner_shape_supported(tracker().prove_store(), ("agent0",))
+                update(f'INSERT DATA {{ GRAPH <{graph}> {{ {sub} <{N}ontology/status> "future" . }} }}')
+                assert not seeds_plate.owner_shape_supported(tracker().prove_store(), ("agent0",))
+                update(f'INSERT DATA {{ GRAPH <{graph}> {{ {sub} <{N}ontology/status> "closed" . }} }}')
+                assert seeds_plate.owner_shape_supported(tracker().prove_store(), ("agent0",))
+                update(f"DELETE WHERE {{ GRAPH <{graph}> {{ {sub} ?p ?o }} }}")
+            print("missing/unknown status refusal and valid-state coexistence PASS")
         finally:
             child.terminate()
             child.wait(timeout=10)
