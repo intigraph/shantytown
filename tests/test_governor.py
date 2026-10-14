@@ -754,6 +754,14 @@ class _Tracker:
         self.item = item
         self.updates = []
 
+    def capacity_rows(self, owner):
+        from shantytown.answer import Answer
+        from shantytown.plate_capacity import owner_name
+        # This fixture has exactly one item; unrelated gate tests still prove
+        # admission against its actual owner instead of assuming spare slots.
+        rows = [vars(self.item)] if owner_name(self.item.assignee) == owner_name(owner) else []
+        return Answer.complete_read(rows, how="complete single-item fixture")
+
     def get(self, item_id):
         return self.item
 

@@ -85,3 +85,27 @@ def test_update_with_nothing_to_say_makes_no_request():
     t = _Fake()
     t.update("7")
     assert t.calls == []
+
+
+def test_capacity_paginates_owner_scope_until_empty_even_short_pages():
+    from shantytown.plate_capacity import size
+    t = _Fake()
+    t.responses = [[{'number': 1, 'title': 'First', 'state': 'open',
+                     'assignee': {'login': 'worker'}}],
+                   [{'number': 2, 'title': 'Second', 'state': 'open',
+                     'assignee': {'login': 'worker'}}], []]
+    assert size(t, 'rig/worker') == 2
+    assert all('assigned_by=worker' in call[1] for call in t.calls)
+    assert 'page=3' in t.calls[-1][1]
+
+
+def test_capacity_refuses_repeated_page_or_ignored_owner_filter():
+    from shantytown.plate_capacity import CapacityUnknown, size
+    row = {'number': 1, 'title': 'First', 'state': 'open', 'assignee': {'login': 'worker'}}
+    t = _Fake()
+    t.responses = [[row], [row]]
+    with pytest.raises(CapacityUnknown, match='duplicate'):
+        size(t, 'worker')
+    t.responses = [[dict(row, assignee={'login': 'someone-else'})]]
+    with pytest.raises(CapacityUnknown, match='owner filter'):
+        size(t, 'worker')

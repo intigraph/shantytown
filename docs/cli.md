@@ -7,6 +7,28 @@
 > now pinned by a test (`tests/test_command_count.py`), so a new command either updates the docstring
 > and this doc, or fails CI.
 
+## Assignment capacity
+
+A crew member may own at most ten active work items. Open, hooked,
+in-progress and blocked tasks count; closed, tombstoned and deferred work,
+future-dated deferrals, messages and permanent records do not. `st crew`
+shows `plate: N/10`, and its JSON rows expose `plate_size` and `plate_cap`.
+An unreadable count is UNKNOWN (`null` in JSON), never zero.
+
+`st go` refuses a new assignment at capacity before sending or updating the
+item. `st task --assignee` at capacity still creates the requested work item,
+prints its ID, leaves it unassigned in the pool and returns refusal. An
+unknown count refuses without creating anything. Dry runs make no writes.
+The exact-ID work update path applies the same gate to assignment and
+reactivation. Haul/feed may resume an already-owned active item at ten because
+that does not add a slot; existing overfull plates are not silently repooled.
+
+Cooperating assignment commands on one host serialize admission and mutation.
+The configured owner reader must cover all selected stores; partial reads
+refuse. This is not an atomic cross-host backend limit: direct tracker writes
+and independent writers on another host require a backend admission contract
+or a single assignment writer. No force or hold override bypasses capacity.
+
 ## The whole surface
 
 ```

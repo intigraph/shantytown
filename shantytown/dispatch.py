@@ -19,6 +19,8 @@ cheapest thing in this module and it is the only thing that can tell a
 coordinator which dispatches actually took.
 """
 from __future__ import annotations
+
+from .plate_capacity import serialized_dispatch
 import re
 import time
 from dataclasses import dataclass, field
@@ -613,6 +615,8 @@ class Dispatcher:
         # for the same reason: dispatching it is the REPAIR (it acquires an owner),
         # so refusing would block the remedy. What was missing was not a refusal,
         # it was the fact reaching a human and the receiving agent.
+        from .plate_capacity import ensure_room
+        ensure_room(self.tracker, agent_name, item)
         orphaned = (item.status or "").strip() == "in_progress" and not holder
         # THE USAGE GOVERNOR (aegis-hdqej), last of the precondition refusals and
         # deliberately last: a CLOSED or STOLEN item is wrong to dispatch at any
@@ -736,6 +740,7 @@ class Dispatcher:
         p = self.plan(item_id, agent_name, note, reassign=reassign)
         return triage(self.panes, p.pane, p.text)
 
+    @serialized_dispatch
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
            note: str | None = None, reassign: bool = False,
            quipu_nodes: list | None = None) -> Plan:
