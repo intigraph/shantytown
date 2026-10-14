@@ -363,7 +363,8 @@ def test_roster_batch_preserves_hooked_held_and_empty_without_per_owner_reads(mo
     assert read("empty") is None
     assert len(queries) == 2
     assert '"hooked"' in queries[0]
-    assert "VALUES (?s ?g)" in queries[1]
+    assert "VALUES ?s" in queries[1]
+    assert "GRAPH ?g" not in queries[1]
     # Fresh render replaces the reader-local observation.
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([]))
     fresh = br.plate_reader(tracker, require_complete=True, owners=["a"])

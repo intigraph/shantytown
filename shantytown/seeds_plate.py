@@ -304,13 +304,24 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # This follows the SDK's indexed query shapes without hydration.
         for offset in range(0, len(pairs), 250):
             chunk = pairs[offset : offset + 250]
-            bindings = " ".join(f"({_iri(subject)} {_iri(graph)})" for subject, graph in chunk)
-            predicates = " ".join(_iri(p) for p in FIELDS)
+            # Keep graph and predicate constant in each indexed branch.
+            # A variable GRAPH/predicate pattern can scan the whole store
+            # before joining VALUES on deployed engines.
+            branches = []
+            for g in graphs:
+                bindings = " ".join(_iri(subject) for subject, graph in chunk if graph == g)
+                if not bindings:
+                    continue
+                for predicate in FIELDS:
+                    branches.append(
+                        f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(g)} "
+                        f"{{ ?s {_iri(predicate)} ?value }} "
+                        f"BIND({json.dumps(g)} AS ?graph) "
+                        f"BIND({json.dumps(predicate)} AS ?predicate) }}"
+                    )
             query = (
-                "SELECT (STR(?s) AS ?subject) (STR(?g) AS ?graph) "
-                "(STR(?p) AS ?predicate) ?value WHERE { "
-                f"VALUES (?s ?g) {{ {bindings} }} VALUES ?p {{ {predicates} }} "
-                "GRAPH ?g { ?s ?p ?value } } LIMIT 10000"
+                "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
+                + " UNION ".join(branches) + " } LIMIT 10000"
             )
             part = _query(proof, query, timeout)["rows"]
             if len(part) >= 10000 or len(wire) + len(part) >= 10000:
@@ -578,18 +589,20 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     for offset in range(0, len(rows), 250):
         chunk = rows[offset : offset + 250]
         expected = {row["id"] for row in chunk}
-        bindings = " ".join(
-            f"({_iri(SEEDS + 'item/' + quote(row['id'], safe=''))} {json.dumps(row['status'])})"
-            for row in chunk)
-        graphs_clause = " ".join(_iri(graph) for graph in graphs)
-        query = (
-            f"SELECT DISTINCT ?id WHERE {{ VALUES (?s ?state) {{ {bindings} }} "
-            f"VALUES ?g {{ {graphs_clause} }} GRAPH ?g {{ "
-            f"?s <{SEEDS}ontology/status> ?state ; a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
-            f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
-            f"?blocker <{SEEDS}ontology/status> ?bs . "
-            'FILTER(?bs != "closed" && ?bs != "tombstone") } } } LIMIT 1000'
-        )
+        branches = []
+        for graph in graphs:
+            for state in dict.fromkeys(row["status"] for row in chunk):
+                bindings = " ".join(
+                    _iri(SEEDS + "item/" + quote(row["id"], safe=""))
+                    for row in chunk if row["status"] == state)
+                branches.append(
+                    f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(graph)} {{ "
+                    f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
+                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
+                    f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+                    f"?blocker <{SEEDS}ontology/status> ?bs . "
+                    'FILTER(?bs != "closed" && ?bs != "tombstone") } } }')
+        query = "SELECT DISTINCT ?id WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
         wire = _query(proof, query, timeout)["rows"]
         if len(wire) >= 1000 or any(
             not isinstance(r.get("id"), str) or r["id"] not in expected for r in wire
