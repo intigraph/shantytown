@@ -1,0 +1,10 @@
+Script started on 2026-10-12 16:48:47-04:00 [COMMAND="PYTHONPATH=. python3 examples/codex_retention_demo.py" <not executed on terminal>]
+{"scope": "isolated fixture", "before_releases": 5, "before_bytes": 102400, "plan_only_removed": []}
+CONTROL: new reader makes saved plan REFUSE before deletion
+DETACHED {"release": "0.150.0-test-target", "temporary": ".retiring-22d8441556e248f1bee5bcbed2da881e"}
+REMOVED {"release": "0.150.0-test-target", "estimated_freed_bytes": 20480}
+DETACHED {"release": "0.151.0-test-target", "temporary": ".retiring-c9469f1c54b44dd4aa6632a8cc2b0fe1"}
+REMOVED {"release": "0.151.0-test-target", "estimated_freed_bytes": 20480}
+{"after_releases": 3, "after_bytes": 61440, "removed": ["0.150.0-test-target", "0.151.0-test-target"], "current": "releases/0.154.0-test-target", "sessions_bytes_and_mtime": "unchanged"}
+
+Script done on 2026-10-12 16:48:47-04:00 [COMMAND_EXIT_CODE="0"]
