@@ -73,6 +73,9 @@ def command(args, tracker):
                 raise RuntimeError("comment readback unproven; write may have landed, do not resend")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
     fields = {}
+    replace_text = getattr(args, "replace_text", False)
+    if replace_text and args.item_action != "update":
+        raise ValueError("--replace-text requires update with a notes/description file")
     if args.item_action == "close":
         from .br import BrTracker
         from .files import FilesTracker
@@ -92,8 +95,21 @@ def command(args, tracker):
             raise ValueError("update requires explicit fields")
         if fields.get("status") == "closed":
             raise ValueError("use close with a reason file for terminal work")
+        text_fields = {key: value for key, value in fields.items()
+                       if key in ("notes", "description")}
+        if replace_text and not text_fields:
+            raise ValueError("--replace-text requires a notes/description file")
+        from .br import BrTracker
+        if isinstance(tracker, BrTracker) and not replace_text:
+            for key, value in text_fields.items():
+                old = getattr(item, key, None)
+                if old and old != value:
+                    raise ValueError(f"non-empty {key} replacement requires --replace-text; "
+                                     "read back and preserve evidence before replacing")
     if not args.dry_run:
-        tracker.update(item.id, **fields)
+        from .br import BrTracker
+        options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
+        tracker.update(item.id, **options, **fields)
         after = exact(tracker, item.id)
         if any(getattr(after, key, None) != value for key, value in fields.items()):
             raise RuntimeError("update readback unproven; write may have landed, do not resend")
