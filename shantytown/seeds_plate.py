@@ -201,7 +201,8 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False,
-               plate_owners: tuple[str, ...] | None = None) -> Answer[list[dict]]:
+               plate_owners: tuple[str, ...] | None = None,
+               include_messages: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -274,8 +275,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
                         f"<{SEEDS}ontology/status> {json.dumps(status)} . "
-                        f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
-                        f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} }} "
+                        + ("" if include_messages else
+                         f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
+                         f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
         query = (
@@ -302,8 +304,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         pairs = list(selected.items())
         # Discover scoped IDs first, then bind every subject and predicate.
         # This follows the SDK's indexed query shapes without hydration.
-        for offset in range(0, len(pairs), 250):
-            chunk = pairs[offset : offset + 250]
+        for offset in range(0, len(pairs), 500):
+            chunk = pairs[offset : offset + 500]
             # Keep graph and predicate constant in each indexed branch.
             # A variable GRAPH/predicate pattern can scan the whole store
             # before joining VALUES on deployed engines.

@@ -864,7 +864,7 @@ def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], li
         from .sd import SdTracker
         if isinstance(tracker, SdTracker):
             projected = (tracker.feed_rows(owners) if owners is not None
-                         else tracker.priority_rows())
+                         else tracker.priority_rows(include_messages=True))
             if projected is not None and owners is None:
                 # A haul consumes its first item: preserve SDK priority,
                 # creation time and ID order rather than query result order.

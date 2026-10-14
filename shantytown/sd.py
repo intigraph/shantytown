@@ -374,12 +374,13 @@ class SdTracker(BrTracker):
         ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
         return [row for row in ready if row["id"] in ids], active
 
-    def priority_rows(self, *, ready_candidates=None) -> tuple[list[dict], list[dict]] | None:
+    def priority_rows(self, *, ready_candidates=None, include_messages=False) -> tuple[list[dict], list[dict]] | None:
         """Lean fields for fleet priority advice; never change mutation reads."""
         if not self._use_remote_projection():
             return None
         from .seeds_plate import owner_rows, unblocked_ids
-        rows = owner_rows(self.prove_store(), None, timeout=self.timeout).exact()
+        rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          include_messages=include_messages).exact()
         from .inbox import drop_parked
         rows = drop_parked(rows)
         ready = [row for row in rows if row["status"] == "open"]
