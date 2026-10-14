@@ -1430,7 +1430,7 @@ st inbox ian "go read st-1"          send: straight into ian's pane (send-keys)
 st inbox -d ian "HANDOFF: qdal.2"    durable: into ian's INBOX, then a live send
 st inbox                             read: what is unread, for me. Marks nothing.
 st inbox --count                     one integer, for a status bar. Marks nothing.
-st inbox --read                      ACK: mark my unread messages read
+st inbox --read                      ACK: mark up to 15 unread messages read; repeat to drain
 st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
 
@@ -1469,6 +1469,17 @@ For pointers that survive because delivery was offline or uncertain, acknowledgm
 can be selective: repeat `--read-id ID` for messages already absorbed while leaving
 an open question unread. The command preflights every ID and changes nothing if any
 named ID is not currently unread for that recipient.
+
+`--read` acknowledges at most 15 messages from its initial unread snapshot per
+invocation. It prints and flushes each body before closing that receipt, then
+prints progress for each independent close. Repeat the command to continue when
+it reports unattempted snapshot messages; new arrivals remain for a later read.
+This bounds the default batch size, not the duration of a remote operation.
+Acknowledgments are not atomic: an interrupted command can leave earlier messages
+read. Their bodies have already been printed. An uncertain close returns exit 2
+and names the receipt as `UNCONFIRMED`; inspect the inbox before continuing.
+Explicit `--read-id` selections retain their whole-selection preflight and are
+not truncated to 15. `--dry-run` reports the selection and performs no closes.
 
 `st agent new` (including the shared relaunch path used by start, attach, and cycle) now
 drains that offline case without turning startup into an acknowledgment. After the

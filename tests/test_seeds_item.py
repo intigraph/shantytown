@@ -204,3 +204,39 @@ def test_literal_uri_assignee_is_not_decoded_as_a_principal(monkeypatch):
                     "o": literal, "kind": seeds_item.XSD + "string"})
     value, _ = tracker(monkeypatch, payload)
     assert seeds_item.read_item(value, "test-one").assignee == literal
+
+
+# aegis-bug: aegis-l42's date-only scheduledTime. The deployed Quipu returns an
+# UNBOUND DATATYPE() for an xsd:date literal, which dropped `kind` from the row and
+# refused the whole item as "item field row unreadable" with no field named.
+SCHEDULED = seeds_item.SCHEMA + "scheduledTime"
+
+
+def test_date_only_scheduled_time_reads(monkeypatch):
+    payload = rows(**{SCHEDULED: "2026-10-14"})
+    payload = [dict(x, kind=seeds_item.XSD + "date") if x["p"] == SCHEDULED else x
+               for x in payload]
+    value, _ = tracker(monkeypatch, payload)
+    assert seeds_item.read_item(value, "test-one").defer_until == "2026-10-14"
+
+
+def test_a_row_without_kind_names_its_predicate(monkeypatch):
+    payload = [{k: v for k, v in x.items() if k != "kind"} if x["p"] == SCHEDULED else x
+               for x in rows(**{SCHEDULED: "2026-10-14"})]
+    value, _ = tracker(monkeypatch, payload)
+    with pytest.raises(ValueError, match=f"{SCHEDULED} lacks kind"):
+        seeds_item.read_item(value, "test-one")
+
+
+def test_an_unreported_type_names_its_field_and_is_not_guessed(monkeypatch):
+    payload = [dict(x, kind=seeds_item.UNREPORTED) if x["p"] == SCHEDULED else x
+               for x in rows(**{SCHEDULED: "2026-10-14"})]
+    value, _ = tracker(monkeypatch, payload)
+    with pytest.raises(ValueError, match=f"{SCHEDULED} has a type the store did not report"):
+        seeds_item.read_item(value, "test-one")
+
+
+def test_query_proves_the_date_type_instead_of_dropping_kind():
+    text = seeds_item._fields_query((GRAPH,), SUBJECT)
+    assert f"STRDT(STR(?value), <{seeds_item.XSD}date>)" in text
+    assert f'"{seeds_item.UNREPORTED}"' in text and "COALESCE(" in text

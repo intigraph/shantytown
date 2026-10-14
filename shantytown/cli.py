@@ -1755,8 +1755,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="print ONLY the number of unread messages. A READ: it marks nothing read")
     inbox_read_mode.add_argument(
         "--read", action="store_true",
-        help="ACK: mark my unread messages read. The explicit act — listing and "
-             "counting never do this")
+        help="ACK: mark up to 15 unread messages read, with progress. Repeat to drain. "
+             "Listing and counting never do this")
     inbox_read_mode.add_argument(
         "--read-id", action="append", default=[], metavar="ID",
         help="ACK only this unread message ID (repeatable). Refuses the whole "
@@ -3234,6 +3234,115 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
         except Exception as exc:
             print('  account-switch: could not tell: ' + type(exc).__name__, file=sys.stderr)
     return protected
+
+
+def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
+                            owner_count=None, budget=None, gaming=None,
+                            log=None):
+    """Move work held by an agent at a ceiling to a claude agent with headroom.
+
+    Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
+    claude". The decisions live in `ceiling_transfer`; this binds the reads and
+    hands every move to the ordinary dispatcher, which refuses busy panes,
+    verifies the send and reads its write back. Every seam is injectable so a
+    hermetic test can drive it.
+    """
+    from . import ceiling_transfer as ct
+    log = log or (lambda msg: print(f"  {msg}", file=sys.stderr))
+    gaming = gaming if gaming is not None else quiet_time_mod.read(Path(a.root))
+    if gaming.held:
+        return []
+    from . import session_budget as _sb
+    # The FULL gate tuple, read once per agent. A source needs a measured
+    # ceiling; a receiver needs positive headroom, so UNKNOWN refuses it there
+    # (ceiling_transfer.receiver_budget) instead of at_ceiling's fail-open None.
+    budget = budget or (lambda name: _sb.gate(Path(a.root), name))
+    budgets = {}
+
+    def _budget(name):
+        if name not in budgets:
+            budgets[name] = budget(name)
+        return budgets[name]
+    findings = {f.agent: f for f in getattr(rep, "findings", ())}
+    plate = plate or _plate(a)
+
+    holders = []
+    for card in agents:
+        if card.retired:
+            continue
+        hit = _budget(card.name)[2]
+        f = findings.get(card.name)
+        if hit is not None:
+            why, evidence = "session ceiling", hit.label()
+        elif f is not None and f.verdict == tend_mod.LIMITED and not f.acted:
+            why, evidence = "usage limit", "pane shows the usage-limit banner and no fallback model is declared"
+        else:
+            continue
+        item = plate(card.name)
+        if item is not None and (item.status or "") != "closed":
+            holders.append(ct.Holder(card.name, item.id, why, evidence))
+    if not holders:
+        return []
+
+    if owner_count is None:
+        trk = _tracker(a)
+
+        def owner_count(name):
+            reader = getattr(trk, "_owner_rows", None)
+            if reader is None:
+                return None
+            answer = reader(name)
+            if not answer.complete:
+                return None
+            return sum(1 for row in answer.exact()
+                       if (row.get("status") or "") != "closed")
+
+    candidates = []
+    for card in agents:
+        unavailable = ""
+        f = findings.get(card.name)
+        harness = harness_mod.name_for(card, root=a.root)
+        if card.retired:
+            unavailable = "retired"
+        elif f is None or f.state != "up" or f.verdict in tend_mod._FAULTS:
+            unavailable = "not live"
+        elif agent_hold.reason(a.root, card.name):
+            unavailable = "held"
+        count = None
+        if not unavailable and harness == ct.TARGET_HARNESS:
+            unavailable = ct.receiver_budget(*_budget(card.name))
+        if not unavailable and harness == ct.TARGET_HARNESS:
+            count = owner_count(card.name)
+            if count is None:
+                unavailable = "plate count unknown"
+        candidates.append(ct.Candidate(card.name, harness, count or 0, unavailable))
+
+    p = ct.plan(holders, candidates)
+    for stay in p.stays:
+        log(f"ceiling-transfer: {stay.item} stays with {stay.frm}: {stay.why}")
+    if a.dry_run:
+        for m in p.moves:
+            log(f"ceiling-transfer: would move {m.item} {m.frm} -> {m.to} ({m.why})")
+        return []
+
+    dispatcher = dispatcher or _wire(a)
+    ledger = Path(a.root) / "ceiling-transfers.jsonl"
+
+    def _comment(item_id, body):
+        from .work_item import _comment_body, _comments
+        trk = dispatcher.tracker
+        _comments(trk, item_id, body)
+        if not any(_comment_body(row) == body for row in _comments(trk, item_id)):
+            raise RuntimeError("comment readback unproven")
+
+    def _emit(event):
+        with ledger.open("a") as fh:
+            fh.write(json.dumps(dict(event, ts=time.time())) + "\n")
+
+    return ct.apply(
+        p.moves,
+        dispatch=lambda item, to, note: dispatcher.go(item, to, note=note, reassign=True),
+        comment=_comment, emit=_emit, log=log)
 
 
 def unobserved_launch_report(agent: str, harness: str, session: str,
@@ -5171,7 +5280,7 @@ def _cmd_inbox(a) -> int:
         st inbox <agent> <message...>   SEND (send-keys; -d persists first)
         st inbox [agent]                READ — list the unread. Marks nothing.
         st inbox --count [agent]        the machine-readable count (one integer)
-        st inbox --read [agent]         ACK — mark all my unread messages read
+        st inbox --read [agent]         ACK — mark up to 15 unread messages read
         st inbox --read-id ID [agent]   ACK — mark only named unread IDs read
 
     Reading and acking are SEPARATE (inbox.py). `st inbox` shows you what is
@@ -5715,38 +5824,60 @@ def _inbox_read(a, me: str) -> int:
                       f"{me}: {', '.join(missing)}. Nothing marked read.",
                       file=sys.stderr)
                 return REFUSED
-        failed: list = []
-        try:
-            marked = box.mark_read(me, ids=read_ids or None)
-        except MarkReadIncomplete as e:
-            # Print what WAS consumed before saying what was not (aegis-6sws17):
-            # those bodies are gone from the unread set either way.
-            marked, failed = e.marked, e.failed
-        # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
-        # only thing that consumes a message. A count is not the message: the
-        # bodies are gone from the unread set the instant this returns, so a
-        # surface that prints "marked 3" and discards them has destroyed the only
-        # copy the reader had a right to see.
-        for m in marked:
+        # A large remote inbox can outlive the caller's timeout. Snapshot the
+        # selection, bound the default batch, and flush each body BEFORE its
+        # independent close: even SIGKILL must not hide a consumed message.
+        wanted = set(read_ids)
+        selected = ([m for m in unread if m.id in wanted]
+                    if read_ids else unread[:15])
+        remaining = len(unread) - len(selected)
+        if getattr(a, "dry_run", False):
+            print(f"  would mark {len(selected)} message(s) read for {me}; "
+                  f"{remaining} snapshot message(s) not selected. 0 writes.")
+            return OK
+        print(f"  acknowledging {len(selected)} message(s) for {me}; "
+              "closes are independent, not atomic.", flush=True)
+        marked, failed = [], []
+        for index, m in enumerate(selected, 1):
             frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
             print(f"\n  {m.id}{frm}")
             for line in (m.body or "").splitlines() or [""]:
                 print(f"    {line}")
-        print(f"\n  marked {len(marked)} message(s) read for {me}.")
+            print(f"  [{index}/{len(selected)}] acknowledging {m.id} ...", flush=True)
+            try:
+                got = box.mark_read(me, ids=[m.id])
+            except MarkReadIncomplete as e:
+                marked.extend(e.marked)
+                failed.extend(e.failed)
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+            except KeyboardInterrupt:
+                failed.append((m, "interrupted; close may or may not have landed"))
+                remaining += len(selected) - index
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+                break
+            except Exception as e:
+                failed.append((m, f"{type(e).__name__}: {str(e)[:120]}"))
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+            else:
+                marked.extend(got)
+                result = "marked read" if got else "no longer unread"
+                print(f"  [{index}/{len(selected)}] {m.id}: {result}", flush=True)
+        print(f"\n  marked {len(marked)} message(s) read for {me}.", flush=True)
+        if remaining:
+            next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
+            print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
         if failed:
-            # NOT "still unread": a close that timed out may have landed. Say
-            # which, and that a re-run acks only what is still open.
-            # Print the BODY too: a close that timed out but landed has left the
-            # unread set, so a re-run will never show it (sattler, #93 review).
+            # A timed-out close may have landed. Keep its payload on stderr
+            # too: consumers may retain the error channel separately.
             print(f"\n  ⚠ UNCONFIRMED: {len(failed)} close(s) may or may not have "
-                  f"landed. Their bodies are below because a re-run shows only "
-                  f"what is still unread; re-run `st inbox --read` to ack the rest.",
-                  file=sys.stderr)
+                  "landed. Inspect `st inbox` before acknowledging the rest.",
+                  file=sys.stderr, flush=True)
             for m, err in failed:
                 frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
                 print(f"\n  {m.id}{frm}  [{err}]", file=sys.stderr)
                 for line in (m.body or "").splitlines() or [""]:
                     print(f"    {line}", file=sys.stderr)
+            sys.stderr.flush()
             return CANNOT_TELL
         return OK
 
@@ -5757,7 +5888,7 @@ def _inbox_read(a, me: str) -> int:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
             print(f"  {m.id}{src}  {m.body}")
-        print(f"\n  {len(unread)} unread. `st inbox --read` to ack all, or "
+        print(f"\n  {len(unread)} unread. `st inbox --read` to ack up to 15, or "
               "`st inbox --read-id <id>` to ack selectively.")
     print()
     return OK
@@ -12529,6 +12660,10 @@ def _tend_once(a, quiet: bool = False) -> int:
             return []
 
         _fleet_sweep("priority-advisory", _priority_report)
+        # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
+        # fleet sweep: it reads the shared board and must run on one host only.
+        _fleet_sweep("ceiling-transfer",
+                     lambda: _ceiling_transfer_sweep(a, agents, rep, log=_log))
 
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
