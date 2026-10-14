@@ -106,12 +106,24 @@ def command(args, tracker):
                 if old and old != value:
                     raise ValueError(f"non-empty {key} replacement requires --replace-text; "
                                      "read back and preserve evidence before replacing")
-    if not args.dry_run:
-        from .br import BrTracker
-        options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
-        tracker.update(item.id, **options, **fields)
-        after = exact(tracker, item.id)
-        if any(getattr(after, key, None) != value for key, value in fields.items()):
-            raise RuntimeError("update readback unproven; write may have landed, do not resend")
+    from .plate_capacity import active, ensure_room, assignment_lock
+    owner = fields.get("assignee", item.assignee)
+    prospective = asdict(item) | fields
+    with assignment_lock(tracker, owner, dry_run=args.dry_run):
+        if owner and ("assignee" in fields or "status" in fields):
+            current = exact(tracker, item.id)
+            if "assignee" not in fields and current.assignee != item.assignee:
+                raise ValueError("item owner changed before admission; reread before updating")
+            item = current
+            prospective = asdict(item) | fields
+        if owner and active(prospective, owner):
+            ensure_room(tracker, owner, item)
+        if not args.dry_run:
+            from .br import BrTracker
+            options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
+            tracker.update(item.id, **options, **fields)
+            after = exact(tracker, item.id)
+            if any(getattr(after, key, None) != value for key, value in fields.items()):
+                raise RuntimeError("update readback unproven; write may have landed, do not resend")
     return {"id": item.id, "fields": fields,
             "result": "planned" if args.dry_run else "verified"}

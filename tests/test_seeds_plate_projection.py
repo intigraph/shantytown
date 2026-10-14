@@ -349,6 +349,26 @@ def test_feed_haul_preserves_short_and_crew_path_owners(monkeypatch, owner):
     assert row["assignee"].split("/")[-1] == "worker"
 
 
+def test_capacity_projects_blocked_and_open_alongside_held_without_hydration(monkeypatch):
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix='test')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
+    queries = []
+    wire = fields('test-held') + fields('test-open', status='open') + fields('test-blocked', status='blocked')
+    def query(proof, text, timeout):
+        queries.append(text)
+        if 'AS ?subject' in text and '?predicate' not in text:
+            return answer([{'subject': seeds_plate.SEEDS + 'item/' + name, 'graph': G}
+                           for name in ('test-held', 'test-open', 'test-blocked')])
+        return answer(wire)
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    monkeypatch.setattr(tracker, '_bd', lambda *a: pytest.fail('SDK hydration escaped'))
+    rows = tracker.capacity_rows('worker').exact()
+    assert {row['status'] for row in rows} == {'in_progress', 'open', 'blocked'}
+    assert '"blocked"' in queries[0] and '"open"' in queries[0]
+    assert 'schema.org/agent' in queries[0] and '"worker"' in queries[0]
+    assert not any('description' in text or 'Comment' in text for text in queries)
+
+
 def test_roster_batch_preserves_hooked_held_and_empty_without_per_owner_reads(monkeypatch):
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
     monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
