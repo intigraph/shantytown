@@ -1428,6 +1428,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--priority", type=int, choices=range(5))
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--replace-text", action="store_true",
+                    help="explicitly replace non-empty notes/description from the supplied file; read back first")
     wi.add_argument("--file", type=Path)
     wi.add_argument("--reason-file", type=Path)
     wi.add_argument("--dry-run", "-n", action="store_true")
