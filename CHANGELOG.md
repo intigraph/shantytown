@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.7.0](https://github.com/scbrown/shantytown/compare/v0.6.0...v0.7.0) (2026-10-14)
+
+
+### Features
+
+* **maintenance:** add reviewed-plan Codex release retention ([#227](https://github.com/scbrown/shantytown/issues/227)) ([72ad83c](https://github.com/scbrown/shantytown/commit/72ad83c9edc7bac7efea1c21f6bfdc14a572c625))
+* publish checked releases to PyPI through GitHub OIDC ([#247](https://github.com/scbrown/shantytown/issues/247)) ([5bbb240](https://github.com/scbrown/shantytown/commit/5bbb240404c6a6e8383f9ee07fda691521103d4c))
+* **tend:** move ceiling-held work to a claude agent with headroom ([#248](https://github.com/scbrown/shantytown/issues/248)) ([d3df479](https://github.com/scbrown/shantytown/commit/d3df47964df6a23ea7f4ee720f57e1dcce9856df))
+
+
+### Bug Fixes
+
+* contain scrub selftest setup failures ([#235](https://github.com/scbrown/shantytown/issues/235)) ([cff5bfa](https://github.com/scbrown/shantytown/commit/cff5bfa9ad9ceef341ff2140c15badaa864cd60f))
+* **cycle:** name the blocker when a --self waiter times out ([#251](https://github.com/scbrown/shantytown/issues/251)) ([994f9f1](https://github.com/scbrown/shantytown/commit/994f9f102fbe5982709a27e143adfa9ea441600f))
+* keep Git maintenance out of disposable selftests ([#243](https://github.com/scbrown/shantytown/issues/243)) ([780f56c](https://github.com/scbrown/shantytown/commit/780f56ca9131988fcfe00be3d1054d5168b609ae))
+* **packages:** create the shared parent with private mode ([#241](https://github.com/scbrown/shantytown/issues/241)) ([c220066](https://github.com/scbrown/shantytown/commit/c2200662533bdc277f0be4b46def0787acadb637))
+* **push:** honor verified explicit linked worktree source ([#240](https://github.com/scbrown/shantytown/issues/240)) ([d66c01f](https://github.com/scbrown/shantytown/commit/d66c01f129209d736acc164aac1745a153487359))
+* **reads:** preserve tracker context and separate tend source ([#238](https://github.com/scbrown/shantytown/issues/238)) ([1cc3e0d](https://github.com/scbrown/shantytown/commit/1cc3e0d17c5f8aa59549956d585d09c50c591f03))
+* **seeds:** filter malformed status candidates before owner joins ([#252](https://github.com/scbrown/shantytown/issues/252)) ([b982b08](https://github.com/scbrown/shantytown/commit/b982b08b04dbcfa7de2b9374d1b3af2ce79a682f))
+* **work-item:** read date-only fields and name the field a row breaks ([#249](https://github.com/scbrown/shantytown/issues/249)) ([1dcc282](https://github.com/scbrown/shantytown/commit/1dcc282ab96aa7281d645e6ff6029a3ac1ade974))
+* **work-item:** support explicit guarded text replacement ([#245](https://github.com/scbrown/shantytown/issues/245)) ([7674460](https://github.com/scbrown/shantytown/commit/7674460ead871661c4028ed477584eecca10f17f))
+
+
+### Performance Improvements
+
+* **seeds:** batch stop queue and roster reads ([#250](https://github.com/scbrown/shantytown/issues/250)) ([6db583e](https://github.com/scbrown/shantytown/commit/6db583e0cd0ad75c0e743d59c083c53ada1a87fe))
+* **seeds:** index plain-status absence in crew validation ([#253](https://github.com/scbrown/shantytown/issues/253)) ([3b32748](https://github.com/scbrown/shantytown/commit/3b32748c044784db9bc6189304293691664cdbcc))
+
 ## [0.6.0](https://github.com/scbrown/shantytown/compare/v0.5.0...v0.6.0) (2026-10-13)
 
 
