@@ -139,6 +139,24 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
                 assert seeds_plate.owner_shape_supported(tracker().prove_store(), ("agent0",))
                 update(f"DELETE WHERE {{ GRAPH <{graph}> {{ {sub} ?p ?o }} }}")
             print("missing/unknown status refusal and valid-state coexistence PASS")
+            # The indexed plain-status guard must not turn non-plain statuses
+            # into a supported shape, or reject a valid mixed-status row.
+            for graph in (G, G + "#seeds-ephemeral"):
+                sub = f"<{N}item/status-term-control>"
+                for status in ('<urn:status:open>', '7', '"open"@en',
+                               '"future"', '"open"',
+                               '"open"^^<http://www.w3.org/2001/XMLSchema#string>'):
+                    update(f'INSERT DATA {{ GRAPH <{graph}> {{ {sub} a <{S}Action> ; '
+                           f'<{S}agent> "agent0" ; <{N}ontology/status> {status} . }} }}')
+                    expected = status in ('"open"',
+                        '"open"^^<http://www.w3.org/2001/XMLSchema#string>')
+                    assert seeds_plate.owner_shape_supported(
+                        tracker().prove_store(), ("agent0",)) is expected
+                    update(f'INSERT DATA {{ GRAPH <{graph}> {{ {sub} '
+                           f'<{N}ontology/status> "closed" . }} }}')
+                    assert seeds_plate.owner_shape_supported(
+                        tracker().prove_store(), ("agent0",))
+                    update(f"DELETE WHERE {{ GRAPH <{graph}> {{ {sub} ?p ?o }} }}")
         finally:
             child.terminate()
             child.wait(timeout=10)
