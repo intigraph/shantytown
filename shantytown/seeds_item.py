@@ -67,10 +67,16 @@ def _time(value):
     return f"{date}T{hour}:{minute}:{second}" + ("." + fraction if fraction else "") + (zone or "")
 
 
+#: The ?kind a row carries when the store could not report the literal's type.
+UNREPORTED = "unreported"
+
+
 def _value(row):
     predicate, value, kind = row["p"], row["o"], row["kind"]
     if predicate not in FIELDS:
         raise ValueError("unexpected item predicate")
+    if kind == UNREPORTED:
+        raise ValueError(f"item field {predicate} has a type the store did not report")
     if predicate == TYPE or predicate in EDGES:
         if kind != "iri":
             raise ValueError("item reference is not an IRI")
@@ -103,11 +109,21 @@ def _name(facts):
     return _one(facts, SCHEMA + "name", _one(facts, LABEL, ""))
 
 
+ROW_KEYS = frozenset({"graph", "s", "p", "o", "kind"})
+
+
 def _subject_facts(rows, graphs, subject):
     found = {}
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {"graph", "s", "p", "o", "kind"}:
-            raise ValueError("item field row unreadable")
+        if not isinstance(row, dict) or set(row) != ROW_KEYS:
+            # Name the field: refusing a whole item anonymously sent the reader
+            # hunting (aegis-bug), and the predicate is the one fact it needs.
+            if not isinstance(row, dict):
+                raise ValueError("item field row unreadable: not an object")
+            problems = [f"lacks {k}" for k in sorted(ROW_KEYS - set(row))]
+            problems += [f"extra {k}" for k in sorted(set(row) - ROW_KEYS)]
+            raise ValueError(f"item field row unreadable: {row.get('p', '?')} "
+                             + ", ".join(problems))
         if row["graph"] not in graphs or not all(isinstance(v, str) for v in row.values()):
             raise ValueError("item field scope unreadable")
         if row["s"] == subject:
@@ -148,8 +164,17 @@ def _fields_query(graphs, subject):
     # Verbose JSON emits native integers and structured dates. Project lexical
     # strings and independent RDF kinds so a string
     # priority or literal dependency cannot impersonate an integer or IRI.
+    # DATATYPE() is UNBOUND on the deployed Quipu for an xsd:date literal
+    # (measured 2026-10-14 on aegis-l42's date-only scheduledTime, while
+    # xsd:dateTime reports normally), and an unbound ?kind dropped the key from
+    # the row. The date type is then PROVEN with sameTerm/STRDT, never guessed
+    # from the lexical form, and anything still unreported says so explicitly.
+    date = _iri(XSD + "date")
+    kind = (f'IF(isIRI(?value), "iri", COALESCE(STR(DATATYPE(?value)), '
+            f'IF(sameTerm(?value, STRDT(STR(?value), {date})), "{XSD}date", "{UNREPORTED}"), '
+            f'"{UNREPORTED}"))')
     return ('SELECT ?graph ?s ?p (STR(?value) AS ?o) '
-            '(IF(isIRI(?value), "iri", STR(DATATYPE(?value))) AS ?kind) WHERE { '
+            f'({kind} AS ?kind) WHERE {{ '
             + " UNION ".join(branches) + f" }} LIMIT {CAP}")
 
 
