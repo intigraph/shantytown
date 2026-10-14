@@ -18,13 +18,14 @@ class Screen:
         self.screen = screen
 
     def __enter__(self):
-        self._e, self._c = d.pane_exists, d.pane_capture
+        self._e, self._c, self._m = d.pane_exists, d.pane_capture, d.pane_in_mode
         d.pane_exists = lambda t: self.screen is not None
         d.pane_capture = lambda t: self.screen or ""
+        d.pane_in_mode = lambda t: False
         return self
 
     def __exit__(self, *a):
-        d.pane_exists, d.pane_capture = self._e, self._c
+        d.pane_exists, d.pane_capture, d.pane_in_mode = self._e, self._c, self._m
 
 
 class TestTriageOutcomes(unittest.TestCase):
@@ -82,12 +83,12 @@ class TestOpenCheckGuard(unittest.TestCase):
     getting dispatched unless something checks. `--open-check` is that check; these
     prove it fires (refuse) and, as a control, that an open item still passes."""
 
-    def _swap(self, exists, capture, send):
-        self._e, self._c, self._s = d.pane_exists, d.pane_capture, d.pane_send
-        d.pane_exists, d.pane_capture, d.pane_send = exists, capture, send
+    def _swap(self, exists, capture, send, in_mode=lambda t: False):
+        self._e, self._c, self._s, self._m = d.pane_exists, d.pane_capture, d.pane_send, d.pane_in_mode
+        d.pane_exists, d.pane_capture, d.pane_send, d.pane_in_mode = exists, capture, send, in_mode
 
     def _restore(self):
-        d.pane_exists, d.pane_capture, d.pane_send = self._e, self._c, self._s
+        d.pane_exists, d.pane_capture, d.pane_send, d.pane_in_mode = self._e, self._c, self._s, self._m
 
     def test_closed_item_refuses_before_touching_the_pane(self):
         touched = []
@@ -112,6 +113,91 @@ class TestOpenCheckGuard(unittest.TestCase):
             self._restore()
         self.assertEqual(rc, 0)                 # delivered
         self.assertTrue(sent)                   # the guard did not block a live item
+
+
+class TestNoShellInjection(unittest.TestCase):
+    """A title or id is DATA. Reproduced before the fix: `$(...)` in a title ran."""
+    PAYLOADS = ["$(echo PWNED-BY-TITLE)", "`echo PWNED-BY-BACKTICK`", 'quote " and $HOME']
+
+    def test_create_cmd_passes_payloads_through_literally(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "seen")
+            for payload in self.PAYLOADS:
+                item = d.create_cmd(payload, 'printf "%s" "{title}" > ' + out + '; echo item-9')
+                self.assertEqual(item, "item-9")
+                with open(out) as f:
+                    self.assertEqual(f.read(), payload)
+
+    def test_open_check_id_is_not_executed(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = os.path.join(tmp, "ran")
+            cmd, env = d.shell_template('test "{id}" = "$EXPECT"', id=f"$(touch {marker})")
+            env["EXPECT"] = f"$(touch {marker})"
+            import subprocess
+            r = subprocess.run(cmd, shell=True, env=env)
+            self.assertEqual(r.returncode, 0)          # compared as text
+            self.assertFalse(os.path.exists(marker))   # and never executed
+
+
+class FakeTmux:
+    """Records every tmux call; answers #{pane_in_mode} with `mode`."""
+    def __init__(self, mode="1", rc=0):
+        self.mode, self.rc, self.calls = mode, rc, []
+
+    def __call__(self, *args):
+        import subprocess
+        self.calls.append(args)
+        if args[0] == "display-message":
+            return subprocess.CompletedProcess(args, self.rc, self.mode + "\n", "")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def sends(self):
+        return [c for c in self.calls if c[0] == "send-keys"]
+
+
+class TestCopyModeRefusal(unittest.TestCase):
+    """The copy-mode trap (seen on this fleet the same day): typed text becomes
+    vi copy-mode commands and the human scrolling back is stuck."""
+    def _with(self, fake):
+        self._t = d._tmux
+        d._tmux = fake
+        self.addCleanup(lambda: setattr(d, "_tmux", self._t))
+
+    def test_pane_send_in_copy_mode_sends_zero_keys(self):
+        fake = FakeTmux("1")
+        self._with(fake)
+        with self.assertRaises(RuntimeError):
+            d.pane_send("x:0.0", "hello")
+        self.assertEqual(fake.sends(), [])
+
+    def test_unreadable_mode_also_sends_nothing(self):
+        fake = FakeTmux("", rc=1)
+        self._with(fake)
+        with self.assertRaises(RuntimeError):
+            d.pane_send("x:0.0", "hello")
+        self.assertEqual(fake.sends(), [])
+
+    def test_normal_mode_still_sends(self):
+        fake = FakeTmux("0")
+        self._with(fake)
+        d.pane_send("x:0.0", "hello")
+        self.assertEqual(len(fake.sends()), 2)
+
+    def test_triage_refuses_a_pane_in_copy_mode(self):
+        fake = FakeTmux("1")
+        self._with(fake)
+        decision = d.triage("x:0.0", "deploy")
+        self.assertIs(decision.action, d.Action.REFUSE)
+        self.assertEqual(decision.inputs["pane_in_mode"], True)
+
+    def test_dispatch_refuses_end_to_end_with_zero_send_keys(self):
+        fake = FakeTmux("1")
+        self._with(fake)
+        rc = d.main(["send", "x:0.0", "item-1"])
+        self.assertEqual(rc, 3)
+        self.assertEqual(fake.sends(), [])
 
 
 if __name__ == "__main__":

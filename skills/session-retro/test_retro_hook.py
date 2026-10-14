@@ -161,5 +161,20 @@ class TestDpSignal(unittest.TestCase):
         self.assertEqual(self.rh._dp_signal(), "")
 
 
+class TestCreateCmdNoInjection(unittest.TestCase):
+    """{body} is model-written prose. Before the fix its backticks executed."""
+    def test_title_and_body_arrive_literally(self):
+        import os, tempfile
+        import file_improvement as fi
+        title, body = "t $(echo PWNED-BY-TITLE)", "note with `echo PWNED-BY-BODY` and \" quotes"
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "seen")
+            item = fi.create_cmd(title, body,
+                                 'printf "%s|%s" "{title}" "{body}" > ' + out + '; echo item-3')
+            self.assertEqual(item, "item-3")
+            with open(out) as f:
+                self.assertEqual(f.read(), f"{title}|{body}")
+
+
 if __name__ == "__main__":
     unittest.main()

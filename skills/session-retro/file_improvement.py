@@ -80,8 +80,13 @@ def create_file(title: str, body: str) -> str:
 def create_cmd(title: str, body: str, template: str) -> str:
     # Escape hatch for any tracker. Template may reference {title} and {body};
     # it must print the new id (last whitespace token of stdout is taken as id).
-    filled = template.replace("{title}", title).replace("{body}", body)
-    r = _run(filled, shell=True)
+    # The values travel as RETRO_TITLE / RETRO_BODY in the environment and the
+    # placeholders become references to them, so the shell treats them as data.
+    # {body} is model-written prose: backticks and $( are likely, and splicing it
+    # into the command line executed them. Quote the placeholders ("{body}").
+    env = dict(os.environ, RETRO_TITLE=title, RETRO_BODY=body)
+    filled = template.replace("{title}", "${RETRO_TITLE}").replace("{body}", "${RETRO_BODY}")
+    r = subprocess.run(filled, shell=True, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise RuntimeError(f"create-cmd failed: {r.stderr.strip()[:160]}")
     toks = r.stdout.split()

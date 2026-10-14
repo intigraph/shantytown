@@ -66,7 +66,25 @@ def pane_capture(target: str) -> str:
     return r.stdout if r.returncode == 0 else ""
 
 
+def pane_in_mode(target: str) -> bool | None:
+    # A pane in copy-mode or view-mode turns typed text into mode commands: the
+    # message is lost AND a human scrolling back is trapped. True/False from tmux's
+    # own #{pane_in_mode}; None when it cannot be read, which callers treat as a
+    # refusal, never as "not in mode".
+    r = _tmux("display-message", "-p", "-t", target, "#{pane_in_mode}")
+    if r.returncode != 0 or r.stdout.strip() not in ("0", "1"):
+        return None
+    return r.stdout.strip() == "1"
+
+
 def pane_send(target: str, text: str) -> None:
+    # Re-checked HERE, immediately before typing, not only in triage: a human can
+    # enter copy-mode between triage and send. Refuse, send zero keys, and leave
+    # the mode alone; cancelling it would throw away what the human was reading.
+    mode = pane_in_mode(target)
+    if mode is not False:
+        raise RuntimeError(f"pane {target} is in copy/view mode or its mode is "
+                           f"unreadable ({mode}); sent nothing")
     # -l sends the text literally (no key-name interpretation), then a separate
     # Enter submits it. Two calls on purpose: a newline embedded in -l would not
     # submit reliably across tmux versions.
@@ -168,6 +186,11 @@ def triage(target: str, new_work: str) -> Decision:
     if not pane_exists(target):
         return Decision(Action.RESTART, "no session", {"pane": target, "exists": False})
 
+    mode = pane_in_mode(target)
+    if mode is not False:
+        return Decision(Action.REFUSE, "pane in copy/view mode" if mode else "pane mode unreadable",
+                        {"pane": target, "pane_in_mode": mode})
+
     screen = pane_capture(target)
     lines = len(screen.splitlines())
 
@@ -240,10 +263,28 @@ def create_file(title: str) -> str:
     return str(path)
 
 
+def shell_template(template: str, **values: str) -> tuple[str, dict]:
+    """A shell command whose {name} placeholders can never inject.
+
+    Each {name} becomes a reference to an environment variable holding the value
+    (DISPATCH_TITLE, DISPATCH_ID). The shell expands a variable's VALUE as data: a
+    `$(...)` or backtick inside a title is printed, never executed. Splicing the
+    text into the command line instead ran it, quotes or not. Quote the
+    placeholder ("{title}") to keep a value with spaces as one argument.
+    """
+    env = dict(os.environ)
+    for name, value in values.items():
+        var = f"DISPATCH_{name.upper()}"
+        env[var] = value
+        template = template.replace("{" + name + "}", "${" + var + "}")
+    return template, env
+
+
 def create_cmd(title: str, template: str) -> str:
     # Escape hatch for any tracker: --create-cmd 'jira new "{title}"'. The command
     # must print the new id (last whitespace token of stdout is taken as the id).
-    r = subprocess.run(template.format(title=title), shell=True, capture_output=True, text=True)
+    cmd, env = shell_template(template, title=title)
+    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise RuntimeError(f"create-cmd failed: {r.stderr.strip()[:160]}")
     toks = r.stdout.split()
@@ -284,8 +325,8 @@ def cmd_send(args) -> int:
     # gets funded). If given, the check must exit 0 for the item to be live; it is
     # pluggable exactly like create — the tool stays blind to what "open" means.
     if args.open_check:
-        chk = subprocess.run(args.open_check.format(id=item_id),
-                             shell=True, capture_output=True, text=True)
+        cmd, env = shell_template(args.open_check, id=item_id)
+        chk = subprocess.run(cmd, shell=True, capture_output=True, text=True, env=env)
         if chk.returncode != 0:
             print(f"refused: --open-check exited {chk.returncode} for {item_id} — "
                   f"the item is not open; not dispatching finished work", file=sys.stderr)
@@ -308,7 +349,11 @@ def cmd_send(args) -> int:
     # order is the point: verify reads the pane back for the id we just sent. If
     # it is not there, we sent into the void — say so (exit 2) and record NOTHING,
     # so a human re-dispatches rather than a tracker lying about assigned work.
-    pane_send(target, hint)
+    try:
+        pane_send(target, hint)
+    except RuntimeError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 3
     if item_id not in pane_capture(target):
         print(f"sent {item_id} to {target} but could not confirm it landed", file=sys.stderr)
         return 2
