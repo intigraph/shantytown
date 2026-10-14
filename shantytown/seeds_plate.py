@@ -681,3 +681,53 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             raise ValueError("ambiguous ready count candidate")
         seen[identifier] = observation
     return sum(date is None or date <= now for _, date in seen.values())
+
+
+@declared_read_operation("due-rows")
+def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
+    """Only active due-bearing rows and reminder fields, never full hydration."""
+    how = "Seeds due-bearing active fields, shared+ephemeral, maximum2000 rows"
+    try:
+        branches = []
+        for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
+            for status in ("open", "in_progress", "blocked"):
+                branches.append(
+                    f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                    f'<{SCHEMA}identifier> ?id ; <{SCHEMA}name> ?title ; '
+                    f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                    '<http://www.w3.org/2002/12/cal/ical#due> ?due . '
+                    f'OPTIONAL {{ ?s <{SCHEMA}agent> ?assignee }} '
+                    f'OPTIONAL {{ ?s <{SCHEMA}keywords> ?label }} }} '
+                    f'BIND({json.dumps(status)} AS ?status) '
+                    f'BIND({json.dumps(graph)} AS ?graph) }}')
+        wire = _query(proof, "SELECT ?graph ?id ?title ?status ?due ?assignee ?label WHERE { "
+                      + " UNION ".join(branches) + " } LIMIT 2000", timeout)["rows"]
+        if len(wire) >= 2000:
+            raise ValueError("due candidate budget reached")
+        grouped = {}
+        for item in wire:
+            due = item.get("due")
+            if isinstance(due, dict) and set(due) == {"datatype", "value"}:
+                due = due["value"]
+            if not all(isinstance(item.get(k),str) and item[k] for k in ("graph","id","title","status")) or not isinstance(due,str):
+                raise ValueError("incomplete due row")
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", item["id"]):
+                raise ValueError("invalid due identifier")
+            assignee = item.get("assignee")
+            if isinstance(assignee,str) and assignee.startswith(SEEDS + "principal/"):
+                from urllib.parse import unquote
+                assignee = unquote(assignee[len(SEEDS + "principal/"):])
+            if assignee is not None and not isinstance(assignee,str):
+                raise ValueError("invalid due owner")
+            row = {"id":item["id"],"title":item["title"],"status":item["status"],
+                   "due_at":due,"assignee":assignee,"graph":item["graph"]}
+            previous = grouped.setdefault(row["id"], {**row,"labels":[]})
+            if any(previous[k] != value for k,value in row.items()):
+                raise ValueError("conflicting or shadowed due row")
+            if item.get("label") is not None:
+                if not isinstance(item["label"],str):
+                    raise ValueError("invalid due label")
+                previous["labels"].append(item["label"])
+        return Answer.complete_read(list(grouped.values()),how=how)
+    except Exception as error:
+        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {type(error).__name__}")

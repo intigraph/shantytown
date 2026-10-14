@@ -12837,6 +12837,28 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} item(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
+        # aegis-873: one crossing reminder then daily, on this original schedule.
+        if cfg.overdue_enabled:
+            from .overdue import OverdueAlerter
+            from .feed_check import backend_adapter
+            def deliver_due(recipient, marker, body):
+                box = _inbox(a, default="beads")
+                if box.find_delivery(recipient, marker) is not None:
+                    return True
+                from copy import copy
+                target = copy(a)
+                target.agent = recipient
+                target.dry_run = False
+                return _inbox_durable(target, _registry(a).get(recipient),
+                                      marker + " " + body, panes, sender="st fleet tend") == OK
+            overdue_sent = _fleet_sweep("overdue-sweep", lambda: OverdueAlerter(
+                Path(a.root), _registry(a),
+                read=backend_adapter(Path(a.root), _registry(a)).due_rows,
+                deliver=deliver_due,
+                receipt=lambda who, marker: _inbox(a, default="beads").find_delivery(who,marker) is not None,
+                log=_log).sweep())
+            if overdue_sent:
+                print(f"  overdue digest delivered to {', '.join(overdue_sent)}", file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
         # A blocked bead at least appears in `br list --status blocked`; a
         # deferred one is excluded from `br ready` BY DESIGN, so hauls,

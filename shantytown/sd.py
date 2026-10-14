@@ -176,6 +176,22 @@ class SdTracker(BrTracker):
             raise ValueError("gate target metadata UNKNOWN")
         return rows[identifier]
 
+    def due_rows(self):
+        if self._use_remote_projection():
+            from .seeds_plate import due_rows
+            return due_rows(self.prove_store(), timeout=self.timeout)
+        result = self._bd("list", "--overdue", "--json", "--limit", "0")
+        if result.returncode:
+            raise RuntimeError(_failure_reason(result))
+        rows = json.loads(result.stdout)
+        if isinstance(rows,dict):
+            if rows.get("has_more") is not False:
+                raise ValueError("overdue CLI did not prove completeness")
+            rows = rows.get("issues")
+        if not isinstance(rows, list):
+            raise ValueError("overdue CLI did not return a complete list")
+        return Answer.complete_read(rows, how="sd list overdue --limit0, proven store")
+
     def backstop_rows(self) -> Answer[list[dict]]:
         return self.deferred_rows(include_asks=True)
 

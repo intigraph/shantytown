@@ -176,6 +176,7 @@ class Config:
     """
     # Cycle preflight fetch budget; local Git probes keep their shorter bound.
     keep_current_fetch_timeout_seconds: float = 180
+    overdue_enabled: bool = False
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -361,7 +362,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current", "cycle_advice", "accounts"}
+             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -428,7 +429,12 @@ def _resolve(data: dict, path: Path) -> Config:
     if (isinstance(fetch_timeout, bool) or not isinstance(fetch_timeout, (int, float))
             or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
         raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
-    return Config(mode=mode, modes=modes,
+    overdue = _table(path, data, "overdue")
+    _refuse_unknown(path, "overdue", overdue, {"enabled"})
+    overdue_enabled = overdue.get("enabled", False)
+    if type(overdue_enabled) is not bool:
+        raise ConfigError(f"{path}: overdue.enabled must be boolean")
+    return Config(mode=mode, modes=modes, overdue_enabled=overdue_enabled,
                   accounts=_accounts(path, _table(path, data, "accounts")),
                   keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,
