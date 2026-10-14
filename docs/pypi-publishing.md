@@ -26,9 +26,15 @@ the same publisher under that project's Publishing settings instead.
 See the official [pending publisher instructions](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
 and [OIDC publishing contract](https://docs.pypi.org/trusted-publishers/using-a-publisher/).
 
+After registering, set the repository variable `PYPI_PUBLISHER_REGISTERED` to
+`true` (Settings → Secrets and variables → Actions → Variables). Until then the
+`pypi` job does not run: the `pypi-not-registered` job records a notice instead,
+so an unregistered publisher cannot fail the release with `invalid-publisher`.
+Release 0.7.0 failed that way before this gate existed.
+
 ## First publication and recovery
 
-After registration and the reviewed workflow merge, run **Release** on **main**
+After registration, the variable and the reviewed workflow merge, run **Release** on **main**
 with `release_tag: v0.6.0` to backfill the existing GitHub release. This path
 requires a published stable release, verifies the two exact distribution names,
 checksums, package metadata and console entry point, and checks metadata and
