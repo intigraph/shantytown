@@ -121,14 +121,14 @@ def test_real_show_cli_requests_verbose_and_refuses_wrong_wire(tmp_path):
     value = json.loads(good.stdout)
     assert (value["id"], value["title"], value["status"], value["priority"]) == (
         "test-one", "wire positive", "open", 0)
-    assert len(requests) == 3
+    assert len(requests) == 2
     assert requests[-1]["verbose"] is True
     assert "STR(?value) AS ?o" in requests[-1]["query"]
     other = tmp_path / "bad"
     other.mkdir()
     bad, requests = exercise(other, honor_verbose=False)
     assert bad.returncode == 2 and "unexpected item predicate" in bad.stderr
-    assert len(requests) == 3
+    assert len(requests) == 2
 
 
 @pytest.mark.real_store
@@ -137,6 +137,6 @@ def test_real_show_cli_with_actual_sdk_and_readonly_http(tmp_path):
     result, requests = exercise(tmp_path, actual_sd=shutil.which("sd"))
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["id"] == "test-one"
-    assert len(requests) == 3
+    assert len(requests) == 2
     assert requests[-1]["verbose"] is True
     assert "STR(?value) AS ?o" in requests[-1]["query"]
