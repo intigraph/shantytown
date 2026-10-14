@@ -596,7 +596,7 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
                     _iri(SEEDS + "item/" + quote(row["id"], safe=""))
                     for row in chunk if row["status"] == state)
                 branches.append(
-                    f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(graph)} {{ "
+                    f"{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {bindings} }} "
                     f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
                     f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
                     f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
