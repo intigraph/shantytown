@@ -196,8 +196,12 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                 (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
                  f"?s a <{SCHEMA}Action> . "),
+                # A plain-value guard admits the server's indexed anti-join.
+                # Non-plain-only statuses are already refused by the other
+                # branch; a known plain status still permits mixed values.
                 (f"?s a <{SCHEMA}Action> . "
-                 f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?any }} ",
+                 f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?any . "
+                 f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
                  f"?s a <{SCHEMA}Action> . "),
             ):
                 branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
