@@ -338,9 +338,17 @@ def _tracker(a, default="files"):
     """
     b = _backend(a, default)
     if b == "seeds":
+        # Only the read-only crew render shares a tracker. A new render clears
+        # it; mutation commands and other backends retain fresh construction.
+        shared = getattr(a, "_crew_snapshot_tracker", None)
+        if shared is not None:
+            return shared
         from .sd import br_like_tracker
-        return br_like_tracker(lambda k: _deployment_default(a, k), "seeds",
-                               repo=getattr(a, "repo", None))
+        tracker = br_like_tracker(lambda k: _deployment_default(a, k), "seeds",
+                                  repo=getattr(a, "repo", None))
+        if getattr(a, "_crew_share_tracker", False):
+            a._crew_snapshot_tracker = tracker
+        return tracker
     if b in ("beads", "br"):
         from .br import BrTracker
         return BrTracker(
@@ -381,12 +389,12 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False, require_complete=False):
+def _plate(a, *, snapshot=False, require_complete=False, owners=None):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in BR_LIKE:
         from .br import plate as br_plate, plate_reader
-        return (plate_reader(trk, require_complete=require_complete) if snapshot
+        return (plate_reader(trk, require_complete=require_complete, owners=owners) if snapshot
                 else lambda who: br_plate(trk, who))
     return lambda who: files_plate(trk, who)
 
@@ -6587,6 +6595,8 @@ def _cmd_crew(a) -> int:
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
+    a._crew_share_tracker = True
+    a._crew_snapshot_tracker = None
     from . import fleet as fleet_mod
     from .deployment import local_host
     cfg, cfg_error = config.load_or_default(Path(a.root))
@@ -6662,7 +6672,8 @@ def _cmd_crew(a) -> int:
         raise RuntimeError("assignment unavailable")
 
     try:
-        plate = _plate(a, snapshot=True, require_complete=True)
+        plate = _plate(a, snapshot=True, require_complete=True,
+                       owners=[ag.name for ag in agents])
     except Exception:
         plate = unavailable_plate
     if getattr(a, "json", False):

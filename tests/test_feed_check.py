@@ -895,8 +895,9 @@ def test_rule_zero_scope_is_only_used_for_seeds_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(tracker, "feed_rows", lambda owners: seen.append(owners) or result)
     assert feed_check.queue_state(tmp_path, _Reg([]), tracker, owners=["worker"]) == result
     assert seen == [["worker"]]
-    # A general haul consumer must retain the existing complete queue path.
+    # A general haul consumer uses the global lean projection, not owner scope.
+    monkeypatch.setattr(tracker, "priority_rows", lambda: seen.append(None) or ([], []))
     monkeypatch.setattr("shantytown.br.ready", lambda t: [])
     monkeypatch.setattr("shantytown.br.in_progress", lambda t: [])
     assert feed_check.queue_state(tmp_path, _Reg([]), tracker) == ([], [])
-    assert seen == [["worker"]]
+    assert seen == [["worker"], None]

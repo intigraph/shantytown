@@ -214,7 +214,8 @@ def test_format_probe_distinguishes_legacy_without_false_empty(monkeypatch, revi
         lambda proof, q, t: queries.append(q) or {"result": revision},
     )
     assert _REAL_SCHEMA_CHECK(PROOF) is (not revision)
-    assert len(queries) == (1 if revision else 2)
+    assert len(queries) == 1
+    assert G in queries[0] and G + "#seeds-ephemeral" in queries[0]
 
 
 def test_schema_read_failure_has_no_fallback(monkeypatch):
@@ -262,8 +263,8 @@ def test_field_from_other_graph_is_unknown(monkeypatch):
 
 
 def test_readiness_response_cannot_escape_its_batch(monkeypatch):
-    rows = [{"id": f"test-{i}", "status": "open"} for i in range(26)]
-    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([{"id": "test-25"}]))
+    rows = [{"id": f"test-{i}", "status": "open"} for i in range(251)]
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([{"id": "test-250"}]))
     with pytest.raises(ValueError, match="readiness"):
         seeds_plate.unblocked_ids(PROOF, rows)
 
@@ -346,3 +347,59 @@ def test_feed_haul_preserves_short_and_crew_path_owners(monkeypatch, owner):
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(fields(assignee=owner)))
     row = seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()[0]
     assert row["assignee"].split("/")[-1] == "worker"
+
+
+def test_roster_batch_preserves_hooked_held_and_empty_without_per_owner_reads(monkeypatch):
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    wire = fields("test-a", assignee="a", status="hooked")
+    wire += fields("test-b", assignee="rig/b", status="in_progress")
+    queries = []
+    monkeypatch.setattr(seeds_plate, "_query", lambda p, q, t: queries.append(q) or answer(wire))
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
+    read = br.plate_reader(tracker, require_complete=True, owners=["a", "rig/b", "empty"])
+    assert read("a").id == "test-a"
+    assert read("rig/b").id == "test-b"
+    assert read("empty") is None
+    assert len(queries) == 2
+    assert '"hooked"' in queries[0]
+    assert "VALUES (?s ?g)" in queries[1]
+    # Fresh render replaces the reader-local observation.
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([]))
+    fresh = br.plate_reader(tracker, require_complete=True, owners=["a"])
+    assert fresh("a") is None
+
+
+def test_roster_outage_is_unknown_for_every_named_owner_without_fallback(monkeypatch):
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
+    read = br.plate_reader(tracker, require_complete=True, owners=["a", "b"])
+    for owner in ["a", "b"]:
+        with pytest.raises(RuntimeError, match="503"):
+            read(owner)
+
+
+def test_roster_scope_cannot_include_unassigned_work(monkeypatch):
+    seen = []
+    monkeypatch.setattr(seeds_plate, "_query", lambda p, q, t: seen.append(q) or answer(fields("test-a", assignee="a")))
+    assert seeds_plate.owner_rows(PROOF, None, plate_owners=("a",)).exact()[0]["id"] == "test-a"
+    assert 'FILTER(STR(?owner) != "")' not in seen[0]
+
+
+def test_global_queue_projection_failure_does_not_hydrate(monkeypatch, tmp_path):
+    from shantytown import feed_check
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK fallback"))
+    from shantytown.answer import PartialAnswer
+    with pytest.raises(PartialAnswer, match="503"):
+        feed_check.queue_state(tmp_path, None, tracker)
+
+
+@pytest.mark.parametrize("owner", ["", "foreign"])
+def test_roster_response_cannot_escape_named_owner_scope(monkeypatch, owner):
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(fields("test-a", assignee=owner)))
+    assert not seeds_plate.owner_rows(PROOF, None, plate_owners=("a",)).complete

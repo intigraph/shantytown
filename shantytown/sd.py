@@ -225,6 +225,40 @@ class SdTracker(BrTracker):
                 raise StoreUnproven(f"seeds plate format unproven: {error}") from error
         return self._native_projection
 
+    def prepare_roster(self, agents):
+        """One bounded native observation for this reader's named roster.
+
+        No failed native read falls back to SDK hydration. The tracker belongs
+        to one render; callers must construct a fresh reader for a fresh view.
+        """
+        if not self._use_remote_projection():
+            return
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .inbox import drop_parked
+        agents = tuple(dict.fromkeys(agents))
+        answer = owner_rows(self.prove_store(), None, plate_owners=agents,
+                            timeout=self.timeout)
+        self._roster_answers = {}
+        self._roster_ready = {}
+        if not answer.complete:
+            self._roster_answers = {agent: answer for agent in agents}
+            return
+        rows = answer.exact()
+        for agent in agents:
+            owners = {agent, agent.split("/")[-1]}
+            own = [row for row in rows if row.get("assignee") in owners]
+            self._roster_answers[agent] = Answer.complete_read(own, how=answer.how)
+            self._plate_projection_candidates[agent] = own
+        candidates = [row for row in drop_parked(rows) if row["status"] == "open"]
+        try:
+            ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+            self._roster_ready = {agent: Answer.complete_read(
+                {row["id"] for row in self._plate_projection_candidates[agent]
+                 if row["id"] in ready}, how="roster-scoped readiness") for agent in agents}
+        except (OSError, ValueError, RuntimeError) as error:
+            self._roster_ready = {agent: Answer.capped(set(), how="roster readiness",
+                                      caveat=str(error)) for agent in agents}
+
     def plate_rows(self, agent: str) -> Answer[list[dict]]:
         """Query both accepted owner spellings before selecting the plate.
 
@@ -232,6 +266,8 @@ class SdTracker(BrTracker):
         whole-board read on a remote store. Selection still uses br's ranking,
         readiness and partial-read rules; only the candidate set is narrower.
         """
+        if agent in getattr(self, "_roster_answers", {}):
+            return self._roster_answers[agent]
         # Remote plates need candidate fields, not bodies/comments/dependency
         # hydration. Local and older SDK transports retain their CLI contract.
         try:
@@ -405,6 +441,8 @@ class SdTracker(BrTracker):
 
     def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
         """Read readiness only for the owner spellings used by plate selection."""
+        if agent in getattr(self, "_roster_ready", {}):
+            return self._roster_ready[agent]
         try:
             projected = self._use_remote_projection()
         except (OSError, ValueError, TypeError, RuntimeError) as error:

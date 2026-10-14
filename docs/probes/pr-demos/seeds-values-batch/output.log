@@ -1,0 +1,9 @@
+Script started on 2026-10-14 05:26:54-04:00 [COMMAND="uv run --no-project --python /usr/bin/python3 --with pytest --with rich python -m pytest -qs tests/test_seeds_plate_batch_native.py" <not executed on terminal>]
+Installed 8 packages in 6ms
+roster native PASS 5 queries/13 exact held plates
+global queue native PASS 4 queries/67ready+12active
+fresh observation deletion PASS
+.
+1 passed in 1.03s
+
+Script done on 2026-10-14 05:26:55-04:00 [COMMAND_EXIT_CODE="0"]

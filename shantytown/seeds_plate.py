@@ -82,11 +82,9 @@ def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     Do not read an older assignedTo/label ledger as an empty schema.org board.
     Unreadable format checks raise; they never authorize a hydration fallback.
     """
-    for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
-        query = f"ASK {{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/revision> ?revision }} }}"
-        if _query(proof, query, timeout)["result"]:
-            return False
-    return True
+    branches = [f"{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/revision> ?revision }} }}"
+                for graph in (proof.graph, proof.graph + "#seeds-ephemeral")]
+    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
 @declared_read_operation("closed-status")
@@ -202,7 +200,8 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
 @declared_read_operation("owner-rows")
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
-               active_only: bool = False) -> Answer[list[dict]]:
+               active_only: bool = False,
+               plate_owners: tuple[str, ...] | None = None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -213,6 +212,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     try:
         if active_only and feed_owners is None:
             raise ValueError("active projection requires an owner scope")
+        if plate_owners is not None:
+            if feed_owners is not None or agent is not None or active_only:
+                raise ValueError("ambiguous roster scope")
+            feed_owners = plate_owners
         scope = feed_owners if feed_owners is not None else agent
         if scope is not None and not owner_shape_supported(
             proof, scope, timeout=timeout
@@ -231,6 +234,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("hooked", "in_progress", "open") if plate_owners is not None else
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
                 if agent is None
@@ -248,7 +252,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     )
                 ]
             )
-            if feed_owners is not None and not active_only:
+            if feed_owners is not None and not active_only and plate_owners is None:
                 # Only unassigned open candidates and the candidate workers'
                 # own ready/active hauls can affect Rule Zero.
                 branches.append(
@@ -298,19 +302,15 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         pairs = list(selected.items())
         # Discover scoped IDs first, then bind every subject and predicate.
         # This follows the SDK's indexed query shapes without hydration.
-        for offset in range(0, len(pairs), 25):
-            fields = []
-            for subject, graph in pairs[offset : offset + 25]:
-                for predicate in FIELDS:
-                    fields.append(
-                        f"{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} "
-                        f"BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) "
-                        f"BIND({json.dumps(graph)} AS ?graph) }}"
-                    )
+        for offset in range(0, len(pairs), 250):
+            chunk = pairs[offset : offset + 250]
+            bindings = " ".join(f"({_iri(subject)} {_iri(graph)})" for subject, graph in chunk)
+            predicates = " ".join(_iri(p) for p in FIELDS)
             query = (
-                "SELECT (STR(?s) AS ?subject) ?graph (STR(?p) AS ?predicate) ?value WHERE { "
-                + " UNION ".join(fields)
-                + " } LIMIT 10000"
+                "SELECT (STR(?s) AS ?subject) (STR(?g) AS ?graph) "
+                "(STR(?p) AS ?predicate) ?value WHERE { "
+                f"VALUES (?s ?g) {{ {bindings} }} VALUES ?p {{ {predicates} }} "
+                "GRAPH ?g { ?s ?p ?value } } LIMIT 10000"
             )
             part = _query(proof, query, timeout)["rows"]
             if len(part) >= 10000 or len(wire) + len(part) >= 10000:
@@ -370,6 +370,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
                 or not row["id"].strip()
                 or (agent is not None and row.get("assignee") not in owners)
+                or (plate_owners is not None and row.get("assignee") not in owners)
                 or (feed_owners is not None and row.get("assignee")
                     and row["assignee"].split("/")[-1]
                     not in {a.split("/")[-1] for a in feed_owners})
@@ -574,21 +575,20 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """
     result = set()
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
-    for offset in range(0, len(rows), 25):
-        expected = {row["id"] for row in rows[offset : offset + 25]}
-        branches = []
-        for row in rows[offset : offset + 25]:
-            subject = _iri(SEEDS + "item/" + quote(row["id"], safe=""))
-            for graph in graphs:
-                branches.append(
-                    f"{{ GRAPH {_iri(graph)} {{ {subject} <{SEEDS}ontology/status> {json.dumps(row['status'])} ; "
-                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
-                    f"FILTER NOT EXISTS {{ {subject} <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
-                    f"?blocker <{SEEDS}ontology/status> ?bs . "
-                    'FILTER(?bs != "closed" && ?bs != "tombstone") } } }'
-                )
+    for offset in range(0, len(rows), 250):
+        chunk = rows[offset : offset + 250]
+        expected = {row["id"] for row in chunk}
+        bindings = " ".join(
+            f"({_iri(SEEDS + 'item/' + quote(row['id'], safe=''))} {json.dumps(row['status'])})"
+            for row in chunk)
+        graphs_clause = " ".join(_iri(graph) for graph in graphs)
         query = (
-            "SELECT DISTINCT ?id WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
+            f"SELECT DISTINCT ?id WHERE {{ VALUES (?s ?state) {{ {bindings} }} "
+            f"VALUES ?g {{ {graphs_clause} }} GRAPH ?g {{ "
+            f"?s <{SEEDS}ontology/status> ?state ; a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
+            f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+            f"?blocker <{SEEDS}ontology/status> ?bs . "
+            'FILTER(?bs != "closed" && ?bs != "tombstone") } } } LIMIT 1000'
         )
         wire = _query(proof, query, timeout)["rows"]
         if len(wire) >= 1000 or any(
