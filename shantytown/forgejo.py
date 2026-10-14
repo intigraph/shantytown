@@ -91,6 +91,38 @@ class ForgejoTracker:
                         status=d.get("state", "open"), assignee=assignee,
                         priority=_label_priority(d.get("labels") or []))
 
+    def capacity_rows(self, owner):
+        """Owner-filtered issues, paging until an observed empty page."""
+        from dataclasses import asdict
+        from urllib.parse import urlencode
+        from .answer import Answer
+        how = "Forgejo open issues assigned_by owner; complete pagination"
+        found = {}
+        try:
+            for page in range(1, 101):
+                query = urlencode(dict(state="open", type="issues",
+                                       assigned_by=_bare(owner), page=page, limit=50))
+                values = self._request("GET", "/issues?" + query)
+                if not isinstance(values, list):
+                    raise ValueError("owner issues response is not a page")
+                if not values:
+                    return Answer.complete_read(list(found.values()), how=how)
+                for value in values:
+                    if not isinstance(value, dict) or type(value.get("number")) is not int:
+                        raise ValueError("invalid issue identity")
+                    owners = value.get("assignees") or [value.get("assignee")]
+                    if not any(isinstance(user, dict) and user.get("login") == _bare(owner)
+                               for user in owners):
+                        raise ValueError("owner filter not proven")
+                    item = self._to_item(value)
+                    if item.id in found or item.status != "open":
+                        raise ValueError("duplicate or non-open owner issue")
+                    found[item.id] = asdict(item) | {"assignee": owner,
+                        "labels": [label["name"] for label in value.get("labels", [])]}
+            raise ValueError("owner issue pagination budget reached")
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            return Answer.capped(list(found.values()), how=how, caveat=str(error))
+
     def get(self, item_id: str) -> WorkItem:
         try:
             return self._to_item(self._request("GET", f"/issues/{item_id}"))

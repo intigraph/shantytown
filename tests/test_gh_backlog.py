@@ -303,6 +303,11 @@ def test_gh20_a_failed_tracker_write_after_a_LANDED_send_is_named(tmp_path):
     from shantytown.dispatch import Dispatcher, DispatchedButUntracked
 
     class _Tracker:
+        def capacity_rows(self, owner):
+            # This fault fixture's only item is unassigned; the write is the
+            # intentionally broken leg, not the owner-count read.
+            return Answer.complete_read([], how="complete unassigned fault fixture")
+
         def get(self, i):
             from shantytown.protocols import WorkItem
             return WorkItem(id=i, title="fix the roof", status="open")

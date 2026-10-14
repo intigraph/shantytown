@@ -143,6 +143,8 @@ code had eleven (context landed unannounced) — a count nobody enforces is a
 comment, and in a repo whose whole thesis is the exact count, that is the bug.
 """
 from __future__ import annotations
+
+from .plate_capacity import PlateFull, CapacityUnknown
 import argparse
 import dataclasses
 import json
@@ -5907,7 +5909,15 @@ def _cmd_task(a) -> int:
     reason step 2 has anything to say.
     """
     title = " ".join(a.title)
+    from .plate_capacity import (ensure_room, assignment_lock, PlateFull,
+                                 CapacityUnknown)
     if a.dry_run:
+        if a.assignee:
+            try:
+                ensure_room(_tracker(a), a.assignee)
+            except (PlateFull, CapacityUnknown) as error:
+                print(f"  refused: {error}", file=sys.stderr)
+                return REFUSED
         print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else ""))
         print("\n  0 writes.")
         return OK
@@ -5927,11 +5937,24 @@ def _cmd_task(a) -> int:
                 message = "advisory skipped: unexpected advisory failure"
             if message:
                 print(message, file=sys.stderr)
-        item = tracker.create(title, assignee=a.assignee)
+        refused = None
+        with assignment_lock(tracker, a.assignee):
+            if a.assignee:
+                try:
+                    ensure_room(tracker, a.assignee)
+                except PlateFull as error:
+                    refused = str(error)
+                except CapacityUnknown as error:
+                    print(f"  refused: {error}", file=sys.stderr)
+                    return REFUSED
+            item = tracker.create(title, assignee=None if refused else a.assignee)
     except Exception as e:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
     print(f"  {item.id}    {item.title}")
+    if refused:
+        print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
+        return REFUSED
     return OK
 
 
@@ -6372,6 +6395,7 @@ def _cmd_go(a) -> int:
         # without it is the exact failure aegis-8013 is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
         return REFUSED
+    from .plate_capacity import PlateFull, CapacityUnknown
     relayed = _go_on_host(a, note)
     if relayed is not None:
         return relayed
@@ -6405,7 +6429,7 @@ def _cmd_go(a) -> int:
         except AlreadyAssigned as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
-        except GovernorRefused as e:
+        except (GovernorRefused, PlateFull, CapacityUnknown) as e:
             # The gate applies to --dry-run TOO. A preview that showed a dispatch
             # the real command would refuse is a preview of the wrong command.
             print(f"  refused: {e}", file=sys.stderr)
@@ -6509,7 +6533,7 @@ def _cmd_go(a) -> int:
         # one item is duplicated effort no tool ever flags (aegis-uvw5 / 7yeb).
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    except GovernorRefused as e:
+    except (GovernorRefused, PlateFull, CapacityUnknown) as e:
         # The usage governor's tier (aegis-hdqej). Nothing written, nothing sent.
         # The item is untouched and stays dispatchable — this is a NOT NOW, not a
         # rejection, and the message says on what reading and at what threshold.
@@ -6807,6 +6831,10 @@ def _cmd_crew(a) -> int:
                        owners=[ag.name for ag in agents])
     except Exception:
         plate = unavailable_plate
+    from .plate_capacity import observed_size, MAX_ACTIVE
+    from functools import cache
+    capacity_tracker = _tracker(a)
+    plate_sizes = cache(lambda who: observed_size(capacity_tracker, who))
     if getattr(a, "json", False):
         launches = _launches(a)
         from . import stats as _stats_mod
@@ -6839,6 +6867,7 @@ def _cmd_crew(a) -> int:
                 cycle_request_age=(_request_age.get(ag.name)
                                    if ag.name in _pending else None),
                 cycle_request_stale=ag.name in cycle_stale,
+                plate_size=plate_sizes(ag.name), plate_cap=MAX_ACTIVE,
                 name=ag.name, host=local or "local", role=",".join(ag.effective_roles()),
                 tree_role=ag.role, retired=bool(ag.retired),
                 role_sources=crew_role_sources(ag, cfg.roles),
@@ -6998,6 +7027,8 @@ def _cmd_crew(a) -> int:
         host_cell = f"{local or 'local':<22} " if peer_results else ""
         print(f"  {host_cell}{ag.name:<11} {role_cell:<{role_width}} {state:<13} {verdict:<8} "
               f"{tree_cell:<9} {work:<16} {posture:<7} {ag.pane or '—'}")
+        count = plate_sizes(ag.name)
+        print(f"    plate: {count if count is not None else '? UNKNOWN'}/{MAX_ACTIVE}")
         if state == "up":
             try:
                 held = plate(ag.name) if plate else None
@@ -7017,6 +7048,8 @@ def _cmd_crew(a) -> int:
         print(f"  {row['host']:<22} {row['name']:<11} {role_cell:<{role_width}} "
               f"{row['state']:<13} {row['settings']:<8} {row['tree']:<9} "
               f"{row['work']:<16} {row['posture']:<7} {row['pane']}")
+        count = row.get('plate_size')
+        print(f"    plate: {count if type(count) is int else '? UNKNOWN'}/{MAX_ACTIVE}")
     for error in peer_errors:
         print("  " + error)
     if peer_results:
@@ -10128,7 +10161,7 @@ def _redispatch_after_cycle(a, agent_name: str, checkpoint_bead: str = "",
         # Both exceptions happen AFTER sending. Never append a second kickoff
         # to a turn that may already be running just because the store failed.
         print(f"  note: cycle dispatch already attempted: {e}", file=sys.stderr)
-    except GovernorRefused as e:
+    except (GovernorRefused, PlateFull, CapacityUnknown) as e:
         print(f"  note: cycle redispatch REFUSED by governor for {agent_name}: {e}; "
               "no resume prompt submitted.", file=sys.stderr)
     except (TriageRefused, AlreadyAssigned, Blocked, Closed, HasOpenBlocker) as e:

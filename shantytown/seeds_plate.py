@@ -212,7 +212,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
 @declared_read_operation("owner-rows")
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
-               active_only: bool = False,
+               active_only: bool = False, capacity: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False) -> Answer[list[dict]]:
     how = (
@@ -251,6 +251,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
                 if agent is None
+                else ("hooked", "in_progress", "open", "blocked") if capacity
                 else ("hooked", "in_progress", "open")
             )
             terms = (
