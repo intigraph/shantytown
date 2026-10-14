@@ -20,7 +20,9 @@ ends its overdue episode. The visible preview is bounded; the intent packet
 retains complete membership in `notify/overdue.json`.
 
 Delivery intent is persisted before sending. Stable inbox receipt markers
-reconcile an indeterminate write without a second message. Unreadable board
+reconcile an indeterminate write without a second message. An absent receipt
+never permits a resend after the persisted attempt fence; unknown attempts remain
+pending for operator reconciliation. Unreadable board
 results, corrupt ledgers and unknown receipts cannot authorize duplicate sends.
 Overlapping passes hold one lock. A reminder asks the owner to close, re-rank,
 or re-date with a reason; it does not change an item's state or bypass a gate.

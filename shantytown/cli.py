@@ -12842,9 +12842,6 @@ def _tend_once(a, quiet: bool = False) -> int:
             from .overdue import OverdueAlerter
             from .feed_check import backend_adapter
             def deliver_due(recipient, marker, body):
-                box = _inbox(a, default="beads")
-                if box.find_delivery(recipient, marker) is not None:
-                    return True
                 from copy import copy
                 target = copy(a)
                 target.agent = recipient

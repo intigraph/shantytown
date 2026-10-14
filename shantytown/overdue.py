@@ -113,20 +113,20 @@ class OverdueAlerter:
         # Reconcile already attempted messages byte-for-byte before new work.
         sent = []
         for recipient, packet in list(pending.items()):
+            # A recorded attempt can have committed despite an unknown result.
+            # Even a complete absent receipt read never authorizes a resend.
+            if packet.get("attempted") is not True:
+                raise ValueError("overdue attempt fence missing; operator reconciliation required")
             already = self.receipt(recipient, packet["marker"]) if self.receipt is not None else False
-            eligible = any(key in live_keys for key in packet["keys"])
-            if not already and not eligible:
-                if not any(json.loads(key)[0] == "unlock" for key in packet["keys"]):
-                    del pending[recipient]
-                    write_json_atomic(self.path, ledger)
+            if not already:
+                self.log(f"overdue: {recipient} attempted receipt UNKNOWN; no resend")
                 continue
-            if already or self.deliver(recipient, packet["marker"], packet["body"]):
-                for key in packet["keys"]:
-                    if key in live_keys or json.loads(key)[0] == "unlock":
-                        entries[key] = now.timestamp()
-                del pending[recipient]
-                sent.append(recipient)
-                write_json_atomic(self.path, ledger)
+            for key in packet["keys"]:
+                if key in live_keys or json.loads(key)[0] == "unlock":
+                    entries[key] = now.timestamp()
+            del pending[recipient]
+            sent.append(recipient)
+            write_json_atomic(self.path, ledger)
         for recipient, candidates in sorted(grouped.items()):
             if recipient in pending or recipient in sent:
                 continue
@@ -141,7 +141,7 @@ class OverdueAlerter:
             unlock_count = len(keys) - overdue_count
             body = (f"Work reminders ({overdue_count} overdue, {unlock_count} unlocked): {preview}. "
                     "Close, re-rank, or re-date with a reason. Full digest: notify/overdue.json.")
-            packet = {"marker":marker,"body":body,"keys":keys}
+            packet = {"marker":marker,"body":body,"keys":keys,"attempted":True}
             pending[recipient] = packet
             write_json_atomic(self.path, ledger)
             if self.deliver(recipient, marker, body):

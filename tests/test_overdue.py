@@ -56,10 +56,10 @@ def test_unknown_delivery_reconciles_identical_packet_once(tmp_path):
         if marker in receipts: return True
         receipts[marker]=body
         return False  # committed write followed by unreadable response
-    kwargs=dict(read=lambda:Answer.complete_read([row()],how="fixture due"),deliver=deliver,now=lambda:now)
+    kwargs=dict(read=lambda:Answer.complete_read([row()],how="fixture due"),deliver=deliver,receipt=lambda who,marker:marker in receipts,now=lambda:now)
     assert OverdueAlerter(tmp_path,Registry(),**kwargs).sweep()==[]
     assert OverdueAlerter(tmp_path,Registry(),**kwargs).sweep()==["worker"]
-    assert attempts[0]==attempts[1] and len(receipts)==1
+    assert len(attempts)==1 and len(receipts)==1
     assert OverdueAlerter(tmp_path,Registry(),**kwargs).sweep()==[]
 
 
@@ -133,3 +133,13 @@ def test_native_cli_due_reader_accepts_complete_page_and_refuses_cap(tmp_path,mo
     page["has_more"]=True
     import pytest
     with pytest.raises(ValueError): tracker.due_rows()
+
+
+def test_absent_receipt_after_ambiguous_attempt_never_resends(tmp_path):
+    attempts=[]
+    a=OverdueAlerter(tmp_path,Registry(),read=lambda:Answer.complete_read([row()],how="fixture"),deliver=lambda *args:attempts.append(args) or False,receipt=lambda *args:False)
+    assert a.sweep()==[]
+    assert a.sweep()==[]
+    assert a.sweep()==[]
+    assert len(attempts)==1
+    assert json.loads(a.path.read_text())["pending"]["worker"]["attempted"] is True
