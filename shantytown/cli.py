@@ -338,9 +338,17 @@ def _tracker(a, default="files"):
     """
     b = _backend(a, default)
     if b == "seeds":
+        # Only the read-only crew render shares a tracker. A new render clears
+        # it; mutation commands and other backends retain fresh construction.
+        shared = getattr(a, "_crew_snapshot_tracker", None)
+        if shared is not None:
+            return shared
         from .sd import br_like_tracker
-        return br_like_tracker(lambda k: _deployment_default(a, k), "seeds",
-                               repo=getattr(a, "repo", None))
+        tracker = br_like_tracker(lambda k: _deployment_default(a, k), "seeds",
+                                  repo=getattr(a, "repo", None))
+        if getattr(a, "_crew_share_tracker", False):
+            a._crew_snapshot_tracker = tracker
+        return tracker
     if b in ("beads", "br"):
         from .br import BrTracker
         return BrTracker(
@@ -381,12 +389,12 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False, require_complete=False):
+def _plate(a, *, snapshot=False, require_complete=False, owners=None):
     """The plate reader matching the selected tracker."""
     trk = _tracker(a)
     if _backend(a) in BR_LIKE:
         from .br import plate as br_plate, plate_reader
-        return (plate_reader(trk, require_complete=require_complete) if snapshot
+        return (plate_reader(trk, require_complete=require_complete, owners=owners) if snapshot
                 else lambda who: br_plate(trk, who))
     return lambda who: files_plate(trk, who)
 
@@ -1753,8 +1761,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="print ONLY the number of unread messages. A READ: it marks nothing read")
     inbox_read_mode.add_argument(
         "--read", action="store_true",
-        help="ACK: mark my unread messages read. The explicit act — listing and "
-             "counting never do this")
+        help="ACK: mark up to 15 unread messages read, with progress. Repeat to drain. "
+             "Listing and counting never do this")
     inbox_read_mode.add_argument(
         "--read-id", action="append", default=[], metavar="ID",
         help="ACK only this unread message ID (repeatable). Refuses the whole "
@@ -5278,7 +5286,7 @@ def _cmd_inbox(a) -> int:
         st inbox <agent> <message...>   SEND (send-keys; -d persists first)
         st inbox [agent]                READ — list the unread. Marks nothing.
         st inbox --count [agent]        the machine-readable count (one integer)
-        st inbox --read [agent]         ACK — mark all my unread messages read
+        st inbox --read [agent]         ACK — mark up to 15 unread messages read
         st inbox --read-id ID [agent]   ACK — mark only named unread IDs read
 
     Reading and acking are SEPARATE (inbox.py). `st inbox` shows you what is
@@ -5822,38 +5830,60 @@ def _inbox_read(a, me: str) -> int:
                       f"{me}: {', '.join(missing)}. Nothing marked read.",
                       file=sys.stderr)
                 return REFUSED
-        failed: list = []
-        try:
-            marked = box.mark_read(me, ids=read_ids or None)
-        except MarkReadIncomplete as e:
-            # Print what WAS consumed before saying what was not (aegis-6sws17):
-            # those bodies are gone from the unread set either way.
-            marked, failed = e.marked, e.failed
-        # PRINT WHAT IT CONSUMED (GitHub #14). --read is the ACK, and it is the
-        # only thing that consumes a message. A count is not the message: the
-        # bodies are gone from the unread set the instant this returns, so a
-        # surface that prints "marked 3" and discards them has destroyed the only
-        # copy the reader had a right to see.
-        for m in marked:
+        # A large remote inbox can outlive the caller's timeout. Snapshot the
+        # selection, bound the default batch, and flush each body BEFORE its
+        # independent close: even SIGKILL must not hide a consumed message.
+        wanted = set(read_ids)
+        selected = ([m for m in unread if m.id in wanted]
+                    if read_ids else unread[:15])
+        remaining = len(unread) - len(selected)
+        if getattr(a, "dry_run", False):
+            print(f"  would mark {len(selected)} message(s) read for {me}; "
+                  f"{remaining} snapshot message(s) not selected. 0 writes.")
+            return OK
+        print(f"  acknowledging {len(selected)} message(s) for {me}; "
+              "closes are independent, not atomic.", flush=True)
+        marked, failed = [], []
+        for index, m in enumerate(selected, 1):
             frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
             print(f"\n  {m.id}{frm}")
             for line in (m.body or "").splitlines() or [""]:
                 print(f"    {line}")
-        print(f"\n  marked {len(marked)} message(s) read for {me}.")
+            print(f"  [{index}/{len(selected)}] acknowledging {m.id} ...", flush=True)
+            try:
+                got = box.mark_read(me, ids=[m.id])
+            except MarkReadIncomplete as e:
+                marked.extend(e.marked)
+                failed.extend(e.failed)
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+            except KeyboardInterrupt:
+                failed.append((m, "interrupted; close may or may not have landed"))
+                remaining += len(selected) - index
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+                break
+            except Exception as e:
+                failed.append((m, f"{type(e).__name__}: {str(e)[:120]}"))
+                print(f"  [{index}/{len(selected)}] UNCONFIRMED {m.id}", flush=True)
+            else:
+                marked.extend(got)
+                result = "marked read" if got else "no longer unread"
+                print(f"  [{index}/{len(selected)}] {m.id}: {result}", flush=True)
+        print(f"\n  marked {len(marked)} message(s) read for {me}.", flush=True)
+        if remaining:
+            next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
+            print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
         if failed:
-            # NOT "still unread": a close that timed out may have landed. Say
-            # which, and that a re-run acks only what is still open.
-            # Print the BODY too: a close that timed out but landed has left the
-            # unread set, so a re-run will never show it (sattler, #93 review).
+            # A timed-out close may have landed. Keep its payload on stderr
+            # too: consumers may retain the error channel separately.
             print(f"\n  ⚠ UNCONFIRMED: {len(failed)} close(s) may or may not have "
-                  f"landed. Their bodies are below because a re-run shows only "
-                  f"what is still unread; re-run `st inbox --read` to ack the rest.",
-                  file=sys.stderr)
+                  "landed. Inspect `st inbox` before acknowledging the rest.",
+                  file=sys.stderr, flush=True)
             for m, err in failed:
                 frm = f" from {m.frm}" if getattr(m, "frm", None) else ""
                 print(f"\n  {m.id}{frm}  [{err}]", file=sys.stderr)
                 for line in (m.body or "").splitlines() or [""]:
                     print(f"    {line}", file=sys.stderr)
+            sys.stderr.flush()
             return CANNOT_TELL
         return OK
 
@@ -5864,7 +5894,7 @@ def _inbox_read(a, me: str) -> int:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
             print(f"  {m.id}{src}  {m.body}")
-        print(f"\n  {len(unread)} unread. `st inbox --read` to ack all, or "
+        print(f"\n  {len(unread)} unread. `st inbox --read` to ack up to 15, or "
               "`st inbox --read-id <id>` to ack selectively.")
     print()
     return OK
@@ -6696,6 +6726,8 @@ def _cmd_crew(a) -> int:
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
+    a._crew_share_tracker = True
+    a._crew_snapshot_tracker = None
     from . import fleet as fleet_mod
     from .deployment import local_host
     cfg, cfg_error = config.load_or_default(Path(a.root))
@@ -6771,7 +6803,8 @@ def _cmd_crew(a) -> int:
         raise RuntimeError("assignment unavailable")
 
     try:
-        plate = _plate(a, snapshot=True, require_complete=True)
+        plate = _plate(a, snapshot=True, require_complete=True,
+                       owners=[ag.name for ag in agents])
     except Exception:
         plate = unavailable_plate
     if getattr(a, "json", False):
@@ -9565,6 +9598,7 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
     pane is the agent still finishing the turn that asked; it is never cut off."""
     from . import cycle as cycle_mod
     deadline = clock() + SELF_SERVE_TIMEOUT_S
+    blocker = "never idle (last read: pane unreadable)"
     while clock() < deadline:
         request = cycle_mod.Requests(a.root).pending().get(agent)
         if request is None:
@@ -9577,6 +9611,8 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
         except Exception as e:  # noqa: BLE001 — retry until the deadline
             read = None
             print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
+        if read is not None:
+            blocker = _self_serve_blocker(read)
         if (read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED)
                 and not read.shells):
             if _serve_cycle_request(a, agent, request) == OK:
@@ -9586,9 +9622,23 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
             sleep(SELF_SERVE_RETRY_S)
             continue
         sleep(SELF_SERVE_POLL_S)
-    print(f"  {agent}: never idle within {SELF_SERVE_TIMEOUT_S // 60}m; the request "
-          f"stays pending for `st fleet tend`.", file=sys.stderr)
+    # aegis-cch: an idle pane holding a background shell timed out as "never
+    # idle", which reads as a busy agent and sent the diagnosis to stop-event
+    # traffic. Name what the LAST read saw, so the operator can act on it.
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"  {now} {agent}: {blocker} for {SELF_SERVE_TIMEOUT_S // 60}m; the "
+          f"request stays pending for `st fleet tend`.", file=sys.stderr)
     return REFUSED
+
+
+def _self_serve_blocker(read) -> str:
+    """What kept one waiter poll from serving: a live shell, else the pane state."""
+    if read.state in (triage_mod.IDLE, triage_mod.SATURATED) and read.shells:
+        n = read.shells
+        return (f"idle but held by {n} background shell{'s' * (n != 1)} "
+                f"(stop it, or let it exit)")
+    return f"never idle (last read: {read.state})"
 
 
 def _cycle_input_empty(screen: str, card, root=None) -> bool:
