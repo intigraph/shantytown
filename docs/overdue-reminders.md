@@ -66,3 +66,22 @@ receipt. An uncertain ACK reads the exact retained event; a matching receipt
 confirms it, a conflict refuses, and a readable null permits only the identical
 ACK. It never permits another notification. Source flags, projection and joint
 scheduled acceptance remain separate from these fixture controls.
+
+## Due dates at the decision boundary
+
+`st anchor` and its session-start briefing replace the single plate caption with
+**Top of your plate** (up to three active items in priority order) and
+**Coming due** (overdue first, then due within three days, up to three).
+The combined display has a hard 400-byte UTF-8 cap. A long identifier is never
+cut into a different actionable item; display omissions are explicit.
+The separate current-work line retains the existing custody/readiness selection.
+The lists are advice and do not bypass blocked work or deadline gates.
+
+Administrator cards see the fleet-wide lists and the eligible active-item count
+without a due date. Inbox titles and inbox labels are excluded. Failed or capped
+reads show UNKNOWN instead of an empty queue. Workers reuse their fresh plate
+projection, so the view adds no network requests. Cold administrator reads use
+the same finite, indexed SDK projection (candidate IDs, then bound scalar fields);
+a complete packet is cached for 30 seconds. Descriptions and retained import
+blobs are never hydrated for this view. Actual installed timing and a naturally
+started session containing a due-soon item remain deployment acceptance checks.

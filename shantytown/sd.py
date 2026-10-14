@@ -77,6 +77,7 @@ class SdTracker(BrTracker):
         self._proof: "StoreProof | None" = None
         self._plate_projection_candidates: dict[str, list[dict]] = {}
         self._native_projection: bool | None = None
+        self._decision_candidates: dict[str, Answer[list[dict]]] = {}
 
     @property
     def _bin(self) -> str:
@@ -360,7 +361,11 @@ class SdTracker(BrTracker):
         if projected:
             from .seeds_plate import owner_rows
             self._plate_projection_candidates.pop(agent, None)
-            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout)
+            full = owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+            self._decision_candidates[agent] = full
+            answer = (Answer.complete_read([row for row in full.exact()
+                      if row["status"] in ("hooked", "in_progress", "open")], how=full.how)
+                      if full.complete else full)
             if answer.complete:
                 self._plate_projection_candidates[agent] = answer.exact()
             return answer
@@ -376,6 +381,18 @@ class SdTracker(BrTracker):
                    for row in held.exact()):
                 return held
         return self._owner_rows(agent)
+
+    def decision_rows(self, agent: str | None) -> Answer[list[dict]]:
+        """Advisory fields; reuse a fresh worker plate's complete projection."""
+        if agent is not None and agent in self._decision_candidates:
+            return self._decision_candidates[agent]
+        try:
+            if not self._use_remote_projection():
+                raise ValueError("decision projection unavailable on this transport")
+            from .seeds_plate import owner_rows
+            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+        except Exception as error:
+            return Answer.capped([],how="Seeds decision fields",caveat=str(error))
 
     def unassigned_open_counts(self) -> tuple[int, int] | None:
         if not self._use_remote_projection():

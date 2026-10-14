@@ -6027,7 +6027,8 @@ def _cmd_anchor(a) -> int:
             _mcp = tuple(codex_mcp_approve_servers(a.root))
         except Exception:
             _mcp = ()
-        p = do_anchor(me, registry, panes, plate=_plate(a),
+        _anchor_tracker = _tracker(a)
+        p = do_anchor(me, registry, panes, plate=_plate(a, tracker=_anchor_tracker),
                       lead_status=_lead_status(registry, panes),
                       harness=_hn, mcp_preapproved=_mcp)
     except LookupError as e:
@@ -6076,6 +6077,10 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import due_brief
+    p.decision_view = due_brief.render(due_brief.load(
+        _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
+        fleet=p.me.role == "administrator")
     print()
     print(p.render())
     from . import context_hint

@@ -29,6 +29,7 @@ FIELDS = {
     SEEDS + "ontology/priority": "priority",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
+    "http://www.w3.org/2002/12/cal/ical#due": "due_at",
 }
 
 
@@ -234,7 +235,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
                plate_owners: tuple[str, ...] | None = None,
-               include_messages: bool = False, shape_reads=None) -> Answer[list[dict]]:
+               include_messages: bool = False, shape_reads=None,
+               decision: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -266,6 +268,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("hooked", "in_progress", "open", "blocked") if decision else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
@@ -385,6 +388,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     "updated_at",
                     "created_at",
                     "defer_until",
+                    "due_at",
                 ):
                     raise ValueError("unsupported typed plate value")
                 value = value["value"]

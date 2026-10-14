@@ -98,6 +98,7 @@ class Anchoring:
     # never here — `anchor` promises reads-only. Empty = none declared, which is
     # also the honest default for a deployment that never said (aegis-n549ii).
     mcp_preapproved: tuple[str, ...] = ()
+    decision_view: str = ""
 
     def render(self, *, now: datetime | None = None) -> str:
         L: list[str] = []
@@ -106,10 +107,15 @@ class Anchoring:
             who += f", reports to {self.me.reports_to}"
         L += [who + ".", ""]
 
-        L.append("  ON YOUR PLATE")
+        if self.decision_view:
+            L.extend(self.decision_view.rstrip().splitlines())
+            L.append(f"  Current work: {self.item.id if self.item else 'nothing.'}")
+        else:
+            L.append("  ON YOUR PLATE")
         if self.item:
-            L.append(f"    ▶ {self.item.id}  {self.item.title}".rstrip()
-                     + f"        ({self.item.status})")
+            if not self.decision_view:
+                L.append(f"    ▶ {self.item.id}  {self.item.title}".rstrip()
+                         + f"        ({self.item.status})")
             if stale_plate(self.item, now=now):
                 L.append("      STALE PLATE: no tracker update for over 48 hours. "
                          "Verify whether this work is still current before acting; "
@@ -132,7 +138,7 @@ class Anchoring:
                          " If measurement is impossible, record why.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
-            L.append("    nothing. `st go <item> <you>` or ask your lead.")
+            L.append("    nothing. Consult Top of your plate and Coming due; ask your lead.")
         L.append("")
 
         if self.harness == "codex":
