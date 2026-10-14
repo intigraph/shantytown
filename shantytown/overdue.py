@@ -98,7 +98,10 @@ class OverdueAlerter:
                 continue
             self.reg.get(recipient)  # Unknown owner must not silently reroute.
             kind = row.get("kind", "overdue")
-            key = json.dumps([kind,row["id"], row["due_at"], recipient], separators=(",", ":"))
+            # Unlock identity belongs to the producer generation, not a later
+            # assignee edit; one event must not resend to another recipient.
+            key = json.dumps([kind,row["id"], row["due_at"],
+                              recipient if kind == "overdue" else None], separators=(",", ":"))
             if key in live_keys:
                 raise ValueError("duplicate reminder episode")
             live_keys.add(key)

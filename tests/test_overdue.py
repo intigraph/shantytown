@@ -80,6 +80,7 @@ def test_unlock_uses_same_digest_once_per_episode_not_daily(tmp_path):
     now[0]+=timedelta(days=2); assert a.sweep()==[]
     events[0]["episode"]="condition-revision-2"; assert a.sweep()==["worker"]
     assert len(sent)==2
+    events[0]["recipient"]="admin"; assert a.sweep()==[]  # ordinary owner edit does not create an event
     previous=dict(events[0]); events.clear(); assert a.sweep()==[]
     events.append(previous); assert a.sweep()==[]  # replay after absence stays said
 
