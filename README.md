@@ -63,7 +63,7 @@ st task <title>                   create work, get an id back
 st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
 st sling <bead>                  hand a beaded design to the executive for scheduling.
 st inbox <agent> <message>        a message into a pane. send-keys, nothing more.
-st crew                           who exists, what state, what role
+st crew                           who exists, what state, tree roles and deployment traits
 st anchor                         who am I, what's on my plate      ← the anchor
 st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
 st work                           the item and the board
@@ -106,7 +106,7 @@ st fleet                          the whole crew
   watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
 st repo                           a shared project repo
   worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]             push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>                 what code should I be looking at?
   pr <owner/repo> --bead <id>      complete overlap inventory; --create records decisions then creates
 st ops                            the installation

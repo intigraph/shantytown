@@ -84,8 +84,32 @@ def capture_end(conn, payload, now, agent):
 
 
 def _br(config, *args):
-    response = subprocess.run([config.get('br', 'br'), *args], cwd=config['tracker_repo'],
-                              capture_output=True, text=True, timeout=30)
+    if config.get('_tracker') is None and '_authority_args' in config:
+        # Pause/heartbeat-only paths need no board read. Resolve lazily at the
+        # first real item operation, retaining those independent health paths.
+        from . import cli
+        from types import SimpleNamespace
+        command_args=config['_authority_args']
+        authority=SimpleNamespace(root=command_args.root,backend=None,repo=None)
+        backend=cli._backend(authority,default='')
+        if backend not in ('seeds','br','beads'):
+            raise RuntimeError('cost requires an explicit deployment tracker backend')
+        if getattr(command_args,'backend',None) and command_args.backend != backend:
+            raise RuntimeError('cost backend override differs from deployment authority')
+        tracker=cli._tracker(authority)
+        if backend == 'seeds':
+            tracker.prove_store()
+        config.update(_backend=backend,_tracker=tracker)
+    tracker=config.get('_tracker')
+    if tracker is not None:
+        response=tracker._bd(*args)
+    elif config.get('_backend') == 'seeds':
+        raise RuntimeError('native cost authority missing; refusing retired tracker fallback')
+    else:
+        # Legacy library callers remain explicit. The CLI always supplies its
+        # selected tracker before source reads, metrics or closure receipts.
+        response = subprocess.run([config.get('br', 'br'), *args], cwd=config['tracker_repo'],
+                                  capture_output=True, text=True, timeout=30)
     if response.returncode:
         raise RuntimeError(response.stderr[:300] or 'tracker command failed')
     return json.loads(response.stdout)
@@ -282,10 +306,11 @@ def _scheduler_status(config, state, phase):
 def run(args):
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
+        config={**config,'_authority_args':args}
         with (Path(args.root) / 'cost.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return _run_locked(args, config)
-    except (OSError, ValueError, KeyError) as exc:
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
         print(f'cost: UNKNOWN: {exc}', file=sys.stderr)
         return 2
 

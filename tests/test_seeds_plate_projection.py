@@ -269,6 +269,11 @@ def test_readiness_response_cannot_escape_its_batch(monkeypatch):
 
 
 def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):
+    # This positive control declares a harness instead of inheriting the
+    # operator shell's context. A stale SHANTY_AGENT alone stays UNKNOWN.
+    for key in ("QUIPU_AGENT", "QUIPU_SESSION", "SEEDS_AGENT_NAME"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("CODEX_HOME", "fixture-harness")
     monkeypatch.setenv("SHANTY_AGENT", "worker")
     monkeypatch.setenv("SEEDS_SESSION", "test-session")
 

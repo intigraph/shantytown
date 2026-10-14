@@ -89,7 +89,7 @@ def _commit(wt: Path, name: str):
 def test_push_lands_on_BOTH_remotes(two_remotes, capsys):
     repo, wt, origin, forge = two_remotes
     _commit(wt, "work")
-    rc = main(["push", str(repo), "ellie"])
+    rc = main(["push", str(repo), "ellie", "--branch", "main"])
     assert rc == OK
     mine = _sha(wt, "HEAD")
     assert _sha(origin, "main") == mine, "origin did not receive the push"
@@ -97,6 +97,43 @@ def test_push_lands_on_BOTH_remotes(two_remotes, capsys):
         "forge did not receive the push — pushing ONE remote is the fork")
     out = capsys.readouterr().out
     assert "origin" in out and "forge" in out, f"remotes not both reported: {out!r}"
+
+
+@pytest.mark.parametrize("prefix", [["push"], ["repo", "push"]])
+@pytest.mark.parametrize("destination", [[], ["--branch", ""]])
+def test_destination_intent_required_before_remote_contact(
+        two_remotes, monkeypatch, capsys, prefix, destination):
+    from shantytown import cli
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "unpublished-feature")
+    dirty = wt / "dirty.txt"
+    dirty.write_text("preserve\n")
+    before = [_sha(peer, "main") for peer in (origin, forge)]
+    head = _sha(wt, "HEAD")
+    # Source/worktree resolution itself must not be needed to reject intent.
+    monkeypatch.setattr(cli, "_resolve_push_worktree",
+                        lambda *a: pytest.fail("must refuse before resolution"))
+    monkeypatch.setattr(cli, "push_every_remote",
+                        lambda *a: pytest.fail("must not contact peers"))
+    assert main([*prefix, str(repo), "ellie", *destination]) == REFUSED
+    assert "explicit destination" in capsys.readouterr().err
+    assert [_sha(peer, "main") for peer in (origin, forge)] == before
+    assert _sha(wt, "HEAD") == head
+    assert dirty.read_text() == "preserve\n"
+
+
+def test_explicit_feature_destination_keeps_hooks_and_main_refs(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    before = [_sha(peer, "main") for peer in (origin, forge)]
+    _commit(wt, "feature-for-review")
+    log = repo / "hook-log"
+    hook = repo / ".git" / "hooks" / "pre-push"
+    hook.write_text(f'#!/bin/sh\necho hook >> "{log}"\n')
+    hook.chmod(0o755)
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "wt/ellie"]) == OK
+    assert [_sha(peer, "main") for peer in (origin, forge)] == before
+    assert all(_sha(peer, "wt/ellie") == _sha(wt, "HEAD") for peer in (origin, forge))
+    assert log.read_text().splitlines() == ["hook", "hook"]
 
 
 def test_checked_out_noncanonical_branch_REFUSES_before_contacting_remotes(
@@ -120,7 +157,7 @@ def test_checked_out_noncanonical_branch_REFUSES_before_contacting_remotes(
     _commit(dedicated, "unrelated-fix")
     monkeypatch.chdir(dedicated)
 
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "refused before push" in err
     assert "fix/unrelated" in err and "wt/ellie" in err
@@ -153,7 +190,7 @@ def test_a_repo_with_ONE_remote_still_works(tmp_path, capsys):
     _git(wt, "config", "user.email", "t@example.invalid")
     _git(wt, "config", "user.name", "t")
     _commit(wt, "solo-work")
-    assert main(["push", str(repo), "ellie"]) == OK
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == OK
     assert _sha(origin, "main") == _sha(wt, "HEAD")
 
 
@@ -169,7 +206,7 @@ def test_mixed_authority_remotes_REFUSE_before_contacting_either(two_remotes, ca
     before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
     _commit(wt, "must-not-land")
 
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "REFUSED BEFORE PUSH" in err
     assert "third-party" in err and "no remote was contacted" in err
@@ -189,7 +226,7 @@ def test_bare_name_finds_existing_workspace_worktree(
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
     _commit(wt, "workspace-work")
 
-    assert main(["push", "proj", "ellie"]) == OK
+    assert main(["push", "proj", "ellie", "--branch", "main"]) == OK
     assert _sha(origin, "main") == _sha(wt, "HEAD")
     assert _sha(forge, "main") == _sha(wt, "HEAD")
     assert "no worktree" not in capsys.readouterr().err
@@ -205,7 +242,7 @@ def test_bare_name_refuses_ambiguous_existing_worktrees(
     monkeypatch.setenv("GT_ROOT", str(gt_root))
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
 
-    assert main(["push", "proj", "ellie"]) == REFUSED
+    assert main(["push", "proj", "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "ambiguous worktree" in err
     assert str(wt) in err and str(duplicate) in err
@@ -222,7 +259,7 @@ def test_workspace_resolution_keeps_third_party_remote_preflight(
     before_origin, before_forge = _sha(origin, "main"), _sha(forge, "main")
     _commit(wt, "workspace-must-not-land")
 
-    assert main(["push", "proj", "ellie"]) == REFUSED
+    assert main(["push", "proj", "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "REFUSED BEFORE PUSH" in err
     assert "no remote was contacted" in err
@@ -246,7 +283,7 @@ def test_non_ff_is_REFUSED_and_the_remote_is_NOT_rewritten(two_remotes, capsys):
     theirs = _sha(forge, "main")
 
     _commit(wt, "mine")
-    rc = main(["push", str(repo), "ellie"])
+    rc = main(["push", str(repo), "ellie", "--branch", "main"])
     assert rc == REFUSED, "a non-fast-forward push must be REFUSED"
 
     # THE LOAD-BEARING ASSERTION: their commit is still there. If this ever fails,
@@ -261,7 +298,7 @@ def test_a_fast_forward_is_still_accepted(two_remotes):
     always refuses would pass the test above and be useless."""
     repo, wt, origin, forge = two_remotes
     _commit(wt, "clean")
-    assert main(["push", str(repo), "ellie"]) == OK
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == OK
     assert _sha(forge, "main") == _sha(wt, "HEAD")
 
 
@@ -283,7 +320,7 @@ def test_pre_push_hook_refusal_surfaces_complete_stderr(two_remotes, capsys):
     hook.chmod(0o755)
     _commit(wt, "must-be-scrubbed")
 
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     refusal = (
         "SCRUB REFUSED: internal identifier detected\n"
@@ -309,7 +346,7 @@ def test_the_refusal_NAMES_the_remote_that_refused(two_remotes, capsys):
     _git(other, "push", "-q", "origin", "main")
 
     _commit(wt, "mine")
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "forge" in err, f"the refusing remote was not named: {err!r}"
     assert "non-fast-forward" in err.lower()
@@ -334,7 +371,7 @@ def test_a_PARTIAL_push_says_so_and_names_both_sides(two_remotes, capsys):
     _git(other, "push", "-q", "origin", "main")
 
     _commit(wt, "mine")
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "PARTIAL" in err, f"a partial push was not announced: {err!r}"
     assert "origin" in err and "forge" in err, (
@@ -385,7 +422,7 @@ def test_hook_prose_quoting_git_is_NOT_diagnosed_as_non_fast_forward(
         "instead.' >&2"))
     _commit(wt, "carries-an-internal-identifier")
 
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "internal identifiers" in err, (
         f"the guard's own refusal did not reach the operator: {err!r}")
@@ -414,7 +451,7 @@ def test_a_real_non_fast_forward_is_STILL_diagnosed(two_remotes, capsys):
     _git(other, "push", "-q", "origin", "main")
 
     _commit(wt, "mine")
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "forge REFUSED: non-fast-forward" in err, (
         f"a genuine non-fast-forward lost its diagnosis: {err!r}")
@@ -430,7 +467,7 @@ def test_the_failure_names_what_it_actually_attempted(two_remotes, capsys):
     _refusing_hook(repo, "echo 'guard says no' >&2")
     _commit(wt, "whatever")
 
-    assert main(["push", str(repo), "ellie"]) == REFUSED
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == REFUSED
     err = capsys.readouterr().err
     assert "wt/ellie" in err and "main" in err, (
         f"the failure did not say WHICH ref it pushed: {err!r}")
@@ -480,7 +517,7 @@ def test_a_worktree_on_ANOTHER_branch_is_REFUSED_and_no_remote_moves(two_remotes
     _git(wt, "checkout", "-q", "-b", "ellie/topic")
     _commit(wt, "work on the topic branch")
 
-    rc = main(["push", str(repo), "ellie"])
+    rc = main(["push", str(repo), "ellie", "--branch", "main"])
 
     assert rc == REFUSED, "pushed a branch the worktree is not on"
     out = capsys.readouterr()
@@ -495,7 +532,7 @@ def test_the_canonical_case_is_UNTOUCHED_by_that_guard(two_remotes):
     """The control. Without it the guard could pass by refusing everything."""
     repo, wt, origin, forge = two_remotes
     _commit(wt, "work")
-    assert main(["push", str(repo), "ellie"]) == OK
+    assert main(["push", str(repo), "ellie", "--branch", "main"]) == OK
     assert _sha(origin, "main") == _sha(wt, "HEAD")
     assert _sha(forge, "main") == _sha(wt, "HEAD")
 
@@ -529,11 +566,77 @@ def test_explicit_source_branch_publishes_exact_topic_to_both_peers(two_remotes)
         assert _sha(remote, 'main') != _sha(wt, 'HEAD')
 
 
+def test_explicit_extra_worktree_publishes_only_its_source_and_preserves_canonical(
+        two_remotes, monkeypatch):
+    repo, canonical, origin, forge = two_remotes
+    _git(canonical, 'checkout', '-b', 'ellie/old-held')
+    (canonical / 'uncommitted').write_text('preserve canonical')
+    before = (_sha(canonical, 'HEAD'), _git(canonical, 'status', '--porcelain'),
+              (repo / '.git' / 'config').read_bytes(),
+              (repo / '.git' / 'worktrees' / 'ellie' / 'index').read_bytes())
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    _commit(extra, 'extra-topic')
+    monkeypatch.chdir(extra)
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == OK
+    assert all(_sha(peer, 'ellie/topic') == _sha(extra, 'HEAD') for peer in (origin, forge))
+    assert all(_sha(peer, 'main') == before[0] for peer in (origin, forge))
+    after = (_sha(canonical, 'HEAD'), _git(canonical, 'status', '--porcelain'),
+             (repo / '.git' / 'config').read_bytes(),
+             (repo / '.git' / 'worktrees' / 'ellie' / 'index').read_bytes())
+    assert after == before
+    assert _git(canonical, 'branch', '--show-current') == 'ellie/old-held'
+
+
+@pytest.mark.parametrize('caller,source', [('canonical', 'ellie/topic'),
+                                         ('extra', 'wt/ellie')])
+def test_extra_worktree_retains_caller_and_source_branch_refusals(
+        two_remotes, monkeypatch, caller, source):
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    monkeypatch.chdir(canonical if caller == 'canonical' else extra)
+    monkeypatch.setattr(cli, 'push_every_remote', lambda *a: pytest.fail('must not contact any peer'))
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch', source,
+                 '--branch', 'ellie/topic']) == REFUSED
+    assert all(_sha(peer, 'main') == _sha(canonical, 'HEAD') for peer in (origin, forge))
+
+
+def test_extra_worktree_keeps_all_remote_trust_preflight(two_remotes, monkeypatch):
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie-topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    _commit(extra, 'held-topic')
+    _git(repo, 'config', 'remote.forge.st-push-allowed', 'false')
+    monkeypatch.chdir(extra)
+    assert main(['repo', 'push', str(extra), 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == REFUSED
+    for peer in (origin, forge):
+        assert _sha(peer, 'main') == _sha(canonical, 'HEAD')
+        assert subprocess.run(['git', '-C', str(peer), 'rev-parse', '--verify',
+                               'refs/heads/ellie/topic'], capture_output=True).returncode != 0
+
+
+@pytest.mark.parametrize('marker', ['malformed', 'copied'])
+def test_explicit_gitfile_cannot_alias_an_unregistered_root(two_remotes, marker):
+    from shantytown import cli
+    from shantytown.workspace import WorkspaceError
+    repo, canonical, _, _ = two_remotes
+    impostor = canonical.parent / 'ellie-impostor'
+    impostor.mkdir()
+    (impostor / '.git').write_text('not a gitdir' if marker == 'malformed'
+                                 else (canonical / '.git').read_text())
+    with pytest.raises(WorkspaceError, match='linked worktree identity'):
+        cli._resolve_push_worktree(str(impostor), 'ellie')
+
+
 def test_explicit_wrong_source_refuses_without_remote_write(two_remotes):
     repo, wt, origin, forge = two_remotes
     before = [_sha(remote, 'main') for remote in (origin, forge)]
     assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
-                 'fix/not-checked-out']) == REFUSED
+                 'fix/not-checked-out', '--branch', 'main']) == REFUSED
     assert [_sha(remote, 'main') for remote in (origin, forge)] == before
 
 
@@ -543,7 +646,7 @@ def test_explicit_source_requires_readable_branch(two_remotes, monkeypatch):
     monkeypatch.setattr(cli, '_worktree_branch', lambda path: None)
     monkeypatch.setattr(cli, 'push_every_remote', lambda *a: pytest.fail('must not push'))
     assert main(['repo', 'push', str(repo), 'ellie', '--source-branch',
-                 'wt/ellie']) == REFUSED
+                 'wt/ellie', '--branch', 'main']) == REFUSED
 
 
 def test_explicit_empty_source_with_detached_tree_never_publishes_stale_canonical(
@@ -563,3 +666,90 @@ def test_explicit_empty_source_with_detached_tree_never_publishes_stale_canonica
         assert _sha(remote, 'main') == canonical
     assert _sha(wt, 'wt/ellie') == canonical
     assert _sha(wt, 'HEAD') != canonical
+
+
+def test_explicit_timeout_allows_real_slow_hook(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "slow-hook-feature")
+    hooks = Path(_git(wt, "rev-parse", "--git-path", "hooks"))
+    if not hooks.is_absolute():
+        hooks = wt / hooks
+    hook = hooks / "pre-push"
+    hook.write_text("#!/bin/sh\nsleep 61\nexit 0\n")
+    hook.chmod(0o755)
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "slow-feature",
+                 "--timeout", "90"]) == OK
+    assert _sha(origin, "slow-feature") == _sha(wt, "HEAD")
+    assert _sha(forge, "slow-feature") == _sha(wt, "HEAD")
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "3601"])
+def test_invalid_push_timeout_has_no_remote_write(two_remotes, timeout):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "must-stay-local")
+    before = [_sha(r, "main") for r in (origin, forge)]
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "main",
+                 "--timeout", timeout]) == REFUSED
+    assert [_sha(r, "main") for r in (origin, forge)] == before
+
+
+def test_timeout_is_indeterminate_and_stops_other_peers(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    calls = []
+    def timed_out(dest, *args):
+        calls.append(args)
+        return 124, "", "read back destination SHA before retry"
+    result = push_every_remote(wt, "wt/ellie", "feature", push_run=timed_out)
+    assert len(calls) == len(result) == 1
+    assert not result[0].ok and not result[0].non_ff
+    assert "INDETERMINATE" in result[0].reason
+    assert "read back" in result[0].reason
+
+
+def test_real_hook_timeout_keeps_destination_absent(two_remotes):
+    from shantytown.workspace import _git_push
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "blocked-by-hook")
+    hooks = Path(_git(wt, "rev-parse", "--git-path", "hooks"))
+    if not hooks.is_absolute():
+        hooks = wt / hooks
+    hook = hooks / "pre-push"
+    hook.write_text("#!/bin/sh\nsleep 5\nexit 0\n")
+    hook.chmod(0o755)
+    rc, stdout, stderr = _git_push(wt, "--porcelain", "origin",
+                                  "wt/ellie:refs/heads/feature", timeout=1)
+    assert rc == 124 and stdout == "" and "INDETERMINATE" in stderr
+    result = subprocess.run(["git", "-C", str(origin), "show-ref", "--verify",
+                             "refs/heads/feature"], capture_output=True)
+    assert result.returncode != 0
+
+
+def test_timeout_after_remote_commit_is_still_indeterminate(two_remotes):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "committed-before-lost-response")
+    calls = []
+    def committed_timeout(dest, *args):
+        calls.append(args)
+        _git(dest, "push", *args)
+        return 124, "", "read back destination SHA before retry"
+    result = push_every_remote(wt, "wt/ellie", "feature", push_run=committed_timeout)
+    assert len(calls) == len(result) == 1
+    assert not result[0].ok and "INDETERMINATE" in result[0].reason
+    # Read-back proves the first sorted peer committed despite the timeout.
+    assert _sha(forge, "feature") == _sha(wt, "HEAD")
+    missing = subprocess.run(["git", "-C", str(origin), "show-ref", "--verify",
+                              "refs/heads/feature"], capture_output=True)
+    assert missing.returncode != 0
+
+
+def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatch, capsys):
+    from shantytown import cli
+    from shantytown.workspace import PushOutcome
+    repo, wt, origin, forge = two_remotes
+    monkeypatch.setattr(cli, "push_every_remote", lambda *args: [
+        PushOutcome(remote="forge", ok=True),
+        PushOutcome(remote="origin", ok=False, reason="origin INDETERMINATE")])
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "feature"]) == REFUSED
+    err = capsys.readouterr().err
+    assert "confirmed publication" in err and "Read back" in err
+    assert "did not" not in err

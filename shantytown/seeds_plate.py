@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-import os
 import re
 from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 from .answer import Answer
-from .query_identity import current_query_identity
+from .query_identity import read_headers, declared_read_operation
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -42,18 +41,7 @@ def _iri(value: str) -> str:
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
-    # Same caller-declared attribution contract as the SDK, never credentials.
-    for header, value in (
-        (
-            "X-Quipu-Agent",
-            current_query_identity() or os.environ.get("QUIPU_AGENT") or os.environ.get("SEEDS_AGENT_NAME")
-            or os.environ.get("SHANTY_AGENT"),
-        ),
-        ("X-Quipu-Session", os.environ.get("SEEDS_SESSION")),
-        ("X-Quipu-Task", os.environ.get("SEEDS_TASK")),
-    ):
-        if value and value.isascii() and not any(c in value for c in "\r\n"):
-            headers[header] = value
+    headers.update(read_headers())
     payload = {"query": query}
     if verbose:
         payload["verbose"] = True
@@ -87,6 +75,7 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     return result
 
 
+@declared_read_operation("uses-native-schema")
 def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     """A positive legacy revision marker retains the SDK adapter.
 
@@ -100,6 +89,7 @@ def uses_native_schema(proof, *, timeout: int = 30) -> bool:
     return True
 
 
+@declared_read_operation("closed-status")
 def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
     """Fresh exact status for a closed: condition, without dependency hydration."""
     how = "Seeds exact condition status; shared and ephemeral graphs"
@@ -129,6 +119,7 @@ def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
         return Answer.capped(False, how=how, caveat=f"condition status unreadable: {error}")
 
 
+@declared_read_operation("closed-statuses")
 def closed_statuses(proof, identifiers, *, timeout: int = 30) -> dict[str, bool | None]:
     """Bounded candidate-only conditions; never a pre-mutation freshness check.
 
@@ -186,6 +177,7 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
     return f"?s <{SCHEMA}agent> ?owner . FILTER(REGEX(STR(?owner), {pattern})) "
 
 
+@declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
     branches = []
     if isinstance(agent, tuple):
@@ -207,6 +199,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
     return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
+@declared_read_operation("owner-rows")
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False) -> Answer[list[dict]]:
@@ -403,7 +396,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
 
 
-def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
+@declared_read_operation("deferred-rows")
+def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=None) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
     fields = {**FIELDS, SEEDS + "ontology/notes": "notes"}
@@ -422,6 +416,35 @@ def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
                     f'<{SEEDS}ontology/status> "open" ; {_iri(predicate)} ?date }} '
                     f'BIND({json.dumps(graph)} AS ?graph) }}'
                 )
+        if include_asks:
+            for graph in graphs:
+                for status in ("open", "blocked", "in_progress"):
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                        f'<{SEEDS}ontology/notes> ?askNotes . '
+                        'FILTER(CONTAINS(?askNotes, "steve_quote:")) } '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}')
+        if include_asks:
+            for graph in graphs:
+                for status in ("open", "blocked"):
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ ?s a <{SCHEMA}Action> ; '
+                        f'<{SEEDS}ontology/status> {json.dumps(status)} ; '
+                        f'<{SEEDS}ontology/notes> ?gateNotes . '
+                        'FILTER(CONTAINS(?gateNotes, "resume_when:")) } '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}')
+        if target_ids is not None:
+            if not target_ids or len(target_ids) > 25:
+                raise ValueError("gate target batch must contain 1..25 IDs")
+            branches = []
+            for identifier in target_ids:
+                if not isinstance(identifier, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", identifier):
+                    raise ValueError("invalid gate target ID")
+                subject = SEEDS + "item/" + quote(identifier, safe="")
+                for graph in graphs:
+                    branches.append(f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} a <{SCHEMA}Action> }} '
+                                    f'BIND({_iri(subject)} AS ?s) BIND({json.dumps(graph)} AS ?graph) }}')
         candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
                             + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
         if len(candidates) >= 10000:
@@ -485,25 +508,32 @@ def deferred_rows(proof, *, timeout: int = 30) -> Answer[list[dict]]:
                         raise ValueError("ambiguous deferral field")
                     seen.add((subject, key))
                     row[key] = value
+        statuses = (("closed", "tombstone", "deferred", "open", "blocked", "in_progress")
+                    if target_ids is not None else
+                    ("deferred", "open", "blocked", "in_progress") if include_asks else
+                    ("deferred", "open"))
         for subject, row in grouped.items():
             if (not all(isinstance(row.get(k), str) for k in ("id", "title", "created_at", "status"))
                     or not row["id"] or subject != SEEDS + "item/" + quote(row["id"], safe="")
                     or type(row.get("priority")) is not int or not 0 <= row["priority"] <= 4
-                    or row["status"] not in ("deferred", "open")
-                    or (row["status"] == "open" and row["defer_until"] is None)
+                    or row["status"] not in statuses
+                    or (target_ids is None and row["status"] != "deferred" and row["defer_until"] is None
+                        and not (include_asks and any(marker in (row["notes"] or "")
+                                                     for marker in ("steve_quote:", "resume_when:"))))
                     or any(row[k] is not None and not isinstance(row[k], str)
                            for k in ("notes", "assignee", "defer_until"))):
                 raise ValueError("incomplete or changed deferral candidate")
             row["labels"].sort()
         def ranking(row):
             return row["priority"], row["created_at"], row["id"]
-        rows = [row for status in ("deferred", "open")
+        rows = [row for status in statuses
                 for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 
 
+@declared_read_operation("unassigned-counts")
 def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
     """Exact open/unassigned counts without fetching any issue payload."""
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
@@ -535,6 +565,7 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
     return tuple(counts)
 
 
+@declared_read_operation("unblocked-ids")
 def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """SDK-native readiness test on already projected IDs, in bounded batches.
 
@@ -568,6 +599,7 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     return result
 
 
+@declared_read_operation("ready-count")
 def ready_count(proof, *, timeout: int = 30, now=None) -> int:
     """Count SDK-ready rows with only IDs and deferral dates.
 

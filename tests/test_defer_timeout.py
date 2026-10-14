@@ -14,7 +14,7 @@ from shantytown.tmux import NullPanes
 class PartialBr(BrTracker):
     def __init__(self, fail_write=None, after_commit=False, drop=None):
         super().__init__(repo=None)
-        self.row = {'id': 'item-1', 'title': 'test', 'status': 'open', 'labels': []}
+        self.row = {'id': 'item-1', 'title': 'test', 'status': 'open', 'labels': [], 'priority': 2}
         self.writes = []
         self.fail_write = fail_write
         self.after_commit = after_commit
@@ -24,7 +24,7 @@ class PartialBr(BrTracker):
     def _bd_for(self, item_id, *args):
         if args[0] == 'show':
             self.reads += 1
-            return subprocess.CompletedProcess(args, 0, json.dumps([self.row]), '')
+            return subprocess.CompletedProcess(args, 0, json.dumps([self.row if item_id == 'item-1' else dict(id=item_id, title='required code', status='open', priority=2)]), '')
         assert args[0] == 'update'
         self.writes.append(args)
         failing = len(self.writes) == self.fail_write
@@ -63,7 +63,7 @@ def test_timeout_at_each_write_boundary_keeps_a_resume_path(tmp_path, marker, fa
     reason = 'resume_when: closed:item-2' if marker else 'wait for the window'
     with pytest.raises(DeferUnconfirmed, match='No automatic retry'):
         dispatcher(tmp_path, t).defer('item-1', 'human', reason,
-                                      until='' if marker else '2026-12-01')
+                                      until='' if marker else '2026-12-01', dependency_reason='Required tested code path')
     assert len(t.writes) == fail_write  # no blind retry after an indeterminate result
     assert t.row['status'] != 'deferred' or (
         t.row.get('defer_until') or 'resume_when:' in t.row.get('notes', ''))

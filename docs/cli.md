@@ -86,7 +86,7 @@ st fleet                      the whole crew
   watch [--peer|--metrics]    one liveness pass on the PEER host's administrator
 st repo                       a shared project repo
   worktree <repo> [agent]     provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent]         push wt/<agent> to EVERY remote; refuses if invoked from another branch
+  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
   context <query>             what code should I be looking at? (bobbin)
   pr <owner/repo> --bead <id>  complete overlap inventory; --create records decisions then creates
 st ops                        the installation
@@ -194,6 +194,28 @@ session opens small and knows where to look rather than opening large. It is
 delivered exactly once: a brief that survived its own delivery would be re-read
 at every later session start, telling an agent to resume work it finished two
 sessions ago.
+
+Before accepting a self-cycle, optional Jev advice checks the checkpoint's exact
+next step, landed versus local work, and decisions made. Configure
+`SHANTY_CHECKPOINT_JEV_COMMAND` as the installed Jev MCP server command in `[env]`;
+it falls back to `SHANTY_CREATE_JEV_COMMAND`. The judge sees only checkpoint text,
+at most 8192 characters, with a five-second total transport deadline. Its yes
+probability must reach 0.75; a lower result triggers bounded missing-piece checks.
+These are inferred judgments, not proof that a handoff is correct.
+
+A thin handoff gets one rewrite opportunity per launch when the pane reports
+context below the cycle line. Re-running the cycle then proceeds even if the
+handoff is still thin. At or past the cycle line, with unknown depth or launch
+identity, or when Jev or its telemetry is unavailable, advice never refuses the
+cycle. `--allow-loss` also skips the rewrite delay. Existing durable-checkpoint
+and work-preservation gates still apply. Automatic servicing does not rejudge
+an accepted request; dry runs make no judge calls or quality-ledger writes.
+
+Verdicts are recorded privately in `<root>/checkpoint-quality.jsonl`, including
+question/input provenance, probabilities, model, usage, latency, and whether a
+rewrite was offered. This ledger is available to decision evaluation tooling;
+it does not promote inferred judgments into the knowledge graph.
+
 `st anchor` shows context measurement at startup, and `st crew` shows occupancy
 from that session's most recent hook transcript plus a named summary of live
 agents with unmeasured context. An agent without a current Stop observation is
@@ -2501,3 +2523,77 @@ PR before retrying. GitHub has no atomic expected-head create endpoint, so a bra
 race after the last read is detected on the result, not prevented. This command
 provides the crew creation path; it does not claim to intercept raw `gh` or other
 clients. Installing a mandatory external-client hook is a separate adoption step.
+
+### Explicit push destination
+
+`st repo push <repo> [agent]` and its deprecated top-level alias refuse an omitted or empty
+`--branch` before contacting any remote. Publish a candidate with
+`--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
+worktree is on that topic instead of its canonical agent branch. The source must
+match the selected worktree and caller. Existing authority, pre-push hooks and
+non-fast-forward checks still apply to every trusted peer.
+
+`--branch main` explicitly selects a destination; it does not establish independent
+review or successful CI. Land reviewed PRs through the normal merge helper rather
+than treating source publication as a reviewed merge.
+
+For a normal pre-push check that needs more than a minute, pass
+`--timeout 600`. This sets a per-peer deadline between 1 and 3600 seconds;
+the default remains 60 seconds. Hooks and publication guards still run.
+A timeout leaves publication indeterminate: read back that peer's exact
+remote destination SHA before deciding whether any retry is needed. Remaining
+peers are not attempted after a timeout, and earlier successful peers stay published.
+
+### Replacing work-item text
+
+`st work item update ITEM --notes-file FILE` fills empty notes or verifies an
+identical body. Seeds and br protect existing text from replacement. To replace
+it deliberately, read back the item, preserve its evidence and use
+`--notes-file FILE --replace-text`. The same option applies to
+`--description-file`; it is refused without a text file. It affects only the
+explicit update and does not weaken ordinary tracker or deferral writes.
+
+The command writes once and verifies the exact new text. A timeout or failed
+read-back can follow a committed write: inspect the item before deciding on any
+retry. `--dry-run` performs no write, even with explicit replacement.
+
+### Technical gates and Steve asks
+
+`st work defer ITEM bead --reason 'resume_when: closed:TARGET' --dependency-reason 'Required API/schema/artifact from TARGET'` requires a one-line technical dependency. Queue order belongs on the plate. The target inherits the waiting item's priority before the item is deferred; an unconfirmed priority write stops without replaying it. A Steve ask behind a lower-priority target requires Sattler's `--sattler-reason`, recorded with the deferral. Dry runs write nothing.
+
+Declare `repo: NAME` and/or `epic: ID` on separate notes lines. Different or unknown scopes flag Sattler through the existing natural tend pass. The pass follows at most eight gate links and performs at most 25 additional exact metadata reads; unreadable/truncated/cyclic chains retain UNKNOWN or a cycle finding and never release work based on those findings. Stall events are delivered once per chain until resolution, with a persistent delivery ledger. No additional timer is installed.
+
+For an original Steve ask, retain these notes using the normal exact item notes update:
+
+```text
+steve_quote: Exact requested work
+steve_source: Original request reference
+steve_ask_at: 2026-10-05T12:00:00Z
+```
+
+Use the original full UTC timestamp, never the item's creation/modification date. Optional `work_started_at: ...Z` records actual work start; an `in_progress` item also counts as started. After 72 hours without work the existing tend pass delivers one event to Sattler, then Hammond on the next still-unstarted pass. Failed deliveries stay pending. A quote without complete time/source gets one provenance-UNKNOWN notice to Sattler, without an age claim. Historical unannotated prose is not a registered ask; preserve and annotate its original provenance to track it.
+
+
+### Gate backstop digests and verdict cooldown
+
+The existing natural `st fleet tend` pass sends at most one gate-backstop digest
+per recipient per pass. Sattler receives the selected stalled chains and pending
+Steve asks together; a verified ask escalation to Hammond remains a later pass.
+The 12-event and metadata-read budgets remain in force. Pending events and ask
+stages advance only after confirmed digest delivery; failed or indeterminate
+sends retain pending state without retrying within that pass.
+
+To record a verdict on the waiting item, retain its existing notes and add:
+
+```text
+gate_verdict: Keep this gate: required API is still pending
+gate_verdict_by: sattler
+gate_verdict_at: 2026-10-13T22:00:00Z
+```
+
+These are declared item metadata, not authenticated actor identity. A nonempty
+verdict attributed to Sattler with a valid timestamp suppresses new gate-backstop
+notifications for that item for 24 hours. Future, absent, invalid, or differently
+attributed timestamps do not arm the cooldown. Pending delivery and prior ask
+stages remain recorded; normal eligibility resumes when the cooldown expires.
+The verdict does not release an item, rewrite priorities, or clear its gate.

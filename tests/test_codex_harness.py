@@ -100,6 +100,15 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
     assert "--cd '/work with space'" in launch
     assert f"ln -sfn {cfg} {daemon_home / 'config.toml'}" in launch
     assert f"ln -sfn {cfg.parent / 'auth.json'} {daemon_home / 'auth.json'}" in launch
+    durable = Path(os.environ.get(
+        "XDG_DATA_HOME", Path.home() / ".local" / "share")) / "shantytown" / "codex" / "packages" / "app-server-daemon"
+    if __import__("sys").platform.startswith("linux"):
+        assert f"-m shantytown.codex_packages --home {daemon_home} --durable {durable}" in launch
+        assert launch.index("codex remote-control stop") < launch.index("-m shantytown.codex_packages")
+        assert launch.index("-m shantytown.codex_packages") < launch.index("-m shantytown.codex_ready")
+        assert "--migrate-stopped" in launch
+    else:
+        assert "-m shantytown.codex_packages" not in launch
     daemon_standalone = daemon_home / "packages" / "standalone"
     assert f"ln -sfn {cfg.parent / 'packages' / 'standalone' / 'releases'} " \
            f"{daemon_standalone / 'releases'}" in launch
@@ -1443,3 +1452,19 @@ def test_a_still_listed_server_keeps_its_approval_across_a_re_emit(monkeypatch):
     """Revoking must not become a stampede: what is still declared stays."""
     d = _render_mcp(monkeypatch, "homelab", existing=_MCP_ALREADY_APPROVED)
     assert d["mcp_servers"]["homelab"]["default_tools_approval_mode"] == "approve"
+
+
+def test_nonlinux_remote_launch_preserves_existing_package_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(__import__("sys"), "platform", "darwin")
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text('[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings/codex/worker/config.toml"
+    managed = cfg.parent / "packages/standalone/current/codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+    launch = CODEX.launch(Agent(name="ellie", role="worker"), str(cfg), root=root)
+    assert "codex remote-control stop" in launch
+    assert "-m shantytown.codex_ready" in launch
+    assert "-m shantytown.codex_packages" not in launch
+    assert "&&  &&" not in launch

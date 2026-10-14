@@ -1067,6 +1067,17 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
+            data_base = Path(os.environ.get(
+                "XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            # Share the daemon package INCLUDING its native installer lock.
+            # Only daemon control/socket/session state remains card-specific.
+            durable_packages = (data_base / "shantytown" / "codex"
+                                / "packages" / "app-server-daemon")
+            package_setup = (
+                f"{shlex.quote(sys.executable)} -m shantytown.codex_packages "
+                f"--home {shlex.quote(str(daemon_home))} "
+                f"--durable {shlex.quote(str(durable_packages))}"
+            )
             bootstrap = " && ".join((
                 path_shim_setup,
                 f"mkdir -p {shlex.quote(str(daemon_home))}",
@@ -1164,7 +1175,16 @@ class CodexHarness:
             # (sessions/sessions), and rollouts would keep going to tmpfs with
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
-            daemon_start = (f"{bootstrap} && {stop} && {sessions_setup} && "
+            # Only a sanctioned normal launch reaches this stop/start path.
+            # Existing package custody is verified after stop; no live cleanup.
+            # The measured runtime-tmpfs failure and /proc custody proof are
+            # Linux-specific. Preserve other platforms' existing launch path.
+            packages_after_stop = (
+                f"{package_setup} --migrate-stopped && "
+                if sys.platform.startswith("linux") else ""
+            )
+            daemon_start = (f"{bootstrap} && {stop} && "
+                            f"{packages_after_stop}{sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
             flags += f" --remote unix://{socket}"
