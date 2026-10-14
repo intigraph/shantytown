@@ -113,6 +113,34 @@ def test_the_waiter_gives_up_and_leaves_the_request(tmp_path, monkeypatch):
     assert "hammond" in cycle.Requests(tmp_path).pending()
 
 
+IDLE_WITH_SHELL = ("❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle) · 1 shell · "
+                   "← for agents")
+
+
+def test_the_timeout_names_the_live_shell_that_held_it(tmp_path, monkeypatch, capsys):
+    # aegis-cch: an administrator's idle pane kept one background shell for the
+    # whole window, and the timeout said only "never idle", which reads as a
+    # busy agent. The blocker is named, with its count, so it can be stopped.
+    cycle.Requests(tmp_path).request("hammond", "ckpt")
+    served = _waiter_world(tmp_path, monkeypatch, itertools.repeat(IDLE_WITH_SHELL))
+    t = itertools.count(0, 60)
+    rc = cli._serve_own_request(argparse.Namespace(root=tmp_path), "hammond",
+                                sleep=lambda s: None, clock=t.__next__)
+    err = capsys.readouterr().err
+    assert rc == cli.REFUSED and served == []
+    assert "held by 1 background shell" in err and "never idle" not in err
+
+
+def test_the_timeout_names_a_busy_pane_as_busy(tmp_path, monkeypatch, capsys):
+    cycle.Requests(tmp_path).request("hammond", "ckpt")
+    _waiter_world(tmp_path, monkeypatch, itertools.repeat(BUSY))
+    t = itertools.count(0, 60)
+    cli._serve_own_request(argparse.Namespace(root=tmp_path), "hammond",
+                           sleep=lambda s: None, clock=t.__next__)
+    err = capsys.readouterr().err
+    assert "never idle" in err and "last read: busy" in err
+
+
 def test_the_spawn_is_detached_and_scoped(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_SELF_CYCLE_SERVE", "1")
     calls = []
