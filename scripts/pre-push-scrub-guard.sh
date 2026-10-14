@@ -229,6 +229,18 @@ scrub_added_lines() {
 }
 
 if [ "${1:-}" = "--selftest" ]; then
+  # These repositories are disposable. A detached maintenance child can outlive
+  # a Git command and race the caller-containment snapshot or fixture cleanup.
+  # Append command-scope config; keep inherited entries and normal pushes intact.
+  selftest_git_count=${GIT_CONFIG_COUNT:-0}
+  [[ "$selftest_git_count" =~ ^[0-9]{1,3}$ ]] || { echo "FAIL selftest Git config count" >&2; exit 1; }
+  selftest_git_count=$((10#$selftest_git_count))
+  export "GIT_CONFIG_KEY_${selftest_git_count}=maintenance.auto"
+  export "GIT_CONFIG_VALUE_${selftest_git_count}=false"
+  selftest_git_count=$((selftest_git_count+1))
+  export "GIT_CONFIG_KEY_${selftest_git_count}=gc.auto"
+  export "GIT_CONFIG_VALUE_${selftest_git_count}=0"
+  export GIT_CONFIG_COUNT=$((selftest_git_count+1))
   # Synthesises its own config, so the controls run without the real names ever
   # appearing in this repo — and so the test proves the MECHANISM, which is the
   # only thing this file is now responsible for.
@@ -245,6 +257,14 @@ if [ "${1:-}" = "--selftest" ]; then
     case "$fixture" in "$tmp"/fixture.*) ;; *) return 1 ;; esac
     [ -d "$fixture" ] || return 1
     printf '%s\n' "$fixture"
+  }
+  selftest_bare_git() {
+    git init -q --bare "$1" || return 1
+    # A local receive-pack drops command-scope Git config, so the disposable
+    # receiver also needs its own settings before any fixture pushes reach it.
+    git -C "$1" config --local maintenance.auto false || return 1
+    git -C "$1" config --local gc.auto 0 || return 1
+    git -C "$1" config --local receive.autogc false || return 1
   }
   # Synthetic config: the controls must prove the MECHANISM without the estate's
   # real names ever appearing in this public file. Reserved names only
@@ -351,7 +371,7 @@ if [ "${1:-}" = "--selftest" ]; then
     r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }; (
       cf="$r/scrub.conf"
       printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\n' > "$cf"
-      git init -q --bare "$r/pub.git" || exit 1
+      selftest_bare_git "$r/pub.git" || exit 1
       git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
       cd "$r/w" || exit 1
       git config user.email t@t || exit 1
@@ -386,7 +406,7 @@ if [ "${1:-}" = "--selftest" ]; then
   if command -v git >/dev/null 2>&1; then
     r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }; (
       set -e
-      git init -q --bare "$r/pub.git" || exit 1
+      selftest_bare_git "$r/pub.git" || exit 1
       git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
       cd "$r/w" || exit 1
       git config user.email t@t || exit 1
@@ -472,7 +492,7 @@ if [ "${1:-}" = "--selftest" ]; then
       cf="$r/scrub.conf"
       # Ticket rule SCOPED to user-facing artefacts; host rule unscoped as always.
       printf 'internal_host_re=forge\\.invalid\npatterns=[a-z0-9-]+\\.invalid\\b\nticket_patterns=\\bzz-[a-z0-9]{3,6}\\b\nticket_exempt_path_re=\\.(py|rs|sh)$\n' > "$cf"
-      git init -q --bare "$r/pub.git" || exit 1
+      selftest_bare_git "$r/pub.git" || exit 1
       git clone -q "$r/pub.git" "$r/w" 2>/dev/null || exit 1
       cd "$r/w" || exit 1
       git config user.email t@t || exit 1
@@ -525,7 +545,7 @@ if [ "${1:-}" = "--selftest" ]; then
       #    attribution is to tell them apart — and a banner that always prints is
       #    worse than none, since it would excuse a real leak.
       git remote add internal "$r/forge.git" 2>/dev/null || true
-      git init -q --bare "$r/forge.git" || exit 1
+      selftest_bare_git "$r/forge.git" || exit 1
       git checkout -q main 2>/dev/null || git checkout -q -B main origin/main
       git checkout -q -b shared; mkdir -p pkg
       echo '# talks to other-host.invalid' > pkg/shared.py

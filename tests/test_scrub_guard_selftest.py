@@ -15,7 +15,7 @@ def snapshot(root):
             for p in root.rglob('*') if p.is_file()}
 
 
-def probe(guard, fault='none', number=1, empty=False):
+def probe(guard, fault='none', number=1, empty=False, trace=None):
     with tempfile.TemporaryDirectory(prefix='scrub-selftest-') as temporary:
         root = Path(temporary)
         caller = root / 'caller'
@@ -29,10 +29,14 @@ def probe(guard, fault='none', number=1, empty=False):
         env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
         env.update(HOME=str(home), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
                    GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0',
+                   GIT_CONFIG_COUNT='2', GIT_CONFIG_KEY_0='maintenance.auto',
+                   GIT_CONFIG_VALUE_0='false', GIT_CONFIG_KEY_1='gc.auto', GIT_CONFIG_VALUE_1='0',
                    SCRUB_PATTERNS_FILE=str(root / 'absent-config'), FAULT=fault,
                    FAULT_NUMBER=str(number), EMPTY_FAULT='1' if empty else '0',
                    FIXTURE_ROOT=str(fixtures), PROBE_ROOT=str(root),
                    REAL_GIT=shutil.which('git'), REAL_MKTEMP=shutil.which('mktemp'))
+        if trace is not None:
+            env['GIT_TRACE2_EVENT'] = str(trace)
         real_git = env['REAL_GIT']
         subprocess.run([real_git, 'init', '-q', str(caller)], env=env, check=True)
         for key, value in [('user.name', 'caller-control'), ('user.email', 'caller@example.invalid'),
@@ -77,9 +81,15 @@ exec "$REAL_GIT" "$@"
 }
 ''')
         env.update(PATH=str(bins) + os.pathsep + os.environ['PATH'], BASH_ENV=str(bash_env))
+        # Caller setup must not leave a maintenance child behind. Remove those
+        # command-scope overrides for the guard so it proves its own isolation.
+        guard_env = dict(env)
+        for key in ('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0',
+                    'GIT_CONFIG_KEY_1', 'GIT_CONFIG_VALUE_1'):
+            guard_env.pop(key)
         before = snapshot(caller)
         result = subprocess.run(['bash', str(guard.resolve()), '--selftest'], cwd=caller,
-                                env=env, capture_output=True, text=True, timeout=90)
+                                env=guard_env, capture_output=True, text=True, timeout=90)
         after = snapshot(caller)
         changes = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
         return {'fault_seen': (root / 'fault-seen').exists(),
@@ -112,7 +122,14 @@ class SelftestSetupFailureTests(unittest.TestCase):
                 self.assert_failure_is_contained('alloc', number, empty=True)
 
     def test_populated_success_control_leaves_caller_untouched(self):
-        result = probe(self.guard)
+        with tempfile.TemporaryDirectory(prefix='scrub-git-trace-') as directory:
+            trace = Path(directory) / 'trace.jsonl'
+            result = probe(self.guard, trace=trace)
+            events = [json.loads(line) for line in trace.read_text().splitlines()]
+        self.assertTrue(any(e.get('event') == 'start' for e in events))
+        maintenance = [e for e in events if e.get('event') == 'child_start'
+                       and 'maintenance' in e.get('argv', [])]
+        self.assertEqual(maintenance, [])
         self.assertEqual(result['exit'], 0, result)
         self.assertGreaterEqual(result['positive_controls'], 40, result)
         self.assertEqual(result['caller_changes'], [], result)
