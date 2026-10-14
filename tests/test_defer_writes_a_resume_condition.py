@@ -27,6 +27,9 @@ def world(tmp_path: Path):
     tracker = FilesTracker(tmp_path / "items")
     tracker.update("item-1", title="a parked thing", status="open",
                    assignee="kelly")
+    tracker.update("item-1", priority=2)
+    for target in ("aegis-mzdcm0", "aegis-nt4rap", "gate-1", "landed-1", "aegis-u6mdxf"):
+        tracker.update(target, status="open", priority=2)
     return Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes()), tracker
 
 
@@ -94,7 +97,7 @@ def test_a_resume_when_MARKER_counts_as_a_condition(world):
     reader to ignore it, which costs more than never having warned.
     """
     d, tracker = world
-    r = d.defer("item-1", "human", "resume_when: closed:aegis-u6mdxf\n\nblocked on the window")
+    r = d.defer("item-1", "human", "resume_when: closed:aegis-u6mdxf\n\nblocked on the window", dependency_reason="Required tested code path")
     assert r.condition == "resume_when closed:aegis-u6mdxf", (
         "a sweeper-readable marker in the notes IS a machine-testable resume "
         f"condition; got {r.condition!r}")
@@ -152,7 +155,7 @@ def test_prose_only_redefer_preserves_existing_bead_gate_with_date_backstop(worl
     from shantytown.deferrals import parse_condition
     d, tracker = world
     tracker.update('item-1', notes='resume_when: closed:gate-1', defer_until='2026-10-21T17:00:00Z')
-    d.defer('item-1', 'bead', 'The real bead gate still applies')
+    d.defer('item-1', 'bead', 'The real bead gate still applies', dependency_reason="Required tested code path")
     assert parse_condition(tracker.get('item-1').notes).render() == 'closed:gate-1'
     assert tracker.get('item-1').notes.count('resume_when:') == 1
 

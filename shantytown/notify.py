@@ -1632,7 +1632,8 @@ class DeferralAlerter:
             if self._read is not None:
                 rows = self._read()
             else:
-                rows = backend().deferred().exact()
+                reader = getattr(backend(), "backstop_rows", None)
+                rows = (reader() if callable(reader) else backend().deferred()).exact()
         except Exception as e:                       # FAIL OPEN
             self._log(f"deferral-sweep: could not read the store ({e!r})")
             rows, store_error = [], True
@@ -1665,6 +1666,27 @@ class DeferralAlerter:
                     self._log(f"deferral-sweep: could not read {bead} ({e!r}); retry next pass")
                     cache[bead] = None
             return cache[bead]
+
+        from .gate_backstop import Backstop
+        def deliver_backstop(recipient, text):
+            if recipient == "sattler":
+                return self._push(self._reg, self._panes, text)
+            try:
+                card = self._reg.get(recipient)
+                if not card.pane or not self._panes.exists(card.pane):
+                    return None
+                self._panes.send(card.pane, attribute(text, ST_TEND))
+                return recipient
+            except (LookupError, PaneNotAgent):
+                return None
+        try:
+            backstop_reported = ([] if store_error else Backstop(
+                self._root, now, deliver_backstop, self._log).run(
+                    rows, show if self._show is not None else lambda identifier: backend().gate_detail(identifier),
+                    lookup_many=None if self._show is not None else lambda identifiers: backend().gate_details(identifiers)))
+        except Exception as exc:
+            self._log(f"gate-backstop UNKNOWN ({exc}); retained ledger, no release")
+            backstop_reported = []
 
         rows = [r for r in rows if isinstance(r, dict)
                 and (r.get("status") == "deferred" or r.get("defer_until") is not None)]
@@ -1801,7 +1823,7 @@ class DeferralAlerter:
                                 preserve=retry | {f.bead for f in loud})
                     self._log("deferral-sweep: no admin pane — failures remain pending; "
                               "routine findings recorded in the log")
-                    return []
+                    return backstop_reported
                 write_json_atomic(summary_path, {"digest": digest})
         elif not any(is_loud(f) for f in findings) and not retry and not store_error:
             # Quiet findings do not prevent a positively read urgent resolution
@@ -1811,7 +1833,7 @@ class DeferralAlerter:
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
         seen.record(findings, preserve=retry)
-        return [f.bead for f in loud]
+        return list(dict.fromkeys(backstop_reported + [f.bead for f in loud]))
 
 
 class BlockedStaleAlerter:

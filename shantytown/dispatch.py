@@ -858,7 +858,8 @@ class Dispatcher:
         return r
 
     def defer(self, item_id: str, kind: str, reason: str,
-              dry_run: bool = False, until: str = "") -> Deferred:
+              dry_run: bool = False, until: str = "", dependency_reason: str = "",
+              sattler_reason: str = "", gate_authority: str = "") -> Deferred:
         """Persist and verify the resume condition before hiding an item.
 
         A backend may partially apply an update before timing out. Staging the
@@ -930,6 +931,28 @@ class Dispatcher:
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
             raise DeferRefused("resume_when must name a testable closed:<id> or date:<ISO date>")
+        gate_target = None
+        inherited_priority = None
+        if active.kind == "closed":
+            from .gate_backstop import validate_gate, scope
+            if not dependency_reason.strip() or "\n" in dependency_reason.strip() or "\r" in dependency_reason.strip():
+                raise DeferRefused("closed gate requires --dependency-reason: one-line technical dependency; queue order is not a gate")
+            gate_target = self.tracker.get(active.arg)
+            if gate_target.id != active.arg:
+                raise DeferRefused("gate lookup returned a different target ID")
+            try:
+                inherited_priority = validate_gate(item, gate_target, dependency_reason,
+                                                   sattler_reason, gate_authority)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
+            reason += "\ndependency_reason: " + dependency_reason.strip()
+            own_scope, target_scope = scope(item.notes or ""), scope(gate_target.notes or "")
+            if any(a and b and a != b for a,b in zip(own_scope, target_scope)):
+                reason += "\ngate_scope_flag: cross-repo/epic; Sattler notification pending natural tend"
+            elif not any(a and b for a,b in zip(own_scope, target_scope)):
+                reason += "\ngate_scope_flag: UNKNOWN repo/epic; Sattler verification pending natural tend"
+            if sattler_reason:
+                reason += "\nsattler_gate_reason: " + sattler_reason.strip()
         reason = canonical_reason(reason, active.render())
 
         def missing(current, final=False):
@@ -999,6 +1022,14 @@ class Dispatcher:
             if absent:
                 raise TrackerWriteLost(item_id, absent, 1)
 
+        if gate_target is not None and inherited_priority < gate_target.priority:
+            try:
+                self.tracker.update(gate_target.id, priority=inherited_priority)
+                after_target = self.tracker.get(gate_target.id)
+                if after_target.priority != inherited_priority:
+                    raise ValueError("priority inheritance readback failed")
+            except Exception as exc:
+                raise DeferUnconfirmed(f"{gate_target.id}: inheritance unconfirmed; no defer or retry: {exc}") from exc
         fields = {"defer_reason": reason}
         if write_until:
             fields["defer_until"] = write_until

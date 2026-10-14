@@ -1428,6 +1428,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--priority", type=int, choices=range(5))
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--replace-text", action="store_true",
+                    help="explicitly replace non-empty notes/description from the supplied file; read back first")
     wi.add_argument("--file", type=Path)
     wi.add_argument("--reason-file", type=Path)
     wi.add_argument("--dry-run", "-n", action="store_true")
@@ -1468,6 +1470,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "timestamps are refused, including in -n dry runs. Written to "
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
+    df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
     cr = sub.add_parser("crew", help="who exists, what state, what role")
@@ -6030,7 +6034,10 @@ def _cmd_defer(a) -> int:
     d = _wire(a)
     try:
         r = d.defer(a.item, a.kind, reason, dry_run=a.dry_run,
-                    until=getattr(a, "until", "") or "")
+                    until=getattr(a, "until", "") or "",
+                    dependency_reason=getattr(a, "dependency_reason", ""),
+                    sattler_reason=getattr(a, "sattler_reason", ""),
+                    gate_authority=_me(a) or "")
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -6039,13 +6046,15 @@ def _cmd_defer(a) -> int:
               "before retrying — the status and label may already have landed.",
               file=sys.stderr)
         return CANNOT_TELL
+    if "gate_scope_flag:" in r.reason:
+        print("  ⚠ gate scope flagged for Sattler on the next natural tend pass.", file=sys.stderr)
     if r.noop:
         print(f"  {a.item} is already deferred as {r.label} — nothing to write.")
         return OK
     if a.dry_run:
         print(f"  would defer {a.item}: verify reason and resume condition "
               f"{r.condition!r} first, then {r.was_status} -> deferred with "
-              f"{r.label}. 1 tracker read, 0 writes.")
+              f"{r.label}. Item and gate reads only; 0 writes.")
         return OK
     print(f"  ✓ {a.item} deferred as {r.label}; reason, resume condition "
           f"{r.condition!r}, and exactly one blocker kind verified by read-back.")
@@ -8737,6 +8746,32 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     """
     p = Path(repo).expanduser()
     if p.is_absolute() or "/" in repo:
+        # A linked worktree's literal root is already the selected source.
+        # worktree_for is a provisioning map, not its inverse: applying it to
+        # an approved extra worktree silently chooses the canonical old tree.
+        if (p / ".git").is_file():
+            import subprocess
+            try:
+                identity = subprocess.run(
+                    ["git", "-C", str(p), "rev-parse", "--path-format=absolute",
+                     "--git-dir", "--git-common-dir", "--show-toplevel"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                fields = identity.stdout.splitlines()
+                registered = subprocess.run(
+                    ["git", "-C", str(p), "worktree", "list", "--porcelain", "-z"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                roots = {Path(field.removeprefix("worktree ")).resolve()
+                         for field in registered.stdout.split("\0")
+                         if field.startswith("worktree ")}
+                if (identity.returncode or registered.returncode or len(fields) != 3
+                        or Path(fields[0]).resolve() == Path(fields[1]).resolve()
+                        or Path(fields[2]).resolve() != p.resolve() or p.resolve() not in roots):
+                    raise WorkspaceError("explicit linked worktree identity cannot be verified")
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkspaceError("explicit linked worktree identity cannot be read") from error
+            return p
         return worktree_for(p, agent)
 
     gt_root = Path(os.environ.get("GT_ROOT", Path.home() / "gt"))

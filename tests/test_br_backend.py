@@ -59,6 +59,24 @@ def test_real_br_crud_readers_and_terminal_transition(br_store):
     assert plate(tracker, "arnold") is None
 
 
+def test_work_item_explicit_replacement_reaches_real_br_guard(br_store, tmp_path):
+    from argparse import Namespace
+    from shantytown.work_item import command
+    tracker = BrTracker(str(br_store))
+    item = tracker.create("text replacement control")
+    tracker.update(item.id, notes="prior evidence\nresume_when: closed:old")
+    body = tmp_path / "notes.txt"
+    body.write_text("prior evidence\nhistorical gate cleared by ruling")
+    args = Namespace(item=item.id, item_action="update", dry_run=False,
+                     notes_file=body, replace_text=False)
+    with pytest.raises(ValueError, match="requires --replace-text"):
+        command(args, tracker)
+    assert "resume_when:" in tracker.get(item.id).notes
+    args.replace_text = True
+    assert command(args, tracker)["result"] == "verified"
+    assert tracker.get(item.id).notes == body.read_text()
+
+
 def test_anchor_go_crew_and_durable_inbox_use_scratch_br(
         br_store, tmp_path, monkeypatch, capsys):
     root = _root(tmp_path)
