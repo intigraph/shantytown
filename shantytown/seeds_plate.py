@@ -209,12 +209,32 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
     return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
+class RenderShapeReads:
+    """Positive shape observations scoped to one render and one proven store."""
+
+    def __init__(self):
+        self.supported = []
+
+    def check(self, proof, scope, *, timeout):
+        names = frozenset(a.split("/")[-1] for a in scope) if isinstance(scope, tuple) else None
+        for seen_proof, seen_names in self.supported:
+            requested = names if names is not None else frozenset((scope.split("/")[-1],))
+            if seen_proof == proof and requested <= seen_names:
+                return True
+        result = owner_shape_supported(proof, scope, timeout=timeout)
+        # Only the suffix-matching roster scope can prove later narrower reads.
+        # A refusal or exception must never become a cached positive result.
+        if result and names is not None:
+            self.supported.append((proof, names))
+        return result
+
+
 @declared_read_operation("owner-rows")
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
                plate_owners: tuple[str, ...] | None = None,
-               include_messages: bool = False) -> Answer[list[dict]]:
+               include_messages: bool = False, shape_reads=None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -230,9 +250,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 raise ValueError("ambiguous roster scope")
             feed_owners = plate_owners
         scope = feed_owners if feed_owners is not None else agent
-        if scope is not None and not owner_shape_supported(
-            proof, scope, timeout=timeout
-        ):
+        shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
+        if scope is not None and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
         graphs = (graph, graph + "#seeds-ephemeral")

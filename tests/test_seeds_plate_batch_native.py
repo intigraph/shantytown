@@ -87,6 +87,7 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
                 return t
 
             t = tracker()
+            t.render_shape_reads = seeds_plate.RenderShapeReads()
             read = br.plate_reader(
                 t, require_complete=True, owners=[f"agent{i}" for i in range(13)]
             )
@@ -94,6 +95,13 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
                 assert read(f"agent{i}").id == f"test-{i}"
             assert len(queries) <= 6, len(queries)
             print("roster native PASS", len(queries), "queries/13 exact held plates")
+            # Capacity remains a separate complete owner observation, but its
+            # shape checks reuse this render's broader positive roster proof.
+            for i in range(13):
+                own = t.capacity_rows(f"agent{i}").exact()
+                assert own and all(row["assignee"] == f"agent{i}" for row in own)
+            assert sum(query.startswith("ASK") and "?bad" in query
+                       for query in queries) == 1
             queries.clear()
             r, a = feed_check.queue_state(Path(d), None, tracker())
             assert len(a) == 12

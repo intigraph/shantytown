@@ -302,7 +302,7 @@ class SdTracker(BrTracker):
             if self._use_remote_projection():
                 from .seeds_plate import owner_rows
                 return owner_rows(self.prove_store(), agent, timeout=self.timeout,
-                                  capacity=True)
+                                  capacity=True, shape_reads=getattr(self, "render_shape_reads", None))
             return self._owner_rows(agent)
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
@@ -319,7 +319,8 @@ class SdTracker(BrTracker):
         from .inbox import drop_parked
         agents = tuple(dict.fromkeys(agents))
         answer = owner_rows(self.prove_store(), None, plate_owners=agents,
-                            timeout=self.timeout)
+                            timeout=self.timeout,
+                            shape_reads=getattr(self, "render_shape_reads", None))
         self._roster_answers = {}
         self._roster_ready = {}
         if not answer.complete:
