@@ -176,6 +176,7 @@ class Config:
     """
     # Cycle preflight fetch budget; local Git probes keep their shorter bound.
     keep_current_fetch_timeout_seconds: float = 180
+    overdue_external_unlocks: bool = False
     overdue_enabled: bool = False
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
@@ -430,11 +431,15 @@ def _resolve(data: dict, path: Path) -> Config:
             or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
         raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
     overdue = _table(path, data, "overdue")
-    _refuse_unknown(path, "overdue", overdue, {"enabled"})
+    _refuse_unknown(path, "overdue", overdue, {"enabled", "external_unlocks"})
     overdue_enabled = overdue.get("enabled", False)
     if type(overdue_enabled) is not bool:
         raise ConfigError(f"{path}: overdue.enabled must be boolean")
+    external_unlocks = overdue.get("external_unlocks",False)
+    if type(external_unlocks) is not bool:
+        raise ConfigError(f"{path}: overdue.external_unlocks must be boolean")
     return Config(mode=mode, modes=modes, overdue_enabled=overdue_enabled,
+                  overdue_external_unlocks=external_unlocks,
                   accounts=_accounts(path, _table(path, data, "accounts")),
                   keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,

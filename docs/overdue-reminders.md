@@ -5,6 +5,7 @@ Enable the reminder sweep in the deployment's reviewed configuration:
 ```toml
 [overdue]
 enabled = true
+external_unlocks = false # opt in separately after the Seeds producer is installed
 ```
 
 It runs within the existing `fleet tend` schedule, host-owner admission and
@@ -50,3 +51,18 @@ re-dating, committed-but-unknown writes, restart reconciliation, event replay an
 unassigned unlock routing. These are isolated fixtures. Closure requires an
 observed run and actual receipt from the original schedule after normal source
 projection, using an approved overdue control item.
+
+With `external_unlocks=true`, the same admitted sweep reconciles the selected
+Seeds producer before reading persistent pending events. An uncertain reconcile
+write leaves a retained fence and does not repeat the write automatically.
+Known overdue work can still notify when unlock evaluation is unknown. No
+legacy/foreign backend is substituted.
+
+The sender extracts the actual inbox receipt ID and verifies that exact item,
+recipient, inbox label and marker. If the known-ID read is unknown, the intent
+retains that ID for exact reconciliation instead of scanning all inbox history.
+After verification, the consumer acknowledges the producer event with that
+receipt. An uncertain ACK reads the exact retained event; a matching receipt
+confirms it, a conflict refuses, and a readable null permits only the identical
+ACK. It never permits another notification. Source flags, projection and joint
+scheduled acceptance remain separate from these fixture controls.

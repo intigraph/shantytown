@@ -28,6 +28,7 @@ env like the other SHANTY_* keys:
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 from dataclasses import dataclass
@@ -175,6 +176,60 @@ class SdTracker(BrTracker):
         if identifier not in rows:
             raise ValueError("gate target metadata UNKNOWN")
         return rows[identifier]
+
+    def _blocker_result(self, *args):
+        result = self._bd("blockers", *args, "--json")
+        if result.returncode:
+            raise RuntimeError("selected Seeds blocker operation UNKNOWN")
+        value = json.loads(result.stdout)
+        if not isinstance(value,dict):
+            raise ValueError("invalid blocker response")
+        return value
+
+    def reconcile_blockers(self):
+        value = self._blocker_result("reconcile")
+        if not isinstance(value.get("changed"),list):
+            raise ValueError("blocker reconciliation result UNKNOWN")
+
+    def unlock_events(self):
+        value = self._blocker_result("events")
+        events = value.get("events")
+        if not isinstance(events,list) or len(events) >= 1000 or value.get("has_more") is True or value.get("truncated") is True:
+            raise ValueError("unlock event completeness UNKNOWN")
+        rows=[]
+        identities=set()
+        for event in events:
+            if (not isinstance(event,dict)
+                    or not all(isinstance(event.get(k),str) and event[k] for k in ("event_id","issue_id"))
+                    or (event.get("assignee") is not None and not isinstance(event["assignee"],str))
+                    or "receipt" not in event or event["receipt"] is not None
+                    or event["event_id"] in identities):
+                raise ValueError("invalid unlock event")
+            generation = event.get("ready_generation")
+            if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*",event["issue_id"])
+                    or type(generation) is not int or generation < 1
+                    or event["event_id"] != f"seeds:unlock:{event['issue_id']}:{generation}"):
+                raise ValueError("unlock event identity/generation UNKNOWN")
+            identities.add(event["event_id"])
+            rows.append({"kind":"unlock","id":event["issue_id"],
+                         "episode":event["event_id"],"recipient":event.get("assignee")})
+        return Answer.complete_read(rows,how="selected Seeds persistent pending unlock events")
+
+    def unlock_receipt(self, identifier, event_id):
+        value=self._blocker_result("receipt",identifier,event_id)
+        event=value.get("event")
+        if (not isinstance(event,dict) or event.get("event_id") != event_id
+                or event.get("issue_id") != identifier or "receipt" not in event
+                or (event["receipt"] is not None and not isinstance(event["receipt"],str))):
+            raise ValueError("exact unlock receipt UNKNOWN")
+        return event["receipt"]
+
+    def ack_unlock(self, identifier, event_id, receipt):
+        if not isinstance(receipt,str) or not receipt:
+            raise ValueError("verified inbox receipt required")
+        value=self._blocker_result("ack",identifier,event_id,"--receipt",receipt)
+        if "tx" not in value or (value["tx"] is not None and type(value["tx"]) is not int):
+            raise ValueError("unlock ACK result UNKNOWN")
 
     def due_rows(self):
         if self._use_remote_projection():

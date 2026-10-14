@@ -12839,21 +12839,56 @@ def _tend_once(a, quiet: bool = False) -> int:
                   file=sys.stderr)
         # aegis-873: one crossing reminder then daily, on this original schedule.
         if cfg.overdue_enabled:
-            from .overdue import OverdueAlerter
+            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
             from .feed_check import backend_adapter
+            def verify_due_receipt(recipient, marker, identifier):
+                from .br import show
+                value = show(_tracker(a, default="beads"),identifier)
+                return verify_inbox_receipt(value,recipient,marker,identifier)
+            def find_due_receipt(recipient, marker, identifier=None):
+                if identifier is not None:
+                    return verify_due_receipt(recipient,marker,identifier)
+                item = _inbox(a, default="beads").find_delivery(recipient,marker)
+                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
             def deliver_due(recipient, marker, body):
                 from copy import copy
+                from contextlib import redirect_stdout
+                from io import StringIO
                 target = copy(a)
                 target.agent = recipient
                 target.dry_run = False
-                return _inbox_durable(target, _registry(a).get(recipient),
-                                      marker + " " + body, panes, sender="st fleet tend") == OK
-            overdue_sent = _fleet_sweep("overdue-sweep", lambda: OverdueAlerter(
-                Path(a.root), _registry(a),
-                read=backend_adapter(Path(a.root), _registry(a)).due_rows,
-                deliver=deliver_due,
-                receipt=lambda who, marker: _inbox(a, default="beads").find_delivery(who,marker) is not None,
-                log=_log).sweep())
+                output = StringIO()
+                with redirect_stdout(output):
+                    code = _inbox_durable(target, _registry(a).get(recipient),
+                                         marker + " " + body, panes, sender="st fleet tend")
+                if code != OK:
+                    return None
+                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
+                if match is None:
+                    raise ValueError("known reminder receipt ID unavailable")
+                identifier = match.group(1)
+                try:
+                    return verify_due_receipt(recipient,marker,identifier)
+                except Exception:
+                    return PendingReceipt(identifier)
+            def run_due_reminders():
+                unlock_reader = None
+                if cfg.overdue_external_unlocks:
+                    from .unlock_reader import UnlockReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("external unlocks require the selected Seeds producer")
+                    unlock_reader = UnlockReader(selected,Path(a.root))
+                return OverdueAlerter(
+                    Path(a.root), _registry(a),
+                    read=backend_adapter(Path(a.root), _registry(a)).due_rows,
+                    deliver=deliver_due,
+                    receipt=find_due_receipt,
+                    events=unlock_reader.events if unlock_reader is not None else None,
+                    ack=unlock_reader.ack if unlock_reader is not None else None,
+                    log=_log).sweep()
+            overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
             if overdue_sent:
                 print(f"  overdue digest delivered to {', '.join(overdue_sent)}", file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
