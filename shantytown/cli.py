@@ -9631,6 +9631,7 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
     pane is the agent still finishing the turn that asked; it is never cut off."""
     from . import cycle as cycle_mod
     deadline = clock() + SELF_SERVE_TIMEOUT_S
+    blocker = "never idle (last read: pane unreadable)"
     while clock() < deadline:
         request = cycle_mod.Requests(a.root).pending().get(agent)
         if request is None:
@@ -9643,6 +9644,8 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
         except Exception as e:  # noqa: BLE001 — retry until the deadline
             read = None
             print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
+        if read is not None:
+            blocker = _self_serve_blocker(read)
         if (read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED)
                 and not read.shells):
             if _serve_cycle_request(a, agent, request) == OK:
@@ -9652,9 +9655,23 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
             sleep(SELF_SERVE_RETRY_S)
             continue
         sleep(SELF_SERVE_POLL_S)
-    print(f"  {agent}: never idle within {SELF_SERVE_TIMEOUT_S // 60}m; the request "
-          f"stays pending for `st fleet tend`.", file=sys.stderr)
+    # aegis-cch: an idle pane holding a background shell timed out as "never
+    # idle", which reads as a busy agent and sent the diagnosis to stop-event
+    # traffic. Name what the LAST read saw, so the operator can act on it.
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"  {now} {agent}: {blocker} for {SELF_SERVE_TIMEOUT_S // 60}m; the "
+          f"request stays pending for `st fleet tend`.", file=sys.stderr)
     return REFUSED
+
+
+def _self_serve_blocker(read) -> str:
+    """What kept one waiter poll from serving: a live shell, else the pane state."""
+    if read.state in (triage_mod.IDLE, triage_mod.SATURATED) and read.shells:
+        n = read.shells
+        return (f"idle but held by {n} background shell{'s' * (n != 1)} "
+                f"(stop it, or let it exit)")
+    return f"never idle (last read: {read.state})"
 
 
 def _cycle_input_empty(screen: str, card, root=None) -> bool:
