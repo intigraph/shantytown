@@ -12,10 +12,11 @@ calls**. The recording shows the proposed reader, not that separate control.
 Deletion followed by a new reader verifies that a render cannot retain a
 previous assignment indefinitely.
 
-[Recorded output](output.log) and [timing data](timing.log) are retained here as
+[Recorded output](output.log.gz) and [timing data](timing.log) are retained here as
 small, sanitized review artifacts. Playback was checked with `scriptreplay`:
 
 ```sh
+gzip -dc output.log.gz > output.log
 scriptreplay --log-out output.log --log-timing timing.log
 ```
 
