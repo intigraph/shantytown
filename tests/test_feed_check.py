@@ -895,8 +895,23 @@ def test_rule_zero_scope_is_only_used_for_seeds_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(tracker, "feed_rows", lambda owners: seen.append(owners) or result)
     assert feed_check.queue_state(tmp_path, _Reg([]), tracker, owners=["worker"]) == result
     assert seen == [["worker"]]
-    # A general haul consumer must retain the existing complete queue path.
+    # A general haul consumer uses the global lean projection, not owner scope.
+    monkeypatch.setattr(tracker, "priority_rows", lambda **kw: seen.append(None) or ([], []))
     monkeypatch.setattr("shantytown.br.ready", lambda t: [])
     monkeypatch.setattr("shantytown.br.in_progress", lambda t: [])
     assert feed_check.queue_state(tmp_path, _Reg([]), tracker) == ([], [])
-    assert seen == [["worker"]]
+    assert seen == [["worker"], None]
+
+
+def test_global_seeds_queue_keeps_priority_creation_id_order(monkeypatch, tmp_path):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(quipu="https://example.test", prefix="test")
+    def row(id, priority, created):
+        return {"id": id, "priority": priority, "created_at": created}
+    later = row("test-later", 0, "2026-01-02T00:00:00Z")
+    earlier = row("test-earlier", 0, "2026-01-01T00:00:00Z")
+    lower = row("test-lower", 1, "2025-01-01T00:00:00Z")
+    monkeypatch.setattr(tracker, "priority_rows", lambda **kw: ([lower, later, earlier], [later, earlier]))
+    ready, active = feed_check.queue_state(tmp_path, None, tracker)
+    assert [r["id"] for r in ready] == ["test-earlier", "test-later", "test-lower"]
+    assert [r["id"] for r in active] == ["test-earlier", "test-later"]
