@@ -1,0 +1,11 @@
+Script started on 2026-10-13 10:43:00-04:00 [COMMAND="bash docs/demos/deferred-reading-list-record.sh" <not executed on terminal>]
+BASE 31605148230d, identical40-day future-gate input:
+Future gate mechanical findings: 0
+Reading report: ABSENT; age coverage UNKNOWN
+Lapsed positive control: 1
+CANDIDATE, same input and command:
+Future gate mechanical findings: 0
+Reading report: CONFIRMED old items: 1 unknown ages: 0
+Lapsed positive control: 1
+
+Script done on 2026-10-13 10:43:00-04:00 [COMMAND_EXIT_CODE="0"]

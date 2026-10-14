@@ -67,6 +67,41 @@ def parse_stamp(value) -> datetime | None:
     return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
+def reading_list(rows, now, *, snapshot_ok=True):
+    """Age is a reading prompt, never permission to release a deferral.
+
+    Consume only tend's already admitted snapshot. Missing touch timestamps stay
+    UNKNOWN rather than silently shrinking the old-work band (aegis-wqc).
+    """
+    report = {"schema": 1, "observed_at": now.isoformat(),
+              "confidence": "CONFIRMED" if snapshot_ok else "UNKNOWN",
+              "scope": "admitted tend deferred snapshot only", "threshold_days": 30,
+              "untouched_30d": [], "age_unknown": []}
+    if not snapshot_ok:
+        report["error"] = "deferred snapshot unreadable"
+        return report
+    for row in rows:
+        if row.get("status") in ("closed", "done"):
+            continue
+        if row.get("status") != "deferred" and not row.get("defer_until"):
+            continue
+        item = {key: row.get(key) for key in ("id", "title", "assignee", "priority")}
+        stamp = parse_stamp(row.get("updated_at"))
+        if stamp is None or stamp > now:
+            item["reason"] = "updated_at missing, malformed or in the future"
+            report["age_unknown"].append(item)
+            continue
+        age = (now - stamp).days
+        if age >= 30:
+            item.update(updated_at=stamp.isoformat(), age_days=age)
+            report["untouched_30d"].append(item)
+    report["untouched_30d"].sort(key=lambda item: (-item["age_days"], str(item["id"])))
+    report["age_unknown"].sort(key=lambda item: str(item["id"]))
+    if report["age_unknown"]:
+        report["confidence"] = "UNKNOWN"
+    return report
+
+
 @dataclass(frozen=True)
 class Condition:
     """A parsed resume condition. `kind` is lowercase; `arg` is verbatim."""

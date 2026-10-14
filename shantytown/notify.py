@@ -1642,6 +1642,21 @@ class DeferralAlerter:
         if now is None:
             now = datetime.now(timezone.utc)
 
+        # Retain the retired weekly sweep's age band without a second board
+        # read, a pane wake or any authority to release work (aegis-wqc).
+        from .files import write_json_atomic
+        reading = pol.reading_list(rows, now, snapshot_ok=not store_error)
+        reading_path = Path(self._root) / "notify" / "deferred-reading-list.json"
+        try:
+            write_json_atomic(reading_path, reading)
+            if reading["untouched_30d"] or store_error:
+                self._log("deferred reading list: "
+                          f"{len(reading['untouched_30d'])} untouched30d+, "
+                          f"{len(reading['age_unknown'])} age UNKNOWN; "
+                          f"{reading['confidence']}; {reading_path}")
+        except OSError as error:
+            self._log(f"deferred reading list: UNKNOWN publication ({error!r})")
+
         # CANNOT TELL, not False. A show() that raises must leave the condition
         # UNTESTABLE — reporting it unmet would be a silent wrong answer, and
         # reporting it met would send the admin to un-defer live work.
