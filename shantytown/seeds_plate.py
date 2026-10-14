@@ -177,7 +177,6 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
 
 @declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
-    branches = []
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
@@ -187,13 +186,22 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                                 _iri(SEEDS + "principal/" + quote(owner, safe="")))]
     if not clauses:
         return True
+    known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
+    branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
         for clause in clauses:
-            branches.append(
-                f"{{ GRAPH {_iri(graph)} {{ {clause} ?s a <{SCHEMA}Action> . "
-                f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?state . "
-                'FILTER(?state IN ("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")) } } }'
-            )
+            # Restrict the candidate relation before joining owners and types.
+            # Missing status and unknown-only status retain the original refusal.
+            for candidate, type_clause in (
+                (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
+                 f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
+                 f"?s a <{SCHEMA}Action> . "),
+                (f"?s a <{SCHEMA}Action> . "
+                 f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?any }} ",
+                 f"?s a <{SCHEMA}Action> . "),
+            ):
+                branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
+                                f"{clause} {type_clause} }} }}")
     return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 

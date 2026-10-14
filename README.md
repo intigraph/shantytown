@@ -153,6 +153,7 @@ Everything the README used to say, and more, lives in [`docs/`](docs/SUMMARY.md)
 | [The CLI](docs/cli.md) | every command, the stop decision, exit codes |
 | [Design](docs/design.md) · [Vision](docs/vision.md) · [Principles](docs/principles.md) | the shape, what it replaces, and how we'd know it failed |
 | [Roles](docs/roles.md) · [Agent card](docs/agent-card.md) · [Harnesses](docs/harnesses.md) · [Adapters](docs/adapters.md) · [Integrations](docs/integrations.md) | identity, the tier, more than one agent program, pluggable everything |
+| [Codex release retention](docs/codex-release-retention.md) | opt-in package cleanup; preserve running versions and session evidence |
 
 ## 📄 Licence
 
