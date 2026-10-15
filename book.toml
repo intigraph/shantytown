@@ -3,8 +3,11 @@ title = "shantytown"
 authors = ["scbrown"]
 language = "en"
 src = "docs"
-description = "A small harness for running a crew of coding agents."
+description = "Agent crews for software delivery and everyday operations on the Quipu stack."
 
 [output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+additional-css = ["custom/css/custom.css"]
 git-repository-url = "https://github.com/scbrown/shantytown"
 edit-url-template = "https://github.com/scbrown/shantytown/edit/main/{path}"
