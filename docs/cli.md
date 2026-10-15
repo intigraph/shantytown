@@ -203,7 +203,8 @@ the lock through the replacement.
 Cycle's publication check counts only commits reachable from that worktree's
 HEAD, so another agent's unpublished branch in the shared repository does not
 block it. It prune-fetches the current branch's tracked remote and any peers
-explicitly marked `remote.<name>.st-push-allowed=true`. Main's upstream is a
+explicitly marked `remote.<name>.st-push-allowed=true`, never a declared mirror
+(`st-push-role=mirror`). Main's upstream is a
 fallback only when neither is configured. Only successfully refreshed peers can
 prove publication; deleted branches and stale refs on skipped or failed remotes
 cannot. Tracking a fork does not require publishing to the original repository.
@@ -2585,6 +2586,17 @@ the default remains 60 seconds. Hooks and publication guards still run.
 A timeout leaves publication indeterminate: read back that peer's exact
 remote destination SHA before deciding whether any retry is needed. Remaining
 peers are not attempted after a timeout, and earlier successful peers stay published.
+
+### Mirror-only remotes
+
+A remote that is advanced only by a mirror protocol, such as a scrubbed public
+copy, is declared with `git config remote.<name>.st-push-role mirror`. `st repo
+push` never contacts it and reports it as `skipped (mirror)`, even if it is also
+marked `st-push-allowed=true`. A mirror never proves publication to the cycle
+loss gate, because its history is rewritten. `st-push-role peer` declares a
+trusted peer, equivalent to `st-push-allowed=true`. Any other role value refuses
+before any remote is contacted, and so does a remote set in which every remote
+is a mirror. Advance a mirror only through its own reviewed mirror sync.
 
 ### Replacing work-item text
 
