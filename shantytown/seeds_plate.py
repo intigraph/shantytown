@@ -728,7 +728,7 @@ def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
                     f'OPTIONAL {{ ?s <{SCHEMA}keywords> ?label }} }} '
                     f'BIND({json.dumps(status)} AS ?status) '
                     f'BIND({json.dumps(graph)} AS ?graph) }}')
-        wire = _query(proof, "SELECT ?graph ?id ?title ?status ?due ?assignee ?label WHERE { "
+        wire = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph ?id ?title ?status ?due ?assignee ?label WHERE { "
                       + " UNION ".join(branches) + " } LIMIT 2000", timeout)["rows"]
         if len(wire) >= 2000:
             raise ValueError("due candidate budget reached")
@@ -741,6 +741,9 @@ def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
                 raise ValueError("incomplete due row")
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", item["id"]):
                 raise ValueError("invalid due identifier")
+            if (item["graph"] not in (proof.graph, proof.graph + "#seeds-ephemeral")
+                    or item.get("subject") != SEEDS + "item/" + quote(item["id"], safe="")):
+                raise ValueError("invalid due subject or graph")
             assignee = item.get("assignee")
             if isinstance(assignee,str) and assignee.startswith(SEEDS + "principal/"):
                 from urllib.parse import unquote
