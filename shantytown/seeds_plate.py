@@ -315,11 +315,24 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 owner_clause = (_feed_owner_clause(feed_owners)
                                 if feed_owners is not None
                                 else (f"?s <{SCHEMA}agent> {term} . " if term else ""))
-                for status in statuses:
+                # Keep owner terms constant for indexed selection. Collapse only
+                # this exact-owner path; roster/feed projections retain their
+                # separately validated query shapes.
+                combine_statuses = agent is not None and feed_owners is None
+                status_terms = (
+                    ("?wanted_status",) if combine_statuses
+                    else tuple(json.dumps(status) for status in statuses)
+                )
+                status_filter = (
+                    "FILTER(?wanted_status IN ("
+                    + ", ".join(json.dumps(status) for status in statuses)
+                    + ")) " if combine_statuses else ""
+                )
+                for status_term in status_terms:
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
-                        f"<{SEEDS}ontology/status> {json.dumps(status)} . "
-                        + (f"?s <{SCHEMA}name> ?title . "
+                        f"<{SEEDS}ontology/status> {status_term} . "
+                        + status_filter + (f"?s <{SCHEMA}name> ?title . "
                            f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
                            if messages_only else "" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
