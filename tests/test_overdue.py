@@ -220,3 +220,35 @@ def test_unknown_unlock_owner_is_not_rerouted(tmp_path):
         events=lambda:Answer.complete_read([dict(id="a-unlock",kind="unlock",episode="event-1",recipient="missing")],how="fixture unlock"),
         deliver=lambda *args:sent.append(args) or True)
     assert a.sweep()==[] and not sent
+
+
+def test_scheduled_delivery_callback_retains_known_receipt():
+    """Exercise the actual nested callback without a fleet run or real sender."""
+    import ast
+    import inspect
+    from shantytown import cli
+    from shantytown.overdue import PendingReceipt
+
+    source = ast.parse(inspect.getsource(cli))
+    callback = next(node for node in ast.walk(source)
+                    if isinstance(node, ast.FunctionDef) and node.name == "deliver_due")
+    sent = []
+    expected = object()
+    def sender(target, card, body, panes, **kwargs):
+        sent.append((target.agent, body))
+        print("delivered to inbox as inbox-receipt-1")
+        return cli.OK
+    namespace = dict(vars(cli), a=SimpleNamespace(agent="original"), panes=None,
+                     _registry=lambda _: Registry(), _inbox_durable=sender,
+                     verify_due_receipt=lambda *args: expected,
+                     PendingReceipt=PendingReceipt)
+    exec(compile(ast.Module(body=[callback], type_ignores=[]), cli.__file__, "exec"), namespace)
+    assert namespace["deliver_due"]("worker", "[marker]", "body") is expected
+    assert sent == [("worker", "[marker] body")]
+
+    def unknown(*args):
+        raise RuntimeError("read unavailable after committed delivery")
+    namespace["verify_due_receipt"] = unknown
+    pending = namespace["deliver_due"]("worker", "[second]", "body")
+    assert isinstance(pending, PendingReceipt)
+    assert pending.identifier == "inbox-receipt-1"
