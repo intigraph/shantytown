@@ -69,3 +69,33 @@ def test_tag_and_trigger_identity_gate(tmp_path, tag, sha, ok):
                             cwd=tmp_path, env=dict(os.environ, PATH=f"{fixture}:{os.environ['PATH']}", RELEASE_TAG=tag,
                             GITHUB_SHA=head if sha == "HEAD" else sha), capture_output=True)
     assert (result.returncode == 0) == ok
+
+
+def job_block(name):
+    """One top-level job's literal lines, ending at the next job key."""
+    lines = WORKFLOW.read_text().splitlines()
+    start = lines.index(f"  {name}:")
+    block = []
+    for line in lines[start + 1:]:
+        if line.startswith("  ") and not line.startswith("   ") and line.rstrip().endswith(":"):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def test_pypi_upload_waits_for_the_registered_publisher():
+    upload, notice = job_block("pypi"), job_block("pypi-not-registered")
+    assert "vars.PYPI_PUBLISHER_REGISTERED == 'true'" in upload
+    assert "vars.PYPI_PUBLISHER_REGISTERED != 'true'" in notice
+    # Both arms keep the same release/backfill success gate, so exactly one runs.
+    gate = "(needs.release.result == 'success' || needs.pypi-backfill.result == 'success')"
+    assert gate in upload and gate in notice
+    # Only the upload job may mint an OIDC token; the notice job has no permissions.
+    assert WORKFLOW.read_text().count("id-token: write") == 1 and "id-token: write" in upload
+    assert "permissions: {}" in notice and "environment:" not in notice
+
+
+def test_unregistered_publisher_skip_is_a_visible_notice():
+    result = subprocess.run(["bash", "-c", step_script("Skip PyPI until the Trusted Publisher is registered")],
+                            capture_output=True, text=True, check=True)
+    assert result.stdout.startswith("::notice title=PyPI upload skipped::")
