@@ -602,6 +602,49 @@ def test_exec_timeout_kills_the_command_and_fails_the_run(tmp_path):
     assert res["end"] - res["start"] < 3
 
 
+def _fake_systemd_run(tmp_path) -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tool = bin_dir / "systemd-run"
+    tool.write_text("#!/bin/sh\nexit 0\n")
+    tool.chmod(0o755)
+    return bin_dir
+
+
+def test_a_runner_under_systemd_leaves_the_tend_units_cgroup(tmp_path, monkeypatch):
+    # aegis-db3: a new SESSION is not a new cgroup. When the oneshot tend pass
+    # ended, systemd killed the "detached" runner 16s into an hourly sweep.
+    bin_dir = _fake_systemd_run(tmp_path)
+    seen = {}
+
+    def popen(argv, **kw):
+        seen["argv"] = argv
+        return SimpleNamespace(pid=4242)
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    env = {"INVOCATION_ID": "abc", "XDG_RUNTIME_DIR": "/run/user/1000", "PATH": str(bin_dir)}
+    pid = jobs._spawn_detached(["true"], 60, tmp_path / "sweep.result.json",
+                               tmp_path / "sweep.log", env, str(tmp_path))
+    assert pid == 4242
+    argv = seen["argv"]
+    assert argv[:5] == [str(bin_dir / "systemd-run"), "--user", "--scope", "--quiet", "--collect"]
+    assert argv[5].startswith("--unit=st-job-sweep.result-")
+    assert argv[6:9] == [jobs.sys.executable, "-m", "shantytown.jobs"]
+
+
+@pytest.mark.parametrize("env", [
+    {"XDG_RUNTIME_DIR": "/run/user/1000"},             # not inside a systemd unit
+    {"INVOCATION_ID": "abc"},                          # no user manager to ask
+    {"INVOCATION_ID": "abc", "XDG_RUNTIME_DIR": "/run/user/1000", "PATH": "/nonexistent"},
+])
+def test_outside_systemd_the_runner_starts_exactly_as_before(tmp_path, monkeypatch, env):
+    seen = {}
+    monkeypatch.setattr(jobs.subprocess, "Popen",
+                        lambda argv, **kw: seen.setdefault("argv", argv) and SimpleNamespace(pid=1))
+    jobs._spawn_detached(["true"], 60, tmp_path / "x.result.json", tmp_path / "x.log",
+                         env, str(tmp_path))
+    assert seen["argv"][0] == jobs.sys.executable
+
+
 def test_a_runner_that_died_without_a_result_is_a_failure_not_a_hang(tmp_path):
     _write(tmp_path, "sh", '[trigger]\nevery = "1h"\n[action]\nexec = "true"\n[retry]\nmax = 0\n')
     r = jobs.Runner(tmp_path, now=_Clock(1_000_000), spawn=lambda *a: 999_999_999,

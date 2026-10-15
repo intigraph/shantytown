@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -914,8 +915,32 @@ def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> di
             out.close()
 
 
+def _escape_unit(result_path: Path, env) -> list:
+    """The prefix that moves a detached runner out of the calling unit's cgroup.
+
+    A new session is not a new cgroup. Tend runs as a systemd oneshot service,
+    and when the pass ends systemd kills every process left in the service's
+    cgroup (KillMode=control-group), the "detached" runner included. The job is
+    cut off mid-run and recorded as "exited without a result" (aegis-db3: an
+    hourly sweep killed 16s and 29s into its run, twice). Under systemd, start
+    the runner in its own transient scope. `systemd-run --scope` execs the
+    command, so the pid returned is still the runner's. Outside systemd, or
+    with no systemd-run, nothing changes.
+    """
+    e = os.environ if env is None else env
+    if not e.get("INVOCATION_ID") or not e.get("XDG_RUNTIME_DIR"):
+        return []
+    tool = shutil.which("systemd-run", path=e.get("PATH"))
+    if not tool:
+        return []
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", result_path.stem)[:64]
+    return [tool, "--user", "--scope", "--quiet", "--collect",
+            f"--unit=st-job-{name}-{int(time.time() * 1000)}"]
+
+
 def _spawn_detached(argv, timeout_s, result_path: Path, log_path: Path, env, cwd) -> int:
-    child = [sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
+    child = [*_escape_unit(Path(result_path), env),
+             sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
              str(timeout_s), str(log_path), "--", *argv]
     proc = subprocess.Popen(child, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, env=env, cwd=cwd,
