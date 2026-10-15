@@ -1,0 +1,10 @@
+{
+  "target": "candidate source / isolated read and delivery sink",
+  "first_pass_recipients": [
+    "worker"
+  ],
+  "second_pass_recipients": [],
+  "actual_messages": 1,
+  "message": "Work reminders (112 overdue, 0 unlocked): example-0, example-1, example-10, example-100, example-101. Close, re-rank, or re-date with a reason. Full digest: notify/overdue.json.",
+  "production_delivery": "not invoked"
+}

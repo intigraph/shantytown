@@ -120,3 +120,16 @@ they take precedence over this file where the two overlap.
 ## Licence
 
 MIT — see `LICENSE`. Contributions are accepted under the same licence.
+
+## Pull request and squash titles
+
+Use `type: summary` or `type(scope): summary`, with an optional `!` before
+the colon for a breaking change. Supported types are `feat`, `fix`, `perf`,
+`refactor`, `docs`, `test`, `chore`, `ci`, and `build`. For example,
+`fix(inbox): retain unread messages on a failed close`.
+
+The required CI test jobs validate the PR title, including after title edits.
+The repository squash setting must be **Pull request title** (`PR_TITLE`) so
+a single-commit PR also uses the validated title. Keep this setting when changing
+repository merge options. All supported types have visible release-note sections;
+`test:` and maintenance changes are included as well as features and fixes.

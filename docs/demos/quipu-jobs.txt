@@ -1,0 +1,22 @@
+Synthetic source CLI fixture; real output, no runtime installation.
+Base: 66284bdd8000c785d35a5bb4cc35cd26803bf62c
+
+BASE
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:review list
+usage: st work jobs [-h] {list,check,run,history} ...
+st work jobs: error: argument jobs_sub: invalid choice: 'urn:example:catalogue' (choose from list, check, run, history)
+exit=2
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:removed list
+usage: st work jobs [-h] {list,check,run,history} ...
+st work jobs: error: argument jobs_sub: invalid choice: 'urn:example:catalogue' (choose from list, check, run, history)
+exit=2
+
+CANDIDATE
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:review list
+Quipu declarations only; executable admission and signed run status are UNKNOWN.
+Membership coverage: 1 required identities verified
+  review  enabled  every 600s  timezone UTC  host urn:example:host  revision revision1  target urn:example:manifest:revision1
+exit=0
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:removed list
+cannot tell: required job identities missing: urn:example:removed
+exit=2

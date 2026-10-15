@@ -1792,6 +1792,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
                            "list | check [name] | run <name> | history [name]")
+    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph; "
+                    "list/check only until the signed execution lane is enabled")
+    jb.add_argument("--expect-job", action="append", default=[], metavar="IRI",
+                    help="require a known job identity in the graph (repeatable); "
+                         "detects deletion independently of other valid declarations")
+    jb.add_argument("--json", action="store_true",
+                    help="versioned declarations-only JSON; requires --graph")
     jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
     jb_sub.add_parser("list", help="every job: trigger, next due, last result")
     jb_check = jb_sub.add_parser(
@@ -2113,8 +2120,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "uncommitted or unpushed work")
 
     ph = leaf("push",
-                        help="push your worktree branch to EVERY remote — the "
-                             "repo has two live peers and pushing one forks it")
+                        help="push your worktree branch to EVERY peer remote — "
+                             "the repo has two live peers and pushing one forks "
+                             "it; declared mirrors (st-push-role=mirror) are "
+                             "never pushed")
     ph.add_argument("repo",
                     help="the shared checkout: a path, or a bare name under "
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
@@ -6027,7 +6036,8 @@ def _cmd_anchor(a) -> int:
             _mcp = tuple(codex_mcp_approve_servers(a.root))
         except Exception:
             _mcp = ()
-        p = do_anchor(me, registry, panes, plate=_plate(a),
+        _anchor_tracker = _tracker(a)
+        p = do_anchor(me, registry, panes, plate=_plate(a, tracker=_anchor_tracker),
                       lead_status=_lead_status(registry, panes),
                       harness=_hn, mcp_preapproved=_mcp)
     except LookupError as e:
@@ -6076,6 +6086,10 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import due_brief
+    p.decision_view = due_brief.render(due_brief.load(
+        _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
+        fleet=p.me.role == "administrator")
     print()
     print(p.render())
     from . import context_hint
@@ -10421,15 +10435,21 @@ def _cmd_push(a) -> int:
         return REFUSED
 
     for o in outcomes:
-        if o.ok:
+        if o.skipped:
+            print(f"  {o.remote}: skipped (mirror) — {o.reason}")
+        elif o.ok:
             print(f"  {o.remote}: {'already current' if o.up_to_date else 'pushed'}"
                   f" {branch} -> {a.branch}")
         else:
             print(f"  ⚠ {o.reason}", file=sys.stderr)
 
+    if not any(o.ok and not o.skipped for o in outcomes) and not any(
+            not o.ok for o in outcomes):
+        print("  refused: no remote received the push.", file=sys.stderr)
+        return REFUSED
     refused = [o for o in outcomes if not o.ok]
     if refused:
-        landed = [o.remote for o in outcomes if o.ok]
+        landed = [o.remote for o in outcomes if o.ok and not o.skipped]
         if landed:
             # SAY THIS OUT LOUD. A partial push is the state most likely to be
             # misread as "the push failed" and retried blindly, and the remotes
@@ -11918,6 +11938,50 @@ def _jobs_sweep(a) -> list[str]:
     return _jobs_runner(a).sweep()
 
 
+def _cmd_declared_jobs(a, verb) -> int:
+    """Explicit graph read surface; never fall back to local executors/history."""
+    from . import quipu_jobs
+    if verb not in {"list", "check"}:
+        print("refused: graph jobs require the signed execution/history lane; "
+              "local TOML execution and history are separate", file=sys.stderr)
+        return REFUSED
+    try:
+        jobs = quipu_jobs.JobCatalogue(a.graph, root=a.root).read()
+        required = set(getattr(a, "expect_job", ()) or ())
+        missing = required - {job.iri for job in jobs}
+        if missing:
+            raise quipu_jobs.JobRefused("required job identities missing: " + ", ".join(sorted(missing)))
+    except (quipu_jobs.JobsUnavailable, quipu_jobs.JobRefused) as exc:
+        print(f"cannot tell: {exc}", file=sys.stderr)
+        return CANNOT_TELL
+    selected = [job for job in jobs if not getattr(a, "name", None) or job.name == a.name]
+    if not selected:
+        print(f"refused: no declared job {a.name!r}", file=sys.stderr)
+        return REFUSED
+    if getattr(a, "json", False):
+        from dataclasses import asdict
+        print(json.dumps({
+            "schema_version": 1, "graph": a.graph, "source": "declarations_only",
+            "executable_admission": "UNKNOWN", "signed_run_status": "UNKNOWN",
+            "firing_eligibility": "UNKNOWN",
+            "membership": {"status": "required_identities_verified" if required else "UNKNOWN",
+                           "required": sorted(required)},
+            "jobs": [asdict(job) for job in selected],
+        }, sort_keys=True))
+        return CANNOT_TELL if verb == "check" else OK
+    print("Quipu declarations only; executable admission and signed run status are UNKNOWN.")
+    print("Membership coverage: " + (f"{len(required)} required identities verified" if required
+                                     else "UNKNOWN (no --expect-job controls supplied)"))
+    for job in selected:
+        print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
+              f"every {job.interval_s}s  timezone {job.timezone}  "
+              f"host {job.host}  revision {job.revision}  target {job.target}")
+    if verb == "check":
+        print("Declarations validated; firing eligibility is UNKNOWN until runtime admission.")
+        return CANNOT_TELL
+    return OK
+
+
 def _cmd_jobs(a) -> int:
     """st work jobs [list] | check [name] | run <name> | history [name].
 
@@ -11928,6 +11992,11 @@ def _cmd_jobs(a) -> int:
     """
     from . import jobs as jobs_mod
     verb = getattr(a, "jobs_sub", None) or "list"
+    if getattr(a, "graph", None):
+        return _cmd_declared_jobs(a, verb)
+    if getattr(a, "expect_job", None) or getattr(a, "json", False):
+        print("refused: --expect-job and --json require --graph", file=sys.stderr)
+        return REFUSED
     jobs, errors = jobs_mod.load(a.root)
     by_name = {j.name: j for j in jobs}
     for e in errors:
@@ -12839,6 +12908,60 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} item(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
+        # aegis-873: one crossing reminder then daily, on this original schedule.
+        if cfg.overdue_enabled:
+            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
+            from .feed_check import backend_adapter
+            def verify_due_receipt(recipient, marker, identifier):
+                from .br import show
+                value = show(_tracker(a, default="beads"),identifier)
+                return verify_inbox_receipt(value,recipient,marker,identifier)
+            def find_due_receipt(recipient, marker, identifier=None):
+                if identifier is not None:
+                    return verify_due_receipt(recipient,marker,identifier)
+                item = _inbox(a, default="beads").find_delivery(recipient,marker)
+                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
+            def deliver_due(recipient, marker, body):
+                from copy import copy
+                from contextlib import redirect_stdout
+                from io import StringIO
+                target = copy(a)
+                target.agent = recipient
+                target.dry_run = False
+                output = StringIO()
+                with redirect_stdout(output):
+                    code = _inbox_durable(target, _registry(a).get(recipient),
+                                         marker + " " + body, panes, sender="st fleet tend")
+                if code != OK:
+                    return None
+                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
+                if match is None:
+                    raise ValueError("known reminder receipt ID unavailable")
+                identifier = match.group(1)
+                try:
+                    return verify_due_receipt(recipient,marker,identifier)
+                except Exception:
+                    return PendingReceipt(identifier)
+            def run_due_reminders():
+                unlock_reader = None
+                if cfg.overdue_external_unlocks:
+                    from .unlock_reader import UnlockReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("external unlocks require the selected Seeds producer")
+                    unlock_reader = UnlockReader(selected,Path(a.root))
+                return OverdueAlerter(
+                    Path(a.root), _registry(a),
+                    read=backend_adapter(Path(a.root), _registry(a)).due_rows,
+                    deliver=deliver_due,
+                    receipt=find_due_receipt,
+                    events=unlock_reader.events if unlock_reader is not None else None,
+                    ack=unlock_reader.ack if unlock_reader is not None else None,
+                    log=_log).sweep()
+            overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
+            if overdue_sent:
+                print(f"  overdue digest delivered to {', '.join(overdue_sent)}", file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
         # A blocked bead at least appears in `br list --status blocked`; a
         # deferred one is excluded from `br ready` BY DESIGN, so hauls,

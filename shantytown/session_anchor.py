@@ -46,12 +46,12 @@ _ALL = (
     "    Execute the plate item now; there is no one downstream to hand it to.",
     "    Measure the current state on the item before you change anything.",
     "    When done: close it with a falsifiable reason (before -> after), report",
-    "    to your lead (`st inbox -d <lead> ...`), then take the next item.",
+    "    to your lead (`st inbox -d <lead> ...`), then consult Top of your plate and Coming due.",
     "    Never block your pane on a question: record it on the item, recommend.",
 )
 # No `st ready`: st has no such verb, and the tracker's ready command is
 # deployment-specific. test_every_injected_st_verb_is_real pins this.
-_EMPTY = "    Plate empty: `st inbox <you>`, then ask your lead for work."
+_EMPTY = "    Plate empty: consult Top of your plate and Coming due, then your lead."
 _BY_ROLE = {
     "lead": ("    As a lead, sweep YOUR OWN plate before feeding reports from the pool.",),
     "administrator": ("    As the administrator, drain stop events and feed idle agents first.",),
@@ -123,7 +123,7 @@ def render(root: str, agent: str) -> str:
                 f"(anchor exit {rc}). Run `st anchor` before you pick up work.")
     m = _ROLE_RE.search(text)
     role = m.group(1) if m else ""
-    empty = "ON YOUR PLATE\n    nothing." in text
+    empty = "ON YOUR PLATE\n    nothing." in text or "Current work: nothing." in text
     stale = "\n      STALE PLATE:" in text
     return "\n".join((BANNER, text.rstrip(), "",
                        "\n".join(startup_lines(role, empty, stale))))

@@ -602,6 +602,98 @@ def test_exec_timeout_kills_the_command_and_fails_the_run(tmp_path):
     assert res["end"] - res["start"] < 3
 
 
+def _fake_systemd_run(tmp_path, version="systemd 259 (259.5)") -> Path:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    tool = bin_dir / "systemd-run"
+    tool.write_text(f"#!/bin/sh\n[ \"$1\" = --version ] && echo '{version}'\nexit 0\n")
+    tool.chmod(0o755)
+    jobs._SYSTEMD_VERSIONS.pop(str(tool), None)
+    jobs._systemd_version(str(tool))   # read now, before a test patches Popen
+    return bin_dir
+
+
+def _spawned_argv(tmp_path, monkeypatch, env, job_argv=("true",)):
+    seen = {}
+
+    def popen(argv, **kw):
+        seen["argv"] = argv
+        return SimpleNamespace(pid=4242)
+    monkeypatch.setattr(jobs.subprocess, "Popen", popen)
+    pid = jobs._spawn_detached(list(job_argv), 60, tmp_path / "sweep.result.json",
+                               tmp_path / "sweep.log", env, str(tmp_path))
+    assert pid == 4242
+    return seen["argv"]
+
+
+def _systemd_env(bin_dir):
+    return {"INVOCATION_ID": "abc", "XDG_RUNTIME_DIR": "/run/user/1000", "PATH": str(bin_dir)}
+
+
+def test_a_runner_under_systemd_leaves_the_tend_units_cgroup(tmp_path, monkeypatch):
+    # aegis-db3: a new SESSION is not a new cgroup. When the oneshot tend pass
+    # ended, systemd killed the "detached" runner 16s into an hourly sweep.
+    bin_dir = _fake_systemd_run(tmp_path)
+    argv = _spawned_argv(tmp_path, monkeypatch, _systemd_env(bin_dir), ["sh", "-c", "echo ${USER} $$"])
+    assert argv[:5] == [str(bin_dir / "systemd-run"), "--user", "--scope", "--quiet", "--collect"]
+    assert argv[5].startswith("--unit=st-job-sweep.result-")
+    # Without this, systemd-run rewrites the job's own argv: ${USER} -> braino, $$ -> $.
+    assert argv[6] == "--expand-environment=no"
+    assert argv[7:10] == [jobs.sys.executable, "-m", "shantytown.jobs"]
+    assert argv[-3:] == ["sh", "-c", "echo ${USER} $$"]
+
+
+def test_an_older_systemd_gets_the_scope_and_the_argv_untouched(tmp_path, monkeypatch):
+    # Before 254 systemd-run neither expands nor knows the flag; escaping `$`
+    # there was measured to double it (CI runner, real tool).
+    bin_dir = _fake_systemd_run(tmp_path, version="systemd 249 (249.11)")
+    argv = _spawned_argv(tmp_path, monkeypatch, _systemd_env(bin_dir), ["sh", "-c", "echo ${USER} $$"])
+    assert argv[:3] == [str(bin_dir / "systemd-run"), "--user", "--scope"]
+    assert "--expand-environment=no" not in argv
+    assert argv[-3:] == ["sh", "-c", "echo ${USER} $$"]
+
+
+def test_an_unreadable_systemd_version_keeps_the_old_spawn(tmp_path, monkeypatch):
+    bin_dir = _fake_systemd_run(tmp_path, version="not systemd")
+    argv = _spawned_argv(tmp_path, monkeypatch, _systemd_env(bin_dir))
+    assert argv[0] == jobs.sys.executable
+
+
+@pytest.mark.parametrize("env", [
+    {"XDG_RUNTIME_DIR": "/run/user/1000"},             # not inside a systemd unit
+    {"INVOCATION_ID": "abc"},                          # no user manager to ask
+    {"INVOCATION_ID": "abc", "XDG_RUNTIME_DIR": "/run/user/1000", "PATH": "/nonexistent"},
+])
+def test_outside_systemd_the_runner_starts_exactly_as_before(tmp_path, monkeypatch, env):
+    assert _spawned_argv(tmp_path, monkeypatch, env)[0] == jobs.sys.executable
+
+
+def _user_bus():
+    """The real user manager's bus, which the suite's own env may point away from."""
+    import os
+    import shutil
+    run = Path(f"/run/user/{os.getuid()}")
+    if shutil.which("systemd-run") and (run / "bus").is_socket():
+        return run
+    return None
+
+
+@pytest.mark.skipif(_user_bus() is None, reason="needs a systemd user manager")
+def test_real_systemd_run_passes_the_job_argv_byte_identical(tmp_path):
+    import os
+    import subprocess
+    run = _user_bus()
+    env = dict(os.environ, INVOCATION_ID="test", XDG_RUNTIME_DIR=str(run),
+               DBUS_SESSION_BUS_ADDRESS=f"unix:path={run / 'bus'}")
+    prefix = jobs._escape_unit(tmp_path / "argv.result.json", env)
+    assert prefix, "a reachable user manager must produce a scope prefix"
+    job = ["${USER}", "$$", "$HOME", "a b", "q'uote", "back\\slash", "ends$"]
+    runner = [jobs.sys.executable, "-c", "import json,sys; print(json.dumps(sys.argv[1:]))", *job]
+    r = subprocess.run([*prefix, *runner], capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == job
+
+
 def test_a_runner_that_died_without_a_result_is_a_failure_not_a_hang(tmp_path):
     _write(tmp_path, "sh", '[trigger]\nevery = "1h"\n[action]\nexec = "true"\n[retry]\nmax = 0\n')
     r = jobs.Runner(tmp_path, now=_Clock(1_000_000), spawn=lambda *a: 999_999_999,

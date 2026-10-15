@@ -5,6 +5,46 @@ run the repo patrol*; *when someone outside the project opens a PR, create a
 triage item and hand it to an agent*. One TOML file per job lives in
 `<root>/jobs/`, and `st fleet tend` evaluates every job on each pass.
 
+## Read Quipu declarations
+
+The explicit graph read surface is available while signed execution is being
+integrated. It does not select an execution backend or change the tend sweep:
+
+```sh
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review list
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review --json list
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review check review
+```
+
+The graph must contain the opt-in Quechua scheduled-jobs profile: an Event links
+an Action through `schema:potentialAction` and a Schedule through
+`schema:eventSchedule`. The reader requires explicit RDF types, revision,
+owner, host, target, enabled state, timezone, anchor and a fixed interval of at
+least sixty seconds. Calendar qualifiers and ambiguous times are refused.
+Disabled declarations stay visible. Multiple schedules per job require a future
+explicit overlap admission and are currently refused.
+
+`list` reports declarations, without asserting executable admission or signed
+run health. `check` validates declarations and exits 2 because firing eligibility
+is not yet available. `run` and `history` refuse in graph mode rather than using
+local commands or local run records. An unavailable, empty, truncated or invalid
+catalogue also exits 2; there is no TOML fallback. A nonempty graph alone cannot
+prove every expected job exists. Repeat `--expect-job` for known identities to
+make deletion of one job fail even when other declarations remain valid; without
+these controls the command explicitly reports membership coverage as UNKNOWN.
+
+For adapters in another process, put `--json` before `list` or `check`. The
+versioned object contains `schema_version: 1`, the selected graph, typed `jobs`,
+and explicit `UNKNOWN` runtime verdicts. `membership.required` lists only the
+identity controls actually checked; `required_identities_verified` does not
+claim the complete host inventory was supplied. Without controls membership
+stays `UNKNOWN`. Errors emit no catalogue object and retain their nonzero exit
+status; JSON without `--graph` refuses before reading local TOML.
+
+This source capability does not load the profile into a server, register a
+signing key, fire a schedule or retire an existing cron job. Calls without
+`--graph` retain the existing TOML behavior below.
+
 ## Why it is shaped like this
 
 Before this, every recurring job was one of two things. Some were sweeps
