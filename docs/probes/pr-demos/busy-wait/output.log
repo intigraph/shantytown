@@ -1,0 +1,23 @@
+Script started on 2026-10-15 14:18:41-04:00 [COMMAND="python3 docs/probes/pr-demos/busy-wait/record.py" <not executed on terminal>]
+BEFORE: observe a live idle pane with eight short-deferred items
+{
+  "fixture_kind": "eight modeled observations, not historical replay",
+  "short_deferred_rows": 8,
+  "observations": 8,
+  "false_rule_zero_blocks": 8,
+  "free": [
+    "worker"
+  ]
+}
+{"empty_plate_positive_control_blocks": true}
+AFTER: observe a live idle pane with eight short-deferred items
+{
+  "fixture_kind": "eight modeled observations, not historical replay",
+  "short_deferred_rows": 8,
+  "observations": 8,
+  "false_rule_zero_blocks": 0,
+  "free": []
+}
+{"empty_plate_positive_control_blocks": true}
+
+Script done on 2026-10-15 14:18:42-04:00 [COMMAND_EXIT_CODE="0"]
