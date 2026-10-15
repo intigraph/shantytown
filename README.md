@@ -1,167 +1,172 @@
-<div align="center">
+<p align="center"><img src="assets/logo.svg" alt="shantytown" width="200"/></p>
+<h1 align="center">shantytown</h1>
+<p align="center"><em>🏭 Ship software and organize everyday work with a crew of AI agents.</em></p>
+<p align="center">
+<a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"/></a>
+<a href="https://github.com/scbrown/shantytown/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg"/></a>
+<a href="https://github.com/scbrown/caboodle"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
+</p>
 
-<img src="assets/logo.svg" alt="shantytown" width="360"/>
+**A crew of AI agents for shipping software and running everyday operations:
+part of the Quipu stack.** Use it to coordinate a software factory where agents and CI plan, build,
+check and deliver changes, or for personal operations such as research and
+follow-up work. You supply the goals, tools and access; the same work items,
+ownership and controls organize both. Quipu integration is optional.
 
+## Why you would want it
 
-# shantytown
+- Keep a software delivery crew on track: give work an owner, respect busy
+  sessions, and connect the crew to your repository's checks and review policy.
+- Organize everyday responsibilities with the same tasks and shared context;
+  configure the workflows and information your crew needs.
+- Run work by hand, on a schedule or after an event, with explicit capacity
+  limits and a recorded outcome. See the [book](https://scbrown.github.io/shantytown/).
 
-**A small harness for running a crew of coding agents.**
+## Install
 
-*Create a work item. Tell an agent to go get it. That's the whole idea.*
+Python 3.11+, [pipx](https://pipx.pypa.io/) and `tmux` are prerequisites.
+Install the verified wheel from the [latest release](https://github.com/scbrown/shantytown/releases/latest):
 
-[![dispatch 3.4s](https://img.shields.io/badge/dispatch-3.4s-brightgreen)](docs/why.md#-measured-against-gas-town)
-[![43 commands](https://img.shields.io/badge/commands-43-blue)](#-the-whole-surface)
-[![tests](https://img.shields.io/badge/tests-5480%20passing-blue)](docs/principles.md)
-[![python](https://img.shields.io/badge/python-3.11%2B-blue)](#-install)
-[![dependencies none](https://img.shields.io/badge/dependencies-none-blue)](#-install)
-[![license MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-
-</div>
-
-```bash
-st task "fix the login timeout"      # → st-1
-st inbox ada "go read st-1"           # → straight into ada's pane
-st crew                              # → who's up, who's on what
+```sh
+curl -fLO https://github.com/scbrown/shantytown/releases/download/v0.7.1/shantytown-0.7.1-py3-none-any.whl
+curl -fLO https://github.com/scbrown/shantytown/releases/download/v0.7.1/SHA256SUMS
+grep 'shantytown-0.7.1-py3-none-any.whl$' SHA256SUMS | shasum -a 256 -c
+pipx install ./shantytown-0.7.1-py3-none-any.whl
+st --version
 ```
 
-Three steps: **create → send → fetch.** No resident daemon. No broker. No queue — just a
-thin harness plus an orchestration layer that prioritizes work and reacts to
-governed events (see [Workflows & events](docs/workflows.md)).
+The release reports `st 0.7.1`. To install from source instead:
 
-> **Where this came from.** Shantytown was written by someone who runs a
-> [Gas Town](https://github.com/gastownhall/gastown) fleet daily — it is not a rival pitch from
-> outside, it is the smaller thing that fell out of operating one. Gas Town is built for a world
-> with an orchestration tier. Some days the job is just *"give that agent this ticket"*, and on
-> those days a whole town is more than the work needs. This is what's left when you keep only that.
+```sh
+git clone https://github.com/scbrown/shantytown
+pipx install ./shantytown
+```
 
-## 🖥️ One dispatch, end to end
+Choose an installed [agent harness](https://scbrown.github.io/shantytown/harnesses.html)
+and configure a tracker in [Getting started](https://scbrown.github.io/shantytown/getting-started.html).
+
+## First success in three commands
+
+Preview a two-agent crew in an empty directory. This writes nothing and launches no session:
+
+```sh
+mkdir shantytown-demo && cd shantytown-demo
+st --root .shanty --backend files fleet init -y --admin coordinator --crew builder --dry-run
+```
+
+Expected preview:
 
 ```text
-$ st task "fix the login timeout"
-  st-1    fix the login timeout
+  store    .shanty
+  dir      crew/
+  dir      settings/
+  dir      events/
+  dir      launched/
+  card     coordinator  administrator  pane st-coordinator
+  card     builder      worker         pane st-builder
+  hooks    settings/administrator.settings.json
+  hooks    settings/worker.settings.json
+  permissions for NEW cards: MANUAL (approval prompts enabled)
+  config   .shanty/shantytown.toml
 
-$ st go st-1 ada
-  st-1 -> ada          in progress
-  sent to pane crew-ada
+  2 agent(s) · startup mode 'lite' · hibernate off
 
-$ st go st-2 ada
-  refused: pane not ready — REFUSE   in-flight work
-         inputs: marker='esc to interrupt' pane='crew-ada'
-$ echo $?
-1
+  --dry-run: nothing written.
 ```
 
-Dispatch consults triage and **refuses** rather than typing over an agent's in-flight work. Every
-writing command has `--dry-run`, and exit codes mean one thing each: `0` did it, `1` refused, `2`
-could not tell. The longer walk-through, including boot modes and the anchor, is in the
-[book](docs/tour.md).
+The preview shows the crew, hooks and approval mode before you commit to running it.
+Follow [Getting started](https://scbrown.github.io/shantytown/getting-started.html) to create and launch the crew.
 
-## 🧱 The whole surface
+## On your own code
 
-```
-st task <title>                   create work, get an id back
-st go <item> <agent>              dispatch. the one that matters. the agent is named, never guessed.
-st sling <bead>                  hand a beaded design to the executive for scheduling.
-st inbox <agent> <message>        a message into a pane. send-keys, nothing more.
-st crew                           who exists, what state, tree roles and deployment traits
-st anchor                         who am I, what's on my plate      ← the anchor
-st attach [agent]                 attach to a crew member — STARTING them if down (socket + pane resolved)
-st work                           the item and the board
-  item <show|update|comment|close> <id>
-                              exact-ID operations on the configured work tracker
-  repool <item>                   hand an item back: status -> open AND assignee cleared, verified
-  defer <item> <kind> --reason-file <path|->
-                                  park it with one blocker-kind label + durable reason, verified
-  cost [bead] [--sync]            parser-owned cost reads and closed-bead/metric publication
-  triage [item ...]             preview Jev board suggestions; --publish comments only
-  dream [--run]                   inspect or run one bounded spare-capacity reflection cycle
-  jobs [list|check|run|history]   declared cron/interval/event jobs, evaluated by `st fleet tend`
-st agent                          one agent
-  new <agent>                     create an agent from a card
-  stop <agent>                    stop it
-  harness <agent> [claude|codex]  convert one agent to another harness. Prints the card's
-                                  harness when the target is omitted
-  account <agent> [name]          select account, harness and default model; --now queues a safe cycle
-  cycle <agent> [--self]          clear context WITHOUT destroying the runtime: checkpoint ->
-                                  stop -> relaunch -> re-dispatch (/clear drops bypass; this keeps it)
-  advise <agent> [--related P]    keep or cycle at a handoff: depth + cache TTL, plus a
-                                  relatedness signal anything outside st may post
-  input <agent>                   what's in their input box: EMPTY | TYPED | GHOST (never submits)
-  ask <agent>                     the question they're blocked on, options read verbatim
-  answer <agent> <N>              select option N. refuses unless a picker is really up
-  log [agent]                     what happened
-  history <agent>                 captured transcripts: what was archived, and
-                                  whether the source still exists
-  stats [agent]                   files/skills plus provider tokens and cache dimensions
-st fleet                          the whole crew
-  start [--mode lite|heavy]       BOOT the town: the admin alone, or every card. idempotent.
-  tend                            supervise the crew: respawn what DIED, never what was RETIRED
-  roles [--check|set|sync]        the hierarchy: show it, verify it, write it, import it
-  init                            scaffold a NEW deployment: asks, then writes store+cards+config
-  hold gaming [--clear|--status]  hold local launches during a gaming session
-  window plan <id>                snapshot + acquire one maintenance transaction
-  window drain|clear|release|abort <id>
-                                  drain and restore exactly that snapshot
-  dashboard [admin]               live, tier-scoped view: roster/state/work, self-refreshing
-  watch [--peer|--metrics]        one liveness pass on the PEER host's administrator
-st repo                           a shared project repo
-  worktree <repo> [agent]         provision an agent's isolated worktree off a SHARED project repo
-  push <repo> [agent] --branch <destination>  push wt/<agent> to EVERY remote; requires explicit destination
-  context <query>                 what code should I be looking at?
-  pr <owner/repo> --bead <id>      complete overlap inventory; --create records decisions then creates
-st ops                            the installation
-  doctor [--install]              what's installed, what's stale, what's missing
-  provision [agent]           register Quipu tooling for local crew without launching
-  subscribe                       watch quipu entity events; route governed workflows to the admin
-  hooks <register|list|check>     keep tools' registered hook bundles rendered, and check they are
-  help <topic>                    rationale pages: handoff/cycle, haul, inbox
-```
+With a configured project and crew, use the ID returned by your tracker in place of `st-1`:
 
-Forty-three, and the count is load-bearing: seven verbs and thirty-six grouped commands under five
-groups, and a test pins this block AND this sentence to the parser, so the next command either updates
-both or fails CI. A group is a namespace, not a command; it earns no slot. The flat spellings from
-before the grouping (st cycle for st agent cycle, and so on) still work for two releases and say so on
-stderr.
-
-## 📦 Install
-
-```bash
-git clone https://github.com/scbrown/shantytown && cd shantytown
-pip install -e .
-st ops doctor            # what's installed, what's stale, what's missing
-st fleet init              # five questions, then a town: cards, hooks, config
-st fleet start && st attach
-```
-
-Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend is optional — the files
-tracker needs nothing at all; `beads`, its Rust port `br`, and a Forgejo issue tracker plug in with
-`--backend` or one line of `[env]`. Everything after that — modes, hibernate, the tmux socket, a
-second host, the governor, every environment variable — is in
-[Getting started](docs/getting-started.md) and [Configuration](docs/configuration.md).
-
-## 📚 The book
-
-Everything the README used to say, and more, lives in [`docs/`](docs/SUMMARY.md) as an mdbook:
-
-| chapter | what it answers |
+| question | command |
 |---|---|
-| [Why Shantytown?](docs/why.md) | the honest comparison, and the numbers measured against `gt sling` |
-| [Features](docs/features.md) | what it does, including what landed after the pitch was written |
-| [Routing](docs/routing.md) | `st inbox` *is* `tmux send-keys`, and what that buys |
-| [Workflows & events](docs/workflows.md) | prioritized workflows at the admin's stop; governed Quipu events |
-| [Getting started](docs/getting-started.md) · [Configuration](docs/configuration.md) | `st fleet init`, boot modes, every table and env var |
-| [The CLI](docs/cli.md) | every command, the stop decision, exit codes |
-| [Design](docs/design.md) · [Vision](docs/vision.md) · [Principles](docs/principles.md) | the shape, what it replaces, and how we'd know it failed |
-| [Roles](docs/roles.md) · [Agent card](docs/agent-card.md) · [Harnesses](docs/harnesses.md) · [Adapters](docs/adapters.md) · [Integrations](docs/integrations.md) | identity, the tier, more than one agent program, pluggable everything |
-| [Codex release retention](docs/codex-release-retention.md) | opt-in package cleanup; preserve running versions and session evidence |
+| What does this item need? | `st work item show st-1` |
+| Create a task | `st task "check the next release"` |
+| Give it to an agent | `st go st-1 builder` |
+| Who is working on what? | `st crew` |
+| What can this agent do next? | `st anchor builder` |
+| What recurring jobs are declared? | `st work jobs list` |
 
-## 📄 Licence
+The [full CLI reference](https://scbrown.github.io/shantytown/cli.html)
+lists every command and its exit codes.
 
-MIT — see [LICENSE](LICENSE).
+### High-level capabilities
 
----
+- **Work ownership and plate caps:** admit work within configured limits and
+  respect busy sessions.
+- **Software delivery:** connect planning, implementation and review to your
+  repository's CI and delivery rules.
+- **Scheduled and event work:** declare cron, interval or event jobs and
+  arrange regular `st fleet tend` passes with your host scheduler.
+- **Governor:** inspect account/window quota observations, live caps and
+  session ceilings. Eligible handoffs retain their guards, and a gaming-session pause prevents
+  new local work from starting.
 
-<div align="center"><sub>
-Every number here was measured on one host, not estimated.<br>
-<i>A crew of agents, and someone running the town.</i>
-</sub></div>
+**In review:** due-date defaults and coming-due briefs, overdue reminders,
+and scope changes confirmed by the responsible owner. These need release, configuration and verified
+delivery before running crews can rely on them.
+
+The [capability status and measured governor example](https://scbrown.github.io/shantytown/introduction.html#capacity-report-example)
+retain their date, units and UNKNOWNs. Quota percentages and counters do not measure tokens saved.
+
+## Wire it into your agent
+
+Shantytown provisions role instructions and hooks for the selected harness.
+It works with Quipu for shared work and memory, Seeds for Quipu-backed tasks,
+Bobbin for code context, and Yupana for structural checks. Camayoc prepares
+knowledge for Quipu; Desire Path can turn recurring agent mistakes into requests.
+Caboodle installs reviewed tool versions. Chaski reactions and Shuttle workflows
+can supply external event-driven work. These integrations are optional and need
+[configuration](https://scbrown.github.io/shantytown/integrations.html).
+
+## Before you start
+
+- Use Linux or macOS with `tmux`, Python 3.11+ and an authenticated agent CLI.
+- Choose the tracker and registry that fit your project; Quipu is an optional backend.
+- Configure the host scheduler to call `st fleet tend` for recurring work.
+  Jobs run on a pass, within its cadence, rather than at an exact second.
+- Review credentials, account limits and approval mode before unattended work.
+
+## What's next
+
+- [Book home](https://scbrown.github.io/shantytown/)
+- [Documentation map](https://scbrown.github.io/shantytown/map.html)
+- [Getting started](https://scbrown.github.io/shantytown/getting-started.html)
+
+## 🧺 The stack
+
+<!-- stack-table:start -->
+
+The Quipu stack is built around a governed, bitemporal knowledge store: shared
+facts, decisions and work history your agents can query. Quipu can check writes
+against your rules, records where each fact came from, and answers what was true
+when.
+
+| tool | what it gives your agents |
+|---|---|
+| [caboodle](https://github.com/scbrown/caboodle) | 🧰 Agent Platform Toolkit - installs and configures the quipu stack |
+| [quipu](https://github.com/scbrown/quipu) | stores shared facts with provenance and history; can check writes against your rules |
+| [camayoc](https://github.com/scbrown/camayoc) | prepares knowledge and vocabulary for Quipu, with checks before it is admitted |
+| [bobbin](https://github.com/scbrown/bobbin) | searches your code and can include related knowledge from Quipu |
+| [yupana](https://github.com/scbrown/yupana) | shows code impact and can read policies from Quipu to check changes |
+| [desire-path](https://github.com/scbrown/desire-path) | turns agent mistakes into feature requests; works on its own without Quipu |
+| [seeds](https://github.com/scbrown/seeds) | a work item tracker backed by the Quipu knowledge base |
+| [shantytown](https://github.com/scbrown/shantytown) | runs crews of AI agents on work items, triggered by hand, on a schedule or by events; can share work and memory through Quipu |
+| [shuttle](https://github.com/scbrown/shuttle) | runs signed agent workflows and keeps their records in Quipu |
+
+<!-- stack-table:end -->
+
+## Contributing
+
+```sh
+python3 -m pytest -q
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and validation.
+
+## 📜 License
+
+[MIT](LICENSE)
