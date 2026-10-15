@@ -102,6 +102,24 @@ a dispatch that dispatch will refuse.
 
 ### Inputs, gathered ONCE
 
+A mechanically idle worker is **BUSY_WAITING** for automatic feeding when its
+owned work has a `defer_until` within 60 minutes of the current UTC time, including
+a 60-minute grace after that gate elapses while the item remains deferred. Such
+a worker is excluded from Rule Zero's free-feedable set and from automatic tend
+feeds. An available open, hooked or in-progress item on the same plate still
+allows that owner's existing haul to proceed. Undated and distant defers do not
+reserve the worker indefinitely. Closed items, messages, anchors and decisions
+do not count toward this occupancy.
+
+Native Seeds reads only metadata for the mechanically idle candidate owners,
+across the shared and ephemeral graphs, with existing row caps and exact-answer
+checks. It never hydrates full item bodies as a fallback. Unknown occupancy
+cannot prove that a worker is free: automatic feeding pauses and Rule Zero does
+not block an administrator's stop on that claim. Files and configured legacy
+Beads readers retain owner-scoped reads; unconfigured legacy and Forgejo
+deployments retain their existing feed behavior. This filter changes no pane,
+stop intent, item status, priority, explicit dispatch or account-governor rule.
+
 One sweep of the panes, shared by every rank that needs it. This is both the
 correctness property (the ranks cannot disagree about who is busy) and the
 performance one.
