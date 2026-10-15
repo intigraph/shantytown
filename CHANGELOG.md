@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.1](https://github.com/scbrown/shantytown/compare/v0.7.0...v0.7.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **release:** skip the PyPI upload until the Trusted Publisher is registered ([#256](https://github.com/scbrown/shantytown/issues/256)) ([92aac68](https://github.com/scbrown/shantytown/commit/92aac682d71c3ed4235315edcff89b232b4c3d2a))
+
+
+### Performance Improvements
+
+* reuse successful owner shape reads within one crew render ([#254](https://github.com/scbrown/shantytown/issues/254)) ([585fcea](https://github.com/scbrown/shantytown/commit/585fceaf68a8118dacf3e5a2dcc46ed5b7ce28d3))
+
 ## [0.7.0](https://github.com/scbrown/shantytown/compare/v0.6.0...v0.7.0) (2026-10-14)
 
 
