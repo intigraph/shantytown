@@ -53,12 +53,12 @@ jobs:
         run: python scripts/check-pr-title.py
 
       # `pip install -e .` installs the package and its console script. The
-      # project declares no runtime dependencies, so pytest is the only extra.
+      # project declares no runtime dependencies, so RDF fixture support is a test-only extra.
       - name: Install
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest
+          python -m pip install ".[test]"
           python -m pip install pre-commit==4.6.1
 
       # Prove refusal before treating the tracked-file scan as evidence.
@@ -133,7 +133,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e .
-          python -m pip install pytest
+          python -m pip install ".[test]"
 
       # Proves the detector's three findings paths (HIDDEN / INDUCED / FLAKY)
       # against a synthetic suite built for the purpose. A detector whose

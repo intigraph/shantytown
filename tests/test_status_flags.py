@@ -106,11 +106,18 @@ def test_short_keeps_stdout_clean_when_it_could_not_look(tmp_path, monkeypatch, 
     assert "refused" in cap.err
 
 
-def test_the_full_render_is_unchanged_without_the_flag(tmp_path, monkeypatch, capsys):
+def test_the_full_render_has_human_context_without_machine_flags(tmp_path, monkeypatch, capsys):
     """The human surface must not have quietly become the machine one."""
     _card(tmp_path, "ellie", role="worker")
     assert _run(["anchor", "ellie"], tmp_path, monkeypatch, NullPanes()) == cli.OK
-    assert "ON YOUR PLATE" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "You are ellie — worker." in out
+    assert "Current work: nothing." in out
+    # This fixture uses files, whose transport has no due-date projection.
+    # Human context must say UNKNOWN rather than manufacture empty lists.
+    assert "Top of your plate: UNKNOWN" in out
+    assert "Coming due: UNKNOWN" in out
+    assert "ON YOUR PLATE" not in out
 
 
 # --- anchor --events ---------------------------------------------------------

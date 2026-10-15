@@ -777,6 +777,26 @@ class TrackerAdapter:
                                  "--json", "--limit", "0")
         return Answer.complete_read(value, how=f"{self.kind} list blocked --limit 0")
 
+    def due_rows(self):
+        reader = getattr(self.tracker, "due_rows", None)
+        if callable(reader):
+            return reader()
+        result = (self.tracker._bd("list", "--overdue", "--json", "--limit", "0")
+                  if self.tracker is not None else None)
+        if result is None:
+            value = self._legacy("bd", "list", "--overdue", "--json", "--limit", "0")
+        else:
+            if result.returncode:
+                raise RuntimeError("overdue read failed")
+            value = json.loads(result.stdout)
+        if isinstance(value, dict):
+            if value.get("has_more") is not False:
+                raise ValueError("overdue read completeness UNKNOWN")
+            value = value.get("issues")
+        if not isinstance(value, list):
+            raise ValueError("overdue read completeness UNKNOWN")
+        return Answer.complete_read(value, how=f"{self.kind} list overdue --limit0")
+
     def backstop_rows(self) -> Answer[list[dict]]:
         """Optional expanded candidate seam; old deferred() adapters stay valid."""
         scoped = getattr(self.tracker, "backstop_rows", None)

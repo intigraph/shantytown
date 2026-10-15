@@ -435,3 +435,46 @@ def test_global_queue_projection_failure_does_not_hydrate(monkeypatch, tmp_path)
 def test_roster_response_cannot_escape_named_owner_scope(monkeypatch, owner):
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(fields("test-a", assignee=owner)))
     assert not seeds_plate.owner_rows(PROOF, None, plate_owners=("a",)).complete
+
+
+@pytest.mark.parametrize("agent, options, expected", [
+    ("worker", {"decision": True}, {"open", "blocked"}),
+    (None, {"plate_owners": ("worker",), "capacity": True}, {"open", "blocked"}),
+    (None, {"plate_owners": ("worker",)}, {"open"}),
+])
+def test_decision_and_roster_capacity_preserve_blocked_scope_in_actual_rdf(
+    monkeypatch, agent, options, expected
+):
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    graph = data.graph(URIRef(G))
+    for status in ("open", "blocked"):
+        subject = URIRef(seeds_plate.SEEDS + "item/test-" + status)
+        graph.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        for predicate, value in (
+            (seeds_plate.SCHEMA + "identifier", "test-" + status),
+            (seeds_plate.SCHEMA + "name", "scoped work"),
+            (seeds_plate.SCHEMA + "agent", "worker"),
+            (seeds_plate.SEEDS + "ontology/status", status),
+            (seeds_plate.SEEDS + "ontology/priority", 1),
+        ):
+            graph.add((subject, URIRef(predicate), Literal(value)))
+    queries = []
+
+    def query(_proof, text, timeout):
+        queries.append(text)
+        return answer([
+            {str(key): value.toPython() if isinstance(value, Literal) else str(value)
+             for key, value in result.asdict().items()}
+            for result in data.query(text)
+        ])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        result = seeds_plate.owner_rows(PROOF, agent, **options)
+        assert result.complete
+        assert {row["status"] for row in result.exact()} == expected
+        assert len(queries) == 2
+    finally:
+        data.close()

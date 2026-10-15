@@ -207,7 +207,8 @@ def test_every_injected_st_verb_is_real():
     in anything this hook injects must parse."""
     from shantytown import cli
     verbs = set().union(*(_st_verbs(t) for t in _injected_texts()))
-    assert {"inbox", "go"} <= verbs          # CONTROL: the extractor sees verbs
+    assert "inbox" in verbs                 # CONTROL: an actual injected verb is seen
+    assert _st_verbs("`st go <item> <you>`") == {"go"}  # removed guidance remains detectable
     bad = []
     for v in sorted(verbs):
         try:
