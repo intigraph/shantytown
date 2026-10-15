@@ -915,8 +915,25 @@ def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> di
             out.close()
 
 
-def _escape_unit(result_path: Path, env) -> list:
-    """The prefix that moves a detached runner out of the calling unit's cgroup.
+_SYSTEMD_VERSIONS: dict = {}
+
+
+def _systemd_version(tool: str):
+    """`systemd-run --version` as an int, or None when it cannot be read."""
+    if tool not in _SYSTEMD_VERSIONS:
+        try:
+            out = subprocess.run([tool, "--version"], capture_output=True, text=True,
+                                 timeout=5).stdout
+            m = re.match(r"systemd (\d+)", out)
+            _SYSTEMD_VERSIONS[tool] = int(m.group(1)) if m else None
+        except (OSError, subprocess.SubprocessError):
+            _SYSTEMD_VERSIONS[tool] = None
+    return _SYSTEMD_VERSIONS[tool]
+
+
+def _escape_unit(result_path: Path, env):
+    """The prefix that moves a detached runner out of the calling unit's cgroup,
+    and whether the command after it must have `$` escaped.
 
     A new session is not a new cgroup. Tend runs as a systemd oneshot service,
     and when the pass ends systemd kills every process left in the service's
@@ -924,27 +941,37 @@ def _escape_unit(result_path: Path, env) -> list:
     cut off mid-run and recorded as "exited without a result" (aegis-db3: an
     hourly sweep killed 16s and 29s into its run, twice). Under systemd, start
     the runner in its own transient scope. `systemd-run --scope` execs the
-    command, so the pid returned is still the runner's. Outside systemd, or
-    with no systemd-run, nothing changes.
+    command, so the pid returned is still the runner's.
+
+    systemd-run expands `${VAR}` and `$$` in the command it runs, which would
+    rewrite a job's own argv. systemd 254+ turns that off with
+    --expand-environment=no; older versions get every `$` doubled instead. When
+    the version cannot be read, or outside systemd, nothing changes.
     """
     e = os.environ if env is None else env
     if not e.get("INVOCATION_ID") or not e.get("XDG_RUNTIME_DIR"):
-        return []
+        return [], False
     tool = shutil.which("systemd-run", path=e.get("PATH"))
-    if not tool:
-        return []
+    version = _systemd_version(tool) if tool else None
+    if version is None:
+        return [], False
     name = re.sub(r"[^A-Za-z0-9_.-]", "_", result_path.stem)[:64]
-    return [tool, "--user", "--scope", "--quiet", "--collect",
-            f"--unit=st-job-{name}-{int(time.time() * 1000)}"]
+    prefix = [tool, "--user", "--scope", "--quiet", "--collect",
+              f"--unit=st-job-{name}-{int(time.time() * 1000)}"]
+    if version >= 254:
+        return [*prefix, "--expand-environment=no"], False
+    return prefix, True
 
 
 def _spawn_detached(argv, timeout_s, result_path: Path, log_path: Path, env, cwd) -> int:
-    child = [*_escape_unit(Path(result_path), env),
-             sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
-             str(timeout_s), str(log_path), "--", *argv]
-    proc = subprocess.Popen(child, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, env=env, cwd=cwd,
-                            start_new_session=True)
+    prefix, escape = _escape_unit(Path(result_path), env)
+    runner = [sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
+              str(timeout_s), str(log_path), "--", *argv]
+    if escape:
+        runner = [a.replace("$", "$$") for a in runner]
+    proc = subprocess.Popen([*prefix, *runner], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=env, cwd=cwd, start_new_session=True)
     return proc.pid
 
 
