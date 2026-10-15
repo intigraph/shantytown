@@ -12,6 +12,7 @@ integrated. It does not select an execution backend or change the tend sweep:
 
 ```sh
 st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review list
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review --json list
 st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review check review
 ```
 
@@ -31,6 +32,14 @@ catalogue also exits 2; there is no TOML fallback. A nonempty graph alone cannot
 prove every expected job exists. Repeat `--expect-job` for known identities to
 make deletion of one job fail even when other declarations remain valid; without
 these controls the command explicitly reports membership coverage as UNKNOWN.
+
+For adapters in another process, put `--json` before `list` or `check`. The
+versioned object contains `schema_version: 1`, the selected graph, typed `jobs`,
+and explicit `UNKNOWN` runtime verdicts. `membership.required` lists only the
+identity controls actually checked; `required_identities_verified` does not
+claim the complete host inventory was supplied. Without controls membership
+stays `UNKNOWN`. Errors emit no catalogue object and retain their nonzero exit
+status; JSON without `--graph` refuses before reading local TOML.
 
 This source capability does not load the profile into a server, register a
 signing key, fire a schedule or retire an existing cron job. Calls without

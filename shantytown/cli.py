@@ -1797,6 +1797,8 @@ def build_parser() -> argparse.ArgumentParser:
     jb.add_argument("--expect-job", action="append", default=[], metavar="IRI",
                     help="require a known job identity in the graph (repeatable); "
                          "detects deletion independently of other valid declarations")
+    jb.add_argument("--json", action="store_true",
+                    help="versioned declarations-only JSON; requires --graph")
     jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
     jb_sub.add_parser("list", help="every job: trigger, next due, last result")
     jb_check = jb_sub.add_parser(
@@ -11951,6 +11953,17 @@ def _cmd_declared_jobs(a, verb) -> int:
     if not selected:
         print(f"refused: no declared job {a.name!r}", file=sys.stderr)
         return REFUSED
+    if getattr(a, "json", False):
+        from dataclasses import asdict
+        print(json.dumps({
+            "schema_version": 1, "graph": a.graph, "source": "declarations_only",
+            "executable_admission": "UNKNOWN", "signed_run_status": "UNKNOWN",
+            "firing_eligibility": "UNKNOWN",
+            "membership": {"status": "required_identities_verified" if required else "UNKNOWN",
+                           "required": sorted(required)},
+            "jobs": [asdict(job) for job in selected],
+        }, sort_keys=True))
+        return CANNOT_TELL if verb == "check" else OK
     print("Quipu declarations only; executable admission and signed run status are UNKNOWN.")
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
@@ -11976,8 +11989,8 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
-    if getattr(a, "expect_job", None):
-        print("refused: --expect-job requires --graph", file=sys.stderr)
+    if getattr(a, "expect_job", None) or getattr(a, "json", False):
+        print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
     jobs, errors = jobs_mod.load(a.root)
     by_name = {j.name: j for j in jobs}

@@ -244,3 +244,39 @@ def test_graph_check_cannot_claim_would_fire_from_declarations_alone(tmp_path, m
     out = capsys.readouterr().out
     assert 'firing eligibility is UNKNOWN' in out
     assert 'would fire' not in out and 'Membership coverage: UNKNOWN' in out
+
+
+@pytest.mark.parametrize('verb,expected_rc', [('list', 0), ('check', 2)])
+def test_json_catalogue_retains_typed_values_and_unknown_runtime(
+        tmp_path, monkeypatch, capsys, verb, expected_rc):
+    from shantytown import cli, jobs
+    monkeypatch.setattr(q.JobCatalogue, 'read', lambda self: q.decode_catalogue(catalogue()))
+    monkeypatch.setattr(jobs, 'load', lambda *a: pytest.fail('JSON read local TOML'))
+    assert cli.main(['--root', str(tmp_path), 'work', 'jobs', '--graph',
+                     'urn:example:catalogue', '--expect-job', JOB, '--json', verb]) == expected_rc
+    data = json.loads(capsys.readouterr().out)
+    assert data['schema_version'] == 1 and data['source'] == 'declarations_only'
+    assert data['membership'] == {'status': 'required_identities_verified', 'required': [JOB]}
+    assert data['jobs'][0]['enabled'] is True
+    assert data['jobs'][0]['interval_s'] == 600
+    assert data['jobs'][0]['iri'] == JOB
+    assert all(data[key] == 'UNKNOWN' for key in
+               ('executable_admission', 'signed_run_status', 'firing_eligibility'))
+    assert not list(tmp_path.rglob('*'))
+
+
+def test_json_deletion_control_never_emits_healthy_catalogue(tmp_path, monkeypatch, capsys):
+    from shantytown import cli
+    monkeypatch.setattr(q.JobCatalogue, 'read', lambda self: q.decode_catalogue(catalogue()))
+    assert cli.main(['--root', str(tmp_path), 'work', 'jobs', '--graph',
+                     'urn:example:catalogue', '--expect-job', 'urn:example:removed',
+                     '--json', 'list']) == cli.CANNOT_TELL
+    result = capsys.readouterr()
+    assert result.out == '' and 'required job identities missing' in result.err
+
+
+def test_json_without_graph_refuses_before_local_execution(tmp_path, monkeypatch, capsys):
+    from shantytown import cli, jobs
+    monkeypatch.setattr(jobs, 'load', lambda *a: pytest.fail('JSON fell back to TOML'))
+    assert cli.main(['--root', str(tmp_path), 'work', 'jobs', '--json', 'list']) == cli.REFUSED
+    assert capsys.readouterr().out == ''
