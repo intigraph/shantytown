@@ -87,3 +87,20 @@ def test_the_state_key_changes_when_the_prose_gate_is_met(tmp_path):
     assert seen.unreported([met]) == [met]
     seen.record([met])
     assert seen.unreported([met]) == []
+
+
+def test_existing_findings_keep_their_keys_so_install_does_not_re_alert():
+    # Pinned to origin/main's Finding.key() before this change (aegis-152 review C1):
+    # appending the new field to every key would re-alert the whole backlog once.
+    lapsed = deferrals.Finding(bead="aegis-x", title="t", assignee="a", priority=1,
+                               lapsed_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+                               lapsed_days=3)
+    waiting = deferrals.Finding(bead="aegis-y", priority=2,
+                                condition=deferrals.Condition("date", "2026-10-20T13:00:00Z"))
+    assert lapsed.key() == "485e6508d2a8e07f"
+    assert waiting.key() == "69fa1a1bafe99e20"
+    # ...while a prose finding is a different state, so it does get its own key.
+    prose = deferrals.Finding(bead="aegis-y", priority=2,
+                              condition=deferrals.Condition("date", "2026-10-20T13:00:00Z"),
+                              prose_gate="aegis-qbl")
+    assert prose.key() != waiting.key()

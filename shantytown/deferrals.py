@@ -279,7 +279,11 @@ class Finding:
         cond = self.condition.render() if self.condition else ""
         raw = (f"{self.bead}|{cond}|{int(bool(self.lapsed_at))}|{int(self.met)}"
                f"|{self.untestable}|{int(self.conditionless)}"
-               f"|{self.priority}|{int(self.read_error)}|{self.prose_gate}")
+               f"|{self.priority}|{int(self.read_error)}")
+        if self.prose_gate:
+            # Only when set: every pre-existing finding keeps its key, so installing
+            # this does not re-alert the whole backlog once (aegis-152 review C1).
+            raw += f"|prose:{self.prose_gate}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def render(self) -> str:
