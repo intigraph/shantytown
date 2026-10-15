@@ -327,3 +327,22 @@ def test_a_codex_agent_with_no_visible_zero_is_never_auto_cycled(tmp_path):
         ac.sweep(AGENTS, _Runtime())
         clock.t += 300
     assert reqs.pending() == {}
+
+
+def test_truncated_claude_footer_cannot_prove_zero_shells():
+    for ending in ("…", "..."):
+        screen = "❯ \n⏵⏵ bypass permissions on · esc to interrupt · ← for ag" + ending
+        assert "truncated footer" in unattended_shell_block(screen, "claude")
+        assert "truncated footer" in unattended_shell_block("\x1b[2m" + screen + "\x1b[0m\n\n", "claude")
+    assert unattended_shell_block("❯ \n⏵⏵ bypass permissions on (shift+tab to cycle)", "claude") == ""
+    assert "2 background" in unattended_shell_block("❯ \n⏵⏵ bypass permissions on · 2 shells · esc to interrupt · ← for ag…", "claude")
+
+
+def test_checkpointed_agent_with_truncated_footer_is_not_auto_cycled(tmp_path):
+    screen = _saturated_pane(646.0) + "\n⏵⏵ bypass permissions on · ← for ag…"
+    ac, panes, reqs, pushed, store, clock = _world(tmp_path, screen)
+    assert _sweep(ac) == []
+    clock.t += 300
+    store["comments"] = [{"author": "kelly", "created_at": _iso(clock.t - 60)}]
+    assert _sweep(ac) == []
+    assert reqs.pending() == {}

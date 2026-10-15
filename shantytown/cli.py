@@ -599,6 +599,25 @@ def _governors(a):
     return replace(cfg, governor=replace(base, by_harness=policies)), fleet.governors
 
 
+def _administrator_launch_slots(a, cfg, lane, fleet=None):
+    """Canonical, non-retired administrator identities sharing this account.
+
+    A peer's live row does not grant the administrator role. Resolve the role
+    from the exact registry and normalize host-less local cards identically to
+    the local process census. Unknown registry coverage refuses at the caller.
+    """
+    from . import accounts
+    from .deployment import local_host
+    host = local_host(a.root) or 'local'
+    hosts = {host, *cfg.host_peers}
+    resolve_lane = fleet.lane if fleet is not None else lambda name: name
+    return {(getattr(admin, 'host', None) or host, admin.name)
+            for admin in _registry(a).all().exact()
+            if admin.role == 'administrator' and not getattr(admin, 'retired', False)
+            and (getattr(admin, 'host', None) or host) in hosts
+            and resolve_lane(accounts.lane(admin, cfg)) == lane}
+
+
 def _account_launch_refusal(a, card, *, replacing=False):
     try:
         cfg, governors = _governors(a)
@@ -620,12 +639,23 @@ def _account_launch_refusal(a, card, *, replacing=False):
             if governor is None:
                 return 'named account governor is unavailable'
             verdict = governor.evaluate(persist=False)
-            cap = verdict.max_agents
-            used = sum(row['live'] and row.get('account') == account.name for row in rows)
-            if cap is not None and used >= cap:
-                return f'account {account.name}: {used}/{cap} slots occupied'
-            return verdict.excludes(card, _catalog(a))
-        refusal = fleet.admits_launch(accounts.lane(card, cfg), rows)
+            if verdict.frozen or verdict.drains:
+                return ((verdict.alarm or verdict.why or 'account governor holds launches')
+                    + '; no account-governor override; --despite-hold covers gaming/quiet-time only')
+            from .fleet_governor import launch_capacity_refusal
+            from .deployment import local_host
+            target = (getattr(card, 'host', None) or local_host(a.root) or 'local', card.name)
+            refusal = launch_capacity_refusal(
+                account.name, verdict.max_agents,
+                [row for row in rows if row.get('account') == account.name],
+                administrators=_administrator_launch_slots(a, cfg, account.name),
+                target=target)
+            return refusal or verdict.excludes(card, _catalog(a))
+        lane = fleet.lane(accounts.lane(card, cfg))
+        target = (getattr(card, 'host', None) or fleet.local, card.name)
+        refusal = fleet.admits_launch(
+            accounts.lane(card, cfg), rows,
+            administrators=_administrator_launch_slots(a, cfg, lane, fleet), target=target)
         if refusal:
             return refusal
         _h, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
@@ -2338,7 +2368,8 @@ def _add_despite_hold(parser) -> None:
                         help="launch even though the gaming governor is holding. "
                              "Overrides the hold for THIS command only; it stays "
                              "in force for dispatch, respawns and every other "
-                             "launch.")
+                             "launch. Does not override account capacity, FULL STOP, "
+                             "a frozen account or unknown fleet admission.")
 
 
 def _despite_hold(a) -> bool:
@@ -12922,6 +12953,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
             def deliver_due(recipient, marker, body):
+                import re
                 from copy import copy
                 from contextlib import redirect_stdout
                 from io import StringIO

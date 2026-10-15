@@ -9,6 +9,50 @@ from shantytown import config
 from shantytown.seeds_plate import due_rows
 
 
+def test_due_read_failure_diagnostic_is_safe_and_does_not_send(tmp_path, monkeypatch):
+    from urllib.error import HTTPError
+    cases = [
+        (HTTPError("https://invalid.example/private-token", 408, "private-token", {}, None), "HTTPError:408"),
+        (HTTPError("https://invalid.example/private-token", 403, "private-token", {}, None), "HTTPError:403"),
+        (TimeoutError("private-token"), "TimeoutError"),
+        (ValueError("private-token"), "ValueError"),
+    ]
+    proof = SimpleNamespace(graph="https://example.org/board")
+    for index, (failure, expected) in enumerate(cases):
+        calls, sent, logs = [], [], []
+        def query(*args, **kwargs):
+            calls.append(1)
+            raise failure
+        monkeypatch.setattr("shantytown.seeds_plate._query", query)
+        alerter = OverdueAlerter(tmp_path / str(index), Registry(), read=lambda: due_rows(proof),
+                                 deliver=lambda *args: sent.append(args), log=logs.append)
+        alerter.path.parent.mkdir(parents=True)
+        retained = json.dumps({"entries": {}, "pending": {"admin": {"attempted": True}}})
+        alerter.path.write_text(retained)
+        assert alerter.sweep() == []
+        assert calls == [1] and not sent and alerter.path.read_text() == retained
+        assert f"overdue read cause: {expected}; no repeat delivery" in logs
+        assert all("private-token" not in line and "https://" not in line for line in logs)
+
+    # Unrecognized or forged caveats cannot become log content.
+    for caveat in ("due projection UNKNOWN: HTTPError:408 private-token",
+                   "due projection UNKNOWN: private-token", {"private-token": True}):
+        logs = []
+        alerter = OverdueAlerter(tmp_path / "unknown", Registry(),
+            read=lambda: Answer.capped([], how="private-token", caveat=caveat),
+            deliver=lambda *args: sent.append(args), log=logs.append)
+        assert alerter.sweep() == []
+        assert "overdue read cause: UNKNOWN; no repeat delivery" in logs
+        assert all("private-token" not in line for line in logs)
+
+    # A complete empty projection is a real quiet result, with no diagnostic.
+    logs = []
+    monkeypatch.setattr("shantytown.seeds_plate._query", lambda *args, **kwargs: {"rows": []})
+    assert OverdueAlerter(tmp_path / "complete", Registry(), read=lambda: due_rows(proof),
+                         deliver=lambda *args: sent.append(args), log=logs.append).sweep() == []
+    assert not logs and not sent
+
+
 class Registry:
     def all(self):
         return Answer.complete_read([SimpleNamespace(name="admin",role="administrator")],how="fixture registry")
@@ -184,3 +228,71 @@ def test_due_projection_validates_subject_before_grouping(monkeypatch):
         assert len(calls) == 3 and all("LIMIT 2000" in text for text in calls)
     finally:
         data.close()
+
+
+def test_no_card_owner_notice_goes_to_admin_without_mutating_item(tmp_path):
+    rows=[dict(row("a-unknown"),assignee="missing"),row("a-known")]
+    before=json.loads(json.dumps(rows)); sent=[]; logs=[]
+    a=OverdueAlerter(tmp_path,Registry(),
+        read=lambda:Answer.complete_read(rows,how="owner routing fixture"),
+        deliver=lambda *args:sent.append(args) or True,
+        now=lambda:datetime(2026,10,2,tzinfo=timezone.utc),log=logs.append)
+    assert a.sweep()==["admin","worker"]
+    assert a.sweep()==[]
+    assert len(sent)==2 and {s[0] for s in sent}=={"admin","worker"}
+    assert rows==before
+    assert any("a-unknown owner missing has no card; notice to admin" in line for line in logs)
+
+
+def test_no_card_owner_without_admin_is_unknown_and_known_owner_proceeds(tmp_path):
+    class NoAdmin(Registry):
+        def all(self): return Answer.complete_read([],how="no administrator fixture")
+    sent=[]; logs=[]
+    a=OverdueAlerter(tmp_path,NoAdmin(),
+        read=lambda:Answer.complete_read([dict(row("a-missing"),assignee="missing"),row()],how="owner routing fixture"),
+        deliver=lambda *args:sent.append(args) or True,
+        now=lambda:datetime(2026,10,2,tzinfo=timezone.utc),log=logs.append)
+    assert a.sweep()==["worker"]
+    assert a.sweep()==[] and len(sent)==1
+    assert any("administrator UNKNOWN" in line for line in logs)
+
+
+def test_unknown_unlock_owner_is_not_rerouted(tmp_path):
+    sent=[]
+    a=OverdueAlerter(tmp_path,Registry(),
+        read=lambda:Answer.complete_read([],how="fixture due"),
+        events=lambda:Answer.complete_read([dict(id="a-unlock",kind="unlock",episode="event-1",recipient="missing")],how="fixture unlock"),
+        deliver=lambda *args:sent.append(args) or True)
+    assert a.sweep()==[] and not sent
+
+
+def test_scheduled_delivery_callback_retains_known_receipt():
+    """Exercise the actual nested callback without a fleet run or real sender."""
+    import ast
+    import inspect
+    from shantytown import cli
+    from shantytown.overdue import PendingReceipt
+
+    source = ast.parse(inspect.getsource(cli))
+    callback = next(node for node in ast.walk(source)
+                    if isinstance(node, ast.FunctionDef) and node.name == "deliver_due")
+    sent = []
+    expected = object()
+    def sender(target, card, body, panes, **kwargs):
+        sent.append((target.agent, body))
+        print("delivered to inbox as inbox-receipt-1")
+        return cli.OK
+    namespace = dict(vars(cli), a=SimpleNamespace(agent="original"), panes=None,
+                     _registry=lambda _: Registry(), _inbox_durable=sender,
+                     verify_due_receipt=lambda *args: expected,
+                     PendingReceipt=PendingReceipt)
+    exec(compile(ast.Module(body=[callback], type_ignores=[]), cli.__file__, "exec"), namespace)
+    assert namespace["deliver_due"]("worker", "[marker]", "body") is expected
+    assert sent == [("worker", "[marker] body")]
+
+    def unknown(*args):
+        raise RuntimeError("read unavailable after committed delivery")
+    namespace["verify_due_receipt"] = unknown
+    pending = namespace["deliver_due"]("worker", "[second]", "body")
+    assert isinstance(pending, PendingReceipt)
+    assert pending.identifier == "inbox-receipt-1"
