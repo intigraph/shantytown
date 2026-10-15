@@ -535,7 +535,16 @@ class SdTracker(BrTracker):
 
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
-        answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds inbox format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import owner_rows
+            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout,
+                                messages_only=True, include_closed=include_closed)
+        else:
+            answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
         # Each bounded read is ordered, but their union must keep the SDK's
         # global priority/creation/id order before dates leave the projection.
         rows = sorted(answer.at_least(), key=lambda row: (

@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 import re
 from urllib.parse import quote, urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .answer import Answer
@@ -237,7 +238,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                include_deferred: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
-               decision: bool = False) -> Answer[list[dict]]:
+               decision: bool = False, messages_only: bool = False,
+               include_closed: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -248,6 +250,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     if include_deferred:
         how = "Seeds owner-scoped waiting-work metadata; shared and ephemeral graphs"
     try:
+        if (include_closed and not messages_only) or (messages_only and (
+                agent is None or feed_owners is not None or plate_owners is not None
+                or active_only or capacity or decision)):
+            raise ValueError("ambiguous inbox projection scope")
         if active_only and feed_owners is None:
             raise ValueError("active projection requires an owner scope")
         if plate_owners is not None:
@@ -273,6 +279,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("open", "hooked", "in_progress", "blocked", "deferred")
+                + (("closed",) if include_closed else ()) if messages_only else
                 ("hooked", "in_progress", "open", "blocked")
                 if decision or (plate_owners is not None and capacity) else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
@@ -318,7 +326,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
                         f"<{SEEDS}ontology/status> {json.dumps(status)} . "
-                        + ("" if include_messages else
+                        + (f"?s <{SCHEMA}name> ?title . "
+                           f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
+                           if messages_only else "" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
@@ -421,7 +431,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
-            if row.get("status") in ("closed", "tombstone"):
+            if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
@@ -449,7 +459,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or subject != SEEDS + "item/" + quote(row["id"], safe="")
             ):
                 raise ValueError("incomplete or unsupported plate candidate")
-            if row["status"] not in ("closed", "tombstone"):
+            if messages_only:
+                from .inbox import is_message
+                if not is_message(row["title"]) or row["status"] == "tombstone":
+                    raise ValueError("unexpected inbox candidate")
+            if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
@@ -766,4 +780,7 @@ def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
                 previous["labels"].append(item["label"])
         return Answer.complete_read(list(grouped.values()),how=how)
     except Exception as error:
-        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {type(error).__name__}")
+        cause = type(error).__name__
+        if isinstance(error, HTTPError) and type(error.code) is int and 400 <= error.code <= 599:
+            cause += f":{error.code}"
+        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {cause}")

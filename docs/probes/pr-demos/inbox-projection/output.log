@@ -1,0 +1,42 @@
+Script started on 2026-10-15 17:56:50-04:00 [COMMAND="PYTHONPATH=. python3 docs/probes/pr-demos/inbox-projection/probe.py" <not executed on terminal>]
+{
+  "sdk": {
+    "queries": 14,
+    "ids": [
+      "test-a",
+      "test-b"
+    ],
+    "shapes": [
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "ASK",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "ASK",
+      "SELECT",
+      "SELECT"
+    ]
+  },
+  "native": {
+    "queries": 4,
+    "ids": [
+      "test-a",
+      "test-b"
+    ],
+    "shapes": [
+      "ASK",
+      "ASK",
+      "SELECT",
+      "SELECT"
+    ]
+  },
+  "ratio": 0.2857142857142857
+}
+
+Script done on 2026-10-15 17:56:51-04:00 [COMMAND_EXIT_CODE="0"]
