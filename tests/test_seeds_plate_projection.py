@@ -385,14 +385,19 @@ def test_roster_batch_preserves_hooked_held_and_empty_without_per_owner_reads(mo
     assert '"hooked"' in queries[0]
     assert "VALUES ?s" in queries[1]
     assert "GRAPH ?g" not in queries[1]
+    # A standalone admission reader must not reuse a prior roster positive.
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
+    assert not tracker.capacity_rows("a").complete
     # Fresh render replaces the reader-local observation.
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([]))
     fresh = br.plate_reader(tracker, require_complete=True, owners=["a"])
     assert fresh("a") is None
+    assert tracker.capacity_rows("a").exact() == []
 
 
 def test_roster_outage_is_unknown_for_every_named_owner_without_fallback(monkeypatch):
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    tracker.render_shape_reads = seeds_plate.RenderShapeReads()
     monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
     monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
@@ -400,6 +405,12 @@ def test_roster_outage_is_unknown_for_every_named_owner_without_fallback(monkeyp
     for owner in ["a", "b"]:
         with pytest.raises(RuntimeError, match="503"):
             read(owner)
+    # A failed render cannot return empty capacity or start per-owner retries.
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: pytest.fail("read after refused render"))
+    from shantytown.answer import PartialAnswer
+    for owner in ("a", "b"):
+        with pytest.raises(PartialAnswer, match="503"):
+            tracker.capacity_rows(owner).exact()
 
 
 def test_roster_scope_cannot_include_unassigned_work(monkeypatch):
@@ -424,3 +435,46 @@ def test_global_queue_projection_failure_does_not_hydrate(monkeypatch, tmp_path)
 def test_roster_response_cannot_escape_named_owner_scope(monkeypatch, owner):
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(fields("test-a", assignee=owner)))
     assert not seeds_plate.owner_rows(PROOF, None, plate_owners=("a",)).complete
+
+
+@pytest.mark.parametrize("agent, options, expected", [
+    ("worker", {"decision": True}, {"open", "blocked"}),
+    (None, {"plate_owners": ("worker",), "capacity": True}, {"open", "blocked"}),
+    (None, {"plate_owners": ("worker",)}, {"open"}),
+])
+def test_decision_and_roster_capacity_preserve_blocked_scope_in_actual_rdf(
+    monkeypatch, agent, options, expected
+):
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    graph = data.graph(URIRef(G))
+    for status in ("open", "blocked"):
+        subject = URIRef(seeds_plate.SEEDS + "item/test-" + status)
+        graph.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        for predicate, value in (
+            (seeds_plate.SCHEMA + "identifier", "test-" + status),
+            (seeds_plate.SCHEMA + "name", "scoped work"),
+            (seeds_plate.SCHEMA + "agent", "worker"),
+            (seeds_plate.SEEDS + "ontology/status", status),
+            (seeds_plate.SEEDS + "ontology/priority", 1),
+        ):
+            graph.add((subject, URIRef(predicate), Literal(value)))
+    queries = []
+
+    def query(_proof, text, timeout):
+        queries.append(text)
+        return answer([
+            {str(key): value.toPython() if isinstance(value, Literal) else str(value)
+             for key, value in result.asdict().items()}
+            for result in data.query(text)
+        ])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        result = seeds_plate.owner_rows(PROOF, agent, **options)
+        assert result.complete
+        assert {row["status"] for row in result.exact()} == expected
+        assert len(queries) == 2
+    finally:
+        data.close()

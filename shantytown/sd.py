@@ -300,6 +300,11 @@ class SdTracker(BrTracker):
     def capacity_rows(self, agent: str) -> Answer[list[dict]]:
         """Whole owner queue, never the plate reader's in-hand early return."""
         try:
+            roster = getattr(self, "_roster_capacity", {})
+            # Only the explicit crew render may reuse its frozen observation.
+            # Admission callers without that render scope still read live.
+            if getattr(self, "render_shape_reads", None) is not None and agent in roster:
+                return roster[agent]
             if self._use_remote_projection():
                 from .seeds_plate import owner_rows
                 return owner_rows(self.prove_store(), agent, timeout=self.timeout,
@@ -319,20 +324,24 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows, unblocked_ids
         from .inbox import drop_parked
         agents = tuple(dict.fromkeys(agents))
-        answer = owner_rows(self.prove_store(), None, plate_owners=agents,
+        answer = owner_rows(self.prove_store(), None, plate_owners=agents, capacity=True,
                             timeout=self.timeout,
                             shape_reads=getattr(self, "render_shape_reads", None))
         self._roster_answers = {}
+        self._roster_capacity = {}
         self._roster_ready = {}
         if not answer.complete:
             self._roster_answers = {agent: answer for agent in agents}
+            self._roster_capacity = {agent: answer for agent in agents}
             return
         rows = answer.exact()
         for agent in agents:
             owners = {agent, agent.split("/")[-1]}
             own = [row for row in rows if row.get("assignee") in owners]
-            self._roster_answers[agent] = Answer.complete_read(own, how=answer.how)
-            self._plate_projection_candidates[agent] = own
+            self._roster_capacity[agent] = Answer.complete_read(own, how=answer.how)
+            plate = [row for row in own if row["status"] != "blocked"]
+            self._roster_answers[agent] = Answer.complete_read(plate, how=answer.how)
+            self._plate_projection_candidates[agent] = plate
         candidates = [row for row in drop_parked(rows) if row["status"] == "open"]
         try:
             ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)

@@ -1,0 +1,6 @@
+'Enforce ten-item local assignment cap': exit 1
+PR title must use type(scope): summary or type: summary; types: feat, fix, perf, refactor, docs, test, chore, ci, build
+'fix(assignments): enforce ten-item local cap': exit 0
+PR title check: conventional subject accepted
+'test: cover status variants': exit 0
+PR title check: conventional subject accepted
