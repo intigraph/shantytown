@@ -11,7 +11,8 @@ and releases exactly at expiry.
 
 Base: `f8b788eb5c0e2df182285c0f6a8e001004f82b66`.
 Candidate implementation: `d78a4c8`; the following recording commit adds
-only these demo artifacts. Peer/process observations use NullPanes and all
+only these demo artifacts. A later host-placement refusal adds no change to
+this local, host-less fixture sequence. Peer/process observations use NullPanes and all
 writes stay in disposable private registry/tracker files. No real agent,
 inbox recipient, scheduler or board is changed. This proves source behavior,
 not installed or natural-schedule acceptance.

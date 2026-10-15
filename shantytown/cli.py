@@ -6158,8 +6158,12 @@ def _anchor_events(a, me: str) -> int:
 
 def _cmd_hold_feed(a) -> int:
     from . import feed_hold
+    from .quipu import QuipuUnreachable, QuipuNotQuipu
     try:
-        _registry(a).get(a.agent)
+        card = _registry(a).get(a.agent)
+        from .deployment import local_host
+        if card.host is not None and card.host != local_host(a.root):
+            raise ValueError(f"feed hold belongs to host {card.host}; select that deployment")
         if (a.status or a.clear) and (a.until or a.reason_file is not None):
             raise ValueError("--status/--clear cannot also create a hold")
         if a.status:
@@ -6184,7 +6188,8 @@ def _cmd_hold_feed(a) -> int:
             f"would hold automatic feed until {a.until}" if a.dry_run else
             feed_hold.reason(a.root, a.agent)))
         return OK
-    except (LookupError, OSError, ValueError) as exc:
+    except (LookupError, OSError, ValueError, CouldNotLook, PartialAnswer,
+            QuipuUnreachable, QuipuNotQuipu) as exc:
         print(f"  refused: {exc}", file=sys.stderr)
         return REFUSED
 

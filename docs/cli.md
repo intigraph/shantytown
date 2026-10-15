@@ -24,7 +24,9 @@ reader. An unreadable condition or hold record keeps automatic feeding held.
 Expired records remain as provenance and do not block feeding. A replacement
 hold takes effect immediately; an older expiry cannot remove it.
 
-The hold is durable and appears in the human `st crew` and `st anchor` views.
+The hold is stored on the agent's declared host. An off-host or unresolved-host
+request refuses before writing; select the target deployment through the existing
+CLI execution lane. The hold is durable and appears in the human `st crew` and `st anchor` views.
 It does not stop, retire, cycle or relaunch the agent, cancel a queued cycle, or
 block explicit `st go` and inbox delivery. It does not grant dispatch permission:
 all existing busy-pane, budget, stop and ownership gates still apply.

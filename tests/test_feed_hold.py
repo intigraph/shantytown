@@ -164,3 +164,30 @@ def test_crew_and_anchor_report_feed_hold_without_changing_pane_state(tmp_path, 
     assert cli.main([*common, 'crew', '--local']) == 0
     assert 'ellie: feed held' in capsys.readouterr().out
     assert panes.exists('%5')
+
+
+@pytest.mark.parametrize('local', [None, 'other'])
+def test_offhost_or_unknown_placement_refuses_before_writing(tmp_path, monkeypatch, local):
+    from dataclasses import replace
+    from shantytown import deployment
+    from shantytown.files import FilesRegistry
+    root = _root(tmp_path)
+    reg = FilesRegistry(root / 'crew')
+    reg.set(replace(reg.get('ellie'), host='target'))
+    monkeypatch.setattr(deployment, 'local_host', lambda root: local)
+    note = tmp_path / 'reason'
+    note.write_text('coordinate')
+    assert cli.main(['--root', str(root), '--backend', 'files', 'work', 'hold-feed',
+                     'ellie', '--until', '2099-01-01', '--reason-file', str(note)]) == cli.REFUSED
+    assert not (root / 'feed-holds').exists()
+
+
+def test_unreadable_registry_refuses_without_hold_write(tmp_path, monkeypatch):
+    from shantytown.quipu import QuipuUnreachable
+    root = _root(tmp_path)
+    def unavailable(a):
+        raise QuipuUnreachable('fixture registry unavailable')
+    monkeypatch.setattr(cli, '_registry', unavailable)
+    assert cli.main(['--root', str(root), '--backend', 'files', 'work', 'hold-feed',
+                     'ellie', '--status']) == cli.REFUSED
+    assert not (root / 'feed-holds').exists()
