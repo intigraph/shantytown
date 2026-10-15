@@ -184,3 +184,39 @@ def test_due_projection_validates_subject_before_grouping(monkeypatch):
         assert len(calls) == 3 and all("LIMIT 2000" in text for text in calls)
     finally:
         data.close()
+
+
+def test_no_card_owner_notice_goes_to_admin_without_mutating_item(tmp_path):
+    rows=[dict(row("a-unknown"),assignee="missing"),row("a-known")]
+    before=json.loads(json.dumps(rows)); sent=[]; logs=[]
+    a=OverdueAlerter(tmp_path,Registry(),
+        read=lambda:Answer.complete_read(rows,how="owner routing fixture"),
+        deliver=lambda *args:sent.append(args) or True,
+        now=lambda:datetime(2026,10,2,tzinfo=timezone.utc),log=logs.append)
+    assert a.sweep()==["admin","worker"]
+    assert a.sweep()==[]
+    assert len(sent)==2 and {s[0] for s in sent}=={"admin","worker"}
+    assert rows==before
+    assert any("a-unknown owner missing has no card; notice to admin" in line for line in logs)
+
+
+def test_no_card_owner_without_admin_is_unknown_and_known_owner_proceeds(tmp_path):
+    class NoAdmin(Registry):
+        def all(self): return Answer.complete_read([],how="no administrator fixture")
+    sent=[]; logs=[]
+    a=OverdueAlerter(tmp_path,NoAdmin(),
+        read=lambda:Answer.complete_read([dict(row("a-missing"),assignee="missing"),row()],how="owner routing fixture"),
+        deliver=lambda *args:sent.append(args) or True,
+        now=lambda:datetime(2026,10,2,tzinfo=timezone.utc),log=logs.append)
+    assert a.sweep()==["worker"]
+    assert a.sweep()==[] and len(sent)==1
+    assert any("administrator UNKNOWN" in line for line in logs)
+
+
+def test_unknown_unlock_owner_is_not_rerouted(tmp_path):
+    sent=[]
+    a=OverdueAlerter(tmp_path,Registry(),
+        read=lambda:Answer.complete_read([],how="fixture due"),
+        events=lambda:Answer.complete_read([dict(id="a-unlock",kind="unlock",episode="event-1",recipient="missing")],how="fixture unlock"),
+        deliver=lambda *args:sent.append(args) or True)
+    assert a.sweep()==[] and not sent
