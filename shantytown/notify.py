@@ -1711,6 +1711,10 @@ class DeferralAlerter:
                 condition = pol.parse_condition(str(row.get("notes") or ""))
                 if condition is not None and condition.kind == "closed":
                     targets.append(condition.arg)
+                # Prose gates ride the same batch (aegis-152): no per-item reads.
+                if condition is None or condition.kind == "date":
+                    targets.extend(pol.prose_gate_targets(str(row.get("notes") or "")))
+            targets = list(dict.fromkeys(targets))
             if targets:
                 try:
                     reader = getattr(backend(), "closed_many", None)
@@ -1753,6 +1757,9 @@ class DeferralAlerter:
                 failed(finding)
                 continue
             row = by_id[finding.bead]
+            if finding.prose_gate:
+                reports.append(finding)  # report-only: never a release candidate
+                continue
             if (finding.condition and finding.condition.testable()
                     and not finding.met and not finding.untestable):
                 continue  # a known unmet mechanical gate needs no ruling
