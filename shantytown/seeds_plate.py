@@ -266,6 +266,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("hooked", "in_progress", "open", "blocked") if plate_owners is not None and capacity else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
