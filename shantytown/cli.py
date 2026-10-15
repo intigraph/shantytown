@@ -1792,6 +1792,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
                            "list | check [name] | run <name> | history [name]")
+    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph; "
+                    "list/check only until the signed execution lane is enabled")
+    jb.add_argument("--expect-job", action="append", default=[], metavar="IRI",
+                    help="require a known job identity in the graph (repeatable); "
+                         "detects deletion independently of other valid declarations")
     jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
     jb_sub.add_parser("list", help="every job: trigger, next due, last result")
     jb_check = jb_sub.add_parser(
@@ -11918,6 +11923,39 @@ def _jobs_sweep(a) -> list[str]:
     return _jobs_runner(a).sweep()
 
 
+def _cmd_declared_jobs(a, verb) -> int:
+    """Explicit graph read surface; never fall back to local executors/history."""
+    from . import quipu_jobs
+    if verb not in {"list", "check"}:
+        print("refused: graph jobs require the signed execution/history lane; "
+              "local TOML execution and history are separate", file=sys.stderr)
+        return REFUSED
+    try:
+        jobs = quipu_jobs.JobCatalogue(a.graph, root=a.root).read()
+        required = set(getattr(a, "expect_job", ()) or ())
+        missing = required - {job.iri for job in jobs}
+        if missing:
+            raise quipu_jobs.JobRefused("required job identities missing: " + ", ".join(sorted(missing)))
+    except (quipu_jobs.JobsUnavailable, quipu_jobs.JobRefused) as exc:
+        print(f"cannot tell: {exc}", file=sys.stderr)
+        return CANNOT_TELL
+    selected = [job for job in jobs if not getattr(a, "name", None) or job.name == a.name]
+    if not selected:
+        print(f"refused: no declared job {a.name!r}", file=sys.stderr)
+        return REFUSED
+    print("Quipu declarations only; executable admission and signed run status are UNKNOWN.")
+    print("Membership coverage: " + (f"{len(required)} required identities verified" if required
+                                     else "UNKNOWN (no --expect-job controls supplied)"))
+    for job in selected:
+        print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
+              f"every {job.interval_s}s  timezone {job.timezone}  "
+              f"host {job.host}  revision {job.revision}  target {job.target}")
+    if verb == "check":
+        print("Declarations validated; firing eligibility is UNKNOWN until runtime admission.")
+        return CANNOT_TELL
+    return OK
+
+
 def _cmd_jobs(a) -> int:
     """st work jobs [list] | check [name] | run <name> | history [name].
 
@@ -11928,6 +11966,11 @@ def _cmd_jobs(a) -> int:
     """
     from . import jobs as jobs_mod
     verb = getattr(a, "jobs_sub", None) or "list"
+    if getattr(a, "graph", None):
+        return _cmd_declared_jobs(a, verb)
+    if getattr(a, "expect_job", None):
+        print("refused: --expect-job requires --graph", file=sys.stderr)
+        return REFUSED
     jobs, errors = jobs_mod.load(a.root)
     by_name = {j.name: j for j in jobs}
     for e in errors:
