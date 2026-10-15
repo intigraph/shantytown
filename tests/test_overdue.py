@@ -86,7 +86,7 @@ def test_unlock_uses_same_digest_once_per_episode_not_daily(tmp_path):
 
 
 def test_due_projection_positive_and_conflict_unknown(monkeypatch):
-    calls=[]; wire=[dict(graph="https://example.org/board",id="a-1",title="work",status="open",due={"datatype":"http://www.w3.org/2001/XMLSchema#dateTime","value":"2026-10-01T00:00:00Z"},assignee="https://seeds.local/principal/worker")]
+    calls=[]; wire=[dict(subject="https://seeds.local/item/a-1",graph="https://example.org/board",id="a-1",title="work",status="open",due={"datatype":"http://www.w3.org/2001/XMLSchema#dateTime","value":"2026-10-01T00:00:00Z"},assignee="https://seeds.local/principal/worker")]
     def query(proof,text,timeout): calls.append(text); return dict(rows=wire)
     monkeypatch.setattr("shantytown.seeds_plate._query",query)
     proof=SimpleNamespace(graph="https://example.org/board")
@@ -143,3 +143,44 @@ def test_absent_receipt_after_ambiguous_attempt_never_resends(tmp_path):
     assert a.sweep()==[]
     assert len(attempts)==1
     assert json.loads(a.path.read_text())["pending"]["worker"]["attempted"] is True
+
+
+def test_due_projection_validates_subject_before_grouping(monkeypatch):
+    """Run the actual SELECT against RDF, including an identical-ID foreign row."""
+    import pytest
+    from rdflib import Dataset, URIRef, Literal, RDF
+    from shantytown import seeds_plate as plate
+
+    proof = SimpleNamespace(graph="urn:fixture:board")
+    data = Dataset()
+    graph = data.graph(URIRef(proof.graph))
+
+    def add(subject):
+        subject = URIRef(subject)
+        graph.add((subject, RDF.type, URIRef(plate.SCHEMA + "Action")))
+        for predicate, value in (
+            (plate.SCHEMA + "identifier", "example-1"),
+            (plate.SCHEMA + "name", "work"),
+            (plate.SEEDS + "ontology/status", "open"),
+            ("http://www.w3.org/2002/12/cal/ical#due", "2026-10-01T00:00:00Z"),
+        ):
+            graph.add((subject, URIRef(predicate), Literal(value)))
+
+    calls = []
+
+    def query(_proof, text, timeout):
+        calls.append(text)
+        return {"rows": [{str(k): str(v) for k, v in row.asdict().items()}
+                         for row in data.query(text)]}
+
+    monkeypatch.setattr(plate, "_query", query)
+    try:
+        add(plate.SEEDS + "item/example-1")
+        assert due_rows(proof).exact()[0]["id"] == "example-1"
+        add("urn:foreign:example-1")
+        assert not due_rows(proof).complete  # cannot collapse into canonical row
+        graph.remove((URIRef(plate.SEEDS + "item/example-1"), None, None))
+        assert not due_rows(proof).complete  # foreign subject alone is not absence
+        assert len(calls) == 3 and all("LIMIT 2000" in text for text in calls)
+    finally:
+        data.close()
