@@ -128,3 +128,21 @@ def test_a_mirror_never_proves_publication(two_remotes, staleness):
                            reachable=lambda _: True)
     assert not verdict.ok
     assert verdict.risks[0].unpushed == 1
+
+
+def test_a_tracked_mirror_is_not_a_publication_remote(two_remotes):
+    """Even the branch's own tracked remote cannot prove publication if it is
+    a mirror: the fetch path would otherwise refresh and trust only it."""
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "preserved")
+    branch = _git(wt, "symbolic-ref", "--short", "HEAD")
+    _git(wt, "push", "-q", "forge", f"HEAD:refs/heads/{branch}")
+    _git(repo, "config", f"branch.{branch}.remote", "forge")
+    _git(repo, "config", "remote.forge.st-push-role", "mirror")
+    assert "forge" not in workspace.publication_remotes(wt)
+    verdict = cycle.assess(
+        "worker", [wt], "saved checkpoint",
+        lambda t: workspace.tree_staleness(t, fetch=True, untracked_all=True,
+                                           tracked_only=True),
+        reachable=lambda _: True)
+    assert not verdict.ok
