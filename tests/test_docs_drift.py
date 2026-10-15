@@ -485,3 +485,16 @@ def test_readme_first_success_preview_matches_real_dry_run(tmp_path):
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == expected.group(1).strip()
     assert list(tmp_path.iterdir()) == [], "the README dry run wrote project files"
+
+
+def test_readme_preview_guard_rejects_a_stale_agent_count(tmp_path, monkeypatch):
+    """A plausible but stale preview must fail the same executable check."""
+    fake_readme = tmp_path / "README.md"
+    text = README.read_text()
+    assert "2 agent(s)" in text
+    fake_readme.write_text(text.replace("2 agent(s)", "3 agent(s)"))
+    monkeypatch.setitem(globals(), "README", fake_readme)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    with pytest.raises(AssertionError):
+        test_readme_first_success_preview_matches_real_dry_run(run_dir)
