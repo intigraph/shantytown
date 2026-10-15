@@ -86,6 +86,33 @@ def test_missing_or_oversized_input_never_starts_worker(monkeypatch, text, comma
     assert q.judge(text, command)['outcome'] == 'unknown'
 
 
+def _descendant_running(proc):
+    # A successful kill can remove /proc between lookup and read (PR264 CI).
+    # Only disappearance proves gone; permission and malformed data must fail.
+    try:
+        return proc.read_text().split()[2] != 'Z'
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+@pytest.mark.parametrize('state', ['R', 'S', 'T', 'Z'])
+def test_descendant_reader_preserves_live_process_refusal(state):
+    proc = SimpleNamespace(read_text=lambda: f'123 (child) {state} 1')
+    assert _descendant_running(proc) is (state != 'Z')
+
+
+@pytest.mark.parametrize('error', [FileNotFoundError, ProcessLookupError, PermissionError])
+def test_descendant_reader_handles_only_disappearance(error):
+    def vanished():
+        raise error()
+    proc = SimpleNamespace(read_text=vanished)
+    if error is PermissionError:
+        with pytest.raises(PermissionError):
+            _descendant_running(proc)
+    else:
+        assert not _descendant_running(proc)
+
+
 def test_hung_server_is_bounded_and_descendants_are_killed(tmp_path, monkeypatch):
     script = tmp_path / 'hang.py'
     child_pid = tmp_path / 'child.pid'
@@ -100,9 +127,9 @@ def test_hung_server_is_bounded_and_descendants_are_killed(tmp_path, monkeypatch
     from pathlib import Path
     proc = Path(f'/proc/{pid}/stat')
     deadline = time.monotonic() + 1
-    while proc.exists() and proc.read_text().split()[2] != 'Z' and time.monotonic() < deadline:
+    while _descendant_running(proc) and time.monotonic() < deadline:
         time.sleep(.01)
-    assert not proc.exists() or proc.read_text().split()[2] == 'Z', 'descendant survived timeout' 
+    assert not _descendant_running(proc), 'descendant survived timeout'
 
 
 def test_malformed_server_verdict_is_unknown(tmp_path):
