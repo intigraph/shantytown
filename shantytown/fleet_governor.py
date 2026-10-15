@@ -517,7 +517,7 @@ class FleetGovernor:
                     break
         return balance_mod.balance(self.lane_paces(now, local_agents), band)
 
-    def admits_launch(self, harness, local_agents=None):
+    def admits_launch(self, harness, local_agents=None, *, administrators=(), target=None):
         if self.errors:
             return self.fallback()
         lane = self.lane(harness)
@@ -526,12 +526,43 @@ class FleetGovernor:
             return 'account governor unconfigured for ' + harness if self.governors else ''
         verdict = governor.evaluate(persist=False)
         if verdict.frozen or verdict.drains:
-            return verdict.alarm or verdict.why or 'account governor holds launches'
-        count = self.counts(local_agents).get(lane, 0)
-        if verdict.max_agents is not None and count >= verdict.max_agents:
-            return (f'account governor {lane}: {count} live across hosts; '
-                    f'launch would count {count + 1}/{verdict.max_agents} (max_agents cap)')
+            return ((verdict.alarm or verdict.why or 'account governor holds launches')
+                    + '; no account-governor override; --despite-hold covers gaming/quiet-time only')
+        rows = [r for r in self.agents
+                if local_agents is None or r['host'] != self.local]
+        if local_agents is not None:
+            rows += local_agents
+        rows = [r for r in rows
+                if self.lane(r.get('account') or r['harness']) == lane]
+        return launch_capacity_refusal(
+            lane, verdict.max_agents, rows, administrators=administrators, target=target)
+
+
+def launch_capacity_refusal(lane, cap, rows, *, administrators=(), target=None):
+    """Preserve missing administrators' slots INSIDE the existing account cap.
+
+    Identities come from the governed roster, not role claims in peer process
+    rows. A running administrator consumes its reservation like any other slot.
+    The total cap is still checked first, including for administrator repair.
+    """
+    if cap is None:
         return ''
+    live = [row for row in rows if row['live']]
+    count = len(live)
+    if count >= cap:
+        return (f'account governor {lane}: {count} live across hosts; '
+                f'launch would count {count + 1}/{cap} (max_agents cap). '
+                'No account-cap override; stop an agent in this account to free a slot. '
+                '--despite-hold covers the gaming/quiet-time hold only.')
+    administrators = set(administrators)
+    occupied = {(row['host'], row['name']) for row in live}
+    vacant = administrators - occupied
+    if target not in administrators and count + len(vacant) >= cap:
+        return (f'account governor {lane}: {count}/{cap} slots occupied; '
+                f'{len(vacant)} slot(s) reserved for offline administrators. '
+                'Launch an administrator or free a non-administrator slot; '
+                '--despite-hold does not override account capacity.')
+    return ''
 
 
 class FreshestReader:
