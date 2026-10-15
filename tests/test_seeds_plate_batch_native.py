@@ -37,7 +37,7 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
             facts = []
             for i in range(80):
                 owner = f"agent{i%13}"
-                status = "hooked" if i == 0 else "in_progress" if i < 13 else "open"
+                status = "blocked" if i == 79 else "hooked" if i == 0 else "in_progress" if i < 13 else "open"
                 sub = f"<{N}item/test-{i}>"
                 props = [
                     ("a", f"<{S}Action>"),
@@ -95,19 +95,24 @@ def test_native_roster_and_global_queue_batches(monkeypatch):
                 assert read(f"agent{i}").id == f"test-{i}"
             assert len(queries) <= 6, len(queries)
             print("roster native PASS", len(queries), "queries/13 exact held plates")
-            # Capacity remains a separate complete owner observation, but its
-            # shape checks reuse this render's broader positive roster proof.
+            # The render observes blocked capacity too, without allowing it
+            # to replace held/ready assignments or rereading each owner.
+            before_capacity = len(queries)
             for i in range(13):
                 own = t.capacity_rows(f"agent{i}").exact()
                 assert own and all(row["assignee"] == f"agent{i}" for row in own)
+            assert len(queries) == before_capacity
+            print("capacity native PASS", len(queries) - before_capacity, "additional queries/13 owners; blocked retained")
+            assert "test-79" in {row["id"] for row in t.capacity_rows("agent1").exact()}
+            assert "test-79" not in {row["id"] for row in t.plate_rows("agent1").exact()}
             assert sum(query.startswith("ASK") and "?bad" in query
                        for query in queries) == 1
             queries.clear()
             r, a = feed_check.queue_state(Path(d), None, tracker())
             assert len(a) == 12
-            assert len(r) == 67
+            assert len(r) == 66
             assert len(queries) <= 4, len(queries)
-            print("global queue native PASS", len(queries), "queries/67ready+12active")
+            print("global queue native PASS", len(queries), "queries/66ready+12active")
             # A new observation sees deletion: the cache cannot outlive its reader.
             body = urllib.parse.urlencode(
                 {

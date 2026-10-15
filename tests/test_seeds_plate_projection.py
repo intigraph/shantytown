@@ -385,14 +385,19 @@ def test_roster_batch_preserves_hooked_held_and_empty_without_per_owner_reads(mo
     assert '"hooked"' in queries[0]
     assert "VALUES ?s" in queries[1]
     assert "GRAPH ?g" not in queries[1]
+    # A standalone admission reader must not reuse a prior roster positive.
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
+    assert not tracker.capacity_rows("a").complete
     # Fresh render replaces the reader-local observation.
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([]))
     fresh = br.plate_reader(tracker, require_complete=True, owners=["a"])
     assert fresh("a") is None
+    assert tracker.capacity_rows("a").exact() == []
 
 
 def test_roster_outage_is_unknown_for_every_named_owner_without_fallback(monkeypatch):
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    tracker.render_shape_reads = seeds_plate.RenderShapeReads()
     monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: (_ for _ in ()).throw(OSError("503")))
     monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
@@ -400,6 +405,12 @@ def test_roster_outage_is_unknown_for_every_named_owner_without_fallback(monkeyp
     for owner in ["a", "b"]:
         with pytest.raises(RuntimeError, match="503"):
             read(owner)
+    # A failed render cannot return empty capacity or start per-owner retries.
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: pytest.fail("read after refused render"))
+    from shantytown.answer import PartialAnswer
+    for owner in ("a", "b"):
+        with pytest.raises(PartialAnswer, match="503"):
+            tracker.capacity_rows(owner).exact()
 
 
 def test_roster_scope_cannot_include_unassigned_work(monkeypatch):
