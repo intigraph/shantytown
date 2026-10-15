@@ -542,8 +542,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                 key = fields[predicate]
                 if isinstance(value, dict):
                     if set(value) != {"datatype", "value"} or key not in (
-                            "created_at", "updated_at", "defer_until"):
-                        raise ValueError("unsupported typed deferral field")
+                            "created_at", "updated_at", "defer_until", "due_at"):
+                        raise ValueError(f"unsupported typed deferral field: {subject} {key}")
                     value = value["value"]
                 if key == "assignee" and isinstance(value, str) and value.startswith(SEEDS + "principal/"):
                     from urllib.parse import unquote
@@ -572,7 +572,7 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                         and not (include_asks and any(marker in (row["notes"] or "")
                                                      for marker in ("steve_quote:", "resume_when:"))))
                     or any(row[k] is not None and not isinstance(row[k], str)
-                           for k in ("notes", "assignee", "defer_until"))):
+                           for k in ("notes", "assignee", "defer_until", "due_at") if k in row)):
                 raise ValueError("incomplete or changed deferral candidate")
             row["labels"].sort()
         def ranking(row):

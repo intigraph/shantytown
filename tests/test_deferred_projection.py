@@ -129,3 +129,33 @@ def test_status_only_blocked_waiter_native_tend_once_across_restart(monkeypatch,
     if expected:
         assert 'test-one -> test-two' in calls[0] and 'gate target is deferred/blocked' in calls[0]
     assert len(candidate_queries) == 4
+
+
+def test_typed_due_date_preserves_the_complete_deferred_set(monkeypatch):
+    due = {"datatype": "xsd:dateTime", "value": "2026-10-29T00:00:00Z"}
+    result, calls = project(monkeypatch, wire(due_at=due))
+    row = result.exact()[0]
+    assert row["due_at"] == due["value"]
+    assert row["notes"] == "resume_when: closed:test-two"
+    assert row["status"] == "deferred"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("change", [
+    {"due_at": {"datatype": "xsd:dateTime", "value": "date", "extra": True}},
+    {"notes": {"datatype": "xsd:string", "value": "private notes"}},
+    {"priority": {"datatype": "xsd:integer", "value": "1"}},
+])
+def test_unsupported_typed_field_stays_unknown_with_safe_context(monkeypatch, change):
+    result, _ = project(monkeypatch, wire(**change))
+    with pytest.raises(PartialAnswer, match="unsupported typed deferral field") as error:
+        result.exact()
+    assert S in str(error.value)
+    assert next(iter(change)) in str(error.value)
+    assert "private notes" not in str(error.value)
+
+
+def test_non_string_typed_due_date_remains_unknown(monkeypatch):
+    result, _ = project(monkeypatch, wire(due_at={"datatype": "xsd:dateTime", "value": 7}))
+    with pytest.raises(PartialAnswer, match="incomplete or changed deferral candidate"):
+        result.exact()
