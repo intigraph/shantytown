@@ -2113,8 +2113,10 @@ def build_parser() -> argparse.ArgumentParser:
                          "uncommitted or unpushed work")
 
     ph = leaf("push",
-                        help="push your worktree branch to EVERY remote — the "
-                             "repo has two live peers and pushing one forks it")
+                        help="push your worktree branch to EVERY peer remote — "
+                             "the repo has two live peers and pushing one forks "
+                             "it; declared mirrors (st-push-role=mirror) are "
+                             "never pushed")
     ph.add_argument("repo",
                     help="the shared checkout: a path, or a bare name under "
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
@@ -10421,15 +10423,21 @@ def _cmd_push(a) -> int:
         return REFUSED
 
     for o in outcomes:
-        if o.ok:
+        if o.skipped:
+            print(f"  {o.remote}: skipped (mirror) — {o.reason}")
+        elif o.ok:
             print(f"  {o.remote}: {'already current' if o.up_to_date else 'pushed'}"
                   f" {branch} -> {a.branch}")
         else:
             print(f"  ⚠ {o.reason}", file=sys.stderr)
 
+    if not any(o.ok and not o.skipped for o in outcomes) and not any(
+            not o.ok for o in outcomes):
+        print("  refused: no remote received the push.", file=sys.stderr)
+        return REFUSED
     refused = [o for o in outcomes if not o.ok]
     if refused:
-        landed = [o.remote for o in outcomes if o.ok]
+        landed = [o.remote for o in outcomes if o.ok and not o.skipped]
         if landed:
             # SAY THIS OUT LOUD. A partial push is the state most likely to be
             # misread as "the push failed" and retried blindly, and the remotes
