@@ -237,7 +237,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                active_only: bool = False, capacity: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
-               decision: bool = False) -> Answer[list[dict]]:
+               decision: bool = False, messages_only: bool = False,
+               include_closed: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -246,6 +247,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     if feed_owners is not None:
         how = "Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs"
     try:
+        if (include_closed and not messages_only) or (messages_only and (
+                agent is None or feed_owners is not None or plate_owners is not None
+                or active_only or capacity or decision)):
+            raise ValueError("ambiguous inbox projection scope")
         if active_only and feed_owners is None:
             raise ValueError("active projection requires an owner scope")
         if plate_owners is not None:
@@ -269,6 +274,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
+                ("open", "hooked", "in_progress", "blocked", "deferred")
+                + (("closed",) if include_closed else ()) if messages_only else
                 ("hooked", "in_progress", "open", "blocked")
                 if decision or (plate_owners is not None and capacity) else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
@@ -312,7 +319,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
                         f"<{SEEDS}ontology/status> {json.dumps(status)} . "
-                        + ("" if include_messages else
+                        + (f"?s <{SCHEMA}name> ?title . "
+                           f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
+                           if messages_only else "" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
@@ -415,7 +424,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
-            if row.get("status") in ("closed", "tombstone"):
+            if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
@@ -441,7 +450,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or subject != SEEDS + "item/" + quote(row["id"], safe="")
             ):
                 raise ValueError("incomplete or unsupported plate candidate")
-            if row["status"] not in ("closed", "tombstone"):
+            if messages_only:
+                from .inbox import is_message
+                if not is_message(row["title"]) or row["status"] == "tombstone":
+                    raise ValueError("unexpected inbox candidate")
+            if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
