@@ -9,6 +9,50 @@ from shantytown import config
 from shantytown.seeds_plate import due_rows
 
 
+def test_due_read_failure_diagnostic_is_safe_and_does_not_send(tmp_path, monkeypatch):
+    from urllib.error import HTTPError
+    cases = [
+        (HTTPError("https://invalid.example/private-token", 408, "private-token", {}, None), "HTTPError:408"),
+        (HTTPError("https://invalid.example/private-token", 403, "private-token", {}, None), "HTTPError:403"),
+        (TimeoutError("private-token"), "TimeoutError"),
+        (ValueError("private-token"), "ValueError"),
+    ]
+    proof = SimpleNamespace(graph="https://example.org/board")
+    for index, (failure, expected) in enumerate(cases):
+        calls, sent, logs = [], [], []
+        def query(*args, **kwargs):
+            calls.append(1)
+            raise failure
+        monkeypatch.setattr("shantytown.seeds_plate._query", query)
+        alerter = OverdueAlerter(tmp_path / str(index), Registry(), read=lambda: due_rows(proof),
+                                 deliver=lambda *args: sent.append(args), log=logs.append)
+        alerter.path.parent.mkdir(parents=True)
+        retained = json.dumps({"entries": {}, "pending": {"admin": {"attempted": True}}})
+        alerter.path.write_text(retained)
+        assert alerter.sweep() == []
+        assert calls == [1] and not sent and alerter.path.read_text() == retained
+        assert f"overdue read cause: {expected}; no repeat delivery" in logs
+        assert all("private-token" not in line and "https://" not in line for line in logs)
+
+    # Unrecognized or forged caveats cannot become log content.
+    for caveat in ("due projection UNKNOWN: HTTPError:408 private-token",
+                   "due projection UNKNOWN: private-token", {"private-token": True}):
+        logs = []
+        alerter = OverdueAlerter(tmp_path / "unknown", Registry(),
+            read=lambda: Answer.capped([], how="private-token", caveat=caveat),
+            deliver=lambda *args: sent.append(args), log=logs.append)
+        assert alerter.sweep() == []
+        assert "overdue read cause: UNKNOWN; no repeat delivery" in logs
+        assert all("private-token" not in line for line in logs)
+
+    # A complete empty projection is a real quiet result, with no diagnostic.
+    logs = []
+    monkeypatch.setattr("shantytown.seeds_plate._query", lambda *args, **kwargs: {"rows": []})
+    assert OverdueAlerter(tmp_path / "complete", Registry(), read=lambda: due_rows(proof),
+                         deliver=lambda *args: sent.append(args), log=logs.append).sweep() == []
+    assert not logs and not sent
+
+
 class Registry:
     def all(self):
         return Answer.complete_read([SimpleNamespace(name="admin",role="administrator")],how="fixture registry")
