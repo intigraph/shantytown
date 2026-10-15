@@ -35,7 +35,9 @@ refuses closed, blocked and gated items. A second, private assignment path
 would have to re-earn every one of those refusals.
 
 A move that fails is reported and left for the next pass; it is never retried
-inside a pass, and a dispatch that may have landed is never re-sent.
+inside a pass, and a dispatch that may have landed is never re-sent. Once
+triage refuses a receiver, remaining moves to that receiver are reported as
+skipped for this pass. Other receivers continue; the next pass checks afresh.
 """
 
 from __future__ import annotations
@@ -170,9 +172,15 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
     failure after a delivered move is logged loudly and never undoes the move:
     the work has moved, and only the record is missing.
     """
-    from .dispatch import DispatchedButUntracked
+    from .dispatch import DispatchedButUntracked, TriageRefused
     results = []
+    refused = {}
     for m in moves:
+        if m.to in refused:
+            detail = f"receiver refused earlier this pass: {refused[m.to]}"
+            log(f"ceiling-transfer: {m.item} stays with {m.frm}; {m.to} skipped ({detail})")
+            results.append(Outcome(m, False, detail))
+            continue
         try:
             dispatch(m.item, m.to, m.note())
         except DispatchedButUntracked as exc:
@@ -186,6 +194,8 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
             continue
         except Exception as exc:  # noqa: BLE001 - every refusal is reported, none retried
             detail = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, TriageRefused):
+                refused[m.to] = detail
             log(f"ceiling-transfer: {m.item} stays with {m.frm}; moving it to "
                 f"{m.to} was refused or unproven ({detail})")
             results.append(Outcome(m, False, detail))

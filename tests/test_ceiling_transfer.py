@@ -275,3 +275,50 @@ def test_delivered_but_untracked_is_not_reported_as_staying():
     assert not out[0].moved
     assert "DELIVERED to ellie" in log[0] and "do not resend" in log[0]
     assert "stays with" not in log[0]
+
+
+def test_busy_receiver_is_attempted_once_per_pass_without_stopping_other_receivers():
+    from shantytown.dispatch import TriageRefused
+    from shantytown.triage import Action, Decision
+
+    moves = [ct.Move(f"item-{i}", "holder", "busy", "session ceiling", "fixture")
+             for i in range(5)]
+    moves.insert(2, ct.Move("control", "holder", "ready", "session ceiling", "fixture"))
+    calls, comments, events, logs = [], [], [], []
+
+    def dispatch(item, to, note):
+        calls.append((item, to))
+        if to == "busy":
+            raise TriageRefused(Decision(Action.REFUSE, "pane is busy", {"busy": True}))
+
+    out = ct.apply(moves, dispatch=dispatch, comment=lambda *c: comments.append(c),
+                   emit=events.append, log=logs.append)
+    assert calls == [("item-0", "busy"), ("control", "ready")]
+    assert [o.move for o in out] == moves  # even skipped work has an outcome
+    assert [o.move.item for o in out if o.moved] == ["control"]
+    assert [c[0] for c in comments] == ["control"]
+    assert [e["item"] for e in events] == ["control"]
+    assert all("TriageRefused" in o.detail for o in out if not o.moved)
+    assert sum("skipped" in line for line in logs) == 4
+
+    # A refusal is an observation for this pass, never a persistent agent hold.
+    later = []
+    out = ct.apply([moves[0]], dispatch=lambda *c: later.append(c),
+                   comment=lambda *c: None, emit=lambda e: None, log=lambda line: None)
+    assert len(later) == 1 and out[0].moved
+
+
+def test_item_level_failure_does_not_withhold_other_work_from_the_receiver():
+    calls = []
+    moves = [ct.Move("bad", "holder", "ready", "session ceiling", "fixture"),
+             ct.Move("good", "holder", "ready", "session ceiling", "fixture")]
+
+    def dispatch(item, to, note):
+        calls.append(item)
+        if item == "bad":
+            raise ValueError("item is not dispatchable")
+
+    out = ct.apply(moves, dispatch=dispatch, comment=lambda *c: None,
+                   emit=lambda e: None, log=lambda line: None)
+    assert calls == ["bad", "good"]
+    assert not out[0].moved and out[1].moved
