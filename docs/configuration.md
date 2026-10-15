@@ -190,6 +190,19 @@ app-server reader are refused. Named accounts participate in the existing balanc
 advisory across the whole fresh set; stale or unrated lanes cannot supply a preference.
 Caps still gate every launch and automatic switch.
 
+Account launch admission reserves capacity for each non-retired administrator
+in the canonical registry on a configured host, within that account's existing
+`max_agents`. Workers cannot consume an offline administrator's reserved slot.
+A running administrator occupies its own reservation; an administrator launch
+still counts against the same hard total cap. Harnesses sharing a legacy base
+account share its reservations too. Peer process rows cannot grant the role.
+
+At a cap of three, two workers leave one reserved slot for an administrator.
+If three sessions already occupy the account, even administrator repair refuses:
+stop an agent in that account before relaunching. `--despite-hold` overrides only
+the gaming/quiet-time hold. It does not override account capacity, FULL STOP,
+a frozen account or unknown fleet admission. No spend override is provided.
+
 Credential references support `infisical:KEY`, `env:VARIABLE`, and an absolute
 `file:` path. Infisical must be installed and authenticated by the operator; its
 output is captured and never logged. Infisical/environment values contain the
