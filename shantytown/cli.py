@@ -12922,6 +12922,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
             def deliver_due(recipient, marker, body):
+                import re
                 from copy import copy
                 from contextlib import redirect_stdout
                 from io import StringIO
