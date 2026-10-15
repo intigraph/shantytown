@@ -22,7 +22,7 @@ version if there are duplicates, the most up to date stuff is on github."*
 | **reactor** | — | watches bead lifecycle, fires actions | **event source**, with caveats |
 | **desire-path (dp)** | github `scbrown/desire-path` | records failed tool calls | **telemetry — the best idea nobody is using** |
 | **shanty** | github `scbrown/shanty` | Go tmux wrapper | pane adapter, later |
-| **skein** | github `scbrown/skein` | agent-skills spec + validator | skills, later |
+| **skein** | github `scbrown/skein` (archived) | former agent-skills collection | archived; its skills now ship with their tools (shantytown's are in `skills/`) |
 | **Gas Town** | github `gastownhall/gastown` | the harness this shrinks | — |
 | gt-api | *(not public)* | tapestry's intended backend | **do not build.** See below. |
 
@@ -186,8 +186,6 @@ it already solved it by ignoring the harness entirely.
 
 ## Open
 
-- **skein** — agent-skills spec + validator. We have 22 skills. Skills are probably an
-  adapter, not a core concept, but this needs reading before deciding.
 - **Does the bead-advisor belong in shantytown at all?** It is triage with a knowledge base, and
   triage IS in scope. Lean: the *interface* is (events + knowledge), and the advisor is a consumer that
   lives outside. If it lands inside, the harness has grown an opinion about work quality.

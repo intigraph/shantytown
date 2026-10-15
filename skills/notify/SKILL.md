@@ -28,7 +28,7 @@ allowed-tools:
 Both transports are plain HTTP POST against public, documented services. There
 is no bot to run and no session to keep alive.
 
-**On IRC:** skein deliberately ships no IRC client. IRC needs a *persistent
+**On IRC:** this skill deliberately ships no IRC client. IRC needs a *persistent
 connection*, and a persistent connection is a daemon — the one thing this repo
 does not do. If you want IRC, run a bridge (matterbridge, an ntfy→IRC relay,
 a webhook-to-`ii` script) and point `NOTIFY_WEBHOOK_URL` at it. That is an
