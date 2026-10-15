@@ -208,10 +208,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # Until the account owner registers the Trusted Publisher, an upload can only
+  # fail invalid-publisher and turn main red (0.7.0 did). The repository
+  # variable PYPI_PUBLISHER_REGISTERED=true is set after that registration.
+  pypi-not-registered:
+    needs: [release, pypi-backfill]
+    if: >-
+      ${{ always() && !cancelled() && vars.PYPI_PUBLISHER_REGISTERED != 'true' &&
+          (needs.release.result == 'success' || needs.pypi-backfill.result == 'success') }}
+    runs-on: ubuntu-22.04
+    permissions: {}
+    steps:
+      - name: Skip PyPI until the Trusted Publisher is registered
+        run: |
+          echo "::notice title=PyPI upload skipped::PYPI_PUBLISHER_REGISTERED is not true; register the publisher (docs/pypi-publishing.md), set the variable, then backfill this release."
+
   pypi:
     needs: [release, pypi-backfill]
     if: >-
-      ${{ always() && !cancelled() &&
+      ${{ always() && !cancelled() && vars.PYPI_PUBLISHER_REGISTERED == 'true' &&
           (needs.release.result == 'success' || needs.pypi-backfill.result == 'success') }}
     runs-on: ubuntu-22.04
     environment:
