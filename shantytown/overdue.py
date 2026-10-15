@@ -116,7 +116,25 @@ class OverdueAlerter:
             if not recipient:
                 self.log(f"overdue: {row['id']} recipient UNKNOWN")
                 continue
-            self.reg.get(recipient)  # Unknown owner must not silently reroute.
+            # No-card assignees remain on their work items. Their notice goes
+            # to the configured administrator, never to an invented crew card.
+            try:
+                self.reg.get(recipient)
+            except LookupError:
+                if row.get("kind") == "unlock":
+                    self.log(f"unlock: {row['id']} recipient {recipient} UNKNOWN")
+                    continue
+                owner = recipient
+                recipient = find_administrator(self.reg)
+                if not recipient:
+                    self.log(f"overdue: {row['id']} owner {owner} has no card; administrator UNKNOWN")
+                    continue
+                try:
+                    self.reg.get(recipient)
+                except LookupError:
+                    self.log(f"overdue: {row['id']} administrator {recipient} UNKNOWN")
+                    continue
+                self.log(f"overdue: {row['id']} owner {owner} has no card; notice to {recipient}")
             kind = row.get("kind", "overdue")
             # Unlock identity belongs to the producer generation, not a later
             # assignee edit; one event must not resend to another recipient.
