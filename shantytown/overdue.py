@@ -58,6 +58,22 @@ def findings(rows, now):
     return result
 
 
+def _due_read_cause(caveat):
+    """A bounded diagnostic, never an arbitrary reader message or URL."""
+    if not isinstance(caveat, str) or len(caveat) > 80:
+        return "UNKNOWN"
+    prefix = "due projection UNKNOWN: "
+    for name in ("HTTPError", "URLError", "TimeoutError", "ValueError", "TypeError",
+                 "JSONDecodeError", "OSError"):
+        if caveat == prefix + name:
+            return name
+    if caveat.startswith(prefix + "HTTPError:"):
+        status = caveat[len(prefix + "HTTPError:"):]
+        if len(status) == 3 and status.isascii() and status.isdecimal() and 400 <= int(status) <= 599:
+            return "HTTPError:" + status
+    return "UNKNOWN"
+
+
 class OverdueAlerter:
     def __init__(self, root, reg, *, read, deliver, events=None, receipt=None, ack=None, now=None, log=None):
         self.root, self.reg = Path(root), reg
@@ -85,7 +101,10 @@ class OverdueAlerter:
     def _sweep(self):
         from .tier import find_administrator
         now = self.now()
-        rows = self.read().exact()
+        answer = self.read()
+        if getattr(answer, "complete", True) is False:
+            self.log(f"overdue read cause: {_due_read_cause(getattr(answer, 'caveat', None))}; no repeat delivery")
+        rows = answer.exact()
         current = findings(rows, now)
         try:
             events = self.events().exact() if self.events is not None else []

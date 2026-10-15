@@ -10,6 +10,7 @@ import json
 from datetime import datetime, timezone
 import re
 from urllib.parse import quote, urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .answer import Answer
@@ -757,4 +758,7 @@ def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
                 previous["labels"].append(item["label"])
         return Answer.complete_read(list(grouped.values()),how=how)
     except Exception as error:
-        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {type(error).__name__}")
+        cause = type(error).__name__
+        if isinstance(error, HTTPError) and type(error.code) is int and 400 <= error.code <= 599:
+            cause += f":{error.code}"
+        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {cause}")
