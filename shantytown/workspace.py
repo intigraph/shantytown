@@ -1212,6 +1212,13 @@ def publication_remotes(dest: Path | str, run: GitRunner = _git) -> list[str]:
     """
     rc, out = run(dest, "remote")
     names = out.splitlines() if rc == 0 else []
+    # A declared mirror holds rewritten (scrubbed, squashed) history, so a ref
+    # there can never prove this tree's commits were published (aegis-x74). An
+    # invalid role leaves nothing provable: the caller reports that and gates.
+    mirrors, refusal = mirror_remotes(Path(dest), names, run)
+    if refusal:
+        return []
+    names = [n for n in names if n not in mirrors]
     rc, branch = run(dest, "symbolic-ref", "--quiet", "--short", "HEAD")
     tracked = None
     if rc == 0:
@@ -1411,8 +1418,20 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     # here" actually means.
     # A skipped remote may retain a deleted branch. It cannot certify that a
     # commit is safely published when only the tracked remote was refreshed.
-    saved_refs = ([f"--remotes={name}" for name in refreshed]
-                  if selected else ["--remotes"])
+    if selected:
+        saved_refs = [f"--remotes={name}" for name in refreshed]
+    else:
+        # A declared mirror holds rewritten history and never proves a commit
+        # was published (aegis-x74); a remote whose role cannot be read is not
+        # trusted as proof either. No such remote: the original `--remotes`.
+        rc_r, names = run(dest, "remote")
+        names = names.split() if rc_r == 0 else []
+        mirrors, bad = mirror_remotes(Path(dest), names, run)
+        if bad:
+            mirrors = [n for n in names if _push_role(Path(dest), n, run)
+                       not in (None, "peer")]
+        saved_refs = ([f"--remotes={n}" for n in names if n not in mirrors]
+                      if mirrors else ["--remotes"])
     rc2, unpushed = run(dest, "rev-list", "--count", "HEAD", "--not", *saved_refs)
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
@@ -1557,6 +1576,9 @@ class PushOutcome:
     up_to_date: bool = False
     non_ff: bool = False
     reason: str | None = None
+    #: A declared mirror that was deliberately NOT contacted (aegis-x74). Not a
+    #: failure, and never a publication: callers must not report it as pushed.
+    skipped: bool = False
 
 
 def _remote_authority(url: str) -> tuple[str, str]:
@@ -1581,12 +1603,61 @@ def _remote_authority(url: str) -> tuple[str, str]:
     return host.lower(), owner.lower()
 
 
+#: Declared push roles (aegis-x74). A `mirror` is advanced ONLY by its own
+#: mirror protocol (e.g. a scrubbed, squashed public copy), so `st repo push`
+#: never writes to it and it never proves publication.
+PUSH_ROLES = ("peer", "mirror")
+
+
+def _push_role(dest: Path | str, remote: str, run: GitRunner) -> str | None:
+    """The remote's declared `st-push-role`, or None when it is not set.
+
+    Only Git's exit 1 means "no such key". An unreadable config (exit 3, 128,
+    ...) or a configured empty value is returned as an unrecognised marker so
+    callers refuse it: a declaration meant to say "mirror" must never quietly
+    read as an undeclared peer.
+    """
+    rc, value = run(dest, "config", "--get", f"remote.{remote}.st-push-role")
+    if rc == 1:
+        return None
+    if rc != 0:
+        return f"<unreadable: git config exit {rc}>"
+    return value.strip().lower() or "<empty>"
+
+
 def _explicit_push_peer(dest: Path | str, remote: str,
                         run: GitRunner) -> bool:
-    """Was this remote explicitly approved for an every-remote push?"""
+    """Was this remote explicitly approved for an every-remote push?
+
+    A declared mirror never is, whatever `st-push-allowed` says: that flag only
+    answered "is this ours?", and skein's public mirror carried it (aegis-x74).
+    """
+    role = _push_role(dest, remote, run)
+    if role == "peer":
+        return True
+    if role is not None:
+        return False
     rc, value = run(dest, "config", "--bool", "--get",
                     f"remote.{remote}.st-push-allowed")
     return rc == 0 and value.strip().lower() == "true"
+
+
+def mirror_remotes(dest: Path | str, remotes: list[str],
+                   run: GitRunner = _git) -> tuple[list[str], str]:
+    """Split out declared mirrors. Returns (mirrors, refusal).
+
+    A refusal names every remote whose role is not one of PUSH_ROLES; it is
+    returned before anything is contacted, because guessing the role of a
+    remote that may be a public mirror is exactly the x74 leak.
+    """
+    roles = {r: _push_role(dest, r, run) for r in remotes}
+    invalid = [f"{r}={v}" for r, v in roles.items()
+               if v is not None and v not in PUSH_ROLES]
+    if invalid:
+        return [], ("REFUSED BEFORE PUSH: unrecognised remote.<name>.st-push-role "
+                    f"({', '.join(invalid)}); expected one of "
+                    f"{'/'.join(PUSH_ROLES)}. No remote was contacted.")
+    return [r for r in remotes if roles[r] == "mirror"], ""
 
 
 def push_authority_refusal(dest: Path | str, run: GitRunner = _git,
@@ -1601,6 +1672,18 @@ def push_authority_refusal(dest: Path | str, run: GitRunner = _git,
         remotes = sorted(out.splitlines()) if rc == 0 else []
     if not remotes:
         return ""
+    # Mirrors are never pushed, so they take no part in the authority decision.
+    # A set that is ALL mirrors has nowhere to publish: that is a refusal, never
+    # an empty "no conflict" that the cycle loss gate could read as clean.
+    mirrors, refusal = mirror_remotes(dest, remotes, run)
+    if refusal:
+        return refusal
+    if mirrors:
+        remotes = [r for r in remotes if r not in mirrors]
+        if not remotes:
+            return ("REFUSED BEFORE PUSH: every configured remote is a declared "
+                    f"mirror ({', '.join(mirrors)}); a mirror is advanced only by "
+                    "its mirror protocol. No remote was contacted.")
     # PRE-FLIGHT EVERY REMOTE BEFORE CONTACTING ANY OF THEM (aegis-ke5ri).
     # `upstream` is a normal name for somebody else's repository.  Thinker's
     # origin is scbrown/thinker while upstream is induktio/thinker; blindly
@@ -1672,8 +1755,17 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     if refusal:
         return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
 
-    outcomes: list[PushOutcome] = []
-    for remote in remotes:
+    # NEVER PUSH A DECLARED MIRROR (aegis-x74). A raw feature branch reached
+    # skein's public, scrubbed GitHub mirror through this loop because the loop
+    # had no word for "mirror". The role was validated by the preflight above.
+    mirrors, _ = mirror_remotes(dest, remotes, run)
+    outcomes: list[PushOutcome] = [
+        PushOutcome(remote=m, ok=True, skipped=True,
+                    reason=(f"{m} is a declared mirror (remote.{m}.st-push-role="
+                            "mirror): not pushed; it is advanced only by its "
+                            "mirror protocol."))
+        for m in mirrors]
+    for remote in (r for r in remotes if r not in mirrors):
         rc, out, err = push_run(dest, "--porcelain", remote,
                                 f"{src}:refs/heads/{dst}")
         if rc == 0:
