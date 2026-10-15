@@ -2,6 +2,8 @@
 
 [shantytown](introduction.md)
 
+- [Documentation map](map.md)
+
 # The pitch
 
 - [Why Shantytown?](why.md)
