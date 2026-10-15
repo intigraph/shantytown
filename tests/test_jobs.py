@@ -643,11 +643,14 @@ def test_a_runner_under_systemd_leaves_the_tend_units_cgroup(tmp_path, monkeypat
     assert argv[-3:] == ["sh", "-c", "echo ${USER} $$"]
 
 
-def test_an_older_systemd_gets_every_dollar_escaped_instead(tmp_path, monkeypatch):
+def test_an_older_systemd_gets_the_scope_and_the_argv_untouched(tmp_path, monkeypatch):
+    # Before 254 systemd-run neither expands nor knows the flag; escaping `$`
+    # there was measured to double it (CI runner, real tool).
     bin_dir = _fake_systemd_run(tmp_path, version="systemd 249 (249.11)")
     argv = _spawned_argv(tmp_path, monkeypatch, _systemd_env(bin_dir), ["sh", "-c", "echo ${USER} $$"])
+    assert argv[:3] == [str(bin_dir / "systemd-run"), "--user", "--scope"]
     assert "--expand-environment=no" not in argv
-    assert argv[-3:] == ["sh", "-c", "echo $${USER} $$$$"]
+    assert argv[-3:] == ["sh", "-c", "echo ${USER} $$"]
 
 
 def test_an_unreadable_systemd_version_keeps_the_old_spawn(tmp_path, monkeypatch):
@@ -682,12 +685,10 @@ def test_real_systemd_run_passes_the_job_argv_byte_identical(tmp_path):
     run = _user_bus()
     env = dict(os.environ, INVOCATION_ID="test", XDG_RUNTIME_DIR=str(run),
                DBUS_SESSION_BUS_ADDRESS=f"unix:path={run / 'bus'}")
-    prefix, escape = jobs._escape_unit(tmp_path / "argv.result.json", env)
+    prefix = jobs._escape_unit(tmp_path / "argv.result.json", env)
     assert prefix, "a reachable user manager must produce a scope prefix"
     job = ["${USER}", "$$", "$HOME", "a b", "q'uote", "back\\slash", "ends$"]
     runner = [jobs.sys.executable, "-c", "import json,sys; print(json.dumps(sys.argv[1:]))", *job]
-    if escape:
-        runner = [a.replace("$", "$$") for a in runner]
     r = subprocess.run([*prefix, *runner], capture_output=True, text=True, env=env, timeout=30)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == job
