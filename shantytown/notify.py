@@ -2172,6 +2172,10 @@ def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", 
             return f"{count} background terminal(s) still running" if count else ""
         return "background shells cannot be read on the codex harness, so zero is not visible"
     n = triage_mod.running_shells(plain)
+    if n is None and harness_name in _SHELL_COUNT_COMPLETE:
+        footer = triage_mod._tail(plain).splitlines()
+        if footer and footer[-1].rstrip().endswith(("…", "...")):
+            return "background shells cannot be read from a truncated footer, so zero is not visible"
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
                 f"{harness_name or 'unknown'} harness, so zero is not visible")
