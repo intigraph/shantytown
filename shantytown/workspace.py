@@ -1612,11 +1612,17 @@ PUSH_ROLES = ("peer", "mirror")
 def _push_role(dest: Path | str, remote: str, run: GitRunner) -> str | None:
     """The remote's declared `st-push-role`, or None when it is not set.
 
-    An unrecognised value is returned as-is so callers can refuse it: a typo in
-    a role meant to say "mirror" must not quietly read as "peer".
+    Only Git's exit 1 means "no such key". An unreadable config (exit 3, 128,
+    ...) or a configured empty value is returned as an unrecognised marker so
+    callers refuse it: a declaration meant to say "mirror" must never quietly
+    read as an undeclared peer.
     """
     rc, value = run(dest, "config", "--get", f"remote.{remote}.st-push-role")
-    return value.strip().lower() if rc == 0 and value.strip() else None
+    if rc == 1:
+        return None
+    if rc != 0:
+        return f"<unreadable: git config exit {rc}>"
+    return value.strip().lower() or "<empty>"
 
 
 def _explicit_push_peer(dest: Path | str, remote: str,

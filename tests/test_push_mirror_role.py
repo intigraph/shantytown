@@ -146,3 +146,42 @@ def test_a_tracked_mirror_is_not_a_publication_remote(two_remotes):
                                            tracked_only=True),
         reachable=lambda _: True)
     assert not verdict.ok
+
+
+def _role_read(result):
+    """A real git runner whose `st-push-role` read for forge returns `result`."""
+    def run(dest, *args, **kw):
+        if args[:2] == ("config", "--get") and args[2] == "remote.forge.st-push-role":
+            return result
+        return workspace._git(dest, *args, **kw)
+    return run
+
+
+@pytest.mark.parametrize("result", [(128, ""), (3, ""), (0, ""), (0, "  \n")],
+                         ids=["fatal-128", "invalid-config-3", "empty", "blank"])
+def test_an_unreadable_or_empty_role_refuses_before_any_push(two_remotes, result):
+    """wu's aegis-x74 finding: only exit 1 means "no role"."""
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "feature")
+    run = _role_read(result)
+    push = Mock(side_effect=AssertionError("must not contact a remote"))
+    outcomes = workspace.push_every_remote(wt, "HEAD", "ellie/feature",
+                                           run=run, push_run=push)
+    assert len(outcomes) == 1 and not outcomes[0].ok
+    assert "st-push-role" in outcomes[0].reason
+    push.assert_not_called()
+    assert workspace.push_authority_refusal(wt, run=run)
+    assert "forge" not in workspace.publication_remotes(wt, run=run)
+    assert _ref(origin, "refs/heads/ellie/feature") is None
+    assert _ref(forge, "refs/heads/ellie/feature") is None
+
+
+def test_a_genuinely_missing_role_keeps_the_legacy_peer_path(two_remotes):
+    """Positive control: exit 1 is "no role", so st-push-allowed still decides."""
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "feature")
+    run = _role_read((1, ""))
+    outcomes = workspace.push_every_remote(wt, "HEAD", "ellie/feature", run=run)
+    assert sorted((o.remote, o.ok, o.skipped) for o in outcomes) == [
+        ("forge", True, False), ("origin", True, False)]
+    assert _ref(forge, "refs/heads/ellie/feature") == _git(wt, "rev-parse", "HEAD")
