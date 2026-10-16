@@ -328,6 +328,33 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
+Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
+the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
+command, path, URL or query. Each binding names one item, producer, host, unit,
+boot/generation, protected window and starting instant. Its producer contract
+must be accepted before the binding can be used. The initial protected-recycle
+binding is **disabled**: this release does not change an existing review date or
+start an evidence collector.
+
+The protected-recycle evaluator requires a complete ordered interval containing
+a natural soft defer inside the nominated window, then a successful unforced
+recycle after the window. An intervening manual restart or hard override
+disqualifies that pair. Complete fresh evidence without a pair is NOT_MET;
+missing, stale, gapped, invalid or identity-mismatched evidence is UNKNOWN.
+Neither verdict releases work, even after a review date lapses. MET preserves
+the existing judgment, dependency and date gates and is checked again immediately
+before release; it never closes the item or waives its acceptance criteria.
+
+The fixed evidence location is
+`~/.local/state/shantytown/resume-events/<binding-id>.json`. Directory and file
+must be owned by the user or root and not writable by group/others; symlinks
+are refused. One read is bounded to 64 KiB and 1,000 events. Evidence must be
+observed within 30 minutes, with a 14-day binding horizon. Schema 1 includes
+binding identity, UTC capture/window/observation bounds, explicit complete/gaps
+fields, contiguous sequence bounds, and uniquely identified typed events from
+the bound generation. No evidence is cached across scheduled evaluations.
+Producer owners must review the complete schema before enabling a binding.
+
 The twenty-eighth is **help**: the rationale pages for the instructions st pushes into
 panes on a timer. It exists because those messages had grown into essays — every reason
 anyone might need, re-pushed every few minutes, which is exactly how the one
