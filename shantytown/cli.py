@@ -1053,6 +1053,26 @@ def _hostmem_verdict(cfg):
 #: The two measured blowouts were 27 and 36 MINUTES, so this is not a tight
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
+# A REFUSED cycle request is retried after this long, not on every pass (aegis-qc2).
+# Measured 2026-10-16: four requests refused on dirty trees were re-served on all 36
+# passes in three hours at 10-50s each, which spent the sweep budget before the later
+# sweeps (the deferral sweep among them) could start. A new request from the agent
+# clears the refusal and is served on the next pass, so fixing the tree and asking
+# again is never delayed by this.
+_CYCLE_REFUSED_RETRY_S = float(os.environ.get("SHANTY_CYCLE_REFUSED_RETRY_S", "1800"))
+
+
+def _refusal_backing_off(request: dict, now: float | None = None) -> bool:
+    """True while a refused request is inside its retry interval.
+
+    Fails toward SERVING: a refusal with no readable time is retried, so a
+    malformed record can only cost a pass, never strand a request."""
+    refused = request.get("refused") if isinstance(request, dict) else None
+    at = refused.get("at") if isinstance(refused, dict) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return False
+    now = time.time() if now is None else now
+    return 0 <= now - float(at) < _CYCLE_REFUSED_RETRY_S
 
 def _hooks_running(a, cards) -> list:
     """The agents RUNNING now, each with the settings file its PROCESS was
@@ -12412,6 +12432,9 @@ def _tend_once(a, quiet: bool = False) -> int:
     # run — a dry run, an early refusal — still has something for the summary
     # to read. It was scoped to the sweep block first and two tests caught it.
     deferred: list[str] = []
+    # Wall time of each sweep that ran (aegis-qc2). The deferral line names what was
+    # shed; without these it cannot say what consumed the budget.
+    sweep_seconds: dict[str, float] = {}
     panes = _panes(a)
     try:
         reg = _registry(a)
@@ -12774,12 +12797,16 @@ def _tend_once(a, quiet: bool = False) -> int:
                 # summary in its own noise.
                 deferred.append(label)
                 return []
+            started = time.monotonic()
             try:
                 return fn()
             except Exception as e:  # noqa: BLE001 — any sweep error is survivable
                 print(f"  ⚠ tend: the {label} sweep CRASHED ({e!r}) — "
                       f"supervision continues without it this pass", file=sys.stderr)
                 return []
+            finally:
+                sweep_seconds[label] = (sweep_seconds.get(label, 0.0)
+                                        + time.monotonic() - started)
 
         # FLEET-WIDE sweeps run on the fleet owner host ONLY (aegis-1g55ji). They
         # read the shared board and push to the LOCAL admin, so a second host's
@@ -12870,6 +12897,11 @@ def _tend_once(a, quiet: bool = False) -> int:
                          f"({st_now.state if st_now else 'unreadable'}); "
                          f"its cycle waits for the next idle pass")
                     continue
+            if _refusal_backing_off(request):
+                _log(f"cycle: {who}'s request was refused "
+                     f"({str(request['refused'].get('reason', ''))[:80]}); "
+                     f"retrying after {_CYCLE_REFUSED_RETRY_S:.0f}s or a new request")
+                continue
             rc_c = _sweep(f"cycle:{who}", lambda w=who, r=request:
                           _serve_cycle_request(a, w, r))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
@@ -13124,6 +13156,11 @@ def _tend_once(a, quiet: bool = False) -> int:
               f"runs before any of these. A recurring deferral means the store or "
               f"a notifier is slow, not that supervision is failing.",
               file=sys.stderr)
+        slowest = sorted(sweep_seconds.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        if slowest:
+            print("  ⚠ tend: slowest sweeps this pass: "
+                  + ", ".join(f"{label} {secs:.1f}s" for label, secs in slowest),
+                  file=sys.stderr)
     # The health signal, written even on a dry run — "a pass ran" is the fact
     # somebody needs when the supervisor itself has stopped. Recorded AFTER the
     # pass so it can never claim work that did not happen.

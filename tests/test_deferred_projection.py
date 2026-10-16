@@ -129,3 +129,19 @@ def test_status_only_blocked_waiter_native_tend_once_across_restart(monkeypatch,
     if expected:
         assert 'test-one -> test-two' in calls[0] and 'gate target is deferred/blocked' in calls[0]
     assert len(candidate_queries) == 4
+
+
+def test_a_typed_due_date_is_read_not_refused(monkeypatch):
+    """aegis-qc2, measured 2026-10-16: every item with an ical:due (typed
+    xsd:dateTime) made the deferral read refuse, so the sweep never summarized."""
+    typed = {'datatype': 'http://www.w3.org/2001/XMLSchema#dateTime',
+             'value': '2026-10-30T05:30:08Z'}
+    answer, _ = project(monkeypatch, wire(due_at=typed))
+    assert answer.exact()[0]['due_at'] == '2026-10-30T05:30:08Z'
+
+
+def test_other_typed_fields_still_refuse_and_name_the_field(monkeypatch):
+    typed = {'datatype': 'http://www.w3.org/2001/XMLSchema#string', 'value': 'held'}
+    answer, _ = project(monkeypatch, wire(title=typed))
+    with pytest.raises(PartialAnswer, match='unsupported typed deferral field: title'):
+        answer.exact()
