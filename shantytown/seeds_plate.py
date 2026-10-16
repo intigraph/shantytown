@@ -235,6 +235,7 @@ class RenderShapeReads:
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
+               include_deferred: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
@@ -246,6 +247,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     ) + "; shared and ephemeral graphs"
     if feed_owners is not None:
         how = "Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs"
+    if include_deferred:
+        how = "Seeds owner-scoped waiting-work metadata; shared and ephemeral graphs"
     try:
         if (include_closed and not messages_only) or (messages_only and (
                 agent is None or feed_owners is not None or plate_owners is not None
@@ -258,6 +261,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 raise ValueError("ambiguous roster scope")
             feed_owners = plate_owners
         scope = feed_owners if feed_owners is not None else agent
+        if include_deferred and scope is None:
+            raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
         if scope is not None and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
@@ -285,6 +290,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 else ("hooked", "in_progress", "open", "blocked") if capacity
                 else ("hooked", "in_progress", "open")
             )
+            if include_deferred:
+                statuses = (*statuses, "deferred")
             terms = (
                 [None]
                 if agent is None and feed_owners is None
@@ -443,7 +450,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
                 or not row["id"].strip()
                 or (agent is not None and row.get("assignee") not in owners)
-                or (plate_owners is not None and row.get("assignee") not in owners)
+                or (plate_owners is not None and not include_deferred
+                    and row.get("assignee") not in owners)
+                or (include_deferred and not row.get("assignee"))
                 or (feed_owners is not None and row.get("assignee")
                     and row["assignee"].split("/")[-1]
                     not in {a.split("/")[-1] for a in feed_owners})
