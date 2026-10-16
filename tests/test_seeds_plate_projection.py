@@ -575,3 +575,55 @@ def test_inbox_query_filters_both_graphs_and_owner_spellings_in_actual_rdf(monke
         assert len(queries) == 2
     finally:
         data.close()
+
+
+@pytest.mark.parametrize("options,statuses", [
+    ({}, {"hooked", "in_progress", "open"}),
+    ({"decision": True}, {"hooked", "in_progress", "open", "blocked"}),
+    ({"capacity": True}, {"hooked", "in_progress", "open", "blocked"}),
+    ({"messages_only": True}, {"hooked", "in_progress", "open", "blocked", "deferred"}),
+    ({"messages_only": True, "include_closed": True},
+     {"hooked", "in_progress", "open", "blocked", "deferred", "closed"}),
+])
+def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, options, statuses):
+    from collections import Counter
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    expected = []
+    graphs = (G, G + "#seeds-ephemeral")
+    message = options.get("messages_only", False)
+    for graph_name in (*graphs, G + "-foreign"):
+        graph = data.graph(URIRef(graph_name))
+        for owner in (Literal("worker"), URIRef(seeds_plate.SEEDS + "principal/worker"), Literal("other")):
+            for status in ("hooked", "in_progress", "open", "blocked", "deferred", "closed"):
+                for title in ("actual work", "inbox: payload", "mail: legacy"):
+                    for kind in ("Action", "Thing"):
+                        subject = URIRef(seeds_plate.SEEDS + "item/control-" + str(len(graph)))
+                        graph.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + kind)))
+                        graph.add((subject, URIRef(seeds_plate.SCHEMA + "agent"), owner))
+                        graph.add((subject, URIRef(seeds_plate.SEEDS + "ontology/status"), Literal(status)))
+                        graph.add((subject, URIRef(seeds_plate.SCHEMA + "name"), Literal(title)))
+                        if (graph_name in graphs and str(owner) != "other" and status in statuses
+                                and kind == "Action" and title.startswith(("inbox:", "mail:")) == message):
+                            expected.append((str(subject), graph_name))
+    seen = []
+
+    def query(_proof, text, timeout):
+        seen.append(text)
+        result = data.query(text)
+        assert [str(v) for v in result.vars] == ["subject", "graph"]
+        actual = [(str(row.subject), str(row.graph)) for row in result]
+        assert Counter(actual) == Counter(expected)
+        # Stop before hydration: this test checks the real candidate query,
+        # while existing projection tests cover field reads and uncertainty.
+        return answer([])
+
+    monkeypatch.setattr(seeds_plate, "owner_shape_supported", lambda *a, **kw: True)
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        assert seeds_plate.owner_rows(PROOF, "worker", **options).exact() == []
+        assert len(seen) == 1
+        assert seen[0].count(" UNION ") == 3
+    finally:
+        data.close()
