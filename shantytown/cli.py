@@ -9526,9 +9526,10 @@ def _cmd_cycle(a) -> int:
     if getattr(a, "_automatic_cycle", False):
         try:
             early_panes = _panes(a)
+            opts = {'allow_limited': True} if getattr(a, '_account_card', None) else {}
             early = _automatic_cycle_refusal(
                 card, card.pane or _session_for(card), early_panes,
-                _runtime(a, early_panes), a.root)
+                _runtime(a, early_panes), a.root, **opts)
         except Exception:  # noqa: BLE001 -- unreadable here: the locked check decides
             early = ""
         if early:

@@ -6,6 +6,7 @@ before the later sweeps (the deferral sweep among them) could start. The request
 stays pending either way; only the re-serve is spaced out.
 """
 import time
+import pytest
 
 from shantytown import cli, cycle
 
@@ -107,3 +108,39 @@ def test_an_idle_pane_still_reaches_the_guard(tmp_path, monkeypatch):
     from tests.test_tend import IDLE
     _, walked = _serve_with_pane(tmp_path, monkeypatch, IDLE)
     assert walked == [1]
+
+
+@pytest.mark.parametrize("account_switch,expected_walk", [(False, False), (True, True)])
+def test_limited_boundary_keeps_account_switch_exception(
+        tmp_path, monkeypatch, account_switch, expected_walk):
+    """The early observation preserves the locked check's account-switch exception."""
+    from types import SimpleNamespace
+    from tests.test_tend import _Args, _Panes, _roster, IDLE
+    _roster(tmp_path, {"worker": {"role": "worker", "pane": "p-worker"}})
+    monkeypatch.setattr(cli, "Tmux",
+                        lambda *_a, **_k: _Panes(screens={"p-worker": IDLE}))
+    monkeypatch.setattr(cli, "_cycle_stop_refusal", lambda *_a: "")
+    monkeypatch.setattr(cli, "_runtime",
+                        lambda *_a: SimpleNamespace(shows_ready_ui=lambda _p: True))
+    monkeypatch.setattr(cli.triage_mod, "work_state",
+                        lambda *_a, **_k: cli.triage_mod.LIMITED)
+    monkeypatch.setattr(cli, "asks_a_question", lambda *_a: False)
+    monkeypatch.setattr(cli, "auth_expired", lambda *_a: False)
+    monkeypatch.setattr(cli, "limit_reached", lambda *_a: True)
+    monkeypatch.setattr(cli, "_cycle_input_empty", lambda *_a: True)
+    monkeypatch.setattr(cli.harness_mod, "name_for", lambda *_a: "claude")
+    monkeypatch.setattr(cli.notify_mod, "unattended_shell_block", lambda *_a, **_k: "")
+    walked = []
+
+    def trees(*_a, **_k):
+        walked.append(1)
+        raise RuntimeError("guard reached")
+    monkeypatch.setattr(cli, "_agent_trees", trees)
+    args = _Args(tmp_path, backend="files", agent="worker", self_=False,
+                 serve_request=False, _automatic_cycle=True,
+                 _account_card=object() if account_switch else None)
+    try:
+        cli._cmd_cycle(args)
+    except RuntimeError as exc:
+        assert str(exc) == "guard reached"
+    assert bool(walked) == expected_walk
