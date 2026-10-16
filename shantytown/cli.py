@@ -12412,6 +12412,9 @@ def _tend_once(a, quiet: bool = False) -> int:
     # run — a dry run, an early refusal — still has something for the summary
     # to read. It was scoped to the sweep block first and two tests caught it.
     deferred: list[str] = []
+    # Wall time of each sweep that ran (aegis-qc2). The deferral line names what was
+    # shed; without these it cannot say what consumed the budget.
+    sweep_seconds: dict[str, float] = {}
     panes = _panes(a)
     try:
         reg = _registry(a)
@@ -12774,12 +12777,16 @@ def _tend_once(a, quiet: bool = False) -> int:
                 # summary in its own noise.
                 deferred.append(label)
                 return []
+            started = time.monotonic()
             try:
                 return fn()
             except Exception as e:  # noqa: BLE001 — any sweep error is survivable
                 print(f"  ⚠ tend: the {label} sweep CRASHED ({e!r}) — "
                       f"supervision continues without it this pass", file=sys.stderr)
                 return []
+            finally:
+                sweep_seconds[label] = (sweep_seconds.get(label, 0.0)
+                                        + time.monotonic() - started)
 
         # FLEET-WIDE sweeps run on the fleet owner host ONLY (aegis-1g55ji). They
         # read the shared board and push to the LOCAL admin, so a second host's
@@ -13124,6 +13131,11 @@ def _tend_once(a, quiet: bool = False) -> int:
               f"runs before any of these. A recurring deferral means the store or "
               f"a notifier is slow, not that supervision is failing.",
               file=sys.stderr)
+        slowest = sorted(sweep_seconds.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        if slowest:
+            print("  ⚠ tend: slowest sweeps this pass: "
+                  + ", ".join(f"{label} {secs:.1f}s" for label, secs in slowest),
+                  file=sys.stderr)
     # The health signal, written even on a dry run — "a pass ran" is the fact
     # somebody needs when the supervisor itself has stopped. Recorded AFTER the
     # pass so it can never claim work that did not happen.
