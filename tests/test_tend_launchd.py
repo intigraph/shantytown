@@ -20,6 +20,39 @@ from shantytown import cli, supervisor
 ST_BIN = "/opt/homebrew/bin/st"
 
 
+@pytest.mark.parametrize("declared,ambient,want", [
+    ("seeds", "files", "seeds"), (None, "br", "br"), (None, None, "files"),
+])
+def test_launchd_backend_uses_relay_doctor_precedence(
+        tmp_path, monkeypatch, declared, ambient, want):
+    root = tmp_path / "root"
+    root.mkdir()
+    if declared:
+        (root / "shantytown.toml").write_text(f'[env]\nSHANTY_BACKEND="{declared}"\n')
+    monkeypatch.delenv("SHANTY_BACKEND", raising=False)
+    if ambient:
+        monkeypatch.setenv("SHANTY_BACKEND", ambient)
+    monkeypatch.setenv("PRIVATE_AUTH_TOKEN", "must-not-be-carried")
+    changed, msg = supervisor.install_launchd(
+        ST_BIN, root, agents_dir=tmp_path / "LA", path_env="/private/bin")
+    assert changed, msg
+    env = plistlib.loads((tmp_path / "LA" / f"{supervisor.LAUNCHD_LABEL}.plist").read_bytes())["EnvironmentVariables"]
+    assert env == {"PATH": "/private/bin", "SHANTY_ROOT": str(root.resolve()),
+                   "SHANTY_BACKEND": want}
+
+
+@pytest.mark.parametrize("config_text", ['[env', '[env]\nSHANTY_BACKEND="unsupported"\n'])
+def test_launchd_refuses_unknown_routing_before_write(tmp_path, config_text):
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "shantytown.toml").write_text(config_text)
+    called = []
+    changed, msg = supervisor.install_launchd(
+        ST_BIN, root, agents_dir=tmp_path / "LA", run=called.append)
+    assert not changed and "REFUSED" in msg
+    assert not (tmp_path / "LA").exists() and not called
+
+
 def test_the_plist_runs_the_absolute_st_with_SHANTY_ROOT_every_five_minutes(tmp_path):
     ran = []
     changed, msg = supervisor.install_launchd(
