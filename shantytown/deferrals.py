@@ -44,7 +44,7 @@ _CONDITION = re.compile(
     r"resume[_ -]?when\s*[:=]\s*([a-z-]+)\s*:\s*(\S+)", re.IGNORECASE)
 
 #: Condition kinds this module can actually decide.
-SUPPORTED = ("closed", "date")
+SUPPORTED = ("closed", "date", "event")
 #: Kinds the vocabulary defines and this module cannot yet test. Reported as
 #: UNTESTABLE, never as unmet — "we did not look" and "we looked and it is not
 #: met" must not render the same, which is the whole defect this bead is about.
@@ -322,6 +322,7 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
     still be open, which is worse than staying quiet.
     """
     out: list[Finding] = []
+    event_answers = {}  # bounded reads, only within this candidate pass
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -387,6 +388,15 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                     read_error = True
                 else:
                     met = bool(verdict)
+            elif cond.kind == "event":
+                from .resume_events import evaluate as event_evaluate
+                key = (cond.arg, bead)
+                if key not in event_answers:
+                    event_answers[key] = event_evaluate(cond.arg, bead, now)
+                verdict = event_answers[key]
+                met = verdict.state == "MET"
+                if verdict.state == "UNKNOWN":
+                    untestable = f"{cond.render()} (UNKNOWN: {verdict.reason})"
             else:
                 untestable = cond.render()
 
