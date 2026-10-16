@@ -190,7 +190,12 @@ st work jobs history [name]  recent attempts from logs/jobs.jsonl
 `RunAtLoad`) and loads it with `launchctl bootstrap`. The plist uses the
 **absolute** path of the `st` you ran, sets `SHANTY_ROOT`, and carries your
 shell's `PATH`, because launchd starts jobs with `/usr/bin:/bin` and tend calls
-tmux, git, gh and br. `--uninstall` removes it and refuses to touch a plist that
+tmux, git, gh and br. It also carries `SHANTY_BACKEND`: the deployment's `[env]`
+value takes precedence over the installing shell, with `files` as the standalone
+default. Invalid routing configuration refuses installation before any write.
+Peer governor SSH failures retain recognized causes from the final diagnostic
+line, such as “No route to host”; arbitrary remote stderr is not echoed.
+`--uninstall` removes it and refuses to touch a plist that
 st did not write. Linux keeps the systemd user timer, unchanged.
 
 ## Examples

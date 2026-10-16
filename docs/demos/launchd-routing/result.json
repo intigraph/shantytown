@@ -1,0 +1,19 @@
+{
+  "base": "83c8ab151925d81a670463da60982b3f76187f64",
+  "before": {
+    "backend": null,
+    "path_preserved": true,
+    "root_preserved": true,
+    "peer_unavailable": true,
+    "reason": "peer governor unreachable (SSH transport failed)",
+    "production_calls": 0
+  },
+  "candidate": {
+    "backend": "seeds",
+    "path_preserved": true,
+    "root_preserved": true,
+    "peer_unavailable": true,
+    "reason": "peer governor unreachable (SSH transport failed: No route to host)",
+    "production_calls": 0
+  }
+}
