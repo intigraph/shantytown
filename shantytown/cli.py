@@ -5478,8 +5478,14 @@ def _cmd_inbox(a) -> int:
         # ack recipe ran in bash. Nothing destructive ran by luck of the wording,
         # not by design. Refuse, and say the message was NOT delivered.
         print(f"  refused: {e}", file=sys.stderr)
-        from .tmux import PaneTaskList
+        from .tmux import PaneInMode, PaneTaskList
         if isinstance(e, PaneTaskList):
+            return REFUSED
+        if isinstance(e, PaneInMode):
+            # A person is scrolling back in that pane; the agent is fine. The
+            # dead-agent remedy below would send them to restart a live session.
+            print(f"  remedy: retry once {agent.name}'s pane leaves copy-mode, or "
+                  f"use `st inbox -d` so the message waits.", file=sys.stderr)
             return REFUSED
         print(f"  remedy: st agent new {agent.name}, or use `st inbox -d` so the "
               f"message survives until it is back.", file=sys.stderr)
@@ -6593,6 +6599,12 @@ def _cmd_go(a) -> int:
         # dispatchable. Refusing is the whole point: typing a dispatch into bash
         # would EXECUTE it, and the sender would be told the work was assigned.
         print(f"  refused: {e}", file=sys.stderr)
+        from .tmux import PaneInMode
+        if isinstance(e, PaneInMode):
+            # Someone is scrolling back in the pane (aegis-6jx); the agent is up.
+            print(f"  remedy: re-run this dispatch once {a.agent}'s pane leaves "
+                  f"copy-mode", file=sys.stderr)
+            return REFUSED
         print(f"  remedy: st agent new {a.agent}   (then re-run this dispatch)",
               file=sys.stderr)
         return REFUSED
