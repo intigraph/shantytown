@@ -54,7 +54,8 @@ class _Catalog:
                  if r.lower() in self.DECLARED]
         survival = next((b for b in ("last", "support", "normal") if b in bands),
                         None)
-        return types.SimpleNamespace(survival=survival, lane=[], unattached=False)
+        return types.SimpleNamespace(survival=survival, lane=[], unattached=False,
+                                     absorbs=bool(set(roles_) & {"lead", "administrator"}))
 
 
 class _Blows:
