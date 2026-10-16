@@ -363,3 +363,70 @@ def test_main_emits_additional_context_never_a_permission_decision(tmp_path,
     assert hso["hookEventName"] == "PreToolUse"
     assert "UNTRACKED WORK" in hso["additionalContext"]
     assert "permissionDecision" not in json.dumps(out)
+
+
+def test_failed_poll_backs_off_across_instances_without_fake_verdict(tmp_path):
+    from shantytown.untracked import ACTIVITY_UNKNOWN, ledger_activity
+    clock = _Clock()
+    calls = []
+
+    def failed(who):
+        calls.append(who)
+        raise RuntimeError("fixture read unavailable")
+
+    for _ in range(20):
+        # Separate hook invocations share only the persisted ledger.
+        g = _gov(tmp_path, failed, clock=clock)
+        v = g.check("weaver")
+        assert v.action == SILENT and "could not read" in v.why and not v.text
+        assert ledger_activity(tmp_path, "weaver", now=clock())[0] == ACTIVITY_UNKNOWN
+        clock.advance(1)
+    assert len(calls) == 1
+    led = g._load("weaver")
+    assert led["read_failed_at"] == 1_000_000.0
+    assert "hooked" not in led and "strikes" not in led
+    clock.advance(POLL_S)
+    g.check("weaver")
+    assert len(calls) == 2
+
+
+def test_failed_poll_preserves_ladder_and_recovers_after_expiry(tmp_path):
+    from shantytown.untracked import ACTIVITY_UNKNOWN, ledger_activity
+    clock = _Clock()
+    state = {"reader": EMPTY}
+    g = _gov(tmp_path, lambda who: state["reader"](who), clock=clock)
+    for _ in range(5):
+        g.check("weaver")
+        clock.advance(POLL_S + 1)
+    before = g._load("weaver")
+    state["reader"] = _boom
+    g.check("weaver")
+    assert ledger_activity(tmp_path, "weaver", now=clock())[0] == ACTIVITY_UNKNOWN
+    for _ in range(10):
+        clock.advance(1)
+        g.check("weaver")
+    after = g._load("weaver")
+    for key in ("strikes", "since", "warned_at", "escalated", "checked_at", "hooked"):
+        assert after.get(key) == before.get(key)
+    state["reader"] = EMPTY
+    clock.advance(POLL_S + 1)
+    g.check("weaver")
+    assert g._load("weaver")["strikes"] == 6
+    assert "read_failed_at" not in g._load("weaver")
+    state["reader"] = HELD
+    clock.advance(POLL_S + 1)
+    assert g.check("weaver").why == "work is on the hook"
+    assert "strikes" not in g._load("weaver")
+
+
+def test_failed_read_is_unknown_even_after_an_old_hooked_verdict(tmp_path):
+    from shantytown.untracked import ACTIVITY_UNKNOWN, ledger_activity
+    clock = _Clock()
+    state = {"reader": HELD}
+    g = _gov(tmp_path, lambda who: state["reader"](who), clock=clock)
+    g.check("weaver")
+    clock.advance(POLL_S + 1)
+    state["reader"] = _boom
+    g.check("weaver")
+    assert g._load("weaver")["hooked"] is True  # historical evidence retained
+    assert ledger_activity(tmp_path, "weaver", now=clock())[0] == ACTIVITY_UNKNOWN
