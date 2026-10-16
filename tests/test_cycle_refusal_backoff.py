@@ -1,0 +1,73 @@
+"""A refused cycle request is retried on an interval, not on every pass (aegis-qc2).
+
+Measured 2026-10-16: four requests refused on dirty trees were re-served on all
+36 tend passes in three hours, 10-50s each, and spent the 120s sweep budget
+before the later sweeps (the deferral sweep among them) could start. The request
+stays pending either way; only the re-serve is spaced out.
+"""
+import time
+
+from shantytown import cli, cycle
+
+
+def _tend_world(tmp_path, monkeypatch):
+    from tests.test_tend import _Panes, _roster
+    _roster(tmp_path, {"worker": {"role": "worker", "pane": "p-worker"}})
+    monkeypatch.setattr(cli, "Tmux",
+                        lambda *_a, **_k: _Panes(live={"p-worker"}))
+
+
+def _served(tmp_path, monkeypatch):
+    from tests.test_tend import _Args
+    seen = []
+    monkeypatch.setattr(cli, "_cmd_cycle", lambda ns: seen.append(ns.agent) or cli.OK)
+    cli._tend_once(_Args(tmp_path, backend="files"))
+    return seen.count("worker")
+
+
+def test_a_fresh_request_is_served(tmp_path, monkeypatch):
+    _tend_world(tmp_path, monkeypatch)
+    cycle.Requests(tmp_path).request("worker", "ckpt")
+    assert _served(tmp_path, monkeypatch) == 1
+
+
+def test_a_recent_refusal_is_not_re_served_and_stays_pending(tmp_path, monkeypatch):
+    _tend_world(tmp_path, monkeypatch)
+    r = cycle.Requests(tmp_path)
+    r.request("worker", "ckpt")
+    assert r.mark_refused("worker", "work would be lost or stranded")
+    assert _served(tmp_path, monkeypatch) == 0
+    # Never dropped: the agent still has its request and its refusal reason.
+    rec = cycle.Requests(tmp_path).pending()["worker"]
+    assert rec["checkpoint"] == "ckpt"
+    assert rec["refused"]["reason"].startswith("work would be lost")
+
+
+def test_a_refusal_past_the_interval_is_retried(tmp_path, monkeypatch):
+    _tend_world(tmp_path, monkeypatch)
+    r = cycle.Requests(tmp_path)
+    r.request("worker", "ckpt")
+    r.mark_refused("worker", "dirty tree")
+    data = r._load()
+    data["worker"]["refused"]["at"] = time.time() - cli._CYCLE_REFUSED_RETRY_S - 1
+    r._save(data)
+    assert _served(tmp_path, monkeypatch) == 1
+
+
+def test_a_new_request_after_a_refusal_is_served_immediately(tmp_path, monkeypatch):
+    _tend_world(tmp_path, monkeypatch)
+    r = cycle.Requests(tmp_path)
+    r.request("worker", "ckpt")
+    r.mark_refused("worker", "dirty tree")
+    r.request("worker", "ckpt after cleaning the tree")
+    assert _served(tmp_path, monkeypatch) == 1
+
+
+def test_an_unreadable_refusal_time_fails_toward_serving():
+    for refused in ({"reason": "x"}, {"reason": "x", "at": "soon"},
+                    {"reason": "x", "at": True}, "legacy"):
+        assert cli._refusal_backing_off({"refused": refused}) is False
+    assert cli._refusal_backing_off({"refused": None}) is False
+    # A clock that moved backwards is not "recent": retry rather than stall.
+    assert cli._refusal_backing_off({"refused": {"at": time.time() + 3600}}) is False
+    assert cli._refusal_backing_off({"refused": {"at": time.time()}}) is True

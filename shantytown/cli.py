@@ -1053,6 +1053,26 @@ def _hostmem_verdict(cfg):
 #: The two measured blowouts were 27 and 36 MINUTES, so this is not a tight
 #: squeeze on ordinary work; it is a ceiling on the pathological case.
 _TEND_SWEEP_BUDGET_S = float(os.environ.get("SHANTY_TEND_SWEEP_BUDGET_S", "120"))
+# A REFUSED cycle request is retried after this long, not on every pass (aegis-qc2).
+# Measured 2026-10-16: four requests refused on dirty trees were re-served on all 36
+# passes in three hours at 10-50s each, which spent the sweep budget before the later
+# sweeps (the deferral sweep among them) could start. A new request from the agent
+# clears the refusal and is served on the next pass, so fixing the tree and asking
+# again is never delayed by this.
+_CYCLE_REFUSED_RETRY_S = float(os.environ.get("SHANTY_CYCLE_REFUSED_RETRY_S", "1800"))
+
+
+def _refusal_backing_off(request: dict, now: float | None = None) -> bool:
+    """True while a refused request is inside its retry interval.
+
+    Fails toward SERVING: a refusal with no readable time is retried, so a
+    malformed record can only cost a pass, never strand a request."""
+    refused = request.get("refused") if isinstance(request, dict) else None
+    at = refused.get("at") if isinstance(refused, dict) else None
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return False
+    now = time.time() if now is None else now
+    return 0 <= now - float(at) < _CYCLE_REFUSED_RETRY_S
 
 def _hooks_running(a, cards) -> list:
     """The agents RUNNING now, each with the settings file its PROCESS was
@@ -12877,6 +12897,11 @@ def _tend_once(a, quiet: bool = False) -> int:
                          f"({st_now.state if st_now else 'unreadable'}); "
                          f"its cycle waits for the next idle pass")
                     continue
+            if _refusal_backing_off(request):
+                _log(f"cycle: {who}'s request was refused "
+                     f"({str(request['refused'].get('reason', ''))[:80]}); "
+                     f"retrying after {_CYCLE_REFUSED_RETRY_S:.0f}s or a new request")
+                continue
             rc_c = _sweep(f"cycle:{who}", lambda w=who, r=request:
                           _serve_cycle_request(a, w, r))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
