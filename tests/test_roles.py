@@ -153,3 +153,44 @@ def test_check_never_raises_on_a_bad_card(tmp_path: Path):
     except Exception as e:
         pytest.fail(f"check() raised instead of reporting: {e!r}")
     assert rep.verdict == roles.CANNOT_TELL
+
+
+def test_parent_must_receive_stops_in_same_catalog_as_router(tmp_path: Path):
+    from shantytown import tier, traits
+
+    c = tmp_path / "crew"
+    _card(c, "admin", role="administrator")
+    _card(c, "wu", role="keeper", reports_to="admin")
+    _card(c, "worker", role="worker", reports_to="wu")
+    registry = FilesRegistry(c)
+    assert roles.check(registry).verdict == roles.BROKEN
+    assert "not a stop recipient" in roles.check(registry).render()
+    with pytest.raises(LookupError, match="not a stop recipient"):
+        tier.route_stop(registry, "worker")
+
+    catalog = traits.Catalog({"keeper": {"coordination": ["absorbs"]}})
+    assert roles.check(registry, catalog=catalog).verdict == roles.OK
+    assert tier.route_stop(registry, "worker", catalog=catalog).to == "wu"
+
+
+def test_worker_parent_is_broken_even_when_parent_exists(tmp_path: Path):
+    c = tmp_path / "crew"
+    _card(c, "admin", role="administrator")
+    _card(c, "peer", role="worker", reports_to="admin")
+    _card(c, "worker", role="worker", reports_to="peer")
+    report = roles.check(FilesRegistry(c))
+    assert report.verdict == roles.BROKEN
+    assert "parent 'peer' is not a stop recipient" in report.render()
+
+
+def test_unreadable_parent_catalog_is_not_a_clean_check(tmp_path: Path):
+    class BrokenCatalog:
+        def of(self, roles):
+            raise RuntimeError("catalog unavailable")
+
+    c = tmp_path / "crew"
+    _card(c, "admin", role="administrator")
+    _card(c, "worker", role="worker", reports_to="admin")
+    report = roles.check(FilesRegistry(c), catalog=BrokenCatalog())
+    assert report.verdict == roles.CANNOT_TELL
+    assert "cannot resolve parent stop eligibility" in report.render()
