@@ -10467,8 +10467,8 @@ def _cmd_push(a) -> int:
             import shlex
             remedy = (
                 "--source-branch does not override the caller-checkout guard. "
-                f"After verifying the selected checkout, run `cd {shlex.quote(str(dest))}` "
-                "and repeat this command from there."
+                f"After verifying the selected checkout, run `cd {shlex.quote(str(Path(dest).resolve()))}` "
+                "and use that absolute source path when repeating the push command."
             )
         else:
             remedy = (
