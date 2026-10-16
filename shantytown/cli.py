@@ -9516,6 +9516,26 @@ def _cmd_cycle(a) -> int:
     # routed around and then trusted by nobody. tree_staleness(fetch=True) also
     # prunes, which closes the opposite and worse error — a deleted upstream ref
     # laundering an orphaned commit into "safe".
+    # CHEAP BEFORE COSTLY (aegis-qc2, measured 2026-10-16 after #293). A tend-served
+    # (automatic) cycle is refused under the lifecycle lock when the pane reads busy
+    # or a codex shell cannot be read. That refusal came only AFTER the loss guard's
+    # network fetch and tree walk, and records no refusal, so ellie (busy) and wu
+    # (codex) paid 15-50s of the tend sweep budget on every pass. Observe the pane
+    # first and refuse with the same reason; the locked re-check still runs before
+    # any pane write, because the pane can change during the guard.
+    if getattr(a, "_automatic_cycle", False):
+        try:
+            early_panes = _panes(a)
+            opts = {'allow_limited': True} if getattr(a, '_account_card', None) else {}
+            early = _automatic_cycle_refusal(
+                card, card.pane or _session_for(card), early_panes,
+                _runtime(a, early_panes), a.root, **opts)
+        except Exception:  # noqa: BLE001 -- unreadable here: the locked check decides
+            early = ""
+        if early:
+            print(f"  refused: {agent_name}: {early}; the request stays "
+                  f"pending for the next idle pass", file=sys.stderr)
+            return REFUSED
     trees = _agent_trees(a, card, sweep=True)
     # Refuse a timed-out preflight BEFORE writing cycle state or stopping a pane.
     # A pending request must remain exactly as the caller left it so a later
