@@ -516,9 +516,8 @@ def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
             if rows is not None:
                 return _assigned_to(me, rows.exact())
     # Only a backend without the native projection keeps the old CLI path.
-    return _assigned_to(me, _bd_json(
-        ["list", "--status", "in_progress", "--limit", "0"], cwd,
-        root=root, reg=reg))
+    args = ["list", "--status", "in_progress", "--limit", "0"]
+    return _assigned_to(me, _bd_json(args, cwd, root=root, reg=reg))
 
 
 def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
