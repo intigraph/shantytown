@@ -577,9 +577,13 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                     raise ValueError("invalid or shadowed deferral field")
                 key = fields[predicate]
                 if isinstance(value, dict):
+                    # due_at is an xsd:dateTime like the plate reader's (aegis-qc2):
+                    # without it, one item with a due date made every deferral
+                    # read refuse, so the deferral sweep never produced a summary.
                     if set(value) != {"datatype", "value"} or key not in (
-                            "created_at", "updated_at", "defer_until"):
-                        raise ValueError("unsupported typed deferral field")
+                            "created_at", "updated_at", "defer_until", "due_at"):
+                        raise ValueError(f"unsupported typed deferral field: {key} "
+                                         f"({value.get('datatype')!s:.80})")
                     value = value["value"]
                 if key == "assignee" and isinstance(value, str) and value.startswith(SEEDS + "principal/"):
                     from urllib.parse import unquote
