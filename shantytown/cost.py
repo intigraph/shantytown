@@ -387,6 +387,9 @@ def _run_selected(args, config, graph_state):
         # Do not publish a clean-looking replacement on a failed source.
         if result['errors']:
             raise RuntimeError('Camayoc source coverage UNKNOWN: ' + '; '.join(result['errors']))
+        if config.get('daily_output'):
+            from . import cost_daily
+            cost_daily.update(config['daily_output'], result, now=time.time())
         _publish_metrics(config, result)
         if config.get('publish_script'):
             with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as handle:
