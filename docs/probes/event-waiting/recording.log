@@ -1,0 +1,70 @@
+Script started on 2026-10-17 04:16:35-04:00 [COMMAND="stty -onlcr; python3 docs/probes/event-waiting/demo.py --output docs/probes/event-waiting/output.json" <not executed on terminal>]
+{
+  "scope": "private fixtures; ten identical synthetic admin turns, not live notification frequency",
+  "baseline_ref": "4b48bce",
+  "source_sha256": {
+    "baseline": {
+      "shantytown/busy_wait.py": "96ac93d962400f0ecf61992c43e09cf0472aa47fa6968a51cda80dea9a298141",
+      "shantytown/feed_check.py": "d4430a0d539c246b037c3036728e759c335aabd70767d73cd75e689e3ef987e7",
+      "shantytown/seeds_plate.py": "c3382b56185c98c2505580b367527f97e753a33efad28c5c0686c4bfff398e33"
+    },
+    "candidate": {
+      "shantytown/busy_wait.py": "ee9fc00d425e5d16bfbcbd27398c1bd36aa2e5686fec80a8e08c7afee47c4bf3",
+      "shantytown/feed_check.py": "3b43dc01ad7b65a80b688a035807de34eb169729246bd3f29f3884a75d13d1b0",
+      "shantytown/seeds_plate.py": "2680eda762a408692d9ed3613bb23b6ddd0e199ea3cac2e0f884c1dafd5a07a3"
+    }
+  },
+  "before": {
+    "time": "2026-10-17T08:16:36.202819+00:00",
+    "waiting": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "near_control": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "idle_control": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "unsuitable_candidates": [
+      [
+        "epic",
+        "umbrella"
+      ],
+      [
+        "parked",
+        "parked"
+      ],
+      [
+        "manual",
+        "ordinary task"
+      ]
+    ]
+  },
+  "after": {
+    "time": "2026-10-17T08:16:36.422861+00:00",
+    "waiting": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "near_control": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "idle_control": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "unsuitable_candidates": []
+  }
+}
+
+Script done on 2026-10-17 04:16:36-04:00 [COMMAND_EXIT_CODE="0"]

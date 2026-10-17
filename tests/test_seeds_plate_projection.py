@@ -26,6 +26,7 @@ def fields(id="test-held", **overrides):
         "status": "in_progress",
         "assignee": "worker",
         "priority": 1,
+        "issue_type": "task",
     }
     row.update(overrides)
     inverse = {v: k for k, v in seeds_plate.FIELDS.items()}
@@ -627,3 +628,11 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
         assert seen[0].count(" UNION ") == 3
     finally:
         data.close()
+
+
+def test_feed_type_missing_is_unknown_not_an_actionable_task(monkeypatch):
+    wire = [r for r in fields() if r["predicate"] != seeds_plate.SEEDS + "ontology/issueType"]
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(wire))
+    from shantytown.answer import PartialAnswer
+    with pytest.raises(PartialAnswer):
+        seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()
