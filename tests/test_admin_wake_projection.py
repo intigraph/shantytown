@@ -111,3 +111,30 @@ def test_off_removes_only_owned_fallback_and_keeps_unrelated_hooks(tmp_path, mod
     after = render(tmp_path)
     assert budget_hooks(after) == []
     assert unrelated in after["hooks"]["UserPromptSubmit"]
+
+
+@pytest.mark.parametrize("mode", [None, "off", "deselected"])
+def test_cleanup_preserves_mentions_and_other_root_commands(tmp_path, mode):
+    configure(tmp_path, "advise")
+    owned = budget_hooks(render(tmp_path))[0]["command"]
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    configure(foreign, "advise")
+    foreign_command = admin_budget_prompt_hooks("administrator", foreign)[0]["hooks"][0]["command"]
+    commands = ["custom-control",
+                "echo 'audit note: shantytown.admin_wake_budget remains OFF'",
+                foreign_command]
+    path = tmp_path / "admin/.claude" / P.CONSENT_TEMPLATE
+    settings = json.loads(path.read_text())
+    settings["hooks"]["UserPromptSubmit"].append({"hooks": [
+        {"type": "command", "command": command} for command in commands]})
+    path.write_text(json.dumps(settings))
+    configure(tmp_path, "off" if mode == "deselected" else mode)
+    if mode == "deselected":
+        (tmp_path / "shantytown.toml").write_text(
+            '[admin_wake_budget]\nmode="advise"\nagents=["other"]\n')
+    after = render(tmp_path)
+    actual = [h.get("command") for g in after["hooks"]["UserPromptSubmit"]
+              for h in g.get("hooks", [])]
+    assert owned not in actual
+    assert all(command in actual for command in commands)

@@ -867,15 +867,22 @@ def _workspace_capture(text: str, root, settings_path=None, *, card=None) -> str
         # shared role file to activate one administrator's trial.
         from . import config as config_mod
         from .harness import name_for
-        from .runtime import admin_budget_prompt_hooks
+        from .runtime import admin_budget_prompt_hooks, _hook_interpreter
+        import shlex
         policy, error = config_mod.load_or_default(root)
         selected = (not error and card.name in policy.admin_wake_budget.agents
                     and name_for(card, root=root) == "claude")
         budget = admin_budget_prompt_hooks(card.role, root) if selected else []
+        # Match the generated invocation at this root, including when OFF no
+        # longer emits it. A module mention is not ownership of a custom hook.
+        owned_budget_command = (
+            f"{_hook_interpreter()} -m shantytown.admin_wake_budget --root "
+            + shlex.quote(str(Path(root).resolve())))
         kept = []
         for group in cfg["hooks"]["UserPromptSubmit"]:
             commands = [hook for hook in group.get("hooks", [])
-                        if "shantytown.admin_wake_budget" not in hook.get("command", "")]
+                        if not (hook.get("type") == "command"
+                                and hook.get("command") == owned_budget_command)]
             if commands:
                 kept.append({**group, "hooks": commands})
         cfg["hooks"]["UserPromptSubmit"] = kept + budget
