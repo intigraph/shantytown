@@ -46,8 +46,6 @@ def _token(value):
 
 def selection(root, agent):
     """Deployment-owned auth references; never a second MCP server manifest."""
-    if not NAME.fullmatch(agent):
-        raise Unavailable("invalid crew name")
     path = Path(root) / "provision" / "crew-credentials.json"
     try:
         data = json.loads(_private(path))
@@ -61,19 +59,27 @@ def selection(root, agent):
     row = data.get("agents", {}).get(agent)
     if row is None:
         return None
-    if not isinstance(row, dict) or set(row) != {"principal", "servers"}:
+    if not isinstance(agent, str) or not NAME.fullmatch(agent):
+        raise Unavailable("invalid crew name")
+    if (not isinstance(row, dict) or not {"principal", "servers"} <= set(row)
+            or set(row) - {"principal", "servers", "quipu_cli"}):
         raise Unavailable("invalid crew credential selection")
     if not isinstance(row["principal"], str) or not row["principal"]:
         raise Unavailable("missing crew principal")
-    if not isinstance(row["servers"], dict) or not 1 <= len(row["servers"]) <= 8:
+    if (not isinstance(row["servers"], dict) or len(row["servers"]) > 8
+            or not row["servers"] and "quipu_cli" not in row
+            or "quipu_cli" in row and "quipu-cli" in row["servers"]):
         raise Unavailable("invalid crew credential servers")
-    for name, ref in row["servers"].items():
+    audiences, digests = {}, {}
+    for name, ref in _entries(row):
         if not NAME.fullmatch(name) or not isinstance(ref, dict):
             raise Unavailable("invalid crew credential server")
         audience = ref.get("audience")
         expected = "CREW_" + hashlib.sha256(row["principal"].encode()).hexdigest()[:24].upper()
         if audience not in ("homelab-mcp", "quipu"):
             raise Unavailable("invalid crew credential audience")
+        if name == "quipu-cli" and audience != "quipu":
+            raise Unavailable("invalid CLI credential audience")
         expected += "_" + audience.replace("-", "_").upper()
         if (set(ref) != {"audience", "project", "path", "key", "secret_id",
                         "secret_version", "token_sha256", "shared_key"}
@@ -88,7 +94,19 @@ def selection(root, agent):
                 or not isinstance(ref["shared_key"], str)
                 or not re.fullmatch(r"[A-Z][A-Z0-9_]*", ref["shared_key"])):
             raise Unavailable("invalid crew credential reference")
+        pin = {k: v for k, v in ref.items() if k != "shared_key"}
+        if audience in audiences and audiences[audience] != pin:
+            raise Unavailable("conflicting references for one credential audience")
+        if ref["token_sha256"] in digests and digests[ref["token_sha256"]] != audience:
+            raise Unavailable("credential reused across service audiences")
+        audiences[audience] = pin
+        digests[ref["token_sha256"]] = audience
     return data, row
+
+
+def _entries(row):
+    return list(row["servers"].items()) + (
+        [("quipu-cli", row["quipu_cli"])] if "quipu_cli" in row else [])
 
 
 def _tmpfs(path):
@@ -194,8 +212,9 @@ def project(servers, root, agent, harness, *, fetch=None, materialize=True):
         raise Unavailable("crew credential server absent from canonical tooling")
     runtime = _directory(agent) if materialize else None
     result = {name: dict(spec) for name, spec in servers.items()}
-    for name, ref in row["servers"].items():
-        if not result[name].get("url"):
+    fetched = {}
+    for name, ref in _entries(row):
+        if name in row["servers"] and not result[name].get("url"):
             raise Unavailable("crew credential requires HTTP MCP")
         target = runtime / name if materialize else None
         # Remove the prior launch's value first; an unavailable read must never
@@ -205,7 +224,11 @@ def project(servers, root, agent, harness, *, fetch=None, materialize=True):
         try:
             if not materialize:
                 continue
-            value = _token((fetch or _fetch)(data, ref))
+            audience = ref["audience"]
+            if audience not in fetched:
+                fetched[audience] = None  # A failed fetch is not resent for another entry.
+                fetched[audience] = _token((fetch or _fetch)(data, ref))
+            value = _token(fetched[audience])
             if not hmac.compare_digest(hashlib.sha256(value.encode()).hexdigest(),
                                        ref["token_sha256"]):
                 raise Unavailable("credential reference mismatch")
@@ -222,7 +245,8 @@ def project(servers, root, agent, harness, *, fetch=None, materialize=True):
             warnings.warn("crew credential unavailable; shared fallback on next connection",
                           RuntimeWarning, stacklevel=2)
         finally:
-            _helper(result[name], root, agent, name)
+            if name in row["servers"]:
+                _helper(result[name], root, agent, name)
     return result
 
 
@@ -238,9 +262,10 @@ def _helper(spec, root, agent, name):
 def headers(root, agent, server):
     """Called only by the harness's private header-helper pipe."""
     selected = selection(root, agent)
-    if selected is None or server not in selected[1]["servers"]:
+    refs = dict(_entries(selected[1])) if selected is not None else {}
+    if server not in refs:
         raise Unavailable("crew credential selection unavailable")
-    ref = selected[1]["servers"][server]
+    ref = refs[server]
     try:
         value = _token(_private(_directory(agent) / server, 4096).decode())
         if not hmac.compare_digest(hashlib.sha256(value.encode()).hexdigest(),
@@ -251,6 +276,30 @@ def headers(root, agent, server):
         from .provision import load_secrets
         value = _token(load_secrets(root).get(ref["shared_key"]))
     return {"Authorization": "Bearer " + value}
+
+
+def cli_environment(root, agent):
+    """Only a file path, never a bearer, crosses the launch boundary."""
+    if root is None:
+        return {}
+    selected = selection(root, agent)
+    if selected is None or "quipu_cli" not in selected[1]:
+        return {}
+    path = Path("/run/user") / str(os.getuid()) / "shantytown-credentials" / agent / "quipu-cli"
+    return {"QUIPU_AUTH_TOKEN_FILE": str(path)}
+
+
+def cli_token(root, agent, path):
+    """Resolve only our explicitly selected CLI path; other providers stay intact."""
+    if not root or not agent or not path:
+        return None
+    expected = Path("/run/user") / str(os.getuid()) / "shantytown-credentials" / agent / "quipu-cli"
+    if str(expected) != path:
+        return None
+    selected = selection(root, agent)
+    if selected is None or "quipu_cli" not in selected[1]:
+        raise Unavailable("CLI credential selection unavailable")
+    return headers(root, agent, "quipu-cli")["Authorization"].removeprefix("Bearer ")
 
 
 def main():

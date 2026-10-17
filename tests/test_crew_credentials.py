@@ -278,3 +278,80 @@ def test_actual_codex_provision_keeps_named_helper_in_independent_agent_config(c
     assert token not in config.read_text()
     assert (role / "config.toml").read_bytes() == old_role
     assert (runtime / "probe").read_text() == token
+
+
+def test_cli_file_handoff_and_next_request_shared_fallback(configured, monkeypatch):
+    from shantytown import quipu_auth
+    root, data, path, runtime, servers, token = configured
+    ref = dict(data["agents"]["alice"]["servers"]["probe"])
+    cli_value = "synthetic-quipu-only"
+    ref.update(audience="quipu", key=ref["key"].removesuffix("_HOMELAB_MCP") + "_QUIPU",
+               token_sha256=hashlib.sha256(cli_value.encode()).hexdigest())
+    data["agents"]["alice"]["quipu_cli"] = ref
+    path.write_text(json.dumps(data))
+    C.project(servers, root, "alice", "codex", fetch=lambda data, ref: cli_value if ref["audience"] == "quipu" else token)
+    env = C.cli_environment(root, "alice")
+    assert set(env) == {"QUIPU_AUTH_TOKEN_FILE"}
+    assert token not in str(env) and "synthetic-shared" not in str(env)
+    monkeypatch.setenv("SHANTY_ROOT", str(root))
+    monkeypatch.setenv("SHANTY_AGENT", "alice")
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", env["QUIPU_AUTH_TOKEN_FILE"])
+    monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
+    assert quipu_auth.token() == cli_value
+    (runtime / "quipu-cli").unlink()
+    assert quipu_auth.token() == "synthetic-shared"
+    monkeypatch.setenv("QUIPU_AUTH_TOKEN", "explicit-fixture-override")
+    assert quipu_auth.token() == "explicit-fixture-override"
+
+
+def test_launcher_carries_only_cli_file_path_to_both_harnesses(configured, monkeypatch):
+    from shantytown import harness, runtime as runtime_mod
+    from shantytown.protocols import Agent
+    root, data, path, _, _, token = configured
+    ref = dict(data["agents"]["alice"]["servers"]["probe"])
+    cli_value = "synthetic-quipu-only"
+    ref.update(audience="quipu", key=ref["key"].removesuffix("_HOMELAB_MCP") + "_QUIPU",
+               token_sha256=hashlib.sha256(cli_value.encode()).hexdigest())
+    data["agents"]["alice"]["quipu_cli"] = ref
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(runtime_mod, "_settings_env", lambda *a: {"QUIPU_AUTH_TOKEN": "synthetic-parent-secret"})
+    monkeypatch.setattr(harness, "resolve_model", lambda *a: None)
+    for name, config in [("claude", "settings.json"), ("codex", "config.toml")]:
+        card = Agent(name="alice", harness=name)
+        launch = harness.get(name).launch(card, str(root / config), root)
+        assert "-u QUIPU_AUTH_TOKEN " in launch
+        assert "QUIPU_AUTH_TOKEN_FILE=/run/user/" in launch
+        assert token not in launch and "synthetic-parent-secret" not in launch
+
+
+def test_missing_optin_does_not_restrict_existing_card_names(tmp_path):
+    assert C.selection(tmp_path, "worker.legacy") is None
+
+
+def test_repeated_server_reference_fetches_once_per_launch(configured):
+    root, data, path, _, servers, token = configured
+    data["agents"]["alice"]["servers"]["second"] = dict(data["agents"]["alice"]["servers"]["probe"])
+    path.write_text(json.dumps(data))
+    servers["second"] = dict(servers["probe"])
+    calls = []
+    def fetch(*args):
+        calls.append(1)
+        return token
+    C.project(servers, root, "alice", "codex", fetch=fetch)
+    assert calls == [1]
+
+
+@pytest.mark.parametrize("conflict", ["pin", "audience"])
+def test_conflicting_audience_references_refuse_before_fetch(configured, conflict):
+    root, data, path, _, servers, _ = configured
+    ref = dict(data["agents"]["alice"]["servers"]["probe"])
+    if conflict == "pin":
+        ref["secret_version"] += 1
+        data["agents"]["alice"]["servers"]["second"] = ref
+        servers["second"] = dict(servers["probe"])
+    else:
+        ref.update(audience="quipu", key=ref["key"].removesuffix("_HOMELAB_MCP") + "_QUIPU")
+        data["agents"]["alice"]["quipu_cli"] = ref
+    path.write_text(json.dumps(data))
+    with pytest.raises(C.Unavailable):
+        C.project(servers, root, "alice", "codex", fetch=lambda *a: pytest.fail("must not fetch"))

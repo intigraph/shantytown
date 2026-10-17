@@ -11,6 +11,9 @@ reference from Infisical using the existing crew machine identity in
 version and SHA256, refuses redirects, and makes no retries. Login and secret
 read each have a five-second socket timeout and a bounded response. This is not
 a guaranteed total wall-clock deadline for a continuously streaming server.
+References for the same audience must have identical pins. Each launch fetches
+each selected audience once, including failures: at most two logins and two
+secret reads for the two supported audiences, with no retries.
 
 A successful read creates a regular 0600 file under
 `/run/user/<uid>/shantytown-credentials/<agent>/<server>`, beneath verified
@@ -74,3 +77,13 @@ Source tests and a native config-parser check do not establish installed client
 adoption, end-to-end identity, or a complete attribution measurement. Rollout
 still needs server acceptance first, the scoped deployment slot, a logged
 one-agent canary, fleet order, and the separate measurement.
+
+An optional agent-level `quipu_cli` reference uses the same fields with audience
+`quipu` and shared key `QUIPU_AUTH_TOKEN`. It selects a separate `quipu-cli`
+runtime file; it does not add an MCP server. Both harness launch commands unset
+the inherited `QUIPU_AUTH_TOKEN` and carry only `QUIPU_AUTH_TOKEN_FILE`.
+Shantytown's Quipu client reads that selected file and uses its existing global
+shared provider if the file is removed, on the next token lookup. An explicit
+per-invocation token override retains its existing precedence. External SDKs
+and installed `sd` support for this file variable remain unverified; this source
+path does not establish their adoption.
