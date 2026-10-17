@@ -119,9 +119,13 @@ re-evaluates capacity without opening or resuming the item. Immediate owned work
 still reaches the owner's haul. The assigned-item ceiling remains a separate gate.
 
 Dispatch candidates exclude epics by native `issue_type`, parked labels and
-explicit manual/human-only labels, alongside existing owned and decision-gated
-exclusions. Titles never establish these categories. Missing native type metadata
-is UNKNOWN rather than proof of an actionable task.
+the governed `feed:manual` label, alongside existing owned and human/decision
+exclusions. `feed:manual` means a coordinator must arrange that item's dispatch
+manually; it does not bar explicit dispatch or an already-owned haul. An item
+owner/coordinator applies it explicitly. Titles and embedded store names never
+establish this category, and unmarked tasks stay candidates. Missing native type
+metadata is UNKNOWN rather than proof of an actionable dispatch candidate; the
+independent active-anchor barrier does not require this dispatch-only field.
 
 Native Seeds reads only metadata for the mechanically idle candidate owners,
 across the shared and ephemeral graphs, with existing row caps and exact-answer

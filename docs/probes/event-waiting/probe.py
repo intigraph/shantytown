@@ -43,5 +43,6 @@ print(json.dumps(dict(time=datetime.now(timezone.utc).isoformat(), waiting=count
                      unsuitable_candidates=feed_check.dispatchable({'worker'}, [
                          dict(id='epic', issue_type='epic', title='umbrella'),
                          dict(id='parked', title='parked', labels=['parked:by-design']),
+                         dict(id='manual', title='ordinary task', issue_type='task', labels=['feed:manual']),
                          dict(id='owned', title='owned', assignee='other'),
                          dict(id='human', title='human', labels=['needs-stiwi'])])), indent=2))

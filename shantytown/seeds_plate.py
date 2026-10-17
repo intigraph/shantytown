@@ -460,7 +460,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or ("assignee" in row and not isinstance(row["assignee"], str))
                 or type(row.get("priority")) is not int
                 or not 0 <= row["priority"] <= 4
-                or (feed_owners is not None and plate_owners is None
+                or (feed_owners is not None and plate_owners is None and not active_only
                     and (not isinstance(row.get("issue_type"), str)
                          or not row["issue_type"]))
                 or row["status"]

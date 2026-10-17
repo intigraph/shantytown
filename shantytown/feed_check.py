@@ -422,7 +422,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
         if (b.get("assignee")
                 or b.get("issue_type") == "epic"
                 or any(str(label).strip().lower().startswith("parked:")
-                       or str(label).strip().lower() in {"manual", "manual-only", "human-only", "stiwi-only"}
+                       or str(label).strip().lower() == "feed:manual"
                        for label in (b.get("labels") or []))
                 or is_message(b.get("title", ""))
                 or is_decision(b.get("labels"))

@@ -57,7 +57,7 @@ def test_repeated_turns_waiting_silent_idle_still_blocks(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("row", [{"issue_type": "epic"}, {"labels": ["parked:by-design"]},
-                                 {"labels": ["manual"]}, {"labels": ["needs-stiwi"]},
+                                 {"labels": ["feed:manual"]}, {"labels": ["needs-stiwi"]},
                                  {"assignee": "other"}])
 def test_undispatchable_metadata_does_not_offer_work(row):
     assert feed_check.dispatchable({"worker"}, [dict(id="x", title="ordinary words", **row)]) == []
@@ -67,3 +67,9 @@ def test_titles_never_define_epic_or_manual_work():
     assert feed_check.dispatchable({"worker"}, [dict(id="x", title="manual epic implementation")]) == [
         ("x", "manual epic implementation")]
 
+
+def test_manual_marker_is_explicit_and_does_not_change_owned_haul():
+    row = dict(id="manual", title="ordinary task", issue_type="task", labels=["feed:manual"])
+    assert feed_check.dispatchable({"worker"}, [row]) == []
+    assert feed_check.dispatchable({"worker"}, [dict(row, labels=[])]) == [("manual", "ordinary task")]
+    assert feed_check.hauls([dict(row, assignee="worker")]) == {"worker": ["manual"]}

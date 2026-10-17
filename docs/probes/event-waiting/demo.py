@@ -1,6 +1,7 @@
 """Compare repeated policy decisions in private fixtures; no live hook or dispatch."""
 import argparse
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,13 +30,16 @@ with tempfile.TemporaryDirectory(prefix='event-waiting-') as baseline:
     with tarfile.open(fileobj=io.BytesIO(archive)) as bundle:
         bundle.extractall(baseline, filter='data')
     before, after = run(baseline), run(root)
+    paths = ('shantytown/busy_wait.py', 'shantytown/feed_check.py', 'shantytown/seeds_plate.py')
+    sources = {name: {p: hashlib.sha256((Path(directory) / p).read_bytes()).hexdigest() for p in paths}
+               for name, directory in (('baseline', baseline), ('candidate', root))}
 assert before['waiting']['prompt_count_per_10_turns'] == 10
 assert after['waiting']['prompt_count_per_10_turns'] == 0
 assert before['idle_control']['prompt_count_per_10_turns'] == after['idle_control']['prompt_count_per_10_turns'] == 10
 assert before['near_control']['prompt_count_per_10_turns'] == after['near_control']['prompt_count_per_10_turns'] == 0
-assert len(before['unsuitable_candidates']) == 2 and not after['unsuitable_candidates']
+assert len(before['unsuitable_candidates']) == 3 and not after['unsuitable_candidates']
 result = {'scope': 'private fixtures; ten identical synthetic admin turns, not live notification frequency',
-          'baseline_ref': args.baseline_ref, 'before': before, 'after': after}
+          'baseline_ref': args.baseline_ref, 'source_sha256': sources, 'before': before, 'after': after}
 if args.output:
     args.output.write_text(json.dumps(result, indent=2) + '\n')
 print(json.dumps(result, indent=2))

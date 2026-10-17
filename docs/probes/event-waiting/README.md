@@ -15,8 +15,8 @@ hook execution or runtime configuration change occurs.
 
 Ten identical synthetic admin turns produce ten dispatch blocks before the fix
 and zero while an agent owns externally gated work with a review time two hours away. The existing fifteen-minute waiting control
-stays at zero blocks. A truly idle worker still produces ten blocks. Epic and parked
-candidates go from two offered items to zero; owned and human-only controls stay
+stays at zero blocks. A truly idle worker still produces ten blocks. Epic, parked and explicit `feed:manual`
+candidates go from three offered items to zero; owned and human-only controls stay
 excluded. Titles do not establish work type or manual authority.
 
 [output.json](output.json) retains both results. These counts are deterministic
