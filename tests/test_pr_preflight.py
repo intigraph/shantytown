@@ -37,6 +37,8 @@ class Forge:
                 raise p.Refused("lost response")
             return {"number": 99, "html_url": "https://github.com/example/project/pull/99",
                     "head": {"sha": HEAD}, "base": {"sha": BASE}}
+        if path == f"repos/{REPO}":
+            return {"id": 123, "full_name": REPO}
         parsed = urlsplit(path)
         tail = parsed.path.removeprefix(f"repos/{REPO}/")
         query = parse_qs(parsed.query)
@@ -86,6 +88,68 @@ def test_disjoint_positive_creates_once_and_records_primary(candidate):
     assert len(forge.writes) == 1
     assert "Bead: project-new" in forge.writes[0]["body"]
     assert "Overlap preflight:" in forge.writes[0]["body"]
+
+
+def test_renamed_repository_refuses_before_any_post(candidate):
+    forge = Forge()
+    with pytest.raises(p.Refused, match="resolves to example/project"):
+        p.run("unused", "example/previous", "main", "project-new", "body", "title", [],
+              create=True, api=lambda path, body=None: (
+                  {"id": 123, "full_name": REPO} if body is None else forge(path, body)))
+    assert not forge.writes
+
+
+@pytest.mark.parametrize("identity", [None, {}, [],
+    {"id": True, "full_name": REPO}, {"id": 0, "full_name": REPO},
+    {"id": 123, "full_name": "https://github.com/example/project"},
+])
+def test_unproven_repository_identity_refuses_before_post(candidate, identity):
+    forge = Forge()
+    def api(path, body=None):
+        return identity if path == f"repos/{REPO}" else forge(path, body)
+    with pytest.raises(p.Refused, match="identity unverified"):
+        p.run("unused", REPO, "main", "project-new", "body", "title", [],
+              create=True, api=api)
+    assert not forge.writes
+
+
+@pytest.mark.parametrize("changed", [
+    {"id": 124, "full_name": REPO}, {"id": 123, "full_name": "example/renamed"},
+])
+def test_repository_identity_race_refuses_before_post(candidate, changed):
+    forge = Forge()
+    reads = 0
+    def api(path, body=None):
+        nonlocal reads
+        if path == f"repos/{REPO}":
+            reads += 1
+            return {"id": 123, "full_name": REPO} if reads == 1 else changed
+        return forge(path, body)
+    with pytest.raises(p.Refused):
+        p.run("unused", REPO, "main", "project-new", "body", "title", [],
+              create=True, api=api)
+    assert reads == 2 and not forge.writes
+
+
+def test_null_post_result_reports_unknown_on_stderr(candidate, monkeypatch, tmp_path, capsys):
+    from shantytown.cli import build_parser
+    forge = Forge()
+    def api(path, body=None):
+        if body is not None:
+            forge.writes.append(body)
+            return None
+        return forge(path)
+    monkeypatch.setattr(p, "github", api)
+    body = tmp_path / "body.md"
+    body.write_text("Concrete change")
+    args = build_parser().parse_args([
+        "repo", "pr", REPO, "--bead", "project-new", "--create",
+        "--title", "Title", "--body-file", str(body),
+    ])
+    assert p.command(args) == 2
+    output = capsys.readouterr()
+    assert '"created": null' in output.out and "UNKNOWN" in output.err
+    assert len(forge.writes) == 1
 
 
 def test_overlap_independent_exact_head_and_reason_are_recorded(candidate):
