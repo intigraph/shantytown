@@ -26,14 +26,16 @@ including after an authenticated server refusal.
 
 The bearer lives in a sealed anonymous Linux memory descriptor passed only to
 that child. The environment carries principal, descriptor number and the exact
-admitted destination; it carries no bearer. Native code checks the resolved
+admitted destination; it carries no selected bearer. Native code checks the resolved
 destination again before reading the descriptor. A configuration change between
 admission and execution cannot silently retarget it. The launcher closes its
 descriptor on success, errors, timeout and interruption. Unsupported descriptor
 platforms refuse before provider access; there is no disk-file fallback.
 
-Both inherited Seeds bearer inputs and all Seeds selection metadata are removed
-from the child environment. The parent environment is unchanged. Explicitly
+Both inherited Seeds bearer inputs, legacy `SEEDS_TOKEN`/`QUIPU_AUTH_TOKEN`
+aliases (including the Quipu token-file alias), and all Seeds selection metadata
+are removed from the child environment. No alias is mapped into a native input.
+The parent environment is unchanged. Explicitly
 deselected commands use native user/config defaults after that sanitation; this
 adapter does not treat inherited environment bearers as deliberate overrides.
 Callers needing explicit overrides must use the native explicit input API.

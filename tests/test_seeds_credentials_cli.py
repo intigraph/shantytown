@@ -79,6 +79,8 @@ def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
         env = dict(PATH=os.environ["PATH"], HOME=str(tmp_path),
                    XDG_CONFIG_HOME=str(user.parent), SEEDS_QUIPU_TOKEN="foreign-inline-inert",
                    SEEDS_QUIPU_TOKEN_FILE=str(foreign),
+                   SEEDS_TOKEN="foreign-inline-inert", QUIPU_AUTH_TOKEN="foreign-inline-inert",
+                   QUIPU_AUTH_TOKEN_FILE=str(foreign),
                    SEEDS_QUIPU_CREDENTIAL_PRINCIPAL="foreign-principal",
                    SEEDS_QUIPU_TOKEN_FD="999999",
                    SEEDS_QUIPU_CREDENTIAL_DESTINATION="https://foreign.example")
