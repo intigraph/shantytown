@@ -93,3 +93,6 @@ including MCP-only and unselected cards; its own selected path replaces them.
 Token lookup refuses a managed path belonging to another card instead of
 reading it through the legacy file provider. Explicit non-crew global file
 providers and per-invocation token overrides retain their precedence.
+
+Managed-path classification is lexical at both boundaries, collapsing repeated
+root separators and dot segments without following links or opening targets.

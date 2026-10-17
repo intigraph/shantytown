@@ -304,8 +304,8 @@ def managed_cli_path(path):
     """Recognize our reserved runtime namespace without reading its target."""
     if not path:
         return False
-    return any(re.match(r"/run/user/[0-9]+/shantytown-credentials(?:/|$)", value)
-               for value in (path, os.path.abspath(path)))
+    normalized = "/" + os.path.abspath(path).lstrip("/")
+    return re.match(r"/run/user/[0-9]+/shantytown-credentials(?:/|$)", normalized) is not None
 
 
 def cli_token(root, agent, path):

@@ -357,15 +357,20 @@ def test_conflicting_audience_references_refuse_before_fetch(configured, conflic
         C.project(servers, root, "alice", "codex", fetch=lambda *a: pytest.fail("must not fetch"))
 
 
+@pytest.mark.parametrize('alias', ['canonical', 'double-root', 'triple-root', 'inner-slash', 'dot', 'parent'])
 @pytest.mark.parametrize('child', ['alice', 'carol'])
 @pytest.mark.parametrize('kind,settings', [('claude', 'settings.json'), ('codex', 'config.toml')])
-def test_child_launch_clears_foreign_managed_cli_path(configured, monkeypatch, child, kind, settings):
+def test_child_launch_clears_foreign_managed_cli_path(configured, monkeypatch, child, kind, settings, alias):
     import subprocess
     import sys
     from shantytown import harness, runtime as runtime_mod
     from shantytown.protocols import Agent
     root, _, _, _, _, _ = configured
     foreign = f'/run/user/{os.getuid()}/shantytown-credentials/bob/quipu-cli'
+    foreign = {'canonical': foreign, 'double-root': '/'+foreign,
+               'triple-root': '//'+foreign, 'inner-slash': foreign.replace('/user/', '//user//'),
+               'dot': foreign.replace('/bob/', '/./bob/'),
+               'parent': foreign.replace('/bob/', '/alice/../bob/')}[alias]
     monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE', foreign)
     monkeypatch.setattr(runtime_mod, '_settings_env', lambda *a: {})
     monkeypatch.setattr(harness, 'resolve_model', lambda *a: None)
@@ -383,9 +388,10 @@ def test_child_launch_clears_foreign_managed_cli_path(configured, monkeypatch, c
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize('prefix', ['/', '//', '///'])
 @pytest.mark.parametrize('agent', ['alice', 'carol', None])
 @pytest.mark.parametrize('suffix', ['bob/quipu-cli', 'alice/../bob/quipu-cli'])
-def test_foreign_managed_file_never_reaches_generic_reader(configured, monkeypatch, agent, suffix):
+def test_foreign_managed_file_never_reaches_generic_reader(configured, monkeypatch, agent, suffix, prefix):
     from shantytown import quipu_auth
     root, _, _, _, _, _ = configured
     monkeypatch.setenv('SHANTY_ROOT', str(root))
@@ -395,7 +401,7 @@ def test_foreign_managed_file_never_reaches_generic_reader(configured, monkeypat
         monkeypatch.delenv('SHANTY_AGENT', raising=False)
     monkeypatch.delenv('QUIPU_AUTH_TOKEN', raising=False)
     monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE',
-        f'/run/user/{os.getuid()}/shantytown-credentials/{suffix}')
+        f'{prefix}run/user/{os.getuid()}/shantytown-credentials/{suffix}')
     with pytest.raises(C.Unavailable):
         quipu_auth.token()
     monkeypatch.setenv('QUIPU_AUTH_TOKEN', 'explicit-invocation')
@@ -437,8 +443,9 @@ def test_inactive_credential_deployment_keeps_legacy_launch_bytes(configured):
     assert harness._crew_launch_identity(Agent(name='carol'), None) == ('', '')
 
 
+@pytest.mark.parametrize('prefix', ['/', '//', '///'])
 @pytest.mark.parametrize('kind', ['claude', 'codex'])
-def test_own_selected_child_replaces_foreign_parent_path(configured, monkeypatch, kind):
+def test_own_selected_child_replaces_foreign_parent_path(configured, monkeypatch, kind, prefix):
     import shlex, subprocess, sys
     from shantytown import harness
     from shantytown.protocols import Agent
@@ -449,7 +456,7 @@ def test_own_selected_child_replaces_foreign_parent_path(configured, monkeypatch
     data['agents']['alice']['quipu_cli'] = ref
     path.write_text(json.dumps(data))
     monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE',
-        f'/run/user/{os.getuid()}/shantytown-credentials/bob/quipu-cli')
+        f'{prefix}run/user/{os.getuid()}/shantytown-credentials/bob/quipu-cli')
     monkeypatch.setenv('QUIPU_AUTH_TOKEN', 'synthetic-parent-content')
     options, values = harness._crew_launch_identity(Agent(name='alice', harness=kind), root)
     expected = C.cli_environment(root, 'alice')['QUIPU_AUTH_TOKEN_FILE']

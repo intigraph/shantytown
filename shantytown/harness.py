@@ -112,8 +112,13 @@ def _crew_launch_identity(card, root):
             return "", ""
         # Resolve inheritance in the child shell, not the composing process:
         # tmux/daemon environments can differ from the caller environment.
+        # Pure lexical normalization matches managed_cli_path, including //
+        # roots; it neither resolves links nor opens credential targets.
+        normalize = shlex.join([sys.executable, "-c",
+            "import os; print('/' + os.path.abspath(os.environ.get("
+            "'QUIPU_AUTH_TOKEN_FILE', '')).lstrip('/'), end='')"])
         return (
-            '$(case "${QUIPU_AUTH_TOKEN_FILE-}" in '
+            f'$(case "$({normalize})" in '
             '/run/user/*/shantytown-credentials/*) '
             'printf "%s" "-u QUIPU_AUTH_TOKEN_FILE ";; esac) ', "")
     return "-u QUIPU_AUTH_TOKEN -u QUIPU_AUTH_TOKEN_FILE ", "".join(
