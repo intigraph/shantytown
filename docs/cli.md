@@ -2694,3 +2694,14 @@ notifications for that item for 24 hours. Future, absent, invalid, or differentl
 attributed timestamps do not arm the cooldown. Pending delivery and prior ask
 stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
+
+
+### Request command attribution
+
+Tracker reads declare a finite command source (`st-anchor`, `st-plate`,
+`st-inbox`, `st-stop_policy`, `st-stop_event`, `st-haul`, `st-tend`,
+`st-work`, or `st-other`) separately from the underlying SDK operation.
+Nested stop hooks retain the outer command. These values contain no command
+arguments or message text and are diagnostic declarations, not identities or
+authorization. Server logging and reader coverage are required to use them in
+a traffic census; sending the headers alone does not establish attribution.

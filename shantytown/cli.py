@@ -163,7 +163,7 @@ import time
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
-from .query_identity import declared_query_identity
+from .query_identity import declared_query_identity, declared_command
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -2416,6 +2416,11 @@ def _refuse_gaming(a, status) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
+    with declared_command(a.cmd):
+        return _main(a, argv)
+
+
+def _main(a, argv: list[str] | None = None) -> int:
     # Kept verbatim so a refusal can hand back the operator's OWN command line
     # with the flag appended — a remedy they can paste, not one they translate.
     a.invocation = "st " + " ".join(sys.argv[1:] if argv is None else argv)
