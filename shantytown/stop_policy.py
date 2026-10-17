@@ -54,6 +54,8 @@ plumbing, and the command surface is pinned.
 """
 from __future__ import annotations
 
+from .query_identity import declared_command
+
 import json
 import os
 import sys
@@ -481,6 +483,7 @@ def _drain_payload(root, me: str, kw) -> str:
         return ""
 
 
+@declared_command("stop_policy")
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     me_env = os.environ.get("SHANTY_AGENT")
