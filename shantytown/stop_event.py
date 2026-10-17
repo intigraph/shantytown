@@ -41,6 +41,8 @@ re-dispatched over live agents; distrusting it made the event worthless, since
 the safe read was to scrape every pane by hand. drain now does that scrape.
 """
 from __future__ import annotations
+
+from .query_identity import declared_command
 import json
 import os
 import subprocess
@@ -1104,6 +1106,12 @@ def _compose_workflow(reg, panes, plate, rank, events, me: str, *,
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    with declared_command("haul" if args and args[0] == "haul" else "stop_event"):
+        return _main(args)
+
+
+def _main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     mode = argv[0] if argv else ""
     if mode not in ("send", "drain", "haul"):
