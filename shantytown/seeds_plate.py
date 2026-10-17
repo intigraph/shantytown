@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import re
+import time
 from urllib.parse import quote, urlsplit
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -532,10 +533,23 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                 for graph in graphs:
                     branches.append(f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} a <{SCHEMA}Action> }} '
                                     f'BIND({_iri(subject)} AS ?s) BIND({json.dumps(graph)} AS ?graph) }}')
-        candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
-                            + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
-        if len(candidates) >= 10000:
-            raise ValueError("deferral candidate budget reached")
+        # The unscoped 16-arm UNION exhausted the server execution budget
+        # (aegis-9lb). Keep each clause unchanged but execute it separately.
+        # Exact-ID gate reads retain their bounded batch. A failed branch must
+        # refuse the whole read; never hydrate a partially collected candidate set.
+        groups = [branches] if target_ids is not None else [[branch] for branch in branches]
+        candidates = []
+        deadline = time.monotonic() + timeout
+        for group in groups:
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                raise ValueError("deferral candidate time budget reached")
+            remaining = 10000 - len(candidates)
+            rows = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+                          + " UNION ".join(group) + f" }} LIMIT {remaining}", time_left)["rows"]
+            candidates.extend(rows)
+            if len(candidates) >= 10000:
+                raise ValueError("deferral candidate budget reached")
         selected = {}
         for row in candidates:
             subject, graph = row.get("subject"), row.get("graph")
