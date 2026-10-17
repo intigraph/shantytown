@@ -289,13 +289,34 @@ def cli_environment(root, agent):
     return {"QUIPU_AUTH_TOKEN_FILE": str(path)}
 
 
+def cli_launch_enabled(root):
+    """Keep legacy launch bytes when this deployment has no active selection."""
+    if root is None:
+        return False
+    try:
+        data = json.loads(_private(Path(root) / "provision" / "crew-credentials.json"))
+    except FileNotFoundError:
+        return False
+    return data.get("enabled") is True
+
+
+def managed_cli_path(path):
+    """Recognize our reserved runtime namespace without reading its target."""
+    if not path:
+        return False
+    return any(re.match(r"/run/user/[0-9]+/shantytown-credentials(?:/|$)", value)
+               for value in (path, os.path.abspath(path)))
+
+
 def cli_token(root, agent, path):
     """Resolve only our explicitly selected CLI path; other providers stay intact."""
-    if not root or not agent or not path:
+    if not managed_cli_path(path):
         return None
+    if not root or not agent:
+        raise Unavailable("CLI credential identity unavailable")
     expected = Path("/run/user") / str(os.getuid()) / "shantytown-credentials" / agent / "quipu-cli"
     if str(expected) != path:
-        return None
+        raise Unavailable("CLI credential identity mismatch")
     selected = selection(root, agent)
     if selected is None or "quipu_cli" not in selected[1]:
         raise Unavailable("CLI credential selection unavailable")

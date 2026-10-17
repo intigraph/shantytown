@@ -87,3 +87,9 @@ shared provider if the file is removed, on the next token lookup. An explicit
 per-invocation token override retains its existing precedence. External SDKs
 and installed `sd` support for this file variable remain unverified; this source
 path does not establish their adoption.
+
+A child launch clears inherited managed per-crew CLI paths in the child shell,
+including MCP-only and unselected cards; its own selected path replaces them.
+Token lookup refuses a managed path belonging to another card instead of
+reading it through the legacy file provider. Explicit non-crew global file
+providers and per-invocation token overrides retain their precedence.

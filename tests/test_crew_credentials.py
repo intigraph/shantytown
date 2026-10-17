@@ -355,3 +355,106 @@ def test_conflicting_audience_references_refuse_before_fetch(configured, conflic
     path.write_text(json.dumps(data))
     with pytest.raises(C.Unavailable):
         C.project(servers, root, "alice", "codex", fetch=lambda *a: pytest.fail("must not fetch"))
+
+
+@pytest.mark.parametrize('child', ['alice', 'carol'])
+@pytest.mark.parametrize('kind,settings', [('claude', 'settings.json'), ('codex', 'config.toml')])
+def test_child_launch_clears_foreign_managed_cli_path(configured, monkeypatch, child, kind, settings):
+    import subprocess
+    import sys
+    from shantytown import harness, runtime as runtime_mod
+    from shantytown.protocols import Agent
+    root, _, _, _, _, _ = configured
+    foreign = f'/run/user/{os.getuid()}/shantytown-credentials/bob/quipu-cli'
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE', foreign)
+    monkeypatch.setattr(runtime_mod, '_settings_env', lambda *a: {})
+    monkeypatch.setattr(harness, 'resolve_model', lambda *a: None)
+    card = Agent(name=child, harness=kind)
+    launch = harness.get(kind).launch(card, str(root / settings), root)
+    assert '-u QUIPU_AUTH_TOKEN_FILE ' in launch
+    assert foreign not in launch
+    options, values = harness._crew_launch_identity(card, root)
+    assert values == ''
+    # Execute the actual shared env boundary privately; no native harness starts.
+    import shlex
+    result = subprocess.run(['bash', '-c', 'env ' + options + shlex.quote(sys.executable)
+        + ' -c ' + shlex.quote('import os; assert "QUIPU_AUTH_TOKEN_FILE" not in os.environ')],
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize('agent', ['alice', 'carol', None])
+@pytest.mark.parametrize('suffix', ['bob/quipu-cli', 'alice/../bob/quipu-cli'])
+def test_foreign_managed_file_never_reaches_generic_reader(configured, monkeypatch, agent, suffix):
+    from shantytown import quipu_auth
+    root, _, _, _, _, _ = configured
+    monkeypatch.setenv('SHANTY_ROOT', str(root))
+    if agent:
+        monkeypatch.setenv('SHANTY_AGENT', agent)
+    else:
+        monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    monkeypatch.delenv('QUIPU_AUTH_TOKEN', raising=False)
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE',
+        f'/run/user/{os.getuid()}/shantytown-credentials/{suffix}')
+    with pytest.raises(C.Unavailable):
+        quipu_auth.token()
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN', 'explicit-invocation')
+    assert quipu_auth.token() == 'explicit-invocation'
+
+
+def test_global_cli_file_provider_remains_compatible(configured, monkeypatch):
+    from shantytown import harness, quipu_auth, runtime as runtime_mod
+    from shantytown.protocols import Agent
+    root, _, _, _, _, _ = configured
+    global_file = root / 'global-token'
+    global_file.write_text('synthetic-global-provider')
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE', str(global_file))
+    monkeypatch.delenv('QUIPU_AUTH_TOKEN', raising=False)
+    monkeypatch.setenv('SHANTY_ROOT', str(root))
+    monkeypatch.setenv('SHANTY_AGENT', 'carol')
+    assert quipu_auth.token() == 'synthetic-global-provider'
+    monkeypatch.setattr(runtime_mod, '_settings_env', lambda *a: {})
+    monkeypatch.setattr(harness, 'resolve_model', lambda *a: None)
+    for kind, settings in [('claude', 'settings.json'), ('codex', 'config.toml')]:
+        launch = harness.get(kind).launch(Agent(name='carol', harness=kind), str(root/settings), root)
+        options, values = harness._crew_launch_identity(Agent(name='carol', harness=kind), root)
+        import shlex, subprocess, sys
+        command = 'env ' + options + shlex.quote(sys.executable) + ' -c ' + shlex.quote(
+            'import os; assert os.environ["QUIPU_AUTH_TOKEN_FILE"] == ' + repr(str(global_file)))
+        result = subprocess.run(['bash', '-c', command], capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+
+
+def test_inactive_credential_deployment_keeps_legacy_launch_bytes(configured):
+    from shantytown import harness
+    from shantytown.protocols import Agent
+    root, data, path, _, _, _ = configured
+    data['enabled'] = False
+    path.write_text(json.dumps(data))
+    assert harness._crew_launch_identity(Agent(name='carol'), root) == ('', '')
+    path.unlink()
+    assert harness._crew_launch_identity(Agent(name='carol'), root) == ('', '')
+    assert harness._crew_launch_identity(Agent(name='carol'), None) == ('', '')
+
+
+@pytest.mark.parametrize('kind', ['claude', 'codex'])
+def test_own_selected_child_replaces_foreign_parent_path(configured, monkeypatch, kind):
+    import shlex, subprocess, sys
+    from shantytown import harness
+    from shantytown.protocols import Agent
+    root, data, path, _, _, _ = configured
+    ref = dict(data['agents']['alice']['servers']['probe'])
+    ref.update(audience='quipu', key=ref['key'].removesuffix('_HOMELAB_MCP')+'_QUIPU',
+               token_sha256=hashlib.sha256(b'synthetic-cli').hexdigest())
+    data['agents']['alice']['quipu_cli'] = ref
+    path.write_text(json.dumps(data))
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN_FILE',
+        f'/run/user/{os.getuid()}/shantytown-credentials/bob/quipu-cli')
+    monkeypatch.setenv('QUIPU_AUTH_TOKEN', 'synthetic-parent-content')
+    options, values = harness._crew_launch_identity(Agent(name='alice', harness=kind), root)
+    expected = C.cli_environment(root, 'alice')['QUIPU_AUTH_TOKEN_FILE']
+    command = 'env '+options+values+shlex.quote(sys.executable)+' -c '+shlex.quote(
+        'import os; assert "QUIPU_AUTH_TOKEN" not in os.environ; '
+        'assert os.environ["QUIPU_AUTH_TOKEN_FILE"] == '+repr(expected))
+    result = subprocess.run(['bash', '-c', command], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr

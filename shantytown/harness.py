@@ -101,14 +101,22 @@ class Unsupported(Exception):
 
 def _crew_launch_identity(card, root):
     """Carry a selected CLI credential path, never its contents, into either process."""
-    from .crew_credentials import cli_environment
+    from .crew_credentials import cli_environment, cli_launch_enabled
     try:
         values = cli_environment(root, card.name)
+        sanitize = cli_launch_enabled(root)
     except (OSError, ValueError):
         raise Unsupported("crew credential launch configuration unavailable") from None
     if not values:
-        return "", ""
-    return "-u QUIPU_AUTH_TOKEN ", "".join(
+        if not sanitize:
+            return "", ""
+        # Resolve inheritance in the child shell, not the composing process:
+        # tmux/daemon environments can differ from the caller environment.
+        return (
+            '$(case "${QUIPU_AUTH_TOKEN_FILE-}" in '
+            '/run/user/*/shantytown-credentials/*) '
+            'printf "%s" "-u QUIPU_AUTH_TOKEN_FILE ";; esac) ', "")
+    return "-u QUIPU_AUTH_TOKEN -u QUIPU_AUTH_TOKEN_FILE ", "".join(
         f"{key}={shlex.quote(value)} " for key, value in values.items())
 
 
@@ -484,7 +492,7 @@ class ClaudeHarness:
         carried_env = "".join(
             f"{key}={shlex.quote(value)} "
             for key, value in _settings_env(card.role, root).items()
-            if key != "BOBBIN_ROLE" and (not credential_options or key != "QUIPU_AUTH_TOKEN"))
+            if key != "BOBBIN_ROLE" and (not credential_env or key != "QUIPU_AUTH_TOKEN"))
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
@@ -981,7 +989,7 @@ class CodexHarness:
         carried_env = "".join(
             f"{key}={shlex.quote(value)} "
             for key, value in _settings_env(card.role, root).items()
-            if key != "BOBBIN_ROLE" and (not credential_options or key != "QUIPU_AUTH_TOKEN"))
+            if key != "BOBBIN_ROLE" and (not credential_env or key != "QUIPU_AUTH_TOKEN"))
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
