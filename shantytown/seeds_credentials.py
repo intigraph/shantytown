@@ -85,8 +85,21 @@ def run(args, *, root, agent, binary="sd", env=None, cwd=None, fetch=None,
         child.update(SEEDS_QUIPU_CREDENTIAL_PRINCIPAL=row["principal"],
                      SEEDS_QUIPU_TOKEN_FD=str(fd),
                      SEEDS_QUIPU_CREDENTIAL_DESTINATION=proof["destination"])
-        return runner(command, env=child, cwd=cwd, pass_fds=(fd,),
-                      capture_output=True, timeout=60)
+        result = runner(command, env=child, cwd=cwd, pass_fds=(fd,),
+                        capture_output=True, timeout=60)
+        # A remote error may echo Authorization into the child's captured output.
+        # Preserve operation status: redaction must not invent a retry signal.
+        forms = {raw}
+        encoded = value
+        for _ in range(2):
+            encoded = json.dumps(encoded)[1:-1]
+            forms.add(encoded.encode("ascii"))
+        for stream in ("stdout", "stderr"):
+            output = getattr(result, stream)
+            for secret in sorted(forms, key=len, reverse=True):
+                output = output.replace(secret, b"[REDACTED]")
+            setattr(result, stream, output)
+        return result
     finally:
         os.close(fd)
 

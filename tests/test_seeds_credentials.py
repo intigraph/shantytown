@@ -150,3 +150,21 @@ def test_unsupported_descriptor_platform_never_fetches(chosen, monkeypatch):
         S.run(["show", "fixture"], root=root, agent="alice",
               runner=lambda *a, **k: pytest.fail("unsupported platform executed"),
               fetch=lambda *a: pytest.fail("unsupported platform fetched"))
+
+
+@pytest.mark.parametrize("value", ["own-inert-fixture", 'quote"slash\\fixture'])
+def test_child_echo_is_redacted_without_changing_operation_status(chosen, value):
+    root, _, config, path = chosen
+    config["agents"]["alice"]["quipu_cli"]["token_sha256"] = hashlib.sha256(value.encode()).hexdigest()
+    path.write_text(json.dumps(config))
+    forms = [value, json.dumps(value)[1:-1]]
+    forms.append(json.dumps(forms[-1])[1:-1])
+    def runner(command, **kwargs):
+        if "--credential-admission" in command:
+            return admitted()
+        return subprocess.CompletedProcess(command, 7, "|".join(forms).encode(), "|".join(forms).encode())
+    result = S.run(["show", "fixture"], root=root, agent="alice", runner=runner,
+                   fetch=lambda *a: value)
+    assert all(form.encode() not in result.stdout + result.stderr for form in forms)
+    assert b"[REDACTED]" in result.stdout
+    assert result.returncode == 7  # Never turn an uncertain/failed write into a retry signal.

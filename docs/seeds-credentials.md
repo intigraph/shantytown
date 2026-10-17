@@ -31,6 +31,10 @@ destination again before reading the descriptor. A configuration change between
 admission and execution cannot silently retarget it. The launcher closes its
 descriptor on success, errors, timeout and interruption. Unsupported descriptor
 platforms refuse before provider access; there is no disk-file fallback.
+Captured child stdout/stderr redact the exact selected bearer and up to two JSON
+escaping layers, including a server error that echoes it. The operation exit
+status is preserved; redaction does not authorize a retry. This is not a promise
+to recognize arbitrary encodings of credential material.
 
 Both inherited Seeds bearer inputs, legacy `SEEDS_TOKEN`/`QUIPU_AUTH_TOKEN`
 aliases (including the Quipu token-file alias), and all Seeds selection metadata

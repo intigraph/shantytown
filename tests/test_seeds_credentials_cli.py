@@ -23,6 +23,7 @@ from shantytown import seeds_credentials as S
 def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
     binary = os.environ["SEEDS_ADAPTER_TEST_BINARY"]
     observed, provider, descriptors = [], [], []
+    echo_selected = False
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -49,7 +50,7 @@ def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
                     {"probe": {"type": "literal", "value": "complete"}}
                 ] if "SELECT ?probe" in body else []}, "truncated": False})
             else:
-                self.reply({"error": "inert write refusal"}, 403)
+                self.reply({"error": self.headers.get("Authorization") if echo_selected else "inert write refusal"}, 403)
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -92,8 +93,9 @@ def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
                 assert secret not in json.dumps(command) + json.dumps(kwargs["env"])
             descriptors.extend(kwargs.get("pass_fds", ()))
             result = subprocess.run(command, **kwargs)
-            for secret in (value, "shared-inert-fixture", "foreign-inline-inert", "foreign-file-inert"):
-                assert secret.encode() not in result.stdout + result.stderr
+            if not echo_selected:
+                for secret in (value, "shared-inert-fixture", "foreign-inline-inert", "foreign-file-inert"):
+                    assert secret.encode() not in result.stdout + result.stderr
             return result
 
         def fetch(*args):
@@ -125,6 +127,14 @@ def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
         assert env == original
         with pytest.raises(OSError):
             os.fstat(descriptors[-1])
+
+        echo_selected = True
+        echoed = invoke(["--quipu", url, *operation])
+        assert echoed.returncode == result.returncode
+        assert value.encode() not in echoed.stdout + echoed.stderr
+        assert b"[REDACTED]" in echoed.stdout + echoed.stderr
+        assert provider == [1]
+        echo_selected = False
 
         value = "rotated-inert-fixture"
         ref["token_sha256"] = hashlib.sha256(value.encode()).hexdigest()
