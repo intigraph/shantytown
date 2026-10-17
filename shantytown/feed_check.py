@@ -420,6 +420,10 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
         # advance, hauls() and this function are meant to agree about what a
         # worker may be handed, and this one was the odd path out.
         if (b.get("assignee")
+                or b.get("issue_type") == "epic"
+                or any(str(label).strip().lower().startswith("parked:")
+                       or str(label).strip().lower() == "feed:manual"
+                       for label in (b.get("labels") or []))
                 or is_message(b.get("title", ""))
                 or is_decision(b.get("labels"))
                 or is_unfeedable(b.get("title", ""), b.get("labels"))):

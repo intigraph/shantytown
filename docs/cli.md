@@ -2561,6 +2561,15 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 `origin`; it does not push, merge, close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
+The forge's canonical repository slug and stable ID are checked before creation.
+A renamed slug refuses before POST and names the canonical slug; update the
+requested repository and its matching origin deliberately, then run preflight
+again. This command never rewrites remotes or silently migrates aliases. A
+repository identity change during preflight also refuses before POST. A lost or
+malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
+reported on stderr as well as JSON stdout. Inspect the canonical repository for
+the exact PR before retrying; the command never automatically repeats a create.
+
 ```sh
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
@@ -2685,3 +2694,14 @@ notifications for that item for 24 hours. Future, absent, invalid, or differentl
 attributed timestamps do not arm the cooldown. Pending delivery and prior ask
 stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
+
+
+### Request command attribution
+
+Tracker reads declare a finite command source (`st-anchor`, `st-plate`,
+`st-inbox`, `st-stop_policy`, `st-stop_event`, `st-haul`, `st-tend`,
+`st-work`, or `st-other`) separately from the underlying SDK operation.
+Nested stop hooks retain the outer command. These values contain no command
+arguments or message text and are diagnostic declarations, not identities or
+authorization. Server logging and reader coverage are required to use them in
+a traffic census; sending the headers alone does not establish attribution.
