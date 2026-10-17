@@ -27,6 +27,7 @@
 - [Private stop samples](stop-samples.md)
 - [Sleep / dream](dream.md)
 - [Scheduled & event jobs](jobs.md)
+- [Everyday work with one agent](everyday-work.md)
 
 # The shape
 
