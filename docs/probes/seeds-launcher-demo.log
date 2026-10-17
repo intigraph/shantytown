@@ -1,9 +1,13 @@
-Script started on 2026-10-17 17:45:56-04:00 [COMMAND="stty -onlcr; python3 -m pytest -q -s tests/test_seeds_credentials_cli.py" <not executed on terminal>]
+Script started on 2026-10-17 18:17:22-04:00 [COMMAND="stty -onlcr; python3 -m pytest -q -s tests/test_seeds_credentials_cli.py" <not executed on terminal>]
 {"phase": "old-cli", "provider_calls": 0, "http_requests": 0}
 {"phase": "selected", "provider_calls": 1, "own_bearer_headers": 1, "foreign_bearer_headers": 0}
 {"phase": "retarget-refused", "provider_calls": 1, "http_requests": 0}
 {"phase": "next-deselected", "provider_calls": 0, "shared_bearer_headers": 1}
+.{"phase": "old-cli", "provider_calls": 0, "http_requests": 0}
+{"phase": "selected", "provider_calls": 1, "own_bearer_headers": 1, "foreign_bearer_headers": 0}
+{"phase": "retarget-refused", "provider_calls": 1, "http_requests": 0}
+{"phase": "next-deselected", "provider_calls": 0, "shared_bearer_headers": 1}
 .
-1 passed in 0.76s
+2 passed in 1.42s
 
-Script done on 2026-10-17 17:45:57-04:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-17 18:17:24-04:00 [COMMAND_EXIT_CODE="0"]
