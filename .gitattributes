@@ -13,3 +13,4 @@ docs/demos/inbox-read/output.log whitespace=blank-at-eol,blank-at-eof,space-befo
 
 docs/demos/bare-source-hint/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/demos/deferral-candidate-split/output.log -text whitespace=cr-at-eol
+docs/demos/admin-wake-projection/output.log -text whitespace=cr-at-eol

@@ -847,7 +847,7 @@ def _with_precompact_hook(text: str, role: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
-def _workspace_capture(text: str, root, settings_path=None) -> str:
+def _workspace_capture(text: str, root, settings_path=None, *, card=None) -> str:
     """Fill missing role capture registrations, never count an event twice.
 
     The launcher passes the actual selected settings file (including per-agent
@@ -883,6 +883,31 @@ def _workspace_capture(text: str, root, settings_path=None) -> str:
         if commands:
             prompt.append({**group, "hooks": commands})
     cfg["hooks"]["UserPromptSubmit"] = prompt + ([] if role_has_recall else recall)
+    if card is not None:
+        # Scoped provisioning must reach the selected workspace even when its
+        # launch-time role artifact predates the opt-in hook. Never re-render a
+        # shared role file to activate one administrator's trial.
+        from . import config as config_mod
+        from .harness import name_for
+        from .runtime import admin_budget_prompt_hooks, _hook_interpreter
+        import shlex
+        policy, error = config_mod.load_or_default(root)
+        selected = (not error and card.name in policy.admin_wake_budget.agents
+                    and name_for(card, root=root) == "claude")
+        budget = admin_budget_prompt_hooks(card.role, root) if selected else []
+        # Match the generated invocation at this root, including when OFF no
+        # longer emits it. A module mention is not ownership of a custom hook.
+        owned_budget_command = (
+            f"{_hook_interpreter()} -m shantytown.admin_wake_budget --root "
+            + shlex.quote(str(Path(root).resolve())))
+        kept = []
+        for group in cfg["hooks"]["UserPromptSubmit"]:
+            commands = [hook for hook in group.get("hooks", [])
+                        if not (hook.get("type") == "command"
+                                and hook.get("command") == owned_budget_command)]
+            if commands:
+                kept.append({**group, "hooks": commands})
+        cfg["hooks"]["UserPromptSubmit"] = kept + budget
     command = _capture_cmd(root)["command"]
     for event, groups in role_hooks.items():
         if not isinstance(groups, list):
@@ -946,7 +971,7 @@ def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -
     path = ws / ".claude" / CONSENT_TEMPLATE
     text = path.read_text() if path.is_file() else "{}"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_workspace_capture(text, root, settings_path))
+    path.write_text(_workspace_capture(text, root, settings_path, card=card))
 
 
 def headerless_quipu(servers: dict) -> list[str]:
@@ -1196,7 +1221,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         final = _with_precompact_hook(
             _with_stale_hook(
                 _with_untracked_hook(
-                    _workspace_capture(_consent_for_role(text, card.role), root, settings_path),
+                    _workspace_capture(_consent_for_role(text, card.role), root,
+                                       settings_path, card=card),
                     card.role, root),
                 card.role, root),
             card.role, root)
