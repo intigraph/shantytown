@@ -753,3 +753,40 @@ def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatc
     err = capsys.readouterr().err
     assert "confirmed publication" in err and "Read back" in err
     assert "did not" not in err
+
+
+@pytest.mark.parametrize("timeout", [60, 600])
+def test_bare_extra_source_refusal_names_literal_path_remedy(
+        two_remotes, monkeypatch, capsys, timeout):
+    import shlex
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / "ellie extra"
+    _git(repo, "worktree", "add", "-b", "ellie/topic", str(extra), "main")
+    _commit(extra, "extra-topic")
+    before = (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
+              (repo / ".git" / "config").read_bytes())
+    monkeypatch.setenv("GT_ROOT", str(repo.parent))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(repo.parent / "workspace"))
+    monkeypatch.chdir(extra)
+    with monkeypatch.context() as guard:
+        guard.setattr(cli, "push_every_remote",
+                      lambda *a: pytest.fail("refusal must not contact peers"))
+        assert main(["repo", "push", "proj", "ellie", "--source-branch",
+                     "ellie/topic", "--branch", "ellie/topic", "--timeout",
+                     str(timeout)]) == REFUSED
+    msg = capsys.readouterr().err
+    argv = ["st", "repo", "push", str(extra), "ellie", "--source-branch",
+            "ellie/topic", "--branch", "ellie/topic"]
+    if timeout != 60:
+        argv.extend(["--timeout", str(timeout)])
+    assert "literal worktree path" in msg
+    assert shlex.join(argv) in msg
+    assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
+    # The printed shell-quoted remedy must actually choose the extra checkout.
+    assert main(shlex.split(shlex.join(argv))[1:]) == OK
+    assert all(_sha(peer, "ellie/topic") == _sha(extra, "HEAD")
+               for peer in (origin, forge))
+    assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
+    assert (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
+            (repo / ".git" / "config").read_bytes()) == before
