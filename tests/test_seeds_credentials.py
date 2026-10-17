@@ -168,3 +168,35 @@ def test_child_echo_is_redacted_without_changing_operation_status(chosen, value)
     assert all(form.encode() not in result.stdout + result.stderr for form in forms)
     assert b"[REDACTED]" in result.stdout
     assert result.returncode == 7  # Never turn an uncertain/failed write into a retry signal.
+
+
+@pytest.mark.parametrize("principal", ["urn:crew:alice", "https://example.org/ontology/alice"])
+def test_canonical_principal_opaque_declaration_keeps_provider_binding(chosen, principal):
+    root, value, config, path = chosen
+    row = config["agents"]["alice"]
+    row["principal"] = principal
+    row["quipu_cli"]["key"] = "CREW_" + hashlib.sha256(principal.encode()).hexdigest()[:24].upper() + "_QUIPU"
+    path.write_text(json.dumps(config))
+    before = path.read_bytes()
+    provider, declarations = [], []
+    def fetch(provider_config, ref):
+        provider.append(ref["key"])
+        return value
+    def runner(command, **kwargs):
+        if "--credential-admission" in command:
+            assert provider == []
+            return admitted()
+        declarations.append(kwargs["env"]["SEEDS_QUIPU_CREDENTIAL_PRINCIPAL"])
+        assert declarations[-1] == (
+            "principal-sha256:" + hashlib.sha256(principal.encode()).hexdigest())
+        return subprocess.CompletedProcess(command, 0, b"ok", b"")
+    for _ in range(2):
+        # Each command admits before its own fetch; repeated identity is stable.
+        provider.clear()
+        assert S.run(["show", "fixture"], root=root, agent="alice", runner=runner,
+                     fetch=fetch).returncode == 0
+        assert provider == [row["quipu_cli"]["key"]]
+    assert declarations[0] == declarations[1]
+    other = principal + "-distinct"
+    assert declarations[0] != "principal-sha256:" + hashlib.sha256(other.encode()).hexdigest()
+    assert path.read_bytes() == before

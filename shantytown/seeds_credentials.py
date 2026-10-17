@@ -82,7 +82,11 @@ def run(args, *, root, agent, binary="sd", env=None, cwd=None, fetch=None,
         fcntl.fcntl(fd, fcntl.F_ADD_SEALS,
                     fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
                     fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
-        child.update(SEEDS_QUIPU_CREDENTIAL_PRINCIPAL=row["principal"],
+        # Native metadata uses a bounded opaque declaration, not an IRI parser.
+        # Keep provider selection bound to the original canonical principal.
+        declaration = "principal-sha256:" + hashlib.sha256(
+            row["principal"].encode("utf-8")).hexdigest()
+        child.update(SEEDS_QUIPU_CREDENTIAL_PRINCIPAL=declaration,
                      SEEDS_QUIPU_TOKEN_FD=str(fd),
                      SEEDS_QUIPU_CREDENTIAL_DESTINATION=proof["destination"])
         result = runner(command, env=child, cwd=cwd, pass_fds=(fd,),

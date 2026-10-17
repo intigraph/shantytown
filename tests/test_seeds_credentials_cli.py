@@ -20,7 +20,8 @@ from shantytown import seeds_credentials as S
 
 @pytest.mark.skipif(not os.environ.get("SEEDS_ADAPTER_TEST_BINARY"),
                     reason="paired native admission candidate not supplied")
-def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
+@pytest.mark.parametrize("principal", ["urn:crew:alice", "https://example.org/ontology/alice"])
+def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path, principal):
     binary = os.environ["SEEDS_ADAPTER_TEST_BINARY"]
     observed, provider, descriptors = [], [], []
     echo_selected = False
@@ -64,7 +65,8 @@ def test_actual_native_launcher_before_provider_and_bearer_fixture(tmp_path):
         shared.write_text("shared-inert-fixture")
         (user / "config.toml").write_text(
             f'[quipu]\ntoken_file="{shared}"\ntrusted_hosts=["127.0.0.1"]\n')
-        principal = "urn:crew:alice"
+        if principal.startswith("https:"):
+            principal = os.environ.get("SEEDS_ADAPTER_TEST_PRINCIPAL", principal)
         value = "own-inert-fixture"
         ref = dict(audience="quipu", project="fixture", path="/mcp-crew/alice",
                    key="CREW_" + hashlib.sha256(principal.encode()).hexdigest()[:24].upper() + "_QUIPU",

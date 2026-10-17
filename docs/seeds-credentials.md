@@ -25,8 +25,14 @@ selected credentials refuse the command. There is no same-command shared retry,
 including after an authenticated server refusal.
 
 The bearer lives in a sealed anonymous Linux memory descriptor passed only to
-that child. The environment carries principal, descriptor number and the exact
-admitted destination; it carries no selected bearer. Native code checks the resolved
+that child. The environment carries a principal declaration, descriptor number and the exact
+admitted destination; it carries no selected bearer. The declaration is
+`principal-sha256:` followed by the lowercase SHA256 of the selection principal's
+exact UTF-8 bytes. This supports canonical IRIs while respecting native Seeds'
+restricted metadata alphabet. There is no URI normalization or change to provider
+selection: the reference and its key remain bound to the original canonical
+principal. The digest is a non-authenticated declaration, not a substitute for
+server-authenticated attribution. Native code checks the resolved
 destination again before reading the descriptor. A configuration change between
 admission and execution cannot silently retarget it. The launcher closes its
 descriptor on success, errors, timeout and interruption. Unsupported descriptor
