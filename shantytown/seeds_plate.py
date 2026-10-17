@@ -547,6 +547,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
             remaining = 10000 - len(candidates)
             rows = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
                           + " UNION ".join(group) + f" }} LIMIT {remaining}", time_left)["rows"]
+            if time.monotonic() >= deadline:
+                raise ValueError("deferral candidate time budget reached")
             candidates.extend(rows)
             if len(candidates) >= 10000:
                 raise ValueError("deferral candidate budget reached")
