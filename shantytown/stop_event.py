@@ -506,6 +506,20 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     return json.loads(r.stdout)
 
 
+def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
+    if root is not None:
+        from .feed_check import _br_tracker
+        tracker = _br_tracker(root, reg)
+        project = getattr(tracker, "haul_active_rows", None)
+        if project is not None:
+            rows = project(me)
+            if rows is not None:
+                return _assigned_to(me, rows.exact())
+    # Only a backend without the native projection keeps the old CLI path.
+    args = ["list", "--status", "in_progress", "--limit", "0"]
+    return _assigned_to(me, _bd_json(args, cwd, root=root, reg=reg))
+
+
 def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
     """The WORK assigned to `me` — trailing-segment match, the same parse
     feed_check.hauls uses (bd stores crew paths or bare names).
@@ -633,9 +647,9 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             print(f"haul: {me} held — {reason}", file=sys.stderr)
             return 0
         cwd = bd_cwd(reg)
-        # An active anchor = mid-work turn boundary. bd list is filtered
-        # client-side (same reason as feed_check: assignee formats vary).
-        active = _assigned_to(me, _bd_json(["list", "--status", "in_progress", "--limit", "0"], cwd, root=root, reg=reg))
+        # Resume only this owner's anchors: global SDK hydration made every
+        # stop pay for other workers' active work (aegis-dnw).
+        active = _haul_active(me, cwd, root=root, reg=reg)
         resume = active[0] if (active and
                                harness_name == "codex") else None
         if active and resume is None:
