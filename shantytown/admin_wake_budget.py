@@ -67,13 +67,17 @@ def record(root, inp, verdict, *, now=None):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.with_suffix(".lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            prior = json.loads(path.read_text()) if path.exists() else {}
-            counts = prior.get("counts", {})
-            if not isinstance(counts, dict):
+            if path.exists():
+                prior = json.loads(path.read_text())
+                counts = prior.get("counts") if isinstance(prior, dict) else None
+                allowed = {"urgent-bypass", "held", "would-hold", "routine-wake", "idle"}
+                if (not isinstance(counts, dict)
+                        or any(k not in allowed or type(v) is not int or v < 0
+                               for k, v in counts.items())):
+                    raise ValueError("counter history UNKNOWN")
+                counts = dict(counts)
+            else:
                 counts = {}
-            counts = {k: v for k, v in counts.items()
-                      if k in ("urgent-bypass", "held", "would-hold", "routine-wake", "idle")
-                      and type(v) is int and v >= 0}
             counts[state] = counts.get(state, 0) + 1
             path.parent.mkdir(parents=True, exist_ok=True)
             write_json_atomic(path, {"mode": inp.admin_wake_mode, "state": state,

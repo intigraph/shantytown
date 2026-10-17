@@ -151,3 +151,17 @@ def test_enabled_gather_reads_selected_claude_lane_without_persisting(tmp_path, 
     inp = sp.gather(tmp_path, "admin", reg=Registry(), events=Events(), wake_log=Clock(), now=1000)
     assert inp.admin_wake_mode == "off"
     assert calls == [card]
+
+
+def test_malformed_counter_history_is_unknown_and_never_reset(tmp_path, capsys):
+    import json
+    from shantytown.admin_wake_budget import record
+    path = tmp_path / "admin-wake-budget/admin.json"
+    path.parent.mkdir()
+    inp = inputs(mode="advise")
+    for bad in ({"counts": "unreadable"}, {"counts": {"held": -1}}, {}):
+        original = json.dumps(bad)
+        path.write_text(original)
+        record(tmp_path, inp, sp.decide(inp), now=1000)
+        assert path.read_text() == original
+        assert "counter write UNKNOWN" in capsys.readouterr().err
