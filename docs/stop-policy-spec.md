@@ -364,3 +364,44 @@ reading the writer.
   now; folding them is a follow-up with its own measurement, not a freebie.
 - **Should a lead get hibernate?** No, for now: a lead's drain is how it absorbs
   its reports. Revisit only with a measured case.
+
+## Optional admin routine-wake budget
+
+`[admin_wake_budget]` is OFF by default. Deployments may explicitly name
+participants and stage `mode = "advise"` before `mode = "enforce"`:
+
+```toml
+[admin_wake_budget]
+mode = "off" # off | advise | enforce
+agents = []  # explicit administrator card names
+```
+
+For named Claude administrators, the existing dispatch governor supplies fresh
+account/lane evidence without advancing hysteresis. At seven-day usage >=80%,
+routine Stop wakes are spaced at least five minutes apart; at >=90%, fifteen
+minutes. An unknown/stale usage signal, missing wake timestamp or backward clock
+cannot withhold work. Codex lanes and unnamed administrators are unchanged.
+
+In enforce mode this explicit budget precedes ordinary Rule Zero dispatch and
+hibernate; urgent governance/rose events still precede it. An ALLOW leaves pending
+events unconsumed. There is no timer, process suspension or forced pane stop.
+Advise mode records what would have been held but preserves the existing verdict.
+
+`admin-wake-budget/<agent>.json` records bounded cumulative Stop outcomes and the
+last observation. The separately registered UserPromptSubmit hook counts external
+submissions in `<agent>.external.json` without reading prompt stdin. This includes
+operator and injected-message bypasses; their individual identity is UNKNOWN.
+Regenerate settings through the normal launch/provision path before claiming
+external-input coverage. Missing counter files are UNKNOWN, never zero.
+
+This bounds routine automatic Stop wakes, **not** tokens spent in an ongoing
+turn, direct/operator prompts or urgent responses. Those remain bypasses and must
+be included in measured spend. A step-down is cooperative at a turn boundary;
+an account-level or per-request hard token ceiling is not implemented here.
+Activation and changing advise to enforce are separate deployment decisions.
+
+Rollback: set `mode = "off"` on the new version first. Before reverting to an
+older version that does not recognize this table, remove the entire
+`[admin_wake_budget]` table from deployment configuration, then revert the source
+merge through the normal lane. Leaving even an OFF unknown table behind would
+make that older version reject its configuration.

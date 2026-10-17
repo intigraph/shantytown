@@ -1249,6 +1249,23 @@ def pre_tool_use_hooks(root=None) -> list[dict]:
     return pre_tool
 
 
+def admin_budget_prompt_hooks(role: str, root=None) -> list:
+    """An explicit advise/enforce deployment counts external prompt bypasses.
+
+    Default OFF emits no hook. The command reads no prompt body and cannot block.
+    """
+    if role != "administrator" or root is None:
+        return []
+    from . import config
+    import shlex
+    cfg, error = config.load_or_default(root)
+    if error or cfg.admin_wake_budget.mode == "off":
+        return []
+    cmd = (f"{_hook_interpreter()} -m shantytown.admin_wake_budget --root "
+           + shlex.quote(str(Path(root).resolve())))
+    return [{"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}]
+
+
 def claude_settings_for_role(role: str, root=None) -> dict:
     """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (this
     container and its keys) — owned by ClaudeHarness, which is the only thing
@@ -1270,7 +1287,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
             "SessionStart": session_start_hooks(root),
-            "UserPromptSubmit": incident_recall_hooks(),
+            "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
