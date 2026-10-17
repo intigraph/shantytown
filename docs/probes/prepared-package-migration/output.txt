@@ -1,0 +1,9 @@
+Script started on 2026-10-17 08:19:06-04:00 [COMMAND="python3 docs/probes/prepared-package-migration/demo.py" <not executed on terminal>]
+Synthetic stopped package + already-prepared empty disk target
+Custody/filesystem MOCKED; no live daemon or production migration
+before: REFUSED; original preserved; empty target cannot accept package
+after: PASS; shared payload verified; native lock inode preserved
+original retained/HOLD; no capacity-recovery or deployment claim
+after implementation SHA256 3895ddd2dac1f350cf2b301d99c646933b9787288de88d98af543a44f134b3f0
+
+Script done on 2026-10-17 08:19:06-04:00 [COMMAND_EXIT_CODE="0"]
