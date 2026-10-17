@@ -225,7 +225,7 @@ from .runtime import (asks_a_question, auth_expired, bash_guard_command,
                       live_stop_directions, live_wiring,
                       settings_for_role)
 from .tmux import Tmux, declared_socket, shell_foreground
-from .workspace import (WorkspaceError, agent_worktrees, cleanup_worktree,
+from .workspace import (DEFAULT_PUSH_TIMEOUT, WorkspaceError, agent_worktrees, cleanup_worktree,
                         ensure_workspace, ensure_worktree, push_every_remote,
                         remote_reachable, tree_staleness, unlaunchable,
                         upstream_ref, worktree_for)
@@ -2179,8 +2179,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
     ph.add_argument("agent", nargs="?",
                     help="whose worktree; defaults to $SHANTY_AGENT")
-    ph.add_argument("--timeout", type=int, default=60, metavar="SECONDS",
-                    help="per-peer push deadline, 1–3600 seconds (default 60); "
+    ph.add_argument("--timeout", type=int, default=DEFAULT_PUSH_TIMEOUT, metavar="SECONDS",
+                    help=f"per-peer push deadline, 1–3600 seconds (default {DEFAULT_PUSH_TIMEOUT}); "
                          "includes normal pre-push hooks")
     ph.add_argument("--source-branch",
                     help="explicit source branch; must match the selected worktree and caller")
@@ -10511,19 +10511,19 @@ def _cmd_push(a) -> int:
             import shlex
             argv = ["st", "repo", "push", str(invocation[0]), agent,
                     "--source-branch", branch, "--branch", a.branch]
-            if getattr(a, "timeout", 60) != 60:
+            if getattr(a, "timeout", DEFAULT_PUSH_TIMEOUT) != DEFAULT_PUSH_TIMEOUT:
                 argv.extend(["--timeout", str(a.timeout)])
             command = shlex.join(argv)
             print("  Bare names select the canonical agent worktree. To select "
                   "the current checkout, use its literal worktree path:\n"
                   f"  {command}", file=sys.stderr)
         return REFUSED
-    timeout = getattr(a, "timeout", 60)
+    timeout = getattr(a, "timeout", DEFAULT_PUSH_TIMEOUT)
     if not 1 <= timeout <= 3600:
         print("  refused before push: --timeout must be 1–3600 seconds; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
-    if timeout == 60:
+    if timeout == DEFAULT_PUSH_TIMEOUT:
         outcomes = push_every_remote(dest, branch, a.branch)
     else:
         from functools import partial

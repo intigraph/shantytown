@@ -2623,9 +2623,10 @@ non-fast-forward checks still apply to every trusted peer.
 review or successful CI. Land reviewed PRs through the normal merge helper rather
 than treating source publication as a reviewed merge.
 
-For a normal pre-push check that needs more than a minute, pass
-`--timeout 600`. This sets a per-peer deadline between 1 and 3600 seconds;
-the default remains 60 seconds. Hooks and publication guards still run.
+Pushes default to a 600-second per-peer deadline, including local pre-push
+checks, so normal validation hooks can finish before publication. Use
+`--timeout SECONDS` to select a deadline between 1 and 3600 seconds.
+Hooks and publication guards still run.
 A timeout leaves publication indeterminate: read back that peer's exact
 remote destination SHA before deciding whether any retry is needed. Remaining
 peers are not attempted after a timeout, and earlier successful peers stay published.
