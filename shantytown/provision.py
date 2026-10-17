@@ -458,6 +458,9 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
         rendered = mcp_limits.project(
             _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)),
             root, card.name)
+        from .crew_credentials import project as project_credentials
+        rendered["mcpServers"] = project_credentials(
+            rendered["mcpServers"], root, card.name, card.harness, materialize=False)
     except (ProvisionError, ValueError):
         return ["tooling-source(unresolved credentials)"]
     gaps = []
@@ -1152,6 +1155,11 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     from . import mcp_limits
     try:
         rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
+        from .crew_credentials import project as project_credentials
+        credential_kit = json.loads(rendered)
+        credential_kit["mcpServers"] = project_credentials(
+            credential_kit["mcpServers"], root, card.name, card.harness)
+        rendered = json.dumps(credential_kit, indent=2)
     except (OSError, ValueError, TypeError) as exc:
         raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
     if (bare := headerless_quipu(json.loads(rendered).get("mcpServers", {}))):
