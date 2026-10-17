@@ -3322,8 +3322,12 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     """
     from . import ceiling_transfer as ct
     log = log or (lambda msg: print(f"  {msg}", file=sys.stderr))
+    from . import ceiling_advisory as advisory
+    capture = advisory.Capture(Path(a.root), dry_run=a.dry_run, log=log)
+    capture.record("start", inputs_observed=False)
     gaming = gaming if gaming is not None else quiet_time_mod.read(Path(a.root))
     if gaming.held:
+        capture.record("held", reason="gaming", inputs_observed=False)
         return []
     from . import session_budget as _sb
     # The FULL gate tuple, read once per agent. A source needs a measured
@@ -3355,6 +3359,8 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         if item is not None and (item.status or "") != "closed":
             holders.append(ct.Holder(card.name, item.id, why, evidence))
     if not holders:
+        capture.record("no_holders", budgets=budgets, findings=findings,
+                       holders=holders, candidates_observed=False)
         return []
 
     if owner_count is None:
@@ -3371,6 +3377,7 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
                        if (row.get("status") or "") != "closed")
 
     candidates = []
+    counts = {}
     for card in agents:
         unavailable = ""
         f = findings.get(card.name)
@@ -3386,11 +3393,14 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             unavailable = ct.receiver_budget(*_budget(card.name))
         if not unavailable and harness == ct.TARGET_HARNESS:
             count = owner_count(card.name)
+            counts[card.name] = count
             if count is None:
                 unavailable = "plate count unknown"
         candidates.append(ct.Candidate(card.name, harness, count or 0, unavailable))
 
     p = ct.plan(holders, candidates)
+    capture.record("plan", budgets=budgets, findings=findings, holders=holders,
+                   candidates=candidates, counts=counts, plan=p)
     for stay in p.stays:
         log(f"ceiling-transfer: {stay.item} stays with {stay.frm}: {stay.why}")
     if a.dry_run:
@@ -3412,10 +3422,12 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         with ledger.open("a") as fh:
             fh.write(json.dumps(dict(event, ts=time.time())) + "\n")
 
-    return ct.apply(
+    outcomes = ct.apply(
         p.moves,
         dispatch=lambda item, to, note: dispatcher.go(item, to, note=note, reassign=True),
         comment=_comment, emit=_emit, log=log)
+    capture.record("outcomes", outcomes=outcomes)
+    return outcomes
 
 
 def unobserved_launch_report(agent: str, harness: str, session: str,
