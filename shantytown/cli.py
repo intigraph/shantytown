@@ -10504,6 +10504,19 @@ def _cmd_push(a) -> int:
               f"  Either check out '{branch}' there, or push '{checked_out}' "
               f"deliberately with --source-branch after reviewing the ref.",
               file=sys.stderr)
+        if invocation is not None and "/" not in a.repo:
+            # Bare names intentionally select the canonical tree. When the
+            # caller already chose a matching extra source, name its literal
+            # path instead of suggesting a switch of the preserved canonical.
+            import shlex
+            argv = ["st", "repo", "push", str(invocation[0]), agent,
+                    "--source-branch", branch, "--branch", a.branch]
+            if getattr(a, "timeout", 60) != 60:
+                argv.extend(["--timeout", str(a.timeout)])
+            command = shlex.join(argv)
+            print("  Bare names select the canonical agent worktree. To select "
+                  "the current checkout, use its literal worktree path:\n"
+                  f"  {command}", file=sys.stderr)
         return REFUSED
     timeout = getattr(a, "timeout", 60)
     if not 1 <= timeout <= 3600:

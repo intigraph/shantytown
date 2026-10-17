@@ -2561,6 +2561,15 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 `origin`; it does not push, merge, close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
+The forge's canonical repository slug and stable ID are checked before creation.
+A renamed slug refuses before POST and names the canonical slug; update the
+requested repository and its matching origin deliberately, then run preflight
+again. This command never rewrites remotes or silently migrates aliases. A
+repository identity change during preflight also refuses before POST. A lost or
+malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
+reported on stderr as well as JSON stdout. Inspect the canonical repository for
+the exact PR before retrying; the command never automatically repeats a create.
+
 ```sh
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
