@@ -1009,11 +1009,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     # A role config is shared by all agents in that role. A named credential
     # must never be projected into it, including through a per-agent symlink.
-    if secrets is None and card.harness in ("codex", "opencode"):
+    if card.harness in ("codex", "opencode"):
         from .provision_credentials import agent_overrides
+        from .crew_credentials import selection as crew_selection
         try:
-            named = bool(agent_overrides(root, card.name))
-        except ValueError as exc:
+            named = (bool(agent_overrides(root, card.name)) if secrets is None else False)
+            named = named or crew_selection(root, card.name) is not None
+        except (OSError, ValueError) as exc:
             raise ProvisionError(str(exc)) from None
         if named:
             filename = "config.toml" if card.harness == "codex" else "opencode.json"

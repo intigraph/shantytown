@@ -24,6 +24,8 @@ The harness receives a header-helper command, not a bearer. Claude uses
 `headersHelper`; Codex uses `http_headers_helper`. Static Authorization is
 removed so it cannot override the helper. Other headers remain. OpenCode is
 unsupported for this opt-in path and refuses before rewriting the kit.
+Codex requires an independent per-agent config; a shared role config or a
+per-agent symlink to one refuses before fetching or writing named credentials.
 
 If the selected secret cannot be fetched, the prior launch's file is removed.
 The next helper invocation uses the existing global shared credential provider,

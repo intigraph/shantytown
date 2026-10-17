@@ -235,3 +235,46 @@ def test_real_http_fetch_pins_value_and_never_follows_redirect(configured, tmp_p
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_named_helper_refuses_shared_codex_role_config_before_fetch(configured, monkeypatch, tmp_path):
+    from shantytown.protocols import Agent
+    root, _, _, runtime, _, _ = configured
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    role = root / "settings" / "codex" / "worker"
+    role.mkdir(parents=True)
+    (role / "config.toml").write_text("")
+    monkeypatch.setattr(C, "_fetch", lambda *args: pytest.fail("fetch before identity isolation"))
+    # Even explicitly supplied shared secrets cannot bypass the per-agent guard.
+    with pytest.raises(P.ProvisionError, match="independent per-agent"):
+        P.provision(Agent(name="alice", workspace=str(ws), harness="codex"), root, secrets={})
+    assert list(runtime.iterdir()) == [] and not (ws / ".mcp.json").exists()
+
+
+def test_actual_codex_provision_keeps_named_helper_in_independent_agent_config(configured, monkeypatch, tmp_path):
+    import tomllib
+    from shantytown.protocols import Agent
+    root, _, _, runtime, servers, token = configured
+    d = root / "provision"
+    (d / P.MCP_TEMPLATE).write_text(json.dumps({"mcpServers": servers}))
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    settings = root / "settings" / "codex"
+    role = settings / "worker"
+    role.mkdir(parents=True)
+    (role / "config.toml").write_text('model = "role-fixture"\n')
+    agent = settings / "agent-alice"
+    agent.mkdir()
+    config = agent / "config.toml"
+    config.write_text('model = "agent-fixture"\n')
+    old_role = (role / "config.toml").read_bytes()
+    monkeypatch.setattr(C, "_fetch", lambda *args: token)
+    P.provision(Agent(name="alice", workspace=str(ws), harness="codex"), root,
+                settings_path=str(config))
+    got = tomllib.loads(config.read_text())["mcp_servers"]["probe"]
+    assert "http_headers_helper" in got
+    assert "Authorization" not in got.get("http_headers", {})
+    assert token not in config.read_text()
+    assert (role / "config.toml").read_bytes() == old_role
+    assert (runtime / "probe").read_text() == token
