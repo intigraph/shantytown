@@ -391,8 +391,13 @@ Advise mode records what would have been held but preserves the existing verdict
 last observation. The separately registered UserPromptSubmit hook counts external
 submissions in `<agent>.external.json` without reading prompt stdin. This includes
 operator and injected-message bypasses; their individual identity is UNKNOWN.
-Regenerate settings through the normal launch/provision path before claiming
-external-input coverage. Missing counter files are UNKNOWN, never zero.
+After source adoption, `st ops provision <agent>` projects the hook only into
+the selected Claude administrator's workspace, including when its role settings
+predate this feature. A role-owned hook prevents a duplicate workspace hook.
+Reprovisioning with mode OFF removes only this owned fallback and preserves
+unrelated hooks; shared role settings are not rewritten. Confirm a natural
+UserPromptSubmit observation before claiming live external-input coverage.
+Missing counter files are UNKNOWN, never zero.
 
 This bounds routine automatic Stop wakes, **not** tokens spent in an ongoing
 turn, direct/operator prompts or urgent responses. Those remain bypasses and must
