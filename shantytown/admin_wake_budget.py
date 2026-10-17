@@ -117,10 +117,13 @@ def prompt(root, agent):
     path = directory / f"{agent}.external.json"
     with (directory / f"{agent}.external.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        prior = json.loads(path.read_text()) if path.exists() else {}
-        count = prior.get("external_prompt_bypasses", 0)
-        if type(count) is not int or count < 0:
-            raise ValueError("invalid counter")
+        if path.exists():
+            prior = json.loads(path.read_text())
+            count = prior.get("external_prompt_bypasses") if isinstance(prior, dict) else None
+            if type(count) is not int or count < 0:
+                raise ValueError("counter history UNKNOWN")
+        else:
+            count = 0
         write_json_atomic(path, {"external_prompt_bypasses": count + 1,
             "observed_at": time.time(), "operator_identity": "UNKNOWN",
             "coverage": "UserPromptSubmit only; no prompt content read"})

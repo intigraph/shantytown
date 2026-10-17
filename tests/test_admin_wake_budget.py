@@ -165,3 +165,25 @@ def test_malformed_counter_history_is_unknown_and_never_reset(tmp_path, capsys):
         record(tmp_path, inp, sp.decide(inp), now=1000)
         assert path.read_text() == original
         assert "counter write UNKNOWN" in capsys.readouterr().err
+
+
+def test_existing_external_history_is_preserved_and_hook_is_nonblocking(tmp_path, monkeypatch, capsys):
+    import json
+    from shantytown.admin_wake_budget import main
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "crew/admin.json").write_text(json.dumps({"role": "administrator"}))
+    (tmp_path / "shantytown.toml").write_text(
+        '[admin_wake_budget]\nmode="advise"\nagents=["admin"]\n')
+    monkeypatch.setenv("SHANTY_AGENT", "admin")
+    path = tmp_path / "admin-wake-budget/admin.external.json"
+    # Missing file initializes, and valid existing history increments.
+    assert main(["--root", str(tmp_path)]) == 0
+    assert main(["--root", str(tmp_path)]) == 0
+    assert json.loads(path.read_text())["external_prompt_bypasses"] == 2
+    for original in ('{}', '[]', '{"external_prompt_bypasses":true}',
+                     '{"external_prompt_bypasses":-1}',
+                     '{"external_prompt_bypasses":"2"}', '{broken'):
+        path.write_text(original)
+        assert main(["--root", str(tmp_path)]) == 0
+        assert path.read_text() == original
+        assert "external counter UNKNOWN" in capsys.readouterr().err
