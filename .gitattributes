@@ -11,4 +11,5 @@ docs/demos/cycle-resume/output.log whitespace=blank-at-eol,blank-at-eof,space-be
 # Keep raw inbox-read recording bytes replayable and text reviewable.
 docs/demos/inbox-read/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 
+docs/demos/bare-source-hint/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 docs/demos/deferral-candidate-split/output.log -text whitespace=cr-at-eol
