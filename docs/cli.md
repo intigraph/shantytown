@@ -1842,6 +1842,13 @@ or a completed turn between two idle observations re-arms delivery. Appending mo
 work behind the same next item does not resend it. Input preflight, session ceilings
 and delivery receipts still apply; a tracker claim alone is not proof a turn began.
 
+For a native Seeds board, the Stop hook reads only the current owner's active
+anchors across the shared and ephemeral graphs. It retains priority/creation/id
+order and future-dated active work. An incomplete or unproven native read allows
+the stop without claiming new work; it does not retry through a global issue
+listing. Proven legacy boards retain the existing CLI path. The global ready-work
+priority advisory is unchanged.
+
 Both haul triggers honour a current deliberate-stop stamp and a gaming hold before
 claiming or resuming work. A held pass spends neither delivery dedup nor the resume
 backoff. Release the hold through the existing lifecycle or gaming controls.

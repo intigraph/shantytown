@@ -445,6 +445,20 @@ class SdTracker(BrTracker):
         ready, active = result
         return self._tend_order(ready), self._tend_order(active)
 
+    def haul_active_rows(self, owner: str) -> Answer[list[dict]] | None:
+        """The stop hook's own anchors, including future-dated held work.
+
+        Unlike an idle sweep, a haul must retain parked active anchors. Native
+        uncertainty raises rather than falling back to global SDK hydration.
+        """
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows
+        rows = owner_rows(self.prove_store(), None, feed_owners=(owner,),
+                          active_only=True, timeout=self.timeout).exact()
+        return Answer.complete_read(self._tend_order(rows),
+                                    how="owner-scoped haul active anchors")
+
     def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
         if not self._use_remote_projection():
