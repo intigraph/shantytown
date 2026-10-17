@@ -1,0 +1,51 @@
+{
+  "scope": "private fixtures; ten identical synthetic admin turns, not live notification frequency",
+  "baseline_ref": "4b48bce",
+  "before": {
+    "time": "2026-10-17T08:05:39.629985+00:00",
+    "waiting": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "near_control": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "idle_control": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "unsuitable_candidates": [
+      [
+        "epic",
+        "umbrella"
+      ],
+      [
+        "parked",
+        "parked"
+      ]
+    ]
+  },
+  "after": {
+    "time": "2026-10-17T08:05:39.860499+00:00",
+    "waiting": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "near_control": {
+      "free": [],
+      "prompt_count_per_10_turns": 0
+    },
+    "idle_control": {
+      "free": [
+        "worker"
+      ],
+      "prompt_count_per_10_turns": 10
+    },
+    "unsuitable_candidates": []
+  }
+}

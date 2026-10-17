@@ -28,6 +28,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
@@ -459,6 +460,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or ("assignee" in row and not isinstance(row["assignee"], str))
                 or type(row.get("priority")) is not int
                 or not 0 <= row["priority"] <= 4
+                or (feed_owners is not None and plate_owners is None
+                    and (not isinstance(row.get("issue_type"), str)
+                         or not row["issue_type"]))
                 or row["status"]
                 not in (
                     "open",

@@ -111,6 +111,18 @@ allows that owner's existing haul to proceed. Undated and distant defers do not
 reserve the worker indefinitely. Closed items, messages, anchors and decisions
 do not count toward this occupancy.
 
+Assigned `blocked:external` work reserves the same capacity when its explicit
+UTC review timestamp satisfies `0 < review - now <= 24 hours`. This covers
+pending CI, review and lane events beyond the older 60-minute window. Missing,
+malformed or non-UTC timestamps make occupancy UNKNOWN. An expired external gate
+re-evaluates capacity without opening or resuming the item. Immediate owned work
+still reaches the owner's haul. The assigned-item ceiling remains a separate gate.
+
+Dispatch candidates exclude epics by native `issue_type`, parked labels and
+explicit manual/human-only labels, alongside existing owned and decision-gated
+exclusions. Titles never establish these categories. Missing native type metadata
+is UNKNOWN rather than proof of an actionable task.
+
 Native Seeds reads only metadata for the mechanically idle candidate owners,
 across the shared and ephemeral graphs, with existing row caps and exact-answer
 checks. It never hydrates full item bodies as a fallback. Unknown occupancy
