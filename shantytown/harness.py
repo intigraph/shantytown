@@ -99,6 +99,32 @@ class Unsupported(Exception):
     wrong thing. Raised at COMPOSE time, so nothing is launched."""
 
 
+def _crew_launch_identity(card, root):
+    """Carry a selected CLI credential path, never its contents, into either process."""
+    from .crew_credentials import cli_environment, cli_launch_enabled
+    try:
+        values = cli_environment(root, card.name)
+        sanitize = cli_launch_enabled(root)
+    except (OSError, ValueError):
+        raise Unsupported("crew credential launch configuration unavailable") from None
+    if not values:
+        if not sanitize:
+            return "", ""
+        # Resolve inheritance in the child shell, not the composing process:
+        # tmux/daemon environments can differ from the caller environment.
+        # Pure lexical normalization matches managed_cli_path, including //
+        # roots; it neither resolves links nor opens credential targets.
+        normalize = shlex.join([sys.executable, "-c",
+            "import os; print('/' + os.path.abspath(os.environ.get("
+            "'QUIPU_AUTH_TOKEN_FILE', '')).lstrip('/'), end='')"])
+        return (
+            f'$(case "$({normalize})" in '
+            '/run/user/*/shantytown-credentials/*) '
+            'printf "%s" "-u QUIPU_AUTH_TOKEN_FILE ";; esac) ', "")
+    return "-u QUIPU_AUTH_TOKEN -u QUIPU_AUTH_TOKEN_FILE ", "".join(
+        f"{key}={shlex.quote(value)} " for key, value in values.items())
+
+
 def require_role_harness(card, root=None) -> None:
     """Enforce an opt-in deployment role/harness admission policy."""
     if root is None:
@@ -467,10 +493,11 @@ class ClaudeHarness:
         # NOT reach (_report_who_the_rewrite_did_not_reach). Both have since landed —
         # all three legs of that bead are closed. This one is the belt, not the detector.
         from .runtime import _settings_env
+        credential_options, credential_env = _crew_launch_identity(card, root)
         carried_env = "".join(
             f"{key}={shlex.quote(value)} "
             for key, value in _settings_env(card.role, root).items()
-            if key != "BOBBIN_ROLE")
+            if key != "BOBBIN_ROLE" and (not credential_env or key != "QUIPU_AUTH_TOKEN"))
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
@@ -492,7 +519,7 @@ class ClaudeHarness:
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
-            f"env -u SHANTY_MODEL {carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"env -u SHANTY_MODEL {credential_options}{carried_env}{credential_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
             f"claude {flags} --settings {settings_path}"
         )
@@ -963,10 +990,11 @@ class CodexHarness:
         # non-secret settings allowlist into both daemon and local launches.
         # CLI command_environment's temporary exports end before tmux executes.
         from .runtime import _settings_env
+        credential_options, credential_env = _crew_launch_identity(card, root)
         carried_env = "".join(
             f"{key}={shlex.quote(value)} "
             for key, value in _settings_env(card.role, root).items()
-            if key != "BOBBIN_ROLE")
+            if key != "BOBBIN_ROLE" and (not credential_env or key != "QUIPU_AUTH_TOKEN"))
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
         st_roles = f"ST_ROLES={','.join(card.effective_roles())} "
         st_domain = f"ST_ROLE_DOMAIN={card.domain} " if card.domain else ""
@@ -977,7 +1005,7 @@ class CodexHarness:
         model = resolve_model(card, root)
         model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
         identity_env = (
-            f"{carried_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"{carried_env}{credential_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
@@ -1138,7 +1166,7 @@ class CodexHarness:
                 # is the same environment rail as SHANTY_AGENT, not independent
                 # corroboration.  Remove it from the daemon only; the attached
                 # TUI below still inherits its real pane marker from tmux.
-                f"env -u TMUX_PANE -u SHANTY_MODEL {identity_env}"
+                f"env -u TMUX_PANE -u SHANTY_MODEL {credential_options}{identity_env}"
                 f"{codex_mod().HOME_VAR}={daemon_home} "
                 "codex remote-control start "
                 f"{daemon_sandbox}"
@@ -1208,7 +1236,7 @@ class CodexHarness:
         # the role set OPAQUELY (GitHub #37). None of that is Claude Code's; it
         # is how a shantytown agent knows who it is, whatever program it runs.
         launch = (
-            f"{daemon_start}env -u SHANTY_MODEL {identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
+            f"{daemon_start}env -u SHANTY_MODEL {credential_options}{identity_env}{codex_mod().HOME_VAR}={home} codex {flags}"
         )
         # NO SECRET REACHES THE SESSION ENVIRONMENT (aegis-6qau3t). This used to
         # read `set -a; . <root>/provision/secrets.env; set +a;` so that codex
