@@ -1,0 +1,6 @@
+Script started on 2026-10-17 03:26:18-04:00 [COMMAND="python3 docs/demos/deferral-candidate-split/run-demo.py" <not executed on terminal>]
+BEFORE: one 16-arm candidate -> UNKNOWN; no partial hydration
+AFTER: sixteen single-arm candidates -> COMPLETE, one deduplicated fixture item
+No HTTP request, production timing, scheduled sweep or server change demonstrated.
+
+Script done on 2026-10-17 03:26:18-04:00 [COMMAND_EXIT_CODE="0"]
