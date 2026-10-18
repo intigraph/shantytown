@@ -1034,7 +1034,10 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
     ids = {e.id for e in candidates} if candidates is not None else None
-    got = events.drain(me, None if ids is None else lambda e: e.id in ids)
+    # Tracker/workflow enrichment can outlive the hook deadline during an
+    # outage. Preview first: marking delivery before those reads loses the
+    # report when the hook is killed without ever emitting its block payload.
+    got = [e for e in events.pending(me) if ids is None or e.id in ids]
     if not got:
         return 0
     # The event's item fields are a stop-time snapshot, while the pane verdict
@@ -1065,8 +1068,20 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                                   stood_down=stood_down, stopped=stopped, now=now)
         if extra:
             reason = reason + "\n\n" + extra
+    payload = json.dumps({"decision": "block", "reason": reason})
+    # Claim only this prepared batch. A report arriving during enrichment must
+    # wait for its own liveness check; another reader may have claimed an old
+    # report while we were preparing it. Never repeat that reader's delivery or
+    # include workflow advice derived from the superseded batch.
+    prepared_ids = {e.id for e in got}
+    claimed = events.drain(me, lambda e: e.id in prepared_ids)
+    if not claimed:
+        return 0
+    if {e.id for e in claimed} != prepared_ids:
+        payload = json.dumps({"decision": "block", "reason": _compose_reason(
+            claimed, verdicts, now, current_items=current_items)})
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
-    print(json.dumps({"decision": "block", "reason": reason}))
+    print(payload, flush=True)
     return 0
 
 

@@ -1265,6 +1265,14 @@ prevents. Rank 0 does not get to fail *silently*: persisting your own stop event
 survival, not a decision, so a failure there is reported rather than swallowed into
 a clean-looking allow.
 
+The receiving drain prepares its response before marking reports delivered.
+If tracker reads or workflow enrichment exceed the hook deadline, the reports
+remain pending for the next drain. Reports arriving during preparation stay in
+the queue, and a report claimed by another drain is omitted from this response.
+This reduces the interval between the delivery marker and output; it is not a
+durable acknowledgement from the model, so a process failure in that final
+interval still requires checking the retained event and actual model receipt.
+
 ### Hibernate
 
 ```toml
