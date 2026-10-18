@@ -56,7 +56,7 @@ def test_crosscrew_read_is_explicit_historical_and_never_staged(tmp_path, monkey
     assert result['coverage'] == 'this_repository_owner_records'
 
 
-@pytest.mark.parametrize('action', ['stage', 'commit', 'deliver'])
+@pytest.mark.parametrize('action', ['stage', 'commit', 'deliver', 'sync'])
 def test_crosscrew_mutation_or_projection_refuses_before_client_selection(tmp_path, monkeypatch, action):
     monkeypatch.setattr(memory.Client, 'for_agent', lambda *a: pytest.fail('selected writer'))
     with pytest.raises(Unproven):
@@ -149,3 +149,40 @@ def test_commit_command_retains_intent_and_later_delivery_never_duplicates(tmp_p
                                '--outbox', str(root)))['receipt'] == remote.accepted
     assert memory.execute(command)['receipt'] == remote.accepted
     assert remote.writes == 1
+
+
+def test_explicit_sync_resumes_frozen_batch_without_recapturing_source(tmp_path, monkeypatch):
+    from test_memory_sync import Projected
+    remote = Projected()
+    monkeypatch.setattr(memory.Client, 'for_agent', lambda *a: remote)
+    native = tmp_path / 'native'
+    native.mkdir()
+    (native / 'MEMORY.md').write_bytes(b'# CLI source\r\n')
+    (native / 'topic.md').write_bytes('λ\n'.encode())
+    outbox = tmp_path / 'outbox'
+    outbox.mkdir(mode=0o700)
+    extra = ['--directory', str(native), '--outbox', str(outbox),
+             '--harness', 'fixture', '--account', 'selected', '--max-new', '1']
+    result = memory.execute(args(tmp_path, 'sync', *extra))
+    assert result['status'] == 'pending' and len(remote.writes) == 1
+    source = native / 'MEMORY.md'
+    before = source.read_bytes()
+    # An active batch must not read a new/missing source directory.
+    extra[1] = str(tmp_path / 'missing')
+    result = memory.execute(args(tmp_path, 'sync', *extra))
+    assert result['status'] == 'accepted' and len(remote.writes) == 2
+    assert result['native_selection'] == 'UNCHANGED'
+    assert 'CLI source' not in json.dumps(result)
+    assert source.read_bytes() == before
+    extra[1] = str(native)
+    assert memory.execute(args(tmp_path, 'sync', *extra))['status'] == 'unchanged'
+
+
+def test_sync_requires_explicit_attribution_before_source_or_network(tmp_path, monkeypatch):
+    from test_memory_sync import Projected
+    remote = Projected()
+    monkeypatch.setattr(memory.Client, 'for_agent', lambda *a: remote)
+    with pytest.raises(Unproven, match='required memory arguments'):
+        memory.execute(args(tmp_path, 'sync', '--outbox', str(tmp_path / 'not-created'),
+                            '--directory', str(tmp_path / 'not-read')))
+    assert remote.projection_reads == 0 and remote.writes == []

@@ -10,23 +10,27 @@ import sys
 from .memory_files import UnsafeMemory, snapshot
 from .memory_outbox import Outbox, MAX_WIRE
 from .memory_remote import Client, Owner, Unproven, _json
+from .memory_sync import step
 from .quipu_auth import CredentialRefused
 
 
 def configure(parser):
     parser.add_argument('agent', help='crew credential selection, not a guessed owner IRI')
     parser.add_argument('memory_action', choices=('inspect', 'capabilities', 'read', 'export', 'query',
-                                                'commit', 'deliver', 'stage'))
+                                                'commit', 'deliver', 'stage', 'sync'))
     parser.add_argument('--server', help='explicit Quipu origin')
     parser.add_argument('--deployment', help='canonical deployment IRI')
     parser.add_argument('--project', help='canonical project IRI')
     parser.add_argument('--owner', help='explicit other crew IRI for read only')
     parser.add_argument('--text', help='bounded literal query within the selected owner')
-    parser.add_argument('--directory', type=Path, help='explicit source directory for inspect')
+    parser.add_argument('--directory', type=Path, help='explicit source directory for inspect or sync')
     parser.add_argument('--request', type=Path, help='private exact commit intent JSON')
     parser.add_argument('--outbox', type=Path, help='existing private outbox directory')
     parser.add_argument('--intent', help='existing immutable outbox intent name')
     parser.add_argument('--parent', type=Path, help='existing parent for a NEW staged generation')
+    parser.add_argument('--harness', help='explicit source harness attribution for sync')
+    parser.add_argument('--account', help='explicit source account attribution for sync')
+    parser.add_argument('--max-new', type=int, default=1, help='pending sync attempts, 0..128 (default 1)')
 
 
 def _required(args, *names):
@@ -86,6 +90,10 @@ def execute(args):
                 'native_selection': 'UNCHANGED'}
     _required(args, 'outbox')
     outbox = Outbox(args.outbox, client.owner)
+    if action == 'sync':
+        _required(args, 'directory', 'harness', 'account')
+        return step(outbox, client, lambda: snapshot(args.directory), harness=args.harness,
+                    account=args.account, max_new=args.max_new)
     if action == 'commit':
         _required(args, 'request')
         name = outbox.enqueue(_request(args.request))

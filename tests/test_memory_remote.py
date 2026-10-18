@@ -225,3 +225,15 @@ def test_receipt_lookup_is_read_only_and_accepts_absent_or_exact(monkeypatch):
     opener.result = {'receipt': receipt(request)}
     assert client.receipt(request) == opener.result['receipt']
     assert all(call[0].full_url.endswith('/memory/receipt') for call in opener.calls)
+
+
+def test_own_projection_distinguishes_explicit_absence_from_omitted_snapshot(monkeypatch):
+    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: {'Authorization': 'Bearer fixture'})
+    value = dict(authenticated_owner=OWNER.crew, export={
+        'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+        'snapshot': None, 'files': []})
+    client = remote.Client('https://example.test', OWNER, opener=Opener(value))
+    assert client.projection() == value
+    del value['export']['snapshot']
+    with pytest.raises(remote.Unproven):
+        client.projection()

@@ -90,20 +90,35 @@ class Outbox:
             os.close(fd)
         return name
 
-    def deliver(self, name, client):
+    def _intent(self, fd, name, client):
         if not isinstance(name, str) or not _NAME.fullmatch(name) or client.owner != self.owner:
             raise Unproven('outbox name or selected owner mismatch')
+        data = self._read(fd, name)
+        if data is None or hashlib.sha256(data).hexdigest() != _NAME.fullmatch(name)[1]:
+            raise Unproven('outbox intent is missing or changed')
+        return canonical_intent(_json(data), self.owner)
+
+    def accepted(self, name, client):
+        """Verify a local receipt without network or freshness advancement."""
         fd = self._open()
         try:
-            data = self._read(fd, name)
-            if data is None or hashlib.sha256(data).hexdigest() != _NAME.fullmatch(name)[1]:
-                raise Unproven('outbox intent is missing or changed')
-            request = canonical_intent(_json(data), self.owner)
+            request = self._intent(fd, name, client)
             receipt_name = name.removesuffix('.json') + '.receipt.json'
             existing = self._read(fd, receipt_name)
             if existing is not None:
-                # No network, rewrite, or freshness advancement for a local noop.
                 return client._receipt(_json(existing), request)
+            return None
+        finally:
+            os.close(fd)
+
+    def deliver(self, name, client):
+        accepted = self.accepted(name, client)
+        if accepted is not None:
+            return accepted
+        fd = self._open()
+        try:
+            request = self._intent(fd, name, client)
+            receipt_name = name.removesuffix('.json') + '.receipt.json'
             receipt = client.receipt(request)
             if receipt is None:
                 receipt = client.commit(request)

@@ -181,10 +181,17 @@ class Client:
                 'matches': matches[:limit], 'truncated': len(matches) > limit,
                 'search': 'literal; selected owner only; not a global index'}
 
-    def stage_own(self, parent: Path):
+    def projection(self):
+        """Read the verified own manifest, including an explicitly absent head."""
         result = self._request('/memory/projection', self.owner.wire(), identity=True)
-        files = verified_files(result, self.owner)
-        return stage(files, parent)
+        if (not isinstance(result, dict) or result.get('authenticated_owner') != self.owner.crew
+                or not isinstance(result.get('export'), dict)):
+            raise Unproven('own memory projection identity unproven')
+        _export_files(result['export'], self.owner, allow_empty=True)
+        return result
+
+    def stage_own(self, parent: Path):
+        return stage(verified_files(self.projection(), self.owner), parent)
 
 
 def canonical_intent(request, owner: Owner):
@@ -216,7 +223,8 @@ def verified_files(result, owner: Owner):
 
 def _export_files(envelope, owner, *, allow_empty=False):
     if (not isinstance(envelope, dict) or envelope.get('format') != 'quipu.memory-files/v1'
-            or envelope.get('coverage') != 'this_repository_owner_records'):
+            or envelope.get('coverage') != 'this_repository_owner_records'
+            or 'snapshot' not in envelope):
         raise Unproven('memory projection coverage unproven')
     snapshot, records = envelope.get('snapshot'), envelope.get('files')
     if allow_empty and snapshot is None and records == []:

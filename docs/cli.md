@@ -83,7 +83,7 @@ st agent                      one agent
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
-  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage>
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage|sync>
                               explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -2772,6 +2772,16 @@ directory and request file must be private and user-owned. After an unknown
 result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
 trigger reconciles the original receipt before any identical commit. There is
 no implicit retry, deletion or last-writer-wins merge.
+
+`sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
+bounded multi-file capture and performs one pending-intent attempt by default.
+It requires the same explicit remote scope and own credential selection above.
+`--max-new N` permits 0..128 attempts; this is an attempt count, not a wall-clock
+deadline. Invoke it explicitly again to resume the same pending batch before
+recapture. Its journal accepts completion only after a fresh authenticated own
+projection matches the final receipt. A different remote head refuses automatic
+adoption. Source files and native selection remain unchanged. This command
+does not install an automatic lifecycle hook.
 
 `stage --parent PATH` verifies the own-owner export and creates a new exclusive
 generation. It does not select that generation, replace native files or alter

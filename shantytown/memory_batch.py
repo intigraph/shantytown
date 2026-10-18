@@ -80,7 +80,7 @@ def freeze(outbox: Outbox, requests):
     return name
 
 
-def deliver(outbox: Outbox, name, client):
+def deliver(outbox: Outbox, name, client, *, max_new=MAX_FILES):
     """Resume an explicit frozen batch, stopping at the first unknown/conflict.
 
     Accepted intents are read back before any stale-head rejection. A response
@@ -88,6 +88,10 @@ def deliver(outbox: Outbox, name, client):
     Later source changes remain in their original files; this never stages or
     replaces native files and never constructs a new batch from changed input.
     """
+    # This bounds pending intent attempts, not a wall-clock deadline. Each
+    # attempt can perform a receipt read and one commit, both client-bounded.
+    if type(max_new) is not int or not 0 <= max_new <= MAX_FILES:
+        raise Unproven('memory batch delivery budget invalid')
     if not isinstance(name, str) or not _NAME.fullmatch(name) or client.owner != outbox.owner:
         raise Unproven('memory batch identity mismatch')
     fd = outbox._open()
@@ -107,7 +111,18 @@ def deliver(outbox: Outbox, name, client):
             or any(not isinstance(n, str) or not _INTENT.fullmatch(n) for n in names)
             or len(set(names)) != len(names)):
         raise Unproven('memory batch coverage unproven')
-    receipts = [outbox.deliver(intent, client) for intent in names]
-    return {'status': 'batch_delivered' if receipts else 'no_changes_against_supplied_baseline',
+    receipts, attempted = [], 0
+    for intent in names:
+        receipt = outbox.accepted(intent, client)
+        if receipt is None:
+            if attempted == max_new:
+                break
+            attempted += 1
+            receipt = outbox.deliver(intent, client)
+        receipts.append(receipt)
+    remaining = len(names) - len(receipts)
+    status = ('batch_partial' if remaining else 'batch_delivered' if receipts
+              else 'no_changes_against_supplied_baseline')
+    return {'status': status, 'remaining': remaining,
             'receipts': receipts, 'native_selection': 'UNCHANGED',
             'remote_currentness': 'NOT PROVEN'}

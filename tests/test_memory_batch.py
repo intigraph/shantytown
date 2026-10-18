@@ -19,9 +19,11 @@ class Remote(Client):
         self.files = {}
         self.accepted = {}
         self.writes = []
+        self.receipt_reads = 0
         self.lose_number = None
 
     def receipt(self, request):
+        self.receipt_reads += 1
         return self.accepted.get(request['idempotency_key'])
 
     def commit(self, request):
@@ -136,3 +138,48 @@ def test_wrong_owner_or_corrupt_manifest_refuses_without_network(tmp_path):
     remote.owner = Owner(OWNER.deployment, OWNER.project, 'urn:example:beta')
     with pytest.raises(Unproven):
         batch.deliver(outbox, name, remote)
+
+
+def test_one_pending_intent_per_trigger_resumes_without_repeating_accepted_work(tmp_path):
+    outbox, remote = box(tmp_path), Remote()
+    requests = plan(files())
+    name = batch.freeze(outbox, requests)
+    zero = batch.deliver(outbox, name, remote, max_new=0)
+    assert zero['status'] == 'batch_partial' and zero['remaining'] == 3
+    assert remote.writes == [] and remote.receipt_reads == 0
+    for count in range(1, 4):
+        result = batch.deliver(outbox, name, remote, max_new=1)
+        assert len(remote.writes) == count
+        assert result['remaining'] == 3 - count
+        assert result['status'] == ('batch_delivered' if count == 3 else 'batch_partial')
+        assert remote.receipt_reads == count
+    stamps = {p.name: p.stat().st_mtime_ns for p in outbox.root.iterdir()}
+    assert batch.deliver(outbox, name, remote, max_new=0) == result
+    assert remote.writes == list(requests)
+    assert remote.receipt_reads == 3
+    assert stamps == {p.name: p.stat().st_mtime_ns for p in outbox.root.iterdir()}
+
+
+def test_lost_reply_counts_as_pending_until_next_trigger_reconciles_receipt(tmp_path):
+    outbox, remote = box(tmp_path), Remote()
+    name = batch.freeze(outbox, plan(files()))
+    batch.deliver(outbox, name, remote, max_new=1)
+    remote.lose_number = 2
+    with pytest.raises(Unproven):
+        batch.deliver(outbox, name, remote, max_new=1)
+    assert len(remote.writes) == 2
+    # The next trigger spends its single pending allowance reconciling the
+    # accepted remote commit, rather than also committing the third file.
+    result = batch.deliver(outbox, name, remote, max_new=1)
+    assert result['remaining'] == 1 and len(remote.writes) == 2
+    result = batch.deliver(outbox, name, remote, max_new=1)
+    assert result['status'] == 'batch_delivered' and len(remote.writes) == 3
+
+
+@pytest.mark.parametrize('limit', [-1, 129, True, 1.5, None, '1'])
+def test_invalid_delivery_budget_refuses_before_network(tmp_path, limit):
+    outbox, remote = box(tmp_path), Remote()
+    name = batch.freeze(outbox, plan(files()))
+    with pytest.raises(Unproven):
+        batch.deliver(outbox, name, remote, max_new=limit)
+    assert remote.writes == []

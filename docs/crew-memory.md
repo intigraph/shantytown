@@ -81,5 +81,23 @@ Query scope is one explicitly selected owner/repository, not a global search
 index. Own staging and writes retain their separate named-identity requirement.
 Frozen multi-file batches retain all exact intents before delivery, replay
 accepted receipts before stale checks, stop on unknown/conflict and never
-infer deletions from missing source files. These transport primitives are not
+infer deletions from missing source files. A caller can bound delivery with
+`max_new`: each pending intent consumes one allowance, including receipt-only
+reconciliation after a lost reply; already accepted local receipts consume
+none. An exhausted allowance returns `batch_partial` and a remaining count.
+This bounds intent attempts, not elapsed time: each attempt may make one
+receipt request and one commit, each subject to the client's timeout. These
+transport primitives are not
 yet an automatic lifecycle producer or native-root selector.
+
+The synchronization library retains the accepted remote head and active frozen
+batch in the same private outbox. A nonblocking lock serializes cooperating
+triggers. An active batch resumes before source recapture; a new batch requires
+the authenticated own remote head to equal the previously accepted head. Its
+completion is accepted only after a fresh own projection proves the final
+receipt head. Unknown outcomes and foreign heads retain the pending batch.
+The small journal uses fsync and atomic replacement, and unchanged source does
+not rewrite it. These guarantees assume cooperating processes on the same
+secure filesystem; another writer with the same OS user can bypass the lock.
+No automatic hook, native directory selection or remote-head adoption is
+installed by this library.
