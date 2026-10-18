@@ -16,7 +16,7 @@ SURFACE: dict[str, tuple[str, ...] | None] = {
     "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None, "attach": None,
     "work": ("item", "repool", "defer", "cost", "dream", "triage", "jobs"),
     "agent": ("new", "stop", "harness", "account", "cycle", "advise", "input", "ask", "answer",
-              "log", "history", "stats"),
+              "log", "history", "stats", "memory"),
     "fleet": ("start", "tend", "roles", "init", "hold", "window", "dashboard",
               "watch"),
     "repo": ("worktree", "push", "context", "pr"),

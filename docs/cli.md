@@ -83,6 +83,8 @@ st agent                      one agent
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
+  memory <agent> <capabilities|inspect|read|commit|deliver|stage>
+                              explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
   stats --graph               graph-context adoption: what share of dispatches carried a
@@ -291,7 +293,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-three. Seven verbs at the top level and thirty-six grouped commands under five groups
+Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2746,3 +2748,34 @@ transaction and continue to block relaunch; they are not routine quota holds.
 Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
 holds remain respected during automatic recovery. Nothing here starts a second
 administrator, changes an account cap, or clears an operator hold.
+
+## Explicit file-memory transport
+
+`st agent memory` earns its own slot because commit and projection have data
+consequences; they must not be hidden in the read-only anchor. The command
+provides bounded transport, not automatic lifecycle synchronization. Run
+`st agent memory alpha capabilities` for the current honest adapter limits.
+
+Inspect a selected native directory without uploading its bodies:
+
+```sh
+st agent memory alpha inspect --directory /path/to/selected/memory
+```
+
+Remote operations require explicit `--server`, `--deployment` and `--project`
+IRIs and the existing named CLI credential selection. `read --owner IRI` is
+intentionally cross-crew and returns attributed historical data. Other-owner
+commit, delivery and staging refuse. `commit --request request.json --outbox
+/path/to/private-outbox` durably stores the exact private JSON intent before
+reading its receipt and attempting at most one commit. The existing outbox
+directory and request file must be private and user-owned. After an unknown
+result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
+trigger reconciles the original receipt before any identical commit. There is
+no implicit retry, deletion or last-writer-wins merge.
+
+`stage --parent PATH` verifies the own-owner export and creates a new exclusive
+generation. It does not select that generation, replace native files or alter
+harness settings. Existing startup memory bridging remains. Claude native
+selection is still pending an installed handoff, Codex generated-memory
+writeback is unsupported, and an OpenCode native-memory convention is unproven.
+A successful transport command is not native round-trip acceptance.
