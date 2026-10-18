@@ -2728,6 +2728,9 @@ The commands use the same XDG/runtime home resolution as the launcher, verify
 the UNIX peer against the identity-bearing daemon process, and never substitute
 the ordinary Codex host or another card. Peer verification currently requires
 Linux SO_PEERCRED; other platforms refuse instead of weakening routing proof.
+Cards assigned to another host are never contacted; a host-assigned card also
+requires the deployment's explicit local host identity. Output uses that
+configured identity, leaving an undeclared host null rather than guessing it.
 
 Pairing output is a temporary secret. Display it directly to the operator; do
 not redirect it to logs, work items, inbox messages or third-party QR services.

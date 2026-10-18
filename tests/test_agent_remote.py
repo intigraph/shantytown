@@ -82,6 +82,41 @@ def test_wrong_registry_identity_never_connects(capsys):
     assert capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize("host", [None, "other-host"])
+def test_host_assigned_card_never_uses_foreign_or_unresolved_deployment(host, monkeypatch, capsys):
+    class Assigned(Registry):
+        def get(self, name):
+            return Agent(name, harness="codex", host="selected-host")
+
+        def all(self):
+            return Answer([self.get("alice")], "fixture", True)
+    monkeypatch.setattr(remote, "local_host", lambda _: host)
+    def forbidden(*_):
+        pytest.fail("connected without local host binding")
+    assert remote.run(args(), Assigned(), control_factory=forbidden) == 2
+    assert capsys.readouterr().out == ""
+    assert remote.run(args("list"), Assigned(), control_factory=forbidden) == 0
+    row, = json.loads(capsys.readouterr().out)
+    assert row["host"] == "selected-host" and row["availability"] == "unavailable"
+
+
+def test_host_assigned_card_uses_matching_deployment(monkeypatch, capsys):
+    class Assigned(Registry):
+        def get(self, name):
+            return Agent(name, harness="codex", host="selected-host")
+    monkeypatch.setattr(remote, "local_host", lambda _: "selected-host")
+    assert remote.run(args(), Assigned(), control_factory=Provider) == 0
+    assert json.loads(capsys.readouterr().out)["host"] == "selected-host"
+
+
+def test_generation_change_withholds_pair_output(capsys):
+    class Changed(Provider):
+        def __exit__(self, *_):
+            raise remote.RemoteError("daemon identity changed; response withheld")
+    assert remote.run(args(), Registry(), control_factory=Changed) == 2
+    assert capsys.readouterr().out == ""
+
+
 @pytest.mark.parametrize("state", ["disabled", "connecting", "errored", {}, None])
 def test_disconnected_or_malformed_status_never_pairs(state, capsys):
     class Disconnected(Provider):

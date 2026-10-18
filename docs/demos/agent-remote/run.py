@@ -65,7 +65,7 @@ if __name__ == "__main__":
         def run(args, registry):
             return actual(args, registry, control_factory=Control)
 
-        with patch.object(cli, "_registry", return_value=Registry()), patch.object(agent_remote, "run", run), patch("socket.gethostname", return_value="demo-host"):
+        with patch.object(cli, "_registry", return_value=Registry()), patch.object(agent_remote, "run", run), patch.object(agent_remote, "local_host", return_value="demo-host"):
             for arguments in (["list", "--json"], ["pair", "alice", "--dry-run", "--json"], ["pair", "alice", "--json"]):
                 print("AFTER (synthetic transport): st agent remote", " ".join(arguments), flush=True)
                 code = cli.main(["--root", str(root), "agent", "remote", *arguments])

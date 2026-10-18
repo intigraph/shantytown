@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from . import codex_daemon
 from .answer import CouldNotLook, PartialAnswer
+from .deployment import local_host
 
 
 class RemoteError(Exception):
@@ -133,10 +133,15 @@ def run(args, registry, *, control_factory=Control):
         if args.remote_action == "pair" and cards[0].name != args.agent:
             raise RemoteError("registry returned another agent; pairing refused")
         rows = []
+        host = local_host(getattr(args, "root", None))
         for card in cards:
             row = {"agent": card.name, "harness": card.harness or "claude",
-                   "host": socket.gethostname(), "availability": "unavailable"}
-            if row["harness"] != "codex":
+                   "host": card.host or host, "availability": "unavailable"}
+            if card.host and card.host != host:
+                if args.remote_action == "pair":
+                    raise RemoteError("selected card belongs to another or unresolved host; use its configured deployment")
+                row["detail"] = "card belongs to another or unresolved host; no connection attempted"
+            elif row["harness"] != "codex":
                 if args.remote_action == "pair":
                     raise RemoteError("selected card is not a Codex agent")
             else:
