@@ -2,7 +2,7 @@
 
 A canonical administrator and a worker receive the same isolated gaming hold
 and unavailable peer-policy reader. On base `2c880419efcdd25b91dcf49c0aa6c539c8ad631d`,
-both refuse. On the candidate source in this PR, the administrator reaches the
+both refuse. On candidate source commit `fdd46e6` (the code demonstrated in this PR), the administrator reaches the
 stubbed handler and skips the unavailable worker-policy reader; the worker
 continues to refuse both. No sessions are started and no credentials are read.
 These are source-fixture results, not installed or provider acceptance.
