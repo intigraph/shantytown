@@ -2747,7 +2747,7 @@ Use `st agent remote pair NAME --dry-run [--json]` for status/identity inspectio
 without issuing a code. The [phone access runbook](android-crew-sessions.md)
 covers explicit card selection, expiration and unknown outcomes, permissions,
 and the separate Android/reconnect acceptance checklist. Its
-[dated offline record](demos/android-crew-sessions/README.md) makes the limits
+[dated offline record](demos/android-crew-sessions/record.md) makes the limits
 of synthetic checks explicit.
 
 ### Administrator launch availability

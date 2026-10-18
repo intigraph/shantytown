@@ -16,7 +16,7 @@ offline operator-sequence tests; production command behavior is unchanged.
 | Android OS/app, account/workspace, UI labels | Unavailable | No phone session, screenshots or manual-entry/QR option verified. |
 | Official documentation | [Working on your phone][official], fetched 2026-10-18 | General Remote and desktop QR guidance; not per-card Android acceptance. |
 
-The earlier `agent-remote` [fixture demo](../agent-remote/README.md) records
+The earlier `agent-remote` [fixture demo](https://github.com/scbrown/shantytown/blob/708b0348d7ff5dbe140397b95f0b339a4c23a2b4/docs/demos/agent-remote/README.md) records
 the command implementation. It is not Android evidence and is not reclassified
 as such by this documentation change.
 

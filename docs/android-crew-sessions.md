@@ -114,7 +114,7 @@ new conversation is not proof that an old one reconnected.
 
 ## Evidence and reproducible offline checks
 
-See the [dated acceptance record](demos/android-crew-sessions/README.md).
+See the [dated acceptance record](demos/android-crew-sessions/record.md).
 The fixtures use the real command parser and dispatch with synthetic providers.
 They cover explicit routing with duplicate labels, dry-run, stale output,
 generation changes and manual rediscovery. They never contact a real daemon.
