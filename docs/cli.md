@@ -2714,3 +2714,35 @@ Nested stop hooks retain the outer command. These values contain no command
 arguments or message text and are diagnostic declarations, not identities or
 authorization. Server logging and reader coverage are required to use them in
 a traffic census; sending the headers alone does not establish attribution.
+
+
+### Administrator launch availability
+
+Ordinary lifecycle commands automatically exempt a verified local
+`administrator` role from routine launch governors: gaming/quiet-time holds,
+usage tiers and FULL STOP/drain verdicts, account/session ceilings, pace and
+burndown limits, and missing/stale usage or peer census. No `--despite-hold`
+flag or global cap change is needed. This applies to `agent new`, fleet start,
+attach-if-down, harness relaunch, cycles and automatic recovery. The launch
+message names the exemption; `agent new --help` describes the policy.
+
+The exact configured registry grants the role. A name, a peer process row, a
+retired card or an unreadable role cannot grant it. Administrators still appear
+in process and account counts and consume real quota. Workers retain their
+normal limits, including the existing offline-administrator reservations.
+
+Administrator launches serialize locally through the live-session check so two
+concurrent requests cannot create duplicate sessions. An unavailable remote
+worker-cap authority does not prevent local administrator recovery. In tend,
+administrator recovery runs before worker admission; routine governor drains
+exclude those verified administrators. Its complete roster remains
+the source for accounting and wiring checks.
+
+An exemption cannot repair missing credentials, provider authentication or
+resource exhaustion, unsupported harness/model/tool settings, missing workspace
+or hooks, or a malformed deployment configuration. These failures remain honest
+launch failures. Explicit maintenance leases protect an in-flight operational
+transaction and continue to block relaunch; they are not routine quota holds.
+Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
+holds remain respected during automatic recovery. Nothing here starts a second
+administrator, changes an account cap, or clears an operator hold.

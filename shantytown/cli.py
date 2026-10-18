@@ -618,10 +618,59 @@ def _administrator_launch_slots(a, cfg, lane, fleet=None):
             and resolve_lane(accounts.lane(admin, cfg)) == lane}
 
 
+def _administrator_launch(a, card=None) -> bool:
+    """Only the exact local registry grants launch policy exemption.
+
+    Names, peer census roles and caller-supplied cards cannot elevate a worker.
+    Failure to read the registry leaves normal admission in force.
+    """
+    if card is None and getattr(a, 'cmd', None) == 'start':
+        try:
+            cfg = config.load(a.root)
+            names, _label, _skipped, refusal = _start_roster(
+                a, cfg, _registry(a).all().exact())
+            return not refusal and any(_administrator_launch(a, _registry(a).get(n))
+                                       for n in names)
+        except Exception:
+            return False
+    name = getattr(card, 'name', None) or getattr(a, 'agent', None)
+    if not name and getattr(a, 'self_', False):
+        name = os.environ.get('SHANTY_AGENT')
+    if not isinstance(name, str) or not name:
+        return False
+    try:
+        current = _registry(a).get(name)
+        from .deployment import local_host
+        host = local_host(a.root)
+        return (current.role == 'administrator' and not current.retired
+                and (not current.host or current.host == host)
+                and (card is None or (card.role == current.role
+                                      and card.host == current.host)))
+    except Exception:
+        return False
+
+
+def _launch_admission_lock(a, card, cfg):
+    from . import fleet_governor as fg
+    if _administrator_launch(a, card):
+        # Availability must not depend on an unreachable worker-cap authority.
+        # A local lock still covers the duplicate-session check and mutation.
+        return fg.admission_lock(a.root, None, {}, local_required=True)
+    return fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
+                             owner=cfg.host_admission_owner,
+                             **({'local_required': True} if cfg.accounts else {}))
+
+
 def _account_launch_refusal(a, card, *, replacing=False):
     try:
-        cfg, governors = _governors(a)
         from . import accounts, account_auth
+        if _administrator_launch(a, card):
+            cfg = config.load(a.root)
+            account = accounts.selected(card, cfg)
+            if account is not None and not account_auth.available(a.root, account):
+                return 'named account credential resolver or native file is unavailable'
+            return ''
+        cfg, governors = _governors(a)
         account = accounts.selected(card, cfg)
         if account is not None and not account_auth.available(a.root, account):
             return 'named account credential resolver or native file is unavailable'
@@ -2389,7 +2438,9 @@ def _add_despite_hold(parser) -> None:
                              "Overrides the hold for THIS command only; it stays "
                              "in force for dispatch, respawns and every other "
                              "launch. Does not override account capacity, FULL STOP, "
-                             "a frozen account or unknown fleet admission.")
+                             "a frozen account or unknown fleet admission. "
+                             "Verified local administrator roles are automatically "
+                             "exempt from routine launch governor restrictions.")
 
 
 def _despite_hold(a) -> bool:
@@ -2447,7 +2498,7 @@ def _main(a, argv: list[str] | None = None) -> int:
 def _run_command(a) -> int:
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
-    if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a):
+    if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a) and not _administrator_launch(a):
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
@@ -3048,7 +3099,8 @@ def _cmd_harness(a) -> int:
         known=tuple(h.name for h in harness_mod.all_harnesses()),
         model=a.model,
         current_model=card.model,
-        lane_held=_harness_lane_held(a, cfg, a.target),
+        lane_held=(not _administrator_launch(a, card) and
+                   _harness_lane_held(a, cfg, a.target)),
         restart_now=a.now, force=a.force)
 
     if isinstance(plan, harness_switch.Refusal):
@@ -3068,7 +3120,7 @@ def _cmd_harness(a) -> int:
               + (f", model {plan.model}" if plan.model else ""))
         return OK
 
-    if plan.restart_now and not _despite_hold(a):
+    if plan.restart_now and not _despite_hold(a) and not _administrator_launch(a, card):
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
@@ -3496,9 +3548,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
                                 window_restore=window_restore,
                                 reuse_session=reuse_session)
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner,
-                               **({'local_required': True} if cfg.accounts else {})):
+        with _launch_admission_lock(a, card, cfg):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -3527,8 +3577,13 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     guard, the equipped-or-not-created refusal and the hooks verification are each
     load-bearing, and a second launcher would have to re-earn all four.
     """
+    administrator = _administrator_launch(a, card)
+    if administrator:
+        print(f"  administrator {card.name}: routine governor launch restrictions "
+              "exempt (gaming, usage, capacity and peer census); accounting unchanged.",
+              file=sys.stderr)
     gaming = quiet_time_mod.read(Path(a.root))
-    if gaming.held:
+    if gaming.held and not administrator:
         if not _despite_hold(a):
             return _refuse_gaming(a, gaming)
         # An override is a decision worth reading back: it degrades whatever the
@@ -9360,7 +9415,7 @@ def _cmd_cycle(a) -> int:
     completion, because everything after it is irreversible from here.
     """
     gaming = quiet_time_mod.read(Path(a.root))
-    if gaming.held and not _despite_hold(a):
+    if gaming.held and not _despite_hold(a) and not _administrator_launch(a):
         return _refuse_gaming(a, gaming)
     from . import cycle as cycle_mod
 
@@ -9996,9 +10051,7 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED, chosen.mode
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner,
-                               **({'local_required': True} if cfg.accounts else {})):
+        with _launch_admission_lock(a, card, cfg):
             if hasattr(a, '_account_governor'):
                 del a._account_governor
             a._cycle_admission_locked = True
@@ -12768,8 +12821,10 @@ def _tend_once(a, quiet: bool = False) -> int:
         # is not sent hunting for a `--target` flag they never passed.
         target_src=_target_source(getattr(a, "target", None),
                                   None if verdict is None else verdict.max_agents),
+        target_exempt=lambda card: _administrator_launch(a, card),
         governed=(lambda card: agent_hold.reason(a.root, card.name) or
-                  (gaming.refusal if gaming.held else
+                  (_account_launch_refusal(a, card) if _administrator_launch(a, card) else
+                  gaming.refusal if gaming.held else
                   _account_launch_refusal(a, card) or
                   (_card_verdict(card).excludes(card, _catalog(a))
                    if governors and _card_verdict(card) is not None else ""))),
@@ -12782,6 +12837,19 @@ def _tend_once(a, quiet: bool = False) -> int:
     if not a.dry_run:
         _gaming_advisory(a, gaming, reg=reg, panes=panes)
     from . import fleet_governor as fg
+    # Recover administrators independently of the worker authority; serialize
+    # with ordinary manual/cycle launches before any session is created.
+    administrators = [card for card in agents if _administrator_launch(a, card)]
+    admin_report = None
+    if administrators:
+        try:
+            with fg.admission_lock(a.root, None, {}, local_required=True):
+                admin_report = tender.pass_over(administrators, dry_run=a.dry_run,
+                                                budget_agents=agents)
+        except fg.AdmissionUnavailable as exc:
+            print('  held: administrator launch serialization: ' + str(exc), file=sys.stderr)
+            return CANNOT_TELL
+    workers = [card for card in agents if card not in administrators]
     try:
         with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
                                owner=cfg.host_admission_owner,
@@ -12793,10 +12861,17 @@ def _tend_once(a, quiet: bool = False) -> int:
                 verdicts = {name: g.evaluate(persist=not a.dry_run)
                             for name, g in governors.items()}
                 card_verdicts.clear()
-            rep = tender.pass_over(agents, dry_run=a.dry_run)
+            # Include live administrators in the budget census without
+            # supervising them twice or concealing their quota consumption.
+            rep = tender.pass_over(workers, dry_run=a.dry_run,
+                                   budget_agents=agents)
     except fg.AdmissionUnavailable as exc:
         print('  held: ' + str(exc), file=sys.stderr)
+        if admin_report is not None:
+            print(admin_report.render())
         return CANNOT_TELL
+    if admin_report is not None:
+        rep.findings = admin_report.findings + rep.findings
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.
@@ -13261,7 +13336,11 @@ def _drain_sweep(a, verdict, agents, panes, *, governor_name="base", episode=Non
         # closing the drain is exactly "this is no longer for you" — and a
         # fresh session's `st inbox` never lists it again.
         retract=lambda who, msg_id: inbox.mark_read(who, [msg_id]))
-    rows = drainer.sweep(agents, verdict,
+    # A routine drain must not immediately undo administrator recovery. The
+    # drainer also withdraws an old instruction when its recipient is no longer
+    # excluded, retaining the existing unknown-signal/retraction safeguards.
+    governed_agents = [card for card in agents if not _administrator_launch(a, card)]
+    rows = drainer.sweep(governed_agents, verdict,
                          _governor_episode(a) if episode is None else episode,
                          live=lambda ag: bool(ag.pane) and panes.exists(ag.pane),
                          catalog=_catalog(a))
