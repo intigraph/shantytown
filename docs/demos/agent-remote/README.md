@@ -8,9 +8,11 @@ synthetic. This exercises the real CLI parser and dispatch with a fixture
 registry and transport; it does not connect a phone or a live daemon.
 
 Base: `2c880419efcdd25b91dcf49c0aa6c539c8ad631d`.
-Implementation: `e9983fca3b857034d187ce5661efb68a392862bf`.
+Implementation: `085f80f8d2accd50a94136f50c8ad1675bc0a8eb`.
 Recorded 2026-10-18 with Python 3.14 and util-linux `script`; retained here as a
-small repository artifact. Later demo-only commits preserve that implementation.
+small repository artifact. This includes the canonical effective-harness resolver
+correction; the recording uses explicit fixture cards. Later demo-only commits
+preserve that implementation.
 
 Download [output.log.gz](output.log.gz) and [timing.log](timing.log), then replay:
 
