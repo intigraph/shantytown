@@ -1,11 +1,11 @@
-"""st — the CLI. Seven verbs, five groups, thirty-six grouped commands: forty-three, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-seven grouped commands: forty-four, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → item · repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
-            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair}
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
@@ -2259,6 +2259,16 @@ def build_parser() -> argparse.ArgumentParser:
     hi.add_argument("--all", action="store_true",
                     help="list every session, not just the 20 most recent")
 
+    remote = leaf("remote", help="discover and pair existing per-agent Codex servers")
+    actions = remote.add_subparsers(dest="remote_action", required=True)
+    for action in ("list", "pair"):
+        rp = actions.add_parser(action)
+        if action == "pair":
+            rp.add_argument("agent", help="explicit existing Codex agent to pair")
+            rp.add_argument("--dry-run", "-n", action="store_true", help="inspect identity/status without issuing a code")
+        rp.add_argument("--json", action="store_true", help="structured output; pair includes a temporary secret")
+        rp.add_argument("--timeout", type=float, default=3.0, help="per-agent control deadline, 0.1–30 seconds")
+
     # `--help` lists the surface in SURFACE's order — verbs, then groups, and
     # each group's leaves as the table spells them — not in the order this
     # function happens to wire them.
@@ -2662,6 +2672,9 @@ def _run_command(a) -> int:
         return _cmd_push(a)
     if a.cmd == "history":
         return _cmd_history(a)
+    if a.cmd == "remote":
+        from .agent_remote import run
+        return run(a, _registry(a))
     return _not_yet(a.cmd)
 
 

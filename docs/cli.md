@@ -84,6 +84,7 @@ st agent                      one agent
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
   history <agent>             captured transcripts, and whether the source survives
+  remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
   stats --graph               graph-context adoption: what share of dispatches carried a
                               quipu node, what share stated a reason for having none, and
@@ -291,7 +292,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-three. Seven verbs at the top level and thirty-six grouped commands under five groups
+Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2715,6 +2716,32 @@ arguments or message text and are diagnostic declarations, not identities or
 authorization. Server logging and reader coverage are required to use them in
 a traffic census; sending the headers alone does not establish attribution.
 
+### Pair an existing Codex crew server
+
+`st agent remote list [--json]` discovers per-card Codex control sockets and
+reports identity, host and observed availability. `st agent remote pair NAME
+[--json]` requests a short-lived manual code from that explicitly selected
+existing server. `--timeout` bounds each card request (default three seconds).
+Neither command launches, stops, restarts or enables a daemon. A stopped card
+stays stopped; an unsupported protocol or unreadable identity stays UNKNOWN.
+The commands use the same XDG/runtime home resolution as the launcher, verify
+the UNIX peer against the identity-bearing daemon process, and never substitute
+the ordinary Codex host or another card. Peer verification currently requires
+Linux SO_PEERCRED; other platforms refuse instead of weakening routing proof.
+Cards assigned to another host are never contacted; a host-assigned card also
+requires the deployment's explicit local host identity. Output uses that
+configured identity, leaving an undeclared host null rather than guessing it.
+
+Pairing output is a temporary secret. Display it directly to the operator; do
+not redirect it to logs, work items, inbox messages or third-party QR services.
+JSON is deliberate secret-bearing output too. Provider errors never echo raw
+responses. A timeout leaves issuance UNKNOWN and does not automatically retry.
+
+This new command earns a slot because per-card pairing is an explicit action,
+separate from discovery and lifecycle changes. Manual-code issuance does not
+prove Android acceptance or delivery to the intended conversation. Android UI,
+QR/app-link payload and reconnect after lifecycle changes remain unverified;
+no QR is fabricated. Verify selected-agent delivery separately.
 
 ### Administrator launch availability
 
