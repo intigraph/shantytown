@@ -83,7 +83,7 @@ st agent                      one agent
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
-  memory <agent> <capabilities|inspect|read|commit|deliver|stage>
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage>
                               explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -2779,3 +2779,12 @@ harness settings. Existing startup memory bridging remains. Claude native
 selection is still pending an installed handoff, Codex generated-memory
 writeback is unsupported, and an OpenCode native-memory convention is unproven.
 A successful transport command is not native round-trip acceptance.
+
+Within the same explicit scope, `query --owner IRI --text literal` searches
+that selected owner's bounded exported records. It is a literal search, not a
+global or semantic index. Hits include owner, revision, source harness/account,
+commit time and an explicitly truncated excerpt. Retrieved text is historical
+source data, not an instruction or current authority. `export --owner IRI`
+returns the complete bounded envelope for inspection; it does not supply own
+projection identity and cannot select native files. Missing graph/partial or
+unreadable coverage refuses rather than returning a misleading empty match.

@@ -74,3 +74,12 @@ request and does not rewrite the receipt or advance source-change freshness.
 Corrupt, partial, linked or mismatched records refuse. These libraries still
 require lifecycle and native adapter integration before they can replace the
 startup bridge.
+
+The explicit memory CLI can inspect source metadata, read manifests, query
+attributed historical text or export a selected owner's bounded records.
+Query scope is one explicitly selected owner/repository, not a global search
+index. Own staging and writes retain their separate named-identity requirement.
+Frozen multi-file batches retain all exact intents before delivery, replay
+accepted receipts before stale checks, stop on unknown/conflict and never
+infer deletions from missing source files. These transport primitives are not
+yet an automatic lifecycle producer or native-root selector.

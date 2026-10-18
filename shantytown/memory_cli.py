@@ -15,12 +15,13 @@ from .quipu_auth import CredentialRefused
 
 def configure(parser):
     parser.add_argument('agent', help='crew credential selection, not a guessed owner IRI')
-    parser.add_argument('memory_action', choices=('inspect', 'capabilities', 'read',
+    parser.add_argument('memory_action', choices=('inspect', 'capabilities', 'read', 'export', 'query',
                                                 'commit', 'deliver', 'stage'))
     parser.add_argument('--server', help='explicit Quipu origin')
     parser.add_argument('--deployment', help='canonical deployment IRI')
     parser.add_argument('--project', help='canonical project IRI')
     parser.add_argument('--owner', help='explicit other crew IRI for read only')
+    parser.add_argument('--text', help='bounded literal query within the selected owner')
     parser.add_argument('--directory', type=Path, help='explicit source directory for inspect')
     parser.add_argument('--request', type=Path, help='private exact commit intent JSON')
     parser.add_argument('--outbox', type=Path, help='existing private outbox directory')
@@ -64,9 +65,9 @@ def execute(args):
                 'files': [{'path': f.path, 'bytes': len(f.data), 'sha256': f.sha256} for f in files],
                 'native_selection': 'UNCHANGED'}
     _required(args, 'server', 'deployment', 'project')
-    if args.owner and action != 'read':
+    if args.owner and action not in {'read', 'export', 'query'}:
         raise Unproven('other-owner selection is read-only')
-    if action == 'read' and args.owner:
+    if action in {'read', 'export', 'query'} and args.owner:
         client = Client(args.server, Owner(args.deployment, args.project, args.owner))
     else:
         client = Client.for_agent(args.root, args.agent, args.server,
@@ -74,6 +75,11 @@ def execute(args):
     if action == 'read':
         return {'historical': True, 'owner': client.owner.wire(), 'snapshot': client.read(),
                 'coverage': 'this_repository_owner_records'}
+    if action == 'export':
+        return {'historical': True, 'export': client.export(), 'owner': client.owner.wire()}
+    if action == 'query':
+        _required(args, 'text')
+        return client.query(args.text)
     if action == 'stage':
         _required(args, 'parent')
         return {'generation': str(client.stage_own(args.parent)),

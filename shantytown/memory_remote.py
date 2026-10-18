@@ -152,6 +152,35 @@ class Client:
         return self._receipt(self._request('/memory/receipt', request, identity=True),
                              request, absent=True)
 
+    def export(self):
+        """Intentional cross-crew read, never an own-projection credential."""
+        envelope = self._request('/memory/export', self.owner.wire())
+        _export_files(envelope, self.owner, allow_empty=True)
+        return envelope
+
+    def query(self, text, *, limit=20):
+        """Bounded literal search of one declared owner's repository records."""
+        if (not isinstance(text, str) or not text.strip() or len(text.encode()) > 4096
+                or type(limit) is not int or not 1 <= limit <= 20):
+            raise Unproven('memory query or result bound invalid')
+        envelope = self.export()
+        matches = []
+        for record in envelope['files']:
+            source = record.get('text')
+            if not isinstance(source, str):
+                continue
+            if text.casefold() not in (record['path'] + '\n' + source).casefold():
+                continue
+            matches.append(dict(owner=self.owner.wire(), path=record['path'],
+                revision=record['revision'], harness=record.get('harness', 'UNKNOWN'),
+                account=record.get('account', 'UNKNOWN'),
+                committed_at=record.get('committed_at', 'UNKNOWN'),
+                excerpt=source[:1600], excerpt_truncated=len(source) > 1600,
+                historical=True))
+        return {'coverage': envelope['coverage'], 'owner': self.owner.wire(),
+                'matches': matches[:limit], 'truncated': len(matches) > limit,
+                'search': 'literal; selected owner only; not a global index'}
+
     def stage_own(self, parent: Path):
         result = self._request('/memory/projection', self.owner.wire(), identity=True)
         files = verified_files(result, self.owner)
@@ -182,11 +211,16 @@ def verified_files(result, owner: Owner):
     if (not isinstance(result, dict) or result.get('authenticated_owner') != owner.crew
             or not isinstance(result.get('export'), dict)):
         raise Unproven('own memory projection identity unproven')
-    envelope = result['export']
-    if (envelope.get('format') != 'quipu.memory-files/v1'
+    return _export_files(result['export'], owner)
+
+
+def _export_files(envelope, owner, *, allow_empty=False):
+    if (not isinstance(envelope, dict) or envelope.get('format') != 'quipu.memory-files/v1'
             or envelope.get('coverage') != 'this_repository_owner_records'):
         raise Unproven('memory projection coverage unproven')
     snapshot, records = envelope.get('snapshot'), envelope.get('files')
+    if allow_empty and snapshot is None and records == []:
+        return ()
     if not isinstance(snapshot, dict) or snapshot.get('owner') != owner.wire():
         raise Unproven('memory snapshot missing or wrong owner')
     heads = snapshot.get('files')

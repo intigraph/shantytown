@@ -96,6 +96,60 @@ def test_crosscrew_read_stays_public_and_not_a_projection(monkeypatch):
     assert opener.calls[0][0].get_header('Authorization') is None
 
 
+def test_crosscrew_query_returns_attributed_historical_text_without_projection_identity(monkeypatch):
+    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: pytest.fail('read used credentials'))
+    envelope = fixture()['export']
+    envelope['files'][0].update(harness='fixture', account='selected', committed_at='2026-01-01T00:00:00Z')
+    opener = Opener(envelope)
+    client = remote.Client('https://example.test', OWNER, opener=opener)
+    positive = client.query('λ')
+    assert positive['coverage'] == 'this_repository_owner_records'
+    assert positive['matches'][0]['historical'] is True
+    assert positive['matches'][0]['owner'] == OWNER.wire()
+    assert positive['matches'][0]['revision'] == envelope['files'][0]['revision']
+    assert positive['matches'][0]['harness'] == 'fixture'
+    assert positive['matches'][0]['excerpt'] == envelope['files'][0]['text']
+    assert client.query('absent-literal')['matches'] == []
+    assert all(call[0].get_header('Authorization') is None for call in opener.calls)
+    # The same public response cannot be fed to own projection without proof.
+    with pytest.raises(remote.Unproven):
+        remote.verified_files({'export': envelope}, OWNER)
+
+
+def test_read_export_empty_is_explicit_coverage_but_not_a_native_projection():
+    value = {'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+             'snapshot': None, 'files': []}
+    client = remote.Client('https://example.test', OWNER, opener=Opener(value))
+    assert client.query('positive-needle')['matches'] == []
+    with pytest.raises(remote.Unproven):
+        remote.verified_files({'authenticated_owner': OWNER.crew, 'export': value}, OWNER)
+    value['coverage'] = 'partial'
+    with pytest.raises(remote.Unproven):
+        client.query('positive-needle')
+
+
+def test_query_result_count_and_excerpt_are_bounded_and_explicit():
+    value = fixture()['export']
+    original = value['files'][0]
+    value['files'] = []
+    value['snapshot']['files'] = {}
+    for n in range(3):
+        file = MemoryFile(f'topics/{n}.md', ('needle' + 'x' * 1800).encode())
+        head = dict(revision=f'urn:example:r{n}', sha256=file.sha256,
+                    bytes=len(file.data), tombstone=False)
+        value['snapshot']['files'][file.path] = head
+        value['files'].append(dict(original, path=file.path, revision=head['revision'], text=file.data.decode()))
+    client = remote.Client('https://example.test', OWNER, opener=Opener(value))
+    result = client.query('needle', limit=1)
+    assert result['truncated'] is True
+    assert len(result['matches']) == 1
+    assert len(result['matches'][0]['excerpt']) == 1600
+    assert result['matches'][0]['excerpt_truncated'] is True
+    assert 'selected owner only' in result['search']
+    with pytest.raises(remote.Unproven):
+        client.query('')
+
+
 @pytest.mark.parametrize('error', [URLError('private diagnostic'), TimeoutError('private diagnostic'),
                                   HTTPError('private-url', 409, 'private response', {}, None)])
 def test_indeterminate_or_conflict_is_not_retried_or_printed(error):
