@@ -1,0 +1,7 @@
+Script started on 2026-10-18 15:06:54-04:00 [COMMAND="python3 docs/demos/admin-launch/run.py" <not executed on terminal>]
+base
+{"administrator_gaming_exit": 1, "administrator_unknown_peer_refused": true, "live_launches": 0, "worker_gaming_exit": 1, "worker_unknown_peer_refused": true}
+candidate
+{"administrator_gaming_exit": 0, "administrator_unknown_peer_refused": false, "live_launches": 0, "worker_gaming_exit": 1, "worker_unknown_peer_refused": true}
+
+Script done on 2026-10-18 15:06:55-04:00 [COMMAND_EXIT_CODE="0"]
