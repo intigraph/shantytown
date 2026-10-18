@@ -30,3 +30,47 @@ that command against isolated cards, memory and a file-backed fixture tracker;
 they do not start or cycle a pane. A source test is not proof that an already
 running session has loaded the change. Normal source review, CI and managed
 arrival remain required before claiming installation.
+
+## File transport for synchronization
+
+The `shantytown.memory_files` library can snapshot a bounded, explicitly selected
+memory directory and stage its exact UTF-8 bytes into a fresh generation. It
+preserves the complete index and topic files; startup display limits do not
+truncate stored source. It rejects links, non-regular entries, traversal, invalid
+UTF-8 and exceeded limits. Secure descriptor operations are required; unsupported
+filesystems refuse rather than use a weaker path-based fallback.
+
+Staging never replaces an existing file, memory root, settings file or pointer.
+An external edit after snapshot remains in the original root. Interrupted
+generations remain unselected for inspection; rollback does not overwrite later
+edits. A successful staged readback proves the new generation's bytes at that
+point, not that a native harness has selected or read it. A verified harness
+handoff and durable version synchronization are separate capabilities.
+
+This library does not authenticate owners, ingest into Quipu, activate a memory
+feature, or add memory CLI commands. Existing startup behavior and the original
+memory files remain unchanged. Native generated stores must not be treated as
+editable files without their own supported contract.
+
+The versioned transport candidate adds a bounded remote client. It reuses the
+administrator-owned named CLI credential selection; card aliases resolve only
+through that explicit mapping. It does not derive an owner IRI from a card name.
+The server must verify the selected named principal for own writes/projection;
+a shared-token fallback cannot establish that identity. Ordinary cross-crew
+reads stay available.
+
+Remote own staging validates the authenticated owner, complete owner manifest,
+identified revisions, exact UTF-8 bytes, hashes and lengths. Network timeout or
+conflict retains an unknown/conflict result without retrying or changing local
+files. This client is not yet a lifecycle hook or an accepted native harness
+adapter. Existing startup bridge behavior remains in place.
+
+The outbox library keeps immutable intents and verified receipts in an existing
+private, user-owned directory. Each delivery reads the exact intent's receipt
+before attempting at most one commit. Unknown outcomes preserve the intent;
+there is no retry loop. A lost response can be reconciled on a later ordinary
+trigger without another commit. A locally accepted delivery makes no network
+request and does not rewrite the receipt or advance source-change freshness.
+Corrupt, partial, linked or mismatched records refuse. These libraries still
+require lifecycle and native adapter integration before they can replace the
+startup bridge.
