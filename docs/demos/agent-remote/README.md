@@ -8,7 +8,7 @@ synthetic. This exercises the real CLI parser and dispatch with a fixture
 registry and transport; it does not connect a phone or a live daemon.
 
 Base: `2c880419efcdd25b91dcf49c0aa6c539c8ad631d`.
-Implementation: `c3f70d1c90c3dc06079c076c9dd9914c08187f21`.
+Implementation: `e9983fca3b857034d187ce5661efb68a392862bf`.
 Recorded 2026-10-18 with Python 3.14 and util-linux `script`; retained here as a
 small repository artifact. Later demo-only commits preserve that implementation.
 

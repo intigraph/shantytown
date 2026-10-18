@@ -1,4 +1,4 @@
-Script started on 2026-10-18 15:22:22-04:00 [COMMAND="python3 docs/demos/agent-remote/run.py" <not executed on terminal>]
+Script started on 2026-10-18 15:33:17-04:00 [COMMAND="python3 docs/demos/agent-remote/run.py" <not executed on terminal>]
 BEFORE: base 2c88041, st agent remote list --json
 usage: st agent [-h]
                 {new,stop,harness,account,cycle,advise,input,ask,answer,log,history,stats} ...
@@ -17,4 +17,4 @@ NEGATIVE: same pair command, expired synthetic response
 remote: pairing response is expired or invalid; code withheld
 expired response withheld; exit 2; no lifecycle commands
 
-Script done on 2026-10-18 15:22:22-04:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-18 15:33:17-04:00 [COMMAND_EXIT_CODE="0"]
