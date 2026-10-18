@@ -12,7 +12,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import codex_daemon
+from . import codex_daemon, harness
 from .answer import CouldNotLook, PartialAnswer
 from .deployment import local_host
 
@@ -135,8 +135,16 @@ def run(args, registry, *, control_factory=Control):
         rows = []
         host = local_host(getattr(args, "root", None))
         for card in cards:
-            row = {"agent": card.name, "harness": card.harness or "claude",
+            row = {"agent": card.name, "harness": None,
                    "host": card.host or host, "availability": "unavailable"}
+            try:
+                row["harness"] = harness.name_for(card, root=getattr(args, "root", None))
+            except (harness.UnknownHarness, LookupError, OSError, ValueError):
+                if args.remote_action == "pair":
+                    raise RemoteError("cannot resolve selected card harness; no connection attempted") from None
+                row.update(availability="unknown", detail="cannot resolve card harness; no connection attempted")
+                rows.append(row)
+                continue
             if card.host and card.host != host:
                 if args.remote_action == "pair":
                     raise RemoteError("selected card belongs to another or unresolved host; use its configured deployment")

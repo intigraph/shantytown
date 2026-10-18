@@ -258,3 +258,103 @@ def test_real_unix_websocket_status_transport(wire):
     thread.join(2)
     assert not thread.is_alive() and not errors
     assert requests == ["initialize", "initialized", "remoteControl/status/read"]
+
+
+@pytest.mark.parametrize('action', ['list', 'pair'])
+@pytest.mark.parametrize('selection', ['explicit', 'default', 'role', 'account'])
+def test_effective_codex_harness_matches_launcher(selection, action, tmp_path, capsys):
+    from shantytown import harness
+    text = '[harness]\ndefault = "claude"\n'
+    card = Agent('alice', role='worker')
+    if selection == 'explicit':
+        card = Agent('alice', role='worker', harness='codex')
+    elif selection == 'default':
+        text = '[harness]\ndefault = "codex"\n'
+    elif selection == 'role':
+        text += '[harness.by_role]\nworker = "codex"\n'
+    else:
+        card = Agent('alice', role='worker', account='team')
+        text += '''[accounts.team]
+harness = "codex"
+model = "fixture-model"
+credential_ref = "env:FIXTURE_ACCOUNT_AUTH"
+[accounts.team.governor]
+source = "stub"
+stub_pct = 20
+max_agents = 2
+[[accounts.team.governor.tier]]
+at = 95
+action = "drain"
+'''
+    (tmp_path / 'shantytown.toml').write_text(text)
+    assert harness.name_for(card, root=tmp_path) == 'codex'
+
+    class Selected(Registry):
+        def get(self, name):
+            assert name == card.name
+            return card
+
+        def all(self):
+            return Answer([card], 'fixture', True)
+
+    assert remote.run(args(action, root=tmp_path), Selected(), control_factory=Provider) == 0
+    result = json.loads(capsys.readouterr().out)
+    row = result[0] if action == 'list' else result
+    assert row['harness'] == 'codex' and row['availability'] == 'connected'
+    assert ('manual_pairing_code' in row) == (action == 'pair')
+    assert card.harness == ('codex' if selection == 'explicit' else None)
+
+
+@pytest.mark.parametrize('action', ['list', 'pair'])
+def test_explicit_claude_overrides_codex_default_before_rpc(action, tmp_path, capsys):
+    (tmp_path / 'shantytown.toml').write_text('[harness]\ndefault = "codex"\n')
+
+    class Selected(Registry):
+        def get(self, name):
+            return Agent(name, harness='claude')
+
+        def all(self):
+            return Answer([self.get('alice')], 'fixture', True)
+
+    def forbidden(*_):
+        pytest.fail('non-Codex card reached control')
+
+    assert remote.run(args(action, root=tmp_path), Selected(), control_factory=forbidden) == (0 if action == 'list' else 2)
+    output = capsys.readouterr()
+    if action == 'list':
+        row, = json.loads(output.out)
+        assert row['harness'] == 'claude' and row['availability'] == 'unavailable'
+    else:
+        assert output.out == ''
+
+
+@pytest.mark.parametrize('action', ['list', 'pair'])
+@pytest.mark.parametrize('failure', ['missing-root', 'missing-account', 'invalid-config', 'resolver-error'])
+def test_harness_resolution_errors_refuse_before_rpc(failure, action, tmp_path, monkeypatch, capsys):
+    from shantytown import harness
+    card = Agent('alice', account='missing')
+    root = None if failure == 'missing-root' else tmp_path
+    (tmp_path / 'shantytown.toml').write_text('invalid = [' if failure == 'invalid-config' else '')
+    if failure == 'resolver-error':
+        def fail(*_, **__):
+            raise harness.UnknownHarness('PRIVATE-CONFIG-DETAIL')
+        monkeypatch.setattr(harness, 'name_for', fail)
+
+    class Selected(Registry):
+        def get(self, name):
+            return card
+
+        def all(self):
+            return Answer([card], 'fixture', True)
+
+    def forbidden(*_):
+        pytest.fail('unresolved harness reached control')
+
+    assert remote.run(args(action, root=root), Selected(), control_factory=forbidden) == (0 if action == 'list' else 2)
+    output = capsys.readouterr()
+    assert 'PRIVATE-CONFIG-DETAIL' not in output.out + output.err
+    if action == 'list':
+        row, = json.loads(output.out)
+        assert row['harness'] is None and row['availability'] == 'unknown'
+    else:
+        assert output.out == ''
