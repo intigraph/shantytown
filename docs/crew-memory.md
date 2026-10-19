@@ -62,8 +62,9 @@ reads stay available.
 Remote own staging validates the authenticated owner, complete owner manifest,
 identified revisions, exact UTF-8 bytes, hashes and lengths. Network timeout or
 conflict retains an unknown/conflict result without retrying or changing local
-files. This client is not yet a lifecycle hook or an accepted native harness
-adapter. Existing startup bridge behavior remains in place.
+files. The client alone does not activate lifecycle hooks or a native adapter. The
+separate opt-in controller below supplies Claude source support; installed
+acceptance remains separate. Existing startup bridge behavior remains in place.
 
 The outbox library keeps immutable intents and verified receipts in an existing
 private, user-owned directory. Each delivery reads the exact intent's receipt
@@ -71,9 +72,8 @@ before attempting at most one commit. Unknown outcomes preserve the intent;
 there is no retry loop. A lost response can be reconciled on a later ordinary
 trigger without another commit. A locally accepted delivery makes no network
 request and does not rewrite the receipt or advance source-change freshness.
-Corrupt, partial, linked or mismatched records refuse. These libraries still
-require lifecycle and native adapter integration before they can replace the
-startup bridge.
+Corrupt, partial, linked or mismatched records refuse. The configured lifecycle and native adapter below use these libraries;
+source support does not replace the installed startup bridge.
 
 The explicit memory CLI can inspect source metadata, read manifests, query
 attributed historical text or export a selected owner's bounded records.
@@ -127,9 +127,9 @@ outcomes on a later invocation. Direct worker invocation without this channel
 refuses before doing work.
 
 These budgets do not guarantee scheduling latency, termination of an
-uninterruptible OS operation, or a fixed orphan-reaping latency. They do not yet
-install a startup/stop hook or select a native directory. Lifecycle wiring and
-supported native handoff remain required before activation.
+uninterruptible OS operation, or a fixed orphan-reaping latency. The explicit commands do not install a startup/stop hook or select a native
+directory. The opt-in source wiring below still requires normal reviewed
+installation and native acceptance before activation.
 
 ## Opt-in Claude lifecycle and native generations
 
@@ -143,7 +143,7 @@ enabled = false
 server = "https://knowledge.example.test"
 deployment = "urn:example:deployment"
 project = "urn:example:project"
-account = "legacy" # or the exact selected named Claude account
+account = "" # use the selected account; optionally pin its exact name/legacy
 source = "/private/alpha/original-memory"
 outbox = "/private/alpha/outbox"
 staging = "/private/alpha/generations"
@@ -159,12 +159,17 @@ the server must confirm the exact principal on own projection/write. An existing
 credential refusal latch is never refreshed or bypassed by this path.
 
 For an enabled Claude plan, normal managed launch preparation reconciles at
-most one pending intent under the two-second worker budget. Pending batches,
-conflicts, unknown identity, unavailable transport or unsafe settings refuse
-that launch promptly; they do not silently select an older remote head. A
+most one pending intent under the two-second worker budget. A partial batch keeps the current native root usable and reports pending;
+ordinary bounded hooks resume its frozen intents before recapture. It does not
+export a partial remote snapshot or claim native projection. Conflicts, unknown
+identity, unavailable transport or unsafe settings refuse that launch promptly;
+they do not silently select an older remote head. A
 bounded refusal is not permission to retry, cycle a crew member or enable a
 canary. The input settings must be regular, single-link, user-owned and not
-group/world writable. Existing settings, hooks, permissions and environment are
+group/world writable. Explicitly disabled auto memory, a different declared
+native directory, or `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` refuses before ingest;
+the plan does not override those native holds. Private outbox and staging
+directories cannot be inside a Git checkout. Existing settings, hooks, permissions and environment are
 copied into a new private artifact; the role's original artifact is untouched.
 
 Only after own-authenticated projection agrees with the accepted head **and**
@@ -179,7 +184,11 @@ Preparation records a *pending* generation; it does not change the active source
 The actual SessionStart carrying that generation acknowledges it. An interrupted
 preparation or failed launch therefore leaves the previous source authoritative
 for the next synchronization. Stale starts and mismatched Stop sources refuse.
-The same configured source/account/owner identity must match the journal. An
+The same configured source and authenticated owner must match the journal.
+Subscription account names are provenance, not another crew identity; an
+optional account pin is enforced, and otherwise the actual selected account
+is recorded. A verified same-crew account switch retains its accepted head
+and generations without borrowing a sibling account profile. An
 unchanged cycle reuses the generation and does not create another remote revision.
 
 Claude SessionStart and Stop carry a bounded hook for configured crew only.

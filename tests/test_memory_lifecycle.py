@@ -25,8 +25,10 @@ def fixture(tmp_path):
 
 
 def prepare_complete(plan, remote, settings):
-    with pytest.raises(Unproven, match='pending'):
-        life.prepare(plan, remote, settings)
+    pending = life.prepare(plan, remote, settings)
+    assert pending['ingest_status'] == 'pending'
+    assert pending['native_files'] == 'UNCHANGED_EXISTING_SOURCE'
+    assert pending['generation'] == plan.source
     return life.prepare(plan, remote, settings)
 
 
@@ -88,7 +90,7 @@ def test_wrong_owner_or_changed_plan_cannot_adopt_another_selection(tmp_path):
     plan, remote, settings = fixture(tmp_path)
     prepare_complete(plan, remote, settings)
     with pytest.raises(Unproven, match='identity'):
-        life.synchronize(replace(plan, account='different'), remote)
+        life.synchronize(replace(plan, source=str(tmp_path / 'different')), remote)
     with pytest.raises(Unproven, match='missing'):
         life.acknowledge(plan, remote, None, 'start')
     with pytest.raises(Unproven, match='differs'):
@@ -121,7 +123,7 @@ def test_observed_external_edit_during_staging_refuses_selection(tmp_path, monke
 
 
 @pytest.mark.parametrize('change', [dict(enabled='true'), dict(typo=True),
-    dict(account=''), dict(source='relative'), dict(server='https://u:secret@example.test')])
+    dict(account=42), dict(source='relative'), dict(server='https://u:secret@example.test')])
 def test_config_refuses_instead_of_silent_activation(tmp_path, change):
     from dataclasses import asdict
     plan, _, _ = fixture(tmp_path)
@@ -224,3 +226,105 @@ def test_runtime_compose_and_launch_stamp_use_same_prepared_artifact(tmp_path, m
     assert '--settings ' + str(chosen) in command
     assert runtime.settings_path(card) == str(chosen)
     assert seen == [str(tmp_path / 'original.json')]
+
+
+def test_runtime_does_not_cache_unmodified_role_artifact(tmp_path):
+    from shantytown.protocols import Agent
+    from shantytown.runtime import ClaudeRuntime
+    runtime = ClaudeRuntime(None, lambda card: str(tmp_path / (card.role + '.json')), root=tmp_path)
+    worker = Agent('alpha', 'worker', harness='claude')
+    runtime.compose(worker)
+    lead = Agent('alpha', 'lead', harness='claude')
+    assert runtime.settings_path(lead) == str(tmp_path / 'lead.json')
+
+
+def test_readonly_settings_resolution_uses_acknowledged_artifact_and_detects_stale_base(tmp_path, monkeypatch):
+    from shantytown import config
+    from dataclasses import replace
+    from shantytown.protocols import Agent
+    plan, remote, settings = fixture(tmp_path)
+    result = prepare_complete(plan, remote, settings)
+    life.acknowledge(plan, remote, Path(result['generation']).name, 'start')
+    base = tmp_path / 'base-settings.json'
+    base.write_text(json.dumps(settings))
+    base.chmod(0o600)
+    monkeypatch.setattr(config, 'load', lambda root: replace(config.Config(), memory={'alpha': plan}))
+    monkeypatch.setattr(life, '_selected', lambda root, name: (plan, remote))
+    card = Agent('alpha', 'worker', harness='claude')
+    count = len(remote.writes)
+    assert life.selected_settings(tmp_path, card, str(base)) == result['settings']
+    assert len(remote.writes) == count
+    base.write_text('{}')
+    with pytest.raises(Unproven, match='base changed'):
+        life.selected_settings(tmp_path, card, str(base))
+
+
+@pytest.mark.parametrize('override', [dict(autoMemoryEnabled=False),
+    dict(autoMemoryDirectory='/not-the-declared-memory'),
+    dict(env={'CLAUDE_CODE_DISABLE_AUTO_MEMORY': '1'})])
+def test_deliberate_native_hold_or_foreign_root_refuses_before_ingest(tmp_path, override):
+    plan, remote, settings = fixture(tmp_path)
+    settings.update(override)
+    with pytest.raises(Unproven):
+        life.prepare(plan, remote, settings)
+    assert remote.writes == [] and remote.projection_reads == 0
+    assert not list(Path(plan.staging).iterdir())
+
+
+def test_partial_upload_launch_keeps_original_source_and_natural_hooks_progress(tmp_path):
+    plan, remote, settings = fixture(tmp_path)
+    result = life.prepare(plan, remote, settings)
+    assert result['ingest_status'] == 'pending'
+    emitted = json.loads(Path(result['settings']).read_bytes())
+    assert emitted['autoMemoryDirectory'] == plan.source
+    assert emitted['env']['SHANTY_MEMORY_GENERATION'] == 'original'
+    assert not list(Path(plan.staging).iterdir())
+    life.acknowledge(plan, remote, 'original', 'start')
+    assert journal(plan)['generation'] is None
+    assert life.synchronize(plan, remote)['status'] == 'accepted'
+    assert len(remote.writes) == 2
+    life.acknowledge(plan, remote, 'original', 'stop')
+    assert life.synchronize(plan, remote)['status'] == 'unchanged'
+    assert len(remote.writes) == 2
+    live = json.loads((Path(plan.outbox) / 'memory-liveness.json').read_bytes())
+    assert 'projection_last_start' not in live
+
+
+def test_verified_same_crew_account_switch_keeps_owner_head_and_native_files(tmp_path):
+    from dataclasses import replace
+    plan, remote, settings = fixture(tmp_path)
+    first = prepare_complete(plan, remote, settings)
+    generation = Path(first['generation'])
+    life.acknowledge(plan, remote, generation.name, 'start')
+    before = remote.head, len(remote.writes), {p.name: p.read_bytes() for p in generation.iterdir()}
+    # Subscription attribution changes; authenticated logical crew owner does
+    # not. No new person, empty baseline adoption or foreign file scan occurs.
+    switched = replace(plan, account='second-selected-account')
+    second = life.prepare(switched, remote, settings)
+    assert second['generation'] == first['generation']
+    assert (remote.head, len(remote.writes), {p.name: p.read_bytes() for p in generation.iterdir()}) == before
+    (generation / 'topic.md').write_text('same crew, selected second account')
+    assert life.synchronize(switched, remote)['status'] == 'accepted'
+    assert remote.writes[-1]['account'] == 'second-selected-account'
+    assert remote.writes[-1]['owner'] == remote.owner.wire()
+
+
+def test_actual_selected_account_is_attribution_and_optional_pin_is_enforced(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from shantytown import config
+    plan, remote, _ = fixture(tmp_path)
+    crew = tmp_path / 'crew'
+    crew.mkdir()
+    (crew / 'alpha.json').write_text(json.dumps(dict(role='worker', harness='claude', account='second')))
+    cfg = replace(config.Config(), memory={'alpha': replace(plan, account='')},
+                  accounts={'second': SimpleNamespace(name='second', harness='claude')})
+    monkeypatch.setattr(config, 'load', lambda _: cfg)
+    calls = []
+    monkeypatch.setattr(life.Client, 'for_agent', lambda *a: calls.append(a) or remote)
+    actual, client = life._selected(tmp_path, 'alpha')
+    assert actual.account == 'second' and client is remote and len(calls) == 1
+    cfg = replace(cfg, memory={'alpha': plan})
+    with pytest.raises(Unproven, match='account unsupported'):
+        life._selected(tmp_path, 'alpha')
+    assert len(calls) == 1

@@ -1745,7 +1745,8 @@ class ClaudeRuntime:
         from .tier import deployment_catalog
         require_capability(program, card, consequence="Nothing launched.",
                            catalog=deployment_catalog(self._root))
-        settings_path = self.settings_path(card)
+        from .account_auth import settings_path as account_settings_path
+        settings_path = account_settings_path(card, self._resolve(card), self._root)
         if not settings_path:
             # A new store may have a card whose role has never been emitted.
             # Name the generating command, rooted to THIS store, so repair does
@@ -1760,12 +1761,16 @@ class ClaudeRuntime:
                 f"Emit the role settings with `{shlex.join(repair)}`, then retry."
             )
         from .memory_lifecycle import prepare_launch
+        base_settings_path = settings_path
         try:
             settings_path = prepare_launch(self._root, card, settings_path)
         except (OSError, ValueError):
             raise SettingsError('native memory preparation UNKNOWN; nothing launched; '
                                 'preserve source and outbox') from None
-        self._memory_settings[card.name] = settings_path
+        if settings_path != base_settings_path:
+            self._memory_settings[card.name] = (base_settings_path, settings_path)
+        else:
+            self._memory_settings.pop(card.name, None)
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
@@ -1781,9 +1786,15 @@ class ClaudeRuntime:
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
         from .account_auth import settings_path
-        if card.name in self._memory_settings:
-            return self._memory_settings[card.name]
-        return settings_path(card, self._resolve(card), self._root)
+        base = settings_path(card, self._resolve(card), self._root)
+        prepared = self._memory_settings.get(card.name)
+        if prepared is not None and prepared[0] == base:
+            return prepared[1]
+        from .memory_lifecycle import selected_settings
+        try:
+            return selected_settings(self._root, card, base)
+        except (OSError, ValueError):
+            raise SettingsError('native memory settings UNKNOWN; preserve prior artifacts') from None
 
     def prepare_account_settings(self, card: Agent) -> None:
         from .account_auth import settings_path

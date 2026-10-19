@@ -7,7 +7,7 @@ Existing sources and generations remain recoverable, including late edits.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import argparse
 import copy
 import hashlib
@@ -54,8 +54,6 @@ def parse(table):
             raise Unproven('memory plan fields must be text')
         if plan.enabled:
             Client(plan.server, Owner(plan.deployment, plan.project, 'urn:memory:validation'))
-            if not plan.account:
-                raise Unproven('memory plan requires exact selected account or legacy')
             for key in ('source', 'outbox', 'staging'):
                 if not Path(getattr(plan, key)).is_absolute():
                     raise Unproven('memory plan directories must be absolute')
@@ -78,8 +76,10 @@ def _selected(root, agent):
     card = FilesRegistry(Path(root) / 'crew').get(agent)
     program = card.harness or cfg.harness_by_role.get(card.role) or cfg.harness_default or 'claude'
     account = selected(card, cfg)
-    if program != 'claude' or (account.name if account else 'legacy') != plan.account:
+    actual_account = account.name if account else 'legacy'
+    if program != 'claude' or plan.account and actual_account != plan.account:
         raise Unproven('native memory adapter or selected account unsupported')
+    plan = replace(plan, account=actual_account)
     client = Client.for_agent(root, agent, plan.server, plan.deployment, plan.project)
     paths = [Path(value).resolve(strict=True) for value in (plan.source, plan.outbox, plan.staging)]
     if any(a == b or a in b.parents or b in a.parents
@@ -88,6 +88,9 @@ def _selected(root, agent):
     # A staged generation and its settings may contain private source/metadata;
     # they must never be staged inside the source tree or another crew's root.
     for path in (plan.outbox, plan.staging):
+        resolved = Path(path).resolve()
+        if any((parent / '.git').exists() for parent in (resolved, *resolved.parents)):
+            raise Unproven('private memory state cannot be stored in a Git checkout')
         fd = Outbox(Path(path), client.owner)._open()
         os.close(fd)
     return plan, client
@@ -98,7 +101,7 @@ _GENERATION = re.compile(r'memory-generation-[a-f0-9]{32}\Z')
 
 
 def _identity(plan, client):
-    return hashlib.sha256(_bytes(dict(owner=client.owner.wire(), account=plan.account,
+    return hashlib.sha256(_bytes(dict(owner=client.owner.wire(),
         source=plan.source, staging=plan.staging))).hexdigest()
 
 
@@ -195,10 +198,19 @@ def prepare(plan, client, settings):
     arbitrary edits after handoff. Retained old roots require explicit conflict
     reconciliation if an external editor continues writing there afterwards.
     """
-    result = synchronize(plan, client)
-    if result['status'] not in {'accepted', 'unchanged'}:
-        raise Unproven('native memory batch pending; preserve prior native roots')
     outbox = Outbox(Path(plan.outbox), client.owner)
+    current = _current(outbox, plan, client)
+    _native_settings_allowed(settings, plan, current)
+    result = synchronize(plan, client)
+    if result['status'] == 'pending':
+        # A bounded partial upload is not permission to export a partial owner
+        # snapshot. Keep the existing native source usable while ordinary hooks
+        # resume its frozen batch. No new generation is selected here.
+        with _locked(outbox) as fd:
+            _, source, native = _native(outbox, fd, plan, client)
+            marker = native['generation'] or 'original'
+            return _artifact(outbox, fd, settings, source, result['accepted_head'],
+                             marker=marker, ingest='pending', native_files='UNCHANGED_EXISTING_SOURCE')
     with _locked(outbox) as fd:
         previous, source, native = _native(outbox, fd, plan, client)
         _, sync_state = _load(outbox, fd)
@@ -226,15 +238,36 @@ def prepare(plan, client, settings):
             _save_native(outbox, fd, previous, native)
         else:
             generation = source
-        emitted = copy.deepcopy(settings)
-        emitted['autoMemoryDirectory'] = str(generation)
-        emitted['autoMemoryEnabled'] = True
-        emitted.setdefault('env', {})['SHANTY_MEMORY_GENERATION'] = generation.name
-        raw = _bytes(emitted)
-        name = 'memory-settings-' + hashlib.sha256(raw).hexdigest() + '.json'
-        outbox._install(fd, name, raw)
-        return dict(status='prepared', settings=str(outbox.root / name),
-                    generation=str(generation), head=head, native_files='NEW_GENERATION_ONLY')
+        return _artifact(outbox, fd, settings, generation, head,
+                         marker=generation.name, ingest=result['status'],
+                         native_files='NEW_GENERATION_ONLY')
+
+
+def _native_settings_allowed(settings, plan, source):
+    if ('autoMemoryEnabled' in settings and settings['autoMemoryEnabled'] is not True
+            or os.environ.get('CLAUDE_CODE_DISABLE_AUTO_MEMORY') == '1'
+            or settings.get('env', {}).get('CLAUDE_CODE_DISABLE_AUTO_MEMORY') == '1'):
+        raise Unproven('native memory is explicitly disabled; no override')
+    selected = settings.get('autoMemoryDirectory')
+    if selected is not None and (not isinstance(selected, str)
+            or Path(selected).expanduser().resolve() not in {Path(plan.source).resolve(), source.resolve()}):
+        raise Unproven('existing native memory directory differs from declared source')
+
+
+def _artifact(outbox, fd, settings, generation, head, *, marker, ingest, native_files):
+    raw = _bytes(_emitted(settings, generation, marker=marker))
+    name = 'memory-settings-' + hashlib.sha256(raw).hexdigest() + '.json'
+    outbox._install(fd, name, raw)
+    return dict(status='prepared', settings=str(outbox.root / name), generation=str(generation),
+                head=head, ingest_status=ingest, native_files=native_files)
+
+
+def _emitted(settings, generation, *, marker=None):
+    emitted = copy.deepcopy(settings)
+    emitted['autoMemoryDirectory'] = str(generation)
+    emitted['autoMemoryEnabled'] = True
+    emitted.setdefault('env', {})['SHANTY_MEMORY_GENERATION'] = marker or generation.name
+    return emitted
 
 
 def _save_native(outbox, fd, previous, value):
@@ -265,12 +298,16 @@ def _save_record(outbox, fd, name, previous, value):
 
 
 def acknowledge(plan, client, generation, event):
-    if not isinstance(generation, str) or not _GENERATION.fullmatch(generation):
+    if not isinstance(generation, str) or generation != 'original' and not _GENERATION.fullmatch(generation):
         raise Unproven('native memory launch selection missing')
     outbox = Outbox(Path(plan.outbox), client.owner)
     with _locked(outbox) as fd:
         raw, _, native = _native(outbox, fd, plan, client)
         pending = native['pending']
+        if generation == 'original' and native['generation'] is None:
+            if event == 'start' and raw is None:
+                _save_native(outbox, fd, raw, native)
+            return  # Existing source is not proof of Quipu projection/start.
         if event == 'start' and pending is not None and pending['generation'] == generation:
             snapshot(Path(plan.staging) / generation)
             native.update(generation=generation, head=pending['head'], pending=None)
@@ -333,6 +370,29 @@ def prepare_launch(root, card, settings_path):
     if result.get('status') != 'prepared' or not isinstance(result.get('settings'), str):
         raise Unproven('native memory launch unproven')
     return result['settings']
+
+
+def selected_settings(root, card, settings_path):
+    """Read-only expected artifact for launch-stamp checks; no remote request."""
+    if root is None:
+        return settings_path
+    from .config import load
+    cfg = load(root)
+    program = card.harness or cfg.harness_by_role.get(card.role) or cfg.harness_default or 'claude'
+    if not cfg.memory.get(card.name, Plan()).enabled or program != 'claude':
+        return settings_path
+    plan, client = _selected(root, card.name)
+    outbox = Outbox(Path(plan.outbox), client.owner)
+    with _locked(outbox) as fd:
+        _, source, native = _native(outbox, fd, plan, client)
+        if native['generation'] is None and outbox._read(fd, _NATIVE) is None:
+            return settings_path
+        marker = native['generation'] or 'original'
+        raw = _bytes(_emitted(_settings(Path(settings_path)), source, marker=marker))
+        name = 'memory-settings-' + hashlib.sha256(raw).hexdigest() + '.json'
+        if outbox._read(fd, name) != raw:
+            raise Unproven('native settings artifact missing or base changed')
+        return str(outbox.root / name)
 
 
 def hooks(root, event):
