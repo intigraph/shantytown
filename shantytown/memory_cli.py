@@ -56,10 +56,14 @@ def _request(path):
 
 def execute(args):
     action = args.memory_action
+    if action in {'lifecycle', 'prepare-native'}:
+        from .memory_lifecycle import execute as lifecycle
+        return lifecycle(args)
     if action == 'capabilities':
         return {'transport': 'explicit versioned file operations',
-                'native_selection': 'NOT IMPLEMENTED', 'lifecycle_sync': 'NOT IMPLEMENTED',
-                'claude': 'staging only; existing native memory unchanged',
+                'native_selection': 'Claude opt-in generation at managed launch; default OFF',
+                'lifecycle_sync': 'Claude opt-in bounded SessionStart/Stop; default OFF',
+                'claude': 'new generation only; original roots retained; installed acceptance separate',
                 'codex': 'existing read-only startup bridge; generated writeback unsupported',
                 'opencode': 'native memory convention unproven; no writeback'}
     if action == 'inspect':

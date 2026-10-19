@@ -22,7 +22,7 @@ from .memory_remote import Unproven, _json
 
 _LIMIT = 4096
 _FIELDS = ('root', 'agent', 'server', 'deployment', 'project', 'owner', 'directory',
-           'outbox', 'harness', 'account', 'max_new')
+           'outbox', 'harness', 'account', 'max_new', 'settings', 'generation', 'lifecycle_event')
 
 
 def _supervise(command, payload, *, seconds=2.0, watch_parent=False, result_limit=_LIMIT):
@@ -131,18 +131,18 @@ def _worker():
             return 2
         envelope = _json(raw)
         if (not isinstance(envelope, dict) or set(envelope) != {'action', 'arguments'}
-                or envelope['action'] not in {'sync', 'inspect'}):
+                or envelope['action'] not in {'sync', 'inspect', 'lifecycle', 'prepare-native'}):
             return 2
         value = envelope['arguments']
         if not isinstance(value, dict) or set(value) != set(_FIELDS):
             return 2
-        for name in ('root', 'directory', 'outbox'):
+        for name in ('root', 'directory', 'outbox', 'settings'):
             if value[name] is not None:
                 value[name] = Path(value[name])
         from .memory_cli import execute
         result = execute(argparse.Namespace(memory_action=envelope['action'], **value))
         data = json.dumps({'result': result}, separators=(',', ':')).encode()
-        limit = _LIMIT if envelope['action'] == 'sync' else 32768
+        limit = 32768 if envelope['action'] == 'inspect' else _LIMIT
         if len(data) > limit:
             return 2
         # The caller drains the pipe under its deadline; partial writes are not

@@ -1273,6 +1273,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     from the three shared builders above.
     """
     capture = _capture_cmd(root)
+    from .memory_lifecycle import hooks as memory_hooks
     artifact_hooks = []
     # Deployment-owned publication policy must survive settings regeneration.
     # Scope it to administrators; workers and other harnesses do not publish
@@ -1286,10 +1287,10 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
-            "SessionStart": session_start_hooks(root),
+            "SessionStart": session_start_hooks(root) + memory_hooks(root, 'start'),
             "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
-                     {"hooks": [capture]}],
+                     {"hooks": [capture]}] + memory_hooks(root, 'stop'),
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
@@ -1709,6 +1710,7 @@ class ClaudeRuntime:
         self._panes = panes
         self._resolve = resolve_settings
         self._root = root
+        self._memory_settings = {}
 
     def hooks(self, card: Agent) -> HookSpec:
         # FORWARDS to the card's harness — the single source of truth for this
@@ -1757,6 +1759,13 @@ class ClaudeRuntime:
                 f"(role {card.role!r}); refusing to launch a settings-less agent. "
                 f"Emit the role settings with `{shlex.join(repair)}`, then retry."
             )
+        from .memory_lifecycle import prepare_launch
+        try:
+            settings_path = prepare_launch(self._root, card, settings_path)
+        except (OSError, ValueError):
+            raise SettingsError('native memory preparation UNKNOWN; nothing launched; '
+                                'preserve source and outbox') from None
+        self._memory_settings[card.name] = settings_path
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
@@ -1772,6 +1781,8 @@ class ClaudeRuntime:
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
         from .account_auth import settings_path
+        if card.name in self._memory_settings:
+            return self._memory_settings[card.name]
         return settings_path(card, self._resolve(card), self._root)
 
     def prepare_account_settings(self, card: Agent) -> None:

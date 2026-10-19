@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import hashlib
+import os
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -69,6 +70,7 @@ class Client:
         self.server = server.rstrip('/')
         self.owner = owner
         self.opener = opener or build_opener(_NoRedirect)
+        self._credential_selection = None
 
     @classmethod
     def for_agent(cls, root, agent, server, deployment, project, *, opener=None):
@@ -80,14 +82,28 @@ class Client:
         if selected is None or 'quipu_cli' not in selected[1]:
             raise Unproven('named crew CLI credential selection unavailable')
         owner = Owner(deployment, project, selected[1]['principal'])
-        return cls(server, owner, opener=opener)
+        client = cls(server, owner, opener=opener)
+        client._credential_selection = (root, agent)
+        return client
 
     def _request(self, endpoint, body, *, identity=False):
         headers = {'Content-Type': 'application/json', 'X-Quipu-Client': 'crew-memory'}
         if identity:
             # A shared fallback is possible here; the SERVER must reject it for
             # own writes/projection. Local card names are not authentication.
-            headers.update(quipu_auth.write_headers(self.server))
+            if self._credential_selection is None:
+                headers.update(quipu_auth.write_headers(self.server))
+            else:
+                if quipu_auth.status(self.server) == 'writes-disabled':
+                    raise quipu_auth.CredentialRefused('memory writes disabled for this session')
+                from .crew_credentials import cli_token
+                root, agent = self._credential_selection
+                path = str(Path('/run/user') / str(os.getuid()) /
+                           'shantytown-credentials' / agent / 'quipu-cli')
+                value = cli_token(root, agent, path)
+                if not value:
+                    raise Unproven('selected memory CLI credential unavailable')
+                headers['Authorization'] = 'Bearer ' + value
         encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode()
         if len(encoded) > 1024 * 1024:
             raise Unproven('memory request exceeds limit')

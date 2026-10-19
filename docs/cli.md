@@ -2753,7 +2753,9 @@ administrator, changes an account cap, or clears an operator hold.
 
 `st agent memory` earns its own slot because commit and projection have data
 consequences; they must not be hidden in the read-only anchor. The command
-provides bounded transport, not automatic lifecycle synchronization. Run
+provides bounded explicit transport. An independently enabled per-crew Claude
+plan can also use the managed lifecycle described in [crew memory](crew-memory.md).
+The default installs neither native selection nor automatic synchronization. Run
 `st agent memory alpha capabilities` for the current honest adapter limits.
 
 Inspect a selected native directory without uploading its bodies:
@@ -2761,6 +2763,9 @@ Inspect a selected native directory without uploading its bodies:
 ```sh
 st agent memory alpha inspect --directory /path/to/selected/memory
 ```
+
+Inspection uses a one-second worker plus at most 250 ms of cleanup, and emits
+only complete bounded metadata or UNKNOWN. Original files remain unchanged.
 
 Remote operations require explicit `--server`, `--deployment` and `--project`
 IRIs and the existing named CLI credential selection. `read --owner IRI` is
@@ -2776,8 +2781,10 @@ no implicit retry, deletion or last-writer-wins merge.
 `sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
 bounded multi-file capture and performs one pending-intent attempt by default.
 It requires the same explicit remote scope and own credential selection above.
-`--max-new N` permits 0..128 attempts; this is an attempt count, not a wall-clock
-deadline. Invoke it explicitly again to resume the same pending batch before
+`--max-new N` permits 0..128 attempts; the explicit command also has a two-second
+worker deadline plus at most 250 ms of cleanup, regardless of the attempt count.
+A timeout is UNKNOWN and cannot undo an accepted remote commit. Invoke it
+explicitly again to resume the same pending batch before
 recapture. Its journal accepts completion only after a fresh authenticated own
 projection matches the final receipt. A different remote head refuses automatic
 adoption. Source files and native selection remain unchanged. This command
@@ -2786,7 +2793,8 @@ does not install an automatic lifecycle hook.
 `stage --parent PATH` verifies the own-owner export and creates a new exclusive
 generation. It does not select that generation, replace native files or alter
 harness settings. Existing startup memory bridging remains. Claude native
-selection is still pending an installed handoff, Codex generated-memory
+selection requires the separate default-OFF managed plan and installed handoff
+acceptance, Codex generated-memory
 writeback is unsupported, and an OpenCode native-memory convention is unproven.
 A successful transport command is not native round-trip acceptance.
 

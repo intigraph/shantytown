@@ -33,7 +33,7 @@ def test_actual_cli_capabilities_and_inspect_do_not_select_native_root(tmp_path)
         assert result.returncode == 0, result.stderr
         output = json.loads(result.stdout)
         if action == 'capabilities':
-            assert output['native_selection'] == 'NOT IMPLEMENTED'
+            assert 'default OFF' in output['native_selection']
         else:
             assert output['files'][0]['bytes'] == len(source.read_bytes())
             assert output['native_selection'] == 'UNCHANGED'

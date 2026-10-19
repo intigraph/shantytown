@@ -237,3 +237,36 @@ def test_own_projection_distinguishes_explicit_absence_from_omitted_snapshot(mon
     del value['export']['snapshot']
     with pytest.raises(remote.Unproven):
         client.projection()
+
+
+def test_named_client_uses_selected_cli_identity_not_callers_ambient_token(monkeypatch, tmp_path):
+    from shantytown import crew_credentials
+    monkeypatch.setattr(crew_credentials, 'selection', lambda *a: ({},
+        dict(principal=OWNER.crew, quipu_cli={})))
+    selected = []
+    monkeypatch.setattr(crew_credentials, 'cli_token', lambda root, agent, path:
+        selected.append((root, agent, path)) or 'synthetic-selected-token')
+    monkeypatch.setattr(remote.quipu_auth, 'status', lambda _: 'enabled')
+    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: pytest.fail('ambient identity used'))
+    # The transport fixture returns a named owner projection; no real credential
+    # provider, network or runtime path is read by this control.
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self, _): return json.dumps(dict(authenticated_owner=OWNER.crew,
+            export=dict(format='quipu.memory-files/v1', coverage='this_repository_owner_records',
+                        snapshot=None, files=[]))).encode()
+    class Opener:
+        def open(self, request, timeout):
+            assert request.get_header('Authorization') == 'Bearer synthetic-selected-token'
+            return Response()
+    client = remote.Client.for_agent(tmp_path, 'alpha', 'https://example.test',
+                                     OWNER.deployment, OWNER.project, opener=Opener())
+    assert client.projection()['authenticated_owner'] == OWNER.crew
+    assert len(selected) == 1 and selected[0][1] == 'alpha'
+    assert selected[0][2].endswith('/shantytown-credentials/alpha/quipu-cli')
+    monkeypatch.setattr(remote.quipu_auth, 'status', lambda _: 'writes-disabled')
+    with pytest.raises(remote.quipu_auth.CredentialRefused):
+        client.projection()
+    assert len(selected) == 1  # No refresh or second credential after refusal.

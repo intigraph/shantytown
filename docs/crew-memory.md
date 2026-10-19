@@ -130,3 +130,83 @@ These budgets do not guarantee scheduling latency, termination of an
 uninterruptible OS operation, or a fixed orphan-reaping latency. They do not yet
 install a startup/stop hook or select a native directory. Lifecycle wiring and
 supported native handoff remain required before activation.
+
+## Opt-in Claude lifecycle and native generations
+
+Shantytown's source now supports a **disabled-by-default** per-crew plan in its
+existing `shantytown.toml`. This example is synthetic configuration, not a
+command to enable a running deployment:
+
+```toml
+[memory.alpha]
+enabled = false
+server = "https://knowledge.example.test"
+deployment = "urn:example:deployment"
+project = "urn:example:project"
+account = "legacy" # or the exact selected named Claude account
+source = "/private/alpha/original-memory"
+outbox = "/private/alpha/outbox"
+staging = "/private/alpha/generations"
+```
+
+The administrator must select the crew member's actual existing native memory
+root, not a directory inferred from a similarly named account. The source,
+outbox and staging directories must already exist, be distinct and nonoverlapping;
+outbox and staging must be private and user-owned. A named crew CLI credential
+selection is mandatory. Its selected token is resolved through the existing
+credential provider, independently of the administrator's ambient token, and
+the server must confirm the exact principal on own projection/write. An existing
+credential refusal latch is never refreshed or bypassed by this path.
+
+For an enabled Claude plan, normal managed launch preparation reconciles at
+most one pending intent under the two-second worker budget. Pending batches,
+conflicts, unknown identity, unavailable transport or unsafe settings refuse
+that launch promptly; they do not silently select an older remote head. A
+bounded refusal is not permission to retry, cycle a crew member or enable a
+canary. The input settings must be regular, single-link, user-owned and not
+group/world writable. Existing settings, hooks, permissions and environment are
+copied into a new private artifact; the role's original artifact is untouched.
+
+Only after own-authenticated projection agrees with the accepted head **and**
+the current native source bytes does preparation create an exclusive generation.
+It preserves complete UTF-8 index/topic bytes and relative links. It emits
+Claude's documented `autoMemoryDirectory` and `autoMemoryEnabled` settings for
+that future launch. The launch stamp records this exact prepared artifact.
+Claude documents this memory-directory setting in its [memory reference](https://code.claude.com/docs/en/memory).
+A synthetic settings consumer test is not an installed Claude acceptance receipt.
+
+Preparation records a *pending* generation; it does not change the active source.
+The actual SessionStart carrying that generation acknowledges it. An interrupted
+preparation or failed launch therefore leaves the previous source authoritative
+for the next synchronization. Stale starts and mismatched Stop sources refuse.
+The same configured source/account/owner identity must match the journal. An
+unchanged cycle reuses the generation and does not create another remote revision.
+
+Claude SessionStart and Stop carry a bounded hook for configured crew only.
+Other crew plans stay disabled, and a hook failure reports UNKNOWN while returning
+success to the harness's own Stop decision. No daemon, timer or parallel hook
+registry is created. Existing capture/stop hooks remain present. Codex's generated
+memory writeback remains unsupported, so its existing read-only bridge and
+ordinary launch are retained; OpenCode native writable memory remains unproven.
+No alternate native path is fabricated for either harness.
+
+The private liveness journal separates the last trigger/status, complete source
+scan and observed content change, accepted ingest head/advance, and acknowledged
+native generation/head/start. A trigger alone does not advance source-change or
+ingest freshness. Resuming an active frozen batch explicitly reports that source
+coverage was not rescanned. A killed worker may leave `running`, which is UNKNOWN,
+never completed health. These are library/hook evidence fields; natural installed
+trigger acceptance must still be observed.
+
+No filesystem lock can exclude a noncooperating editor. A final source reread
+refuses an observed edit during staging, but an edit **after** that check can
+remain in an older retained root. No source file is overwritten or deleted; such
+late edits require explicit reconciliation of the retained roots. The protocol
+does not promise an atomic handoff against external editors, automatically merge
+roots, infer tombstones, or silently adopt another writer's head. Deployment must
+serialize managed launches and retain the prior native path and settings as the
+rollback. Disabling the plan does not copy generated files back over that path.
+
+Release, installed canary, authentic harness startup/read/write, cross-crew
+queries, private archive migration and original-hook acceptance remain separate
+reviewed deployment steps. Source support does not enable any live plan.
