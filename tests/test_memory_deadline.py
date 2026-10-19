@@ -96,3 +96,115 @@ def test_late_finished_worker_is_unknown_without_signalling_reaped_pid(tmp_path,
     command = worker(tmp_path, 'print(\'{"result":{"status":"accepted"}}\')')
     with pytest.raises(Unproven, match='outcome unknown'):
         deadline._supervise(command, b'{}')
+
+
+def test_inspect_command_has_separate_one_second_worker_budget(monkeypatch, capsys):
+    args = argparse.Namespace(memory_action='inspect')
+    seen = []
+    monkeypatch.setattr(deadline, 'run_inspect', lambda value: seen.append(value) or {'files': []})
+    monkeypatch.setattr(memory_cli, 'execute', lambda _: pytest.fail('unbounded scan'))
+    assert memory_cli.command(args) == 0
+    assert seen == [args]
+    assert json.loads(capsys.readouterr().out) == {'files': []}
+
+
+def test_actual_inspect_worker_preserves_full_128_file_metadata_without_bodies(tmp_path):
+    source = tmp_path / 'native'
+    source.mkdir()
+    for number in range(128):
+        (source / f'topic-{number}.md').write_text('private synthetic λ\r\n')
+    before = {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()}
+    args = argparse.Namespace(directory=source)
+    result = deadline.run_inspect(args)
+    assert len(result['files']) == 128
+    assert result['coverage'] == 'explicit_directory_snapshot'
+    assert result['native_selection'] == 'UNCHANGED'
+    assert 'private synthetic' not in json.dumps(result)
+    assert {p.name: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.iterdir()} == before
+
+
+def test_inspect_wire_uses_one_second_not_sync_budget(tmp_path, monkeypatch):
+    seen = []
+    def supervise(command, payload, **options):
+        seen.append((json.loads(payload), options))
+        return {'files': []}
+    monkeypatch.setattr(deadline, '_supervise', supervise)
+    deadline.run_inspect(argparse.Namespace(directory=tmp_path))
+    envelope, options = seen.pop()
+    assert envelope['action'] == 'inspect'
+    assert options == dict(seconds=1.0, watch_parent=True, result_limit=32768)
+
+
+def test_real_one_second_scan_budget_refuses_late_worker(tmp_path):
+    command = worker(tmp_path, 'import time; time.sleep(20)')
+    before = time.monotonic()
+    with pytest.raises(Unproven, match='outcome unknown'):
+        deadline._supervise(command, b'{}', seconds=1)
+    assert 0.9 <= time.monotonic() - before < 2
+
+
+def test_worker_without_exclusive_parent_channel_refuses_before_work(tmp_path):
+    import subprocess
+    result = subprocess.run([sys.executable, '-m', 'shantytown.memory_deadline'],
+                            input=b'{}', capture_output=True, timeout=2)
+    assert result.returncode == 2
+    assert result.stdout == result.stderr == b''
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux process-state observation only')
+def test_actual_parent_sigkill_stops_only_its_isolated_worker(tmp_path):
+    import os
+    from pathlib import Path
+    import signal
+    import subprocess
+    ready = tmp_path / 'worker-ready'
+    command = worker(tmp_path, f'''import os, sys, time
+from shantytown.memory_deadline import _watch_parent
+_watch_parent(int(sys.argv[2]))
+with open({str(ready)!r}, 'x') as stream:
+    stream.write(str(os.getpid()))
+    stream.flush()
+    os.fsync(stream.fileno())
+time.sleep(30)
+''')
+    parent_script = tmp_path / 'parent.py'
+    parent_script.write_text(f'''from shantytown.memory_deadline import _supervise
+_supervise({command!r}, b'{{}}', watch_parent=True)
+''')
+    # PYTHONPATH points at this isolated source, never installed runtime code.
+    env = dict(os.environ, PYTHONPATH=str(Path(deadline.__file__).parent.parent))
+    parent = subprocess.Popen([sys.executable, str(parent_script)], env=env,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pid = None
+    try:
+        end = time.monotonic() + 1.5
+        while not ready.exists() and time.monotonic() < end:
+            time.sleep(0.01)
+        assert ready.exists(), 'worker did not reach positive ready control'
+        pid = int(ready.read_text())
+        assert os.getpgid(pid) == pid
+        assert parent.poll() is None
+        os.kill(parent.pid, signal.SIGKILL)
+        parent.wait(timeout=1)
+        end = time.monotonic() + 1
+        while time.monotonic() < end:
+            try:
+                state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+            except FileNotFoundError:
+                break
+            if state in {'Z', 'X'}:  # Exited; orphan reaping belongs to PID1.
+                break
+            time.sleep(0.01)
+        else:
+            pytest.fail('worker remained executing after caller death')
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+            parent.wait(timeout=1)
+        if pid is not None:
+            # This is only the exact newly-created fixture group, never a
+            # service/crew PID. No surviving test process is left behind.
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass

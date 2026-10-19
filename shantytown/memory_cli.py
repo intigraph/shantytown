@@ -109,6 +109,9 @@ def command(args):
         if args.memory_action == 'sync':
             from .memory_deadline import run_sync
             result = run_sync(args)
+        elif args.memory_action == 'inspect':
+            from .memory_deadline import run_inspect
+            result = run_inspect(args)
         else:
             result = execute(args)
     except (UnsafeMemory, CredentialRefused, OSError, ValueError):

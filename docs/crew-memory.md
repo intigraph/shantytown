@@ -111,8 +111,22 @@ look up receipts before committing. The supervisor never retries. Its result
 channel contains bounded metadata, with incidental worker diagnostics suppressed.
 Other explicit transport commands retain their existing client timeouts.
 
-This budget does not guarantee scheduling latency or termination of an
-uninterruptible OS operation. It does not yet install a startup/stop hook,
-bound the separate lifecycle scan to one second, select a native directory,
-or establish cleanup after a parent process crash. Those lifecycle guarantees
-remain required before activation.
+The explicit `inspect` command uses a separate one-second disposable worker,
+including startup, plus at most 250 ms of kill/reap cleanup. It returns metadata
+for the complete bounded directory (up to 128 files); it never returns file
+bodies or selects a native directory. A late, malformed or incomplete response
+is UNKNOWN. The synchronization worker still uses its separate two-second
+budget; these limits are not added to an unbounded in-process scan.
+
+Each supervised worker holds only the read end of an exclusive parent-liveness
+pipe. The parent holds the write end, which the operating system closes on
+caller death. EOF stops the worker's own isolated process group. This does not
+signal a crew session, service or unrelated PID, retry a request, or retract a
+remote commit. The exact intent and receipt protocol still resolves unknown
+outcomes on a later invocation. Direct worker invocation without this channel
+refuses before doing work.
+
+These budgets do not guarantee scheduling latency, termination of an
+uninterruptible OS operation, or a fixed orphan-reaping latency. They do not yet
+install a startup/stop hook or select a native directory. Lifecycle wiring and
+supported native handoff remain required before activation.
