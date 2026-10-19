@@ -396,8 +396,13 @@ def selected_settings(root, card, settings_path):
 
 
 def hooks(root, event):
-    from .config import load
-    if root is None or not any(plan.enabled for plan in load(root).memory.values()):
+    from .config import load_or_default
+    if root is None:
+        return []
+    cfg, error = load_or_default(root)
+    # Preserve the emitter's existing malformed-config contract: its ordinary
+    # warning remains visible, while no uncertain memory plan is activated.
+    if error or not any(plan.enabled for plan in cfg.memory.values()):
         return []
     command = shlex.join([sys.executable, '-m', 'shantytown.memory_lifecycle',
                           '--root', str(Path(root).resolve()), '--event', event])
