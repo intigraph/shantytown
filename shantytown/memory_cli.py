@@ -106,7 +106,11 @@ def execute(args):
 
 def command(args):
     try:
-        result = execute(args)
+        if args.memory_action == 'sync':
+            from .memory_deadline import run_sync
+            result = run_sync(args)
+        else:
+            result = execute(args)
     except (UnsafeMemory, CredentialRefused, OSError, ValueError):
         # Do not expose source text, private paths, URLs or credential details.
         print('st: memory result UNKNOWN/refused; preserve source and outbox; no retry.',

@@ -101,3 +101,18 @@ not rewrite it. These guarantees assume cooperating processes on the same
 secure filesystem; another writer with the same OS user can bypass the lock.
 No automatic hook, native directory selection or remote-head adoption is
 installed by this library.
+
+The explicit `st agent memory <agent> sync` command now runs its synchronization
+step in a disposable subprocess with a two-second elapsed budget, including
+startup, followed by at most 250 ms of kill/reap cleanup. A timeout is UNKNOWN,
+not success or evidence that a remote commit was rolled back. Source files,
+frozen intents and the active batch remain for a later explicit invocation to
+look up receipts before committing. The supervisor never retries. Its result
+channel contains bounded metadata, with incidental worker diagnostics suppressed.
+Other explicit transport commands retain their existing client timeouts.
+
+This budget does not guarantee scheduling latency or termination of an
+uninterruptible OS operation. It does not yet install a startup/stop hook,
+bound the separate lifecycle scan to one second, select a native directory,
+or establish cleanup after a parent process crash. Those lifecycle guarantees
+remain required before activation.
