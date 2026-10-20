@@ -89,7 +89,9 @@ class ForgejoTracker:
         # rather than guessing a middle value.
         return WorkItem(id=str(d.get("number")), title=d.get("title", ""),
                         status=d.get("state", "open"), assignee=assignee,
-                        priority=_label_priority(d.get("labels") or []))
+                        priority=_label_priority(d.get("labels") or []),
+                        labels=tuple(label.get('name', '') if isinstance(label, dict) else str(label)
+                                     for label in (d.get('labels') or [])))
 
     def capacity_rows(self, owner):
         """Owner-filtered issues, paging until an observed empty page."""

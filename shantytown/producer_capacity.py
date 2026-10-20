@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .plate_capacity import assignment_lock, ensure_room, real_work, active, PlateFull
+from .plate_capacity import assignment_lock, ensure_room, ensure_update_room, active, PlateFull
 from .sd import SdTracker
 
 
@@ -66,6 +66,29 @@ def without(arguments, name):
     return [v for i,v in enumerate(arguments) if i not in removed]
 
 
+def proposed_fields(arguments, previous):
+    """Project only fields that change capacity membership; keep argv intact."""
+    candidate = previous.copy()
+    for flag, key in (('--title', 'title'), ('--status', 'status'), ('--defer', 'defer_until')):
+        value = option(arguments, flag)
+        if value is not None:
+            candidate[key] = value
+    parsed = list(fields(arguments))
+    replacements = [value for flag, value, _, _ in parsed if flag in ('--labels', '--set-labels')]
+    labels = candidate.get('labels') or []
+    if isinstance(labels, str):
+        labels = labels.split(',')
+    labels = {v.get('name', '') if isinstance(v, dict) else v for v in labels}
+    if replacements:
+        labels = {label.strip() for value in replacements for label in value.split(',') if label.strip()}
+    added = {value.strip() for flag, value, _, _ in parsed if flag == '--add-label'}
+    removed = {value.strip() for flag, value, _, _ in parsed if flag == '--remove-label'}
+    if any(',' in value for value in added | removed) or added & removed:
+        raise ValueError('ambiguous producer label mutation; no unguarded write')
+    candidate['labels'] = sorted((labels | added) - removed)
+    return candidate
+
+
 def run(arguments, tracker, execute, notify):
     """One SDK write under the same owner lock used by go/task/automatic work."""
     if not arguments or arguments[0] not in ('create', 'update'):
@@ -75,8 +98,8 @@ def run(arguments, tracker, execute, notify):
     if arguments[0] == 'create':
         if len(arguments) < 2 or arguments[1].startswith('-'):
             raise ValueError('producer create requires title')
-        candidate = {'title': option(arguments, '--title') or arguments[1], 'labels': option(arguments, '--labels', '-l') or [],
-                     'assignee': owner, 'status': option(arguments, '--status') or 'open'}
+        candidate = proposed_fields(arguments, {'title': arguments[1], 'labels': [],
+                                               'assignee': owner, 'status': 'open'})
         if option(arguments, '--defer'):
             candidate['status'] = 'deferred'
     else:
@@ -84,14 +107,8 @@ def run(arguments, tracker, execute, notify):
             raise ValueError('producer update requires exact ID')
         current = tracker.get(arguments[1])
         owner = owner if owner is not None else current.assignee
-        candidate = vars(current).copy()
-        candidate['status'] = option(arguments, '--status') or current.status
-        defer = option(arguments, '--defer')
-        if defer is not None:
-            candidate['defer_until'] = defer
-    if not owner or not real_work(candidate):
-        return execute(arguments)
-    if not active(candidate | {'assignee': owner}, owner):
+        candidate = proposed_fields(arguments, vars(current))
+    if not owner:
         return execute(arguments)
     with assignment_lock(tracker, owner):
         if current is not None:
@@ -99,9 +116,15 @@ def run(arguments, tracker, execute, notify):
             current = tracker.get(current.id)
             if current.assignee != previous.assignee:
                 raise ValueError('producer owner changed during admission')
+            candidate = proposed_fields(arguments, vars(current))
+        if not active(candidate | {'assignee': owner}, owner):
+            return execute(arguments)
         full = False
         try:
-            ensure_room(tracker, owner, current)
+            if current is None:
+                ensure_room(tracker, owner)
+            else:
+                ensure_update_room(tracker, owner, current, candidate | {'assignee': owner})
         except PlateFull:
             if current is not None and current.assignee:
                 raise

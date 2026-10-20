@@ -122,6 +122,12 @@ def observed_size(tracker, owner):
         return None
 
 
+def ensure_update_room(tracker, owner, current, candidate):
+    """Admission follows slot membership, including delivery-to-work changes."""
+    if active(candidate, owner) and not active(vars(current), owner):
+        ensure_room(tracker, owner)
+
+
 _locks = threading.local()
 
 
@@ -183,6 +189,7 @@ def guard_producers(tracker, notify):
             warnings.warn(f'capacity: {item_id} retained in pool; lead notice UNKNOWN: {type(error).__name__}')
 
     def create_guarded(title, **fields):
+        fields = {k: v for k, v in fields.items() if v is not None}
         owner = fields.get('assignee')
         if not owner or not active({'status':'open'} | fields | {'title':title}, owner):
             return create(title, **fields)
@@ -199,19 +206,21 @@ def guard_producers(tracker, notify):
             return item
 
     def update_guarded(item_id, **fields):
-        if not any(k in fields for k in ('assignee', 'status')):
+        # Backends ignore None, while an empty value explicitly clears a field.
+        proposed = {k: v for k, v in fields.items() if v is not None}
+        if not any(k in proposed for k in ('assignee', 'status', 'title', 'labels', 'defer_until')):
             return update(item_id, **fields)
         previous = tracker.get(item_id)
-        owner = fields.get('assignee', previous.assignee)
+        owner = proposed.get('assignee', previous.assignee)
         if not owner:
             return update(item_id, **fields)
         with assignment_lock(tracker, owner):
             current = tracker.get(item_id)
-            if 'assignee' not in fields and current.assignee != previous.assignee:
+            if 'assignee' not in proposed and current.assignee != previous.assignee:
                 raise CapacityUnknown('owner changed before producer admission')
-            if active(vars(current) | fields, owner):
+            if active(vars(current) | proposed, owner):
                 try:
-                    ensure_room(tracker, owner, current)
+                    ensure_update_room(tracker, owner, current, vars(current) | proposed)
                 except PlateFull:
                     # Do not move somebody else's work to the pool or another owner.
                     if current.assignee:
