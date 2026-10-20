@@ -59,7 +59,7 @@ class OwnedWork:
         agent, now = _agent(agent), _time(time.time() if now is None else now)
         with self.locked() as data:
             data[agent] = dict(generation=uuid.uuid4().hex, state="live",
-                               observed_at=now, expires_at=now + LEASE)
+                               observed_at=now, expires_at=now + LEASE, launched_at=now)
 
     def heartbeat(self, agent, *, now=None):
         agent, now = _agent(agent), _time(time.time() if now is None else now)
@@ -71,12 +71,15 @@ class OwnedWork:
                 raise ValueError("heartbeat moved backwards")
             generation = old["generation"] if old else uuid.uuid4().hex
             data[agent] = dict(generation=generation, state="live",
-                               observed_at=now, expires_at=now + LEASE)
+                               observed_at=now, expires_at=now + LEASE,
+                               launched_at=(old or {}).get("launched_at"))
 
-    def stop(self, agent, *, at=None, reason="", ceiling=False, wake=False):
+    def stop(self, agent, *, at=None, reason="", ceiling=False, wake=False, generation=None):
         agent, at = _agent(agent), _time(time.time() if at is None else at)
         with self.locked() as data:
             old = data.get(agent)
+            if generation is not None and (old is None or old["generation"] != generation):
+                return  # A replay cannot end a different launch generation.
             if old and old["state"] in ("stopped", "ceiling"):
                 if wake and old.get("notice") == "empty":
                     old.update(notice="pending", next_at=at)
@@ -99,121 +102,132 @@ class OwnedWork:
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
-    def tick(self, registry, rows_for, inbox, *, now=None, grace=GRACE, agents=None):
-        """Serve only local pending deadlines. Complete owner reads, never board scans.
+    def _replace(self, agent, before, after):
+        # Local compare-and-swap only. No remote callback may hold this lock:
+        # tool heartbeat hooks must not wait for somebody else's slow inbox.
+        with self.locked() as data:
+            if data.get(agent) != before:
+                return False
+            data[agent] = after
+        return True
 
-        The lock spans receipt lookup/delivery. Persist `attempting` BEFORE the
-        remote write: after UNKNOWN, reconcile a receipt but never blindly resend.
+    def _finish(self, agent, attempt, notice, receipt=None):
+        with self.locked() as data:
+            current = data.get(agent, {})
+            if (current.get("event") != attempt["event"] or
+                    current.get("generation") != attempt["generation"] or
+                    current.get("notice") not in ("attempting", "unknown")):
+                return False
+            current.update(notice=notice)
+            if receipt is not None:
+                current["receipt"] = receipt.id
+        return True
+
+    def tick(self, registry, rows_for, inbox, *, now=None, grace=GRACE, agents=None):
+        """Serve local deadlines with complete owner reads, never board scans.
+
+        Reserve `attempting` atomically before delivery. Recovery reads the exact
+        original receipt, never resends. A launch/heartbeat during metadata I/O
+        invalidates the pending observation before any outbox reservation.
         """
         now = _time(time.time() if now is None else now)
         if not math.isfinite(grace) or grace < 0:
             raise ValueError("invalid grace")
         result = []
-        with self.locked() as data:
-            for name, state in data.items():
-                if agents is not None and name not in agents:
+        for name, initial in self.snapshot().items():
+            if agents is not None and name not in agents:
+                continue
+            state = dict(initial)
+            if state["state"] == "live":
+                if now < state["expires_at"]:
                     continue
-                if state["state"] == "live":
-                    if now < state["expires_at"]:
-                        continue
-                    state.update(state="expired", notice="pending",
-                                 next_at=state["expires_at"], event=uuid.uuid4().hex, reason="heartbeat lease expired; process state UNKNOWN")
-                if state.get("notice") in ("delivered", "empty") or now < state.get("next_at", 0):
+                state.update(state="expired", notice="pending",
+                             next_at=state["expires_at"], event=uuid.uuid4().hex,
+                             reason="heartbeat lease expired; process state UNKNOWN")
+                if not self._replace(name, initial, state):
                     continue
-                marker = "stopped-owner:" + hashlib.sha256(
-                    (name + ":" + state["event"]).encode()).hexdigest()
-                if state.get("notice") in ("attempting", "unknown"):
-                    # Recovery addresses the original recipient even if the
-                    # current card/lead changed after an uncertain write.
-                    receipt = inbox.find_delivery(state["recipient"], marker)
-                    if receipt and receipt.body == state["body"]:
-                        state.update(notice="delivered", receipt=receipt.id)
-                        result.append((name, "reconciled"))
-                    else:
-                        state["notice"] = "unknown"
-                        result.append((name, "delivery UNKNOWN; no resend"))
-                    continue
-                card = registry.get(name)
-                recipient = state.get("recipient") or card.reports_to
+            if state.get("notice") in ("delivered", "empty") or now < state.get("next_at", 0):
+                continue
+            marker = "stopped-owner:" + hashlib.sha256(
+                (name + ":" + state["event"]).encode()).hexdigest()
+            if state.get("notice") in ("attempting", "unknown"):
+                receipt = inbox.find_delivery(state["recipient"], marker)
+                matched = receipt is not None and receipt.body == state["body"]
+                if self._finish(name, state, "delivered" if matched else "unknown",
+                                receipt if matched else None):
+                    result.append((name, "reconciled" if matched else "delivery UNKNOWN; no resend"))
+                continue
+            card = registry.get(name)
+            recipient = card.reports_to
+            if not recipient or recipient == name:
+                administrators = [row.name for row in registry.all().exact()
+                                  if row.role == "administrator"]
+                recipient = administrators[0] if len(administrators) == 1 else None
+            if not recipient or recipient == name:
+                raise RuntimeError("stopped owner has no lead or unambiguous administrator")
+            try:
+                registry.get(recipient)
+            except LookupError:
+                administrators = [row.name for row in registry.all().exact()
+                                  if row.role == "administrator"]
+                recipient = administrators[0] if len(administrators) == 1 else None
                 if not recipient or recipient == name:
-                    administrators = [row.name for row in registry.all().exact()
-                                      if row.role == "administrator"]
-                    recipient = administrators[0] if len(administrators) == 1 else None
-                if not recipient or recipient == name:
-                    raise RuntimeError("stopped owner has no lead or unambiguous administrator")
-                # A dangling lead is an orphan too; transport failure is not a
-                # reason to route to a guessed administrator.
-                try:
-                    registry.get(recipient)
-                except LookupError:
-                    administrators = [row.name for row in registry.all().exact()
-                                      if row.role == "administrator"]
-                    recipient = administrators[0] if len(administrators) == 1 else None
-                    if not recipient or recipient == name:
-                        raise RuntimeError("stopped owner has no administrator")
-                rows = rows_for(name).exact()
-                if any(not isinstance(row, dict) or not row.get("id")
-                       or type(row.get("priority")) is not int
-                       or row["priority"] not in range(5) for row in rows):
-                    raise ValueError("owned work metadata is unproven")
-                owned = [dict(row) for row in rows if row.get("status") != "closed"
-                         and (row.get("assignee") or "").split("/")[-1] == name
-                         and not is_message(row.get("title", ""))]
-                messages = inbox.unread(name)  # Pure read, never acknowledge/reroute content.
-                # Parse actual instants. Lexical offsets are not due ordering.
-                def urgent(row):
-                    if row.get("priority") == 0:
-                        return True
-                    due = row.get("due_at")
-                    if not due:
-                        return False
-                    stamp = datetime.fromisoformat(due.replace("Z", "+00:00"))
-                    if stamp.tzinfo is None:
-                        stamp = stamp.replace(tzinfo=timezone.utc)
-                    return stamp.timestamp() <= now
-                immediate = any(urgent(row) for row in owned)
-                deadline = state["expires_at"] + grace
-                if not immediate and now < deadline:
-                    future_due = [datetime.fromisoformat(row["due_at"].replace("Z", "+00:00"))
-                                  for row in owned if row.get("due_at")]
-                    due_times = [(value if value.tzinfo else value.replace(tzinfo=timezone.utc))
-                                 .timestamp() for value in future_due]
-                    state["next_at"] = min([deadline] + due_times)
-                    continue
-                report = dict(agent=name, recipient=recipient, state=state["state"],
-                              observed_at=state["observed_at"], expires_at=state["expires_at"],
-                              measured_at=now, reason=state.get("reason", ""),
-                              seeds=owned, unread_ids=[m.id for m in messages],
-                              native_expiry=NATIVE_EXPIRY)
-                if not owned and not messages:
-                    state["notice"] = "empty"
-                    continue
-                report_path = self.root / (marker.split(":", 1)[1] + ".json")
-                write_json_atomic(report_path, report)
-                summary = "; ".join(f"{r['id']} P{r.get('priority', '?')} due={r.get('due_at') or '-'}"
-                                    for r in owned)
+                    raise RuntimeError("stopped owner has no administrator")
+            rows = rows_for(name).exact()
+            if any(not isinstance(row, dict) or not row.get("id")
+                   or type(row.get("priority")) is not int
+                   or row["priority"] not in range(5) for row in rows):
+                raise ValueError("owned work metadata is unproven")
+            owned = [dict(row) for row in rows if row.get("status") != "closed"
+                     and (row.get("assignee") or "").split("/")[-1] == name
+                     and not is_message(row.get("title", ""))]
+            messages = inbox.unread(name)  # Never acknowledge or copy message bodies.
+            def due_at(row):
+                due = row.get("due_at")
+                if not due:
+                    return None
+                stamp = datetime.fromisoformat(due.replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=timezone.utc)
+                return stamp.timestamp()
+            dues = [value for row in owned if (value := due_at(row)) is not None]
+            immediate = any(row["priority"] == 0 for row in owned) or any(t <= now for t in dues)
+            deadline = state["expires_at"] + grace
+            if not immediate and now < deadline:
+                self._replace(name, state, dict(state, next_at=min([deadline] + dues)))
+                continue
+            if not owned and not messages:
+                self._replace(name, state, dict(state, notice="empty"))
+                continue
+            report_path = self.root / (marker.split(":", 1)[1] + ".json")
+            report = dict(agent=name, recipient=recipient, state=state["state"],
+                          observed_at=state["observed_at"], expires_at=state["expires_at"],
+                          measured_at=now, reason=state.get("reason", ""),
+                          seeds=owned, unread_ids=[m.id for m in messages],
+                          native_expiry=NATIVE_EXPIRY)
+            summary = "; ".join(f"{r['id']} P{r['priority']} due={r.get('due_at') or '-'}" for r in owned)
+            body = (f"{marker} {name} {state['state']}: {len(owned)} seed(s), "
+                    f"{len(messages)} unread. {summary}. Lead: reassign via st go, repool, "
+                    f"or hold with reason/resume condition. Report {report_path}")
+            if len(body.encode()) > 480:
                 body = (f"{marker} {name} {state['state']}: {len(owned)} seed(s), "
-                        f"{len(messages)} unread. {summary}. Lead: reassign via st go, repool, "
-                        f"or hold with reason/resume condition. Report {report_path}")
-                # Inbox is a pointer channel. Full, uncapped ownership snapshot
-                # remains on disk; long lists do not cause repeated failed writes.
-                if len(body.encode()) > 480:
-                    body = (f"{marker} {name} {state['state']}: {len(owned)} seed(s), "
-                            f"{len(messages)} unread; full report {report_path}. "
-                            "Lead: reassign, repool, or hold with reason/resume condition.")
-                if len(body.encode()) > 480:
-                    raise ValueError("stopped-owner pointer exceeds inbox budget")
-                state.update(notice="attempting", recipient=recipient, report=str(report_path), body=body)
-                write_json_atomic(self.root / "state.json", data)
-                try:
-                    receipt = inbox.deliver(recipient, body, frm="st stopped-owner")
-                    observed = inbox.find_delivery(recipient, marker)
-                    if (observed is None or observed.id != receipt.id or observed.body != body):
-                        raise RuntimeError("stopped-owner receipt read-back unproven")
-                except Exception:
-                    state["notice"] = "unknown"
-                    write_json_atomic(self.root / "state.json", data)
-                    raise
-                state.update(notice="delivered", receipt=receipt.id)
-                result.append((name, "delivered"))
+                        f"{len(messages)} unread; full report {report_path}. "
+                        "Lead: reassign, repool, or hold with reason/resume condition.")
+            if len(body.encode()) > 480:
+                raise ValueError("stopped-owner pointer exceeds inbox budget")
+            attempt = dict(state, notice="attempting", recipient=recipient,
+                           report=str(report_path), body=body)
+            if not self._replace(name, state, attempt):
+                continue  # A restart, heartbeat or another consumer won the race.
+            try:
+                write_json_atomic(report_path, report)
+                receipt = inbox.deliver(recipient, body, frm="st stopped-owner")
+                observed = inbox.find_delivery(recipient, marker)
+                if observed is None or observed.id != receipt.id or observed.body != body:
+                    raise RuntimeError("stopped-owner receipt read-back unproven")
+            except Exception:
+                self._finish(name, attempt, "unknown")
+                raise
+            self._finish(name, attempt, "delivered", receipt)
+            result.append((name, "delivered"))
         return result

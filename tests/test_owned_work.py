@@ -397,3 +397,45 @@ def test_new_durable_mail_reopens_empty_ceiling_after_persist(tmp_path, monkeypa
     assert len(box.unread('lead')) == 1
     assert '1 unread' in box.unread('lead')[0].body
     assert service.snapshot()['worker']['state'] == 'ceiling'
+
+
+def test_remote_read_does_not_hold_heartbeat_lock_and_restart_fences_notice(world):
+    world.service.stop('worker', at=100)
+    def restarting_read(name):
+        # These real local writes would deadlock if the reader held the lock.
+        world.service.heartbeat('other-worker', now=200)
+        world.service.launch('worker', now=200)
+        return Answer.complete_read(world.rows, how='read concurrent with restart')
+    assert world.service.tick(world.reg, restarting_read, world.box, now=400) == []
+    assert not world.box.unread('lead')
+    assert world.service.snapshot()['worker']['state'] == 'live'
+
+
+def test_concurrent_consumers_reserve_only_one_outbox_write(world):
+    world.service.stop('worker', at=100)
+    nested = False
+    def competing_read(name):
+        nonlocal nested
+        if not nested:
+            nested = True
+            world.tick(400)
+        return Answer.complete_read(world.rows, how='same event concurrent observation')
+    assert world.service.tick(world.reg, competing_read, world.box, now=400) == []
+    assert len(world.box.unread('lead')) == 1
+
+
+def test_old_stop_replay_after_relaunch_cannot_stop_new_generation(world):
+    world.service.stop('worker', at=100)
+    old_generation = world.service.snapshot()['worker']['generation']
+    world.service.launch('worker', now=200)
+    world.service.heartbeat('worker', now=300)
+    world.service.stop('worker', at=100, generation=old_generation)
+    assert world.service.snapshot()['worker']['state'] == 'live'
+    assert world.tick(400) == []
+
+
+def test_verified_stop_is_not_discarded_on_wall_clock_rollback(world):
+    world.rows[0]['priority'] = 0
+    world.service.launch('worker', now=200)
+    world.service.stop('worker', at=190)
+    assert world.tick(190) == [('worker', 'delivered')]
