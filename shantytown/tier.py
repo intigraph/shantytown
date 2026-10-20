@@ -356,6 +356,7 @@ class Reason(Enum):
     BLOCKED_ON_HUMAN = "blocked-on-human"
     LEAD_UNREACHABLE = "lead-unreachable"   # Q3: the lead is down, rose to admin
     JOB_FAILED = "job-failed"               # terminal scheduled delivery failure
+    DELIVERY_STALLED = "delivery-stalled"   # retained input has no delivery proof
     UNTRACKED_WORK = "untracked-work"       # a report is ACTING with an empty hook
     # NOTE: "i was busy" is deliberately NOT here. Capacity is a capacity problem
     # and must surface as one (absorb-rate), not be laundered as an escalation.
@@ -369,7 +370,8 @@ class Reason(Enum):
 # drain must not render it as one: stop_event._compose_reason gives it its own
 # section, and the drain's mid-flight DEFER must never hold it back (the sender
 # being busy is the entire content of the alert).
-GOVERNANCE_REASONS = (Reason.UNTRACKED_WORK.value, Reason.JOB_FAILED.value)
+GOVERNANCE_REASONS = (Reason.UNTRACKED_WORK.value, Reason.JOB_FAILED.value,
+                      Reason.DELIVERY_STALLED.value)
 
 
 def is_governance(reason: str | None) -> bool:

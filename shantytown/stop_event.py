@@ -877,12 +877,17 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     """
     if not events:
         return ""
+    stalled = [e for e in events if e.reason == 'delivery-stalled']
+    events = [e for e in events if e.reason != 'delivery-stalled']
+    delivery_lines = ['⚠ Unconfirmed message delivery — inspect retained inbox/input:'] if stalled else []
+    delivery_lines += [f'  - {e.frm} ({_age(e.ts, now)}): {e.detail}' for e in stalled]
     failures = [e for e in events if e.reason == "job-failed"]
     events = [e for e in events if e.reason != "job-failed"]
     failure_lines = ["⚠ Scheduled job failures — inspect the named history; "
                      "these are alerts, not agent stops:"] if failures else []
     failure_lines += [f"  - {e.frm} ({_age(e.ts, now)}): {e.detail}"
                       for e in sorted(failures, key=lambda e: (e.ts, e.id))]
+    failure_lines = delivery_lines + failure_lines
     if not events:
         return "\n".join(failure_lines)
     latest: dict[str, StopEvent] = {}
