@@ -615,7 +615,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     def query(_proof, text, timeout):
         seen.append(text)
         result = data.query(text)
-        assert [str(v) for v in result.vars] == ["subject", "graph"] + (["problem"] if message else [])
+        assert [str(v) for v in result.vars] == ["subject", "graph", "problem"]
         actual = [(str(row.subject), str(row.graph)) for row in result]
         assert Counter(actual) == Counter(expected)
         # Stop before hydration: this test checks the real candidate query,
@@ -627,8 +627,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     try:
         assert seeds_plate.owner_rows(PROOF, "worker", **options).exact() == []
         assert len(seen) == 1
-        if not message:
-            assert seen[0].count(" UNION ") == 3
+        assert 'BIND("unsupported-owner-status" AS ?problem)' in seen[0]
     finally:
         data.close()
 
