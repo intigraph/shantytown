@@ -3,6 +3,7 @@
 Set QUIPU_NATIVE_TEST_BIN to a reviewed executable to run these controls.
 No executable is downloaded and no server or credential is used.
 """
+from collections import Counter
 import hashlib
 import json
 import os
@@ -71,11 +72,14 @@ def native_fixture(root, binary, *, unrelated=30):
 
     primary = []
     for name in ("plain", "known", "target", "missing", "cross", "dated",
-                 "duplicate-target", "duplicate-source"):
+                 "duplicate-target", "duplicate-source", "multiple"):
         primary += facts(name)
     primary += facts("bad-priority", priority='"0"')
     primary += [block("known", "target"), block("missing", "unavailable"),
                 block("cross", "ephemeral-target"),
+                block("multiple", "target"),
+                f'<{item.SEEDS}item/multiple> <{item.SCHEMA}isPartOf> '
+                f'<{item.SEEDS}item/target> .',
                 block("duplicate-source", "duplicate-target"),
                 f'<{item.SEEDS}item/dated> <{item.SCHEMA}scheduledTime> '
                 f'"2026-10-20"^^<{item.XSD}date> .']
@@ -122,7 +126,7 @@ def read(monkeypatch, native, identifier):
 @pytest.mark.parametrize("identifier,blockers", [
     ("plain", ()), ("known", ("target",)), ("missing", ("unavailable",)),
     ("cross", ("ephemeral-target",)), ("ephemeral-source", ("target",)),
-    ("dated", ()),
+    ("dated", ()), ("multiple", ("target",)),
 ])
 def test_native_item_and_cross_graph_dependencies(monkeypatch, native, identifier, blockers):
     result = read(monkeypatch, native, identifier)
@@ -139,3 +143,12 @@ def test_native_item_and_cross_graph_dependencies(monkeypatch, native, identifie
 def test_native_invalid_or_ambiguous_metadata_refuses(monkeypatch, native, identifier, error):
     with pytest.raises(error):
         read(monkeypatch, native, identifier)
+
+
+def test_native_shared_target_retains_bag_multiplicity(native):
+    query = item._fields_query((GRAPH, GRAPH + "#seeds-ephemeral"),
+                              item.SEEDS + "item/multiple")
+    rows = native_rows(native("read", query))
+    target = [row for row in rows if row["s"] == item.SEEDS + "item/target"]
+    counts = Counter(tuple(sorted(row.items())) for row in target)
+    assert len(counts) == 4 and set(counts.values()) == {2}
