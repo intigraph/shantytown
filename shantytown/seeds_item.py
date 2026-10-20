@@ -165,7 +165,10 @@ def _fields_query(graphs, subject):
         for target_graph in graphs:
             branches.append(
                 f"{{ GRAPH {_iri(graph)} {{ {_iri(subject)} ?edge ?s . FILTER({edges}) }} "
-                f"GRAPH {_iri(target_graph)} {{ ?s ?p ?value . FILTER({target_fields}) }} "
+                # A FILTER inside the right GRAPH hides its bound-subject
+                # lookup. Hoist this predicate-only filter: it references no
+                # left-hand variable and preserves the graph and bag semantics.
+                f"GRAPH {_iri(target_graph)} {{ ?s ?p ?value . }} FILTER({target_fields}) "
                 f"BIND({_iri(target_graph)} AS ?graph) }}"
             )
     # Verbose JSON emits native integers and structured dates. Project lexical
