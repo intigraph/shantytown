@@ -576,7 +576,7 @@ class Tmux:
                 custody.finish('delivered')
         except OSError as exc:
             raise PaneSubmissionUnverified(
-                'UNVERIFIED: local delivery custody unavailable; no retry authorized') from exc
+                'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
 
     def _send(self, pane: str, text: str, *, allow_shell: bool = False,
               custody=None) -> None:
