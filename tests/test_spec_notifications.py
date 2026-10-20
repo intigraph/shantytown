@@ -127,5 +127,14 @@ def test_actual_rdf_spec_scope_keeps_deferred_out_of_dispatch(monkeypatch):
         assert specs.complete
         assert {row["id"] for row in specs.exact()} == {"test-changed"}
         assert specs.exact()[0]["status"] == "deferred"
+        # A non-spec row with an invalid owner status must still poison the
+        # shared guard; the new candidate filter cannot hide that evidence.
+        invalid = URIRef(seeds_plate.SEEDS + "item/test-invalid")
+        graph.add((invalid, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        graph.add((invalid, URIRef(seeds_plate.SCHEMA + "agent"), Literal("owner")))
+        graph.add((invalid, URIRef(seeds_plate.SEEDS + "ontology/status"), Literal("unrecognized")))
+        refused = seeds_plate.owner_rows(
+            proof, "owner", decision=True, include_deferred=True, only_specs=True)
+        assert not refused.complete
     finally:
         data.close()
