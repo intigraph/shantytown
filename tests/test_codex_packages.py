@@ -484,3 +484,107 @@ def test_protected_pid_reuse_is_hold(tmp_path, protected, monkeypatch):
     monkeypatch.setattr(Path, "read_text", reused)
     with pytest.raises(RuntimeError, match="identity changed"):
         packages.quarantine_custody(tmp_path / "payload")
+
+
+def test_stopped_migration_seeds_empty_prepared_destination_under_native_lock(tmp_path, stopped, monkeypatch):
+    import fcntl
+    home = tmp_path / "stopped"
+    old = old_package(home)
+    durable = tmp_path / "shared" / "daemon"
+    packages.prepare(tmp_path / "fresh", durable)
+    native = durable / "install.lock"
+    native.touch()
+    inode = native.stat().st_ino
+    expected = packages.manifest(old)
+    copytree = packages.shutil.copytree
+    copies = []
+
+    def copy_locked(*args, **kwargs):
+        with native.open("a+b") as contender:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        copies.append(True)
+        return copytree(*args, **kwargs)
+
+    monkeypatch.setattr(packages.shutil, "copytree", copy_locked)
+    packages.migrate_stopped(home, durable)
+    assert copies
+    assert native.stat().st_ino == inode
+    assert old.is_symlink() and old.resolve() == durable
+    assert packages.manifest(durable) == expected
+    retained = [p for p in old.parent.glob(".stopped-daemon-*") if p.is_dir()]
+    assert len(retained) == 1 and packages.manifest(retained[0]) == expected
+
+
+def test_stopped_empty_destination_held_native_lock_preserves_original(tmp_path, stopped):
+    import fcntl
+    home = tmp_path / "stopped"
+    old = old_package(home)
+    durable = tmp_path / "shared" / "daemon"
+    packages.prepare(tmp_path / "fresh", durable)
+    native = durable / "install.lock"
+    with native.open("a+b") as installer:
+        fcntl.flock(installer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        inode = native.stat().st_ino
+        with pytest.raises(BlockingIOError):
+            packages.migrate_stopped(home, durable)
+    assert native.stat().st_ino == inode
+    assert not old.is_symlink() and (old / "current/bin/codex").read_bytes() == b"reviewed payload"
+    assert packages.manifest(durable) == {}
+
+
+def test_stopped_empty_destination_copy_failure_keeps_source_and_lock(tmp_path, stopped, monkeypatch):
+    home = tmp_path / "stopped"
+    old = old_package(home)
+    durable = tmp_path / "shared" / "daemon"
+    packages.prepare(tmp_path / "fresh", durable)
+    native = durable / "install.lock"
+    native.touch()
+    inode = native.stat().st_ino
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("fixture copy failure")
+
+    monkeypatch.setattr(packages.shutil, "copytree", fail_copy)
+    with pytest.raises(OSError, match="fixture copy failure"):
+        packages.migrate_stopped(home, durable)
+    assert native.stat().st_ino == inode
+    assert not old.is_symlink() and (old / "current/bin/codex").read_bytes() == b"reviewed payload"
+    assert packages.manifest(durable) == {}
+    assert not [p for p in durable.parent.glob(".daemon-package-*") if p.is_dir()]
+
+
+def test_partial_seed_publication_never_switches_or_overwrites_original(tmp_path, stopped, monkeypatch):
+    home = tmp_path / "stopped"
+    old = old_package(home)
+    durable = tmp_path / "shared" / "daemon"
+    packages.prepare(tmp_path / "fresh", durable)
+    expected = packages.manifest(old)
+    rename = Path.rename
+    publications = []
+
+    def fail_second(path, target):
+        if path.parent.name.startswith(".daemon-package-") and Path(target).parent == durable:
+            publications.append(path.name)
+            if len(publications) == 2:
+                raise OSError("fixture publication failure")
+        return rename(path, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "rename", fail_second)
+        with pytest.raises(OSError, match="fixture publication failure"):
+            packages.migrate_stopped(home, durable)
+    assert len(publications) == 2
+    assert not old.is_symlink() and packages.manifest(old) == expected
+    # A partial current link may be dangling, so manifest itself can refuse.
+    # Bind directory entries/inodes without dereferencing that invalid tree.
+    def entries():
+        return sorted((str(p.relative_to(durable)), p.lstat().st_ino,
+                       os.readlink(p) if p.is_symlink() else None)
+                      for p in durable.rglob("*"))
+    partial = entries()
+    assert any(name != "install.lock" for name, *_ in partial)
+    with pytest.raises((RuntimeError, FileNotFoundError)):
+        packages.migrate_stopped(home, durable)
+    assert entries() == partial
+    assert packages.manifest(old) == expected

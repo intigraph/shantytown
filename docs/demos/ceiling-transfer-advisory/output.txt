@@ -1,0 +1,13 @@
+source: BASE-1277d0a target: isolated fixture, injected dispatcher
+{"adjudication": [], "advisory_phases": [], "case": "ready", "comments": 1, "legacy_success_ledger": true, "moved": 1, "sends": 1}
+{"adjudication": [], "advisory_phases": [], "case": "unproven", "comments": 0, "legacy_success_ledger": false, "moved": 0, "sends": 1}
+sha256 cli.py dfd6b8b56969af01a949fd194eeb8dbdf5b38714d5ee3d30f467aa219b03f43f
+sha256 ceiling_transfer.py ecec8be4b970137189205735753216fff343e2299a0af341a0d318ccab26d6ee
+Operational false-positive rate: UNKNOWN; no natural exposure or independent grading
+source: CANDIDATE target: isolated fixture, injected dispatcher
+{"adjudication": ["ungraded"], "advisory_phases": ["start", "plan", "outcomes"], "case": "ready", "comments": 1, "legacy_success_ledger": true, "moved": 1, "sends": 1}
+{"adjudication": ["ungraded"], "advisory_phases": ["start", "plan", "outcomes"], "case": "unproven", "comments": 0, "legacy_success_ledger": false, "moved": 0, "sends": 1}
+sha256 cli.py d75417383021dcfa66e53c3f1c2d8c2fc0cd9dec39513b75af7cc263a7fb1e76
+sha256 ceiling_transfer.py f7a38b63f6b47995048e3df63a5d29726853c265a0a3ea0fa622eebfa0453fdc
+sha256 ceiling_advisory.py ed8d132df6844534e6e666b32b86adf4d4e63edc03bd5e2618e0eced47380915
+Operational false-positive rate: UNKNOWN; no natural exposure or independent grading

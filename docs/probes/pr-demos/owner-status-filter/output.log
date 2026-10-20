@@ -1,0 +1,27 @@
+Script started on 2026-10-15 18:55:09-04:00 [COMMAND="python3 docs/probes/pr-demos/owner-status-filter/probe.py" <not executed on terminal>]
+{
+  "before": {
+    "branches": 16,
+    "bytes": 6051,
+    "rows": 20
+  },
+  "after": {
+    "branches": 4,
+    "bytes": 1855,
+    "rows": 20
+  },
+  "exact_expected_rows_and_headers": true,
+  "controls": [
+    "literal owner",
+    "IRI owner",
+    "both graphs",
+    "modern/legacy messages",
+    "wrong type",
+    "other owner",
+    "foreign graph",
+    "closed"
+  ],
+  "scope": "disposable loopback fixture; shape check bypassed only to isolate candidate selection; normal shape and hydration tests run separately; no production timing claim"
+}
+
+Script done on 2026-10-15 18:55:10-04:00 [COMMAND_EXIT_CODE="0"]

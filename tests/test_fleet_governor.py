@@ -466,6 +466,27 @@ def test_ssh_transport_exit_is_distinct_from_remote_command_failure(monkeypatch)
         assert 'secret' not in error
 
 
+def test_ssh_transport_cause_uses_only_final_line_and_fixed_safe_text(monkeypatch):
+    peer = HostPeer('laptop', 'user@example.test', '/remote')
+    for stderr, expected in (
+        ('previous secret\nssh: connect to host peer port 22: No route to host\n', 'No route to host'),
+        ('ssh: connect: Connection refused', 'Connection refused'),
+        ('Permission denied (publickey).', 'Permission denied'),
+        ('No route to host\nprivate unrecognized final line', None),
+        ('', None),
+        ('secret=private Connection timed out\x1b[31m', 'Connection timed out'),
+    ):
+        monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
+                            SimpleNamespace(returncode=255, stdout='', stderr=stderr))
+        state, error = fg.read_peer(peer)
+        assert state is None and isinstance(error, fg.PeerUnreachable)
+        assert 'secret' not in error and 'private' not in error and '\x1b' not in error
+        if expected:
+            assert expected in error
+        else:
+            assert str(error) == 'laptop governor unreachable (SSH transport failed)'
+
+
 def test_cli_owner_offline_cards_warnings_and_dispatch(tmp_path, monkeypatch, capsys):
     from shantytown import config
     root = _roster(tmp_path, {'local': 'local-pane'})

@@ -26,6 +26,7 @@ def fields(id="test-held", **overrides):
         "status": "in_progress",
         "assignee": "worker",
         "priority": 1,
+        "issue_type": "task",
     }
     row.update(overrides)
     inverse = {v: k for k, v in seeds_plate.FIELDS.items()}
@@ -478,3 +479,160 @@ def test_decision_and_roster_capacity_preserve_blocked_scope_in_actual_rdf(
         assert len(queries) == 2
     finally:
         data.close()
+
+
+def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
+    from shantytown.inbox import TrackerInbox
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
+    queries = []
+
+    def query(proof, text, timeout):
+        queries.append(text)
+        wire = fields("test-modern", title="inbox: marker payload", status="open")
+        wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
+        if '"closed"' in text or '?predicate ?value' in text and closed[0]:
+            wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
+        return answer(wire)
+
+    closed = [False]
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    box = TrackerInbox(tracker, lambda: pytest.fail("whole board read"),
+                       items_for=tracker.inbox_items)
+    assert {message.id for message in box.unread("worker")} == {"test-modern", "test-legacy"}
+    assert len(queries) == 2  # one discovery, one bounded field projection; both prefixes
+    assert "inbox:" in queries[0] and "mail:" in queries[0]
+    assert G + "#seeds-ephemeral" in queries[0]
+    assert '"closed"' not in queries[0]
+    closed[0] = True
+    assert box.find_delivery("worker", "delivered").read
+    assert len(queries) == 4
+    assert '"closed"' in queries[2]
+
+
+@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "disappeared", "nonmessage"])
+def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
+    from shantytown.answer import PartialAnswer
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK fallback"))
+    calls = []
+
+    def query(proof, text, timeout):
+        calls.append(text)
+        if fault == "offline":
+            raise OSError("unavailable")
+        if fault == "disappeared" and len(calls) > 1:
+            return answer([])
+        wire = fields(title="actual work" if fault == "nonmessage" else "inbox: payload",
+                      assignee="other" if fault == "foreign" else "worker")
+        if fault == "ambiguous":
+            wire += fields(title="inbox: contradictory", status="closed")
+        return answer(wire)
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    with pytest.raises(PartialAnswer):
+        tracker.inbox_items("worker").exact()
+
+
+@pytest.mark.parametrize("include_closed", [False, True])
+def test_inbox_query_filters_both_graphs_and_owner_spellings_in_actual_rdf(monkeypatch, include_closed):
+    from rdflib import Dataset, URIRef, Literal, RDF
+    from shantytown.inbox import TrackerInbox
+    data = Dataset()
+    cases = [
+        ("modern", "inbox: modern", "open", "worker", G),
+        ("legacy", "mail: legacy", "blocked", "crew/worker", G + "#seeds-ephemeral"),
+        ("receipt", "inbox: delivered payload", "closed", "worker", G),
+        ("work", "actual work", "in_progress", "worker", G),
+        ("foreign", "inbox: foreign", "open", "other", G),
+    ]
+    for ident, title, status, owner, graph in cases:
+        subject = URIRef(seeds_plate.SEEDS + "item/test-" + ident)
+        target = data.graph(URIRef(graph))
+        target.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        for predicate, value in (
+            (seeds_plate.SCHEMA + "identifier", "test-" + ident),
+            (seeds_plate.SCHEMA + "name", title),
+            (seeds_plate.SCHEMA + "agent", owner),
+            (seeds_plate.SEEDS + "ontology/status", status),
+            (seeds_plate.SEEDS + "ontology/priority", 1),
+        ):
+            target.add((subject, URIRef(predicate), Literal(value)))
+    queries = []
+
+    def query(_proof, text, timeout):
+        queries.append(text)
+        return answer([{str(k): v.toPython() if isinstance(v, Literal) else str(v)
+                        for k, v in row.asdict().items()} for row in data.query(text)])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        rows = seeds_plate.owner_rows(PROOF, "crew/worker", messages_only=True,
+                                      include_closed=include_closed).exact()
+        expected = {"test-modern", "test-legacy"} | ({"test-receipt"} if include_closed else set())
+        assert {row["id"] for row in rows} == expected
+        assert len(queries) == 2
+    finally:
+        data.close()
+
+
+@pytest.mark.parametrize("options,statuses", [
+    ({}, {"hooked", "in_progress", "open"}),
+    ({"decision": True}, {"hooked", "in_progress", "open", "blocked"}),
+    ({"capacity": True}, {"hooked", "in_progress", "open", "blocked"}),
+    ({"messages_only": True}, {"hooked", "in_progress", "open", "blocked", "deferred"}),
+    ({"messages_only": True, "include_closed": True},
+     {"hooked", "in_progress", "open", "blocked", "deferred", "closed"}),
+])
+def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, options, statuses):
+    from collections import Counter
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    expected = []
+    graphs = (G, G + "#seeds-ephemeral")
+    message = options.get("messages_only", False)
+    for graph_name in (*graphs, G + "-foreign"):
+        graph = data.graph(URIRef(graph_name))
+        for owner in (Literal("worker"), URIRef(seeds_plate.SEEDS + "principal/worker"), Literal("other")):
+            for status in ("hooked", "in_progress", "open", "blocked", "deferred", "closed"):
+                for title in ("actual work", "inbox: payload", "mail: legacy"):
+                    for kind in ("Action", "Thing"):
+                        subject = URIRef(seeds_plate.SEEDS + "item/control-" + str(len(graph)))
+                        graph.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + kind)))
+                        graph.add((subject, URIRef(seeds_plate.SCHEMA + "agent"), owner))
+                        graph.add((subject, URIRef(seeds_plate.SEEDS + "ontology/status"), Literal(status)))
+                        graph.add((subject, URIRef(seeds_plate.SCHEMA + "name"), Literal(title)))
+                        if (graph_name in graphs and str(owner) != "other" and status in statuses
+                                and kind == "Action" and title.startswith(("inbox:", "mail:")) == message):
+                            expected.append((str(subject), graph_name))
+    seen = []
+
+    def query(_proof, text, timeout):
+        seen.append(text)
+        result = data.query(text)
+        assert [str(v) for v in result.vars] == ["subject", "graph"]
+        actual = [(str(row.subject), str(row.graph)) for row in result]
+        assert Counter(actual) == Counter(expected)
+        # Stop before hydration: this test checks the real candidate query,
+        # while existing projection tests cover field reads and uncertainty.
+        return answer([])
+
+    monkeypatch.setattr(seeds_plate, "owner_shape_supported", lambda *a, **kw: True)
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        assert seeds_plate.owner_rows(PROOF, "worker", **options).exact() == []
+        assert len(seen) == 1
+        assert seen[0].count(" UNION ") == 3
+    finally:
+        data.close()
+
+
+def test_feed_type_missing_is_unknown_not_an_actionable_task(monkeypatch):
+    wire = [r for r in fields() if r["predicate"] != seeds_plate.SEEDS + "ontology/issueType"]
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer(wire))
+    from shantytown.answer import PartialAnswer
+    with pytest.raises(PartialAnswer):
+        seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()

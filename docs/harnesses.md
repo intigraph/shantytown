@@ -572,7 +572,15 @@ its original tree in same-filesystem quarantine and reports its path and coverag
 No automatic deletion is provided. Keep quarantine for at least one full natural
 cycle of every live Codex card, recording failures and per-card evidence. At a
 sanctioned stopped boundary rollback by removing only the expected disk package
-symlink and renaming the retained tree back; preserve the shared disk payload. The migration shares the native installer
+symlink and renaming the retained tree back; preserve the shared disk payload.
+
+An empty shared directory prepared by a fresh card is seeded from the stopped
+card under both provisioning and native installer locks. The existing native
+lock inode is preserved; a nonempty mismatched package still refuses and keeps
+the original. Copy or partial-publication failures leave the original card
+package in place.
+
+The migration shares the native installer
 lock inode and serializes provisioning; it never forces a cycle, deletes live
 releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
 calling the Linux migration helper there directly refuses.

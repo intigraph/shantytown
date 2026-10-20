@@ -1128,6 +1128,10 @@ def test_a_slow_sweep_sheds_the_rest_of_the_pass_instead_of_wedging_respawn(
     assert "saturation-cycle" in err
     # And the promise the whole design rests on.
     assert "Respawn is unaffected" in err
+    # aegis-qc2: the line also says WHAT consumed the budget, with its wall time,
+    # so a recurring deferral can be traced to a sweep instead of guessed at.
+    slow = [line for line in err.splitlines() if "slowest sweeps this pass" in line]
+    assert slow and "2160.0s" in slow[0], err
 
 
 def test_the_budget_never_interrupts_a_sweep_in_flight(tmp_path, monkeypatch):

@@ -202,6 +202,25 @@ def manifest(root: Path) -> dict:
     return result
 
 
+def _stage_package(old: Path, parent: Path, expected: dict) -> Path:
+    stage = Path(tempfile.mkdtemp(prefix=".daemon-package-", dir=parent))
+    try:
+        shutil.copytree(old, stage, dirs_exist_ok=True, symlinks=True,
+                        ignore=lambda directory, names: ["install.lock"] if Path(directory) == old else [])
+        for relative, entry in expected.items():
+            if entry[0] == "link":
+                link = stage / relative
+                link.unlink()
+                link.symlink_to(entry[1])
+        stage.chmod(0o700)
+        if manifest(stage) != expected or manifest(old) != expected:
+            raise RuntimeError("package copy integrity is UNKNOWN")
+        return stage
+    except BaseException:
+        shutil.rmtree(stage)
+        raise
+
+
 def migrate_stopped(home: Path, durable: Path) -> None:
     """Called only AFTER the normal Remote Control stop, never to force a cycle.
 
@@ -236,18 +255,8 @@ def migrate_stopped(home: Path, durable: Path) -> None:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         expected = manifest(old)
         if not durable.exists():
-            stage = Path(tempfile.mkdtemp(prefix=".daemon-package-", dir=durable.parent))
+            stage = _stage_package(old, durable.parent, expected)
             try:
-                shutil.copytree(old, stage, dirs_exist_ok=True, symlinks=True,
-                                ignore=lambda directory, names: ["install.lock"] if Path(directory) == old else [])
-                for relative, entry in expected.items():
-                    if entry[0] == "link":
-                        link = stage / relative
-                        link.unlink()
-                        link.symlink_to(entry[1])
-                stage.chmod(0o700)
-                if manifest(stage) != expected or manifest(old) != expected:
-                    raise RuntimeError("package copy integrity is UNKNOWN")
                 stage.rename(durable)
             finally:
                 if stage.exists():
@@ -262,6 +271,21 @@ def migrate_stopped(home: Path, durable: Path) -> None:
                 raise RuntimeError("shared native install lock must be a user-owned real file")
         with native_lock.open("a+b") as installer:
             fcntl.flock(installer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            # A fresh card can prepare the shared directory before any native
+            # updater populates it. Seed that empty directory under BOTH locks;
+            # replacing its root would strand the shared install.lock inode.
+            if not manifest(durable) and expected:
+                stage = _stage_package(old, durable.parent, expected)
+                try:
+                    if manifest(durable):
+                        raise RuntimeError("shared package changed while staging; preserve existing card package")
+                    # A partial publication fails closed on the next manifest
+                    # check. The card's original remains untouched until every
+                    # entry is present and verified; never overwrite a mismatch.
+                    for entry in stage.iterdir():
+                        entry.rename(durable / entry.name)
+                finally:
+                    shutil.rmtree(stage)
             if manifest(durable) != expected or manifest(old) != expected:
                 raise RuntimeError("shared package differs; preserve existing card package")
             quarantine_custody(old)
