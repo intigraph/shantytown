@@ -249,7 +249,8 @@ def _panes(a):
     EVERY LIVE AGENT AS DOWN, confidently and with exit 0. tmux.py has warned
     about exactly this since it was written; the CLI just never asked.
     """
-    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."))
+    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."),
+                root=getattr(a, 'root', None))
 
 
 def _registry(a):
@@ -13018,7 +13019,7 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
-            agents, panes, _inbox(a), log=_log))
+            agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
