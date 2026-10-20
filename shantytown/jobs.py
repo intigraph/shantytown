@@ -993,11 +993,12 @@ class Runner:
 
     def __init__(self, root, *, host=None, actions=None, escalate=None,
                  sources=None, now=time.time, run=_run, spawn=_spawn_detached,
-                 detach=True, log=None):
+                 detach=True, log=None, terminal_notice=None):
         self.root = Path(root)
         self.host = host
         self.actions = actions or {}
         self.escalate = escalate
+        self.terminal_notice = terminal_notice
         self.sources = sources or Sources(root)
         self.now = now
         self._run = run
@@ -1187,16 +1188,18 @@ class Runner:
         text = (f"[job {job.name}] gave up after {attempt} attempt(s): "
                 f"{outcome.detail[:160]} — st work jobs history {job.name}")
         told = False
-        if self.escalate is not None:
+        if self.terminal_notice is not None or self.escalate is not None:
             try:
-                told = bool(self.escalate(job, text))
+                told = bool(self.terminal_notice(job, fire, text)
+                            if self.terminal_notice is not None
+                            else self.escalate(job, text))
             except Exception:  # noqa: BLE001 — escalation is best-effort
                 told = False
         row.update(final=True, escalated=told)
         self._record(st, row)
         return [f"⚠ job {job.name}: GAVE UP after {attempt} attempt(s) "
                 f"({outcome.detail}) — "
-                + ("the administrator was told" if told else
+                + ("administrator notice was recorded" if told else
                    "COULD NOT tell the administrator; this line is the only notice")]
 
     def _record(self, st: dict, row: dict) -> None:
