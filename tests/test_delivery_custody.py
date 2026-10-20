@@ -71,7 +71,7 @@ def test_queue_is_unconfirmed_and_cannot_close_durable_pointer(monkeypatch, tmp_
 def test_no_persistence_means_no_typing(monkeypatch, tmp_path):
     panes, calls = local(monkeypatch, tmp_path, [READY])
     monkeypatch.setattr(delivery.Custody, 'save', lambda *_: (_ for _ in ()).throw(OSError('full')))
-    with pytest.raises(tmux.PaneSubmissionUnverified):
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='check delivery and custody before retrying'):
         panes.send('worker', BODY)
     assert keys(calls) == []
 
