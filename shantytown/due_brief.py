@@ -39,7 +39,7 @@ def _date(value):
 
 
 @declared_read_operation("decision-lists")
-def projected(tracker, owner, *, now=None):
+def projected(tracker, owner, *, now=None, seen_changes=frozenset()):
     """One scoped SDK projection; reuse the worker's existing plate read."""
     now = now or datetime.now(timezone.utc)
     try:
@@ -72,7 +72,8 @@ def projected(tracker, owner, *, now=None):
                 changed = _date(row.get("spec_changed_at"))
                 if changed is None:
                     raise ValueError("spec timestamp UNKNOWN")
-                if acknowledged != generation or row.get("spec_ack_actor") != row.get("assignee"):
+                if ((acknowledged != generation or row.get("spec_ack_actor") != row.get("assignee"))
+                        and (row["id"], generation) not in seen_changes):
                     changes.append({"id":row["id"],"previous":previous,"version":generation,
                                     "changed_at":changed.isoformat()})
             if row["status"] not in ("open","in_progress","blocked"):

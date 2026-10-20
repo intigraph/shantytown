@@ -34,9 +34,6 @@ def _consume(root, recipient, rows, *, now=None):
     answer = rows()
     selected = [row for row in answer.exact() if not row.get("assignee")
                 or row["assignee"].split("/")[-1] == recipient]
-    from types import SimpleNamespace
-    projected = due_brief.projected(SimpleNamespace(decision_rows=lambda _:Answer.complete_read(selected,how=answer.how)),recipient,now=now)
-    changes = projected.exact()["changes"]
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError("unsafe spec boundary receipt")
     if path.exists() and path.stat().st_size > 1048576:
@@ -52,6 +49,14 @@ def _consume(root, recipient, rows, *, now=None):
                 or type(decoded[1]) is not int or decoded[1] < 1):
             raise ValueError("spec boundary receipt generation invalid")
     seen = set(state["seen"])
+    # Exclude fenced generations before the projection's three-row cap. A
+    # capped prefix of already-seen rows must not starve later unacked work.
+    from types import SimpleNamespace
+    projected = due_brief.projected(
+        SimpleNamespace(decision_rows=lambda _:Answer.complete_read(selected,how=answer.how)),
+        recipient, now=now,
+        seen_changes=frozenset(tuple(json.loads(value)) for value in seen))
+    changes = projected.exact()["changes"]
     fresh = [row for row in changes if json.dumps([row["id"],row["version"]]) not in seen]
     if not fresh:
         return None

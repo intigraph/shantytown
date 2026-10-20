@@ -80,6 +80,29 @@ def test_recipient_boundary_once_per_generation_owner_scope_unknown(tmp_path):
     with pytest.raises(Exception): consume(tmp_path,"owner",read,now=NOW)
 
 
+@pytest.mark.parametrize("count", [4, 7])
+def test_recipient_boundary_drains_unseen_changes_before_cap(tmp_path, count):
+    rows = [{"id": f"work-{i}", "title": "work", "status": "deferred",
+             "priority": 1, "assignee": "owner", "spec_version": 2,
+             "spec_previous_version": 1, "spec_changed_at": f"2026-10-14T23:00:0{i}Z"}
+            for i in range(count)]
+    read = lambda: Answer.complete_read(rows, how="private unacked changes")
+    emitted = []
+    for start in range(0, count, 3):
+        notice = consume(tmp_path, "owner", read, now=NOW)
+        assert notice is not None and len(notice.encode()) <= 400
+        batch = [f"work-{i}" for i in range(count) if f"work-{i} SPEC" in notice]
+        assert batch == [f"work-{i}" for i in range(start, min(start + 3, count))]
+        emitted.extend(batch)
+    assert len(emitted) == len(set(emitted)) == count
+    assert consume(tmp_path, "owner", read, now=NOW) is None
+    # An ACK is not needed for progression; a newer generation of an already
+    # fenced item must still appear exactly once.
+    rows[0].update(spec_version=3, spec_previous_version=2)
+    assert "work-0 SPEC CHANGED v2 -> v3" in consume(tmp_path, "owner", read, now=NOW)
+    assert consume(tmp_path, "owner", read, now=NOW) is None
+
+
 def test_actual_rdf_spec_scope_keeps_deferred_out_of_dispatch(monkeypatch):
     from rdflib import Dataset, URIRef, Literal, RDF
     from shantytown import seeds_plate
