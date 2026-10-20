@@ -1,7 +1,7 @@
-Script started on 2026-10-20 10:49:14-04:00 [COMMAND="/srv/fleet/aegis/ian-xgt-20261020/py314/bin/python docs/demos/stopped-owner/record.py" <not executed on terminal>]
+Script started on 2026-10-20 10:58:13-04:00 [COMMAND="/srv/fleet/aegis/ian-xgt-20261020/py314/bin/python docs/demos/stopped-owner/record.py" <not executed on terminal>]
 Synthetic stop: two owned seeds, including one P0/overdue; fake panes only.
 Base: b431498a5663c0fe75761eeb809aff107809d55b
-Candidate source: e028fab703ebc7468fccd0a54c730d2ec7559434
+Candidate source: 54d46a537702287c33ec103432ed25b9e31e6640
 
 $ python probe.py <base source>
 {"stop_exit": 0, "intent_recorded": true, "owned_seed_positive_control": 2, "lead_escalations": 0, "both_seed_ids_in_notice": false, "ownership_unchanged": true, "reported_seed_ids": []}
@@ -12,4 +12,4 @@ $ python probe.py <candidate source>
 PASS: 0 -> 1 batched escalation; both seeds retained; no ownership change.
 Source fixture only: no installed or native Quipu/Brief acceptance claim.
 
-Script done on 2026-10-20 10:49:15-04:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-20 10:58:14-04:00 [COMMAND_EXIT_CODE="0"]
