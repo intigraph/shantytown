@@ -66,7 +66,7 @@ def graph(monkeypatch, *agents):
 
 def panes(monkeypatch, *live):
     class FakeTmux:
-        def __init__(self, socket=None):
+        def __init__(self, socket=None, *, root=None):
             self.socket = socket
         def exists(self, pane):
             return pane in live
