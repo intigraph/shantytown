@@ -409,7 +409,7 @@ def test_a_failing_job_backs_off_then_gives_up_and_tells_the_administrator(tmp_p
     clock.t += 120
     lines = r.sweep()
     assert len(calls) == 3
-    assert any("GAVE UP after 3" in ln and "administrator was told" in ln for ln in lines)
+    assert any("GAVE UP after 3" in ln and "administrator notice was recorded" in ln for ln in lines)
     assert len(told) == 1 and told[0].startswith("[job flaky] gave up after 3 attempt(s)")
     assert "pane is not there" in told[0]
 

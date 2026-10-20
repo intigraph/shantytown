@@ -189,9 +189,16 @@ class FilesEvents:
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
                 context_k: float | None = None,
-                detail: str | None = None) -> StopEvent:
+                detail: str | None = None, *, key: str | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
-        ev = StopEvent(id=self._next_id(), to=to, frm=frm, reason=reason, rose=rose,
+        # A stable producer key makes a retried terminal notification idempotent,
+        # including after its consumer has marked the first event delivered.
+        if key is not None:
+            import hashlib
+            event_id = "ev-key-" + hashlib.sha256(key.encode()).hexdigest()
+        else:
+            event_id = self._next_id()
+        ev = StopEvent(id=event_id, to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
                        item_status=item_status, context_k=context_k,
                        detail=detail)
@@ -200,12 +207,29 @@ class FilesEvents:
         # write left a 0-byte file that every pending() then choked on. rename
         # within one directory is atomic on POSIX, so a reader sees the old
         # world or the new file, never a torn one.
-        self._write_json(self.root / f"{ev.id}.json", {
+        payload = {
             "to": ev.to, "frm": ev.frm, "reason": ev.reason,
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
             "context_k": ev.context_k, "detail": ev.detail,
-        })
+        }
+        path = self.root / f"{ev.id}.json"
+        if key is None:
+            self._write_json(path, payload)
+        else:
+            # Publish complete bytes without replacing an existing event. A
+            # crash or concurrent producer may repeat this key after delivery.
+            import tempfile
+            fd, temporary = tempfile.mkstemp(dir=self.root, prefix=".event-")
+            try:
+                with os.fdopen(fd, "w") as stream:
+                    json.dump(payload, stream)
+                try:
+                    os.link(temporary, path)
+                except FileExistsError:
+                    return self._read(path)
+            finally:
+                os.unlink(temporary)
         return ev
 
     @staticmethod
