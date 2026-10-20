@@ -13087,8 +13087,13 @@ def _tend_once(a, quiet: bool = False) -> int:
         def _stopped_owner_deadlines():
             from .owned_work import OwnedWork
             service = OwnedWork(a.root)
+            # Read generations BEFORE legacy stop records. Relaunch clears that
+            # store before minting its generation, so an old scan cannot stop a
+            # newer launch. The empty token fences an absent local record too.
+            observed = service.snapshot()
             for name, record in _stops(a).all().exact().items():
-                service.stop(name, at=record.at, reason=record.reason)
+                service.stop(name, at=record.at, reason=record.reason,
+                             generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)

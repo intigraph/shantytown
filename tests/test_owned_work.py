@@ -482,3 +482,34 @@ def test_attempt_rotation_survives_wallclock_rollback(tmp_path, monkeypatch):
     assert service.pending(now=400) == ['first', 'second']
     service.attempted('first')
     assert service.pending(now=400) == ['second', 'first']
+
+
+@pytest.mark.parametrize('initial', ['missing', 'stopped', 'live'])
+@pytest.mark.parametrize('relaunch', [False, True])
+def test_production_deadline_driver_fences_legacy_scan(tmp_path, monkeypatch, initial, relaunch):
+    """Execute the actual nested driver, with a relaunch during legacy I/O."""
+    import ast
+    from pathlib import Path
+    from shantytown import cli
+    service = OwnedWork(tmp_path)
+    if initial != 'missing':
+        service.launch('worker', now=200)
+        if initial == 'stopped':
+            service.stop('worker', at=190)
+    # Earlier stop time is intentional: wall clock may have moved backwards.
+    def exact():
+        if relaunch:
+            service.launch('worker', now=300)
+        return {'worker': SimpleNamespace(at=190, reason='legacy stop')}
+    namespace = dict(__name__='shantytown.cli', __package__='shantytown',
+                     a=SimpleNamespace(root=tmp_path),
+                     _stops=lambda a: SimpleNamespace(all=lambda: SimpleNamespace(exact=exact)),
+                     _owned_work_tick=lambda a: [])
+    node = next(n for n in ast.walk(ast.parse(Path(cli.__file__).read_text()))
+                if isinstance(n, ast.FunctionDef) and n.name == '_stopped_owner_deadlines')
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])),
+                 'actual_deadline_driver', 'exec'), namespace)
+    namespace['_stopped_owner_deadlines']()
+    state = service.snapshot()['worker']
+    assert state['state'] == ('live' if relaunch else 'stopped')
+    assert state['observed_at'] == (300 if relaunch else 190)

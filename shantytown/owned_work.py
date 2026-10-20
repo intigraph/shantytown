@@ -78,7 +78,7 @@ class OwnedWork:
         agent, at = _agent(agent), _time(time.time() if at is None else at)
         with self.locked() as data:
             old = data.get(agent)
-            if generation is not None and (old is None or old["generation"] != generation):
+            if generation is not None and (old or {}).get("generation", "") != generation:
                 return  # A replay cannot end a different launch generation.
             if old and old["state"] in ("stopped", "ceiling"):
                 if wake and old.get("notice") == "empty":
