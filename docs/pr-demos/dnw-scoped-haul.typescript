@@ -1,0 +1,7 @@
+Script started on 2026-10-16 19:46:30-04:00 [COMMAND="python3 docs/pr-demos/dnw-scoped-haul.py f3d23bfdb2344d491f3fafb8da19f5e26ba922b6" <not executed on terminal>]
+BASE {"anchors": ["own-parked"], "global_reads": 1}
+HEAD {"anchors": ["own-parked"], "global_reads": 0, "future_parked_retained": true}
+NEGATIVE partial owner read: REFUSED; no global fallback
+LIMIT: mocked backend library demo; no native cost or fleet reduction claim
+
+Script done on 2026-10-16 19:46:30-04:00 [COMMAND_EXIT_CODE="0"]

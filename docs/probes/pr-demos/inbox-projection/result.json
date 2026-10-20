@@ -1,0 +1,39 @@
+{
+  "sdk": {
+    "queries": 14,
+    "ids": [
+      "test-a",
+      "test-b"
+    ],
+    "shapes": [
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "ASK",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "SELECT",
+      "ASK",
+      "SELECT",
+      "SELECT"
+    ]
+  },
+  "native": {
+    "queries": 4,
+    "ids": [
+      "test-a",
+      "test-b"
+    ],
+    "shapes": [
+      "ASK",
+      "ASK",
+      "SELECT",
+      "SELECT"
+    ]
+  },
+  "ratio": 0.2857142857142857
+}

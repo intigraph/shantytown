@@ -438,10 +438,11 @@ def git_worktree_remove(shared: Path, dest: Path) -> None:
 
 
 def git_worktree_holds_work(dest: Path, base: str) -> bool:
-    """True if the worktree holds work worth keeping: a dirty tree OR commits not
-    already in <base>. Either means removing it would DISCARD work, which is the
-    aegis-repg failure we exist to prevent — so gc keeps it. Uncertainty (a git
-    call fails) is treated as HOLDS WORK: never discard on a maybe.
+    """Keep dirty or unlanded work, including unpublished squash-equivalent tips.
+
+    Ancestry proves ordinary landings; a clean, remotely retained branch with a
+    tree reachable on the current base also proves a squash landing. Uncertainty
+    is HOLDS WORK: never discard on a maybe.
     """
     dirty = subprocess.run(
         ["git", "-C", str(dest), "status", "--porcelain"],
@@ -453,7 +454,50 @@ def git_worktree_holds_work(dest: Path, base: str) -> bool:
         capture_output=True, text=True)
     if ahead.returncode != 0:
         return True                      # cannot tell -> keep, never discard
-    return ahead.stdout.strip() not in ("", "0")
+    if ahead.stdout.strip() in ("", "0"):
+        return False
+    return not _squash_landed_tree(dest, base)
+
+
+def _squash_landed_tree(dest: Path, base: str) -> bool:
+    """Positive squash proof only; every unreadable or unpublished case keeps work.
+
+    Commit ancestry changes under a squash. Equal root trees preserve paths,
+    modes and binary contents. The branch must also still exist on origin at
+    this exact HEAD, and our base must match origin's current ref. This reads
+    the remote without fetching, changing refs, or deleting the branch.
+    """
+    if not base.startswith("origin/"):
+        return False
+    base_ref = "refs/heads/" + base.removeprefix("origin/")
+    try:
+        def read(*args):
+            code, value = _git(dest, *args, timeout=30)
+            if code or not value:
+                raise ValueError("unreadable squash proof")
+            return value
+
+        branch = read("symbolic-ref", "--quiet", "--short", "HEAD")
+        head = read("rev-parse", "--verify", "HEAD^{commit}")
+        base_commit = read("rev-parse", "--verify", base + "^{commit}")
+        tree = read("rev-parse", "--verify", "HEAD^{tree}")
+        if tree not in read("log", "--format=%T", base_commit).splitlines():
+            return False
+        branch_ref = "refs/heads/" + branch
+        remote = read("ls-remote", "--exit-code", "origin", branch_ref, base_ref)
+        refs = {}
+        for line in remote.splitlines():
+            oid, ref = line.split()
+            if ref in refs:
+                return False
+            refs[ref] = oid
+        if refs.get(branch_ref) != head or refs.get(base_ref) != base_commit:
+            return False
+        # A concurrent commit must not inherit the earlier branch proof.
+        return (read("rev-parse", "--verify", "HEAD^{commit}") == head
+                and _git(dest, "status", "--porcelain", timeout=30) == (0, ""))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
 
 
 def _shared_repo(repo: Path | str) -> Path:
@@ -539,6 +583,10 @@ GitRunner = Callable[..., "tuple[int, str]"]
 # clear. Both streams are still SHOWN verbatim; only stdout is READ.
 PushRunner = Callable[..., "tuple[int, str, str]"]
 
+# A push includes local validation hooks; a one-minute network budget cut off
+# healthy hooks before they could publish. Keep the existing bounded override.
+DEFAULT_PUSH_TIMEOUT = 600
+
 MAIN_CANDIDATES = ("main", "master")
 
 
@@ -549,7 +597,8 @@ def _git(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str]"
     return r.returncode, (r.stdout or "").strip()
 
 
-def _git_push(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str, str]":
+def _git_push(dest: Path | str, *args: str,
+              timeout: float = DEFAULT_PUSH_TIMEOUT) -> "tuple[int, str, str]":
     if not 1 <= timeout <= 3600:
         raise ValueError("push timeout must be between 1 and 3600 seconds")
     try:

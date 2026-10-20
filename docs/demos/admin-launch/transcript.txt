@@ -1,0 +1,4 @@
+base
+{"administrator_gaming_exit": 1, "administrator_unknown_peer_refused": true, "live_launches": 0, "worker_gaming_exit": 1, "worker_unknown_peer_refused": true}
+candidate
+{"administrator_gaming_exit": 0, "administrator_unknown_peer_refused": false, "live_launches": 0, "worker_gaming_exit": 1, "worker_unknown_peer_refused": true}

@@ -134,6 +134,54 @@ def test_drain_with_nothing_pending_is_silent(tmp_path, capsys):
     assert capsys.readouterr().out == ""          # no block -> idle
 
 
+def test_interrupted_enrichment_leaves_event_pending(tmp_path, capsys):
+    """A hook timeout must not consume a report before it can render it."""
+    events = FilesEvents(tmp_path / "events")
+    event = events.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+
+    def interrupted_plate(name):
+        raise KeyboardInterrupt("hook deadline during tracker read")
+
+    with pytest.raises(KeyboardInterrupt):
+        stop_event._drain(events, "maldoon", plate=interrupted_plate)
+
+    assert capsys.readouterr().out == ""
+    assert [e.id for e in events.pending("maldoon")] == [event.id]
+    stop_event._drain(events, "maldoon")
+    assert "ellie stopped" in json.loads(capsys.readouterr().out)["reason"]
+    assert events.pending("maldoon") == []
+
+
+def test_interrupted_workflow_leaves_event_pending(tmp_path, monkeypatch, capsys):
+    events = FilesEvents(tmp_path / "events")
+    event = events.persist(to="hammond", frm="ellie", reason=None, rose=False)
+
+    def interrupted_workflow(*args, **kwargs):
+        raise KeyboardInterrupt("hook deadline during workflow enrichment")
+
+    monkeypatch.setattr(stop_event, "_compose_workflow", interrupted_workflow)
+    with pytest.raises(KeyboardInterrupt):
+        stop_event._drain(events, "hammond", _reg(tmp_path), _Panes(set()))
+    assert capsys.readouterr().out == ""
+    assert [e.id for e in events.pending("hammond")] == [event.id]
+
+
+def test_event_claimed_during_enrichment_is_not_delivered_twice(tmp_path, capsys):
+    events = FilesEvents(tmp_path / "events")
+    events.persist(to="maldoon", frm="ellie", reason=None, rose=False)
+    events.persist(to="maldoon", frm="other", reason=None, rose=False)
+
+    def competing_reader(name):
+        events.drain("maldoon", lambda event: event.frm == "ellie")
+        return None
+
+    stop_event._drain(events, "maldoon", plate=competing_reader)
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert "other stopped" in reason
+    assert "ellie stopped" not in reason
+    assert events.pending("maldoon") == []
+
+
 def test_drain_reason_flags_a_rise(tmp_path, capsys):
     ev = FilesEvents(tmp_path / "events")
     ev.persist(to="hammond", frm="ellie", reason="lead-unreachable", rose=True)

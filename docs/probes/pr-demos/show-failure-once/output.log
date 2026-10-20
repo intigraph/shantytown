@@ -1,0 +1,33 @@
+Script started on 2026-10-15 19:37:33-04:00 [COMMAND="python3 docs/probes/pr-demos/show-failure-once/probe.py" <not executed on terminal>]
+{
+  "before": {
+    "sdk_calls": 2,
+    "commands": [
+      [
+        "show",
+        "test-exact",
+        "--json"
+      ],
+      [
+        "show",
+        "test-exact",
+        "--json"
+      ]
+    ],
+    "error": "br show test-exact failed: HTTP408 fixture unavailable"
+  },
+  "after": {
+    "sdk_calls": 1,
+    "commands": [
+      [
+        "show",
+        "test-exact",
+        "--json"
+      ]
+    ],
+    "error": "br show test-exact failed: HTTP408 fixture unavailable"
+  },
+  "scope": "injected SDK failure, real show handler; no HTTP; production per-command query cost unmeasured"
+}
+
+Script done on 2026-10-15 19:37:33-04:00 [COMMAND_EXIT_CODE="0"]
