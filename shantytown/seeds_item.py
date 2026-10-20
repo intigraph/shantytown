@@ -2,15 +2,11 @@
 
 The SDK show includes comments and reverse dependencies. WorkItem discards
 those, so hydrating them amplifies every known-ID display. Keep the fields
-and outgoing dependency classification in bounded exact-subject observations.
-Items without outgoing edges need one read. With edges, the final read includes
-both source and explicit targets; a changed source refuses rather than mixing
-observations. The original deadline covers both requests.
+and outgoing dependency classification in one bounded observation instead.
 """
 from __future__ import annotations
 
 import re
-import time
 from datetime import datetime, timedelta
 from urllib.parse import quote, unquote
 
@@ -155,22 +151,25 @@ def _target_id(subject):
     return identifier
 
 
-def _fields_query(graphs, subject, targets=()):
-    source_fields = " ".join(_iri(p) for p in FIELDS)
-    target_fields = " ".join(_iri(p) for p in TARGET_FIELDS)
-    target_subjects = " ".join(_iri(target) for target in targets)
+def _fields_query(graphs, subject):
+    source_fields = " || ".join(f"?p = {_iri(p)}" for p in FIELDS)
+    target_fields = " || ".join(f"?p = {_iri(p)}" for p in TARGET_FIELDS)
+    edges = " || ".join(f"?edge = {_iri(p)}" for p in EDGES)
     branches = []
     for graph in graphs:
         branches.append(
-            f"{{ GRAPH {_iri(graph)} {{ VALUES ?p {{ {source_fields} }} "
-            f"{_iri(subject)} ?p ?value . }} BIND({_iri(subject)} AS ?s) "
+            f"{{ GRAPH {_iri(graph)} {{ {_iri(subject)} ?p ?value . "
+            f"FILTER({source_fields}) }} BIND({_iri(subject)} AS ?s) "
             f"BIND({_iri(graph)} AS ?graph) }}"
         )
-        if targets:
+        for target_graph in graphs:
             branches.append(
-                f"{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {target_subjects} }} "
-                f"VALUES ?p {{ {target_fields} }} ?s ?p ?value . }} "
-                f"BIND({_iri(graph)} AS ?graph) }}"
+                f"{{ GRAPH {_iri(graph)} {{ {_iri(subject)} ?edge ?s . FILTER({edges}) }} "
+                # A FILTER inside the right GRAPH hides its bound-subject
+                # lookup. Hoist this predicate-only filter: it references no
+                # left-hand variable and preserves the graph and bag semantics.
+                f"GRAPH {_iri(target_graph)} {{ ?s ?p ?value . }} FILTER({target_fields}) "
+                f"BIND({_iri(target_graph)} AS ?graph) }}"
             )
     # Verbose JSON emits native integers and structured dates. Project lexical
     # strings and independent RDF kinds so a string
@@ -201,7 +200,6 @@ def read_item(tracker, identifier):
     subject = SEEDS + "item/" + quote(identifier, safe="")
     # /query's default flat formatter compacts IRI values to CURIEs. Machine
     # identity/predicate readers require the expanded wire representation.
-    started = time.monotonic()
     rows = _query(proof, _fields_query(graphs, subject), tracker.timeout,
                   verbose=True)["rows"]
     if len(rows) >= CAP:
@@ -216,20 +214,6 @@ def read_item(tracker, identifier):
     priority = _one(facts, SEEDS + "ontology/priority")
     if priority not in ("0", "1", "2", "3", "4"):
         raise ValueError("item priority unreadable")
-    targets = sorted({target for edge in EDGES for target in facts.get(edge, set())})
-    for target in targets:
-        _target_id(target)
-    if targets:
-        remaining = tracker.timeout - (time.monotonic() - started)
-        if remaining <= 0:
-            raise TimeoutError("item field deadline reached before dependencies")
-        final_rows = _query(proof, _fields_query(graphs, subject, targets), remaining,
-                            verbose=True)["rows"]
-        if len(final_rows) >= CAP:
-            raise ValueError("item field row ceiling reached")
-        if _subject_facts(final_rows, graphs, subject) != facts:
-            raise ValueError("item changed during dependency read")
-        rows = final_rows
     dependencies = []
     for edge in EDGES:
         for target in sorted(facts.get(edge, set())):
