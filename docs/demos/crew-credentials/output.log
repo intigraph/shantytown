@@ -1,0 +1,9 @@
+Script started on 2026-10-17 08:05:17-04:00 [COMMAND="python3 docs/demos/crew-credentials/demo.py" <not executed on terminal>]
+Same helper input, base then candidate:
+{"revision": "base", "native_helper": false}
+{"revision": "candidate", "native_helper": true}
+{"candidate": "materialized", "mode": "0o600", "persistent_named_bearer": false, "named_header_selected": true}
+{"candidate": "file deleted", "next_helper_shared_fallback": true}
+Scope: synthetic fetch and runtime directory; no installed-client or revocation claim.
+
+Script done on 2026-10-17 08:05:17-04:00 [COMMAND_EXIT_CODE="0"]

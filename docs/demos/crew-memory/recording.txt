@@ -1,0 +1,7 @@
+Script started on 2026-10-18 14:03:56-04:00 [COMMAND="python3 docs/demos/crew-memory/run.py" <not executed on terminal>]
+Synthetic source-checkout fixture: base=c666ed268a277d57b0db63cf12b789d42cbe984d; candidate=f48c22eb60bf43f53ab906d0aa432bd5684e6db2
+{"anchor_present": true, "arm": "BEFORE", "event": "SessionStart", "hook_exit": 0, "latest_directive_present": false, "memory_present": false, "pane_started_or_cycled": false}
+{"anchor_present": true, "arm": "AFTER", "event": "SessionStart", "hook_exit": 0, "latest_directive_present": true, "memory_present": true, "pane_started_or_cycled": false}
+PASS: same input, memory absent -> present; original index unchanged; no pane launch.
+
+Script done on 2026-10-18 14:03:57-04:00 [COMMAND_EXIT_CODE="0"]

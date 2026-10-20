@@ -570,3 +570,10 @@ min_sync_version = 1
 # keep_at = 0.8
 # cycle_below = 0.3
 # expected_turns = 10
+
+# Optional named Claude administrator Stop cadence. OFF preserves current hooks.
+# Stage advise before enforce; ongoing turns and external prompts are NOT capped.
+# Seven-day >=80%: 5min; >=90%: 15min. Urgent Stop events bypass and are counted.
+[admin_wake_budget]
+mode = "off"
+agents = []

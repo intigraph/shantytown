@@ -1,0 +1,7 @@
+Script started on 2026-10-16 22:19:13-04:00 [COMMAND="python3 docs/probes/command-attribution/demo.py" <not executed on terminal>]
+{"before": {"operation": "query", "source": "shantytown"}}
+{"after": {"operation": "query", "source": "st-anchor"}}
+{"argument_refusal_control": {"operation": "query", "source": "st-other"}}
+PASS: loopback HTTP only; outer command retained; context restored
+
+Script done on 2026-10-16 22:19:13-04:00 [COMMAND_EXIT_CODE="0"]

@@ -3,7 +3,9 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import os
 import re
+import socket
 
+_command = ContextVar("query_command", default=None)
 _caller = ContextVar("query_caller", default=None)
 _source = ContextVar("query_source", default="shantytown")
 _operation = ContextVar("query_operation", default="query")
@@ -25,6 +27,17 @@ def _key(value):
     return value.lower() if value and len(value) <= 64 and re.fullmatch(r"[A-Za-z0-9._-]+", value) else None
 
 
+def _host():
+    # A malformed explicit declaration remains UNKNOWN rather than silently
+    # becoming a different host. This is attribution, never authentication.
+    if "QUIPU_HOST" in os.environ:
+        return _key(os.environ["QUIPU_HOST"])
+    try:
+        return _key(socket.gethostname())
+    except OSError:
+        return None
+
+
 def read_context():
     """Resolve known declarations without guessing identity from an owner/actor."""
     env = os.environ
@@ -42,7 +55,8 @@ def read_context():
     task = _key(env.get("QUIPU_TASK") if env.get("QUIPU_TASK") else env.get("SEEDS_TASK"))
     return {k: v for k, v in {
         "QUIPU_AGENT": caller, "QUIPU_SESSION": session, "QUIPU_TASK": task,
-        "QUIPU_SOURCE": _key(env.get("QUIPU_SOURCE")) or _source.get(),
+        "QUIPU_HOST": _host(),
+        "QUIPU_SOURCE": _command.get() or _key(env.get("QUIPU_SOURCE")) or _source.get(),
         "QUIPU_OPERATION": _key(env.get("QUIPU_OPERATION")) or _operation.get(),
     }.items() if v is not None}
 
@@ -58,7 +72,10 @@ def sdk_subprocess_options(*, read_operation=None):
         with declared_query_identity(current_query_identity(), operation=read_operation):
             return {"env": dict(os.environ, **read_context())}
     name = current_query_identity() or (_source.get() if _source.get() == "st-tend" else None)
-    return {"env": dict(os.environ, QUIPU_AGENT=name)} if name else {}
+    env = dict(os.environ, QUIPU_AGENT=name) if name else None
+    if _command.get():
+        env = dict(env or os.environ, QUIPU_SOURCE=_command.get())
+    return {"env": env} if env is not None else {}
 
 
 @contextmanager
@@ -82,3 +99,20 @@ def declared_read_operation(operation):
         yield
     finally:
         _operation.reset(token)
+
+
+@contextmanager
+def declared_command(command):
+    """Finite command label only: never argv, subjects, paths, or message text.
+
+    The outer entrypoint owns attribution through nested stop hooks; source is
+    diagnostic, not an actor or authority. Context restoration includes errors.
+    """
+    known = {"anchor", "plate", "inbox", "stop_policy", "stop_event",
+             "haul", "tend", "work"}
+    label = command if command in known else "other"
+    token = _command.set(_command.get() or "st-" + label)
+    try:
+        yield
+    finally:
+        _command.reset(token)

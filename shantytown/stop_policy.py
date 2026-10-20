@@ -12,6 +12,7 @@ must be able to answer "why did my coordinator not stop?" from it alone.
 
   0  route + persist MY OWN stop event upward      (side effect, never blocks)
   1  a pending event is URGENT (governance / rose)  -> BLOCK: deliver
+  1a explicit admin routine-wake budget (opt-in) -> ALLOW: batch ordinary wakes
   2  RULE ZERO: free feedable AND dispatchable      -> BLOCK: dispatch
   3  hibernate declines                             -> ALLOW, loudly
   4  a DELIVERABLE pending event                    -> BLOCK: deliver
@@ -53,6 +54,8 @@ plumbing, and the command surface is pinned.
 """
 from __future__ import annotations
 
+from .query_identity import declared_command
+
 import json
 import os
 import sys
@@ -77,6 +80,7 @@ BY_RULE_ZERO = "rule-zero"
 BY_HIBERNATE = "hibernating"
 BY_EVENTS = "events"
 BY_THROTTLED = "governor-throttled"
+BY_ADMIN_BUDGET = "admin-wake-budget"
 BY_NOTHING = "nothing-to-do"
 BY_ERROR = "fail-open"
 
@@ -116,6 +120,9 @@ class Inputs:
     # pane backend: refusing to act on a check we did not run would be worse than
     # the bug. See `deliverable`.
     busy_senders: set = field(default_factory=set)
+    admin_wake_mode: str = "off"
+    admin_usage_pct: float | None = None
+    admin_wake_elapsed: float | None = None
 
     @property
     def deliverable(self) -> list:
@@ -151,6 +158,16 @@ def decide(inp: Inputs) -> Verdict:
         kinds = ", ".join(sorted({e.reason or "escalation" for e in inp.urgent}))
         return Verdict(True, f"{len(inp.urgent)} event(s) that must not wait "
                              f"({kinds}).", BY_URGENT)
+
+    # Explicit admin cadence outranks ordinary dispatch, unlike idle hibernate.
+    # Urgent events above always bypass it. ALLOW consumes no pending events.
+    from .admin_wake_budget import remaining
+    wait = remaining(inp.admin_usage_pct, inp.admin_wake_elapsed)
+    if inp.role == "administrator" and inp.admin_wake_mode == "enforce" and wait:
+        return Verdict(False, f"routine admin wake deferred for {wait:.0f}s; "
+                       f"{len(inp.pending)} event(s) remain PENDING. "
+                       "Urgent/operator work bypasses this cadence; ongoing "
+                       "turn spend is not bounded.", BY_ADMIN_BUDGET)
 
     # RULE ZERO'S TWO PRECONDITIONS (GitHub #29, #23). Both make the gate
     # satisfiable by RESTRAINT, which it was not: it could only ever demand more
@@ -324,6 +341,26 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
     cfg, err = config.load_or_default(root)
     if err:
         print(f"stop_policy: {err} — running with hibernate OFF", file=sys.stderr)
+    policy = cfg.admin_wake_budget
+    if policy.mode != "off" and me in policy.agents:
+        inp.admin_wake_mode = policy.mode
+        try:
+            card = reg.get(me)
+            # Read the SAME lane/account governor as dispatch; no inferred
+            # Claude membership and no cross-provider quota borrowing.
+            from .harness import for_card
+            if for_card(card, root=root).name == "claude":
+                verdict = feed_mod.haul_governor_verdict(root, card)
+                if verdict is not None and not verdict.signal_lost:
+                    inp.admin_usage_pct = verdict.by_window.get("seven_day")
+                last = (wake_log or WakeLog(root)).last(me)
+                if last is not None:
+                    inp.admin_wake_elapsed = (now if now is not None else time.time()) - last
+            else:
+                inp.admin_wake_mode = "off"
+        except Exception as exc:  # fail open, explicitly UNKNOWN
+            print(f"admin_wake_budget: evidence UNKNOWN ({type(exc).__name__})",
+                  file=sys.stderr)
     inp.fleet = cfg.fleet
     if cfg.fleet.max_load_per_core:
         inp.load_per_core = _load_per_core()
@@ -361,6 +398,9 @@ def run(root, me: str, **kw) -> int:
             return 0
         inp = gather(root, me, **kw)
         verdict = decide(inp)
+        if inp.admin_wake_mode != "off":
+            from .admin_wake_budget import record
+            record(root, inp, verdict, now=kw.get("now"))
     except Exception as e:  # noqa: BLE001 — FAIL OPEN, see the module docstring
         print(f"stop_policy: could not decide ({e!r}) — ALLOWING the stop",
               file=sys.stderr)
@@ -443,6 +483,7 @@ def _drain_payload(root, me: str, kw) -> str:
         return ""
 
 
+@declared_command("stop_policy")
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     me_env = os.environ.get("SHANTY_AGENT")

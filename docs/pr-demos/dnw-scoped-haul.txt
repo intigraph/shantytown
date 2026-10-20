@@ -1,0 +1,4 @@
+BASE {"anchors": ["own-parked"], "global_reads": 1}
+HEAD {"anchors": ["own-parked"], "global_reads": 0, "future_parked_retained": true}
+NEGATIVE partial owner read: REFUSED; no global fallback
+LIMIT: mocked backend library demo; no native cost or fleet reduction claim
