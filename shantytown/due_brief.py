@@ -49,7 +49,7 @@ def projected(tracker, owner, *, now=None):
         rows=answer.exact()
         if len(rows)>=10000: raise ValueError("decision candidate cap reached")
         items=[]; seen=set()
-        from .protocols import rank_order
+        from .protocols import rank_order, time_order
         from .inbox import is_message
         for row in rows:
             if row.get("status") not in ("open","in_progress","blocked"):
@@ -63,9 +63,12 @@ def projected(tracker, owner, *, now=None):
             if type(row.get("priority")) is not int or row["priority"] not in range(5):
                 raise ValueError("invalid decision priority")
             due=_date(row.get("due_at"))
-            items.append({"id":row["id"],"title":row["title"],"status":row["status"],"priority":row["priority"],"due_at":due.isoformat() if due else None, "rank":row.get("rank"), "created_at":row.get("created_at")})
+            raw_due=row.get("due_at")
+            if isinstance(raw_due, dict):
+                raw_due=raw_due["value"]
+            items.append({"id":row["id"],"title":row["title"],"status":row["status"],"priority":row["priority"],"due_at":raw_due if due else None, "rank":row.get("rank"), "created_at":row.get("created_at")})
         packet={"top":sorted(items,key=lambda row:(row["priority"],*rank_order(row.get("rank"),row.get("due_at"),row.get("created_at")),row["id"]))[:3],
-                "coming":sorted((row for row in items if row["due_at"] and _date(row["due_at"])<=now+timedelta(days=3)),key=lambda row:(_date(row["due_at"]),row["priority"],row["id"]))[:3],
+                "coming":sorted((row for row in items if row["due_at"] and time_order(row["due_at"])<=time_order((now+timedelta(days=3)).isoformat())),key=lambda row:(time_order(row["due_at"]),row["priority"],row["id"]))[:3],
                 "undated":sum(row["due_at"] is None for row in items)}
         return Answer.complete_read(packet,how=answer.how+"; decision lists reuse scalar fields")
     except Exception as error:

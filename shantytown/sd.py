@@ -436,7 +436,7 @@ class SdTracker(BrTracker):
             if date.tzinfo is None:
                 raise StoreUnproven("tend creation date lacks timezone")
             from .protocols import rank_order
-            return row["priority"], *rank_order(row.get("rank"), row.get("due_at"), date.isoformat()), row["id"]
+            return row["priority"], *rank_order(row.get("rank"), row.get("due_at"), value), row["id"]
         return sorted(rows, key=key)
 
     def tend_rows(self, owners):

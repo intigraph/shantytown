@@ -643,12 +643,42 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     )
 
 
+def time_order(value) -> tuple:
+    """Compare aware instants exactly without changing source spelling.
+
+    datetime truncates fractional seconds past microseconds. Keep the supported
+    nine digits separately, and subtract offsets using integer seconds only.
+    Missing optional dates retain the legacy oldest-first fallback; a supplied
+    date that cannot establish an instant is uncertainty, not an empty key.
+    """
+    import re
+    from datetime import datetime
+    if value is None:
+        return (0, 0, 0)
+    matched = re.fullmatch(
+        r"(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)",
+        value if isinstance(value, str) else "")
+    if not matched:
+        raise ValueError("time ordering evidence malformed or lacks timezone")
+    day, hour, minute, second, fraction, zone = matched.groups()
+    # Validate calendar and clock independently of fractional precision.
+    date = datetime.fromisoformat(f"{day}T{hour}:{minute}:{second}")
+    offset = 0
+    if zone != "Z":
+        hours, minutes = int(zone[1:3]), int(zone[4:])
+        if hours > 14 or minutes > 59 or (hours == 14 and minutes):
+            raise ValueError("time ordering offset out of bounds")
+        offset = (hours * 3600 + minutes * 60) * (1 if zone[0] == "+" else -1)
+    seconds = date.toordinal() * 86400 + date.hour * 3600 + date.minute * 60 + date.second - offset
+    return (1, seconds, int((fraction or "").ljust(9, "0")))
+
+
 def rank_order(rank=None, due_at=None, created_at=None) -> tuple:
     """Exact Seeds decimal order; unranked retains oldest-first fallback."""
     from decimal import Decimal, InvalidOperation
     import re
     if rank is None:
-        return (True, Decimal(0), True, "", created_at or "")
+        return (True, Decimal(0), True, time_order(None), time_order(created_at))
     if not isinstance(rank, str) or not re.fullmatch(r"-?[0-9]+(?:\.[0-9]{1,9})?", rank):
         raise ValueError("rank ordering evidence malformed")
     try:
@@ -657,4 +687,4 @@ def rank_order(rank=None, due_at=None, created_at=None) -> tuple:
         raise ValueError("rank ordering evidence malformed") from error
     if not number.is_finite() or abs(number) > Decimal("9000000000000000000"):
         raise ValueError("rank ordering evidence out of bounds")
-    return (False, number, due_at is None, due_at or "", created_at or "")
+    return (False, number, due_at is None, time_order(due_at), time_order(created_at))
