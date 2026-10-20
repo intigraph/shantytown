@@ -41,6 +41,10 @@ ATTRIBUTED_UPSTREAM = "attributed-upstream"  # the composer signed it already
 BARE = "bare-by-design"                      # not prose; signing it would break it
 
 INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
+    ("admin_inbox.py", "sweep"): (
+        ATTRIBUTED_UPSTREAM,
+        "Batch forwards exact persisted bodies signed by _cmd_inbox, hash-bound "
+        "at enqueue; test_admin_inbox pins sender preservation through CLI+drain."),
     ("cli.py", "_kickoff_after_cycle"): (
         ATTRIBUTED_HERE,
         "anchor/resume kickoff after a completed cycle; sender is st agent cycle."),

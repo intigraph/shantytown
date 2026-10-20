@@ -2780,3 +2780,31 @@ transaction and continue to block relaunch; they are not routine quota holds.
 Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
 holds remain respected during automatic recovery. Nothing here starts a second
 administrator, changes an account cap, or clears an operator hold.
+
+### Explicit routine progress for scoped administrator budgets
+
+`st inbox -d --routine <agent> <pointer>` declares batchable progress. Use it only
+when no immediate decision, blocked-work response, ownership handoff, or active
+window coordination is needed. Operator messages, urgent controls, governance
+notifications, gate/decision requests and handoffs use the unchanged immediate
+path. These are declared exemptions, not authenticated identity or urgency inferred
+from body text. Omitting `--routine` always preserves existing delivery behavior.
+
+Only an explicitly named administrator using Claude, with ENFORCE enabled and a
+fresh quota/cadence observation, can defer the routine live nudge. The durable
+message is persisted first and stays unread. The existing `fleet tend` pass
+submits one batch after the original cadence deadline (at most 900 seconds) plus
+its next actual scheduled tick. OFF, unknown evidence or clock reversal releases
+early. No new daemon/timer is installed, no off-host relay is delayed, and a dry
+run neither persists nor sends. This does not bound ongoing-turn or account spend.
+
+A live attempt is durably claimed before submission. Ambiguous submission,
+stranded input or failed acknowledgement keeps the inbox pointer and does not
+retry the live send. Read it through `st inbox`; sender success means persistence,
+not live arrival. A stopped/overloaded tend schedule, down recipient, malformed
+queue or incomplete unread coverage prevents a wall-clock delivery guarantee;
+those cases remain visible/UNKNOWN and require the normal inbox read path. The
+feature is source-only until reviewed adoption and a separately authorized scoped
+trial proves the actual scheduled path and declared-exemption coverage. Rollback:
+set the scoped policy OFF, drain/read retained pointers, then revert the source;
+do not remove unread messages or revert while routine entries remain pending.
