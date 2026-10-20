@@ -45,6 +45,12 @@ This source capability does not load the profile into a server, register a
 signing key, fire a schedule or retire an existing cron job. Calls without
 `--graph` retain the existing TOML behavior below.
 
+The source-only [seed-before-assignment library](scheduled-seeds.md) supplies
+keyed creation/readback and a durable no-repeat boundary for an admitted agent
+firing. It does not select an execution backend, enable a schedule, change the
+catalogue reader or remove the existing tend sweep. Runtime integration and
+calendar semantics remain separate.
+
 ## Why it is shaped like this
 
 Before this, every recurring job was one of two things. Some were sweeps
