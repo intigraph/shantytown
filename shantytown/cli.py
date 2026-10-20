@@ -6853,20 +6853,9 @@ def _unassigned_open(a):
     three P1s — while `st crew` reported free/busy and the fleet twice read as
     "nothing dispatchable".
 
-    IT CANNOT EXCLUDE `decision-needed`, AND SAYS SO RATHER THAN PRETENDING.
-    A decision-gated bead must not be handed to a worker as implementer work
-    (aegis-2og7d), so unassigned is its CORRECT state and it is not unrouted work.
-    Filtering it out is impossible here: `WorkItem` carries no labels and the
-    beads adapter never parses them, because the Tracker protocol is three
-    functions and deliberately does not grow (aegis-gqr8). Measured on the live
-    store: 113 unassigned, of which 4 are decision-needed — a 3.5% overcount,
-    named in the output so the reader can discount it knowingly instead of
-    discovering it and discounting the whole number.
-
-    (The first version of this function DID filter on `it.labels`. It was tested
-    against a fixture that had been given a `labels` attribute by the test itself,
-    so five green tests proved the filter worked on data that does not exist. The
-    live cross-check against `bd` is what caught it — 113 here against 109 there.)
+    WorkItem carries backend labels. Exclude decision-needed records from
+    routable work in both this fallback and the native aggregate; those records
+    are correctly unassigned while their decision is pending.
     """
     try:
         trk = _tracker(a, "beads")
@@ -6883,6 +6872,8 @@ def _unassigned_open(a):
         if (getattr(it, "status", "") or "").lower() != "open":
             continue
         if (getattr(it, "assignee", None) or "").strip():
+            continue
+        if "decision-needed" in it.labels:
             continue
         n += 1
         pr = getattr(it, "priority", None)
@@ -7331,8 +7322,6 @@ def _cmd_crew(a) -> int:
         print(f"  {n_un} open item(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
               f"`br list --status open` and route by domain.")
-        print(f"    (includes any `decision-needed` items, which are correctly "
-              f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
     # nothing is allowed to reach". Those are opposite instructions to a

@@ -681,7 +681,9 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
             branches.append(
                 f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/status> "open" ; '
                 f"a <{SCHEMA}Action> . FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
-                'FILTER(STR(?owner) != "") } ' + priority + "} }"
+                'FILTER(STR(?owner) != "") } '
+                f'FILTER NOT EXISTS {{ ?s <{SCHEMA}keywords> "decision-needed" }} '
+                + priority + "} }"
             )
         query = (
             "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { "
