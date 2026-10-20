@@ -191,3 +191,19 @@ def test_unreadable_registry_refuses_without_hold_write(tmp_path, monkeypatch):
     assert cli.main(['--root', str(root), '--backend', 'files', 'work', 'hold-feed',
                      'ellie', '--status']) == cli.REFUSED
     assert not (root / 'feed-holds').exists()
+
+
+def test_permission_denied_parent_keeps_existing_hold(tmp_path):
+    from shantytown import feed_hold
+    assert feed_hold.reason(tmp_path, "worker") == ""
+    feed_hold.hold(tmp_path, "worker", "operator", "2099-01-01", "private hold")
+    assert feed_hold.reason(tmp_path, "worker")
+    parent = tmp_path / "feed-holds"
+    parent.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            (parent / "worker.json").lstat()
+        assert "record unreadable" in feed_hold.reason(tmp_path, "worker")
+    finally:
+        parent.chmod(0o700)
+    assert "private hold" in feed_hold.reason(tmp_path, "worker")

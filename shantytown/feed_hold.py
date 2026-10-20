@@ -7,6 +7,7 @@ import fcntl
 import json
 from pathlib import Path
 import re
+import stat
 import time
 
 from .files import write_json_atomic
@@ -92,10 +93,15 @@ def reason(root, agent, *, now=None, closed=None):
         return ""
     path = _path(root, agent)
     try:
-        if not path.exists() and not path.is_symlink():
+        # Boolean Path predicates suppress access errors on supported Python
+        # versions. Only a throwing absence check may release a missing hold.
+        try:
+            path.lstat()
+        except FileNotFoundError:
             return ""
         with _lock(path):
-            if path.is_symlink() or path.stat().st_size > 32768:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or info.st_size > 32768:
                 raise ValueError("invalid feed hold record")
             record = json.loads(path.read_text())
         if (record.get("schema") != "st.feed-hold/1" or record.get("agent") != agent
