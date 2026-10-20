@@ -45,6 +45,12 @@ This source capability does not load the profile into a server, register a
 signing key, fire a schedule or retire an existing cron job. Calls without
 `--graph` retain the existing TOML behavior below.
 
+The opt-in [fixed inbox child](scheduled-inbox.md) supplies the result descriptor
+expected by Chaski's signed scheduled receiver. It reuses normal durable inbox
+delivery; it does not change this catalogue reader, enable a schedule or remove
+the tend sweep. Calendar recurrence and production pilot acceptance remain
+separate gates.
+
 ## Why it is shaped like this
 
 Before this, every recurring job was one of two things. Some were sweeps
