@@ -597,6 +597,28 @@ class TrackerInbox:
             and it.status != "closed"
         ]
 
+    def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
+        """Read named receipts without enumerating the recipient's queue.
+
+        Omitted IDs remain visibly missing to the caller's whole-selection
+        preflight. Transport failures propagate; they never trigger a listing.
+        This is a read, and mark_read still checks each receipt before closing.
+        """
+        messages = []
+        for item_id in dict.fromkeys(ids):
+            try:
+                item = self._tracker.get(item_id)
+            except LookupError:
+                continue
+            if item.status not in ("open", "hooked", "in_progress", "blocked",
+                                   "deferred", "closed", "tombstone"):
+                raise ValueError("selected receipt status unreadable")
+            if (item.id == item_id and is_message(item.title)
+                    and item.assignee in (me, me.split("/")[-1])
+                    and item.status not in ("closed", "tombstone")):
+                messages.append(Message(id=item.id, to=me, body=_body_of(item.title)))
+        return messages
+
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked, failed = [], []
         if ids is None:

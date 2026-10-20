@@ -1,0 +1,25 @@
+Script started on 2026-10-20 16:41:15-04:00 [COMMAND="stty -onlcr; python3 docs/demos/exact-inbox-selection/reproduce.py" <not executed on terminal>]
+Base function: d8902bcdf3b6c5e83de01603bc84cc25873b5462
+  acknowledging 1 message(s) for reader; closes are independent, not atomic.
+
+  demo-receipt
+    private example
+  [1/1] acknowledging demo-receipt ...
+  [1/1] demo-receipt: marked read
+
+  marked 1 message(s) read for reader.
+before {"close": 1, "enumerate": 1, "get": 1}
+  acknowledging 1 message(s) for reader; closes are independent, not atomic.
+
+  demo-receipt
+    private example
+  [1/1] acknowledging demo-receipt ...
+  [1/1] demo-receipt: marked read
+
+  marked 1 message(s) read for reader.
+  other messages not enumerated.
+after {"close": 1, "enumerate": 0, "get": 2}
+cli.py SHA256: e2da2c0f981ed661a13d0f286f22eb9056c8b10e879aad6b03f498ccb929cc60
+inbox.py SHA256: 96b1931aac56b64ffeffaae96cb601794a42737c58877d35443b33deb0dff60c
+
+Script done on 2026-10-20 16:41:15-04:00 [COMMAND_EXIT_CODE="0"]
