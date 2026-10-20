@@ -330,6 +330,20 @@ def _backend(a, default="files") -> str:
 
 
 def _tracker(a, default="files"):
+    from .plate_capacity import guard_producers
+    tracker = _raw_tracker(a, default)
+    def notify(owner, item_id):
+        lead = _registry(a).get(owner).reports_to
+        if not lead:
+            raise ValueError('owner has no lead')
+        # Use the same backend and a message marker: no implementation slot and
+        # no recursive capacity routing. Never recreate the original work item.
+        tracker.create(f'inbox: capacity: {item_id} retained in pool; {owner} has 10 real work items',
+                       assignee=lead, labels='inbox')
+    return guard_producers(tracker, notify)
+
+
+def _raw_tracker(a, default="files"):
     """The tracker for this invocation, selected by --backend (#3).
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
@@ -7036,7 +7050,8 @@ def _cmd_crew(a) -> int:
                 tree_role=ag.role, retired=bool(ag.retired),
                 role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
-                live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
+                live=live, runtime_harness=actual,
+                harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
                 tree=_tree_staleness_cell(a, ag, sweep=False)[0]))
         print(json.dumps(dict(version=fleet_mod.VERSION,
