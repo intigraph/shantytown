@@ -21,6 +21,11 @@ persist-first delivery, registry checks, pane submission, journal and host
 routing. It never reads job TOML, scans work items, creates a timer or calls an
 alternative message transport. Dispatch/go remains a separate future child;
 this inbox pilot does not claim governor/triage execution of a work item.
+An agent-job integration must first create one seed for the deterministic firing
+identity, then assign that same seed through normal admission. This child only
+delivers a pinned message; it neither creates nor assigns seeds and cannot serve
+as that complete agent-job integration. Unknown creation must be reconciled
+before any second create or assignment.
 
 Normal ST exit zero yields `succeeded` and exit zero in the bounded JSON result.
 That means the pointer persisted: the recipient can be down or live submission
