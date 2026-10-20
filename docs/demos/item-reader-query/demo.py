@@ -42,6 +42,8 @@ def main():
         baseline_file.write_text(source)
         baseline = load("shantytown._demo_baseline_item", baseline_file)
         run = controls.native_fixture(root / "fixture", binary, unrelated=250)
+        print(run("--version"), end="")
+        print("Input: item/plain, no blockers, 250 unrelated items per graph.")
         graphs = (controls.GRAPH, controls.GRAPH + "#seeds-ephemeral")
         subject = seeds_item.SEEDS + "item/plain"
         seen = []
@@ -52,8 +54,11 @@ def main():
             started = time.monotonic()
             output = run("read", query)
             elapsed = time.monotonic() - started
-            print(output, end="")
             rows = controls.native_rows(output)
+            for row in rows:
+                predicate = row["p"].rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+                kind = row["kind"].rsplit("#", 1)[-1]
+                print(f"  {predicate} = {json.dumps(row['o'])} [{kind}]")
             assert len(rows) == 5, "populated item control failed"
             seen.append(collections.Counter(json.dumps(row, sort_keys=True) for row in rows))
             print(f"Elapsed: {elapsed * 1000:.3f} ms")
