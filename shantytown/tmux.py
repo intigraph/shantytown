@@ -551,7 +551,7 @@ class Tmux:
             raise PaneSubmissionUnverified(
                 f"pane {pane} entered a tmux mode (copy-mode) during the send: "
                 f"{sent} chunk(s) were typed before it, nothing after and no "
-                f"Enter. NOT SUBMITTED; do not blindly resend.")
+                f"Enter. NOT SUBMITTED; check delivery before retrying.")
         raise PaneInMode(
             f"pane {pane} is in a tmux mode (copy-mode scrollback): NOT DELIVERED, "
             f"nothing typed. Its mode was left alone; retry once it exits, or use "
@@ -576,7 +576,7 @@ class Tmux:
                 custody.finish('delivered')
         except OSError as exc:
             raise PaneSubmissionUnverified(
-                'UNVERIFIED: local delivery custody unavailable; no retry authorized') from exc
+                'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
 
     def _send(self, pane: str, text: str, *, allow_shell: bool = False,
               custody=None) -> None:
@@ -771,7 +771,7 @@ class Tmux:
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
             f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
-            "body was not resent, do not blindly resend")
+            "body was not resent, check delivery before retrying")
 
     def control(self, pane: str, key: str) -> None:
         """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.
