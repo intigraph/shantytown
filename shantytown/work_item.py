@@ -70,7 +70,7 @@ def command(args, tracker):
             _comments(tracker, item.id, body)
             if not any(_comment_body(row) == body
                        for row in _comments(tracker, item.id)):
-                raise RuntimeError("comment readback unproven; write may have landed, do not resend")
+                raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
     fields = {}
     replace_text = getattr(args, "replace_text", False)
@@ -124,6 +124,6 @@ def command(args, tracker):
             tracker.update(item.id, **options, **fields)
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
-                raise RuntimeError("update readback unproven; write may have landed, do not resend")
+                raise RuntimeError("update readback unproven; write may have landed; verify exact readback before retrying")
     return {"id": item.id, "fields": fields,
             "result": "planned" if args.dry_run else "verified"}

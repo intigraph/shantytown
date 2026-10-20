@@ -2535,7 +2535,7 @@ def _run_command(a) -> int:
             return 2
         except Exception as exc:
             print(f"work item operation unproven: {type(exc).__name__}; "
-                  "do not retry writes without readback", file=sys.stderr)
+                  "check write readback, then retry transient failures if not applied", file=sys.stderr)
             return 2
     if a.cmd == "defer":
         return _cmd_defer(a)
