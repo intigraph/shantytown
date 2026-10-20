@@ -86,11 +86,36 @@ def test_ephemeral_shadow_remains_unknown(wire):
     assert not sp.owner_rows(PROOF, 'worker', messages_only=True).complete
 
 
-def test_non_inbox_projection_keeps_existing_guard(wire):
+def test_non_inbox_projection_shares_fresh_guard_with_candidates(wire):
     data, calls = wire
     add(data, title='ordinary work')
     assert len(sp.owner_rows(PROOF, 'worker').exact()) == 1
-    assert len(calls) == 3 and calls[0].startswith('ASK')
+    assert len(calls) == 2 and not any(q.startswith('ASK') for q in calls)
+
+
+@pytest.mark.parametrize('options', [{}, {'capacity': True}, {'decision': True},
+                                    {'include_deferred': True}])
+def test_owner_projection_fresh_guard_retains_positive_and_refuses_bad_work(wire, options):
+    data, calls = wire
+    add(data, title='ordinary work')
+    assert [r['id'] for r in sp.owner_rows(PROOF, 'worker', **options).exact()] == ['demo-message']
+    assert len(calls) == 2
+    add(data, 'demo-bad', title='different ordinary work', status='alien')
+    result = sp.owner_rows(PROOF, 'worker', **options)
+    assert not result.complete and 'unsupported or absent status' in result.caveat
+    assert len(calls) == 3, 'a fresh guard must refuse before field hydration'
+
+
+def test_empty_owner_guard_and_foreign_bad_status(wire):
+    data, calls = wire
+    add(data, 'demo-foreign', owner='other', title='foreign work', status='alien')
+    assert sp.owner_rows(PROOF, 'worker').exact() == []
+    assert len(calls) == 1
+    target, subject = add(data, title='owned work')
+    target.remove((subject, URIRef(sp.SEEDS+'ontology/status'), None))
+    result = sp.owner_rows(PROOF, 'worker')
+    assert not result.complete and 'unsupported or absent status' in result.caveat
+    assert len(calls) == 2
 
 
 def test_native_inbox_guard_and_fields_use_two_requests(monkeypatch, tmp_path):
@@ -153,13 +178,22 @@ def test_native_inbox_guard_and_fields_use_two_requests(monkeypatch, tmp_path):
                                               include_closed=True).exact()} == {
             'demo-message', 'demo-legacy', 'demo-receipt'}
         assert len(calls) == 4
+        update(f'INSERT DATA {{ GRAPH <{G}> {{ <{sp.SEEDS}item/demo-work> a <{sp.SCHEMA}Action> ; '
+               f'<{sp.SCHEMA}identifier> "demo-work" ; <{sp.SCHEMA}name> "ordinary work" ; '
+               f'<{sp.SCHEMA}agent> "worker" ; <{sp.SEEDS}ontology/status> "open" ; '
+               f'<{sp.SEEDS}ontology/priority> 1 . }} }}')
+        assert [r['id'] for r in sp.owner_rows(proof, 'worker').exact()] == ['demo-work']
+        assert len(calls) == 6
         # A bad ordinary task (not a message) must still invalidate the read.
         update(f'INSERT DATA {{ GRAPH <{G}> {{ <{sp.SEEDS}item/demo-bad> a <{sp.SCHEMA}Action> ; '
                f'<{sp.SCHEMA}agent> "worker" ; <{sp.SEEDS}ontology/status> "alien" . }} }}')
         result = sp.owner_rows(proof, 'worker', messages_only=True)
         assert not result.complete and 'unsupported or absent status' in result.caveat
-        assert len(calls) == 5
-        print('native inbox PASS: two populated reads 2 requests each; fresh bad-owner guard 1/refused')
+        assert len(calls) == 7
+        result = sp.owner_rows(proof, 'worker')
+        assert not result.complete and 'unsupported or absent status' in result.caveat
+        assert len(calls) == 8
+        print('native inbox/owner PASS: populated reads 2 requests each; fresh bad-owner guard 1/refused')
     finally:
         child.terminate()
         child.wait(timeout=10)
