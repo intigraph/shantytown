@@ -273,7 +273,7 @@ def test_delivered_but_untracked_is_not_reported_as_staying():
                    dispatch=raise_, comment=lambda *c: None,
                    emit=lambda e: None, log=log.append)
     assert not out[0].moved
-    assert "DELIVERED to ellie" in log[0] and "do not resend" in log[0]
+    assert "DELIVERED to ellie" in log[0] and "verify ownership before retrying" in log[0]
     assert "stays with" not in log[0]
 
 
