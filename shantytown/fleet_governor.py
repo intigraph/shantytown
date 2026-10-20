@@ -251,6 +251,31 @@ def validate(value, host, *, now=None):
     return value
 
 
+def _ssh_transport_detail(stderr):
+    """Retain a recognized final transport cause, never arbitrary remote output.
+
+    stderr may contain credentials or remote command output. Match only the
+    last nonempty line and emit fixed diagnostic text rather than echoing it.
+    """
+    lines = str(stderr or '').strip().splitlines()
+    last = lines[-1].strip().lower() if lines else ''
+    for needle, detail in (
+        ('no route to host', 'No route to host'),
+        ('network is unreachable', 'Network is unreachable'),
+        ('connection refused', 'Connection refused'),
+        ('connection timed out', 'Connection timed out'),
+        ('operation timed out', 'Operation timed out'),
+        ('could not resolve hostname', 'Could not resolve hostname'),
+        ('host key verification failed', 'Host key verification failed'),
+        ('permission denied', 'Permission denied'),
+        ('connection reset', 'Connection reset'),
+        ('connection closed', 'Connection closed'),
+    ):
+        if needle in last:
+            return ': ' + detail
+    return ''
+
+
 def read_peer(peer):
     command = ('PATH="$HOME/.local/bin:$PATH" st --root '
                + shlex.quote(peer.root) + ' crew --governor --json --local')
@@ -259,7 +284,9 @@ def read_peer(peer):
             ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', '--',
              peer.ssh, command], capture_output=True, text=True, timeout=20)
         if result.returncode == 255:
-            return None, PeerUnreachable(f'{peer.name} governor unreachable (SSH transport failed)')
+            return None, PeerUnreachable(
+                f'{peer.name} governor unreachable (SSH transport failed'
+                f'{_ssh_transport_detail(result.stderr)})')
         if result.returncode:
             raise ValueError(f'ssh/governor exit {result.returncode}')
         if len(result.stdout) > 1024 * 1024:

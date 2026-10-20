@@ -1,0 +1,22 @@
+Script started on 2026-10-16 17:33:57-04:00 [COMMAND="python3 docs/demos/launchd-routing/probe.py 83c8ab151925d81a670463da60982b3f76187f64" <not executed on terminal>]
+{
+  "base": "83c8ab151925d81a670463da60982b3f76187f64",
+  "before": {
+    "backend": null,
+    "path_preserved": true,
+    "root_preserved": true,
+    "peer_unavailable": true,
+    "reason": "peer governor unreachable (SSH transport failed)",
+    "production_calls": 0
+  },
+  "candidate": {
+    "backend": "seeds",
+    "path_preserved": true,
+    "root_preserved": true,
+    "peer_unavailable": true,
+    "reason": "peer governor unreachable (SSH transport failed: No route to host)",
+    "production_calls": 0
+  }
+}
+
+Script done on 2026-10-16 17:33:57-04:00 [COMMAND_EXIT_CODE="0"]

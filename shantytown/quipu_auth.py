@@ -19,6 +19,11 @@ class CredentialRefused(Exception):
 def token() -> str:
     value = os.environ.get('QUIPU_AUTH_TOKEN', '').strip()
     if not value:
+        from .crew_credentials import cli_token
+        selected = cli_token(os.environ.get('SHANTY_ROOT'), os.environ.get('SHANTY_AGENT'),
+                             os.environ.get('QUIPU_AUTH_TOKEN_FILE'))
+        if selected is not None:
+            return selected
         path = os.environ.get('QUIPU_AUTH_TOKEN_FILE') or str(Path.home() / '.config/quipu/token')
         try:
             value = Path(path).read_text(encoding='utf-8').strip()

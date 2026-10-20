@@ -449,7 +449,10 @@ def check(registry: Registry, emitted=None, live=None, catalog=None,
         except Exception:      # noqa: BLE001 — an unreadable deployment config
             configured = None
 
-    known = {a.name for a in agents}
+    from .traits import receives_stops
+
+    by_name = {a.name: a for a in agents}
+    known = set(by_name)
     rows: list[Row] = []
     for a in sorted(agents, key=lambda x: x.name):
         if a.reports_to is None:
@@ -469,7 +472,18 @@ def check(registry: Registry, emitted=None, live=None, catalog=None,
             rows.append(Row(a.name, a.role, a.reports_to, BROKEN,
                             "REPORTS TO ITSELF"))
         else:
-            rows.append(Row(a.name, a.role, a.reports_to, OK))
+            try:
+                recipient = receives_stops(by_name[a.reports_to], catalog)
+            except Exception as exc:  # catalog failure is not a healthy hierarchy
+                rows.append(Row(a.name, a.role, a.reports_to, CANNOT_TELL,
+                                f"cannot resolve parent stop eligibility: {exc}"))
+            else:
+                if recipient:
+                    rows.append(Row(a.name, a.role, a.reports_to, OK))
+                else:
+                    rows.append(Row(a.name, a.role, a.reports_to, BROKEN,
+                                    f"parent {a.reports_to!r} is not a stop recipient "
+                                    "(no role in its stack absorbs)"))
 
         # Both extra legs run even for a row the line-check already failed: an
         # ORPHAN with broken hooks has two problems and should say so.

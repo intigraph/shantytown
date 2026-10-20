@@ -111,6 +111,22 @@ allows that owner's existing haul to proceed. Undated and distant defers do not
 reserve the worker indefinitely. Closed items, messages, anchors and decisions
 do not count toward this occupancy.
 
+Assigned `blocked:external` work reserves the same capacity when its explicit
+UTC review timestamp satisfies `0 < review - now <= 24 hours`. This covers
+pending CI, review and lane events beyond the older 60-minute window. Missing,
+malformed or non-UTC timestamps make occupancy UNKNOWN. An expired external gate
+re-evaluates capacity without opening or resuming the item. Immediate owned work
+still reaches the owner's haul. The assigned-item ceiling remains a separate gate.
+
+Dispatch candidates exclude epics by native `issue_type`, parked labels and
+the governed `feed:manual` label, alongside existing owned and human/decision
+exclusions. `feed:manual` means a coordinator must arrange that item's dispatch
+manually; it does not bar explicit dispatch or an already-owned haul. An item
+owner/coordinator applies it explicitly. Titles and embedded store names never
+establish this category, and unmarked tasks stay candidates. Missing native type
+metadata is UNKNOWN rather than proof of an actionable dispatch candidate; the
+independent active-anchor barrier does not require this dispatch-only field.
+
 Native Seeds reads only metadata for the mechanically idle candidate owners,
 across the shared and ephemeral graphs, with existing row caps and exact-answer
 checks. It never hydrates full item bodies as a fallback. Unknown occupancy
@@ -364,3 +380,49 @@ reading the writer.
   now; folding them is a follow-up with its own measurement, not a freebie.
 - **Should a lead get hibernate?** No, for now: a lead's drain is how it absorbs
   its reports. Revisit only with a measured case.
+
+## Optional admin routine-wake budget
+
+`[admin_wake_budget]` is OFF by default. Deployments may explicitly name
+participants and stage `mode = "advise"` before `mode = "enforce"`:
+
+```toml
+[admin_wake_budget]
+mode = "off" # off | advise | enforce
+agents = []  # explicit administrator card names
+```
+
+For named Claude administrators, the existing dispatch governor supplies fresh
+account/lane evidence without advancing hysteresis. At seven-day usage >=80%,
+routine Stop wakes are spaced at least five minutes apart; at >=90%, fifteen
+minutes. An unknown/stale usage signal, missing wake timestamp or backward clock
+cannot withhold work. Codex lanes and unnamed administrators are unchanged.
+
+In enforce mode this explicit budget precedes ordinary Rule Zero dispatch and
+hibernate; urgent governance/rose events still precede it. An ALLOW leaves pending
+events unconsumed. There is no timer, process suspension or forced pane stop.
+Advise mode records what would have been held but preserves the existing verdict.
+
+`admin-wake-budget/<agent>.json` records bounded cumulative Stop outcomes and the
+last observation. The separately registered UserPromptSubmit hook counts external
+submissions in `<agent>.external.json` without reading prompt stdin. This includes
+operator and injected-message bypasses; their individual identity is UNKNOWN.
+After source adoption, `st ops provision <agent>` projects the hook only into
+the selected Claude administrator's workspace, including when its role settings
+predate this feature. A role-owned hook prevents a duplicate workspace hook.
+Reprovisioning with mode OFF removes only this owned fallback and preserves
+unrelated hooks; shared role settings are not rewritten. Confirm a natural
+UserPromptSubmit observation before claiming live external-input coverage.
+Missing counter files are UNKNOWN, never zero.
+
+This bounds routine automatic Stop wakes, **not** tokens spent in an ongoing
+turn, direct/operator prompts or urgent responses. Those remain bypasses and must
+be included in measured spend. A step-down is cooperative at a turn boundary;
+an account-level or per-request hard token ceiling is not implemented here.
+Activation and changing advise to enforce are separate deployment decisions.
+
+Rollback: set `mode = "off"` on the new version first. Before reverting to an
+older version that does not recognize this table, remove the entire
+`[admin_wake_budget]` table from deployment configuration, then revert the source
+merge through the normal lane. Leaving even an OFF unknown table behind would
+make that older version reject its configuration.

@@ -668,7 +668,7 @@ def test_explicit_empty_source_with_detached_tree_never_publishes_stale_canonica
     assert _sha(wt, 'HEAD') != canonical
 
 
-def test_explicit_timeout_allows_real_slow_hook(two_remotes):
+def test_default_timeout_allows_real_slow_hook(two_remotes):
     repo, wt, origin, forge = two_remotes
     _commit(wt, "slow-hook-feature")
     hooks = Path(_git(wt, "rev-parse", "--git-path", "hooks"))
@@ -677,10 +677,32 @@ def test_explicit_timeout_allows_real_slow_hook(two_remotes):
     hook = hooks / "pre-push"
     hook.write_text("#!/bin/sh\nsleep 61\nexit 0\n")
     hook.chmod(0o755)
-    assert main(["repo", "push", str(repo), "ellie", "--branch", "slow-feature",
-                 "--timeout", "90"]) == OK
+    assert main(["repo", "push", str(repo), "ellie", "--branch", "slow-feature"]) == OK
     assert _sha(origin, "slow-feature") == _sha(wt, "HEAD")
     assert _sha(forge, "slow-feature") == _sha(wt, "HEAD")
+
+
+@pytest.mark.parametrize("override,expected", [(None, 600), (1, 1), (60, 60), (90, 90)])
+def test_cli_push_deadline_reaches_each_peer(two_remotes, monkeypatch, override, expected):
+    from shantytown import workspace
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, "deadline-feature")
+    deadlines = []
+    original = workspace.run_with_group_timeout
+
+    def observe(argv, timeout, **kwargs):
+        if argv[3] == "push":
+            deadlines.append(timeout)
+        return original(argv, timeout, **kwargs)
+
+    monkeypatch.setattr(workspace, "run_with_group_timeout", observe)
+    command = ["repo", "push", str(repo), "ellie", "--branch", "deadline-feature"]
+    if override is not None:
+        command.extend(["--timeout", str(override)])
+    assert main(command) == OK
+    assert deadlines == [expected, expected]
+    assert all(_sha(peer, "deadline-feature") == _sha(wt, "HEAD")
+               for peer in (origin, forge))
 
 
 @pytest.mark.parametrize("timeout", ["0", "-1", "3601"])
@@ -755,11 +777,15 @@ def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatc
     assert "did not" not in err
 
 
-def test_selected_origin_only_leaves_other_peer_unchanged(two_remotes):
+@pytest.mark.parametrize('timeout', [None, 60, 600])
+def test_selected_origin_only_leaves_other_peer_unchanged(two_remotes, timeout):
     repo, wt, origin, forge = two_remotes
     _commit(wt, 'selected-feature')
-    assert main(['repo', 'push', str(repo), 'ellie', '--remote', 'origin',
-                 '--branch', 'feature']) == OK
+    command = ['repo', 'push', str(repo), 'ellie', '--remote', 'origin',
+               '--branch', 'feature']
+    if timeout is not None:
+        command.extend(['--timeout', str(timeout)])
+    assert main(command) == OK
     assert _sha(origin, 'feature') == _sha(wt, 'HEAD')
     assert not _git(forge, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')
 
@@ -860,3 +886,42 @@ def test_host_with_unrepresentable_freeze_key_refuses(two_remotes):
     outcomes = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('origin',),
                                 push_run=lambda *a: pytest.fail('must not push'))
     assert not outcomes[0].ok and 'cannot be checked' in outcomes[0].reason
+
+
+@pytest.mark.parametrize("timeout", [None, 60, 600])
+def test_bare_extra_source_refusal_names_literal_path_remedy(
+        two_remotes, monkeypatch, capsys, timeout):
+    import shlex
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / "ellie extra"
+    _git(repo, "worktree", "add", "-b", "ellie/topic", str(extra), "main")
+    _commit(extra, "extra-topic")
+    before = (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
+              (repo / ".git" / "config").read_bytes())
+    monkeypatch.setenv("GT_ROOT", str(repo.parent))
+    monkeypatch.setenv("WORKSPACE_ROOT", str(repo.parent / "workspace"))
+    monkeypatch.chdir(extra)
+    with monkeypatch.context() as guard:
+        guard.setattr(cli, "push_every_remote",
+                      lambda *a: pytest.fail("refusal must not contact peers"))
+        command = ["repo", "push", "proj", "ellie", "--source-branch",
+                   "ellie/topic", "--branch", "ellie/topic"]
+        if timeout is not None:
+            command.extend(["--timeout", str(timeout)])
+        assert main(command) == REFUSED
+    msg = capsys.readouterr().err
+    argv = ["st", "repo", "push", str(extra), "ellie", "--source-branch",
+            "ellie/topic", "--branch", "ellie/topic"]
+    if timeout not in (None, 600):
+        argv.extend(["--timeout", str(timeout)])
+    assert "literal worktree path" in msg
+    assert shlex.join(argv) in msg
+    assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
+    # The printed shell-quoted remedy must actually choose the extra checkout.
+    assert main(shlex.split(shlex.join(argv))[1:]) == OK
+    assert all(_sha(peer, "ellie/topic") == _sha(extra, "HEAD")
+               for peer in (origin, forge))
+    assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
+    assert (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
+            (repo / ".git" / "config").read_bytes()) == before

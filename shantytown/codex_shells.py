@@ -55,10 +55,11 @@ def _json(path, cap=65536):
     return value, hashlib.sha256(raw).hexdigest()
 
 
-def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
-    if root is None or not re.fullmatch(r'[A-Za-z0-9_-]+', agent):
+def control_binding(agent, *, runtime_dir=None, proc=Path('/proc')):
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', agent):
         raise ValueError('missing card binding')
-    home = Path(runtime_dir or os.environ.get('XDG_RUNTIME_DIR', Path.home() / '.cache')) / 'shantytown' / 'codex' / agent
+    from .codex_daemon import runtime_home
+    home = runtime_home(agent, runtime_dir)
     # Native standalone and updater daemons use different identity filenames.
     # Exactly one must exist; a malformed/symlink current record must never
     # fall through to another record. Bind the filename across the RPC too.
@@ -110,6 +111,16 @@ def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
     st = endpoint.stat()
     if not endpoint.is_absolute() or not stat.S_ISSOCK(st.st_mode) or st.st_uid != os.getuid():
         raise ValueError('foreign socket')
+    return dict(pid=pid, start=start, endpoint=str(endpoint),
+                generation=generation, identity_file=identity.name)
+
+
+def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
+    if root is None:
+        raise ValueError('missing card binding')
+    binding = control_binding(agent, runtime_dir=runtime_dir, proc=proc)
+    from .codex_daemon import runtime_home
+    home = runtime_home(agent, runtime_dir)
     context, context_generation = _json(Path(root) / 'context_budget' / f'{agent}.json')
     payload = context.get('payload')
     if not isinstance(payload, dict):
@@ -127,9 +138,7 @@ def _binding(agent, root, *, runtime_dir=None, proc=Path('/proc')):
     header = _decode(first)
     if not isinstance(header, dict) or not isinstance(header.get('payload'), dict) or header.get('type') != 'session_meta' or header['payload'].get('id') != thread:
         raise ValueError('session header mismatch')
-    return dict(pid=pid, start=start, endpoint=str(endpoint), thread=thread,
-                generation=generation, identity_file=identity.name,
-                context_generation=context_generation)
+    return dict(binding, thread=thread, context_generation=context_generation)
 
 
 class _Socket:
@@ -228,6 +237,10 @@ class _Socket:
                     raise ValueError('RPC refused')
                 return result['result']
         raise ValueError('RPC message cap')
+
+
+# Shared bounded transport: pairing adds no second WebSocket implementation.
+ControlSocket = _Socket
 
 
 def _loaded(client, number, thread):

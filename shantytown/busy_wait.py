@@ -8,6 +8,7 @@ from .inbox import is_anchor, is_decision, is_message
 from .plate_capacity import owner_name
 
 SHORT_GATE_MINUTES = 60
+EXTERNAL_GATE_HOURS = 24
 
 
 def utc_now():
@@ -84,6 +85,19 @@ def from_rows(values, owners, *, now=None, minutes=SHORT_GATE_MINUTES):
             continue
         date = row.get("defer_until")
         until = None if date in (None, "") else _instant(date)
+        labels = row.get("labels") or []
+        if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
+            raise ValueError("waiting-work labels UNKNOWN")
+        if "blocked:external" in {label.strip().lower() for label in labels}:
+            # Extend the existing shared selector, never add another feed gate.
+            if (not isinstance(date, str) or "T" not in date
+                    or not date.endswith(("Z", "+00:00")) or until is None):
+                raise ValueError("external waiting-work UTC review time UNKNOWN")
+            if timedelta(0) < until - now <= timedelta(hours=EXTERNAL_GATE_HOURS):
+                waiting.add(owner)
+            elif status in {"open", "hooked", "in_progress"} and until <= now:
+                immediate.add(owner)
+            continue  # Expired gates re-evaluate; this never opens an item.
         # Existing ready/active work must still reach the owner's haul. This
         # filter addresses a plate whose available work is all on gates.
         if status in {"open", "hooked", "in_progress"} and (

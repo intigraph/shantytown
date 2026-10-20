@@ -583,6 +583,10 @@ GitRunner = Callable[..., "tuple[int, str]"]
 # clear. Both streams are still SHOWN verbatim; only stdout is READ.
 PushRunner = Callable[..., "tuple[int, str, str]"]
 
+# A push includes local validation hooks; a one-minute network budget cut off
+# healthy hooks before they could publish. Keep the existing bounded override.
+DEFAULT_PUSH_TIMEOUT = 600
+
 MAIN_CANDIDATES = ("main", "master")
 
 
@@ -593,7 +597,8 @@ def _git(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str]"
     return r.returncode, (r.stdout or "").strip()
 
 
-def _git_push(dest: Path | str, *args: str, timeout: float = 60) -> "tuple[int, str, str]":
+def _git_push(dest: Path | str, *args: str,
+              timeout: float = DEFAULT_PUSH_TIMEOUT) -> "tuple[int, str, str]":
     if not 1 <= timeout <= 3600:
         raise ValueError("push timeout must be between 1 and 3600 seconds")
     try:
