@@ -1067,9 +1067,8 @@ class CodexHarness:
             # linking the role-owned config, credentials and managed payload.
             # The links keep one governed config and one login; only mutable
             # app-server state is per card.
-            runtime_base = Path(os.environ.get(
-                "XDG_RUNTIME_DIR", Path.home() / ".cache"))
-            daemon_home = runtime_base / "shantytown" / "codex" / card.name
+            from .codex_daemon import runtime_home
+            daemon_home = runtime_home(card.name)
             socket = daemon_home / "app-server-control" / "app-server-control.sock"
             # Unix-domain sockets have a small platform path ceiling (108 bytes
             # on Linux, including the terminator). Codex otherwise spawns a

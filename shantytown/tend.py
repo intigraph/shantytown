@@ -336,9 +336,10 @@ class Tender:
                  refresh_trees=None,
                  ensure=ensure_workspace, log=None, gaps=None, crashes=None,
                  retire=None, now=None, target=None, target_src=None,
-                 governed=None,
+                 governed=None, target_exempt=None,
                  catalog=None, stops=None, codex_block=None,
                  fallback_model=None, current_model=None):
+        self._target_exempt = target_exempt or (lambda card: False)
         self._panes = panes
         self._runtime = runtime
         self._launches = launches
@@ -421,11 +422,13 @@ class Tender:
         # the pre-k9068 behaviour, so every existing caller is unaffected.
         self._stops = stops
 
-    def pass_over(self, agents: list[Agent], *, dry_run: bool = False) -> Report:
+    def pass_over(self, agents: list[Agent], *, dry_run: bool = False,
+                  budget_agents: list[Agent] | None = None) -> Report:
         rep = Report(started=time.time(), dry_run=dry_run)
-        allowed = self._respawn_budget(agents)
+        allowed = self._respawn_budget(agents if budget_agents is None else budget_agents)
         for card in sorted(agents, key=lambda a: a.name):
-            rep.findings.append(self._one(card, agents, dry_run, allowed))
+            rep.findings.append(self._one(
+                card, agents if budget_agents is None else budget_agents, dry_run, allowed))
         return rep
 
     def _respawn_budget(self, agents: list[Agent]) -> set[str] | None:
@@ -591,7 +594,8 @@ class Tender:
         # every reason to act. Held back rather than respawned — and reported as a
         # cap with the number in it, because a down agent that nothing mentions is
         # indistinguishable from one the supervisor failed to notice.
-        if allowed is not None and card.name not in allowed:
+        if (allowed is not None and card.name not in allowed
+                and not self._target_exempt(card)):
             return Finding(card.name, "down", BELOW_TARGET,
                            f"held: {self._target_src or '--target'} "
                            f"{self._target} is already met "

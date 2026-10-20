@@ -45,8 +45,9 @@ def fake_panes(monkeypatch, *live):
     sent = []
 
     class FakeTmux:
-        def __init__(self, socket=None):
+        def __init__(self, socket=None, *, root=None):
             self.socket = socket
+            self.delivery_root = root
 
         def exists(self, pane):
             return pane in live

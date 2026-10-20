@@ -877,6 +877,19 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     """
     if not events:
         return ""
+    stalled = [e for e in events if e.reason == 'delivery-stalled']
+    events = [e for e in events if e.reason != 'delivery-stalled']
+    delivery_lines = ['⚠ Unconfirmed message delivery — inspect retained inbox/input:'] if stalled else []
+    delivery_lines += [f'  - {e.frm} ({_age(e.ts, now)}): {e.detail}' for e in stalled]
+    failures = [e for e in events if e.reason == "job-failed"]
+    events = [e for e in events if e.reason != "job-failed"]
+    failure_lines = ["⚠ Scheduled job failures — inspect the named history; "
+                     "these are alerts, not agent stops:"] if failures else []
+    failure_lines += [f"  - {e.frm} ({_age(e.ts, now)}): {e.detail}"
+                      for e in sorted(failures, key=lambda e: (e.ts, e.id))]
+    failure_lines = delivery_lines + failure_lines
+    if not events:
+        return "\n".join(failure_lines)
     latest: dict[str, StopEvent] = {}
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         latest[e.frm] = e
@@ -892,7 +905,7 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
         # _age already carries its own "ago" (and "age unknown" for an unstamped
         # event, which must NOT get one appended) — do not add a second.
         lines.append(f"  - {name} — empty hook as of {_age(e.ts, now)}{rose}")
-    return "\n".join(lines)
+    return "\n".join(failure_lines + lines)
 
 
 def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
@@ -1034,7 +1047,10 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
     ids = {e.id for e in candidates} if candidates is not None else None
-    got = events.drain(me, None if ids is None else lambda e: e.id in ids)
+    # Tracker/workflow enrichment can outlive the hook deadline during an
+    # outage. Preview first: marking delivery before those reads loses the
+    # report when the hook is killed without ever emitting its block payload.
+    got = [e for e in events.pending(me) if ids is None or e.id in ids]
     if not got:
         return 0
     # The event's item fields are a stop-time snapshot, while the pane verdict
@@ -1065,8 +1081,20 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                                   stood_down=stood_down, stopped=stopped, now=now)
         if extra:
             reason = reason + "\n\n" + extra
+    payload = json.dumps({"decision": "block", "reason": reason})
+    # Claim only this prepared batch. A report arriving during enrichment must
+    # wait for its own liveness check; another reader may have claimed an old
+    # report while we were preparing it. Never repeat that reader's delivery or
+    # include workflow advice derived from the superseded batch.
+    prepared_ids = {e.id for e in got}
+    claimed = events.drain(me, lambda e: e.id in prepared_ids)
+    if not claimed:
+        return 0
+    if {e.id for e in claimed} != prepared_ids:
+        payload = json.dumps({"decision": "block", "reason": _compose_reason(
+            claimed, verdicts, now, current_items=current_items)})
     # Deliver to the MODEL via the block protocol. reason, never systemMessage.
-    print(json.dumps({"decision": "block", "reason": reason}))
+    print(payload, flush=True)
     return 0
 
 

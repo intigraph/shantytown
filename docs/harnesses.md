@@ -282,6 +282,12 @@ run the TUI but cannot start Remote Control. If that managed payload is missing,
 This lets a new host start workers even when it inherits an enabled relay setting.
 The warning also appears during `st agent new <agent> --dry-run`.
 
+For discovery and phone enrollment of an **existing** crew server, use the
+[phone access runbook](android-crew-sessions.md). It distinguishes explicit card
+selection from the ordinary computer host, explains non-issuing inspection,
+and records Android and lifecycle acceptance that remains unavailable. A
+connected daemon or a manual code is not proof of phone access.
+
 Install the standalone package under the `CODEX_HOME` named in the warning to
 enable Remote Control on the next launch, or set `SHANTY_REMOTE_CONTROL = "false"`
 under `[env]` in `shantytown.toml` to keep Remote Control off. The fallback does not
