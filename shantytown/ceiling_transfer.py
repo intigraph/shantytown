@@ -190,7 +190,7 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
             # resend would deliver the work twice.
             detail = f"{type(exc).__name__}: {exc}"
             log(f"ceiling-transfer: {m.item} was DELIVERED to {m.to} but the tracker "
-                f"write is unproven; do not resend, repair the assignee ({detail})")
+                f"write is unproven; verify ownership before retrying, repair the assignee ({detail})")
             results.append(Outcome(m, False, detail, disposition="delivered_untracked"))
             continue
         except Exception as exc:  # noqa: BLE001 - every refusal is reported, none retried
