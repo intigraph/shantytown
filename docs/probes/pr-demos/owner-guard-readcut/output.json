@@ -1,0 +1,22 @@
+{
+  "before": {
+    "ids": [
+      "demo-work"
+    ],
+    "empty": [],
+    "populated_requests": 3,
+    "empty_requests": 2,
+    "missing_status_refused": true,
+    "refusal_requests": 1
+  },
+  "after": {
+    "ids": [
+      "demo-work"
+    ],
+    "empty": [],
+    "populated_requests": 2,
+    "empty_requests": 1,
+    "missing_status_refused": true,
+    "refusal_requests": 1
+  }
+}
