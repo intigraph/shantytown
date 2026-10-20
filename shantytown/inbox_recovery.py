@@ -9,7 +9,7 @@ from .tmux import PaneSubmissionUnverified, _codex_owned_input
 from . import triage
 
 
-def sweep(agents, panes, box, *, log=lambda message: None):
+def sweep(agents, panes, box, *, root=None, reg=None, log=lambda message: None):
     recovered = []
     # One observation budget for the whole fleet, not 25 seconds per strand.
     deadline = time.monotonic() + 25
@@ -25,6 +25,10 @@ def sweep(agents, panes, box, *, log=lambda message: None):
             if not panes._confirmed_codex(card.pane, panes.foreground(card.pane)):
                 continue
             screen = panes.capture(card.pane, attrs=True, timeout=2)
+            if root is not None:
+                from .delivery import supervise
+                supervise(root, reg, card, panes, box, screen, deadline=deadline)
+                continue
             if triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER):
                 continue
             matches = [msg for msg in box.unread(card.name)
