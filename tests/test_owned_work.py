@@ -439,3 +439,32 @@ def test_verified_stop_is_not_discarded_on_wall_clock_rollback(world):
     world.service.launch('worker', now=200)
     world.service.stop('worker', at=190)
     assert world.tick(190) == [('worker', 'delivered')]
+
+
+@pytest.mark.parametrize('slow, expected', [(False, 4), (True, 1)])
+def test_supervisor_bounds_starts_and_rotates_unknown_owners(tmp_path, monkeypatch, slow, expected):
+    from shantytown import cli
+    service = OwnedWork(tmp_path)
+    for index in range(6):
+        service.stop(f'worker{index}', at=100)
+    service.launch('stilllive', now=10**12)
+    clock = [0]
+    calls = []
+    def remote_tick(self, registry, rows_for, inbox, **kw):
+        calls.extend(kw['agents'])
+        if slow:
+            clock[0] += 6
+        raise RuntimeError('synthetic unavailable owner')
+    monkeypatch.setattr(OwnedWork, 'tick', remote_tick)
+    monkeypatch.setattr(cli.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(cli, '_tracker', lambda a: object())
+    monkeypatch.setattr(cli, '_registry', lambda a: object())
+    monkeypatch.setattr(cli, '_inbox', lambda a: object())
+    args = SimpleNamespace(root=tmp_path)
+    assert cli._owned_work_tick(args) == []
+    assert calls == [f'worker{i}' for i in range(expected)]
+    calls.clear()
+    assert cli._owned_work_tick(args) == []
+    assert calls[0] == f'worker{expected}'
+    assert 'stilllive' not in calls
+    assert service.snapshot()['worker0']['state'] == 'stopped'

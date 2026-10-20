@@ -2799,12 +2799,21 @@ def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
         if wake_owner is not None:
             service.wake(wake_owner)
         names = ([card.name] if card else [wake_owner] if wake_owner else
-                 list(service.snapshot()))
+                 service.pending())
         if not names:
             return []
         tracker, registry, box = _tracker(a), _registry(a), _inbox(a)
         result = []
-        for name in names:
+        started = time.monotonic()
+        for index, name in enumerate(names):
+            if card is None and wake_owner is None:
+                # Bound starts, not in-flight writes. Rotate attempts so one
+                # unavailable owner cannot monopolize every supervisor pass.
+                if index >= 4 or time.monotonic() - started >= 5:
+                    print(f"  stopped-owner: {len(names) - index} pending owner(s) "
+                          "deferred to next supervisor pass", file=sys.stderr)
+                    break
+                service.attempted(name)
             try:
                 result.extend(service.tick(
                     registry, lambda owner: _owned_work_rows(tracker, owner), box,

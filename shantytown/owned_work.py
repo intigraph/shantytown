@@ -102,6 +102,23 @@ class OwnedWork:
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def pending(self, *, now=None):
+        """Fair local scheduling order; no remote reads or liveness inference."""
+        now = _time(time.time() if now is None else now)
+        states = self.snapshot()
+        return sorted((name for name, state in states.items()
+                       if (state["state"] == "live" and now >= state["expires_at"] or
+                           state["state"] != "live" and
+                           state.get("notice") not in ("delivered", "empty") and
+                           now >= state.get("next_at", 0))),
+                      key=lambda name: (states[name].get("attempted_at", 0), name))
+
+    def attempted(self, agent):
+        """Persist only fairness metadata before starting potentially slow I/O."""
+        with self.locked() as data:
+            if agent in data:
+                data[agent]["attempted_at"] = time.time()
+
     def _replace(self, agent, before, after):
         # Local compare-and-swap only. No remote callback may hold this lock:
         # tool heartbeat hooks must not wait for somebody else's slow inbox.

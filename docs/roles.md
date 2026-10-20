@@ -252,7 +252,10 @@ relaunch before the deadline cancels the pending notice. Replayed stops reuse
 one event identity. The existing fleet-owner tend timer serves local deadlines;
 it does not wake an agent to inspect work. Once an empty queue is proved, it is
 quiet until a new input event. Stop records predating this feature enter through
-the same timer. Dry runs emit no event.
+the same timer. Dry runs emit no event. Each supervisor pass starts at most four
+pending owner checks and stops starting checks after five seconds; an in-flight
+read or write finishes normally. Persisted attempt order rotates unserved owners
+first on the next pass. These are start bounds, not a remote-call timeout.
 
 The portable floor stores evidence below the deployment root's `owned-work/`.
 Launch and existing session/tool capture hooks maintain a 30-minute local lease.
