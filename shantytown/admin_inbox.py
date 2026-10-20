@@ -113,7 +113,7 @@ def sweep(root, agents, panes, box_for, *, now=None, log=lambda message: None):
             box = box_for(backend)
             unread = {msg.id: msg for msg in box.unread(name)}
             ready = []
-            for path, row in entries[:20]:
+            for path, row in sorted(entries, key=lambda entry: (entry[1]['created'], entry[1]['id']))[:20]:
                 msg = unread.get(row['id'])
                 if msg is None:
                     # Missing from this reader is not proof of an ACK.

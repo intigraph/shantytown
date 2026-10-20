@@ -18,8 +18,10 @@ def setup(tmp_path, monkeypatch):
     return card, box, sent, panes
 
 
-def test_batch_deadline_restart_one_copy_and_ack(tmp_path, monkeypatch):
+@pytest.mark.parametrize('name', ['admin', 'fixture-admin'])
+def test_batch_deadline_restart_one_copy_and_ack(tmp_path, monkeypatch, name):
     card, box, sent, panes = setup(tmp_path, monkeypatch)
+    card.name = name
     for text in ['routine one', 'routine two']:
         ai.enqueue(tmp_path, card, box.deliver(card.name, text), 'files', 900, now=1000)
     assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=1899) == []
