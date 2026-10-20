@@ -29,6 +29,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/rank": "rank",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -181,6 +182,13 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
 
 @declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
+    branches = _unsupported_owner_branches(proof, agent)
+    return not branches or not _query(
+        proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+
+
+def _unsupported_owner_branches(proof, agent):
+    """The same counterexample relation for standalone and inbox admission."""
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
@@ -189,7 +197,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                    for term in (json.dumps(owner),
                                 _iri(SEEDS + "principal/" + quote(owner, safe="")))]
     if not clauses:
-        return True
+        return []
     known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
     branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
@@ -210,7 +218,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
             ):
                 branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
                                 f"{clause} {type_clause} }} }}")
-    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+    return branches
 
 
 class RenderShapeReads:
@@ -266,7 +274,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         if include_deferred and scope is None:
             raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        if scope is not None and not shape_check(proof, scope, timeout=timeout):
+        # Inbox reads carry this identical counterexample relation in the
+        # candidate response below. No cached shape result or failed-read
+        # fallback: every invocation observes the guard again.
+        if scope is not None and not messages_only and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
         graphs = (graph, graph + "#seeds-ephemeral")
@@ -348,14 +359,22 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
+        if messages_only:
+            branches.append(
+                "{ { " + " UNION ".join(_unsupported_owner_branches(proof, scope))
+                + ' } BIND("unsupported-owner-status" AS ?problem) }'
+            )
         query = (
-            "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+            "SELECT (STR(?s) AS ?subject) ?graph "
+            + ("?problem " if messages_only else "") + "WHERE { "
             + " UNION ".join(branches)
             + " } LIMIT 10000"
         )
         candidates = _query(proof, query, timeout)["rows"]
         if len(candidates) >= 10000:
             raise ValueError("plate candidate budget reached")
+        if messages_only and any("problem" in row for row in candidates):
+            raise ValueError("owner has an unsupported or absent status")
         selected = {}
         for candidate in candidates:
             subject, graph = candidate.get("subject"), candidate.get("graph")
@@ -446,6 +465,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
             if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (

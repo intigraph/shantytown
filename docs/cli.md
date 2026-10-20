@@ -748,6 +748,9 @@ Two rules fall out, and they are the load-bearing part:
 
 1. **Do not "fix" a suspicious pane by pressing Enter at it.** That was the defect, not the remedy.
    `queued` is a state to *report to the agent's owner*, never one to type your way out of.
+   The automatic Codex recovery below is narrower: it requires a private record
+   proving st injected the exact body into this same session. A human draft or
+   a matching fragment of the send journal is never that proof.
 2. **When the attributes are missing, the answer is `?`.** A stripped capture with text in the box
    returns `UNKNOWN`, which degrades to `?` in `st crew` and to REFUSE in `st go` — never to `idle`.
    Refusing on doubt is cheap; dispatching into a buffer you cannot see is the incident.
@@ -1481,8 +1484,9 @@ of the exact body already stranded there. The latter retries Enter without
 retyping the body, after the older turn ends and Codex identity is confirmed.
 Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
-checks for a new active turn with a cleared composer, or a visible queue preview
-matching the message. Existing activity alone is not confirmation. If the
+checks for a new active turn with a cleared composer. A visible queue preview
+is **not delivery**: Codex may hold it until a later tool boundary. Existing
+activity alone is not confirmation. If the
 composer still contains exactly the rendered message, the transport may retry
 Enter once after the older turn ends and a fresh foreground check positively
 identifies Codex (including Node with a live Codex launch identity). An unknown
@@ -1492,6 +1496,35 @@ reports `UNVERIFIED`. Ephemeral sends and dispatch return exit 2; dispatch does
 not record an assignment. Durable sends retain the persisted inbox pointer and
 return success for persistence while explicitly reporting unverified live
 submission. Inspect the pane or read that pointer rather than blindly resending.
+
+With a deployment root, Codex sends first retain the full body in a private
+`delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
+declared tmux socket, pane and observed session creation time. If custody cannot
+be written, nothing is typed. After the single submission retry fails, st can
+clear only its exact single-line body in an idle, positively identified Codex
+session. It rechecks ownership and session identity before each editing key.
+Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
+authorize no automatic clear. A later sender can clear the same owned failed
+notice before submitting its own message; the older body remains retained.
+Claude and explicit shell-launch sends keep their existing transport.
+
+The existing scheduled `st fleet tend` pass supervises these records. It reuses
+an existing durable inbox row, or creates one normal pointer to the retained
+body. An uncertain inbox write is never blindly repeated. A cleared notice gets
+at most one automatic redelivery in the same session; queued input is never
+resent. An explicit inbox acknowledgment is distinct from terminal delivery.
+Legacy inbox rows without custody may trigger an alert but never authorize
+editing somebody's composer.
+
+After 300 seconds unresolved, the next successful tend observation persists
+one `delivery-stalled` event to the configured lead/admin and attempts one
+normal coordinator wake. It includes the input classification and busy state,
+not the message body. A continuing backlog does not generate another event,
+even after its first event was drained. An empty backlog rearms detection.
+For legacy rows, age starts at the first observation; it is not a guessed row
+creation time. A working tend schedule is required: the threshold is not a
+promise to deliver an alert while supervision itself is stopped. Persistence,
+queued wake, actual receiver arrival and recovery remain separate facts.
 
 An **off-host** durable recipient is nudged through the same declared peer the
 ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A

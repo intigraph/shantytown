@@ -82,6 +82,11 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("cli.py", "_inbox_durable"): (
         ATTRIBUTED_UPSTREAM,
         "the same `msg` _cmd_inbox attributed, handed in as a parameter."),
+    ("delivery.py", "supervise"): (
+        ATTRIBUTED_UPSTREAM,
+        "replays the exact retained pre-type body, preserving its original sender. "
+        "test_delivery_custody::test_recovery_preserves_original_sender checks "
+        "that recovery neither drops nor replaces the signature."),
     ("cli.py", "_deliver_startup_inbox"): (
         ATTRIBUTED_HERE,
         "offline durable messages injected by the verified launcher; sender is "
