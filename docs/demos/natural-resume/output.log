@@ -1,0 +1,12 @@
+Script started on 2026-10-16 14:47:01-04:00 [COMMAND="env PYTHONPATH=. python3 docs/demos/natural-resume/probe.py" <not executed on terminal>]
+Target: source library, synthetic registered producer; no runtime activation
+Base: be8eba5a4c8b9a0509b2b9169165e5711efcd6fb
+Candidate source SHA256: deferrals.py aed8bd23d57e2eaf2957b757eee65b52acd77a4b7e7c1b07f1c4a5df2fb15561
+Candidate source SHA256: resume_events.py bb5341492d3a0c745c5f69f4b9a673ac1fc96295e9e9b88b53714702117ea7b7
+{"before": "UNTESTABLE", "met": false, "reason": "event:fixture-v1"}
+{"input": "natural pair", "after": "MET", "reason": "qualifying natural ordered pair"}
+{"input": "manual recycle", "after": "NOT_MET", "reason": "complete interval has no qualifying natural pair"}
+{"input": "wrong generation", "after": "UNKNOWN", "reason": "event crossed a producer/boot generation"}
+Production binding accepted: False
+
+Script done on 2026-10-16 14:47:01-04:00 [COMMAND_EXIT_CODE="0"]

@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 from urllib.parse import quote
 
 from .forgejo import parse_remote
@@ -38,6 +39,20 @@ def github(path, body=None):
         return json.loads(result.stdout)
     except ValueError as error:
         raise Refused("GitHub returned invalid JSON") from error
+
+
+def canonical_identity(api, repo):
+    """Refuse aliases before POST: a redirect can create under another slug."""
+    identity = api(f"repos/{repo}")
+    if (not isinstance(identity, dict) or type(identity.get("id")) is not int
+            or identity["id"] <= 0 or not isinstance(identity.get("full_name"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", identity["full_name"])):
+        raise Refused("canonical repository identity unverified; no PR creation attempted")
+    canonical = identity["full_name"]
+    if canonical != repo:
+        raise Refused(f"repository {repo} now resolves to {canonical}; use the canonical "
+                      "slug and matching origin; no PR creation attempted")
+    return identity["id"]
 
 
 def pages(api, path, *, maximum=3200):
@@ -201,6 +216,7 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
     api = api or github
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise Refused("repository must be owner/name")
+    repository_id = canonical_identity(api, repo)
     first_candidate = candidate(checkout, repo, base, api)
     pulls = inventory(api, repo)
     existing = [p for p in pulls if p["head_repo"] == repo
@@ -233,6 +249,8 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
     # not turn a lost response or raced head into a blind retry/new duplicate.
     if dry_run:
         return {**review, "would_create": True, "body": body + appendix}
+    if canonical_identity(api, repo) != repository_id:
+        raise Refused("repository identity changed; no PR creation attempted")
     try:
         result = api(f"repos/{repo}/pulls", {"title": title, "body": body + appendix,
                                             "head": first_candidate["head_ref"],
@@ -263,8 +281,10 @@ def command(args):
         print(json.dumps(result, indent=2))
         return 0
     except Indeterminate as error:
+        print(f"PR creation outcome UNKNOWN: {error}", file=sys.stderr)
         print(json.dumps({"refused": str(error), "created": None, "outcome": "indeterminate"}))
         return 2
     except (Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f"PR preflight refused: {error}", file=sys.stderr)
         print(json.dumps({"refused": str(error), "created": False}))
         return 2

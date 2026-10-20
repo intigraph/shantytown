@@ -44,7 +44,7 @@ _CONDITION = re.compile(
     r"resume[_ -]?when\s*[:=]\s*([a-z-]+)\s*:\s*(\S+)", re.IGNORECASE)
 
 #: Condition kinds this module can actually decide.
-SUPPORTED = ("closed", "date")
+SUPPORTED = ("closed", "date", "event")
 #: Kinds the vocabulary defines and this module cannot yet test. Reported as
 #: UNTESTABLE, never as unmet — "we did not look" and "we looked and it is not
 #: met" must not render the same, which is the whole defect this bead is about.
@@ -186,6 +186,32 @@ def named_conditions(text: str) -> list[Condition]:
     return seen
 
 
+# PROSE GATES (aegis-152). Detection for REPORTING only, never a condition: the
+# rule above still holds that prose is not parsed into a releasable gate. These are
+# the sentences an author writes when the real gate is another item closing but the
+# field got a date ("Resume as soon as qbl closes; the date is a backstop").
+_PROSE_GATE = re.compile(
+    r"\b(?:resume|un-?defer|restart|continue|pick (?:it|this) up)\b[^\n.]{0,80}?"
+    r"\b(?:when|once|after|as soon as)\s+(?:aegis-)?([a-z0-9]{3,8}(?:\.[0-9]+)*)\b"
+    r"[^\n.]{0,30}?\b(?:closes|closed|is closed|lands|has landed|merges|completes)\b",
+    re.IGNORECASE)
+PROSE_GATE_LIMIT = 2
+
+
+def prose_gate_targets(notes: str) -> list[str]:
+    """Item ids that the notes' PROSE names as the resume gate, at most two.
+
+    Bare short ids ("qbl") are returned prefixed; whether one names a real item
+    is the caller's lookup to decide, and an unknown answer reports nothing.
+    """
+    out: list[str] = []
+    for token in _PROSE_GATE.findall(notes or ""):
+        target = token.lower() if token.lower().startswith("aegis-") else f"aegis-{token.lower()}"
+        if target not in out:
+            out.append(target)
+    return out[:PROSE_GATE_LIMIT]
+
+
 # The one label that makes "no resume condition" a DECISION rather than a strand.
 # Deliberately a single exact label, not a prefix match: `blocked:human` and
 # `blocked:external` mean "waiting on someone", which is precisely the state that
@@ -237,6 +263,11 @@ class Finding:
     # check was added (aegis-hm8994).
     conditionless: bool = False
     read_error: bool = False
+    # A gate stated only in PROSE ("resume when aegis-qbl closes") whose named
+    # item IS closed, while the stored condition is a date that has not lapsed
+    # (aegis-152; specimen aegis-tnr, parked 9h after qbl closed). Report-only:
+    # it never sets `met`, so can_release() can never act on it.
+    prose_gate: str = ""
 
     def key(self) -> str:
         """The transition key: bead + the STATE being reported.
@@ -249,6 +280,10 @@ class Finding:
         raw = (f"{self.bead}|{cond}|{int(bool(self.lapsed_at))}|{int(self.met)}"
                f"|{self.untestable}|{int(self.conditionless)}"
                f"|{self.priority}|{int(self.read_error)}")
+        if self.prose_gate:
+            # Only when set: every pre-existing finding keeps its key, so installing
+            # this does not re-alert the whole backlog once (aegis-152 review C1).
+            raw += f"|prose:{self.prose_gate}"
         return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def render(self) -> str:
@@ -264,6 +299,10 @@ class Finding:
         elif self.untestable:
             bits.append(f"condition UNTESTABLE [{self.untestable}] — "
                         f"not evaluated, NOT unmet")
+        if self.prose_gate:
+            bits.append(f"PROSE GATE MET [{self.prose_gate} is closed] — the notes "
+                        f"say resume when it closes, but the stored condition "
+                        f"is still waiting; un-defer, or correct the marker")
         if self.conditionless:
             bits.append("NO RESUME CONDITION — invisible to feeders AND to this "
                         "sweeper; needs a resume_when:/defer_until or a close")
@@ -283,6 +322,7 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
     still be open, which is worse than staying quiet.
     """
     out: list[Finding] = []
+    event_answers = {}  # bounded reads, only within this candidate pass
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -348,6 +388,15 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                     read_error = True
                 else:
                     met = bool(verdict)
+            elif cond.kind == "event":
+                from .resume_events import evaluate as event_evaluate
+                key = (cond.arg, bead)
+                if key not in event_answers:
+                    event_answers[key] = event_evaluate(cond.arg, bead, now)
+                verdict = event_answers[key]
+                met = verdict.state == "MET"
+                if verdict.state == "UNKNOWN":
+                    untestable = f"{cond.render()} (UNKNOWN: {verdict.reason})"
             else:
                 untestable = cond.render()
 
@@ -413,6 +462,23 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
                 bead=bead, title=str(row.get("title") or "")[:70],
                 assignee=str(row.get("assignee") or ""),
                 priority=row.get("priority"), conditionless=True))
+            continue
+        prose = ""
+        if (not lapsed and not met and not untestable and is_closed is not None
+                and (cond is None or cond.kind == "date") and len(extra) <= 1):
+            for target in prose_gate_targets(notes_text):
+                try:
+                    verdict = is_closed(target)
+                except Exception:
+                    verdict = None
+                if verdict is True:      # None (unknown / no such item) says nothing
+                    prose = target
+                    break
+        if prose:
+            out.append(Finding(
+                bead=bead, title=str(row.get("title") or "")[:70],
+                assignee=str(row.get("assignee") or ""),
+                priority=row.get("priority"), condition=cond, prose_gate=prose))
             continue
         if not lapsed and not met and not untestable:
             continue        # deferred, on time, condition genuinely unmet — quiet

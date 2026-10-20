@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import re
+import time
 from urllib.parse import quote, urlsplit
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .answer import Answer
@@ -31,6 +33,8 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/rank": "rank",
+    SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
@@ -182,6 +186,13 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
 
 @declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
+    branches = _unsupported_owner_branches(proof, agent)
+    return not branches or not _query(
+        proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+
+
+def _unsupported_owner_branches(proof, agent):
+    """The same counterexample relation for standalone and inbox admission."""
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
@@ -190,7 +201,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                    for term in (json.dumps(owner),
                                 _iri(SEEDS + "principal/" + quote(owner, safe="")))]
     if not clauses:
-        return True
+        return []
     known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
     branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
@@ -211,7 +222,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
             ):
                 branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
                                 f"{clause} {type_clause} }} }}")
-    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+    return branches
 
 
 class RenderShapeReads:
@@ -238,9 +249,11 @@ class RenderShapeReads:
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
+               include_deferred: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
-               decision: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
+               decision: bool = False, messages_only: bool = False,
+               include_closed: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -248,7 +261,13 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     ) + "; shared and ephemeral graphs"
     if feed_owners is not None:
         how = "Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs"
+    if include_deferred:
+        how = "Seeds owner-scoped waiting-work metadata; shared and ephemeral graphs"
     try:
+        if (include_closed and not messages_only) or (messages_only and (
+                agent is None or feed_owners is not None or plate_owners is not None
+                or active_only or capacity or decision)):
+            raise ValueError("ambiguous inbox projection scope")
         if active_only and feed_owners is None:
             raise ValueError("active projection requires an owner scope")
         if plate_owners is not None:
@@ -256,8 +275,13 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 raise ValueError("ambiguous roster scope")
             feed_owners = plate_owners
         scope = feed_owners if feed_owners is not None else agent
+        if include_deferred and scope is None:
+            raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        if scope is not None and not shape_check(proof, scope, timeout=timeout):
+        # Inbox reads carry this identical counterexample relation in the
+        # candidate response below. No cached shape result or failed-read
+        # fallback: every invocation observes the guard again.
+        if scope is not None and not messages_only and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
         graphs = (graph, graph + "#seeds-ephemeral")
@@ -272,7 +296,10 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         branches = []
         for g in graphs:
             statuses = (
-                ("hooked", "in_progress", "open", "blocked", "deferred") if decision else
+                ("open", "hooked", "in_progress", "blocked", "deferred")
+                + (("closed",) if include_closed else ()) if messages_only else
+                ("hooked", "in_progress", "open", "blocked")
+                if decision or (plate_owners is not None and capacity) else
                 ("hooked", "in_progress", "open") if plate_owners is not None else
                 ("in_progress",) if active_only else
                 ("open", "in_progress")
@@ -280,6 +307,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 else ("hooked", "in_progress", "open", "blocked") if capacity
                 else ("hooked", "in_progress", "open")
             )
+            if include_deferred:
+                statuses = (*statuses, "deferred")
             terms = (
                 [None]
                 if agent is None and feed_owners is None
@@ -310,24 +339,48 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 owner_clause = (_feed_owner_clause(feed_owners)
                                 if feed_owners is not None
                                 else (f"?s <{SCHEMA}agent> {term} . " if term else ""))
-                for status in statuses:
+                # Keep owner terms constant for indexed selection. Collapse only
+                # this exact-owner path; roster/feed projections retain their
+                # separately validated query shapes.
+                combine_statuses = agent is not None and feed_owners is None
+                status_terms = (
+                    ("?wanted_status",) if combine_statuses
+                    else tuple(json.dumps(status) for status in statuses)
+                )
+                status_filter = (
+                    "FILTER(?wanted_status IN ("
+                    + ", ".join(json.dumps(status) for status in statuses)
+                    + ")) " if combine_statuses else ""
+                )
+                for status_term in status_terms:
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
-                        f"<{SEEDS}ontology/status> {json.dumps(status)} . "
+                        f"<{SEEDS}ontology/status> {status_term} . "
+                        + status_filter
                         + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
-                        + ("" if include_messages else
+                        + (f"?s <{SCHEMA}name> ?title . "
+                           f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
+                           if messages_only else "" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
+        if messages_only:
+            branches.append(
+                "{ { " + " UNION ".join(_unsupported_owner_branches(proof, scope))
+                + ' } BIND("unsupported-owner-status" AS ?problem) }'
+            )
         query = (
-            "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+            "SELECT (STR(?s) AS ?subject) ?graph "
+            + ("?problem " if messages_only else "") + "WHERE { "
             + " UNION ".join(branches)
             + f" }} LIMIT {501 if only_specs else 10000}"
         )
         candidates = _query(proof, query, timeout)["rows"]
         if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
+        if messages_only and any("problem" in row for row in candidates):
+            raise ValueError("owner has an unsupported or absent status")
         selected = {}
         for candidate in candidates:
             subject, graph = candidate.get("subject"), candidate.get("graph")
@@ -418,19 +471,26 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
-            if row.get("status") in ("closed", "tombstone"):
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
+            if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (
                 not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
                 or not row["id"].strip()
                 or (agent is not None and row.get("assignee") not in owners)
-                or (plate_owners is not None and row.get("assignee") not in owners)
+                or (plate_owners is not None and not include_deferred
+                    and row.get("assignee") not in owners)
+                or (include_deferred and not row.get("assignee"))
                 or (feed_owners is not None and row.get("assignee")
                     and row["assignee"].split("/")[-1]
                     not in {a.split("/")[-1] for a in feed_owners})
                 or ("assignee" in row and not isinstance(row["assignee"], str))
                 or type(row.get("priority")) is not int
                 or not 0 <= row["priority"] <= 4
+                or (feed_owners is not None and plate_owners is None and not active_only
+                    and (not isinstance(row.get("issue_type"), str)
+                         or not row["issue_type"]))
                 or row["status"]
                 not in (
                     "open",
@@ -444,7 +504,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or subject != SEEDS + "item/" + quote(row["id"], safe="")
             ):
                 raise ValueError("incomplete or unsupported plate candidate")
-            if row["status"] not in ("closed", "tombstone"):
+            if messages_only:
+                from .inbox import is_message
+                if not is_message(row["title"]) or row["status"] == "tombstone":
+                    raise ValueError("unexpected inbox candidate")
+            if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
@@ -500,10 +564,25 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                 for graph in graphs:
                     branches.append(f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} a <{SCHEMA}Action> }} '
                                     f'BIND({_iri(subject)} AS ?s) BIND({json.dumps(graph)} AS ?graph) }}')
-        candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
-                            + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
-        if len(candidates) >= 10000:
-            raise ValueError("deferral candidate budget reached")
+        # The unscoped 16-arm UNION exhausted the server execution budget
+        # (aegis-9lb). Keep each clause unchanged but execute it separately.
+        # Exact-ID gate reads retain their bounded batch. A failed branch must
+        # refuse the whole read; never hydrate a partially collected candidate set.
+        groups = [branches] if target_ids is not None else [[branch] for branch in branches]
+        candidates = []
+        deadline = time.monotonic() + timeout
+        for group in groups:
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                raise ValueError("deferral candidate time budget reached")
+            remaining = 10000 - len(candidates)
+            rows = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+                          + " UNION ".join(group) + f" }} LIMIT {remaining}", time_left)["rows"]
+            if time.monotonic() >= deadline:
+                raise ValueError("deferral candidate time budget reached")
+            candidates.extend(rows)
+            if len(candidates) >= 10000:
+                raise ValueError("deferral candidate budget reached")
         selected = {}
         for row in candidates:
             subject, graph = row.get("subject"), row.get("graph")
@@ -545,9 +624,13 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                     raise ValueError("invalid or shadowed deferral field")
                 key = fields[predicate]
                 if isinstance(value, dict):
+                    # due_at is an xsd:dateTime like the plate reader's (aegis-qc2):
+                    # without it, one item with a due date made every deferral
+                    # read refuse, so the deferral sweep never produced a summary.
                     if set(value) != {"datatype", "value"} or key not in (
-                            "created_at", "updated_at", "defer_until"):
-                        raise ValueError("unsupported typed deferral field")
+                            "created_at", "updated_at", "defer_until", "due_at"):
+                        raise ValueError(f"unsupported typed deferral field: {key} "
+                                         f"({value.get('datatype')!s:.80})")
                     value = value["value"]
                 if key == "assignee" and isinstance(value, str) and value.startswith(SEEDS + "principal/"):
                     from urllib.parse import unquote
@@ -761,4 +844,7 @@ def due_rows(proof, *, timeout=30) -> Answer[list[dict]]:
                 previous["labels"].append(item["label"])
         return Answer.complete_read(list(grouped.values()),how=how)
     except Exception as error:
-        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {type(error).__name__}")
+        cause = type(error).__name__
+        if isinstance(error, HTTPError) and type(error.code) is int and 400 <= error.code <= 599:
+            cause += f":{error.code}"
+        return Answer.capped([],how=how,caveat=f"due projection UNKNOWN: {cause}")

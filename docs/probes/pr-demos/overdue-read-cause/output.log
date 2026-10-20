@@ -1,0 +1,50 @@
+Script started on 2026-10-15 15:17:55-04:00 [COMMAND="python3 docs/probes/pr-demos/overdue-read-cause/reproduce.py" <not executed on terminal>]
+BASE 6f573562c55ff62841cb5878d8822a37825a9069
+{
+  "cases": [
+    {
+      "input": "HTTP 408",
+      "log": [
+        "overdue: UNKNOWN (PartialAnswer); no repeat delivery"
+      ],
+      "reads": 1,
+      "production_http": 0,
+      "deliveries": 0,
+      "pending_preserved": true
+    },
+    {
+      "input": "complete empty rows",
+      "log": [],
+      "reads": 1,
+      "production_http": 0,
+      "deliveries": 0,
+      "pending_preserved": true
+    }
+  ]
+}
+CANDIDATE c3ee594a9f273a1215f3b5b673b7de90a1298d15
+{
+  "cases": [
+    {
+      "input": "HTTP 408",
+      "log": [
+        "overdue read cause: HTTPError:408; no repeat delivery",
+        "overdue: UNKNOWN (PartialAnswer); no repeat delivery"
+      ],
+      "reads": 1,
+      "production_http": 0,
+      "deliveries": 0,
+      "pending_preserved": true
+    },
+    {
+      "input": "complete empty rows",
+      "log": [],
+      "reads": 1,
+      "production_http": 0,
+      "deliveries": 0,
+      "pending_preserved": true
+    }
+  ]
+}
+
+Script done on 2026-10-15 15:17:56-04:00 [COMMAND_EXIT_CODE="0"]

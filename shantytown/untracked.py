@@ -38,8 +38,9 @@ WHY IT POLLS RATHER THAN READS EVERY TIME. This runs before every acting tool
 call. On the deployment that needs it the plate lives in beads, and `bd list
 --json` there is 0.15s and 306KB (measured 2026-07-24) — paid per Edit, per
 Write, per Bash, forever. So the tracker is consulted at most once per POLL_S and
-the verdict is carried in the ledger between polls. Strikes still count every
-call: the cheap half is the counting, the expensive half is the looking.
+the verdict is carried in the ledger between polls. Failed observations also
+back off for that interval while remaining UNKNOWN. Strikes still count every
+call with a known-empty hook; UNKNOWN neither counts nor forgives a strike.
 """
 from __future__ import annotations
 
@@ -107,6 +108,8 @@ def ledger_activity(root, agent: str, *, now=None, read=None, stat=None):
         return ACTIVITY_UNKNOWN, "untracked ledger unreadable"
     if not isinstance(data, dict) or not isinstance(mtime, (int, float)):
         return ACTIVITY_UNKNOWN, "untracked ledger unreadable"
+    if data.get("read_failed_at") is not None:
+        return ACTIVITY_UNKNOWN, "untracked tracker read failed"
     if data.get("hooked") is True:
         return ACTIVITY_CLEAR, "hooked"
     if data.get("hooked") is not False:
@@ -222,10 +225,9 @@ class Governor:
 
         hooked = self._hooked(me, led, now)
         if hooked is None:
-            # COULD NOT LOOK. Not a warning, and NOT a reset either: neither
-            # asserting untracked work nor forgiving a stretch already in
-            # progress. The ledger is left exactly as it was, so a flap that
-            # spans a few tool calls costs the ladder nothing.
+            # Persist only the bounded failed-read observation. Preserve the
+            # escalation stretch; UNKNOWN is neither empty nor hooked.
+            self._save(me, led)
             return Verdict(SILENT, "could not read the tracker")
         if hooked:
             self._reset(me, led, now)
@@ -259,16 +261,21 @@ class Governor:
 
         Three answers, deliberately, and the third is the whole reason this
         returns an optional bool instead of a bool. Polled: the cached answer
-        stands for POLL_S, and a poll that RAISES leaves the cache untouched
-        rather than poisoning it with a guess.
+        stands for POLL_S. A raised read has its own bounded backoff;
+        it never replaces the last known verdict with a guess.
         """
+        failed_at = led.get("read_failed_at")
+        if failed_at is not None and 0 <= now - float(failed_at) < POLL_S:
+            return None
         fresh = now - float(led.get("checked_at") or 0.0) < POLL_S
         if fresh and "hooked" in led:
             return bool(led["hooked"])
         try:
             item = self.plate(me)
         except Exception:
+            led["read_failed_at"] = now
             return None
+        led.pop("read_failed_at", None)
         led["checked_at"] = now
         led["hooked"] = item is not None
         return led["hooked"]

@@ -1,0 +1,39 @@
+Script started on 2026-10-14 21:50:13-04:00 [COMMAND="echo BEFORE; python3 docs/probes/pr-demos/ceiling-busy/probe.py "$DEMO_BASE"; echo AFTER; python3 docs/probes/pr-demos/ceiling-busy/probe.py ." <not executed on terminal>]
+BEFORE
+{
+  "version": "0.7.1",
+  "busy_attempts": 5,
+  "available_attempts": 1,
+  "outcomes": 6,
+  "moved": [
+    "control"
+  ],
+  "commented": [
+    "control"
+  ],
+  "event_items": [
+    "control"
+  ],
+  "next_pass_attempts": 1,
+  "next_pass_moved": true
+}
+AFTER
+{
+  "version": "0.7.1",
+  "busy_attempts": 1,
+  "available_attempts": 1,
+  "outcomes": 6,
+  "moved": [
+    "control"
+  ],
+  "commented": [
+    "control"
+  ],
+  "event_items": [
+    "control"
+  ],
+  "next_pass_attempts": 1,
+  "next_pass_moved": true
+}
+
+Script done on 2026-10-14 21:50:13-04:00 [COMMAND_EXIT_CODE="0"]

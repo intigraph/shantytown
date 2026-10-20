@@ -1,0 +1,20 @@
+Script started on 2026-10-18 16:40:50-04:00 [COMMAND="python3 docs/demos/agent-remote/run.py" <not executed on terminal>]
+BEFORE: base 2c88041, st agent remote list --json
+usage: st agent [-h]
+                {new,stop,harness,account,cycle,advise,input,ask,answer,log,history,stats} ...
+st agent: error: argument {new,stop,harness,account,cycle,advise,input,ask,answer,log,history,stats}: invalid choice: 'remote' (choose from new, harness, account, stop, stats, log, input, ask, answer, advise, cycle, history)
+exit: 2
+AFTER (synthetic transport): st agent remote list --json
+[{"agent": "alice", "harness": "codex", "host": "demo-host", "availability": "connected", "server_name": "demo-host"}, {"agent": "bob", "harness": "codex", "host": "demo-host", "availability": "inactive", "detail": "no existing daemon; nothing launched"}]
+exit: 0
+AFTER (synthetic transport): st agent remote pair alice --dry-run --json
+{"agent": "alice", "harness": "codex", "host": "demo-host", "availability": "connected", "server_name": "demo-host", "action": "would_pair"}
+exit: 0
+AFTER (synthetic transport): st agent remote pair alice --json
+{"agent": "alice", "harness": "codex", "host": "demo-host", "availability": "connected", "server_name": "demo-host", "manual_pairing_code": "EXAMPLE-NOT-A-CREDENTIAL", "expires_at": "2100-01-01T00:00:00+00:00"}
+exit: 0
+NEGATIVE: same pair command, expired synthetic response
+remote: pairing response is expired or invalid; code withheld
+expired response withheld; exit 2; no lifecycle commands
+
+Script done on 2026-10-18 16:40:50-04:00 [COMMAND_EXIT_CODE="0"]

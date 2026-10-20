@@ -78,3 +78,54 @@ def test_recipient_boundary_once_per_generation_owner_scope_unknown(tmp_path):
         consume(tmp_path,"owner",lambda:Answer.capped([],how="UNKNOWN"),now=NOW)
     path=next((tmp_path/"notify").glob("*.json"));path.write_text("corrupt")
     with pytest.raises(Exception): consume(tmp_path,"owner",read,now=NOW)
+
+
+def test_actual_rdf_spec_scope_keeps_deferred_out_of_dispatch(monkeypatch):
+    from rdflib import Dataset, URIRef, Literal, RDF
+    from shantytown import seeds_plate
+    from shantytown.sd import StoreProof
+
+    graph_name = "https://example.test/project/test"
+    proof = StoreProof("--quipu", None, "https://example.test", "test", graph_name)
+    data = Dataset()
+    graph = data.graph(URIRef(graph_name))
+    for identifier, owner, status, version in (
+        ("test-ready", "owner", "open", None),
+        ("test-changed", "owner", "deferred", 2),
+        ("test-foreign", "another", "deferred", 2),
+    ):
+        subject = URIRef(seeds_plate.SEEDS + "item/" + identifier)
+        graph.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        values = {
+            seeds_plate.SCHEMA + "identifier": identifier,
+            seeds_plate.SCHEMA + "name": "controlled work",
+            seeds_plate.SCHEMA + "agent": owner,
+            seeds_plate.SEEDS + "ontology/status": status,
+            seeds_plate.SEEDS + "ontology/priority": 1,
+        }
+        if version is not None:
+            values[seeds_plate.SEEDS + "ontology/specVersion"] = version
+        for predicate, value in values.items():
+            graph.add((subject, URIRef(predicate), Literal(value)))
+
+    def query(_proof, text, timeout):
+        rows = [
+            {str(key): value.toPython() if isinstance(value, Literal) else str(value)
+             for key, value in result.asdict().items()}
+            for result in data.query(text)
+        ]
+        return {"rows": rows, "count": len(rows), "truncated": False}
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    monkeypatch.setattr(seeds_plate, "owner_shape_supported", lambda *a, **k: True)
+    try:
+        ordinary = seeds_plate.owner_rows(proof, "owner", decision=True)
+        assert ordinary.complete
+        assert {row["id"] for row in ordinary.exact()} == {"test-ready"}
+        specs = seeds_plate.owner_rows(
+            proof, "owner", decision=True, include_deferred=True, only_specs=True)
+        assert specs.complete
+        assert {row["id"] for row in specs.exact()} == {"test-changed"}
+        assert specs.exact()[0]["status"] == "deferred"
+    finally:
+        data.close()

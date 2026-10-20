@@ -110,7 +110,7 @@ def test_native_sd_comment_transport_verifies_exact_text_once(
     if verified:
         assert work_item.command(operation, tracker)["comment"] == "verified"
     else:
-        with pytest.raises(RuntimeError, match="do not resend"):
+        with pytest.raises(RuntimeError, match="verify exact readback before retrying"):
             work_item.command(operation, tracker)
     assert tracker.writes == 1
 

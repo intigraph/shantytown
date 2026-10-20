@@ -5,6 +5,52 @@ run the repo patrol*; *when someone outside the project opens a PR, create a
 triage item and hand it to an agent*. One TOML file per job lives in
 `<root>/jobs/`, and `st fleet tend` evaluates every job on each pass.
 
+## Read Quipu declarations
+
+The explicit graph read surface is available while signed execution is being
+integrated. It does not select an execution backend or change the tend sweep:
+
+```sh
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review list
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review --json list
+st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:review check review
+```
+
+The graph must contain the opt-in Quechua scheduled-jobs profile: an Event links
+an Action through `schema:potentialAction` and a Schedule through
+`schema:eventSchedule`. The reader requires explicit RDF types, revision,
+owner, host, target, enabled state, timezone, anchor and a fixed interval of at
+least sixty seconds. Calendar qualifiers and ambiguous times are refused.
+Disabled declarations stay visible. Multiple schedules per job require a future
+explicit overlap admission and are currently refused.
+
+`list` reports declarations, without asserting executable admission or signed
+run health. `check` validates declarations and exits 2 because firing eligibility
+is not yet available. `run` and `history` refuse in graph mode rather than using
+local commands or local run records. An unavailable, empty, truncated or invalid
+catalogue also exits 2; there is no TOML fallback. A nonempty graph alone cannot
+prove every expected job exists. Repeat `--expect-job` for known identities to
+make deletion of one job fail even when other declarations remain valid; without
+these controls the command explicitly reports membership coverage as UNKNOWN.
+
+For adapters in another process, put `--json` before `list` or `check`. The
+versioned object contains `schema_version: 1`, the selected graph, typed `jobs`,
+and explicit `UNKNOWN` runtime verdicts. `membership.required` lists only the
+identity controls actually checked; `required_identities_verified` does not
+claim the complete host inventory was supplied. Without controls membership
+stays `UNKNOWN`. Errors emit no catalogue object and retain their nonzero exit
+status; JSON without `--graph` refuses before reading local TOML.
+
+This source capability does not load the profile into a server, register a
+signing key, fire a schedule or retire an existing cron job. Calls without
+`--graph` retain the existing TOML behavior below.
+
+The source-only [seed-before-assignment library](scheduled-seeds.md) supplies
+keyed creation/readback and a durable no-repeat boundary for an admitted agent
+firing. It does not select an execution backend, enable a schedule, change the
+catalogue reader or remove the existing tend sweep. Runtime integration and
+calendar semantics remain separate.
+
 ## Why it is shaped like this
 
 Before this, every recurring job was one of two things. Some were sweeps
@@ -150,7 +196,12 @@ st work jobs history [name]  recent attempts from logs/jobs.jsonl
 `RunAtLoad`) and loads it with `launchctl bootstrap`. The plist uses the
 **absolute** path of the `st` you ran, sets `SHANTY_ROOT`, and carries your
 shell's `PATH`, because launchd starts jobs with `/usr/bin:/bin` and tend calls
-tmux, git, gh and br. `--uninstall` removes it and refuses to touch a plist that
+tmux, git, gh and br. It also carries `SHANTY_BACKEND`: the deployment's `[env]`
+value takes precedence over the installing shell, with `files` as the standalone
+default. Invalid routing configuration refuses installation before any write.
+Peer governor SSH failures retain recognized causes from the final diagnostic
+line, such as “No route to host”; arbitrary remote stderr is not echoed.
+`--uninstall` removes it and refuses to touch a plist that
 st did not write. Linux keeps the systemd user timer, unchanged.
 
 ## Examples
@@ -218,3 +269,36 @@ This is a first slice. It does not yet include: `gh.release` and
 `file.changed` sources; recording runs as quipu facts; or moving dream's
 interval and the loose host crons (CI watch, repo audits, `hold gaming --probe`)
 into job files. Each of those is a separate change.
+
+
+## Store admission and terminal failure notices
+
+Scheduled commands resolve plumbing from the deployment's
+shantytown.toml [env] table before ambient environment variables.
+For a Seeds board, declare SHANTY_BACKEND="seeds", exactly one of
+SHANTY_SD_STORE or SHANTY_SD_QUIPU, and SHANTY_SD_PREFIX there.
+QUIPU_SERVER alone identifies an ontology service, not a work board.
+Shell startup files and a tmux server's global environment are insufficient
+configuration for launchd or cron jobs.
+
+The command st work jobs check [name] performs the Seeds adapter's read-only
+store identity admission for enabled local durable inbox and dispatch jobs,
+even when they are not due. A missing, unreachable or mismatched store exits 2.
+This does not send a message, prove recipient delivery or establish complete
+schedule coverage. Disabled, other-host and exec-only jobs do not trigger it.
+
+After scheduled retries are exhausted, the CLI records one job-failed event
+for the administrator through the existing local event/drain channel. This
+channel does not depend on the failed work store. The event names the job,
+history command and routing checks; raw action output stays in local history.
+Its stable firing key prevents replay from recreating a consumed notice.
+The normal administrator drain renders it as a job alert, not an agent stop or
+untracked-work report. Persistence is not proof that the administrator has
+received it: verify the administrator's normal local drain separately.
+If no administrator or event write is available, the run reports that it could
+not notify the administrator.
+
+Before installing a delivery change, coordinate an observed installed smoke,
+a test silence and a separate reader receipt. Preserve the job state, event
+files (including consumed records), scheduler ledgers and canonical config
+backup across rollback. Use an isolated tmux socket for source verification.

@@ -1,0 +1,15 @@
+{
+  "before": {
+    "hook_invocations": 20,
+    "plate_reads": 20,
+    "activity": "UNKNOWN",
+    "warnings": 0
+  },
+  "after": {
+    "hook_invocations": 20,
+    "plate_reads": 1,
+    "activity": "UNKNOWN",
+    "warnings": 0
+  },
+  "scope": "private clock, separate Governor instances and private shared ledger; no HTTP or production rate claim"
+}

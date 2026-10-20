@@ -218,7 +218,16 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
         if wiring is None or "send" not in wiring.directions:
             continue                     # dark or unreadable -> not feedable
         out.append(ag.name)
-    return sorted(out)
+    from . import busy_wait
+    try:
+        waiting = busy_wait.workers(root, reg, out)
+    except Exception as exc:
+        # UNKNOWN occupancy cannot prove spare capacity. Stop-policy callers
+        # fail open by allowing the administrator's stop, not by feeding WIP.
+        print(f"automatic-feed occupancy UNKNOWN ({type(exc).__name__}); "
+              "no candidate is proven free", file=sys.stderr)
+        return []
+    return sorted(name for name in out if name not in waiting)
 
 
 def idle_haulable_leads(reg, panes, runtime, root=None) -> list[str]:
@@ -411,6 +420,10 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
         # advance, hauls() and this function are meant to agree about what a
         # worker may be handed, and this one was the odd path out.
         if (b.get("assignee")
+                or b.get("issue_type") == "epic"
+                or any(str(label).strip().lower().startswith("parked:")
+                       or str(label).strip().lower() == "feed:manual"
+                       for label in (b.get("labels") or []))
                 or is_message(b.get("title", ""))
                 or is_decision(b.get("labels"))
                 or is_unfeedable(b.get("title", ""), b.get("labels"))):

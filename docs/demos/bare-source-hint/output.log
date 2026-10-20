@@ -1,0 +1,13 @@
+Script started on 2026-10-17 01:38:51-04:00 [COMMAND="bash docs/demos/bare-source-hint/record.sh" <not executed on terminal>]
+BEFORE: bare name + explicit topic from extra checkout; rc=1
+  refused before push: <fixture>/project-wt/worker is on 'wt/worker', but this would push 'worker/topic' — a branch the worktree is not on, so it is not the work you are looking at. No remote was contacted.
+  Either check out 'worker/topic' there, or push 'wt/worker' deliberately with --source-branch after reviewing the ref.
+CONTROL: explicit extra path pushes exact topic to both local peers; main unchanged
+AFTER: bare name + explicit topic from extra checkout; rc=1
+  refused before push: <fixture>/project-wt/worker is on 'wt/worker', but this would push 'worker/topic' — a branch the worktree is not on, so it is not the work you are looking at. No remote was contacted.
+  Either check out 'worker/topic' there, or push 'wt/worker' deliberately with --source-branch after reviewing the ref.
+  Bare names select the canonical agent worktree. To select the current checkout, use its literal worktree path:
+  st repo push '<fixture>/extra source' worker --source-branch worker/topic --branch worker/topic
+CONTROL: explicit extra path pushes exact topic to both local peers; main unchanged
+
+Script done on 2026-10-17 01:38:52-04:00 [COMMAND_EXIT_CODE="0"]

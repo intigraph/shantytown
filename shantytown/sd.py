@@ -300,6 +300,11 @@ class SdTracker(BrTracker):
     def capacity_rows(self, agent: str) -> Answer[list[dict]]:
         """Whole owner queue, never the plate reader's in-hand early return."""
         try:
+            roster = getattr(self, "_roster_capacity", {})
+            # Only the explicit crew render may reuse its frozen observation.
+            # Admission callers without that render scope still read live.
+            if getattr(self, "render_shape_reads", None) is not None and agent in roster:
+                return roster[agent]
             if self._use_remote_projection():
                 from .seeds_plate import owner_rows
                 return owner_rows(self.prove_store(), agent, timeout=self.timeout,
@@ -319,20 +324,24 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows, unblocked_ids
         from .inbox import drop_parked
         agents = tuple(dict.fromkeys(agents))
-        answer = owner_rows(self.prove_store(), None, plate_owners=agents,
+        answer = owner_rows(self.prove_store(), None, plate_owners=agents, capacity=True,
                             timeout=self.timeout,
                             shape_reads=getattr(self, "render_shape_reads", None))
         self._roster_answers = {}
+        self._roster_capacity = {}
         self._roster_ready = {}
         if not answer.complete:
             self._roster_answers = {agent: answer for agent in agents}
+            self._roster_capacity = {agent: answer for agent in agents}
             return
         rows = answer.exact()
         for agent in agents:
             owners = {agent, agent.split("/")[-1]}
             own = [row for row in rows if row.get("assignee") in owners]
-            self._roster_answers[agent] = Answer.complete_read(own, how=answer.how)
-            self._plate_projection_candidates[agent] = own
+            self._roster_capacity[agent] = Answer.complete_read(own, how=answer.how)
+            plate = [row for row in own if row["status"] != "blocked"]
+            self._roster_answers[agent] = Answer.complete_read(plate, how=answer.how)
+            self._plate_projection_candidates[agent] = plate
         candidates = [row for row in drop_parked(rows) if row["status"] == "open"]
         try:
             ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
@@ -403,7 +412,7 @@ class SdTracker(BrTracker):
         if not self._use_remote_projection():
             raise StoreUnproven("spec boundary projection requires the selected remote schema")
         from .seeds_plate import owner_rows
-        return owner_rows(self.prove_store(), owner, timeout=min(self.timeout,1), decision=True, only_specs=True)
+        return owner_rows(self.prove_store(), owner, timeout=min(self.timeout,1), decision=True, only_specs=True, include_deferred=True)
 
     def _spec_json(self, *args):
         result = self._bd(*args, "--json")
@@ -447,7 +456,7 @@ class SdTracker(BrTracker):
             if not self._use_remote_projection():
                 raise ValueError("decision projection unavailable on this transport")
             from .seeds_plate import owner_rows
-            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True, include_deferred=agent is not None)
         except Exception as error:
             return Answer.capped([],how="Seeds decision fields",caveat=str(error))
 
@@ -483,7 +492,8 @@ class SdTracker(BrTracker):
             date = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if date.tzinfo is None:
                 raise StoreUnproven("tend creation date lacks timezone")
-            return row["priority"], date, row["id"]
+            from .protocols import rank_order
+            return row["priority"], *rank_order(row.get("rank"), row.get("due_at"), value), row["id"]
         return sorted(rows, key=key)
 
     def tend_rows(self, owners):
@@ -492,6 +502,20 @@ class SdTracker(BrTracker):
             return None
         ready, active = result
         return self._tend_order(ready), self._tend_order(active)
+
+    def haul_active_rows(self, owner: str) -> Answer[list[dict]] | None:
+        """The stop hook's own anchors, including future-dated held work.
+
+        Unlike an idle sweep, a haul must retain parked active anchors. Native
+        uncertainty raises rather than falling back to global SDK hydration.
+        """
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows
+        rows = owner_rows(self.prove_store(), None, feed_owners=(owner,),
+                          active_only=True, timeout=self.timeout).exact()
+        return Answer.complete_read(self._tend_order(rows),
+                                    how="owner-scoped haul active anchors")
 
     def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
@@ -583,7 +607,16 @@ class SdTracker(BrTracker):
 
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
-        answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
+        try:
+            projected = self._use_remote_projection()
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds inbox format proof", caveat=str(error))
+        if projected:
+            from .seeds_plate import owner_rows
+            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout,
+                                messages_only=True, include_closed=include_closed)
+        else:
+            answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
         # Each bounded read is ordered, but their union must keep the SDK's
         # global priority/creation/id order before dates leave the projection.
         rows = sorted(answer.at_least(), key=lambda row: (

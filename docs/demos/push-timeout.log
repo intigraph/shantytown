@@ -1,0 +1,10 @@
+Script started on 2026-10-17 10:09:15-04:00 [COMMAND="bash run.sh" <not executed on terminal>]
+Actual push runner; command duration modeled as 121 seconds. No network or Git writes.
+BASE 281100288e7a196afcf88e37ab342880ed02afea
+{"case": "default", "rc": 124, "response": "INDETERMINATE: push exceeded 60 seconds; read back the remote destination SHA before any retry."}
+{"case": "explicit short control", "rc": 124, "response": "INDETERMINATE: push exceeded 1 seconds; read back the remote destination SHA before any retry."}
+HEAD source 75373d1 (same implementation in the final PR head)
+{"case": "default", "rc": 0, "response": "fixture peer accepted"}
+{"case": "explicit short control", "rc": 124, "response": "INDETERMINATE: push exceeded 1 seconds; read back the remote destination SHA before any retry."}
+
+Script done on 2026-10-17 10:09:19-04:00 [COMMAND_EXIT_CODE="0"]

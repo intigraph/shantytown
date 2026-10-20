@@ -1,0 +1,11 @@
+Script started on 2026-10-15 02:26:41-04:00 [COMMAND="python3 docs/demos/quipu-jobs.py" <not executed on terminal>]
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:review list
+Quipu declarations only; executable admission and signed run status are UNKNOWN.
+Membership coverage: 1 required identities verified
+  review  enabled  every 600s  timezone UTC  host urn:example:host  revision revision1  target urn:example:manifest:revision1
+exit=0
+$ st work jobs --graph urn:example:catalogue --expect-job urn:example:removed list
+cannot tell: required job identities missing: urn:example:removed
+exit=2
+
+Script done on 2026-10-15 02:26:41-04:00 [COMMAND_EXIT_CODE="0"]

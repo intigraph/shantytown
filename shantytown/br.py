@@ -433,17 +433,23 @@ def show(tracker: BrTracker, bead_id: str) -> dict:
     from a closed one — the detail read is what stops a count being used as a
     status classifier.
     """
-    found = _owning_store(tracker, bead_id)
+    failures: list[str] = []
+    found = _owning_store(tracker, bead_id, failures=failures)
     if found is None:
-        r = tracker._bd("show", bead_id, "--json")
-        raise RuntimeError(f"br show {bead_id} failed: {r.stderr.strip()[:120] or 'no exact match in any store'}")
+        # Preserve the failed observation instead of issuing the same read
+        # again just to obtain its diagnostic. Each independent show still
+        # reads afresh; this is not a cached absence or an availability verdict.
+        detail = "; ".join(failures) or "no exact match in any store"
+        raise RuntimeError(f"br show {bead_id} failed: {detail}")
     return found[1]
 
 
-def _show_in(tracker: BrTracker, repo, bead_id: str):
+def _show_in(tracker: BrTracker, repo, bead_id: str, *, failures=None):
     run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
     r = run("show", bead_id, "--json")
     if r.returncode != 0:
+        if failures is not None:
+            failures.append(r.stderr.strip()[:120] or f"show exited {r.returncode}")
         return None
     value = json.loads(r.stdout) if r.stdout.strip() else {}
     if isinstance(value, dict) and "issues" in value:
@@ -452,7 +458,7 @@ def _show_in(tracker: BrTracker, repo, bead_id: str):
     return value if isinstance(value, dict) else None
 
 
-def _owning_store(tracker: BrTracker, bead_id: str):
+def _owning_store(tracker: BrTracker, bead_id: str, *, failures=None):
     """(repo, row) of the store holding EXACTLY `bead_id`, primary first, or None.
 
     EXACT, not "first success": br can fuzzy-resolve a missing id to a DIFFERENT
@@ -461,7 +467,7 @@ def _owning_store(tracker: BrTracker, bead_id: str):
     claim routed by that answer would write to the wrong bead.
     """
     for repo in (tracker.repos or [tracker.repo]):
-        row = _show_in(tracker, repo, bead_id)
+        row = _show_in(tracker, repo, bead_id, failures=failures)
         if row is not None and row.get("id") == bead_id:
             return repo, row
     return None

@@ -39,6 +39,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -914,12 +915,59 @@ def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> di
             out.close()
 
 
+_SYSTEMD_VERSIONS: dict = {}
+
+
+def _systemd_version(tool: str):
+    """`systemd-run --version` as an int, or None when it cannot be read."""
+    if tool not in _SYSTEMD_VERSIONS:
+        try:
+            out = subprocess.run([tool, "--version"], capture_output=True, text=True,
+                                 timeout=5).stdout
+            m = re.match(r"systemd (\d+)", out)
+            _SYSTEMD_VERSIONS[tool] = int(m.group(1)) if m else None
+        except (OSError, subprocess.SubprocessError):
+            _SYSTEMD_VERSIONS[tool] = None
+    return _SYSTEMD_VERSIONS[tool]
+
+
+def _escape_unit(result_path: Path, env) -> list:
+    """The prefix that moves a detached runner out of the calling unit's cgroup.
+
+    A new session is not a new cgroup. Tend runs as a systemd oneshot service,
+    and when the pass ends systemd kills every process left in the service's
+    cgroup (KillMode=control-group), the "detached" runner included. The job is
+    cut off mid-run and recorded as "exited without a result" (aegis-db3: an
+    hourly sweep killed 16s and 29s into its run, twice). Under systemd, start
+    the runner in its own transient scope. `systemd-run --scope` execs the
+    command, so the pid returned is still the runner's.
+
+    systemd 254 taught systemd-run to expand `${VAR}` and `$$` in the command
+    it runs, scope mode included, which would rewrite a job's own argv; the
+    same release added --expand-environment=no to turn it off. Older versions
+    pass the command through verbatim (measured on a CI runner: escaping `$`
+    there doubled it), so they get the scope with no flag and no escaping.
+    When the version cannot be read, or outside systemd, nothing changes.
+    """
+    e = os.environ if env is None else env
+    if not e.get("INVOCATION_ID") or not e.get("XDG_RUNTIME_DIR"):
+        return []
+    tool = shutil.which("systemd-run", path=e.get("PATH"))
+    version = _systemd_version(tool) if tool else None
+    if version is None:
+        return []
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", result_path.stem)[:64]
+    prefix = [tool, "--user", "--scope", "--quiet", "--collect",
+              f"--unit=st-job-{name}-{int(time.time() * 1000)}"]
+    return [*prefix, "--expand-environment=no"] if version >= 254 else prefix
+
+
 def _spawn_detached(argv, timeout_s, result_path: Path, log_path: Path, env, cwd) -> int:
-    child = [sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
-             str(timeout_s), str(log_path), "--", *argv]
-    proc = subprocess.Popen(child, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL, env=env, cwd=cwd,
-                            start_new_session=True)
+    runner = [sys.executable, "-m", "shantytown.jobs", "_exec", str(result_path),
+              str(timeout_s), str(log_path), "--", *argv]
+    proc = subprocess.Popen([*_escape_unit(Path(result_path), env), *runner], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=env, cwd=cwd, start_new_session=True)
     return proc.pid
 
 
@@ -945,11 +993,12 @@ class Runner:
 
     def __init__(self, root, *, host=None, actions=None, escalate=None,
                  sources=None, now=time.time, run=_run, spawn=_spawn_detached,
-                 detach=True, log=None):
+                 detach=True, log=None, terminal_notice=None):
         self.root = Path(root)
         self.host = host
         self.actions = actions or {}
         self.escalate = escalate
+        self.terminal_notice = terminal_notice
         self.sources = sources or Sources(root)
         self.now = now
         self._run = run
@@ -1139,16 +1188,18 @@ class Runner:
         text = (f"[job {job.name}] gave up after {attempt} attempt(s): "
                 f"{outcome.detail[:160]} — st work jobs history {job.name}")
         told = False
-        if self.escalate is not None:
+        if self.terminal_notice is not None or self.escalate is not None:
             try:
-                told = bool(self.escalate(job, text))
+                told = bool(self.terminal_notice(job, fire, text)
+                            if self.terminal_notice is not None
+                            else self.escalate(job, text))
             except Exception:  # noqa: BLE001 — escalation is best-effort
                 told = False
         row.update(final=True, escalated=told)
         self._record(st, row)
         return [f"⚠ job {job.name}: GAVE UP after {attempt} attempt(s) "
                 f"({outcome.detail}) — "
-                + ("the administrator was told" if told else
+                + ("administrator notice was recorded" if told else
                    "COULD NOT tell the administrator; this line is the only notice")]
 
     def _record(self, st: dict, row: dict) -> None:

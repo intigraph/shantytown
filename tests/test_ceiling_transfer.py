@@ -273,5 +273,168 @@ def test_delivered_but_untracked_is_not_reported_as_staying():
                    dispatch=raise_, comment=lambda *c: None,
                    emit=lambda e: None, log=log.append)
     assert not out[0].moved
-    assert "DELIVERED to ellie" in log[0] and "do not resend" in log[0]
+    assert "DELIVERED to ellie" in log[0] and "verify ownership before retrying" in log[0]
     assert "stays with" not in log[0]
+
+
+def test_busy_receiver_is_attempted_once_per_pass_without_stopping_other_receivers():
+    from shantytown.dispatch import TriageRefused
+    from shantytown.triage import Action, Decision
+
+    moves = [ct.Move(f"item-{i}", "holder", "busy", "session ceiling", "fixture")
+             for i in range(5)]
+    moves.insert(2, ct.Move("control", "holder", "ready", "session ceiling", "fixture"))
+    calls, comments, events, logs = [], [], [], []
+
+    def dispatch(item, to, note):
+        calls.append((item, to))
+        if to == "busy":
+            raise TriageRefused(Decision(Action.REFUSE, "pane is busy", {"busy": True}))
+
+    out = ct.apply(moves, dispatch=dispatch, comment=lambda *c: comments.append(c),
+                   emit=events.append, log=logs.append)
+    assert calls == [("item-0", "busy"), ("control", "ready")]
+    assert [o.move for o in out] == moves  # even skipped work has an outcome
+    assert [o.move.item for o in out if o.moved] == ["control"]
+    assert [c[0] for c in comments] == ["control"]
+    assert [e["item"] for e in events] == ["control"]
+    assert all("TriageRefused" in o.detail for o in out if not o.moved)
+    assert sum("skipped" in line for line in logs) == 4
+
+    # A refusal is an observation for this pass, never a persistent agent hold.
+    later = []
+    out = ct.apply([moves[0]], dispatch=lambda *c: later.append(c),
+                   comment=lambda *c: None, emit=lambda e: None, log=lambda line: None)
+    assert len(later) == 1 and out[0].moved
+
+
+def test_item_level_failure_does_not_withhold_other_work_from_the_receiver():
+    calls = []
+    moves = [ct.Move("bad", "holder", "ready", "session ceiling", "fixture"),
+             ct.Move("good", "holder", "ready", "session ceiling", "fixture")]
+
+    def dispatch(item, to, note):
+        calls.append(item)
+        if item == "bad":
+            raise ValueError("item is not dispatchable")
+
+    out = ct.apply(moves, dispatch=dispatch, comment=lambda *c: None,
+                   emit=lambda e: None, log=lambda line: None)
+    assert calls == ["bad", "good"]
+    assert not out[0].moved and out[1].moved
+
+
+# ---- policy50 observations at the real sweep boundary ----------------------
+
+def _advisory(tmp_path):
+    import json
+    return [json.loads(line) for line in
+            (tmp_path / "ceiling-transfer-advisory.jsonl").read_text().splitlines()
+            if json.loads(line)["phase"] != "start"]
+
+
+def test_advisory_records_the_inputs_used_and_confirmed_dispatch(tmp_path):
+    out, sent, _, _ = _sweep(tmp_path, counts={"ellie": 9})
+    before, after = _advisory(tmp_path)
+    assert sent == [("item-kelly", "ellie", True)] and out[0].moved
+    assert before["sweep"] == after["sweep"]
+    assert (before["phase"], after["phase"]) == ("plan", "outcomes")
+    assert before["effect"] == "record" and before["adjudication"] == "ungraded"
+    assert before["policy_version"] == "4e83e01ae8985b24"
+    assert all(len(digest) == 64 for digest in before["code"].values())
+    inputs = before["inputs"]
+    assert inputs["counts"]["ellie"] == 9
+    assert inputs["budgets"]["kelly"][2]["measure"] == "items"
+    assert inputs["holders"][0]["why"] == "session ceiling"
+    assert inputs["plan"]["moves"][0]["to"] == "ellie"
+    assert after["inputs"]["outcomes"][0]["disposition"] == "confirmed"
+
+
+def test_advisory_unknown_count_is_not_zero_or_a_move(tmp_path):
+    _sweep_unknown(tmp_path)
+    before, after = _advisory(tmp_path)
+    assert before["inputs"]["counts"]["ellie"] is None
+    candidate = next(c for c in before["inputs"]["candidates"] if c["agent"] == "ellie")
+    assert candidate["unavailable"] == "plate count unknown"
+    assert not before["inputs"]["plan"]["moves"]
+    assert before["inputs"]["plan"]["stays"]
+    assert after["inputs"]["outcomes"] == []
+
+
+@pytest.mark.parametrize("lost,expected", [(True, False), (False, True)])
+def test_advisory_distinguishes_inactive_policy_from_lost_signal(tmp_path, lost, expected):
+    def budget(name):
+        if name == "ellie":
+            return sb.Limits(), sb.Spend(signal_lost=lost), None
+        return _known(name, ("kelly",))
+    _, sent, _, _ = _sweep(tmp_path, budget=budget)
+    row = _advisory(tmp_path)[0]
+    assert bool(sent) == expected
+    assert row["inputs"]["budgets"]["ellie"][1]["signal_lost"] is lost
+    # An unread count stays absent, not a fabricated complete zero.
+    assert ("ellie" in row["inputs"]["counts"]) == expected
+
+
+def test_advisory_delivered_untracked_retains_delivery_uncertainty(tmp_path):
+    err = DispatchedButUntracked("item-kelly", "ellie", "%9", OSError("store"))
+    _, sent, comments, _ = _sweep(tmp_path, dispatch_raises=err)
+    row = _advisory(tmp_path)[-1]["inputs"]["outcomes"][0]
+    assert len(sent) == 1 and not comments
+    assert row["disposition"] == "delivered_untracked" and not row["moved"]
+    assert "DispatchedButUntracked" in row["detail"]
+
+
+@pytest.mark.parametrize("mode", ["gaming", "no_holders", "dry_run"])
+def test_advisory_reports_scope_without_inventing_a_dispatch(tmp_path, mode):
+    options = {"gaming": {"gaming": True},
+               "no_holders": {"ceilinged": ()},
+               "dry_run": {"dry_run": True}}[mode]
+    _, sent, comments, _ = _sweep(tmp_path, **options)
+    rows = _advisory(tmp_path)
+    assert not sent and not comments and len(rows) == 1
+    assert rows[0]["phase"] == {"gaming": "held", "no_holders": "no_holders",
+                                "dry_run": "plan"}[mode]
+    assert rows[0]["adjudication"] == "ungraded"
+
+
+def test_advisory_write_failure_does_not_change_dispatch(tmp_path, monkeypatch):
+    from shantytown import ceiling_advisory
+
+    def denied(*args, **kwargs):
+        raise PermissionError("fixture")
+
+    monkeypatch.setattr(ceiling_advisory.os, "open", denied)
+    out, sent, comments, log = _sweep(tmp_path)
+    assert sent == [("item-kelly", "ellie", True)] and comments and out[0].moved
+    assert sum("advisory capture UNKNOWN" in line for line in log) == 3
+    assert not (tmp_path / "ceiling-transfer-advisory.jsonl").exists()
+
+
+def test_advisory_types_refusal_and_skipped_without_a_second_send(tmp_path):
+    from shantytown.dispatch import TriageRefused
+    from shantytown.triage import Action, Decision
+    calls = []
+
+    def refuse(*args):
+        calls.append(args)
+        raise TriageRefused(Decision(Action.REFUSE, "busy", {}))
+
+    moves = [ct.Move(str(i), "holder", "receiver", "session ceiling", "fixture")
+             for i in range(2)]
+    rows = ct.apply(moves, dispatch=refuse, comment=lambda *a: None,
+                    emit=lambda *a: None, log=lambda *a: None)
+    assert len(calls) == 1
+    assert [r.disposition for r in rows] == ["refused", "not_attempted"]
+
+
+def test_advisory_started_read_failure_is_unknown_not_an_empty_population(tmp_path):
+    import json
+    def broken(name):
+        raise RuntimeError("fixture read failed")
+    with pytest.raises(RuntimeError, match="fixture read failed"):
+        _sweep(tmp_path, budget=broken)
+    rows = [json.loads(line) for line in
+            (tmp_path / "ceiling-transfer-advisory.jsonl").read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["phase"] == "start"
+    assert rows[0]["inputs"]["inputs_observed"] is False
+    assert rows[0]["adjudication"] == "ungraded"

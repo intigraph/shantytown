@@ -2,6 +2,8 @@
 
 [shantytown](introduction.md)
 
+- [Documentation map](map.md)
+
 # The pitch
 
 - [Why Shantytown?](why.md)
@@ -21,10 +23,13 @@
 - [Workflows & events](workflows.md)
 - [Roles](roles.md)
 - [Harnesses](harnesses.md)
+  - [Phone access to crew conversations](android-crew-sessions.md)
+    - [Phone acceptance evidence](demos/android-crew-sessions/record.md)
 - [Incident recall](incident-recall.md)
 - [Private stop samples](stop-samples.md)
 - [Sleep / dream](dream.md)
 - [Scheduled & event jobs](jobs.md)
+- [Everyday work with one agent](everyday-work.md)
 
 # The shape
 

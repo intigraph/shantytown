@@ -78,6 +78,7 @@ def test_inbox_scopes_recipient_and_closed_receipts_and_refuses_partial(monkeypa
     from shantytown.inbox import TrackerInbox
     from shantytown.answer import PartialAnswer
     t = SdTracker(quipu="https://example.test", prefix="test")
+    monkeypatch.setattr(t, "_use_remote_projection", lambda: False)
     calls = []
 
     def run(*args):
@@ -179,6 +180,7 @@ def test_scoped_inbox_keeps_legacy_mail_and_rejects_partial_prefix_reads(
     from shantytown.inbox import TrackerInbox
     from shantytown.answer import PartialAnswer
     t = SdTracker(quipu="https://example.test", prefix="test")
+    monkeypatch.setattr(t, "_use_remote_projection", lambda: False)
     rows = [dict(id="modern", title="inbox: modern", assignee="worker", status="open",
                  priority=modern_priority, created_at=modern_date),
             dict(id="legacy", title="  mail: legacy", assignee="worker", status="open",

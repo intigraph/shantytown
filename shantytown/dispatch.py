@@ -637,10 +637,8 @@ class Dispatcher:
         text = f"Work is on your hook: {item_id} — {item.title}"
         text += " — " + instruction(item_id)
         # Put measurement where work arrives, without reading the board again.
-        text += (" — Before a fix or improvement, record a BASELINE on this item"
-                 " before the first change: time, version, probe and result."
-                 " Choose the success metric now; rerun the same probe afterwards."
-                 " If measurement is impossible, record why.")
+        text += (" — For a fix, note what is broken in one line and check it after."
+                 " Skip this for new docs, features or research.")
         # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
         # host with 125 bd stores — they are a riddle, and the receiving agent has
         # no signal that the question is even open. The tag rides HERE, inside
@@ -925,7 +923,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -935,7 +933,13 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id> or date:<ISO date>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date> or event:<binding>")
+        if active.kind == "event":
+            from .resume_events import binding_for
+            try:
+                binding_for(active.arg, item_id)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
         gate_target = None
         inherited_priority = None
         if active.kind == "closed":
