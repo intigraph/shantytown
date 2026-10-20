@@ -332,7 +332,14 @@ def _codex_config(card: Agent, root) -> Path | None:
 def _codex_servers(servers: dict) -> dict:
     """Translate Claude's declarative MCP entries into Codex config values.
 
-    EVERY header — Authorization included — is carried as a LITERAL in
+    Without an explicit headersHelper, headers including Authorization remain
+    literals in http_headers. An explicit helper instead maps to Codex's native
+    http_headers_helper; static Authorization is removed so it cannot override
+    the helper. Codex caches helper results per connection: deleting a selected
+    credential file changes fallback on the next helper run/reconnect, and is
+    not revocation of an already accepted credential.
+
+    The legacy path carries a LITERAL in
     `http_headers`, which lands in the role's 0600 gitignored config.toml. It
     used to be otherwise: an `Authorization: Bearer ${VAR}` in the template was
     translated to codex's `bearer_token_env_var = "VAR"`, and CodexHarness.launch
@@ -365,6 +372,18 @@ def _codex_servers(servers: dict) -> dict:
     for name, raw in servers.items():
         spec = dict(raw)
         spec.pop("type", None)
+        helper = spec.pop("headersHelper", None)
+        if helper is not None:
+            if not isinstance(helper, str) or not helper.strip():
+                raise ProvisionError("MCP headersHelper must be a nonempty command")
+            spec["http_headers_helper"] = helper
+            # Static authorization wins over the native helper. Preserve other
+            # headers, but let the helper select named or shared credentials.
+            for field in ("headers", "http_headers"):
+                if field in spec:
+                    spec[field] = {key: value for key, value in spec[field].items()
+                                   if key.lower() != "authorization"}
+            spec.pop("bearer_token_env_var", None)
         if "headers" in spec:
             headers = dict(spec.pop("headers"))
             if headers:
@@ -439,6 +458,9 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
         rendered = mcp_limits.project(
             _render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)),
             root, card.name)
+        from .crew_credentials import project as project_credentials
+        rendered["mcpServers"] = project_credentials(
+            rendered["mcpServers"], root, card.name, card.harness, materialize=False)
     except (ProvisionError, ValueError):
         return ["tooling-source(unresolved credentials)"]
     gaps = []
@@ -1012,11 +1034,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
 
     # A role config is shared by all agents in that role. A named credential
     # must never be projected into it, including through a per-agent symlink.
-    if secrets is None and card.harness in ("codex", "opencode"):
+    if card.harness in ("codex", "opencode"):
         from .provision_credentials import agent_overrides
+        from .crew_credentials import selection as crew_selection
         try:
-            named = bool(agent_overrides(root, card.name))
-        except ValueError as exc:
+            named = (bool(agent_overrides(root, card.name)) if secrets is None else False)
+            named = named or crew_selection(root, card.name) is not None
+        except (OSError, ValueError) as exc:
             raise ProvisionError(str(exc)) from None
         if named:
             filename = "config.toml" if card.harness == "codex" else "opencode.json"
@@ -1158,6 +1182,11 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     from . import mcp_limits
     try:
         rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
+        from .crew_credentials import project as project_credentials
+        credential_kit = json.loads(rendered)
+        credential_kit["mcpServers"] = project_credentials(
+            credential_kit["mcpServers"], root, card.name, card.harness)
+        rendered = json.dumps(credential_kit, indent=2)
     except (OSError, ValueError, TypeError) as exc:
         raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
     if (bare := headerless_quipu(json.loads(rendered).get("mcpServers", {}))):

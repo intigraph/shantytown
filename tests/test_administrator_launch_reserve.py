@@ -1,4 +1,4 @@
-"""Account repair capacity stays within the ordinary cross-host cap."""
+"""Worker reservations remain bounded; canonical administrator launches are exempt."""
 from dataclasses import replace
 
 import pytest
@@ -31,8 +31,8 @@ def test_worker_cannot_take_repair_slot_but_admin_can(tmp_path, monkeypatch):
     assert cli._account_launch_refusal(args, admin) == ''
     rows.append(agent('laptop', 'admin'))
     assert '4/3' in cli._account_launch_refusal(args, extra)
-    assert '4/3' in cli._account_launch_refusal(args, admin)
-    # A genuine local replacement retains its slot, without exceeding the cap.
+    assert cli._account_launch_refusal(args, admin) == ''
+    # Administrator replacement is also exempt; live accounting stays unchanged.
     assert cli._account_launch_refusal(args, admin, replacing=True) == ''
 
 
@@ -67,15 +67,17 @@ def test_untrusted_peer_role_claim_cannot_spend_reserved_capacity(tmp_path, monk
     assert 'reserved' in cli._account_launch_refusal(args, worker)
 
 
-def test_admin_and_despite_hold_do_not_override_unknown(tmp_path, monkeypatch):
+def test_admin_exempts_unknown_while_worker_despite_hold_does_not(tmp_path, monkeypatch):
     args, registry, worker, admin, rows = setup(tmp_path, monkeypatch)
     monkeypatch.setattr(fg, 'collect', lambda peers: [(None, 'peer unavailable')])
-    assert 'UNKNOWN' in cli._account_launch_refusal(args, admin)
+    assert cli._account_launch_refusal(args, admin) == ''
+    assert 'UNKNOWN' in cli._account_launch_refusal(args, worker)
 
 
-def test_administrator_at_hard_cap_gets_actionable_refusal(tmp_path, monkeypatch):
+def test_administrator_at_hard_cap_is_exempt_worker_refusal_remains_actionable(tmp_path, monkeypatch):
     args, registry, worker, admin, rows = setup(tmp_path, monkeypatch, cap=2)
-    refusal = cli._account_launch_refusal(args, admin)
+    assert cli._account_launch_refusal(args, admin) == ''
+    refusal = cli._account_launch_refusal(args, worker)
     assert '3/2' in refusal
     assert 'stop an agent in this account to free a slot' in refusal
 
@@ -95,6 +97,7 @@ def named_setup(tmp_path, monkeypatch):
     cfg = config.Config(accounts=accounts.parse({'primary': raw(pct=20, cap=3)}))
     account = cfg.accounts['primary']
     governor = gov.Governor(account.governor, accounts.reader_for(account))
+    monkeypatch.setattr(config, 'load', lambda root: cfg)
     monkeypatch.setattr(cli, '_governors', lambda a: (cfg, {'primary': governor}))
     monkeypatch.setattr(account_auth, 'available', lambda *a: True)
     worker = replace(worker, account='primary')
@@ -113,14 +116,15 @@ def test_named_account_reserves_admin_and_keeps_the_total_cap(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize('mode', ['frozen', 'drain'])
-def test_named_admin_despite_hold_cannot_override_freeze_or_full_stop(tmp_path, monkeypatch, mode):
+def test_named_admin_exempts_freeze_or_full_stop_but_worker_cannot(tmp_path, monkeypatch, mode):
     from shantytown import governor as gov
     args, worker, admin, governor = named_setup(tmp_path, monkeypatch)
     verdict = governor.evaluate(persist=False)
     verdict = replace(verdict, frozen=True, why='fixture freeze') if mode == 'frozen' else replace(
         verdict, engaged=(gov.Tier(at=0, action='drain'),))
     monkeypatch.setattr(governor, 'evaluate', lambda **k: verdict)
-    refusal = cli._account_launch_refusal(args, admin)
+    assert cli._account_launch_refusal(args, admin) == ''
+    refusal = cli._account_launch_refusal(args, worker)
     assert refusal and 'no account-governor override' in refusal
 
 
