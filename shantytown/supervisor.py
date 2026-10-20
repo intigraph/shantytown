@@ -328,12 +328,14 @@ def launch_agents_dir() -> Path:
     return Path.home() / "Library" / "LaunchAgents"
 
 
-def _plist(st_bin: str, root: Path, interval_s: int, path_env: str) -> str:
+def _plist(st_bin: str, root: Path, interval_s: int, path_env: str,
+           backend: str = "files") -> str:
     import plistlib
     body = plistlib.dumps({
         "Label": LAUNCHD_LABEL,
         "ProgramArguments": [st_bin, "--root", str(root), "fleet", "tend"],
-        "EnvironmentVariables": {"SHANTY_ROOT": str(root), "PATH": path_env},
+        "EnvironmentVariables": {"SHANTY_ROOT": str(root), "PATH": path_env,
+                                 "SHANTY_BACKEND": backend},
         "StartInterval": int(interval_s),
         # RunAtLoad is the plist's Persistent=true: a Mac that was asleep or
         # off gets a pass as soon as the agent loads, not five minutes later.
@@ -370,8 +372,19 @@ def install_launchd(st_bin: str, root: Path, *, interval: str = "5min", run=None
         return False, (f"REFUSED: {path} exists and was NOT written by st fleet "
                        f"tend (no {PLIST_MARKER!r}). Refusing to overwrite it.")
     root = Path(root).resolve()
+    # Match the relay doctor: deployment declarations outrank the installing
+    # shell. Carry only the routing value, never the caller's whole environment.
+    from . import config
+    from .relay_doctor import BACKENDS
+    cfg, error = config.load_or_default(root)
+    if error:
+        return False, "REFUSED: deployment config unreadable; launchd routing is unknown."
+    backend = cfg.env.get("SHANTY_BACKEND") or os.environ.get("SHANTY_BACKEND") or "files"
+    if backend not in BACKENDS:
+        return False, "REFUSED: unsupported SHANTY_BACKEND; launchd routing is unknown."
     text = _plist(st_bin, root, interval_s,
-                  path_env if path_env is not None else os.environ.get("PATH", ""))
+                  path_env if path_env is not None else os.environ.get("PATH", ""),
+                  backend)
     if path.exists() and path.read_text() == text:
         return False, "already installed and current — nothing to do."
     if dry_run:

@@ -53,6 +53,7 @@ restores the caller's environment on return when invoked as a Python function.
 | `SHANTY_MODEL` | Launch-generated provenance: exact resolved card/role/fleet model carried to client and tools; absent selection clears inherited metadata. Configure selection through cards or `[model]`, not this carrier. | resolved model; else unset |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
 | `SHANTY_TEND_SWEEP_BUDGET_S` | seconds a `st fleet tend` pass may spend on the BEST-EFFORT sweeps that follow respawn (aegis-qwadc). Spending it SKIPS the next sweep; it never interrupts one in flight, because a wall-clock kill lands mid-write. Respawn runs before any of them and is never shed. Raise it on a deployment with slow notifiers; a recurring deferral is a slow store, not failing supervision. | `120` |
+| `SHANTY_CYCLE_REFUSED_RETRY_S` | seconds `st fleet tend` waits before re-serving a self-requested cycle that was REFUSED (dirty or unpushed tree) (aegis-qc2). The request stays pending and its refusal stays visible; only the retry is spaced out, so a stuck refusal cannot spend the sweep budget every pass. A new request from the agent clears the refusal and is served on the next pass. | `1800` |
 | `SHANTY_HOSTMEM_FLOOR_GIB` | a ONE-RUN override of `[hostmem] floor_gib`, the physical admission floor (aegis-do672). `0` disables the brake for this invocation. It exists because the alternative an operator reaches for under a brake they need to get past is commenting out the table — which disarms it for everyone and stays disarmed. | the `[hostmem]` table |
 | `SHANTY_PANE_MEMORY` | set to `off`/`0`/`false` to launch panes with NO memory ceiling at all. The escape hatch has to exist: a wrong ceiling that cannot be switched off kills every pane, including the one you would fix it from. It is the only setting here that disables `panemem` outright — the two `_GIB` knobs only move the ceiling. | on |
 | `SHANTY_PANE_MAX_GIB` | `MemoryMax` on each agent pane's own systemd scope — the KILL line. Sits above measured normal peak (an agent plus a Rust build runs 10-13 GiB) and below the runaway that caused this to exist (31.8 GiB in ten minutes, which tripped host-wide oomd and killed an unrelated agent). Lowering it toward normal peak does not make the host safer: a pane held near its limit reclaims continuously, and that reclaim is itself what raises slice pressure. | `20` |
@@ -188,6 +189,19 @@ supply independent readings. Duplicate usage coordinates and the unscoped Codex
 app-server reader are refused. Named accounts participate in the existing balance
 advisory across the whole fresh set; stale or unrated lanes cannot supply a preference.
 Caps still gate every launch and automatic switch.
+
+Account launch admission reserves capacity for each non-retired administrator
+in the canonical registry on a configured host, within that account's existing
+`max_agents`. Workers cannot consume an offline administrator's reserved slot.
+A running administrator occupies its own reservation; an administrator launch
+still counts against the same hard total cap. Harnesses sharing a legacy base
+account share its reservations too. Peer process rows cannot grant the role.
+
+At a cap of three, two workers leave one reserved slot for an administrator.
+If three sessions already occupy the account, even administrator repair refuses:
+stop an agent in that account before relaunching. `--despite-hold` overrides only
+the gaming/quiet-time hold. It does not override account capacity, FULL STOP,
+a frozen account or unknown fleet admission. No spend override is provided.
 
 Credential references support `infisical:KEY`, `env:VARIABLE`, and an absolute
 `file:` path. Infisical must be installed and authenticated by the operator; its

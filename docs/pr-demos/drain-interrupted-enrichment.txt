@@ -1,0 +1,6 @@
+BASE interrupted enrichment: {"model_response_emitted": false, "pending": 0}
+BASE next drain: {"model_response_emitted": false, "pending": 0}
+CANDIDATE interrupted enrichment: {"model_response_emitted": false, "pending": 1}
+CANDIDATE next drain: {"model_response_emitted": true, "pending": 0}
+CONTROL: third drain is silent; delivered reports do not repeat
+LIMIT: simulated deadline and memory store; no installed runtime claim

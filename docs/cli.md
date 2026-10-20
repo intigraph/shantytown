@@ -116,6 +116,7 @@ st agent                      one agent
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
   history <agent>             captured transcripts, and whether the source survives
+  remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
   stats --graph               graph-context adoption: what share of dispatches carried a
                               quipu node, what share stated a reason for having none, and
@@ -359,6 +360,33 @@ writes and verifies the reason and condition before changing status, then verifi
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
+
+Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
+the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
+command, path, URL or query. Each binding names one item, producer, host, unit,
+boot/generation, protected window and starting instant. Its producer contract
+must be accepted before the binding can be used. The initial protected-recycle
+binding is **disabled**: this release does not change an existing review date or
+start an evidence collector.
+
+The protected-recycle evaluator requires a complete ordered interval containing
+a natural soft defer inside the nominated window, then a successful unforced
+recycle after the window. An intervening manual restart or hard override
+disqualifies that pair. Complete fresh evidence without a pair is NOT_MET;
+missing, stale, gapped, invalid or identity-mismatched evidence is UNKNOWN.
+Neither verdict releases work, even after a review date lapses. MET preserves
+the existing judgment, dependency and date gates and is checked again immediately
+before release; it never closes the item or waives its acceptance criteria.
+
+The fixed evidence location is
+`~/.local/state/shantytown/resume-events/<binding-id>.json`. Directory and file
+must be owned by the user or root and not writable by group/others; symlinks
+are refused. One read is bounded to 64 KiB and 1,000 events. Evidence must be
+observed within 30 minutes, with a 14-day binding horizon. Schema 1 includes
+binding identity, UTC capture/window/observation bounds, explicit complete/gaps
+fields, contiguous sequence bounds, and uniquely identified typed events from
+the bound generation. No evidence is cached across scheduled evaluations.
+Producer owners must review the complete schema before enabling a binding.
 
 The twenty-eighth is **help**: the rationale pages for the instructions st pushes into
 panes on a timer. It exists because those messages had grown into essays — every reason
@@ -752,6 +780,9 @@ Two rules fall out, and they are the load-bearing part:
 
 1. **Do not "fix" a suspicious pane by pressing Enter at it.** That was the defect, not the remedy.
    `queued` is a state to *report to the agent's owner*, never one to type your way out of.
+   The automatic Codex recovery below is narrower: it requires a private record
+   proving st injected the exact body into this same session. A human draft or
+   a matching fragment of the send journal is never that proof.
 2. **When the attributes are missing, the answer is `?`.** A stripped capture with text in the box
    returns `UNKNOWN`, which degrades to `?` in `st crew` and to REFUSE in `st go` — never to `idle`.
    Refusing on doubt is cheap; dispatching into a buffer you cannot see is the incident.
@@ -1270,6 +1301,14 @@ prevents. Rank 0 does not get to fail *silently*: persisting your own stop event
 survival, not a decision, so a failure there is reported rather than swallowed into
 a clean-looking allow.
 
+The receiving drain prepares its response before marking reports delivered.
+If tracker reads or workflow enrichment exceed the hook deadline, the reports
+remain pending for the next drain. Reports arriving during preparation stay in
+the queue, and a report claimed by another drain is omitted from this response.
+This reduces the interval between the delivery marker and output; it is not a
+durable acknowledgement from the model, so a process failure in that final
+interval still requires checking the retained event and actual model receipt.
+
 ### Hibernate
 
 ```toml
@@ -1477,8 +1516,9 @@ of the exact body already stranded there. The latter retries Enter without
 retyping the body, after the older turn ends and Codex identity is confirmed.
 Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
-checks for a new active turn with a cleared composer, or a visible queue preview
-matching the message. Existing activity alone is not confirmation. If the
+checks for a new active turn with a cleared composer. A visible queue preview
+is **not delivery**: Codex may hold it until a later tool boundary. Existing
+activity alone is not confirmation. If the
 composer still contains exactly the rendered message, the transport may retry
 Enter once after the older turn ends and a fresh foreground check positively
 identifies Codex (including Node with a live Codex launch identity). An unknown
@@ -1488,6 +1528,35 @@ reports `UNVERIFIED`. Ephemeral sends and dispatch return exit 2; dispatch does
 not record an assignment. Durable sends retain the persisted inbox pointer and
 return success for persistence while explicitly reporting unverified live
 submission. Inspect the pane or read that pointer rather than blindly resending.
+
+With a deployment root, Codex sends first retain the full body in a private
+`delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
+declared tmux socket, pane and observed session creation time. If custody cannot
+be written, nothing is typed. After the single submission retry fails, st can
+clear only its exact single-line body in an idle, positively identified Codex
+session. It rechecks ownership and session identity before each editing key.
+Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
+authorize no automatic clear. A later sender can clear the same owned failed
+notice before submitting its own message; the older body remains retained.
+Claude and explicit shell-launch sends keep their existing transport.
+
+The existing scheduled `st fleet tend` pass supervises these records. It reuses
+an existing durable inbox row, or creates one normal pointer to the retained
+body. An uncertain inbox write is never blindly repeated. A cleared notice gets
+at most one automatic redelivery in the same session; queued input is never
+resent. An explicit inbox acknowledgment is distinct from terminal delivery.
+Legacy inbox rows without custody may trigger an alert but never authorize
+editing somebody's composer.
+
+After 300 seconds unresolved, the next successful tend observation persists
+one `delivery-stalled` event to the configured lead/admin and attempts one
+normal coordinator wake. It includes the input classification and busy state,
+not the message body. A continuing backlog does not generate another event,
+even after its first event was drained. An empty backlog rearms detection.
+For legacy rows, age starts at the first observation; it is not a guessed row
+creation time. A working tend schedule is required: the threshold is not a
+promise to deliver an alert while supervision itself is stopped. Persistence,
+queued wake, actual receiver arrival and recovery remain separate facts.
 
 An **off-host** durable recipient is nudged through the same declared peer the
 ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
@@ -1846,6 +1915,13 @@ before deduplication. It remembers the next item it delivered, so a new assignme
 or a completed turn between two idle observations re-arms delivery. Appending more
 work behind the same next item does not resend it. Input preflight, session ceilings
 and delivery receipts still apply; a tracker claim alone is not proof a turn began.
+
+For a native Seeds board, the Stop hook reads only the current owner's active
+anchors across the shared and ephemeral graphs. It retains priority/creation/id
+order and future-dated active work. An incomplete or unproven native read allows
+the stop without claiming new work; it does not retry through a global issue
+listing. Proven legacy boards retain the existing CLI path. The global ready-work
+priority advisory is unchanged.
 
 Both haul triggers honour a current deliberate-stop stamp and a gaming hold before
 claiming or resuming work. A held pass spends neither delivery dedup nor the resume
@@ -2559,6 +2635,15 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 `origin`; it does not push, merge, close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
+The forge's canonical repository slug and stable ID are checked before creation.
+A renamed slug refuses before POST and names the canonical slug; update the
+requested repository and its matching origin deliberately, then run preflight
+again. This command never rewrites remotes or silently migrates aliases. A
+repository identity change during preflight also refuses before POST. A lost or
+malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
+reported on stderr as well as JSON stdout. Inspect the canonical repository for
+the exact PR before retrying; the command never automatically repeats a create.
+
 ```sh
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
@@ -2612,9 +2697,10 @@ non-fast-forward checks still apply to every trusted peer.
 review or successful CI. Land reviewed PRs through the normal merge helper rather
 than treating source publication as a reviewed merge.
 
-For a normal pre-push check that needs more than a minute, pass
-`--timeout 600`. This sets a per-peer deadline between 1 and 3600 seconds;
-the default remains 60 seconds. Hooks and publication guards still run.
+Pushes default to a 600-second per-peer deadline, including local pre-push
+checks, so normal validation hooks can finish before publication. Use
+`--timeout SECONDS` to select a deadline between 1 and 3600 seconds.
+Hooks and publication guards still run.
 A timeout leaves publication indeterminate: read back that peer's exact
 remote destination SHA before deciding whether any retry is needed. Remaining
 peers are not attempted after a timeout, and earlier successful peers stay published.
@@ -2683,3 +2769,79 @@ notifications for that item for 24 hours. Future, absent, invalid, or differentl
 attributed timestamps do not arm the cooldown. Pending delivery and prior ask
 stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
+
+
+### Request command attribution
+
+Tracker reads declare a finite command source (`st-anchor`, `st-plate`,
+`st-inbox`, `st-stop_policy`, `st-stop_event`, `st-haul`, `st-tend`,
+`st-work`, or `st-other`) separately from the underlying SDK operation.
+Nested stop hooks retain the outer command. These values contain no command
+arguments or message text and are diagnostic declarations, not identities or
+authorization. Server logging and reader coverage are required to use them in
+a traffic census; sending the headers alone does not establish attribution.
+
+### Pair an existing Codex crew server
+
+`st agent remote list [--json]` discovers per-card Codex control sockets and
+reports identity, host and observed availability. `st agent remote pair NAME
+[--json]` requests a short-lived manual code from that explicitly selected
+existing server. `--timeout` bounds each card request (default three seconds).
+Neither command launches, stops, restarts or enables a daemon. A stopped card
+stays stopped; an unsupported protocol or unreadable identity stays UNKNOWN.
+The commands use the same XDG/runtime home resolution as the launcher, verify
+the UNIX peer against the identity-bearing daemon process, and never substitute
+the ordinary Codex host or another card. Peer verification currently requires
+Linux SO_PEERCRED; other platforms refuse instead of weakening routing proof.
+Cards assigned to another host are never contacted; a host-assigned card also
+requires the deployment's explicit local host identity. Output uses that
+configured identity, leaving an undeclared host null rather than guessing it.
+
+Pairing output is a temporary secret. Display it directly to the operator; do
+not redirect it to logs, work items, inbox messages or third-party QR services.
+JSON is deliberate secret-bearing output too. Provider errors never echo raw
+responses. A timeout leaves issuance UNKNOWN and does not automatically retry.
+
+This new command earns a slot because per-card pairing is an explicit action,
+separate from discovery and lifecycle changes. Manual-code issuance does not
+prove Android acceptance or delivery to the intended conversation. Android UI,
+QR/app-link payload and reconnect after lifecycle changes remain unverified;
+no QR is fabricated. Verify selected-agent delivery separately.
+
+Use `st agent remote pair NAME --dry-run [--json]` for status/identity inspection
+without issuing a code. The [phone access runbook](android-crew-sessions.md)
+covers explicit card selection, expiration and unknown outcomes, permissions,
+and the separate Android/reconnect acceptance checklist. Its
+[dated offline record](demos/android-crew-sessions/record.md) makes the limits
+of synthetic checks explicit.
+
+### Administrator launch availability
+
+Ordinary lifecycle commands automatically exempt a verified local
+`administrator` role from routine launch governors: gaming/quiet-time holds,
+usage tiers and FULL STOP/drain verdicts, account/session ceilings, pace and
+burndown limits, and missing/stale usage or peer census. No `--despite-hold`
+flag or global cap change is needed. This applies to `agent new`, fleet start,
+attach-if-down, harness relaunch, cycles and automatic recovery. The launch
+message names the exemption; `agent new --help` describes the policy.
+
+The exact configured registry grants the role. A name, a peer process row, a
+retired card or an unreadable role cannot grant it. Administrators still appear
+in process and account counts and consume real quota. Workers retain their
+normal limits, including the existing offline-administrator reservations.
+
+Administrator launches serialize locally through the live-session check so two
+concurrent requests cannot create duplicate sessions. An unavailable remote
+worker-cap authority does not prevent local administrator recovery. In tend,
+administrator recovery runs before worker admission; routine governor drains
+exclude those verified administrators. Its complete roster remains
+the source for accounting and wiring checks.
+
+An exemption cannot repair missing credentials, provider authentication or
+resource exhaustion, unsupported harness/model/tool settings, missing workspace
+or hooks, or a malformed deployment configuration. These failures remain honest
+launch failures. Explicit maintenance leases protect an in-flight operational
+transaction and continue to block relaunch; they are not routine quota holds.
+Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
+holds remain respected during automatic recovery. Nothing here starts a second
+administrator, changes an account cap, or clears an operator hold.

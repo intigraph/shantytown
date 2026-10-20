@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import time
 from dataclasses import dataclass
@@ -15,6 +16,14 @@ from pathlib import Path
 
 FLAG = "codex-daemon-wedged"
 STALE_LOCK_S = 10 * 60
+
+
+def runtime_home(agent: str, runtime_dir: Path | None = None) -> Path:
+    """The same per-card state location for launch, inspection and pairing."""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", agent):
+        raise ValueError("invalid agent name")
+    base = runtime_dir or Path(os.environ.get("XDG_RUNTIME_DIR", Path.home() / ".cache"))
+    return base / "shantytown" / "codex" / agent
 
 
 @dataclass(frozen=True)
@@ -134,10 +143,7 @@ def stop_owned(agent: str, *, proc: Path = Path("/proc"), kill=os.kill) -> tuple
 def inspect(agent: str, *, runtime_dir: Path | None = None,
             proc: Path = Path("/proc"), now: float | None = None) -> Health:
     """Return the named card's launch blocker; report only proven facts."""
-    runtime_dir = runtime_dir or Path(
-        os.environ.get("XDG_RUNTIME_DIR", Path.home() / ".cache")
-    )
-    home = runtime_dir / "shantytown" / "codex" / agent
+    home = runtime_home(agent, runtime_dir)
     daemons: list[int] = []
     zombies: list[int] = []
     parents: dict[int, tuple[str, int]] = {}

@@ -1,0 +1,7 @@
+Script started on 2026-10-17 06:26:33-04:00 [COMMAND="python docs/demos/admin-wake-projection/probe.py" <not executed on terminal>]
+Private source fixture; baseline ce995db60403; no live settings
+off: budget hooks 0 -> 0; bytes identical=True
+advise: budget hooks 0 -> 1; bytes identical=False
+repeat advise: 1; rollback off: 0
+
+Script done on 2026-10-17 06:26:34-04:00 [COMMAND_EXIT_CODE="0"]

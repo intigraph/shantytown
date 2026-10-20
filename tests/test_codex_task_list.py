@@ -50,7 +50,8 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     if refused:
         with pytest.raises(tmux.PaneTaskList):
             panes.send("%1", "continue")
-        assert calls == []
+        # Keystrokes only: the copy-mode read (aegis-6jx) is a query, not a key.
+        assert [c for c in calls if "send-keys" in c] == []
     else:
         panes.send("%1", "continue")
         assert any("send-keys" in c for c in calls)

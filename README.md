@@ -32,10 +32,13 @@ curl -fLO https://github.com/scbrown/shantytown/releases/download/v0.7.1/shantyt
 curl -fLO https://github.com/scbrown/shantytown/releases/download/v0.7.1/SHA256SUMS
 grep 'shantytown-0.7.1-py3-none-any.whl$' SHA256SUMS | shasum -a 256 -c
 pipx install ./shantytown-0.7.1-py3-none-any.whl
+export PATH="${PIPX_BIN_DIR:-$HOME/.local/bin}:$PATH"
 st --version
 ```
 
-The release reports `st 0.7.1`. To install from source instead:
+The release reports `st 0.7.1`. The PATH line makes the new command available
+in this shell. For future shells, run `pipx ensurepath` and open a new terminal.
+To install from source instead:
 
 ```sh
 git clone https://github.com/scbrown/shantytown
@@ -72,6 +75,12 @@ Expected preview:
   2 agent(s) · startup mode 'lite' · hibernate off
 
   --dry-run: nothing written.
+```
+
+To preview just one administrator, use an empty worker list:
+
+```sh
+st --root .shanty --backend files fleet init -y --admin coordinator --crew "" --dry-run
 ```
 
 The preview shows the crew, hooks and approval mode before you commit to running it.
@@ -155,6 +164,7 @@ when.
 | [desire-path](https://github.com/scbrown/desire-path) | turns agent mistakes into feature requests; works on its own without Quipu |
 | [seeds](https://github.com/scbrown/seeds) | a work item tracker backed by the Quipu knowledge base |
 | [shantytown](https://github.com/scbrown/shantytown) | runs crews of AI agents on work items, triggered by hand, on a schedule or by events; can share work and memory through Quipu |
+| [rikuy](https://github.com/scbrown/rikuy) | live brief: status, graphs, watches and signed decisions over Quipu |
 | [shuttle](https://github.com/scbrown/shuttle) | runs signed agent workflows and keeps their records in Quipu |
 
 <!-- stack-table:end -->
