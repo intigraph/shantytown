@@ -68,7 +68,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
         "rank": None, "due_at": None, "created_at": None,
     }
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]
 
 
@@ -260,3 +260,100 @@ def test_exact_item_refuses_malformed_rank(monkeypatch, rank):
     value, _ = tracker(monkeypatch, rows(**{seeds_item.SEEDS + "ontology/rank": rank}))
     with pytest.raises(ValueError):
         seeds_item.read_item(value, "test-one")
+
+
+@pytest.mark.parametrize("source_ephemeral", [False, True])
+def test_generated_query_reads_only_exact_source_and_outgoing_targets(source_ephemeral):
+    """Execute the query against both named graphs, with unrelated noise."""
+    from rdflib import Dataset, Literal, URIRef
+    from rdflib.namespace import XSD
+
+    dataset = Dataset()
+    graphs = (GRAPH, GRAPH + "#seeds-ephemeral")
+    source_graph = graphs[int(source_ephemeral)]
+    target_graph = graphs[not source_ephemeral]
+    source = URIRef(SUBJECT)
+    target = URIRef(seeds_item.SEEDS + "item/test-dependent")
+    missing = URIRef(seeds_item.SEEDS + "item/test-absent")
+    source_facts = [
+        (source, URIRef(seeds_item.TYPE), URIRef(seeds_item.SCHEMA + "Action")),
+        (source, URIRef(seeds_item.SCHEMA + "identifier"), Literal("test-one")),
+        (source, URIRef(seeds_item.SEEDS + "ontology/priority"), Literal(0)),
+        (source, URIRef(seeds_item.BLOCKS), target),
+        (source, URIRef(seeds_item.BLOCKS), missing),
+    ]
+    for triple in source_facts:
+        dataset.graph(URIRef(source_graph)).add(triple)
+    target_facts = [
+        (target, URIRef(seeds_item.TYPE), URIRef(seeds_item.SCHEMA + "Action")),
+        (target, URIRef(seeds_item.SCHEMA + "identifier"), Literal("test-dependent")),
+        (target, URIRef(seeds_item.SEEDS + "ontology/status"), Literal("closed")),
+    ]
+    for triple in target_facts:
+        dataset.graph(URIRef(target_graph)).add(triple)
+    # Exclude an outgoing target's non-display fields, an unrelated item,
+    # an incoming dependency, and the exact subject in an unauthorized graph.
+    noise = [
+        (target, URIRef(seeds_item.SCHEMA + "description"), Literal("private target body")),
+        (URIRef("urn:unrelated"), URIRef(seeds_item.BLOCKS), source),
+        (source, URIRef("urn:unrequested"), Literal("not a display field")),
+    ]
+    for triple in noise:
+        dataset.graph(URIRef(source_graph)).add(triple)
+    dataset.graph(URIRef("urn:foreign")).add(
+        (source, URIRef(seeds_item.SCHEMA + "name"), Literal("wrong graph")))
+    actual = {(str(row.graph), str(row.s), str(row.p), str(row.o), str(row.kind))
+              for row in dataset.query(seeds_item._fields_query(graphs, SUBJECT, (str(target), str(missing))))}
+    expected = set()
+    for graph, triples in ((source_graph, source_facts), (target_graph, target_facts)):
+        for s, p, o in triples:
+            kind = "iri" if isinstance(o, URIRef) else str(o.datatype or XSD.string)
+            expected.add((graph, str(s), str(p), str(o), kind))
+    assert actual == expected
+
+
+@pytest.mark.parametrize("change", ["source", "edge", "missing", "cap"])
+def test_dependency_read_refuses_changed_source_or_full_final_observation(monkeypatch, change):
+    target = seeds_item.SEEDS + "item/test-dependent"
+    source = rows(**{seeds_item.BLOCKS: target})
+    value, _ = tracker(monkeypatch, source)
+    final = source + rows(target)
+    if change == "source":
+        final = [dict(row, o="changed") if row["s"] == SUBJECT
+                 and row["p"] == seeds_item.SCHEMA + "name" else row for row in final]
+    elif change == "edge":
+        final = [row for row in final if row["p"] != seeds_item.BLOCKS]
+    elif change == "missing":
+        final = [row for row in final if row["s"] != SUBJECT]
+    else:
+        final *= 2000
+    responses = iter((source, final))
+    monkeypatch.setattr(seeds_item, "_query", lambda *_a, **_kw: {"rows": next(responses)})
+    with pytest.raises(ValueError, match="changed during dependency read|ceiling"):
+        seeds_item.read_item(value, "test-one")
+
+
+def test_dependency_observation_uses_remaining_original_deadline(monkeypatch):
+    source = rows(**{seeds_item.BLOCKS: seeds_item.SEEDS + "item/test-dependent"})
+    value, calls = tracker(monkeypatch, source)
+    value.timeout = 10
+    times = iter((100.0, 103.0))
+    monkeypatch.setattr(seeds_item.time, "monotonic", lambda: next(times))
+    limits = []
+    def query(_proof, text, timeout, *, verbose):
+        limits.append(timeout)
+        return {"rows": source}
+    monkeypatch.setattr(seeds_item, "_query", query)
+    seeds_item.read_item(value, "test-one")
+    assert limits == [10, 7]
+
+
+def test_expired_item_deadline_does_not_start_dependency_read(monkeypatch):
+    source = rows(**{seeds_item.BLOCKS: seeds_item.SEEDS + "item/test-dependent"})
+    value, calls = tracker(monkeypatch, source)
+    value.timeout = 1
+    times = iter((100.0, 102.0))
+    monkeypatch.setattr(seeds_item.time, "monotonic", lambda: next(times))
+    with pytest.raises(TimeoutError, match="deadline"):
+        seeds_item.read_item(value, "test-one")
+    assert len(calls) == 1
