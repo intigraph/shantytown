@@ -117,7 +117,8 @@ class OwnedWork:
         """Persist only fairness metadata before starting potentially slow I/O."""
         with self.locked() as data:
             if agent in data:
-                data[agent]["attempted_at"] = time.time()
+                data[agent]["attempted_at"] = 1 + max(
+                    (state.get("attempted_at", 0) for state in data.values()), default=0)
 
     def _replace(self, agent, before, after):
         # Local compare-and-swap only. No remote callback may hold this lock:

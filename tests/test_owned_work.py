@@ -468,3 +468,17 @@ def test_supervisor_bounds_starts_and_rotates_unknown_owners(tmp_path, monkeypat
     assert calls[0] == f'worker{expected}'
     assert 'stilllive' not in calls
     assert service.snapshot()['worker0']['state'] == 'stopped'
+
+
+def test_attempt_rotation_survives_wallclock_rollback(tmp_path, monkeypatch):
+    from shantytown import owned_work
+    service = OwnedWork(tmp_path)
+    for name in ('first', 'second'):
+        service.stop(name, at=100)
+    monkeypatch.setattr(owned_work.time, 'time', lambda: 1000)
+    service.attempted('first')
+    monkeypatch.setattr(owned_work.time, 'time', lambda: 200)
+    service.attempted('second')
+    assert service.pending(now=400) == ['first', 'second']
+    service.attempted('first')
+    assert service.pending(now=400) == ['second', 'first']
