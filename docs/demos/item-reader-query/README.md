@@ -14,13 +14,13 @@ QUIPU_NATIVE_TEST_BIN=/path/to/qp python3 docs/demos/item-reader-query/demo.py
 ```
 
 The baseline is commit `878f24ea0743f8e0a49e2f9f4fb98aa150a59aa0`.
-The recording identifies the candidate commit. Query and fixture paths in the
+The recording demonstrates candidate `1cc5085a65f29ac261dd7acb6261e380d312068d`. Query and fixture paths in the
 displayed command are placeholders for disposable files; the responses and
 timings come from actual native queries. No service, production store or
 credential is used. The small-fixture timings do not predict production latency.
 
-The small output/timing recording and readable output are retained beside this
-caption with the source change. Playback requires downloading both files and
+The [recorded output](output.log) and [timing data](timing.log) are retained
+beside this caption with the source change. Playback requires downloading both files and
 the util-linux `scriptreplay` command; inline playback is not assumed.
 
 ```sh
