@@ -925,3 +925,41 @@ def test_bare_extra_source_refusal_names_literal_path_remedy(
     assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
     assert (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
             (repo / ".git" / "config").read_bytes()) == before
+
+
+def test_external_helper_transport_never_executes(two_remotes, tmp_path):
+    from shantytown.workspace import push_freeze_refusal
+    _, wt, *_ = two_remotes
+    marker = tmp_path / "helper-executed"
+    helper = tmp_path / "helper"
+    helper.write_text("#!/bin/sh\ntouch " + str(marker) + "\nexit 42\n")
+    helper.chmod(0o700)
+    _git(wt, "remote", "set-url", "origin", f"ext::{helper} frozen.example %S")
+    _git(wt, "config", "protocol.ext.allow", "always")
+    _git(wt, "config", "st.push-freeze.frozen.example", "private hold")
+    assert "unsupported" in push_freeze_refusal(wt, ["origin"])
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",))
+    assert not result[0].ok and "unsupported" in result[0].reason
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("url", ["custom://frozen.example/team/repo", "foo::command",
+                                  "ext::command", "file://foreign.example/repo"])
+def test_unsupported_transport_refuses_before_push(two_remotes, url):
+    _, wt, *_ = two_remotes
+    _git(wt, "remote", "set-url", "origin", url)
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",),
+                              push_run=lambda *a: pytest.fail("must not contact"))
+    assert not result[0].ok and "unsupported" in result[0].reason
+
+
+@pytest.mark.parametrize("url", ["ssh://user@allowed.example/team/repo",
+                                  "https://allowed.example/team/repo",
+                                  "git@allowed.example:team/repo", "file:///tmp/private-repo"])
+def test_supported_unfrozen_transport_reaches_selected_push(two_remotes, url):
+    _, wt, *_ = two_remotes
+    _git(wt, "remote", "set-url", "origin", url)
+    calls = []
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",),
+                              push_run=lambda *a: (calls.append(a) or (0, "", "")))
+    assert calls and result[0].ok

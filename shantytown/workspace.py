@@ -1781,6 +1781,22 @@ def push_freeze_refusal(dest: Path | str, remotes: list[str],
         if rc or not urls.strip():
             return f"REFUSED BEFORE PUSH: {remote} push URLs unreadable; no push authorized."
         for url in urls.splitlines():
+            # Git helper transports can execute arbitrary commands whose real
+            # destination is not represented by the apparent URL authority.
+            # Only ordinary Git transports expose a host we can freeze here.
+            try:
+                parsed = urlsplit(url)
+                supported = (
+                    parsed.scheme in ("ssh", "https", "http", "git")
+                    and bool(parsed.hostname)
+                ) if "://" in url else "::" not in url
+                if parsed.scheme == "file" and "://" in url:
+                    supported = parsed.hostname in (None, "", "localhost")
+            except ValueError:
+                supported = False
+            if not supported:
+                return (f"REFUSED BEFORE PUSH: {remote} uses an unsupported push "
+                        "transport; no helper or push authorized.")
             host, _ = _remote_authority(url)
             if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", host):
                 return (f"REFUSED BEFORE PUSH: {remote} host cannot be checked "
