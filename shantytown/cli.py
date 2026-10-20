@@ -12061,15 +12061,25 @@ def _job_dispatch(a):
 
 
 def _job_escalate(a):
-    def escalate(job, text):
+    def escalate(job, fire, text):
         from .tier import find_administrator
         admin = find_administrator(_registry(a))
         if not admin:
             return False
-        # DURABLE: the administrator may be the agent that is down, and a give-up
-        # notice that vanishes with a missing pane is the silence this replaces.
-        rc, _ = _job_st(a, ["inbox", admin, "-d", text])
-        return rc == OK
+        # The work store may be the very thing that failed. Use the existing
+        # local event/drain channel, independent of durable inbox persistence.
+        # Runner holds the job lock and persists this firing before attempting it.
+        from .tier import Reason
+        key = json.dumps(["job-failed", job.name, fire["queued"], fire["reason"]],
+                         separators=(",", ":"))
+        event = FilesEvents(Path(a.root) / "events").persist(
+            admin, f"job:{job.name}", Reason.JOB_FAILED.value, False,
+            detail=(f"Job {job.name} exhausted retries. Inspect "
+                    f"st work jobs history {job.name}; verify canonical [env] "
+                    "store routing and backend availability. "
+                    "Raw action output remains in the local job history."),
+            key=key)
+        return event.to == admin and event.reason == Reason.JOB_FAILED.value
     return escalate
 
 
@@ -12105,7 +12115,7 @@ def _jobs_runner(a, *, detach=True):
     return jobs_mod.Runner(
         a.root, host=local_host(a.root),
         actions={"inbox": _job_inbox(a), "dispatch": _job_dispatch(a)},
-        escalate=_job_escalate(a),
+        terminal_notice=_job_escalate(a),
         sources=jobs_mod.Sources(a.root, bead_rows=_job_bead_rows(a)),
         detach=detach)
 
@@ -12210,8 +12220,30 @@ def _cmd_jobs(a) -> int:
             print(f"  refused: no job {a.name!r}", file=sys.stderr)
             return REFUSED
         rc = REFUSED if errors else OK
+        store_checked = False
+        store_error = None
         for job in pick:
             verdict, why = runner.check(job)
+            needs_store = (job.action.kind == "dispatch" or
+                           (job.action.kind == "inbox" and job.action.durable))
+            if (needs_store and job.enabled and
+                    jobs_mod.runs_here(job, runner.host)[0]):
+                if not store_checked:
+                    store_checked = True
+                    try:
+                        tracker = _tracker(a)
+                        from .sd import SdTracker
+                        if isinstance(tracker, SdTracker):
+                            tracker.prove_store()
+                    except Exception as exc:
+                        # Avoid echoing endpoint/credential-bearing exception text.
+                        store_error = (f"{type(exc).__name__}: seeds store admission "
+                                       "failed; configure canonical [env] routing "
+                                       "and verify the backend")
+                if store_error:
+                    verdict, why = "cannot tell", store_error
+                elif _backend(a) == "seeds":
+                    why += "; seeds store admitted (read-only identity check)"
             if verdict == "cannot tell":
                 rc = CANNOT_TELL
             print(f"  {job.name:<18} {verdict:<11} {why}")
