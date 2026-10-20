@@ -184,7 +184,7 @@ class SeedLedger:
                 raise SeedUnknown('creation was already reconciled; do not overwrite assignment claim')
         else:
             _, state, item = row
-            if state in ('delivered', 'refused'):
+            if state in ('submitted', 'refused'):
                 return {'seed': item, 'assignment': state}
             if state != 'seeded':
                 raise SeedUnknown('claimed operation uncertain; reconcile instead of repeating')
@@ -201,7 +201,7 @@ class SeedLedger:
             raise SeedUnknown('assignment uncertain; do not repeat') from None
         if type(code) is not int or code not in (0, 1):
             raise SeedUnknown('assignment uncertain; do not repeat')
-        state = 'delivered' if code == 0 else 'refused'
+        state = 'submitted' if code == 0 else 'refused'
         self.conn.execute('UPDATE scheduled_seed_claims SET state=? WHERE firing=?',
                           (state, request.firing))
         return {'seed': item, 'assignment': state}

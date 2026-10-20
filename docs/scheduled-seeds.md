@@ -46,13 +46,15 @@ claim to `seeded`. It performs no create or assignment. Normal delivery may then
 make its one assignment call. This is not an automatic title search or board
 scan. Concurrent reconciliation cannot overwrite an existing assignment claim.
 
-The ledger commits `assigning` before normal `go`. Exit zero records delivered;
+The ledger commits `assigning` before normal `go`. Exit zero records submitted;
 explicit refusal records refused and retains the visible seed. Neither repeats
 the call on replay. An exception, invalid return or exit two retains UNKNOWN,
-including a potentially delivered request whose reply was lost. There is no
+including a potentially submitted request whose reply was lost. There is no
 automatic assignment replay or silent reassignment. The agent closes the seed
 with its result; closure and overdue/missed-deadline observation remain normal
-board/domain responsibilities.
+board/domain responsibilities. A submitted command is not an accepted Go receipt,
+owner ACK, completed task or workflow transition. A future integrating owner must
+verify the exact native dispatch receipt before advancing downstream.
 
 Keep the execution ledger, seed and existing signed-run/outbox state across
 restart and rollback. Do not point this ledger at a board database, delete it to

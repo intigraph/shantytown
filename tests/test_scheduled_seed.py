@@ -52,10 +52,10 @@ class Port:
 def test_one_seed_readback_before_one_assignment_across_restart(tmp_path):
     port, req = Port(), request()
     ledger = SeedLedger(tmp_path/'ledger.db')
-    assert ledger.deliver(req, port) == {'seed':'fixture-seed','assignment':'delivered'}
+    assert ledger.deliver(req, port) == {'seed':'fixture-seed','assignment':'submitted'}
     ledger.close()
     ledger = SeedLedger(tmp_path/'ledger.db')
-    assert ledger.deliver(req, port)['assignment'] == 'delivered'
+    assert ledger.deliver(req, port)['assignment'] == 'submitted'
     assert port.calls == ['create','read','assign']
     ledger.close()
 
@@ -73,7 +73,7 @@ def test_committed_create_with_lost_response_never_recreates_or_assigns(tmp_path
     assert port.calls == ['create'] and len(port.seeds) == 1
     # Exact owner-provided ID/readback resumes assignment without another create.
     ledger.reconcile_created(req, 'fixture-seed', port)
-    assert ledger.deliver(req, port)['assignment'] == 'delivered'
+    assert ledger.deliver(req, port)['assignment'] == 'submitted'
     assert port.calls == ['create','read','read','assign']
     ledger.close()
 
@@ -175,7 +175,7 @@ def test_pure_code_success_and_hold_make_no_seed_but_failure_makes_one(tmp_path)
         assert ledger.for_code_outcome(req,port,{'outcome':name,'exit_code':0}) is None
     assert port.calls == []
     failed = {'outcome':'failed','exit_code':1}
-    assert ledger.for_code_outcome(req,port,failed)['assignment'] == 'delivered'
+    assert ledger.for_code_outcome(req,port,failed)['assignment'] == 'submitted'
     ledger.for_code_outcome(req,port,failed)
     assert port.calls == ['create','read','assign']
     with pytest.raises(ValueError):
@@ -190,13 +190,13 @@ def test_concurrent_reconciliation_cannot_be_overwritten_to_assign_twice(tmp_pat
     def reconciled(fields):
         item = create(fields)
         second.reconcile_created(req,item,port)
-        assert second.deliver(req,port)['assignment'] == 'delivered'
+        assert second.deliver(req,port)['assignment'] == 'submitted'
         return item
     port.create = reconciled
     with pytest.raises(SeedUnknown, match='already reconciled'):
         first.deliver(req,port)
     assert port.calls.count('create') == 1 and port.calls.count('assign') == 1
-    assert first.deliver(req,port)['assignment'] == 'delivered'
+    assert first.deliver(req,port)['assignment'] == 'submitted'
     first.close()
     second.close()
 

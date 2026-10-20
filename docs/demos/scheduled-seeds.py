@@ -73,6 +73,7 @@ def main():
             assert seed['external_ref'] == req.firing and seed['workflow_run'] == req.run_iri
             print('actual SDK: one keyed seed, stable external-ref and signed-run link read back BEFORE synthetic go')
             print('duplicate firing: no second create or assignment callback')
+            print('synthetic callback: submitted only; accepted Go receipt remains UNKNOWN')
             ledger.close()
             ledger = SeedLedger(root/'execution-ledger.db')
             assert ledger.deliver(req,port) == result and port.creates == 1
