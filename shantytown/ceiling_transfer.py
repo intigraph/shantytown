@@ -107,6 +107,7 @@ class Outcome:
     moved: bool
     detail: str = ""
     commented: bool = False
+    disposition: str = "unknown"
 
 
 @dataclass
@@ -179,7 +180,7 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
         if m.to in refused:
             detail = f"receiver refused earlier this pass: {refused[m.to]}"
             log(f"ceiling-transfer: {m.item} stays with {m.frm}; {m.to} skipped ({detail})")
-            results.append(Outcome(m, False, detail))
+            results.append(Outcome(m, False, detail, disposition="not_attempted"))
             continue
         try:
             dispatch(m.item, m.to, m.note())
@@ -190,7 +191,7 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
             detail = f"{type(exc).__name__}: {exc}"
             log(f"ceiling-transfer: {m.item} was DELIVERED to {m.to} but the tracker "
                 f"write is unproven; do not resend, repair the assignee ({detail})")
-            results.append(Outcome(m, False, detail))
+            results.append(Outcome(m, False, detail, disposition="delivered_untracked"))
             continue
         except Exception as exc:  # noqa: BLE001 - every refusal is reported, none retried
             detail = f"{type(exc).__name__}: {exc}"
@@ -198,7 +199,8 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
                 refused[m.to] = detail
             log(f"ceiling-transfer: {m.item} stays with {m.frm}; moving it to "
                 f"{m.to} was refused or unproven ({detail})")
-            results.append(Outcome(m, False, detail))
+            results.append(Outcome(m, False, detail, disposition=(
+                "refused" if isinstance(exc, TriageRefused) else "unproven")))
             continue
         commented = True
         try:
@@ -213,5 +215,5 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
         except Exception as exc:  # noqa: BLE001
             log(f"ceiling-transfer: event for {m.item} not recorded ({type(exc).__name__})")
         log(f"ceiling-transfer: moved {m.item} {m.frm} -> {m.to} ({m.why})")
-        results.append(Outcome(m, True, commented=commented))
+        results.append(Outcome(m, True, commented=commented, disposition="confirmed"))
     return results

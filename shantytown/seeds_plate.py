@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 import re
+import time
 from urllib.parse import quote, urlsplit
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -28,6 +29,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
@@ -459,6 +461,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 or ("assignee" in row and not isinstance(row["assignee"], str))
                 or type(row.get("priority")) is not int
                 or not 0 <= row["priority"] <= 4
+                or (feed_owners is not None and plate_owners is None and not active_only
+                    and (not isinstance(row.get("issue_type"), str)
+                         or not row["issue_type"]))
                 or row["status"]
                 not in (
                     "open",
@@ -532,10 +537,25 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                 for graph in graphs:
                     branches.append(f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} a <{SCHEMA}Action> }} '
                                     f'BIND({_iri(subject)} AS ?s) BIND({json.dumps(graph)} AS ?graph) }}')
-        candidates = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
-                            + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
-        if len(candidates) >= 10000:
-            raise ValueError("deferral candidate budget reached")
+        # The unscoped 16-arm UNION exhausted the server execution budget
+        # (aegis-9lb). Keep each clause unchanged but execute it separately.
+        # Exact-ID gate reads retain their bounded batch. A failed branch must
+        # refuse the whole read; never hydrate a partially collected candidate set.
+        groups = [branches] if target_ids is not None else [[branch] for branch in branches]
+        candidates = []
+        deadline = time.monotonic() + timeout
+        for group in groups:
+            time_left = deadline - time.monotonic()
+            if time_left <= 0:
+                raise ValueError("deferral candidate time budget reached")
+            remaining = 10000 - len(candidates)
+            rows = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+                          + " UNION ".join(group) + f" }} LIMIT {remaining}", time_left)["rows"]
+            if time.monotonic() >= deadline:
+                raise ValueError("deferral candidate time budget reached")
+            candidates.extend(rows)
+            if len(candidates) >= 10000:
+                raise ValueError("deferral candidate budget reached")
         selected = {}
         for row in candidates:
             subject, graph = row.get("subject"), row.get("graph")
@@ -577,9 +597,13 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                     raise ValueError("invalid or shadowed deferral field")
                 key = fields[predicate]
                 if isinstance(value, dict):
+                    # due_at is an xsd:dateTime like the plate reader's (aegis-qc2):
+                    # without it, one item with a due date made every deferral
+                    # read refuse, so the deferral sweep never produced a summary.
                     if set(value) != {"datatype", "value"} or key not in (
-                            "created_at", "updated_at", "defer_until"):
-                        raise ValueError("unsupported typed deferral field")
+                            "created_at", "updated_at", "defer_until", "due_at"):
+                        raise ValueError(f"unsupported typed deferral field: {key} "
+                                         f"({value.get('datatype')!s:.80})")
                     value = value["value"]
                 if key == "assignee" and isinstance(value, str) and value.startswith(SEEDS + "principal/"):
                     from urllib.parse import unquote

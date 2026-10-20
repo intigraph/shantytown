@@ -1,0 +1,153 @@
+{
+  "baseline_ref": "8f1d426bf91dd392937d00620739ff24069d634f",
+  "baseline_source_sha256": "dfc47e72405c5f4101bbfc4c5acb28bab0cc95670b324170103ca7316966e6e4",
+  "candidate_source_sha256": "5788a6052dabf4494b89d358649a6bf0f3615a6093a7594358640f791bcaff18",
+  "before": [
+    {
+      "case": "canonical",
+      "exit": 0,
+      "post_attempts": 1,
+      "response": {
+        "candidate": {
+          "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_ref": "feature",
+          "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "base_ref": "main",
+          "files": [
+            "file.py"
+          ]
+        },
+        "bead": "project-task",
+        "open_count": 0,
+        "overlaps": [],
+        "inventory_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "created": "https://github.com/example/current/pull/99",
+        "number": 99
+      },
+      "stderr": ""
+    },
+    {
+      "case": "renamed",
+      "exit": 2,
+      "post_attempts": 1,
+      "response": {
+        "refused": "create outcome/head/base unverified; inspect remote PR before retrying",
+        "created": null,
+        "outcome": "indeterminate"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "null_post",
+      "exit": 2,
+      "post_attempts": 1,
+      "response": {
+        "refused": "create outcome/head/base unverified; inspect remote PR before retrying",
+        "created": null,
+        "outcome": "indeterminate"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "lost_post",
+      "exit": 2,
+      "post_attempts": 1,
+      "response": {
+        "refused": "create outcome unknown; inspect remote PR before retrying",
+        "created": null,
+        "outcome": "indeterminate"
+      },
+      "stderr": ""
+    },
+    {
+      "case": "missing_identity",
+      "exit": 0,
+      "post_attempts": 1,
+      "response": {
+        "candidate": {
+          "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_ref": "feature",
+          "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "base_ref": "main",
+          "files": [
+            "file.py"
+          ]
+        },
+        "bead": "project-task",
+        "open_count": 0,
+        "overlaps": [],
+        "inventory_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "created": "https://github.com/example/current/pull/99",
+        "number": 99
+      },
+      "stderr": ""
+    }
+  ],
+  "after": [
+    {
+      "case": "canonical",
+      "exit": 0,
+      "post_attempts": 1,
+      "response": {
+        "candidate": {
+          "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "head_ref": "feature",
+          "base": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "base_ref": "main",
+          "files": [
+            "file.py"
+          ]
+        },
+        "bead": "project-task",
+        "open_count": 0,
+        "overlaps": [],
+        "inventory_digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "created": "https://github.com/example/current/pull/99",
+        "number": 99
+      },
+      "stderr": ""
+    },
+    {
+      "case": "renamed",
+      "exit": 2,
+      "post_attempts": 0,
+      "response": {
+        "refused": "repository example/previous now resolves to example/current; use the canonical slug and matching origin; no PR creation attempted",
+        "created": false
+      },
+      "stderr": "PR preflight refused: repository example/previous now resolves to example/current; use the canonical slug and matching origin; no PR creation attempted"
+    },
+    {
+      "case": "null_post",
+      "exit": 2,
+      "post_attempts": 1,
+      "response": {
+        "refused": "create outcome/head/base unverified; inspect remote PR before retrying",
+        "created": null,
+        "outcome": "indeterminate"
+      },
+      "stderr": "PR creation outcome UNKNOWN: create outcome/head/base unverified; inspect remote PR before retrying"
+    },
+    {
+      "case": "lost_post",
+      "exit": 2,
+      "post_attempts": 1,
+      "response": {
+        "refused": "create outcome unknown; inspect remote PR before retrying",
+        "created": null,
+        "outcome": "indeterminate"
+      },
+      "stderr": "PR creation outcome UNKNOWN: create outcome unknown; inspect remote PR before retrying"
+    },
+    {
+      "case": "missing_identity",
+      "exit": 2,
+      "post_attempts": 0,
+      "response": {
+        "refused": "canonical repository identity unverified; no PR creation attempted",
+        "created": false
+      },
+      "stderr": "PR preflight refused: canonical repository identity unverified; no PR creation attempted"
+    }
+  ]
+}

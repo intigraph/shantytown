@@ -51,6 +51,8 @@ loses work, so the default is the other one.
 """
 from __future__ import annotations
 
+from .admin_wake_budget import Policy as AdminWakeBudget, parse as parse_admin_wake_budget
+
 import math
 import tomllib
 from dataclasses import dataclass, field, replace
@@ -181,6 +183,7 @@ class Config:
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
+    admin_wake_budget: AdminWakeBudget = field(default_factory=AdminWakeBudget)
     fleet: Fleet = field(default_factory=Fleet)
     # [crew.<name>] — identity declared IN THIS FILE (GitHub #11). Empty means the
     # file declares no crew, which is the normal case: cards or the graph own it.
@@ -360,7 +363,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "fleet", "crew", "env", "tmux", "dream",
+_TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
              "model", "host", "keep_current", "cycle_advice", "accounts", "overdue"}
@@ -450,6 +453,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   model_fallback=model_fallback,
                   model_fallback_by_role=model_fallback_by_role,
                   hibernate=_hibernate(path, _table(path, data, "hibernate")),
+                  admin_wake_budget=_admin_wake_budget(path, _table(path, data, "admin_wake_budget")),
                   fleet=_fleet(path, _table(path, data, "fleet")),
                   crew=_crew(path, _table(path, data, "crew"),
                              declared=set(declared_roles)),
@@ -1163,4 +1167,11 @@ def _quiet_time(path: Path, tbl: dict) -> quiet_detectors.Policy:
     try:
         return quiet_detectors.parse(tbl)
     except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from exc
+
+
+def _admin_wake_budget(path, tbl):
+    try:
+        return parse_admin_wake_budget(tbl)
+    except (ValueError, TypeError) as exc:
         raise ConfigError(f"{path}: {exc}") from exc

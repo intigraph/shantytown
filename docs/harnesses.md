@@ -282,6 +282,12 @@ run the TUI but cannot start Remote Control. If that managed payload is missing,
 This lets a new host start workers even when it inherits an enabled relay setting.
 The warning also appears during `st agent new <agent> --dry-run`.
 
+For discovery and phone enrollment of an **existing** crew server, use the
+[phone access runbook](android-crew-sessions.md). It distinguishes explicit card
+selection from the ordinary computer host, explains non-issuing inspection,
+and records Android and lifecycle acceptance that remains unavailable. A
+connected daemon or a manual code is not proof of phone access.
+
 Install the standalone package under the `CODEX_HOME` named in the warning to
 enable Remote Control on the next launch, or set `SHANTY_REMOTE_CONTROL = "false"`
 under `[env]` in `shantytown.toml` to keep Remote Control off. The fallback does not
@@ -572,7 +578,15 @@ its original tree in same-filesystem quarantine and reports its path and coverag
 No automatic deletion is provided. Keep quarantine for at least one full natural
 cycle of every live Codex card, recording failures and per-card evidence. At a
 sanctioned stopped boundary rollback by removing only the expected disk package
-symlink and renaming the retained tree back; preserve the shared disk payload. The migration shares the native installer
+symlink and renaming the retained tree back; preserve the shared disk payload.
+
+An empty shared directory prepared by a fresh card is seeded from the stopped
+card under both provisioning and native installer locks. The existing native
+lock inode is preserved; a nonempty mismatched package still refuses and keeps
+the original. Copy or partial-publication failures leave the original card
+package in place.
+
+The migration shares the native installer
 lock inode and serializes provisioning; it never forces a cycle, deletes live
 releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
 calling the Linux migration helper there directly refuses.

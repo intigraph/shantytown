@@ -1,0 +1,13 @@
+Script started on 2026-10-17 03:27:55-04:00 [COMMAND="stty -onlcr; python3 docs/probes/pr-repository-identity/demo.py --baseline-ref "$DEMO_BASELINE_REF" --output docs/probes/pr-repository-identity/output.json" <not executed on terminal>]
+Private candidate/forge fixtures; no installed command or network mutation.
+canonical: POSTs 1 -> 1; exit 0 -> 0
+renamed: POSTs 1 -> 0; exit 2 -> 2
+PR preflight refused: repository example/previous now resolves to example/current; use the canonical slug and matching origin; no PR creation attempted
+null_post: POSTs 1 -> 1; exit 2 -> 2
+PR creation outcome UNKNOWN: create outcome/head/base unverified; inspect remote PR before retrying
+lost_post: POSTs 1 -> 1; exit 2 -> 2
+PR creation outcome UNKNOWN: create outcome unknown; inspect remote PR before retrying
+missing_identity: POSTs 1 -> 0; exit 0 -> 2
+PR preflight refused: canonical repository identity unverified; no PR creation attempted
+
+Script done on 2026-10-17 03:27:55-04:00 [COMMAND_EXIT_CODE="0"]

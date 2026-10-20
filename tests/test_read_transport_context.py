@@ -168,3 +168,75 @@ def test_hostname_failure_stays_unknown(clean_context, monkeypatch, transport):
     monkeypatch.setenv("QUIPU_HOST", "declared-host")
     query(url)
     assert lower(seen[1][0])["x-quipu-host"] == "declared-host"
+
+
+@pytest.mark.parametrize('command', ['anchor', 'plate', 'inbox', 'stop_policy', 'tend'])
+def test_default_command_reaches_http_and_sdk_child(command, clean_context, monkeypatch, transport):
+    from shantytown.query_identity import declared_command
+    url, seen = transport
+    # An inherited producer label cannot hide the actual finite command.
+    monkeypatch.setenv('QUIPU_SOURCE', 'inherited-producer')
+    monkeypatch.setenv('QUIPU_HOST', 'declared-host')
+    monkeypatch.setenv('SEEDS_ACTOR', 'writer-control')
+    before = dict(os.environ)
+    with declared_command(command):
+        query(url)
+        code = "import json,os; print(json.dumps({k:os.environ.get(k) for k in ('QUIPU_SOURCE','QUIPU_OPERATION','SEEDS_ACTOR')}))"
+        child = subprocess.run([sys.executable, '-c', code], capture_output=True,
+                               text=True, check=True,
+                               **sdk_subprocess_options(read_operation='list'))
+    headers = lower(seen[0][0])
+    assert headers['x-quipu-source'] == 'st-' + command
+    assert headers['x-quipu-host'] == 'declared-host'
+    assert headers['x-quipu-client'] == 'seeds'
+    assert json.loads(child.stdout) == {'QUIPU_SOURCE': 'st-' + command,
+                                     'QUIPU_OPERATION': 'list', 'SEEDS_ACTOR': 'writer-control'}
+    assert dict(os.environ) == before
+    assert read_headers()['X-Quipu-Source'] == 'inherited-producer'
+
+
+def test_command_scope_never_emits_arguments_and_restores_after_nested_error(clean_context):
+    from shantytown.query_identity import declared_command
+    with declared_command('stop_policy'):
+        with pytest.raises(RuntimeError), declared_command('inbox'):
+            assert read_headers()['X-Quipu-Source'] == 'st-stop_policy'
+            raise RuntimeError('control')
+        assert read_headers()['X-Quipu-Source'] == 'st-stop_policy'
+    for untrusted in ('secret-message', '/private/file', 'anchor\r\nAuthorization: secret', ''):
+        with declared_command(untrusted):
+            assert read_headers()['X-Quipu-Source'] == 'st-other'
+    assert read_headers()['X-Quipu-Source'] == 'shantytown'
+
+
+def test_cli_dispatch_default_command_scope(clean_context, monkeypatch):
+    from shantytown import cli
+    seen = []
+    monkeypatch.setattr(cli, '_parse_args', lambda argv: SimpleNamespace(cmd='anchor', root=None))
+    monkeypatch.setattr(cli, 'resolve_root', lambda *a, **k: (None, None))
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    from contextlib import nullcontext
+    from shantytown import deployment
+    monkeypatch.setattr(deployment, 'command_environment', lambda *a, **k: nullcontext())
+    monkeypatch.setattr(cli, '_run_command', lambda a: seen.append(read_headers()['X-Quipu-Source']) or 0)
+    assert cli.main(['anchor']) == 0
+    assert seen == ['st-anchor']
+    assert read_headers()['X-Quipu-Source'] == 'shantytown'
+
+
+def test_stop_entrypoints_and_sdk_preflight_preserve_outer_command(clean_context, monkeypatch):
+    from shantytown.query_identity import declared_command
+    from shantytown import stop_event, stop_policy
+    seen = []
+    monkeypatch.setattr(stop_event, '_main', lambda argv: seen.append(read_headers()['X-Quipu-Source']) or 0)
+    assert stop_event.main(['haul']) == 0
+    assert seen == ['st-haul']
+    with declared_command('stop_policy'):
+        assert stop_event.main(['send']) == 0
+        values = sdk_subprocess_options()['env']
+        assert values['QUIPU_SOURCE'] == 'st-stop_policy'
+        assert 'QUIPU_AGENT' not in values
+    assert seen[-1] == 'st-stop_policy'
+    assert read_headers()['X-Quipu-Source'] == 'shantytown'
+    # Invalid hook invocation exits before any registry/board read, restoring context.
+    assert stop_policy.main([]) == 1
+    assert read_headers()['X-Quipu-Source'] == 'shantytown'
