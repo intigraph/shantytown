@@ -587,6 +587,15 @@ def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
         if note:
             print(note, file=sys.stderr)
         return False, limits, spend
+    # A ceiling prevents further work even while the pane stays visible. This
+    # records work custody only; it never kills/restarts or transfers an agent.
+    try:
+        from . import cli
+        from types import SimpleNamespace
+        cli._owned_work_tick(SimpleNamespace(root=root, reason="session ceiling"),
+                             card=FilesRegistry(root / "crew").get(me), ceiling=True)
+    except Exception:
+        print("stopped-owner ceiling evidence UNKNOWN", file=sys.stderr)
     if sb.already_reported(root, me, spend):
         return True, limits, spend       # told once — let the session end
     sb.mark_reported(root, me, spend, ceiling)
