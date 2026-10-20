@@ -51,6 +51,12 @@ delivery; it does not change this catalogue reader, enable a schedule or remove
 the tend sweep. Calendar recurrence and production pilot acceptance remain
 separate gates.
 
+The source-only [seed-before-assignment library](scheduled-seeds.md) supplies
+keyed creation/readback and a durable no-repeat boundary for an admitted agent
+firing. It does not select an execution backend, enable a schedule, change the
+catalogue reader or remove the existing tend sweep. Runtime integration and
+calendar semantics remain separate.
+
 ## Why it is shaped like this
 
 Before this, every recurring job was one of two things. Some were sweeps
@@ -269,3 +275,36 @@ This is a first slice. It does not yet include: `gh.release` and
 `file.changed` sources; recording runs as quipu facts; or moving dream's
 interval and the loose host crons (CI watch, repo audits, `hold gaming --probe`)
 into job files. Each of those is a separate change.
+
+
+## Store admission and terminal failure notices
+
+Scheduled commands resolve plumbing from the deployment's
+shantytown.toml [env] table before ambient environment variables.
+For a Seeds board, declare SHANTY_BACKEND="seeds", exactly one of
+SHANTY_SD_STORE or SHANTY_SD_QUIPU, and SHANTY_SD_PREFIX there.
+QUIPU_SERVER alone identifies an ontology service, not a work board.
+Shell startup files and a tmux server's global environment are insufficient
+configuration for launchd or cron jobs.
+
+The command st work jobs check [name] performs the Seeds adapter's read-only
+store identity admission for enabled local durable inbox and dispatch jobs,
+even when they are not due. A missing, unreachable or mismatched store exits 2.
+This does not send a message, prove recipient delivery or establish complete
+schedule coverage. Disabled, other-host and exec-only jobs do not trigger it.
+
+After scheduled retries are exhausted, the CLI records one job-failed event
+for the administrator through the existing local event/drain channel. This
+channel does not depend on the failed work store. The event names the job,
+history command and routing checks; raw action output stays in local history.
+Its stable firing key prevents replay from recreating a consumed notice.
+The normal administrator drain renders it as a job alert, not an agent stop or
+untracked-work report. Persistence is not proof that the administrator has
+received it: verify the administrator's normal local drain separately.
+If no administrator or event write is available, the run reports that it could
+not notify the administrator.
+
+Before installing a delivery change, coordinate an observed installed smoke,
+a test silence and a separate reader receipt. Preserve the job state, event
+files (including consumed records), scheduler ledgers and canonical config
+backup across rollback. Use an isolated tmux socket for source verification.

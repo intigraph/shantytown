@@ -1,0 +1,11 @@
+Script started on 2026-10-20 01:03:55-04:00 [COMMAND="python3 docs/demos/scheduled-seeds.py" <not executed on terminal>]
+SDK: sd 0.6.0 (seeds) sha256=c741dd1434d2bbe0ff0200e55add48a7a3a0745156a0832f884ff9a1a70d4bc5
+actual SDK: one keyed seed, stable external-ref and signed-run link read back BEFORE synthetic go
+duplicate firing: no second create or assignment callback
+synthetic callback: submitted only; accepted Go receipt remains UNKNOWN
+actual local commit + simulated lost response: seed survives; UNKNOWN, no second create/go
+exact-ID readback reconciliation: one assignment callback, no replacement seed
+pure-code success: no seed (signed run recording remains Shuttle responsibility)
+FIXTURE ONLY: isolated HOME/CWD/store/identity; synthetic go, no real pane or production write
+
+Script done on 2026-10-20 01:03:56-04:00 [COMMAND_EXIT_CODE="0"]
