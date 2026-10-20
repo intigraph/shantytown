@@ -492,7 +492,7 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
         queries.append(text)
         wire = fields("test-modern", title="inbox: marker payload", status="open")
         wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
-        if '"closed"' in text or '?predicate ?value' in text and closed[0]:
+        if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
             wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
         return answer(wire)
 
@@ -504,11 +504,13 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     assert len(queries) == 2  # one discovery, one bounded field projection; both prefixes
     assert "inbox:" in queries[0] and "mail:" in queries[0]
     assert G + "#seeds-ephemeral" in queries[0]
-    assert '"closed"' not in queries[0]
+    # The admitted status vocabulary includes closed even for unread reads;
+    # only the candidate status filter determines whether receipts are selected.
+    assert '"deferred", "closed"))' not in queries[0]
     closed[0] = True
     assert box.find_delivery("worker", "delivered").read
     assert len(queries) == 4
-    assert '"closed"' in queries[2]
+    assert '"deferred", "closed"))' in queries[2]
 
 
 @pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "disappeared", "nonmessage"])
@@ -613,7 +615,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     def query(_proof, text, timeout):
         seen.append(text)
         result = data.query(text)
-        assert [str(v) for v in result.vars] == ["subject", "graph"]
+        assert [str(v) for v in result.vars] == ["subject", "graph", "problem"]
         actual = [(str(row.subject), str(row.graph)) for row in result]
         assert Counter(actual) == Counter(expected)
         # Stop before hydration: this test checks the real candidate query,
@@ -625,7 +627,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     try:
         assert seeds_plate.owner_rows(PROOF, "worker", **options).exact() == []
         assert len(seen) == 1
-        assert seen[0].count(" UNION ") == 3
+        assert 'BIND("unsupported-owner-status" AS ?problem)' in seen[0]
     finally:
         data.close()
 

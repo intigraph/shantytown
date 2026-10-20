@@ -249,7 +249,8 @@ def _panes(a):
     EVERY LIVE AGENT AS DOWN, confidently and with exit 0. tmux.py has warned
     about exactly this since it was written; the CLI just never asked.
     """
-    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."))
+    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."),
+                root=getattr(a, 'root', None))
 
 
 def _registry(a):
@@ -2533,7 +2534,7 @@ def _run_command(a) -> int:
             return 2
         except Exception as exc:
             print(f"work item operation unproven: {type(exc).__name__}; "
-                  "do not retry writes without readback", file=sys.stderr)
+                  "check write readback, then retry transient failures if not applied", file=sys.stderr)
             return 2
     if a.cmd == "defer":
         return _cmd_defer(a)
@@ -9103,6 +9104,15 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     # provisions from the active hank-src checkout.
     gt_worktree = worktree_for(resolved, agent)
     candidates = [gt_worktree, workspace_root / f"{repo}-wt" / agent]
+    crew_sources = {}
+    for container in dict.fromkeys((resolved, workspace_root / repo)):
+        source = container / "crew" / agent
+        # Containers can inherit a parent's Git repository. Only an own marker
+        # identifies the crew clone used by the existing worktree provisioner.
+        if not (container / ".git").exists() and (source / ".git").exists():
+            tree = worktree_for(source, agent)
+            crew_sources[tree] = source
+            candidates.append(tree)
     matches = [path for path in dict.fromkeys(candidates) if path.is_dir()]
     if len(matches) > 1:
         listed = ", ".join(str(path) for path in matches)
@@ -9111,7 +9121,33 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
             "Pass the shared checkout or worktree path explicitly."
         )
     if matches:
-        return matches[0]
+        selected = matches[0]
+        if selected in crew_sources:
+            import subprocess
+            source = crew_sources[selected]
+            try:
+                if not (selected / ".git").is_file():
+                    raise WorkspaceError("crew worktree is not a linked worktree")
+                _resolve_push_worktree(str(selected), agent)
+                common = []
+                for path in (source, selected):
+                    result = subprocess.run(
+                        ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
+                         "--git-common-dir"], capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode or not result.stdout.strip():
+                        raise WorkspaceError("crew worktree identity cannot be verified")
+                    common.append(Path(result.stdout.strip()).resolve())
+                if common[0] != common[1]:
+                    raise WorkspaceError("crew worktree belongs to a different repository")
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkspaceError("crew worktree identity cannot be read") from error
+        return selected
+    if crew_sources:
+        tree, source = next(iter(crew_sources.items()))
+        raise WorkspaceError(
+            f"no crew worktree at {tree}; run st repo worktree {source} {agent} first"
+        )
     return gt_worktree
 
 
@@ -13006,7 +13042,7 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
-            agents, panes, _inbox(a), log=_log))
+            agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
