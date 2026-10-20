@@ -66,6 +66,25 @@ class RepositoryQuery(unittest.TestCase):
         source.add((pointer, OWL.sameAs, other))
         self.assertEqual(set(source.query(QUERY).graph), expected)
 
+    def test_actual_anonymous_chunk_lane_and_foreign_text_negatives(self):
+        source = Graph()
+        chunk = URIRef(str(A) + "chunk/shantytown/README.md#C1")
+        expected = {
+            (chunk, RDF.type, A.Chunk),
+            (chunk, A.filePath, Literal("README.md")),
+            (chunk, RDFS.label, Literal("anonymous pointer")),
+        }
+        blocked = {
+            (chunk, A.content, Literal("private source body")),
+            (chunk, A.startLine, Literal(1)),
+            (chunk, A.endLine, Literal(9)),
+            (URIRef(str(A) + "chunk/foreign/file.py#C1"), RDF.type, A.Chunk),
+            (URIRef(str(A) + "chunk/shantytown-other/file.py#C1"), RDF.type, A.Chunk),
+        }
+        for triple in expected | blocked:
+            source.add(triple)
+        self.assertEqual(set(source.query(QUERY).graph), expected)
+
     def test_empty_is_empty_with_populated_positive(self):
         self.assertEqual(len(Graph().query(QUERY).graph), 0)
         source = Graph()
