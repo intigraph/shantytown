@@ -2793,6 +2793,58 @@ def _stops(a) -> FilesStops:
     return FilesStops(Path(a.root) / "stopped")
 
 
+def _owned_work_rows(tracker, name):
+    """Complete owner scope on Seeds; the files floor scans only its local store."""
+    if hasattr(tracker, "capacity_rows"):
+        return tracker.capacity_rows(name)
+    if isinstance(tracker, FilesTracker):
+        from .answer import Answer
+        return Answer.complete_read([vars(row) for row in files_items(tracker)
+                                     if row.assignee == name], how="local files owner")
+    raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
+
+
+def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
+    from .owned_work import OwnedWork
+    try:
+        service = OwnedWork(a.root)
+        if card is not None:
+            service.stop(card.name, reason=getattr(a, "reason", "") or "",
+                         ceiling=ceiling, wake=True)
+        if wake_owner is not None:
+            service.wake(wake_owner)
+        names = ([card.name] if card else [wake_owner] if wake_owner else
+                 service.pending())
+        if not names:
+            return []
+        tracker, registry, box = _tracker(a), _registry(a), _inbox(a)
+        result = []
+        started = time.monotonic()
+        for index, name in enumerate(names):
+            if card is None and wake_owner is None:
+                # Bound starts, not in-flight writes. Rotate attempts so one
+                # unavailable owner cannot monopolize every supervisor pass.
+                if index >= 4 or time.monotonic() - started >= 5:
+                    print(f"  stopped-owner: {len(names) - index} pending owner(s) "
+                          "deferred to next supervisor pass", file=sys.stderr)
+                    break
+                service.attempted(name)
+            try:
+                result.extend(service.tick(
+                    registry, lambda owner: _owned_work_rows(tracker, owner), box,
+                    agents={name}))
+            except Exception as exc:
+                # One unavailable owner must not starve every later deadline.
+                print(f"  stopped-owner {name}: UNKNOWN ({type(exc).__name__}); "
+                      "pending local evidence retained", file=sys.stderr)
+        return result
+    except Exception as exc:
+        # The shutdown is already verified; metadata failure cannot undo it.
+        print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
+              "); ownership not measured", file=sys.stderr)
+        return []
+
+
 def _launched_now(a, card_name: str, settings_path=None) -> None:
     """ONE place that records 'this agent is now running'.
 
@@ -2808,6 +2860,8 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
         from . import account_state
         account_state.record(a.root, _registry(a).get(card_name), cfg, _panes(a))
     _stops(a).forget(card_name)
+    from .owned_work import OwnedWork
+    OwnedWork(a.root).launch(card_name)
     agent_hold.clear(a.root, card_name)
 
 
@@ -3423,9 +3477,16 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     findings = {f.agent: f for f in getattr(rep, "findings", ())}
     plate = plate or _plate(a)
 
+    from .owned_work import OwnedWork
+    custody = OwnedWork(a.root).snapshot()
+    stopped_owners = _stops(a).all().exact()
     holders = []
     for card in agents:
         if card.retired:
+            continue
+        if (card.name in stopped_owners or
+                custody.get(card.name, {}).get("state") in ("stopped", "ceiling", "expired")):
+            log(f"ceiling-transfer: {card.name} stopped/lease unverified; lead decides ownership")
             continue
         hit = _budget(card.name)[2]
         f = findings.get(card.name)
@@ -4559,6 +4620,7 @@ def _stop_locked(a) -> int:
                              reason="stop requested while already down: "
                              + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
+            _owned_work_tick(a, card=agent)
         if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
             from . import codex_daemon
             fixed = codex_daemon.repair(agent.name)
@@ -4618,6 +4680,7 @@ def _stop_locked(a) -> int:
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
     _cancel_cycle_for_stop(a)
+    _owned_work_tick(a, card=agent)
     # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
     #
     # This line used to promise "`st fleet tend` will still respawn it" unconditionally.
@@ -5563,8 +5626,30 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
+    owned_work_flag, stopped = False, None
+    if not a.dry_run:
+        try:
+            from .owned_work import OwnedWork
+            stopped = _stops(a).get(agent.name)
+            custody = OwnedWork(a.root).snapshot().get(agent.name, {}).get("state")
+            if stopped or custody in ("stopped", "ceiling", "expired"):
+                condition = "deliberately stopped" if stopped else custody
+                print(f"  stopped-owner: {agent.name} {condition}; "
+                      f"lead {agent.reports_to or 'administrator'} must decide ownership",
+                      file=sys.stderr)
+                owned_work_flag = True
+        except Exception:
+            print("  stopped-owner inbox flag UNKNOWN", file=sys.stderr)
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        result = _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        # Inspect after persistence, including UNKNOWN: the new message must
+        # not disappear behind an earlier empty ownership observation.
+        if owned_work_flag:
+            _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+        return result
+    if owned_work_flag:
+        _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -13038,6 +13123,19 @@ def _tend_once(a, quiet: bool = False) -> int:
                 _log(note)
             return []
 
+        def _stopped_owner_deadlines():
+            from .owned_work import OwnedWork
+            service = OwnedWork(a.root)
+            # Read generations BEFORE legacy stop records. Relaunch clears that
+            # store before minting its generation, so an old scan cannot stop a
+            # newer launch. The empty token fences an absent local record too.
+            observed = service.snapshot()
+            for name, record in _stops(a).all().exact().items():
+                service.stop(name, at=record.at, reason=record.reason,
+                             generation=observed.get(name, {}).get("generation", ""))
+            return _owned_work_tick(a)
+
+        _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
