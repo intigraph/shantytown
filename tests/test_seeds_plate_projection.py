@@ -638,3 +638,30 @@ def test_feed_type_missing_is_unknown_not_an_actionable_task(monkeypatch):
     from shantytown.answer import PartialAnswer
     with pytest.raises(PartialAnswer):
         seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()
+
+
+def test_unassigned_counts_exclude_decisions_in_both_graphs(monkeypatch):
+    from rdflib import Dataset, Literal, Namespace, RDF, URIRef
+    data = Dataset()
+    schema = Namespace(seeds_plate.SCHEMA)
+    seeds = Namespace(seeds_plate.SEEDS)
+    for suffix in ("", "#seeds-ephemeral"):
+        graph = data.graph(URIRef(G + suffix))
+        for name, priority, label, owner in (
+            ("ordinary", 1, "ordinary", None),
+            ("decision", 0, "decision-needed", None),
+            ("owned", 0, "ordinary", "worker"),
+            ("low", 3, None, None),
+        ):
+            node = URIRef(seeds_plate.SEEDS + "item/" + name + suffix)
+            graph.add((node, RDF.type, schema.Action))
+            graph.add((node, seeds["ontology/status"], Literal("open")))
+            graph.add((node, seeds["ontology/priority"], Literal(priority)))
+            if label is not None:
+                graph.add((node, schema.keywords, Literal(label)))
+            if owner is not None:
+                graph.add((node, schema.agent, Literal(owner)))
+    def query(proof, text, timeout):
+        return answer([{"n": int(row[0])} for row in data.query(text)])
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unassigned_counts(PROOF) == (4, 2)
