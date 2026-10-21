@@ -241,4 +241,5 @@ def read_item(tracker, identifier):
         rank=_one(facts, SEEDS + "ontology/rank"),
         due_at=_one(facts, "http://www.w3.org/2002/12/cal/ical#due"),
         created_at=_one(facts, SCHEMA + "dateCreated"),
+        labels=tuple(sorted(facts.get(SCHEMA + "keywords", set()))),
     )

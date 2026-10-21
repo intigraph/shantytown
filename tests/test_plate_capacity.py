@@ -163,3 +163,172 @@ def test_work_update_rechecks_owner_under_assignment_lock(tmp_path):
         command(args, tracker)
     assert size(tracker, 'worker') == 10
     assert original_get('st-1').assignee == ''
+
+
+def test_mixed_seventeen_delivery_records_leave_two_real_slots(tmp_path):
+    root, tracker = world(tmp_path, 2)
+    for i in range(8):
+        tracker.create(f'Recurring alarm: fixture{i}', assignee='worker', labels=['recurring-alarm'])
+    for i in range(7):
+        tracker.create(f'inbox: fixture{i}', assignee='worker')
+    assert size(tracker, 'worker') == 2
+    ensure_room(tracker, 'worker')
+
+
+def test_explicit_delivery_labels_and_legacy_mail_not_real_work():
+    from shantytown.plate_capacity import real_work
+    for row in ({'title': 'notice', 'labels': ['inbox']},
+                {'title': 'notice', 'labels': 'alerting'},
+                {'title': 'notice', 'labels': [{'name': 'alarm'}]},
+                {'title': 'mail: legacy'}, {'title': 'ALARM: fixture'}):
+        assert not real_work(row)
+    assert real_work({'title': 'Fix alarm producer', 'labels': ['bug']})
+
+
+def test_all_tracker_producers_share_admission_and_notify_without_consuming_slot(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    root, tracker = world(tmp_path)
+    notices = []
+    guard_producers(tracker, lambda owner, item: notices.append((owner, item)))
+    for title in ('release follow-up', 'workflow follow-up'):
+        item = tracker.create(title, assignee='worker')
+        assert item.assignee is None
+        assert tracker.get(item.id).assignee is None
+    message = tracker.create('inbox: hello', assignee='worker')
+    alarm = tracker.create('Recurring alarm: fixture', assignee='worker')
+    assert message.assignee == alarm.assignee == 'worker'
+    assert len(notices) == 2 and size(tracker, 'worker') == 10
+    pool = tracker.create('Existing pool work')
+    tracker.update(pool.id, assignee='worker', status='in_progress')
+    assert tracker.get(pool.id).assignee == ''
+    assert tracker.get(pool.id).status == 'open'
+    assert len(notices) == 3
+
+
+def test_producer_uncertain_commit_does_not_repeat_assignment(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    root, tracker = world(tmp_path, 9)
+    original = tracker.create
+    calls = []
+    def lost(title, **fields):
+        calls.append(original(title, **fields))
+        raise TimeoutError('response lost after commit')
+    tracker.create = lost
+    guard_producers(tracker, lambda *a: None)
+    with pytest.raises(TimeoutError):
+        tracker.create('One uncertain write', assignee='worker')
+    assert len(calls) == 1 and size(tracker, 'worker') == 10
+
+
+@pytest.mark.parametrize('count', [9, 10])
+@pytest.mark.parametrize('initial,change', [
+    ({'title': 'Recurring alarm: detector', 'labels': ['recurring-alarm']},
+     {'title': 'Implementation', 'labels': [], 'assignee': None, 'status': None}),
+    ({'title': 'inbox: delivery'}, {'title': 'Implementation'}),
+    ({'title': 'Detector', 'labels': ['alarm']}, {'labels': []}),
+    ({'title': 'Future', 'defer_until': '2099-01-01T00:00:00Z'}, {'defer_until': ''}),
+])
+def test_owned_delivery_or_future_work_conversion_needs_a_slot(tmp_path, count, initial, change):
+    from shantytown.plate_capacity import guard_producers
+    _, tracker = world(tmp_path, count)
+    item = tracker.create(assignee='worker', **initial)
+    before = tracker._path(item.id).read_bytes()
+    guard_producers(tracker, lambda *a: pytest.fail('existing ownership must not move to pool'))
+    if count == 10:
+        with pytest.raises(PlateFull):
+            tracker.update(item.id, **change)
+        assert tracker._path(item.id).read_bytes() == before
+    else:
+        tracker.update(item.id, **change)
+    assert size(tracker, 'worker') == 10
+    assert tracker.get(item.id).assignee == 'worker'
+
+
+def test_existing_slot_and_still_excluded_delivery_updates_need_no_new_slot(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    _, tracker = world(tmp_path)
+    alarm = tracker.create('Detector', assignee='worker', labels=['alarm'])
+    guard_producers(tracker, lambda *a: pytest.fail('no pooling'))
+    tracker.capacity_rows = lambda owner: pytest.fail('no new capacity read for existing slot or delivery')
+    tracker.update('st-1', title='Renamed work', labels=['bug'])
+    tracker.update(alarm.id, title='Renamed detector')
+    assert tracker.get('st-1').title == 'Renamed work'
+    assert tracker.get(alarm.id).labels == ('alarm',)
+
+
+def test_unspecified_creation_defaults_cannot_hide_a_new_slot(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    _,tracker=world(tmp_path)
+    notices=[]
+    guard_producers(tracker,lambda *a:notices.append(a))
+    item=tracker.create('Implementation',assignee='worker',status=None,labels=None)
+    assert item.assignee is None and tracker.get(item.id).status=='open'
+    assert size(tracker,'worker')==10 and notices==[('worker',item.id)]
+
+
+@pytest.mark.parametrize('mode', ['tracker', 'sdk'])
+def test_parallel_conversions_share_admission(tmp_path, mode):
+    _, tracker = world(tmp_path, 9)
+    items = [tracker.create('Detector', assignee='worker', labels=['alarm']) for _ in range(2)]
+    script = '''import sys,json,subprocess
+from shantytown.files import FilesTracker
+from shantytown.plate_capacity import guard_producers,PlateFull
+from shantytown.producer_capacity import run
+tracker=FilesTracker(sys.argv[1]); item=sys.argv[2]
+def execute(args):
+ tracker.update(item,title='Implementation',labels=[])
+ return subprocess.CompletedProcess(args,0,json.dumps({'id':item}),'')
+try:
+ if sys.argv[3]=='tracker':
+  guard_producers(tracker,lambda *a:None)
+  tracker.update(item,title='Implementation',labels=[])
+ else:
+  run(['update',item,'--title','Implementation','--labels',''],tracker,execute,lambda *a:None)
+except PlateFull: sys.exit(1)
+'''
+    processes = [subprocess.Popen([sys.executable,'-c',script,str(tracker.root),item.id,mode],
+                                 stdout=subprocess.PIPE,stderr=subprocess.PIPE) for item in items]
+    outputs = [p.communicate(timeout=30) for p in processes]
+    assert sorted(p.returncode for p in processes)==[0,1],outputs
+    assert size(tracker,'worker')==10
+    assert all(tracker.get(item.id).assignee=='worker' for item in items)
+
+
+@pytest.mark.parametrize('mode', ['tracker', 'sdk'])
+def test_conversion_unknown_commit_is_never_repeated(tmp_path, mode):
+    from shantytown.plate_capacity import guard_producers
+    from shantytown.producer_capacity import run
+    _,tracker=world(tmp_path,9)
+    item=tracker.create('Detector',assignee='worker',labels=['alarm'])
+    raw_update=tracker.update
+    calls=[]
+    def lost(item_id,**fields):
+        calls.append(item_id)
+        raw_update(item_id,**fields)
+        raise TimeoutError('response lost after conversion commit')
+    tracker.update=lost
+    with pytest.raises(TimeoutError):
+        if mode=='tracker':
+            guard_producers(tracker,lambda *a:None)
+            tracker.update(item.id,title='Implementation',labels=[])
+        else:
+            run(['update',item.id,'--title','Implementation','--labels',''],tracker,
+                lambda args:lost(item.id,title='Implementation',labels=[]),lambda *a:None)
+    assert calls==[item.id] and size(tracker,'worker')==10
+
+
+def test_parallel_automatic_producers_share_atomic_host_admission(tmp_path):
+    root, tracker = world(tmp_path, 9)
+    script = '''from shantytown.files import FilesTracker
+from shantytown.plate_capacity import guard_producers
+from pathlib import Path
+import sys
+t = guard_producers(FilesTracker(Path(sys.argv[1])), lambda *a: None)
+t.create('automatic work', assignee='worker')
+'''
+    processes = [subprocess.Popen([sys.executable, '-c', script, str(root/'items')],
+                 stdout=subprocess.PIPE, stderr=subprocess.PIPE) for _ in range(2)]
+    results = [p.communicate(timeout=30) for p in processes]
+    assert all(p.returncode == 0 for p in processes), results
+    assert size(tracker, 'worker') == 10
+    assert sorted(tracker.get(f'st-{n}').assignee or '' for n in (10,11)) == ['', 'worker']
