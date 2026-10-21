@@ -618,6 +618,10 @@ class Tmux:
                     if custody is not None and custody.clear_previous(self, before):
                         before = self.capture(pane, attrs=True, timeout=2)
                     if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                        # Journal the refusal (aegis-9t4). One stranded body makes
+                        # every later send refuse here; unjournaled, a 64-minute
+                        # outage on tim read as an empty send log, not a deaf pane.
+                        _journal_send(pane, "<refused:occupied-composer:" + text + ">")
                         raise PaneSubmissionUnverified(
                             f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
