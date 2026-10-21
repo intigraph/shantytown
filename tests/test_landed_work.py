@@ -246,9 +246,9 @@ def test_remote_head_cannot_redirect_cleanup_to_a_local_topic(merged):
     wt, _, _, _, _ = merged
     git(wt, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/heads/feature')
     assert cycle(wt).ok
-    assert landed.Proofs(wt, 'origin', _git).base == 'origin/main'
+    assert landed.Proofs(wt, 'origin', _git).base == 'refs/remotes/origin/main'
     message = landed.retire_and_prune(wt, ['origin'], _git)
-    assert 'detached at origin/main' in message
+    assert 'detached at refs/remotes/origin/main' in message
     assert git(wt, 'rev-parse', 'HEAD') == git(wt, 'rev-parse', 'origin/main')
 
 
@@ -326,3 +326,14 @@ def test_confirmed_fast_forward_pr_can_retire_its_equal_tip_topic(merged):
     rows.append(dict(rows[0], number=8, head={'sha':head, 'ref':'fast-topic'}, merge_commit_sha=head))
     assert 'detached' in landed.retire_and_prune(wt, ['origin'], _git)
     assert _git(wt, 'symbolic-ref', '--quiet', 'HEAD')[0] != 0
+
+
+def test_main_reference_cannot_be_shadowed_by_local_branch(merged):
+    wt, _, _, _, head = merged
+    git(wt, 'fetch', '--prune', 'origin')
+    git(wt, 'symbolic-ref', '--delete', 'refs/remotes/origin/HEAD')
+    trusted = git(wt, 'rev-parse', 'refs/remotes/origin/main')
+    git(wt, 'branch', 'origin/main', head)
+    proof = landed.Proofs(wt, 'origin', _git)
+    assert proof.base_oid == trusted
+    assert proof.base == 'refs/remotes/origin/main'

@@ -95,7 +95,7 @@ def read_merged_prs(url):
 def main_ref(repo, remote, run):
     code, symbolic = run(repo, "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD")
     allowed = [f"refs/remotes/{remote}/main", f"refs/remotes/{remote}/master"]
-    candidates = ([symbolic] if code == 0 and symbolic in allowed else []) + [f"{remote}/main", f"{remote}/master"]
+    candidates = ([symbolic] if code == 0 and symbolic in allowed else []) + allowed
     for ref in candidates:
         if ref and run(repo, "rev-parse", "--verify", ref + "^{commit}")[0] == 0:
             return ref
