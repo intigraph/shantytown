@@ -42,6 +42,9 @@ acknowledged handoff. The full payload stays in the bridge spool, not the inbox.
 """
 from __future__ import annotations
 import json
+import hashlib
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
@@ -451,13 +454,50 @@ class FilesInbox:
         return Message(id=p.stem, to=d["to"], body=d.get("body", ""),
                        frm=d.get("frm"), read=d.get("read", False))
 
-    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+    @contextmanager
+    def _delivery_lock(self):
+        # Allocation and publication are one local critical section. The old
+        # max(id)+1 sequence let concurrent writers overwrite each other's mail.
+        import fcntl
         self.root.mkdir(parents=True, exist_ok=True)
-        msg = Message(id=self._next_id(), to=to, body=body, frm=frm)
-        self._path(msg.id).write_text(json.dumps(
-            {"to": msg.to, "frm": msg.frm, "body": msg.body, "read": msg.read},
-            indent=2, sort_keys=True))
-        return msg
+        with (self.root / ".delivery.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+    def _publish(self, msg):
+        import os
+        import tempfile
+        payload = {"to": msg.to, "frm": msg.frm, "body": msg.body, "read": msg.read}
+        fd, name = tempfile.mkstemp(prefix=".delivery-", dir=self.root)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(payload, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(name, self._path(msg.id))
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+        with self._delivery_lock():
+            msg = Message(id=self._next_id(), to=to, body=body, frm=frm)
+            self._publish(msg)
+            return msg
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        identity = json.dumps([frm, to, key], separators=(",", ":")).encode()
+        msg_id = "msg-" + hashlib.sha256(identity).hexdigest()
+        with self._delivery_lock():
+            path = self._path(msg_id)
+            if path.exists():
+                msg = self._read(path)
+                if (msg.to, msg.body, msg.frm) != (to, body, frm):
+                    raise RuntimeError("delivery key binds a different receipt identity/content")
+                return msg
+            msg = Message(id=msg_id, to=to, body=body, frm=frm)
+            self._publish(msg)
+            return msg
 
     def unread(self, me: str) -> list[Message]:
         """PURE READ — no mkdir, no rewrite, nothing marked."""
@@ -476,16 +516,17 @@ class FilesInbox:
         return matches[0] if matches else None
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
+        if not self.root.is_dir():
+            return []
         marked = []
-        for msg in self.unread(me):
-            if ids is not None and msg.id not in ids:
-                continue
-            p = self._path(msg.id)
-            d = json.loads(p.read_text())
-            d["read"] = True
-            p.write_text(json.dumps(d, indent=2, sort_keys=True))
-            marked.append(Message(id=msg.id, to=msg.to, body=msg.body,
-                                  frm=msg.frm, read=True))
+        with self._delivery_lock():
+            for msg in self.unread(me):
+                if ids is not None and msg.id not in ids:
+                    continue
+                acknowledged = Message(id=msg.id, to=msg.to, body=msg.body,
+                                       frm=msg.frm, read=True)
+                self._publish(acknowledged)
+                marked.append(acknowledged)
         return marked
 
 
@@ -536,6 +577,13 @@ class TrackerInbox:
         return matches[0] if matches else None
 
     def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+        return self._deliver(to, body, frm, None)
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        return self._deliver(to, body, frm, key)
+
+    def _deliver(self, to, body, frm, key):
         title = f"{PREFIX} {body}"
         # If the concrete tracker declares a title cap, honour it HERE — a clean
         # refusal before the write beats bd rejecting the create with a validation
@@ -584,8 +632,15 @@ class TrackerInbox:
         fields = {"assignee": to, "labels": "inbox"}
         if frm:
             fields["description"] = f"from {frm}"
-        item = self._tracker.create(title, **fields)
-        return Message(id=item.id, to=to, body=body, frm=frm)
+        stable_create = getattr(self._tracker, "create_inbox_message", None)
+        if callable(stable_create):
+            item = stable_create(title, delivery_key=key or uuid.uuid4().hex, **fields)
+        elif key is not None:
+            raise RuntimeError("selected tracker lacks stable inbox delivery support")
+        else:
+            item = self._tracker.create(title, **fields)
+        return Message(id=item.id, to=to, body=body, frm=frm,
+                       read=item.status == "closed")
 
     def unread(self, me: str) -> list[Message]:
         """PURE READ. It lists and filters; it closes nothing."""
@@ -627,3 +682,10 @@ class TrackerInbox:
         if failed:
             raise MarkReadIncomplete(marked, failed)
         return marked
+
+
+def validate_delivery_key(key):
+    """An explicit caller operation identity, never a guessed retry of a write."""
+    import re
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", key):
+        raise ValueError("delivery key must be 1..128 ASCII letters/digits or _.:-")
