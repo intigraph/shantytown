@@ -76,6 +76,16 @@ def version(text):
     ("yupana>0.15.0", "yupana 0.15.1", True),
     ("sd==0.6.1", "sd 0.6.1 (seeds)", True),
     ("sd==0.6.1", "sd 0.6.2 (seeds)", False),
+    # grant review of ee38395: a `v` prefix once read as 14.0 and released early,
+    # a pre-release once equalled its release, and a major-only want raised TypeError.
+    ("quipu@0.15", "quipu v0.14.0", False),
+    ("quipu@0.15", "quipu v0.15.0", True),
+    ("quipu@0.15.0", "quipu 0.15.0-rc.1", False),
+    ("quipu==0.15.0", "quipu 0.15.0-rc.1", False),
+    ("quipu>=0.14.9", "quipu 0.15.0-rc.1", True),
+    ("sd@1", "sd 0.9.9", False),
+    ("sd@1", "sd 1.0.0", True),
+    ("st@0.7", "st 0.7.1 (a62f35d-dirty)", True),
 ])
 def test_installed_compares_the_tools_own_version(arg, have, expect):
     met, _ = resume_kinds.installed(arg, run=version(have), which=lambda t: f"/bin/{t}")
@@ -98,6 +108,13 @@ def test_installed_is_unknown_when_it_cannot_tell():
                                   which=lambda t: "/bin/yupana")[0] is None
     assert resume_kinds.installed("yupana@0.15", run=lambda argv: done(2, out="yupana 9.9.9"),
                                   which=lambda t: "/bin/yupana")[0] is None
+
+
+def test_evaluate_answers_every_validated_installed_condition():
+    """Whatever `validate` accepts, `evaluate` answers instead of raising."""
+    for arg in ("sd@1", "sd>=1.2", "sd==0.6.1", "sd>0"):
+        met, _ = resume_kinds.evaluate("installed", arg, run=version("sd 0.6.1"), which=lambda t: "/bin/sd")
+        assert met in (True, False)
 
 
 # --- the sweeper and the writer --------------------------------------------------

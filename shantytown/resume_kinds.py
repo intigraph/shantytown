@@ -26,7 +26,9 @@ TIMEOUT = 15
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
 _INSTALLED = re.compile(r"(" + "|".join(TOOLS) + r")(>=|>|==|@)(\d+(?:\.\d+){0,2})")
-_VERSION = re.compile(r"\b(\d+)\.(\d+)(?:\.(\d+))?\b")
+# A version starts at a token edge or after a `v` (v0.14.0 must not read as 14.0)
+# and may carry a pre-release tail (0.15.0-rc.1), which sorts BEFORE its release.
+_VERSION = re.compile(r"(?<![\w.])v?(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?(?!\w|\.\d)")
 
 
 def validate(kind: str, arg: str) -> None:
@@ -48,8 +50,21 @@ def _run(argv):
 
 
 def _parse(text: str):
+    """(major, minor, patch, released) from a tool's output, or None.
+
+    `released` is 0 for a pre-release, so 0.15.0-rc.1 < 0.15.0 as in semver.
+    """
     m = _VERSION.search(text or "")
-    return tuple(int(g or 0) for g in m.groups()) if m else None
+    if not m:
+        return None
+    major, minor, patch, pre = m.groups()
+    return (int(major), int(minor), int(patch or 0), 0 if pre else 1)
+
+
+def _wanted(version: str):
+    """The validated wanted version, padded: `1` and `1.0` both mean 1.0.0."""
+    parts = [int(p) for p in version.split(".")]
+    return tuple(parts + [0] * (3 - len(parts))) + (1,)
 
 
 def release(arg: str, run=_run):
@@ -90,9 +105,9 @@ def installed(arg: str, run=_run, which=shutil.which):
     have = _parse(out.stdout) if out.returncode == 0 else None
     if have is None:
         return None, f"{tool} --version gave no version"
-    need = _parse(want)
+    need = _wanted(want)
     ok = {"@": have >= need, ">=": have >= need, ">": have > need, "==": have == need}[op]
-    shown = ".".join(map(str, have))
+    shown = ".".join(map(str, have[:3])) + ("" if have[3] else " (pre-release)")
     return ok, f"{tool} {shown} {'satisfies' if ok else 'does not satisfy'} {op}{want}"
 
 
