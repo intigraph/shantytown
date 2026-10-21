@@ -1,0 +1,102 @@
+{
+  "source_revision": "a62f35da4b8cadc4f2754de526e035d4ddc11abc",
+  "reviewed_at": "2026-10-21T06:00:46.156926Z",
+  "max_age_seconds": 2592000,
+  "records": [
+    {
+      "kind": "idea",
+      "source": "README.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
+      "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
+      "source_sha256": "99f58d81bf60f77d699dbb55dd3d3855f5eb8fdb2b621732814733a5c2d32b39",
+      "type": "Concept"
+    },
+    {
+      "kind": "idea",
+      "source": "docs/design.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fdesign.md",
+      "summary": "Tracker and pane protocols separate work storage from session transport. Dispatch verification reads back delivery; refusal and dry-run outcomes preserve explicit uncertainty.",
+      "source_sha256": "994bf420ba3acbe04f87fb51e2f057ef625ab4019a9c5ab44132929f6009f914",
+      "type": "Concept"
+    },
+    {
+      "kind": "interface",
+      "source": "shantytown/cli.py",
+      "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
+      "source_sha256": "f9d4d635249f4e931e2efff465737228683367be90d2e8863ae1738f4b8710e0",
+      "properties": {
+        "interfaceKind": "CLI",
+        "publicName": "st (shantytown.cli:main)"
+      }
+    },
+    {
+      "kind": "interface",
+      "source": "shantytown/config.py",
+      "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
+      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
+      "properties": {
+        "interfaceKind": "file-format",
+        "publicName": "shantytown.toml and SHANTY_* settings"
+      }
+    },
+    {
+      "kind": "interface",
+      "source": "docs/integrations.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fintegrations.md",
+      "summary": "Optional Quipu, Seeds, Bobbin and Yupana integration supplies shared registry, work tracking, context and structural policy through configured adapters.",
+      "source_sha256": "a5d15417ba505f695a0fdc98b03c87b94d9f71cb72d8e83192a29ab8a0d8948b",
+      "properties": {
+        "interfaceKind": "library",
+        "publicName": "Optional stack integrations"
+      },
+      "depends_on": [
+        "http://aegis.gastown.local/ontology/code/quipu/src%2Flib.rs"
+      ]
+    },
+    {
+      "kind": "decision",
+      "source": "CONTRIBUTING.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
+      "summary": "The package keeps zero runtime dependencies and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
+      "source_sha256": "56e37945da2b6dba4e66ffa287842f9aba496edc9be5bf1b1f1fd42d475e5255",
+      "type": "DecisionRecord",
+      "properties": {
+        "status": "active",
+        "supersessionStatus": "not-recorded-in-source"
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "README.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
+      "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
+      "source_sha256": "99f58d81bf60f77d699dbb55dd3d3855f5eb8fdb2b621732814733a5c2d32b39",
+      "properties": {
+        "startHereOrder": 1,
+        "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "docs/configuration.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
+      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
+      "source_sha256": "cf243f0529a8888375bc6cf8e8d4b9c1d96161a380dd736560d16f6b2ba8fd84",
+      "properties": {
+        "startHereOrder": 2
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "CONTRIBUTING.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
+      "summary": "Use the contribution guide for supported Python versions, the zero-dependency constraint, test conventions and console-entry checks.",
+      "source_sha256": "56e37945da2b6dba4e66ffa287842f9aba496edc9be5bf1b1f1fd42d475e5255",
+      "properties": {
+        "startHereOrder": 3
+      }
+    }
+  ]
+}

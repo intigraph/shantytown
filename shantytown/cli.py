@@ -12291,8 +12291,11 @@ def _cmd_declared_jobs(a, verb) -> int:
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
     for job in selected:
+        cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
+                   if isinstance(job, quipu_jobs.CalendarDeclaredJob)
+                   else f"every {job.interval_s}s")
         print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
-              f"every {job.interval_s}s  timezone {job.timezone}  "
+              f"{cadence}  timezone {job.timezone}  "
               f"host {job.host}  revision {job.revision}  target {job.target}")
     if verb == "check":
         print("Declarations validated; firing eligibility is UNKNOWN until runtime admission.")
