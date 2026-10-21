@@ -2823,8 +2823,9 @@ administrator, changes an account cap, or clears an operator hold.
 ### Squash-merged work and worktree maintenance
 
 Cycle loss checks do not require a merged feature branch to remain on a remote.
-Commits count as landed when `git cherry` proves their patches are on a trusted
-peer's main branch, or when they are reachable from the recorded head of a merged
+Commits count as landed when their exact changed paths, old/new blob IDs and file
+modes match a non-merge commit in the bounded trusted-main history, or when they
+are reachable from the recorded head of a merged
 PR in that same repository. The merge commit must also be reachable on trusted
 main. Output names the rule that cleared the work. Unproved follow-up commits
 still refuse a cycle; dirty tracked files remain protected.
@@ -2834,6 +2835,9 @@ the common Git directory. A missing record, unavailable forge, malformed respons
 or truncated history never certifies a landing. Explicit fetch/refresh boundaries
 may read the forge; edit-time checks only use cached evidence and local Git.
 Mirror remotes cannot supply a publication or landing proof.
+Patch IDs and `git cherry` are not loss proofs: they ignore semantic whitespace.
+Exact-delta reads cover at most 512 main commits; unknown or malformed evidence
+keeps work protected.
 
 At normal safe project-worktree refresh boundaries, including the existing
 scheduled tend respawn path, a clean fully landed topic is detached at the

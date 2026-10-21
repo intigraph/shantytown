@@ -92,6 +92,36 @@ def read_merged_prs(url):
     return rows if isinstance(rows, list) and len(rows) <= 50 else []
 
 
+def exact_deltas(output):
+    """Parse NUL-delimited raw Git changes, preserving paths and blob/mode IDs.
+
+    Paths are consumed only after metadata; a filename resembling a commit ID
+    cannot become a history header. Malformed/truncated output proves nothing.
+    """
+    if len(output) > 4_000_000 or (output and not output.endswith("\0")):
+        return {}
+    tokens, result, commit, entries, i = output.split("\0"), {}, None, [], 0
+    raw = re.compile(r":[0-7]{6} [0-7]{6} [0-9a-f]{40} [0-9a-f]{40} [ADMT]")
+    while i < len(tokens):
+        token = tokens[i].lstrip("\n")
+        if not token:
+            i += 1
+            continue
+        if SHA.fullmatch(token):
+            if commit and entries:
+                result[commit] = tuple(entries)
+            commit, entries = token, []
+            i += 1
+        elif commit and raw.fullmatch(token) and i + 1 < len(tokens) and tokens[i + 1]:
+            entries.append((token, tokens[i + 1]))
+            i += 2
+        else:
+            return {}
+    if commit and entries:
+        result[commit] = tuple(entries)
+    return result
+
+
 def main_ref(repo, remote, run):
     code, symbolic = run(repo, "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD")
     allowed = [f"refs/remotes/{remote}/main", f"refs/remotes/{remote}/master"]
@@ -111,6 +141,7 @@ class Proofs:
         if code or not SHA.fullmatch(self.base_oid):
             self.base = None
         self._merged, self._reachable = {}, {}
+        self._exact, self._deltas = None, {}
         code, self.url = run(repo, "remote", "get-url", remote)
         self.identity = forge_identity(self.url) if code == 0 else None
         self.records = []
@@ -183,12 +214,23 @@ class Proofs:
         if not self.base:
             return set(), []
         cleared, notes = set(), []
-        code, cherry = self.run(self.repo, "cherry", self.base_oid, tip)
-        if code == 0:
-            cleared = {line[2:] for line in cherry.splitlines()
-                       if line.startswith("- ") and SHA.fullmatch(line[2:])} & set(candidates)
-            if cleared:
-                notes.append(f"{len(cleared)} patch-equivalent on {self.base}")
+        # Patch IDs (including git cherry) ignore meaningful whitespace. Only
+        # identical raw paths, old/new blob IDs and modes certify a replay.
+        options = ("--no-merges", "--format=%H", "--raw", "-z", "--no-abbrev", "--no-renames")
+        if self._exact is None:
+            code, history = self.run(self.repo, "log", f"-n{LIMIT}", *options, self.base_oid)
+            self._exact = set(exact_deltas(history).values()) if code == 0 else set()
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not SHA.fullmatch(candidate):
+                continue
+            if candidate not in self._deltas:
+                code, changes = self.run(self.repo, "log", "-n1", *options, candidate)
+                self._deltas[candidate] = exact_deltas(changes).get(candidate) if code == 0 else None
+            delta = self._deltas[candidate]
+            if delta and delta in self._exact:
+                cleared.add(candidate)
+        if cleared:
+            notes.append(f"{len(cleared)} exact path/blob/mode delta on {self.base}")
         for record in self.records:
             if not isinstance(record, dict):
                 continue

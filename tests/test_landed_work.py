@@ -83,7 +83,8 @@ def test_api_failure_and_corrupt_cache_preserve_unknown_work(merged, monkeypatch
     assert tree_staleness(wt).unpushed == 2
 
 
-def test_patch_equivalence_without_a_forge_retains_new_work(tmp_path):
+@pytest.mark.parametrize('filename', ['feature', 'f\n odd ', '0' * 40])
+def test_exact_change_without_a_forge_retains_new_work(tmp_path, filename):
     seed, wt = tmp_path / 'seed', tmp_path / 'wt'
     seed.mkdir(); git(seed, 'init', '-b', 'main')
     git(seed, 'config', 'user.name', 'Fixture'); git(seed, 'config', 'user.email', 'fixture@example.org')
@@ -91,11 +92,11 @@ def test_patch_equivalence_without_a_forge_retains_new_work(tmp_path):
     git(tmp_path, 'clone', str(seed), str(wt))
     git(wt, 'config', 'user.name', 'Fixture'); git(wt, 'config', 'user.email', 'fixture@example.org')
     git(wt, 'checkout', '-b', 'feature')
-    (wt / 'feature').write_text('patch'); git(wt, 'add', '.'); git(wt, 'commit', '-m', 'feature')
+    (wt / filename).write_text('patch'); git(wt, 'add', '.'); git(wt, 'commit', '-m', 'feature')
     (seed / 'unrelated').write_text('advance'); git(seed, 'add', '.'); git(seed, 'commit', '-m', 'advance')
     git(seed, 'fetch', str(wt), 'feature'); git(seed, 'cherry-pick', 'FETCH_HEAD')
     result = tree_staleness(wt, fetch=True, tracked_only=True)
-    assert result.unpushed == 0 and 'patch-equivalent' in result.render()
+    assert result.unpushed == 0 and 'exact path/blob/mode delta' in result.render()
     (wt / 'unpublished').write_text('keep'); git(wt, 'add', '.'); git(wt, 'commit', '-m', 'unpublished')
     assert tree_staleness(wt, fetch=True, tracked_only=True).unpushed == 1
 
@@ -337,3 +338,26 @@ def test_main_reference_cannot_be_shadowed_by_local_branch(merged):
     proof = landed.Proofs(wt, 'origin', _git)
     assert proof.base_oid == trusted
     assert proof.base == 'refs/remotes/origin/main'
+
+
+@pytest.mark.parametrize('private,published', [
+    (b'VALUE = "ab"\n', b'VALUE = "a b"\n'),
+    (b'VALUE = "ab"\n', b'VALUE = "ab"\n\n'),
+    (b'a\x00b', b'a\x00 b'),
+])
+def test_patch_similarity_cannot_clear_different_private_bytes(tmp_path, private, published):
+    seed, wt = tmp_path / 'seed', tmp_path / 'wt'
+    seed.mkdir(); git(seed, 'init', '-b', 'main')
+    git(seed, 'config', 'user.name', 'Fixture'); git(seed, 'config', 'user.email', 'fixture@example.org')
+    (seed / 'value').write_bytes(b'base\n'); git(seed, 'add', '.'); git(seed, 'commit', '-m', 'base')
+    git(tmp_path, 'clone', str(seed), str(wt))
+    git(wt, 'config', 'user.name', 'Fixture'); git(wt, 'config', 'user.email', 'fixture@example.org')
+    git(wt, 'checkout', '-b', 'private')
+    (wt / 'value').write_bytes(private); git(wt, 'add', '.'); git(wt, 'commit', '-m', 'private bytes')
+    head = git(wt, 'rev-parse', 'HEAD')
+    (seed / 'value').write_bytes(published); git(seed, 'add', '.'); git(seed, 'commit', '-m', 'published bytes')
+    result = tree_staleness(wt, fetch=True, tracked_only=True)
+    assert result.unpushed == 1
+    assert landed.retire_and_prune(wt, ['origin'], _git) is None
+    assert git(wt, 'rev-parse', 'HEAD') == head
+    assert git(wt, 'symbolic-ref', '--short', 'HEAD') == 'private'
