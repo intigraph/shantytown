@@ -578,6 +578,9 @@ class Policy:
     # about total spend and about a blind signal; this is about the SHAPE of what
     # remains dispatchable under a floor, which is a different question.
     exempt: tuple[str, ...] = ()
+    # Lane eligibility is opt-in and separate from every spend restriction.
+    admit_class: bool = False
+    class_exempt: tuple[str, ...] = ()
     # THE FLEET-SIZE CAP, and the only governor input that is NOT read from a
     # meter (aegis-tzpo1). Stiwi, 2026-08-04: *"have the governor add a cap, we
     # clearly need a mechanism."*
@@ -2017,6 +2020,9 @@ class Verdict:
     # itself is here, and "why was this one let through" is the same question.
     exempt: tuple[str, ...] = ()
     stale_usable: tuple[str, ...] = ()  # accepted cached windows, with original ages
+    admit_class: bool = False
+    class_exempt: tuple[str, ...] = ()
+    work_harness: str = "claude"
 
     def resets_in(self, window: str, now: float) -> float | None:
         at = self.resets.get(window)
@@ -2316,10 +2322,10 @@ class Verdict:
         # the remaining budget — admits the idea that one agent's lane was
         # misjudged by a fleet-wide rule.
         if self.waives(item, agent):
-            return ADMITTED
+            return self._class_refusal(item, agent)
         floor = self.floor
         if self.tier is None or floor is None:
-            return ADMITTED
+            return self._class_refusal(item, agent)
         priority = getattr(item, "priority", None)
         if priority is None:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
@@ -2330,7 +2336,13 @@ class Verdict:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
                     f"is P{priority}. Dispatch it when usage falls, or raise its "
                     f"priority if it really is that important.")
-        return ADMITTED
+        return self._class_refusal(item, agent)
+
+    def _class_refusal(self, item, agent):
+        if not self.admit_class or agent in self.class_exempt:
+            return ADMITTED
+        from .work_class import lane_refusal
+        return lane_refusal(item, self.work_harness, agent)
 
     def excludes(self, agent, catalog=None) -> str:
         """"" if this agent may RUN under the current tier, else WHY not.
@@ -2548,6 +2560,7 @@ class Governor:
         now = self._now()
         if not pol.active:
             return Verdict(reading=Reading(source="none"),
+                           admit_class=pol.admit_class,
                            why="no [[governor.tier]] declared — the governor is off")
 
         # transport_error is shared by EVERY window when the read itself failed.
@@ -2692,6 +2705,7 @@ class Governor:
                 # in the first place, so blindness is not a reason to relax it.
                 # A dead probe must not be able to uncap the fleet.
                 cap=pol.max_agents,
+                admit_class=pol.admit_class,
                 why=lost,
                 alarm=(f"USAGE SIGNAL LOST [{self.name}]: {lost}. "
                        + ("on_signal_lost = \"freeze\": no new work is being "
@@ -2862,7 +2876,8 @@ class Governor:
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
                        burning=tuple(burning), pacing=tuple(pacing),
-                       cap=pol.max_agents, exempt=pol.exempt)
+                       cap=pol.max_agents, exempt=pol.exempt,
+                       admit_class=pol.admit_class)
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
@@ -3234,6 +3249,7 @@ _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
              "metric", "by_harness", "limit_id", "delegation_reserve_pct",
              "balance_band", "reading_needs_live_session"}
+_GOV_KEYS |= {"admit_class", "class_exempt"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length", "curve"}
@@ -3313,6 +3329,15 @@ def parse(tbl: dict) -> Policy:
         raise GovernorError(f"[governor] exempt names {', '.join(dupes)} twice; "
                             f"a repeated name means one of them is a typo nobody "
                             f"will notice.")
+
+    admit_class = tbl.get("admit_class", False)
+    if type(admit_class) is not bool:
+        raise GovernorError("[governor] admit_class must be true or false")
+    class_exempt = tbl.get("class_exempt", [])
+    if (not isinstance(class_exempt, list)
+            or any(not isinstance(name, str) or not name.strip() for name in class_exempt)
+            or len(set(class_exempt)) != len(class_exempt)):
+        raise GovernorError("[governor] class_exempt must be an array of unique agent names")
 
     raw_tiers = tbl.get("tier", [])
     if isinstance(raw_tiers, dict):
@@ -3411,6 +3436,7 @@ def parse(tbl: dict) -> Policy:
                   password_file=tbl.get("password_file"), stub_pct=stub,
                   limit_id=_limit_id(tbl),
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
+                  admit_class=admit_class, class_exempt=tuple(class_exempt),
                   paces=paces, max_agents=_cap(tbl, "[governor]"),
                   delegation_reserve_pct=delegation_reserve,
                   balance_band=float(tbl.get("balance_band", 0.0) or 0.0),

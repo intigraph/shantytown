@@ -937,8 +937,12 @@ def _governor_verdicts_for(a, cards):
     fleet = getattr(a, '_account_governor', None)
     if fleet is not None and fleet.errors:
         raise RuntimeError(fleet.fallback())
+    from . import work_class
     if not governors:
-        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+        return {card.name: (harness_mod.name_for(card, root=a.root),
+                work_class.for_card(
+                    gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                    cfg.governor, card, a.root) if cfg.governor.admit_class else None)
                 for card in cards}
     from . import account_state
     verdicts, out = {}, {}
@@ -949,7 +953,8 @@ def _governor_verdicts_for(a, cards):
         if lane not in verdicts:
             verdicts[lane] = (unconfigured if unconfigured is not None else
                               governor.evaluate(persist=False))
-        out[card.name] = lane, verdicts[lane]
+        out[card.name] = lane, work_class.for_card(
+            verdicts[lane], cfg.governor, card, a.root)
     return out
 
 
@@ -981,7 +986,7 @@ def _dispatch_gate(a):
     if fleet is not None and fleet.errors:
         return lambda item, agent=None: fleet.fallback()
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
-    if not governors and not stood_down:
+    if not governors and not stood_down and not cfg.governor.admit_class:
         return None
     cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
@@ -1052,7 +1057,11 @@ def _dispatch_gate(a):
                 print(f"  ⚠ {mem.warning}", file=sys.stderr)
 
         if not governors:
-            return ""
+            from . import work_class
+            verdict = work_class.for_card(
+                gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                cfg.governor, card, a.root)
+            return verdict.admits(item, agent)
 
         if sender is not None and (cfg.governor.by_harness or getattr(cfg, "accounts", {})) and not delegated:
             _sh, source_governor, source_unconfigured = _governor_for(
@@ -1078,7 +1087,8 @@ def _dispatch_gate(a):
                                  else governor.evaluate(persist=False))
             if verdicts[harness].alarm:
                 print(f"  ⚠ {verdicts[harness].alarm}", file=sys.stderr)
-        verdict = verdicts[harness]
+        from . import work_class
+        verdict = work_class.for_card(verdicts[harness], cfg.governor, card, a.root)
         refusal = verdict.admits(item, agent)
         if not refusal and verdict.waives(item, agent):
             print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
