@@ -456,6 +456,14 @@ def git_worktree_holds_work(dest: Path, base: str) -> bool:
         return True                      # cannot tell -> keep, never discard
     if ahead.stdout.strip() in ("", "0"):
         return False
+    from .landed import classify
+    code, commits = _git(dest, "rev-list", "--max-count=512", f"{base}..HEAD")
+    candidates = commits.splitlines()
+    if (code == 0 and candidates and ahead.stdout.strip().isdigit()
+            and len(candidates) == int(ahead.stdout.strip())):
+        cleared, _ = classify(dest, candidates, publication_remotes(dest, _git), _git)
+        if cleared == set(candidates):
+            return False
     return not _squash_landed_tree(dest, base)
 
 
@@ -854,6 +862,7 @@ class Staleness:
     publication_remote: str = ""
     # Cycle-only exemptions; other staleness consumers still see these as dirty.
     per_install: tuple = ()
+    landed: tuple = ()
 
     def measurement_is_stale(self) -> bool:
         """Is this reading too old to be worth calling "ok"?
@@ -884,6 +893,8 @@ class Staleness:
         if self.error:
             return f"staleness UNKNOWN ({self.error})"
         bits = []
+        if self.landed:
+            bits.append("landed: " + "; ".join(self.landed))
         if self.unverified:
             # FIRST, so the reader cannot take the measured half for the whole.
             # No behind-count is printed at all in this state — it was not
@@ -1485,6 +1496,18 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
+    landed = ()
+    if unpushed.isdigit() and int(unpushed):
+        from . import landed as landing
+        code, orphan_text = run(dest, "rev-list", f"--max-count={landing.LIMIT}",
+                                "HEAD", "--not", *saved_refs)
+        candidates = [oid for oid in orphan_text.splitlines() if landing.SHA.fullmatch(oid)]
+        trusted = refreshed if selected else [n for n in names if n not in mirrors]
+        if code == 0 and candidates:
+            cleared, why = landing.classify(dest, candidates, trusted, run,
+                                            network=bool(fetch and refreshed))
+            unpushed = str(max(0, int(unpushed) - len(cleared)))
+            landed = tuple(why)
     status_args = ["status", "--porcelain"]
     if untracked_all:
         # Directory-collapsed output (`?? .playwright-mcp/`) is enough to COUNT
@@ -1501,6 +1524,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             behind=int(behind) if behind.isdigit() else 0,
             unpushed=int(unpushed) if unpushed.isdigit() else 0,
             publication_remote=remote or "",
+            landed=landed,
             dirty=True,
             note=note,
             unverified=unverified,
@@ -1542,6 +1566,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
         publication_remote=remote or "",
+        landed=landed,
         dirty=tracked_dirty,
         provisioned=provisioned,
         per_install=per_install,
