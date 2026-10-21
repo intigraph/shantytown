@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "99f58d81bf60f77d699dbb55dd3d3855f5eb8fdb2b621732814733a5c2d32b39",
+      "source_sha256": "a3727e4aa5d516cf7ae1513309683a3f04e7ba5f752f9c43fa40a5c6d0dc4162",
       "type": "Concept"
     },
     {
@@ -60,7 +60,7 @@
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
       "summary": "The package keeps zero runtime dependencies and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
-      "source_sha256": "56e37945da2b6dba4e66ffa287842f9aba496edc9be5bf1b1f1fd42d475e5255",
+      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
       "type": "DecisionRecord",
       "properties": {
         "status": "active",
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "99f58d81bf60f77d699dbb55dd3d3855f5eb8fdb2b621732814733a5c2d32b39",
+      "source_sha256": "a3727e4aa5d516cf7ae1513309683a3f04e7ba5f752f9c43fa40a5c6d0dc4162",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -93,7 +93,7 @@
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
       "summary": "Use the contribution guide for supported Python versions, the zero-dependency constraint, test conventions and console-entry checks.",
-      "source_sha256": "56e37945da2b6dba4e66ffa287842f9aba496edc9be5bf1b1f1fd42d475e5255",
+      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
       "properties": {
         "startHereOrder": 3
       }

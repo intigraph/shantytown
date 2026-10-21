@@ -2,7 +2,7 @@
 <h1 align="center">shantytown</h1>
 <p align="center"><em>🏭 Ship software and organize everyday work with a crew of AI agents.</em></p>
 <p align="center">
-<a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"/></a>
+<a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache_2.0-blue"/></a>
 <a href="https://github.com/scbrown/shantytown/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg"/></a>
 <a href="https://github.com/scbrown/caboodle"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
 </p>
@@ -179,4 +179,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and validation.
 
 ## 📜 License
 
-[MIT](LICENSE)
+[Apache-2.0](LICENSE)
