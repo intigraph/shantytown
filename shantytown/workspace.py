@@ -46,6 +46,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .protocols import Agent
+from . import worktree_storage
 
 
 class WorkspaceError(RuntimeError):
@@ -504,6 +505,22 @@ def _shared_repo(repo: Path | str) -> Path:
     """Normalize to the SHARED checkout, tolerating being handed the worktree dir
     or the `<name>-wt` container (crew-worktree.sh does the same on the name)."""
     p = Path(repo).expanduser()
+    if (p / ".git").is_file():
+        # A configured storage container is not an inverse mapping to the
+        # shared checkout. Ask Git instead of guessing from directory names.
+        result = subprocess.run(["git", "-C", str(p), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True)
+        common = Path(result.stdout.strip())
+        if result.returncode or not common.is_absolute() or common.name != ".git":
+            raise WorkspaceError("cannot identify the shared checkout of this linked worktree")
+        return common.parent
+    if p.name.endswith("-wt") and p.is_dir():
+        linked = [child for child in p.iterdir() if (child / ".git").is_file()]
+        if linked:
+            sources = {_shared_repo(child) for child in linked}
+            if len(sources) != 1:
+                raise WorkspaceError("worktree container has conflicting shared checkouts")
+            return sources.pop()
     if p.parent.name.endswith("-wt"):            # <name>-wt/<agent>
         return p.parent.parent / p.parent.name[:-len("-wt")]
     if p.name.endswith("-wt"):                    # <name>-wt
@@ -514,7 +531,42 @@ def _shared_repo(repo: Path | str) -> Path:
 def worktree_for(repo: Path | str, agent: str) -> Path:
     """Where agent's isolated worktree of <repo> lives: <repo>-wt/<agent>."""
     shared = _shared_repo(repo)
-    return shared.parent / f"{shared.name}-wt" / agent
+    legacy = shared.parent / f"{shared.name}-wt" / agent
+    # Existing work remains reachable even when an external disk is absent.
+    if legacy.exists():
+        return legacy
+    # Git's registration survives configuration changes. Only accept the exact
+    # legacy path or our source-derived namespace, never another named tree.
+    if (shared / ".git").is_dir():
+        registered = subprocess.run(["git", "-C", str(shared), "worktree", "list", "--porcelain", "-z"],
+                                    capture_output=True, text=True)
+        if registered.returncode == 0:
+            container = worktree_storage.destination(Path("/"), shared, agent).parent.name
+            matches = []
+            for field in registered.stdout.split("\0"):
+                if field.startswith("worktree "):
+                    candidate = Path(field[len("worktree "):])
+                    if candidate.name == agent and candidate.parent.name == container:
+                        if not candidate.is_dir():
+                            raise WorkspaceError("registered external worktree is unavailable; refusing a duplicate")
+                        if _shared_repo(candidate).resolve() != shared.resolve():
+                            raise WorkspaceError("registered worktree source identity differs")
+                        matches.append(candidate)
+            if len(matches) > 1:
+                raise WorkspaceError("multiple registered worktrees match this agent and source")
+            if matches:
+                return matches[0]
+    try:
+        root = worktree_storage.configured_root()
+    except worktree_storage.StorageError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    if root is None:
+        return legacy
+    destination = worktree_storage.destination(root, shared, agent)
+    if destination.exists() and (not (destination / ".git").is_file()
+                                 or _shared_repo(destination).resolve() != shared.resolve()):
+        raise WorkspaceError("configured worktree destination is not registered to this source")
+    return destination
 
 
 def agent_worktrees(agent: str,
@@ -538,6 +590,12 @@ def agent_worktrees(agent: str,
             Path(os.environ.get("GT_ROOT", Path.home() / "gt")),
             Path(os.environ.get("WORKSPACE_ROOT", Path.home() / "workspace")),
         )
+        try:
+            storage = worktree_storage.configured_root()
+        except worktree_storage.StorageError as exc:
+            raise WorkspaceError(str(exc)) from exc
+        if storage is not None:
+            roots += (storage,)
     out: list[Path] = []
     seen: set[Path] = set()
     for raw_root in roots:
@@ -1569,7 +1627,7 @@ def ensure_worktree(repo: Path | str, agent: str, base: str = "origin/main",
             f"no shared git checkout at {shared} to provision a worktree from — "
             f"refusing to invent one. Fix: pass the path to the real checkout."
         )
-    dest = shared.parent / f"{shared.name}-wt" / agent
+    dest = worktree_for(shared, agent)
     if dest.is_dir():
         return str(dest)                 # already provisioned — idempotent
     if dest.exists():
