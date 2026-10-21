@@ -313,6 +313,12 @@ named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
+For a bundle's Codex `notify`, each emitted file records an ownership fingerprint
+in a comment. Unregistering the bundle removes its unchanged notify value on
+regeneration. An operator's replacement and older unmarked values survive:
+matching a command alone is not proof that st owns it. Workspace and project
+trust rewrites preserve the fingerprint while the notify remains unchanged.
+
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
 background reflection. Cycles require explicit admission; `tend` never creates
 them because an interval elapsed. Status shows the last cycle, rotation and
@@ -323,7 +329,7 @@ deferral did not require the deferrer to state whether the blocker was a bead, h
 access capability, external event, or no blocker at all. `st work defer` records that kind
 and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
 `--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
-`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
+`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` / `release:` / `installed:` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
@@ -336,6 +342,20 @@ boot/generation, protected window and starting instant. Its producer contract
 must be accepted before the binding can be used. The initial protected-recycle
 binding is **disabled**: this release does not change an existing review date or
 start an evidence collector.
+
+Version conditions need no binding, because they test a public fact rather than
+one item's producer:
+
+- `resume_when: release:<owner>/<repo>@<tag>` is met once that GitHub release is
+  published. A draft or a missing release is not met yet.
+- `resume_when: installed:<tool><op><version>` is met once the tool's own
+  `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
+  tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
+  with a fixed argv.
+
+`st work defer` refuses a malformed argument before writing anything. A read
+that cannot answer cleanly (a network error, a tool not on PATH, a version that
+does not parse) is UNKNOWN and keeps the hold. It is never reported as met.
 
 The protected-recycle evaluator requires a complete ordered interval containing
 a natural soft defer inside the nominated window, then a successful unforced
