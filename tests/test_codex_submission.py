@@ -114,9 +114,10 @@ def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
     assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
 
 
-def test_observed_queue_with_our_preview_is_submission(monkeypatch):
+def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
     panes, _ = transport(monkeypatch, [BUSY, QUEUED])
-    panes.send('worker', BODY)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
 
 
 def test_other_queue_message_is_not_our_receipt(monkeypatch):
@@ -175,7 +176,8 @@ def test_busy_owned_input_queues_once_without_retyping(monkeypatch):
     busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
     panes, calls = transport(monkeypatch, [busy_owned, busy_owned, busy_owned,
                                           busy_owned, QUEUED])
-    panes.send('worker', BODY)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls)] == ['Tab']
 
 

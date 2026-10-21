@@ -249,7 +249,8 @@ def _panes(a):
     EVERY LIVE AGENT AS DOWN, confidently and with exit 0. tmux.py has warned
     about exactly this since it was written; the CLI just never asked.
     """
-    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."))
+    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."),
+                root=getattr(a, 'root', None))
 
 
 def _registry(a):
@@ -330,6 +331,20 @@ def _backend(a, default="files") -> str:
 
 
 def _tracker(a, default="files"):
+    from .plate_capacity import guard_producers
+    tracker = _raw_tracker(a, default)
+    def notify(owner, item_id):
+        lead = _registry(a).get(owner).reports_to
+        if not lead:
+            raise ValueError('owner has no lead')
+        # Use the same backend and a message marker: no implementation slot and
+        # no recursive capacity routing. Never recreate the original work item.
+        tracker.create(f'inbox: capacity: {item_id} retained in pool; {owner} has 10 real work items',
+                       assignee=lead, labels='inbox')
+    return guard_producers(tracker, notify)
+
+
+def _raw_tracker(a, default="files"):
     """The tracker for this invocation, selected by --backend (#3).
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
@@ -2539,7 +2554,7 @@ def _run_command(a) -> int:
             return 2
         except Exception as exc:
             print(f"work item operation unproven: {type(exc).__name__}; "
-                  "do not retry writes without readback", file=sys.stderr)
+                  "check write readback, then retry transient failures if not applied", file=sys.stderr)
             return 2
     if a.cmd == "defer":
         return _cmd_defer(a)
@@ -2784,6 +2799,58 @@ def _stops(a) -> FilesStops:
     return FilesStops(Path(a.root) / "stopped")
 
 
+def _owned_work_rows(tracker, name):
+    """Complete owner scope on Seeds; the files floor scans only its local store."""
+    if hasattr(tracker, "capacity_rows"):
+        return tracker.capacity_rows(name)
+    if isinstance(tracker, FilesTracker):
+        from .answer import Answer
+        return Answer.complete_read([vars(row) for row in files_items(tracker)
+                                     if row.assignee == name], how="local files owner")
+    raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
+
+
+def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
+    from .owned_work import OwnedWork
+    try:
+        service = OwnedWork(a.root)
+        if card is not None:
+            service.stop(card.name, reason=getattr(a, "reason", "") or "",
+                         ceiling=ceiling, wake=True)
+        if wake_owner is not None:
+            service.wake(wake_owner)
+        names = ([card.name] if card else [wake_owner] if wake_owner else
+                 service.pending())
+        if not names:
+            return []
+        tracker, registry, box = _tracker(a), _registry(a), _inbox(a)
+        result = []
+        started = time.monotonic()
+        for index, name in enumerate(names):
+            if card is None and wake_owner is None:
+                # Bound starts, not in-flight writes. Rotate attempts so one
+                # unavailable owner cannot monopolize every supervisor pass.
+                if index >= 4 or time.monotonic() - started >= 5:
+                    print(f"  stopped-owner: {len(names) - index} pending owner(s) "
+                          "deferred to next supervisor pass", file=sys.stderr)
+                    break
+                service.attempted(name)
+            try:
+                result.extend(service.tick(
+                    registry, lambda owner: _owned_work_rows(tracker, owner), box,
+                    agents={name}))
+            except Exception as exc:
+                # One unavailable owner must not starve every later deadline.
+                print(f"  stopped-owner {name}: UNKNOWN ({type(exc).__name__}); "
+                      "pending local evidence retained", file=sys.stderr)
+        return result
+    except Exception as exc:
+        # The shutdown is already verified; metadata failure cannot undo it.
+        print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
+              "); ownership not measured", file=sys.stderr)
+        return []
+
+
 def _launched_now(a, card_name: str, settings_path=None) -> None:
     """ONE place that records 'this agent is now running'.
 
@@ -2799,6 +2866,8 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
         from . import account_state
         account_state.record(a.root, _registry(a).get(card_name), cfg, _panes(a))
     _stops(a).forget(card_name)
+    from .owned_work import OwnedWork
+    OwnedWork(a.root).launch(card_name)
     agent_hold.clear(a.root, card_name)
 
 
@@ -3414,9 +3483,16 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     findings = {f.agent: f for f in getattr(rep, "findings", ())}
     plate = plate or _plate(a)
 
+    from .owned_work import OwnedWork
+    custody = OwnedWork(a.root).snapshot()
+    stopped_owners = _stops(a).all().exact()
     holders = []
     for card in agents:
         if card.retired:
+            continue
+        if (card.name in stopped_owners or
+                custody.get(card.name, {}).get("state") in ("stopped", "ceiling", "expired")):
+            log(f"ceiling-transfer: {card.name} stopped/lease unverified; lead decides ownership")
             continue
         hit = _budget(card.name)[2]
         f = findings.get(card.name)
@@ -4550,6 +4626,7 @@ def _stop_locked(a) -> int:
                              reason="stop requested while already down: "
                              + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
+            _owned_work_tick(a, card=agent)
         if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
             from . import codex_daemon
             fixed = codex_daemon.repair(agent.name)
@@ -4609,6 +4686,7 @@ def _stop_locked(a) -> int:
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
     _cancel_cycle_for_stop(a)
+    _owned_work_tick(a, card=agent)
     # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
     #
     # This line used to promise "`st fleet tend` will still respawn it" unconditionally.
@@ -5554,8 +5632,30 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
+    owned_work_flag, stopped = False, None
+    if not a.dry_run:
+        try:
+            from .owned_work import OwnedWork
+            stopped = _stops(a).get(agent.name)
+            custody = OwnedWork(a.root).snapshot().get(agent.name, {}).get("state")
+            if stopped or custody in ("stopped", "ceiling", "expired"):
+                condition = "deliberately stopped" if stopped else custody
+                print(f"  stopped-owner: {agent.name} {condition}; "
+                      f"lead {agent.reports_to or 'administrator'} must decide ownership",
+                      file=sys.stderr)
+                owned_work_flag = True
+        except Exception:
+            print("  stopped-owner inbox flag UNKNOWN", file=sys.stderr)
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        result = _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        # Inspect after persistence, including UNKNOWN: the new message must
+        # not disappear behind an earlier empty ownership observation.
+        if owned_work_flag:
+            _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+        return result
+    if owned_work_flag:
+        _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -6844,20 +6944,9 @@ def _unassigned_open(a):
     three P1s — while `st crew` reported free/busy and the fleet twice read as
     "nothing dispatchable".
 
-    IT CANNOT EXCLUDE `decision-needed`, AND SAYS SO RATHER THAN PRETENDING.
-    A decision-gated bead must not be handed to a worker as implementer work
-    (aegis-2og7d), so unassigned is its CORRECT state and it is not unrouted work.
-    Filtering it out is impossible here: `WorkItem` carries no labels and the
-    beads adapter never parses them, because the Tracker protocol is three
-    functions and deliberately does not grow (aegis-gqr8). Measured on the live
-    store: 113 unassigned, of which 4 are decision-needed — a 3.5% overcount,
-    named in the output so the reader can discount it knowingly instead of
-    discovering it and discounting the whole number.
-
-    (The first version of this function DID filter on `it.labels`. It was tested
-    against a fixture that had been given a `labels` attribute by the test itself,
-    so five green tests proved the filter worked on data that does not exist. The
-    live cross-check against `bd` is what caught it — 113 here against 109 there.)
+    WorkItem carries backend labels. Exclude decision-needed records from
+    routable work in both this fallback and the native aggregate; those records
+    are correctly unassigned while their decision is pending.
     """
     try:
         trk = _tracker(a, "beads")
@@ -6874,6 +6963,8 @@ def _unassigned_open(a):
         if (getattr(it, "status", "") or "").lower() != "open":
             continue
         if (getattr(it, "assignee", None) or "").strip():
+            continue
+        if "decision-needed" in it.labels:
             continue
         n += 1
         pr = getattr(it, "priority", None)
@@ -7042,7 +7133,8 @@ def _cmd_crew(a) -> int:
                 tree_role=ag.role, retired=bool(ag.retired),
                 role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
-                live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
+                live=live, runtime_harness=actual,
+                harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
                 tree=_tree_staleness_cell(a, ag, sweep=False)[0]))
         print(json.dumps(dict(version=fleet_mod.VERSION,
@@ -7321,8 +7413,6 @@ def _cmd_crew(a) -> int:
         print(f"  {n_un} open item(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
               f"`br list --status open` and route by domain.")
-        print(f"    (includes any `decision-needed` items, which are correctly "
-              f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
     # nothing is allowed to reach". Those are opposite instructions to a
@@ -9109,6 +9199,15 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     # provisions from the active hank-src checkout.
     gt_worktree = worktree_for(resolved, agent)
     candidates = [gt_worktree, workspace_root / f"{repo}-wt" / agent]
+    crew_sources = {}
+    for container in dict.fromkeys((resolved, workspace_root / repo)):
+        source = container / "crew" / agent
+        # Containers can inherit a parent's Git repository. Only an own marker
+        # identifies the crew clone used by the existing worktree provisioner.
+        if not (container / ".git").exists() and (source / ".git").exists():
+            tree = worktree_for(source, agent)
+            crew_sources[tree] = source
+            candidates.append(tree)
     matches = [path for path in dict.fromkeys(candidates) if path.is_dir()]
     if len(matches) > 1:
         listed = ", ".join(str(path) for path in matches)
@@ -9117,7 +9216,33 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
             "Pass the shared checkout or worktree path explicitly."
         )
     if matches:
-        return matches[0]
+        selected = matches[0]
+        if selected in crew_sources:
+            import subprocess
+            source = crew_sources[selected]
+            try:
+                if not (selected / ".git").is_file():
+                    raise WorkspaceError("crew worktree is not a linked worktree")
+                _resolve_push_worktree(str(selected), agent)
+                common = []
+                for path in (source, selected):
+                    result = subprocess.run(
+                        ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
+                         "--git-common-dir"], capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode or not result.stdout.strip():
+                        raise WorkspaceError("crew worktree identity cannot be verified")
+                    common.append(Path(result.stdout.strip()).resolve())
+                if common[0] != common[1]:
+                    raise WorkspaceError("crew worktree belongs to a different repository")
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkspaceError("crew worktree identity cannot be read") from error
+        return selected
+    if crew_sources:
+        tree, source = next(iter(crew_sources.items()))
+        raise WorkspaceError(
+            f"no crew worktree at {tree}; run st repo worktree {source} {agent} first"
+        )
     return gt_worktree
 
 
@@ -12067,15 +12192,25 @@ def _job_dispatch(a):
 
 
 def _job_escalate(a):
-    def escalate(job, text):
+    def escalate(job, fire, text):
         from .tier import find_administrator
         admin = find_administrator(_registry(a))
         if not admin:
             return False
-        # DURABLE: the administrator may be the agent that is down, and a give-up
-        # notice that vanishes with a missing pane is the silence this replaces.
-        rc, _ = _job_st(a, ["inbox", admin, "-d", text])
-        return rc == OK
+        # The work store may be the very thing that failed. Use the existing
+        # local event/drain channel, independent of durable inbox persistence.
+        # Runner holds the job lock and persists this firing before attempting it.
+        from .tier import Reason
+        key = json.dumps(["job-failed", job.name, fire["queued"], fire["reason"]],
+                         separators=(",", ":"))
+        event = FilesEvents(Path(a.root) / "events").persist(
+            admin, f"job:{job.name}", Reason.JOB_FAILED.value, False,
+            detail=(f"Job {job.name} exhausted retries. Inspect "
+                    f"st work jobs history {job.name}; verify canonical [env] "
+                    "store routing and backend availability. "
+                    "Raw action output remains in the local job history."),
+            key=key)
+        return event.to == admin and event.reason == Reason.JOB_FAILED.value
     return escalate
 
 
@@ -12111,7 +12246,7 @@ def _jobs_runner(a, *, detach=True):
     return jobs_mod.Runner(
         a.root, host=local_host(a.root),
         actions={"inbox": _job_inbox(a), "dispatch": _job_dispatch(a)},
-        escalate=_job_escalate(a),
+        terminal_notice=_job_escalate(a),
         sources=jobs_mod.Sources(a.root, bead_rows=_job_bead_rows(a)),
         detach=detach)
 
@@ -12158,8 +12293,11 @@ def _cmd_declared_jobs(a, verb) -> int:
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
     for job in selected:
+        cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
+                   if isinstance(job, quipu_jobs.CalendarDeclaredJob)
+                   else f"every {job.interval_s}s")
         print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
-              f"every {job.interval_s}s  timezone {job.timezone}  "
+              f"{cadence}  timezone {job.timezone}  "
               f"host {job.host}  revision {job.revision}  target {job.target}")
     if verb == "check":
         print("Declarations validated; firing eligibility is UNKNOWN until runtime admission.")
@@ -12216,8 +12354,30 @@ def _cmd_jobs(a) -> int:
             print(f"  refused: no job {a.name!r}", file=sys.stderr)
             return REFUSED
         rc = REFUSED if errors else OK
+        store_checked = False
+        store_error = None
         for job in pick:
             verdict, why = runner.check(job)
+            needs_store = (job.action.kind == "dispatch" or
+                           (job.action.kind == "inbox" and job.action.durable))
+            if (needs_store and job.enabled and
+                    jobs_mod.runs_here(job, runner.host)[0]):
+                if not store_checked:
+                    store_checked = True
+                    try:
+                        tracker = _tracker(a)
+                        from .sd import SdTracker
+                        if isinstance(tracker, SdTracker):
+                            tracker.prove_store()
+                    except Exception as exc:
+                        # Avoid echoing endpoint/credential-bearing exception text.
+                        store_error = (f"{type(exc).__name__}: seeds store admission "
+                                       "failed; configure canonical [env] routing "
+                                       "and verify the backend")
+                if store_error:
+                    verdict, why = "cannot tell", store_error
+                elif _backend(a) == "seeds":
+                    why += "; seeds store admitted (read-only identity check)"
             if verdict == "cannot tell":
                 rc = CANNOT_TELL
             print(f"  {job.name:<18} {verdict:<11} {why}")
@@ -12972,6 +13132,19 @@ def _tend_once(a, quiet: bool = False) -> int:
                 _log(note)
             return []
 
+        def _stopped_owner_deadlines():
+            from .owned_work import OwnedWork
+            service = OwnedWork(a.root)
+            # Read generations BEFORE legacy stop records. Relaunch clears that
+            # store before minting its generation, so an old scan cannot stop a
+            # newer launch. The empty token fences an absent local record too.
+            observed = service.snapshot()
+            for name, record in _stops(a).all().exact().items():
+                service.stop(name, at=record.at, reason=record.reason,
+                             generation=observed.get(name, {}).get("generation", ""))
+            return _owned_work_tick(a)
+
+        _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
@@ -12980,7 +13153,7 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
-            agents, panes, _inbox(a), log=_log))
+            agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
