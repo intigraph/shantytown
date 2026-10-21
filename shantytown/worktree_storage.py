@@ -56,5 +56,6 @@ def configured_root(*, environ=None, config_path=None, mountpoint=None, device=N
 def destination(root: Path, shared: Path, agent: str) -> Path:
     # The entire source identity distinguishes same-named checkouts. The digest
     # is a filesystem namespace, never authentication or a public identifier.
-    identity = hashlib.sha256(os.fsencode(shared.resolve())).hexdigest()
+    shared = shared.resolve()
+    identity = hashlib.sha256(os.fsencode(shared)).hexdigest()
     return root / f'{shared.name[:48]}-{identity}-wt' / agent

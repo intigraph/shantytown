@@ -137,3 +137,12 @@ def test_malformed_configuration_refuses(tmp_path, body):
     config.write_text(body)
     with pytest.raises(storage.StorageError):
         storage.configured_root(environ={}, config_path=config)
+
+
+def test_source_symlink_alias_has_one_storage_identity(tmp_path):
+    source = tmp_path / 'actual'
+    source.mkdir()
+    alias = tmp_path / 'alias'
+    alias.symlink_to(source, target_is_directory=True)
+    root = tmp_path / 'storage'
+    assert storage.destination(root, source, 'worker') == storage.destination(root, alias, 'worker')
