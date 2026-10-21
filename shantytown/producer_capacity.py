@@ -69,6 +69,11 @@ def without(arguments, name):
 def proposed_fields(arguments, previous):
     """Project only fields that change capacity membership; keep argv intact."""
     candidate = previous.copy()
+    priority = option(arguments, '--priority')
+    if priority is not None:
+        if priority not in ('0', '1', '2', '3', '4'):
+            raise ValueError('unsupported producer priority')
+        candidate['priority'] = int(priority)
     for flag, key in (('--title', 'title'), ('--status', 'status'), ('--defer', 'defer_until')):
         value = option(arguments, flag)
         if value is not None:
@@ -110,7 +115,7 @@ def run(arguments, tracker, execute, notify):
         candidate = proposed_fields(arguments, vars(current))
     if not owner:
         return execute(arguments)
-    with assignment_lock(tracker, owner):
+    with assignment_lock(tracker, owner, dry_run='--dry-run' in arguments):
         if current is not None:
             previous = current
             current = tracker.get(current.id)
@@ -122,7 +127,7 @@ def run(arguments, tracker, execute, notify):
         full = False
         try:
             if current is None:
-                ensure_room(tracker, owner)
+                ensure_room(tracker, owner, candidate=candidate)
             else:
                 ensure_update_room(tracker, owner, current, candidate | {'assignee': owner})
         except PlateFull:

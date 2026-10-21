@@ -305,10 +305,16 @@ class SdTracker(BrTracker):
             # Admission callers without that render scope still read live.
             if getattr(self, "render_shape_reads", None) is not None and agent in roster:
                 return roster[agent]
+            return self.capacity_admission_rows(agent)
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
+
+    def capacity_admission_rows(self, agent: str) -> Answer[list[dict]]:
+        """A mutation cannot borrow a frozen crew-render membership snapshot."""
+        try:
             if self._use_remote_projection():
                 from .seeds_plate import owner_rows
-                return owner_rows(self.prove_store(), agent, timeout=self.timeout,
-                                  capacity=True, shape_reads=getattr(self, "render_shape_reads", None))
+                return owner_rows(self.prove_store(), agent, timeout=self.timeout, capacity=True)
             return self._owner_rows(agent)
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
