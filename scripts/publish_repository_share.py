@@ -14,6 +14,9 @@ import sys
 import tarfile
 import tempfile
 
+# Release source must stay clean when modules load.
+sys.dont_write_bytecode = True
+
 REPOSITORY = "scbrown/shantytown"
 MEMBERS = {"export.nt", "export.ttl", "payload.nq", "manifest.json", "manifest.ttl", "shapes.ttl", "queries.ttl"}
 

@@ -12,6 +12,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import sys
+
+# Release source must stay clean when modules load.
+sys.dont_write_bytecode = True
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("knowledge", ROOT / "scripts/build-repository-knowledge.py")

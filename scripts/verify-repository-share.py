@@ -12,6 +12,9 @@ import tarfile
 import tempfile
 import time
 
+# Release source must stay clean when modules load.
+sys.dont_write_bytecode = True
+
 spec = importlib.util.spec_from_file_location("publisher", Path(__file__).with_name("publish_repository_share.py"))
 publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)

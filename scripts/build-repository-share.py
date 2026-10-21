@@ -15,9 +15,42 @@ import sqlite3
 import io
 import tarfile
 import subprocess
+import sys
+
+# Release source must stay clean when modules load.
+sys.dont_write_bytecode = True
+
+
+def isolated_environment(private):
+    """Native workers must not inherit a host endpoint or credential catalogue."""
+    private = Path(private)
+    env = dict(os.environ)
+    for key in list(env):
+        if key in {
+            "BOBBIN_SERVER",
+            "QUIPU_SERVER",
+            "QUIPU_DB",
+            "QUIPU_AUTH_TOKEN",
+            "QUIPU_AUTH_TOKEN_FILE",
+            "GH_TOKEN",
+            "GITHUB_TOKEN",
+        } or key.startswith("BOBBIN_QUIPU_"):
+            env.pop(key)
+    for key, name in (
+        ("HOME", "native-home"),
+        ("XDG_CONFIG_HOME", "native-config"),
+        ("XDG_DATA_HOME", "native-data"),
+        ("XDG_CACHE_HOME", "native-cache"),
+    ):
+        directory = private / name
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        env[key] = str(directory)
+    return env
 
 
 def command(args, *, env=None, cwd=None):
+    if env is None and cwd is not None:
+        env = isolated_environment(cwd)
     return subprocess.run([str(v) for v in args], check=True, capture_output=True, text=True, env=env, cwd=cwd).stdout
 
 
@@ -50,6 +83,7 @@ def local_mcp(binary, database, calls):
         stderr=subprocess.PIPE,
         text=True,
         cwd=Path(database).parent,
+        env=isolated_environment(Path(database).parent),
     ) as process:
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
@@ -198,7 +232,7 @@ def build(revision, source, tooling, binary, bobbin, output):
         return command(args, env=env, cwd=private)
 
     policy = private / "policy.ttl"
-    run(["python3", tooling / "scripts/private-share-policy.py", policy])
+    run(["python3", tooling / "scripts/private-share-policy.py", policy], env=dict(os.environ))
     corpus = materialize_release(source, revision, private / "source")
     (corpus / ".bobbin").mkdir(exist_ok=True)
     index_database = private / "indexed-graph.db"
@@ -225,7 +259,9 @@ entities = false
 model = "all-MiniLM-L6-v2"
 batch_size = 64
 """)
-    env = {k: v for k, v in os.environ.items() if k not in ("BOBBIN_SERVER", "BOBBIN_QUIPU_REMOTE")}
+    env = isolated_environment(private)
+    # Keep default inference concurrency bounded; a caller may supply its measured limit.
+    env.setdefault("BOBBIN_ONNX_THREADS", "1")
     run([bobbin, "index", index, "--source", corpus, "--repo", slug, "--force", "--skip-calibrate", "--json"], env=env)
     database = private / "producer.db"
     if not index_database.is_file():
