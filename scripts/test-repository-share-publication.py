@@ -126,6 +126,36 @@ class Publication(unittest.TestCase):
         self.assertIn("usage:", result.stderr)
         self.assertEqual(list(source.rglob("*.pyc")), [])
 
+    def test_hold_absent_and_dangling_symlink_before_any_build(self):
+        hold = self.root / "hold"
+        with patch.dict(publisher.os.environ, {"QUIPU_SHARE_HOLD_FILE": str(hold)}):
+            self.assertFalse(publisher.held())
+            hold.symlink_to(self.root / "missing-target")
+            for kind in ("dangling symlink", "regular file"):
+                with self.subTest(kind=kind), patch.object(publisher, "command", side_effect=AssertionError("lookup reached")) as command:
+                    self.assertTrue(publisher.held())
+                    with self.assertRaisesRegex(ValueError, "held before"):
+                        publisher.publish("v1.2.3", self.revision, self.root / "output")
+                    command.assert_not_called()
+                    self.assertFalse((self.root / "output").exists())
+                hold.unlink()
+                hold.write_text("synthetic hold")
+
+    def test_unreadable_hold_fails_closed(self):
+        with patch.object(Path, "lstat", side_effect=PermissionError("synthetic denied")), patch.object(publisher, "command") as command:
+            with self.assertRaisesRegex(ValueError, "cannot inspect publication hold"):
+                publisher.publish("v1.2.3", self.revision, self.root / "output")
+            command.assert_not_called()
+            self.assertFalse((self.root / "output").exists())
+
+    def test_absent_hold_reaches_first_lookup_positive_control(self):
+        hold = self.root / "absent-hold"
+        with patch.dict(publisher.os.environ, {"QUIPU_SHARE_HOLD_FILE": str(hold)}), patch.object(publisher, "command", side_effect=RuntimeError("synthetic first lookup")) as command:
+            with self.assertRaisesRegex(RuntimeError, "synthetic first lookup"):
+                publisher.publish("v1.2.3", self.revision, self.root / "output")
+            command.assert_called_once()
+            self.assertFalse((self.root / "output").exists())
+
     def host_environment(self):
         host = self.root / "synthetic-host"
         host.mkdir()
