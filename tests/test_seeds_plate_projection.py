@@ -494,14 +494,15 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
         wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
         if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
             wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
-        return answer(wire)
+        from shantytown.seeds_inbox import FIELDS
+        return answer([r for r in wire if r["predicate"] in FIELDS])
 
     closed = [False]
     monkeypatch.setattr(seeds_plate, "_query", query)
     box = TrackerInbox(tracker, lambda: pytest.fail("whole board read"),
                        items_for=tracker.inbox_items)
     assert {message.id for message in box.unread("worker")} == {"test-modern", "test-legacy"}
-    assert len(queries) == 2  # one discovery, one bounded field projection; both prefixes
+    assert len(queries) == 1  # fresh combined metadata, format and guard observation
     assert "inbox:" in queries[0] and "mail:" in queries[0]
     assert G + "#seeds-ephemeral" in queries[0]
     # The admitted status vocabulary includes closed even for unread reads;
@@ -509,11 +510,11 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     assert '"deferred", "closed"))' not in queries[0]
     closed[0] = True
     assert box.find_delivery("worker", "delivered").read
-    assert len(queries) == 4
-    assert '"deferred", "closed"))' in queries[2]
+    assert len(queries) == 2
+    assert '"deferred", "closed"))' in queries[1]
 
 
-@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "disappeared", "nonmessage"])
+@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "missingfield", "nonmessage"])
 def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
     from shantytown.answer import PartialAnswer
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
@@ -525,13 +526,14 @@ def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
         calls.append(text)
         if fault == "offline":
             raise OSError("unavailable")
-        if fault == "disappeared" and len(calls) > 1:
-            return answer([])
         wire = fields(title="actual work" if fault == "nonmessage" else "inbox: payload",
                       assignee="other" if fault == "foreign" else "worker")
         if fault == "ambiguous":
             wire += fields(title="inbox: contradictory", status="closed")
-        return answer(wire)
+        if fault == "missingfield":
+            wire = [r for r in wire if r["predicate"] != seeds_plate.SCHEMA + "identifier"]
+        from shantytown.seeds_inbox import FIELDS
+        return answer([r for r in wire if r["predicate"] in FIELDS])
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     with pytest.raises(PartialAnswer):
