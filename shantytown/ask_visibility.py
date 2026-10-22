@@ -17,7 +17,7 @@ def is_ask(item):
         labels = labels.split(',')
     labels = {label.get('name', '') if isinstance(label, Mapping) else label for label in labels}
     return (bool(ASK_LABELS & labels)
-            or str(value.get('title', '')).startswith('ASK Stiwi'))
+            or str(value.get('title', '')).strip().startswith('ASK Stiwi'))
 
 
 def refuse_deferral(item, changes):

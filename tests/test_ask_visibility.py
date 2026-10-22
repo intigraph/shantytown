@@ -58,3 +58,37 @@ def test_unassigned_sdk_producer_refuses_before_execute(title, labels):
     with pytest.raises(ValueError, match='Brief.*Later'):
         producer_capacity.run(['update','lab-1','--status','deferred'], tracker, execute, Mock())
     execute.assert_not_called()
+
+
+@pytest.mark.parametrize('prefix', [' ', '\t\n', '\u2003'])
+@pytest.mark.parametrize('operation', ['create', 'update'])
+def test_sdk_normalized_ask_title_refuses_before_execution(prefix, operation):
+    tracker = Mock()
+    tracker.get.return_value = WorkItem('lab-1', title='Technical control')
+    title = prefix + 'ASK Stiwi: choose' + ' \t'
+    arguments = (['create', title] if operation == 'create'
+                 else ['update', 'lab-1', '--title', title])
+    execute = Mock(return_value=subprocess.CompletedProcess([], 0))
+    with pytest.raises(ValueError, match='Brief.*Later'):
+        producer_capacity.run(arguments + ['--defer', '2027-01-01'],
+                              tracker, execute, Mock())
+    execute.assert_not_called()
+
+
+@pytest.mark.parametrize('operation', ['create', 'update'])
+def test_normalized_technical_title_still_allows_future_date(operation):
+    tracker = Mock()
+    tracker.get.return_value = WorkItem('lab-1', title='Technical control')
+    title = ' \tDiscuss ASK Stiwi syntax '
+    arguments = (['create', title] if operation == 'create'
+                 else ['update', 'lab-1', '--title', title])
+    arguments += ['--defer', '2027-01-01']
+    execute = Mock(return_value=subprocess.CompletedProcess([], 0))
+    producer_capacity.run(arguments, tracker, execute, Mock())
+    execute.assert_called_once_with(arguments)
+
+
+def test_normalized_existing_ask_cannot_be_disguised_during_deferral():
+    before = WorkItem('lab-1', title=' \tASK Stiwi: choose')
+    with pytest.raises(ValueError, match='Brief.*Later'):
+        refuse_deferral(before, {'title': 'Technical disguise', 'defer_until': '2027-01-01'})
