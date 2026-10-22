@@ -23,6 +23,12 @@ an unavailable registered external tree refuses duplicate provisioning. Creation
 lookup and cleanup use the same destination resolver. Enumeration includes the
 configured storage root as well as the two existing source roots.
 
+Legacy checkouts may use separate or symlinked Git metadata. Checkout identity
+is verified with Git, rather than inferred from the metadata directory's name.
+External provisioning requires an identifiable registered primary checkout;
+ambiguous or unresolvable metadata layouts refuse before creating a worktree.
+No Git configuration or metadata is rewritten to manufacture that identity.
+
 Keep the storage configuration while external trees exist: enumeration depends
 on that root. To stop creating external trees without hiding them, first finish
 or relocate them through the existing guarded worktree lifecycle, then remove

@@ -1,6 +1,7 @@
 """Mounted storage admission must fail before worktree creation."""
 from pathlib import Path
 import json
+import subprocess
 import pytest
 from shantytown import worktree_storage as storage
 from shantytown import workspace
@@ -146,3 +147,79 @@ def test_source_symlink_alias_has_one_storage_identity(tmp_path):
     alias.symlink_to(source, target_is_directory=True)
     root = tmp_path / 'storage'
     assert storage.destination(root, source, 'worker') == storage.destination(root, alias, 'worker')
+
+
+def identity_repository(tmp_path, kind):
+    repo = tmp_path / 'project'
+    repo.mkdir()
+    metadata = tmp_path / 'metadata'
+    args = ['git', '-c', 'core.hooksPath=/dev/null', 'init']
+    if kind == 'separate':
+        args += ['--separate-git-dir', str(metadata)]
+    subprocess.run([*args, str(repo)], check=True, capture_output=True)
+    if kind == 'symlink':
+        (repo / '.git').rename(metadata)
+        (repo / '.git').symlink_to(metadata, target_is_directory=True)
+
+    def git(*args):
+        return subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(repo), *args],
+                              check=True, capture_output=True, text=True)
+
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '--allow-empty', '-m', 'fixture')
+    tree = tmp_path / 'project-wt/worker'
+    git('worktree', 'add', '-b', 'worker', str(tree))
+    return repo, tree, git
+
+
+@pytest.mark.parametrize('kind', ['ordinary', 'separate', 'symlink'])
+@pytest.mark.parametrize('input_name', ['source', 'linked'])
+def test_primary_identity_does_not_depend_on_metadata_name(tmp_path, monkeypatch, kind, input_name):
+    repo, tree, _ = identity_repository(tmp_path, kind)
+    monkeypatch.setattr(storage, 'configured_root', lambda: None)
+    path = repo if input_name == 'source' else tree
+    assert workspace._shared_repo(path).resolve() == repo.resolve()
+    assert workspace.worktree_for(path, 'worker') == tree
+
+
+@pytest.mark.parametrize('kind', ['separate', 'symlink'])
+def test_unknown_external_primary_refuses_before_add(tmp_path, monkeypatch, kind):
+    repo, _, _ = identity_repository(tmp_path, kind)
+    root = tmp_path / 'storage'
+    monkeypatch.setattr(storage, 'configured_root', lambda: root)
+    with pytest.raises(workspace.WorkspaceError, match='registered primary'):
+        workspace.ensure_worktree(repo, 'new-worker', add=lambda *a: pytest.fail('must not add'))
+    assert not root.exists()
+
+
+@pytest.mark.parametrize('kind', ['separate', 'symlink'])
+def test_unknown_registered_external_tree_never_creates_a_duplicate(tmp_path, monkeypatch, kind):
+    repo, _, git = identity_repository(tmp_path, kind)
+    target = storage.destination(tmp_path / 'external', repo, 'external-worker')
+    git('worktree', 'add', '-b', 'external-worker', str(target))
+    monkeypatch.setattr(storage, 'configured_root', lambda: None)
+    with pytest.raises(workspace.WorkspaceError, match='one shared checkout'):
+        workspace.ensure_worktree(repo, 'external-worker', add=lambda *a: pytest.fail('duplicate add'))
+    assert target.exists()
+    assert not (tmp_path / 'project-wt/external-worker').exists()
+
+
+def test_foreign_legacy_name_cannot_override_registered_identity(tmp_path):
+    repo, _, git = identity_repository(tmp_path, 'ordinary')
+    foreign = tmp_path / 'foreign'
+    subprocess.run(['git', '-c', 'core.hooksPath=/dev/null', 'init', str(foreign)],
+                   check=True, capture_output=True)
+    tree = tmp_path / 'foreign-wt/other-worker'
+    git('worktree', 'add', '-b', 'other-worker', str(tree))
+    assert workspace._shared_repo(tree).resolve() == repo.resolve()
+
+
+def test_ambiguous_primary_alias_is_not_chosen(tmp_path):
+    repo, _, git = identity_repository(tmp_path, 'ordinary')
+    alias = tmp_path / 'alias'
+    alias.mkdir()
+    (alias / '.git').write_text(f'gitdir: {repo / ".git"}\n')
+    tree = tmp_path / 'alias-wt/other-worker'
+    git('worktree', 'add', '-b', 'other-worker', str(tree))
+    with pytest.raises(workspace.WorkspaceError, match='one shared checkout'):
+        workspace._shared_repo(tree)

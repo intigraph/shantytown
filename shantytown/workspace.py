@@ -501,19 +501,67 @@ def _squash_landed_tree(dest: Path, base: str) -> bool:
         return False
 
 
+def _git_identity(repo: Path) -> tuple[Path, Path] | None:
+    """Read this checkout's Git directory and common directory, without guessing."""
+    if not (repo / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute",
+             "--git-dir", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+        paths = [Path(line) for line in result.stdout.splitlines()]
+        if result.returncode or len(paths) != 2 or not all(path.is_absolute() for path in paths):
+            return None
+        return paths[0].resolve(strict=True), paths[1].resolve(strict=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _registered_shared_repo(repo: Path, common: Path) -> Path | None:
+    """Validate Git's primary entry; relocated metadata is not itself a checkout."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain", "-z"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise WorkspaceError("cannot read the primary checkout registration") from exc
+    first = result.stdout.split("\0", 1)[0]
+    if result.returncode or not first.startswith("worktree "):
+        raise WorkspaceError("cannot read the primary checkout registration")
+    primary = Path(first[len("worktree "):])
+    if primary.is_absolute() and _git_identity(primary) == (common, common):
+        return primary.resolve()
+    return None
+
+
 def _shared_repo(repo: Path | str) -> Path:
     """Normalize to the SHARED checkout, tolerating being handed the worktree dir
     or the `<name>-wt` container (crew-worktree.sh does the same on the name)."""
     p = Path(repo).expanduser()
     if (p / ".git").is_file():
-        # A configured storage container is not an inverse mapping to the
-        # shared checkout. Ask Git instead of guessing from directory names.
-        result = subprocess.run(["git", "-C", str(p), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                capture_output=True, text=True)
-        common = Path(result.stdout.strip())
-        if result.returncode or not common.is_absolute() or common.name != ".git":
+        identity = _git_identity(p)
+        if identity is None:
             raise WorkspaceError("cannot identify the shared checkout of this linked worktree")
-        return common.parent
+        git_dir, common = identity
+        if git_dir == common:
+            # A primary checkout can have a .git file after --separate-git-dir.
+            return p
+        sources = set()
+        primary = _registered_shared_repo(p, common)
+        if primary is not None:
+            sources.add(primary)
+        if p.parent.name.endswith("-wt"):
+            legacy = p.parent.parent / p.parent.name[:-len("-wt")]
+            # Preserve the legacy layout only when Git proves the same primary
+            # identity. A similarly named foreign checkout must never be chosen.
+            if _git_identity(legacy) == (common, common):
+                sources.add(legacy.resolve())
+        if len(sources) != 1:
+            raise WorkspaceError("cannot identify one shared checkout for this linked worktree")
+        return sources.pop()
     if p.name.endswith("-wt") and p.is_dir():
         linked = [child for child in p.iterdir() if (child / ".git").is_file()]
         if linked:
@@ -537,7 +585,7 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
         return legacy
     # Git's registration survives configuration changes. Only accept the exact
     # legacy path or our source-derived namespace, never another named tree.
-    if (shared / ".git").is_dir():
+    if (shared / ".git").exists():
         registered = subprocess.run(["git", "-C", str(shared), "worktree", "list", "--porcelain", "-z"],
                                     capture_output=True, text=True)
         if registered.returncode == 0:
@@ -562,6 +610,10 @@ def worktree_for(repo: Path | str, agent: str) -> Path:
         raise WorkspaceError(str(exc)) from exc
     if root is None:
         return legacy
+    if (shared / ".git").is_file() or (shared / ".git").is_symlink():
+        identity = _git_identity(shared)
+        if identity is None or _registered_shared_repo(shared, identity[1]) != shared.resolve():
+            raise WorkspaceError("external storage requires an identifiable registered primary checkout")
     destination = worktree_storage.destination(root, shared, agent)
     if destination.exists() and (not (destination / ".git").is_file()
                                  or _shared_repo(destination).resolve() != shared.resolve()):
