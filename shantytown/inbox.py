@@ -610,8 +610,19 @@ class TrackerInbox:
             # a slow listing must not prevent acknowledgment of a known message.
             # Validate the whole selection before closing any of it.
             messages = []
-            for item_id in dict.fromkeys(ids):
-                item = self._tracker.get(item_id)
+            wanted = list(dict.fromkeys(ids))
+            if not wanted:
+                return []
+            reader = getattr(self._tracker, "inbox_receipts", None)
+            if callable(reader):
+                items = reader(me, wanted).exact()
+                if len(items) != len(wanted) or {it.id for it in items} != set(wanted):
+                    raise RuntimeError("exact inbox receipt selection is incomplete")
+                by_id = {it.id: it for it in items}
+            else:
+                by_id = {i: self._tracker.get(i) for i in wanted}
+            for item_id in wanted:
+                item = by_id[item_id]
                 if (item.id != item_id or not is_message(item.title)
                         or item.assignee not in (me, me.split("/")[-1])):
                     raise RuntimeError(f"refused inbox acknowledgment of {item_id}: "
