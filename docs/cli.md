@@ -1982,6 +1982,15 @@ the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.
 
+Scheduled probes deliver operational hold/lift transitions to live crew panes,
+separately from routine budget advice. Failed pane deliveries remain pending.
+An unknown detector or failed slowdown verification warns the administrator;
+a continuous hold lasting 30 minutes warns once and never clears automatically.
+Before honouring a hold copied from notes, run `st fleet hold all --status`.
+With the default 120-second lift delay and minute probes, a continuously negative
+media signal clears within 180 seconds. A message saying one reason ended does
+not override another active reason or the budget governor.
+
 ```toml
 [[quiet_time.detector]]
 name = "gaming"
