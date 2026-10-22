@@ -163,6 +163,74 @@ def test_sdk_dry_run_writes_no_overflow_journal(tmp_path, monkeypatch):
     assert tracker.get(urgent.id).assignee is None and journal(tmp_path) == []
 
 
+@pytest.mark.parametrize('flags', [
+    ['--acceptance-criteria', '--dry-run'],
+    ['--acceptance-criteria=--dry-run'],
+    ['--description', '--dry-run'],
+    ['-d--dry-run'],
+])
+@pytest.mark.parametrize('unavailable', [False, True])
+def test_sdk_literal_dry_run_value_cannot_skip_overflow_journal(
+        tmp_path, monkeypatch, flags, unavailable):
+    tracker = world(tmp_path, monkeypatch)
+    path = tmp_path / '.local/state/shantytown/plate-capacity/overflow.jsonl'
+    if unavailable:
+        path.mkdir(parents=True)
+    arguments = ['create', 'Incident', '--assignee', 'worker', '--priority', '0', *flags]
+    calls = []
+
+    def execute(argv):
+        calls.append(argv)
+        return CompletedProcess(argv, 0, '{}', '')
+
+    if unavailable:
+        with pytest.raises(CapacityUnknown, match='journal unavailable'):
+            run(arguments, tracker, execute, lambda *a: pytest.fail('no pooling'))
+        assert calls == [] and path.is_dir()
+    else:
+        run(arguments, tracker, execute, lambda *a: pytest.fail('no pooling'))
+        assert calls == [arguments] and len(journal(tmp_path)) == 1
+
+
+def test_sdk_real_dry_run_with_literal_value_keeps_argv_and_writes_nothing(tmp_path, monkeypatch):
+    tracker = world(tmp_path, monkeypatch)
+    arguments = ['create', 'Incident', '--dry-run', '--assignee', 'worker',
+                 '--priority', 'P0', '--acceptance-criteria', '--dry-run']
+    calls = []
+    run(arguments, tracker,
+        lambda argv: calls.append(argv) or CompletedProcess(argv, 0, '{}', ''),
+        lambda *a: pytest.fail('no pooling'))
+    assert calls == [arguments] and journal(tmp_path) == [] and size(tracker, 'worker') == 10
+
+
+@pytest.mark.parametrize('priority,urgent', [
+    ('0', True), ('P0', True), ('p0', True), ('P+0000', True),
+    (' +00 ', True), ('P2', False), ('p2', False), ('0002', False),
+    (' +02 ', False), ('\t p4 \n', False),
+])
+def test_sdk_priority_spellings_preserve_admission_and_original_argv(
+        tmp_path, monkeypatch, priority, urgent):
+    tracker = world(tmp_path, monkeypatch) if urgent else FilesTracker(tmp_path / 'items')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    arguments = ['create', 'Incident', '--assignee', 'worker', '--priority', priority]
+    calls = []
+    run(arguments, tracker,
+        lambda argv: calls.append(argv) or CompletedProcess(argv, 0, '{}', ''),
+        lambda *a: pytest.fail('no pooling'))
+    assert calls == [arguments]
+    assert len(journal(tmp_path)) == int(urgent)
+
+
+@pytest.mark.parametrize('priority', ['', 'P', 'Pp0', '5', 'P5', '-0', 'P-1', '++0', '１', '1.0'])
+def test_sdk_invalid_priority_refuses_before_transport(tmp_path, monkeypatch, priority):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    tracker = FilesTracker(tmp_path / 'items')
+    with pytest.raises(ValueError, match='unsupported producer priority'):
+        run(['create', 'Incident', '--assignee', 'worker', '--priority', priority], tracker,
+            lambda argv: pytest.fail('invalid priority must not reach SDK'), lambda *a: None)
+    assert journal(tmp_path) == []
+
+
 def test_p0_overflow_does_not_override_governor_or_claim_delivery(tmp_path, monkeypatch):
     tracker = world(tmp_path, monkeypatch)
     crew = tmp_path / 'crew'

@@ -37,6 +37,7 @@ def fields(arguments):
     while i < len(arguments):
         word = arguments[i]
         if word in BOOLEANS:
+            yield word, True, i, 1
             i += 1
             continue
         name, equal, value = word.partition('=')
@@ -71,9 +72,18 @@ def proposed_fields(arguments, previous):
     candidate = previous.copy()
     priority = option(arguments, '--priority')
     if priority is not None:
-        if priority not in ('0', '1', '2', '3', '4'):
+        # Match Seeds model::parse_priority: trim, one optional P/p, then
+        # an unsigned decimal (optional +), with a resulting value of 0..4.
+        digits = priority.strip()
+        if digits.startswith(('P', 'p')):
+            digits = digits[1:]
+        digits = digits.removeprefix('+')
+        if not digits or not digits.isascii() or not digits.isdecimal():
             raise ValueError('unsupported producer priority')
-        candidate['priority'] = int(priority)
+        normalized = digits.lstrip('0') or '0'
+        if normalized not in ('0', '1', '2', '3', '4'):
+            raise ValueError('unsupported producer priority')
+        candidate['priority'] = int(normalized)
     for flag, key in (('--title', 'title'), ('--status', 'status'), ('--defer', 'defer_until')):
         value = option(arguments, flag)
         if value is not None:
@@ -115,7 +125,7 @@ def run(arguments, tracker, execute, notify):
         candidate = proposed_fields(arguments, vars(current))
     if not owner:
         return execute(arguments)
-    with assignment_lock(tracker, owner, dry_run='--dry-run' in arguments):
+    with assignment_lock(tracker, owner, dry_run=option(arguments, '--dry-run') is True):
         if current is not None:
             previous = current
             current = tracker.get(current.id)
