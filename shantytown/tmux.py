@@ -82,6 +82,10 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     from . import triage
     if not text or triage.input_state(screen) != triage.INPUT_QUEUED:
         return False
+    framed = triage.codex_composer(screen)
+    if framed is not None:
+        body = triage.strip_attrs(framed).lstrip()[1:]
+        return ' '.join(body.split()) == ' '.join(text.split())
     lines = triage.strip_attrs(screen).rstrip().splitlines()
     prompts = [i for i, line in enumerate(lines) if line.lstrip().startswith("›")]
     if not prompts:
