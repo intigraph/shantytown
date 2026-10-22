@@ -14,6 +14,19 @@ from .files import write_json_atomic
 LONG_HOLD_SECONDS = 1800
 
 
+def metrics(root):
+    """Pending operational delivery is visible to the normal alerting tier."""
+    try:
+        data = json.loads((Path(root)/'notify/quiet_time_delivery.json').read_text())
+        pending = len(data.get('pending', [])) + int(bool(data.get('page_pending')))
+    except FileNotFoundError:
+        pending = 0
+    except (OSError, ValueError, TypeError, AttributeError):
+        pending = 1  # unreadable is not successful delivery
+    return ('# TYPE aegis_quiet_time_notice_pending gauge\n'
+            f'aegis_quiet_time_notice_pending {pending}\n')
+
+
 def sweep(root, status, reg, panes, *, slowdown_unknown=False, now=None,
           push=None, page=None):
     from .notify import push_to_admin, push_to_own_pane

@@ -125,3 +125,16 @@ def test_upgrade_still_held_starts_prolonged_hold_clock(tmp_path):
     assert run(1000) == ['sattler', 'worker']
     run(2800)
     assert len(pages) == 1
+
+
+def test_pending_delivery_metric_retains_failures_and_corruption(tmp_path):
+    assert 'notice_pending 0\n' in quiet_notice.metrics(tmp_path)
+    held = quiet.Status((('media', quiet.Observation('active')),))
+    quiet_notice.sweep(tmp_path, held, roster(), SimpleNamespace(exists=lambda p: True),
+                       push=lambda *a: None)
+    assert 'notice_pending 2\n' in quiet_notice.metrics(tmp_path)
+    quiet_notice.sweep(tmp_path, held, roster(), SimpleNamespace(exists=lambda p: True),
+                       push=lambda *a: 'ok')
+    assert 'notice_pending 0\n' in quiet_notice.metrics(tmp_path)
+    (tmp_path/'notify/quiet_time_delivery.json').write_text('broken')
+    assert 'notice_pending 1\n' in quiet_notice.metrics(tmp_path)

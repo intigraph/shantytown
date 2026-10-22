@@ -12478,6 +12478,8 @@ def _cmd_hold(a) -> int:
                                          delete=False) as stream:
             tmp = Path(stream.name)
             stream.write(quiet_time_mod.metrics(status))
+            from . import quiet_notice
+            stream.write(quiet_notice.metrics(root))
             if a.slowdown:
                 stream.write("# HELP aegis_gaming_slowdown_ok Requested scope operations verified.\n"
                              "# TYPE aegis_gaming_slowdown_ok gauge\n"
