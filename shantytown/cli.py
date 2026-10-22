@@ -1605,6 +1605,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--review-routing", action="store_true",
+                    help="bounded local identity/pane observation; no full crew census")
     cr.add_argument("--no-priority-advice", action="store_true",
                     help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
@@ -1871,6 +1873,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
+    ib.add_argument("--retain-pointer", action="store_true",
+                    help="with -d: retain the unread durable pointer after live "
+                         "delivery; on Seeds use a fresh delivery slug and avoid "
+                         "the automatic inbox retirement read")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
         "--count", action="store_true",
@@ -2553,6 +2559,9 @@ def _run_command(a) -> int:
     if a.cmd == "defer":
         return _cmd_defer(a)
     if a.cmd == "crew":
+        if getattr(a, "review_routing", False):
+            from .review_routing import command
+            return command(a)
         return _cmd_crew(a)
     if a.cmd == "roles":
         # aegis-fagvi: one noun, three verbs. `set`/`sync` reuse the same
@@ -5561,6 +5570,12 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, "retain_pointer", False) and (
+            not getattr(a, "durable", False) or not a.message
+            or getattr(a, "count", False) or getattr(a, "read", False)
+            or getattr(a, "read_id", [])):
+        print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
+        return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
     if not a.message and (getattr(a, "durable", False) or a.dry_run) \
@@ -5940,7 +5955,16 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
-        item = box.deliver(a.agent, msg, frm=_me(a))
+        if getattr(a, "retain_pointer", False) and backend == "seeds":
+            # A fresh namespace avoids repeated probes of short-id collisions
+            # on a large board. This uses the SDK's ordinary --slug contract;
+            # persist-first and the store's compare-and-set remain unchanged.
+            import secrets
+            if not isinstance(box, TrackerInbox):
+                raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
+            item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
+        else:
+            item = box.deliver(a.agent, msg, frm=_me(a))
     except MessageTooLong as e:                  # PERMANENT: the message will never fit
         # Not a "could not tell" (2) — the store is fine; the message is too long,
         # and retrying it unchanged will fail identically. That is a REFUSED (1)
@@ -6010,6 +6034,10 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
                   f"the message survives and they read it with `st inbox`.")
             return OK
 
+        if getattr(a, "retain_pointer", False):
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  "+ live; durable pointer retained by request")
+            return OK
         try:
             box.mark_read(agent.name, ids=[item.id])
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
