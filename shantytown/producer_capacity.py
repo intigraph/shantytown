@@ -159,7 +159,9 @@ def main():
     import os
     tracker = SdTracker(store=os.environ.get('SHANTY_SD_STORE'),
                         quipu=os.environ.get('SHANTY_SD_QUIPU'),
-                        prefix=os.environ.get('SHANTY_SD_PREFIX'))
+                        prefix=os.environ.get('SHANTY_SD_PREFIX'),
+                        inbox_graph=os.environ.get('SHANTY_SD_INBOX_GRAPH'),
+                        inbox_prefix=os.environ.get('SHANTY_SD_INBOX_PREFIX'))
     tracker._bd = lambda *args: execute(list(args))
     def notify(owner, item_id):
         from .files import FilesRegistry
@@ -168,8 +170,9 @@ def main():
         lead = registry.get(owner).reports_to
         if not lead:
             raise ValueError('owner has no lead')
-        result = execute(['create', f'inbox: capacity: {item_id} retained in pool; {owner} full',
-                          '--assignee', lead, '--labels', 'inbox', '--json'])
+        result = tracker.inbox_tracker()._bd(
+            'create', f'inbox: capacity: {item_id} retained in pool; {owner} full',
+            '--assignee', lead, '--labels', 'inbox', '--json')
         if result.returncode:
             raise ValueError('lead delivery unproven')
     result = run(arguments, tracker, execute, notify)

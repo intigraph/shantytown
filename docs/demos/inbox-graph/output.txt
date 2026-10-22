@@ -1,0 +1,19 @@
+Script started on 2026-10-22 01:22:11-04:00 [COMMAND="bash docs/demos/inbox-graph/record.sh" <not executed on terminal>]
+BASE 37e714e; private source + native Seeds fixture
+same input: board has one work item; inbox has a legacy receipt
+legacy receipt found: False
+new ID uses messages prefix: False
+inbox pointers leaked onto work board: 1
+real work remains open: True
+production requests: 0
+
+CANDIDATE working tree; private source + native Seeds fixture
+same input: board has one work item; inbox has a legacy receipt
+legacy receipt found: True
+new ID uses messages prefix: True
+inbox pointers leaked onto work board: 0
+real work remains open: True
+closed legacy receipt remains discoverable: True
+production requests: 0
+
+Script done on 2026-10-22 01:22:12-04:00 [COMMAND_EXIT_CODE="0"]

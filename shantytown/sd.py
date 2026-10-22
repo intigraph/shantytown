@@ -32,6 +32,7 @@ import re
 import os
 import subprocess
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from .br import BrTracker, _failure_reason
 from .query_identity import sdk_subprocess_options
@@ -68,12 +69,17 @@ class SdTracker(BrTracker):
 
     def __init__(self, repo: "str | None" = None, timeout: int = 30, *,
                  store: "str | None" = None, quipu: "str | None" = None,
-                 prefix: "str | None" = None):
+                 prefix: "str | None" = None, graph: "str | None" = None,
+                 inbox_graph: "str | None" = None, inbox_prefix: "str | None" = None):
         # One store, no fan-out: extra br repos are br stores, not seeds.
         super().__init__(repo=repo, timeout=timeout, extra_repos=None)
         self.store = store or None
         self.quipu = quipu or None
         self.prefix = prefix or None
+        self.graph = graph or None
+        self.inbox_graph = inbox_graph or None
+        self.inbox_prefix = inbox_prefix or None
+        self._inbox_scope = None
         self._proof: "StoreProof | None" = None
         self._plate_projection_candidates: dict[str, list[dict]] = {}
         self._native_projection: bool | None = None
@@ -89,13 +95,64 @@ class SdTracker(BrTracker):
                 "seeds backend: both SHANTY_SD_STORE and SHANTY_SD_QUIPU are set; "
                 "name exactly one store")
         if self.store:
-            return ["--store", self.store]
-        if self.quipu:
-            return ["--quipu", self.quipu]
-        raise StoreUnproven(
-            "seeds backend: no store configured (set SHANTY_SD_STORE or "
-            "SHANTY_SD_QUIPU). Refusing: sd would fall back to a default local "
-            "store and report an empty board.")
+            location = ["--store", self.store]
+        elif self.quipu:
+            location = ["--quipu", self.quipu]
+        else:
+            raise StoreUnproven(
+                "seeds backend: no store configured (set SHANTY_SD_STORE or "
+                "SHANTY_SD_QUIPU). Refusing: sd would fall back to a default local "
+                "store and report an empty board.")
+        if self.graph is not None:
+            try:
+                parsed = urlsplit(self.graph)
+            except ValueError as error:
+                raise StoreUnproven("invalid configured inbox graph IRI") from error
+            if not parsed.scheme or any(c in self.graph for c in '<>"{}\\\r\n\t '):
+                raise StoreUnproven("invalid configured inbox graph IRI")
+            location += ["--graph", self.graph]
+        return location
+
+    def _sdk_options(self, *, read_operation=None):
+        options = sdk_subprocess_options(read_operation=read_operation)
+        if self.graph is not None:
+            # The explicit inbox scope owns allocation of NEW ids. Reads still
+            # accept migrated identifiers, which retain their original prefix.
+            options["env"] = dict(options.get("env") or os.environ,
+                                  SEEDS_PREFIX=self.prefix)
+        return options
+
+    def inbox_tracker(self):
+        """Same selected store, independently proven message graph; no fallback.
+
+        Unconfigured deployments keep the existing adapter. A partial scope is
+        refused, because writing on one graph while reading another loses mail.
+        """
+        if not self.inbox_graph and not self.inbox_prefix:
+            return self
+        if not self.inbox_graph or not self.inbox_prefix:
+            raise StoreUnproven("inbox graph and id prefix must be configured together")
+        if (not re.fullmatch(r"[a-z][a-z0-9]{0,31}", self.inbox_prefix)
+                or self.inbox_prefix == self.prefix):
+            raise StoreUnproven("inbox requires a distinct valid new-id prefix")
+        proof = self.prove_store()
+        if not isinstance(proof.graph, str) or not proof.graph:
+            raise StoreUnproven("work graph identity is UNKNOWN")
+        sibling = "#seeds-ephemeral"
+        if {self.inbox_graph, self.inbox_graph+sibling} & {proof.graph, proof.graph+sibling}:
+            raise StoreUnproven("inbox scope must not overlap work or its ephemeral sibling")
+        if self._inbox_scope is None:
+            self._inbox_scope = SdTracker(
+                repo=self.repo, timeout=self.timeout, store=self.store,
+                quipu=self.quipu, prefix=self.inbox_prefix, graph=self.inbox_graph)
+        return self._inbox_scope
+
+    def create(self, title: str, **fields) -> WorkItem:
+        # Capacity notifications and other generic producers also emit mail.
+        # Route them through the same scope as the explicit inbox command.
+        if is_message(title) and (self.inbox_graph or self.inbox_prefix):
+            return self.inbox_tracker().create(title, **fields)
+        return super().create(title, **fields)
 
     def prove_store(self) -> StoreProof:
         """`sd where --json` for the configured store, or raise StoreUnproven.
@@ -122,7 +179,7 @@ class SdTracker(BrTracker):
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout,
-                               **sdk_subprocess_options(read_operation="where"))
+                               **self._sdk_options(read_operation="where"))
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -152,6 +209,8 @@ class SdTracker(BrTracker):
             raise StoreUnproven(
                 f"seeds backend: sd reads {w.get('quipu_url')!r}, configured "
                 f"quipu is {self.quipu!r}")
+        if self.graph is not None and w.get("graph") != self.graph:
+            raise StoreUnproven("sd did not prove the configured inbox graph")
         if w.get("prefix") != self.prefix:
             raise StoreUnproven(
                 f"seeds backend: store {named} has prefix {w.get('prefix')!r}, "
@@ -634,7 +693,7 @@ class SdTracker(BrTracker):
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
         return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                              timeout=self.timeout, **sdk_subprocess_options(
+                              timeout=self.timeout, **self._sdk_options(
                                   read_operation=args[0] if args and args[0] in {
                                       "show", "list", "ready", "where", "search", "count", "info", "stats"
                                   } else None))
@@ -660,5 +719,6 @@ def br_like_tracker(get, backend: "str | None" = None, *, repo: "str | None" = N
     if backend == "seeds":
         return SdTracker(repo=repo, store=get("SHANTY_SD_STORE"),
                          quipu=get("SHANTY_SD_QUIPU"), prefix=get("SHANTY_SD_PREFIX"),
-                         **kw)
+                         inbox_graph=get("SHANTY_SD_INBOX_GRAPH"),
+                         inbox_prefix=get("SHANTY_SD_INBOX_PREFIX"), **kw)
     return BrTracker(repo=repo, extra_repos=parse_extra_repos(get(EXTRA_REPOS_KEY)), **kw)

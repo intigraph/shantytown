@@ -470,8 +470,13 @@ def _inbox(a, default="files"):
     # command that reports a different store than it wrote to is the exact lie
     # this repo exists to refuse, and it is worse than the missing default:
     # you would go looking in beads for a message that is not there.
-    if _backend(a, default) in BR_LIKE:
+    backend = _backend(a, default)
+    if backend in BR_LIKE:
         trk = _tracker(a, default)
+        if backend == "seeds":
+            scope = getattr(trk, "inbox_tracker", None)
+            if scope is not None:
+                trk = scope()
         from .br import items as br_items
         return TrackerInbox(trk, lambda: br_items(trk),
                             lambda: br_items(trk, include_closed=True),

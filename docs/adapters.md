@@ -312,6 +312,28 @@ An optional `SHANTY_STOP_JEV_COMMAND` classifies an open anchor at Stop send usi
 
 The four inferred outcomes are finished-unclosed (one close reminder per session and item), blocked on a named dependency (evidence reaches the lead), gave-up/looping (needs-decision escalation through the existing administrator route), and mid-work (a turn boundary). It never closes a bead, assigns work, pages or restarts anything. Existing haul and session-budget gates still apply. The stop event carries explicitly dated inferred advice; the drain labels it historical if the current anchor differs. Private verdict metadata under the deployment root’s `stop_outcomes` includes input/question hashes, probabilities, model, usage and latency for evaluation, without storing the message. Disable by unsetting the command.
 
+### Separate Seeds inbox graph
+
+A deployment can keep messages in a distinct named graph on the same selected
+Seeds store. Set both `SHANTY_SD_INBOX_GRAPH` and `SHANTY_SD_INBOX_PREFIX` in its
+deployment configuration. For example, a work prefix `project` can use a new
+message prefix `projectmail` and graph `https://tracker.example/project/inbox`.
+The new prefix must differ: Seeds allocates short IDs within a graph, so using
+the work prefix in a newly empty message graph could collide with work IDs.
+Migrated messages keep their original identifiers and remain readable and
+acknowledgeable under the new allocation prefix.
+
+The inbox command uses the scoped adapter for persistence, recipient reads,
+closed receipt lookup and acknowledgment. Generic producers creating an
+`inbox:` message use that same scope. Ordinary work operations and plate reads
+retain the work graph. Store identity, graph and prefix must be proved before
+an effect; partial configuration or a mismatched graph refuses without falling
+back to the work board. Other tracker backends keep their existing behavior.
+
+Unset both fields to retain the existing deployment. This is source support,
+not an automatic migration: enable the scope only at a reviewed import and
+writer cutover boundary that preserves pending deliveries and the TTL sweep.
+
 ### Remote Seeds plate reads
 
 `SdTracker` selects plate candidates and ready IDs by the requested owner,
