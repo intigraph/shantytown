@@ -13,6 +13,8 @@ import shutil
 import urllib.error
 import urllib.request
 
+from .launchable import BYPASS
+
 
 class ReadBudgetExceeded(RuntimeError):
     pass
@@ -77,8 +79,9 @@ def observe(cards, states, harness_for):
     for card, state, work, posture in states:
         row = result[card.name]
         row.update(state=state, work=work)
-        row["available"] = (row["harness"] == "codex" and state == "up"
-                            and work == "idle" and posture == "BYPASS")
+        row["available"] = (not getattr(card, "retired", False)
+                            and row["harness"] == "codex" and state == "up"
+                            and work == "idle" and posture == BYPASS)
     return list(result.values())
 
 
