@@ -535,7 +535,8 @@ class TrackerInbox:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
         return matches[0] if matches else None
 
-    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+    def deliver(self, to: str, body: str, frm: str | None = None,
+                *, slug: str | None = None) -> Message:
         title = f"{PREFIX} {body}"
         # If the concrete tracker declares a title cap, honour it HERE — a clean
         # refusal before the write beats bd rejecting the create with a validation
@@ -582,6 +583,8 @@ class TrackerInbox:
                 unit=unit,
             )
         fields = {"assignee": to, "labels": "inbox"}
+        if slug is not None:
+            fields["slug"] = slug
         if frm:
             fields["description"] = f"from {frm}"
         item = self._tracker.create(title, **fields)
