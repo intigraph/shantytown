@@ -521,6 +521,19 @@ def comments(tracker: BrTracker, bead_id: str) -> list[dict]:
     return [c for c in value if isinstance(c, dict)] if isinstance(value, list) else []
 
 
+class NothingWritten(RuntimeError):
+    """The tracker refused the write and says it wrote NOTHING (sd exit 4).
+
+    sd's exit 4 is a lost compare-and-set: its guard did not match, so the
+    server committed nothing. That is a definite outcome, not an unproven one,
+    and it must not read like a write that may have landed (aegis-epi: a lost
+    comment-index race printed only "RuntimeError" and tripped a rollback).
+    """
+
+
+SD_CONFLICT_EXIT = 4
+
+
 def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
     """Append a comment through br's file-safe comments subcommand."""
     path = None
@@ -536,6 +549,9 @@ def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
             # shell. Retry once on the primary store with the body on stdin.
             r = tracker._bd_in(tracker.repo, "comments", "add", bead_id,
                                "--file", "/dev/stdin", stdin=body)
+        if r.returncode == SD_CONFLICT_EXIT and getattr(tracker, "_tool", "br") == "sd":
+            raise NothingWritten(
+                f"sd comments add {bead_id} wrote nothing: {_failure_reason(r)[:300]}")
         if r.returncode != 0:
             raise RuntimeError(
                 f"br comments add {bead_id} failed: {r.stderr.strip()[:160]}")
