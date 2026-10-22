@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -160,6 +161,22 @@ def merge_notes(existing: str | None, addition: str) -> tuple[str, bool]:
     return old + NOTES_SEPARATOR + addition, True
 
 
+_BEARER_ANY = re.compile(r"(?i)(bearer\s+)(\S+)")
+
+
+def redact_cause(text: str) -> str:
+    """Mask credential-shaped text in a failure message. Call it BEFORE any cut.
+
+    The shared output redactor needs 24+ token characters, so a cut that lands
+    inside a token leaves a shorter fragment it cannot see (grant's review of
+    aegis-epi #360: a 400-char bound kept 10 token chars). Redact the whole
+    text first, then mask any value after "bearer" whatever its length.
+    """
+    from .stats import _redact_bearer_output
+    text = _redact_bearer_output(text.encode())[0].decode(errors="replace")
+    return _BEARER_ANY.sub(lambda m: m.group(1) + "[REDACTED]", text)
+
+
 def _failure_reason(r) -> str:
     """The human reason a br call failed.
 
@@ -175,10 +192,10 @@ def _failure_reason(r) -> str:
         err = (json.loads(r.stdout) or {}).get("error") or {}
         code, msg = err.get("code"), err.get("message")
         if code or msg:
-            return f"{code}: {msg}" if code and msg else str(code or msg)
+            return redact_cause(f"{code}: {msg}" if code and msg else str(code or msg))
     except (ValueError, AttributeError, TypeError):
         pass
-    return r.stderr.strip()[:200] or f"br exited {r.returncode} with no message"
+    return redact_cause(r.stderr.strip())[:200] or f"br exited {r.returncode} with no message"
 
 
 def rows_partial(tracker: BrTracker) -> "tuple[list[dict], list[str]]":
@@ -554,7 +571,7 @@ def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
                 f"sd comments add {bead_id} wrote nothing: {_failure_reason(r)[:300]}")
         if r.returncode != 0:
             raise RuntimeError(
-                f"br comments add {bead_id} failed: {r.stderr.strip()[:160]}")
+                f"br comments add {bead_id} failed: {redact_cause(r.stderr.strip())[:160]}")
     finally:
         if path:
             try:

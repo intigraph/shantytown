@@ -2500,11 +2500,11 @@ def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
     """An exception's message for stderr: one line, bounded, bearer-redacted.
 
     The type name alone hid WHY a write failed (aegis-epi). The message can
-    carry a tracker's stderr, so credential-shaped text is masked first.
+    carry a tracker's stderr, so the WHOLE text is redacted before the bound:
+    a cut inside a token would leave a fragment too short to recognise.
     """
-    from .stats import _redact_bearer_output
-    text = " ".join(str(exc).split())[:limit] or "no message"
-    return _redact_bearer_output(text.encode())[0].decode(errors="replace")
+    from .br import redact_cause
+    return redact_cause(" ".join(str(exc).split()))[:limit] or "no message"
 
 
 def main(argv: list[str] | None = None) -> int:
