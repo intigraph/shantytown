@@ -8,6 +8,8 @@ census, peer fanout, tree scan or priority advice is read.
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import hashlib
+import shutil
 import urllib.error
 import urllib.request
 
@@ -137,13 +139,17 @@ def command(a):
                 except Exception:
                     return None
             rows = observe(cards, states, running_harness)
+            tracker = cli._tracker(a)
+            if not isinstance(tracker, SdTracker):
+                raise ValueError("routing requires the configured Seeds reader")
+            proof = tracker.prove_store()
+            if not proof.quipu_url or not proof.graph:
+                raise ValueError("routing requires a proven remote graph")
+            sdk_path = shutil.which(tracker._bin)
+            if sdk_path is None:
+                raise ValueError("configured Seeds executable unavailable")
+            sdk_digest = hashlib.sha256(Path(sdk_path).read_bytes()).hexdigest()
             if any(row.get("available") for row in rows):
-                tracker = cli._tracker(a)
-                if not isinstance(tracker, SdTracker):
-                    raise ValueError("routing requires the configured Seeds reader")
-                proof = tracker.prove_store()
-                if not proof.quipu_url or not proof.graph:
-                    raise ValueError("routing requires a proven remote graph")
                 check_assignments(
                     rows, lambda owners: seeds_plate.owner_rows(
                         proof, None, plate_owners=owners, timeout=15).exact(),
@@ -151,6 +157,7 @@ def command(a):
         answer = dict(version=1, scope="review-routing", complete=True,
                       observed_at=datetime.now(timezone.utc).isoformat(), agents=rows,
                       capabilities=["inbox-retain-pointer-v1"],
+                      delivery_sdk_sha256=sdk_digest,
                       quipu_reads=usage["reads"], quipu_408s=usage["timeouts"])
         print(json.dumps(answer))
         return 0

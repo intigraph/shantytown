@@ -1875,7 +1875,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "best-effort live send. Default is ephemeral send-keys.")
     ib.add_argument("--retain-pointer", action="store_true",
                     help="with -d: retain the unread durable pointer after live "
-                         "delivery; avoid the automatic inbox retirement read")
+                         "delivery; on Seeds use a fresh delivery slug and avoid "
+                         "the automatic inbox retirement read")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
         "--count", action="store_true",
@@ -5954,7 +5955,16 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
-        item = box.deliver(a.agent, msg, frm=_me(a))
+        if getattr(a, "retain_pointer", False) and backend == "seeds":
+            # A fresh namespace avoids repeated probes of short-id collisions
+            # on a large board. This uses the SDK's ordinary --slug contract;
+            # persist-first and the store's compare-and-set remain unchanged.
+            import secrets
+            if not isinstance(box, TrackerInbox):
+                raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
+            item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
+        else:
+            item = box.deliver(a.agent, msg, frm=_me(a))
     except MessageTooLong as e:                  # PERMANENT: the message will never fit
         # Not a "could not tell" (2) — the store is fine; the message is too long,
         # and retrying it unchanged will fail identically. That is a REFUSED (1)

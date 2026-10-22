@@ -206,6 +206,30 @@ class _CappedTracker:
                         assignee=fields.get("assignee"))
 
 
+def test_seed_retention_uses_fresh_sdk_slug_without_retirement(tmp_path, monkeypatch):
+    import secrets
+    tracker = _CappedTracker()
+    class NoRetirement(TrackerInbox):
+        def mark_read(self, *args, **kwargs):
+            raise AssertionError("must not read the inbox to retire a retained pointer")
+    box = NoRetirement(tracker, lambda: [])
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    nonce = iter(("1" * 24, "2" * 24))
+    def fresh(size):
+        assert size == 12
+        return next(nonce)
+    monkeypatch.setattr(secrets, "token_hex", fresh)
+    class LiveTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text): pass
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: LiveTmux())
+    root = _root(tmp_path)
+    for _ in range(2):
+        assert main(["--root", str(root), "--backend", "seeds", "inbox", "-d",
+                     "--retain-pointer", "ian", "bounded route"]) == OK
+    assert [fields["slug"] for _, fields in tracker.created] == ["rr" + "1" * 24, "rr" + "2" * 24]
+
+
 def test_durable_REFUSES_a_too_long_message_and_does_not_call_it_cannot_tell(tmp_path, monkeypatch, capsys):
     """The bug: a message over the tracker's title cap failed with a leaked bd
     validation string, returned CANNOT_TELL (2, 'store maybe unreachable'), and
