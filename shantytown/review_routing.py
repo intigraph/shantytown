@@ -150,6 +150,7 @@ def command(a):
                     turn=int(datetime.now(timezone.utc).timestamp()) // 900)
         answer = dict(version=1, scope="review-routing", complete=True,
                       observed_at=datetime.now(timezone.utc).isoformat(), agents=rows,
+                      capabilities=["inbox-retain-pointer-v1"],
                       quipu_reads=usage["reads"], quipu_408s=usage["timeouts"])
         print(json.dumps(answer))
         return 0

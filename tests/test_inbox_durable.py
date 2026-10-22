@@ -86,6 +86,33 @@ def test_durable_persists_AND_sends_when_recipient_is_live(tmp_path, monkeypatch
     assert box.marked == [("ian", ["st-dur1"])], "only the live-delivered pointer closes"
 
 
+def test_explicit_retention_delivers_once_without_reading_the_inbox(tmp_path, monkeypatch, capsys):
+    class NoRetirementInbox(_RecordingInbox):
+        def mark_read(self, *args, **kwargs):
+            raise AssertionError("retention must not scan/retire inbox pointers")
+    box = NoRetirementInbox()
+    sent = []
+    monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
+    class LiveTmux:
+        def exists(self, pane): return True
+        def send(self, pane, text): sent.append((pane, text))
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: LiveTmux())
+    rc = main(["--root", str(_root(tmp_path)), "inbox", "-d", "--retain-pointer", "ian", "bounded route"])
+    assert rc == OK
+    assert len(box.delivered) == len(sent) == 1
+    assert "pointer retained" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("arguments", [["--retain-pointer", "ian", "message"],
+                                      ["-d", "--retain-pointer", "ian"],
+                                      ["--retain-pointer", "--count", "ian"]])
+def test_retention_requires_a_durable_send_before_any_reads(tmp_path, monkeypatch, arguments):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("invalid retention request reached inbox reader/writer")
+    monkeypatch.setattr(cli, "_inbox", forbidden)
+    assert main(["--root", str(_root(tmp_path)), "inbox", *arguments]) == REFUSED
+
+
 def test_durable_keeps_pointer_open_when_live_input_is_stranded(tmp_path, monkeypatch):
     box = _RecordingInbox()
     monkeypatch.setattr(cli, "_inbox", lambda a, **kw: box)
