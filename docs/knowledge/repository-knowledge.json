@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "cf243f0529a8888375bc6cf8e8d4b9c1d96161a380dd736560d16f6b2ba8fd84",
+      "source_sha256": "b910e60d6901cd73bad712fb6b20f592051b910ff9720d8cd3b855eb0ac3dd7f",
       "properties": {
         "startHereOrder": 2
       }
