@@ -62,6 +62,23 @@ class StoreProof:
     graph: "str | None" = None
 
 
+def check_inbox_config(work_prefix, inbox_graph, inbox_prefix):
+    """An inbox scope's configuration rules, checked before any SDK call."""
+    if not inbox_graph or not inbox_prefix:
+        raise StoreUnproven("inbox graph and id prefix must be configured together")
+    if not re.fullmatch(r"[a-z][a-z0-9]{0,31}", inbox_prefix) or inbox_prefix == work_prefix:
+        raise StoreUnproven("inbox requires a distinct valid new-id prefix")
+
+
+def check_inbox_graph(work_graph, inbox_graph):
+    """The inbox graph must be distinct from the proven work graph and its sibling."""
+    if not isinstance(work_graph, str) or not work_graph:
+        raise StoreUnproven("work graph identity is UNKNOWN")
+    sibling = "#seeds-ephemeral"
+    if {inbox_graph, inbox_graph+sibling} & {work_graph, work_graph+sibling}:
+        raise StoreUnproven("inbox scope must not overlap work or its ephemeral sibling")
+
+
 class SdTracker(BrTracker):
     """BrTracker over `sd`, pinned to one proven store."""
 
@@ -130,17 +147,8 @@ class SdTracker(BrTracker):
         """
         if not self.inbox_graph and not self.inbox_prefix:
             return self
-        if not self.inbox_graph or not self.inbox_prefix:
-            raise StoreUnproven("inbox graph and id prefix must be configured together")
-        if (not re.fullmatch(r"[a-z][a-z0-9]{0,31}", self.inbox_prefix)
-                or self.inbox_prefix == self.prefix):
-            raise StoreUnproven("inbox requires a distinct valid new-id prefix")
-        proof = self.prove_store()
-        if not isinstance(proof.graph, str) or not proof.graph:
-            raise StoreUnproven("work graph identity is UNKNOWN")
-        sibling = "#seeds-ephemeral"
-        if {self.inbox_graph, self.inbox_graph+sibling} & {proof.graph, proof.graph+sibling}:
-            raise StoreUnproven("inbox scope must not overlap work or its ephemeral sibling")
+        check_inbox_config(self.prefix, self.inbox_graph, self.inbox_prefix)
+        check_inbox_graph(self.prove_store().graph, self.inbox_graph)
         if self._inbox_scope is None:
             self._inbox_scope = SdTracker(
                 repo=self.repo, timeout=self.timeout, store=self.store,

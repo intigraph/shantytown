@@ -7,12 +7,13 @@ credentials stay in the inherited environment. No write retry is performed.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
 from .plate_capacity import assignment_lock, ensure_room, ensure_update_room, active, PlateFull
-from .sd import SdTracker
+from .sd import SdTracker, check_inbox_config, check_inbox_graph
 
 
 BOOLEANS = {'--json', '--robot', '--quiet', '-q', '--ephemeral', '--dry-run',
@@ -161,6 +162,45 @@ def run(arguments, tracker, execute, notify):
         return result
 
 
+def _proven(send, graph, prefix):
+    """`where --json` over `send` must report the expected graph and prefix."""
+    result = send(['where', '--json'])
+    try:
+        where = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        where = None
+    if (not isinstance(where, dict) or where.get('prefix') != prefix
+            or (graph is not None and where.get('graph') != graph)):
+        raise ValueError('selected SDK route did not prove the expected graph and prefix')
+    return where
+
+
+def inbox_route(binary, options, tracker, timeout):
+    """The inbox scope over the caller's SAME selected SDK route (aegis-tg5 F5).
+
+    The binary and options are the caller's, unchanged; only the graph and the
+    new-id prefix differ. Both the scope proof and the write use this route, so
+    no ambient `sd` is reached. Returns None when no inbox scope is configured,
+    and refuses when the options already name a graph: equivalence is unproven.
+    """
+    if not tracker.inbox_graph and not tracker.inbox_prefix:
+        return None
+    check_inbox_config(tracker.prefix, tracker.inbox_graph, tracker.inbox_prefix)
+    if any(o == '--graph' or o.startswith('--graph=') for o in options):
+        raise ValueError('selected SDK route already names a graph; inbox scope unproven')
+
+    def route(extra, prefix):
+        env = dict(os.environ, SEEDS_PREFIX=prefix)
+        return lambda args: subprocess.run([binary, *options, *extra, *args],
+                                           capture_output=True, text=True,
+                                           timeout=timeout, env=env)
+    work = _proven(route([], tracker.prefix), None, tracker.prefix)
+    check_inbox_graph(work.get('graph'), tracker.inbox_graph)
+    send = route(['--graph', tracker.inbox_graph], tracker.inbox_prefix)
+    _proven(send, tracker.inbox_graph, tracker.inbox_prefix)
+    return send
+
+
 def main():
     value = json.load(sys.stdin)
     binary, options, arguments = value['binary'], value['options'], value['arguments']
@@ -185,9 +225,9 @@ def main():
         lead = registry.get(owner).reports_to
         if not lead:
             raise ValueError('owner has no lead')
-        result = tracker.inbox_tracker()._bd(
-            'create', f'inbox: capacity: {item_id} retained in pool; {owner} full',
-            '--assignee', lead, '--labels', 'inbox', '--json')
+        send = inbox_route(binary, options, tracker, value['timeout']) or execute
+        result = send(['create', f'inbox: capacity: {item_id} retained in pool; {owner} full',
+                       '--assignee', lead, '--labels', 'inbox', '--json'])
         if result.returncode:
             raise ValueError('lead delivery unproven')
     result = run(arguments, tracker, execute, notify)

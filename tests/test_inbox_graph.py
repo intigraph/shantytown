@@ -184,10 +184,37 @@ def test_sdk_capacity_notice_uses_same_message_scope(monkeypatch,separate):
         notify('worker','work-retained')
         return subprocess.CompletedProcess(arguments,0,'{}','')
     monkeypatch.setattr(producer_capacity,'run',retained)
+    selected=['/fixture/sd','--quipu','https://graph.example']
     monkeypatch.setattr(producer_capacity.sys,'stdin',io.StringIO(json.dumps({
-        'binary':'/fixture/sd','options':[],
+        'binary':selected[0],'options':selected[1:],
         'arguments':['create','work','--assignee','worker'],'timeout':10})))
     assert producer_capacity.main()==0
     effects=[entry for entry in calls if 'create' in entry[0]]
     assert len(effects)==1
     assert effects[0][1:]==((INBOX,'messages') if separate else (BOARD,'work'))
+    # Every SDK call, scope proofs included, uses the caller's SELECTED binary and
+    # options (grant, review of #356): the inbox route only adds the graph/prefix.
+    assert calls and all(cmd[:len(selected)]==selected for cmd,_,_ in calls), calls
+
+
+def test_sdk_capacity_notice_refuses_when_selected_route_names_a_graph(monkeypatch):
+    import io
+    from shantytown import producer_capacity,files
+    calls=fake_sdk(monkeypatch)
+    monkeypatch.setenv('SHANTY_SD_QUIPU','https://graph.example')
+    monkeypatch.setenv('SHANTY_SD_PREFIX','work')
+    monkeypatch.setenv('SHANTY_ROOT','/fixture')
+    monkeypatch.setenv('SHANTY_SD_INBOX_GRAPH',INBOX)
+    monkeypatch.setenv('SHANTY_SD_INBOX_PREFIX','messages')
+    monkeypatch.delenv('SHANTY_SD_STORE',raising=False)
+    monkeypatch.setattr(files,'FilesRegistry',lambda *a:Namespace(get=lambda owner:Namespace(reports_to='lead')))
+    def retained(arguments,tracker,execute,notify):
+        notify('worker','work-retained')
+        return subprocess.CompletedProcess(arguments,0,'{}','')
+    monkeypatch.setattr(producer_capacity,'run',retained)
+    monkeypatch.setattr(producer_capacity.sys,'stdin',io.StringIO(json.dumps({
+        'binary':'/fixture/sd','options':['--quipu','https://graph.example','--graph',BOARD],
+        'arguments':['create','work','--assignee','worker'],'timeout':10})))
+    with pytest.raises(ValueError, match='already names a graph'):
+        producer_capacity.main()
+    assert not [entry for entry in calls if 'create' in entry[0]]
