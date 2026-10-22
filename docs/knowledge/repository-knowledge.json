@@ -1,6 +1,6 @@
 {
-  "source_revision": "da84e7cb5a953a62b924207aa7eeb42b23f30cd1",
-  "reviewed_at": "2026-10-22T03:37:46.721193Z",
+  "source_revision": "1170da27eeb236d7d92086dc2a56d330c9e784c6",
+  "reviewed_at": "2026-10-22T05:26:02.590321Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "d0c3567cdc97b5d5c0a6651efaab199c11fc2353714c11397ab645c028091b3f",
+      "source_sha256": "e4be60e102ee38a1200216f6cf9cac659fe59767e86015c93957c3e0c657a0a3",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
