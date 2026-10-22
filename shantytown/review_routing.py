@@ -158,6 +158,7 @@ def command(a):
                       observed_at=datetime.now(timezone.utc).isoformat(), agents=rows,
                       capabilities=["inbox-retain-pointer-v1"],
                       delivery_sdk_sha256=sdk_digest,
+                      routing_held=bool(cli.quiet_time_mod.read(Path(a.root)).held),
                       quipu_reads=usage["reads"], quipu_408s=usage["timeouts"])
         print(json.dumps(answer))
         return 0
