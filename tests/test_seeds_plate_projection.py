@@ -494,14 +494,15 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
         wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
         if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
             wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
-        return answer(wire)
+        from shantytown.seeds_inbox import FIELDS
+        return answer([r for r in wire if r["predicate"] in FIELDS])
 
     closed = [False]
     monkeypatch.setattr(seeds_plate, "_query", query)
     box = TrackerInbox(tracker, lambda: pytest.fail("whole board read"),
                        items_for=tracker.inbox_items)
     assert {message.id for message in box.unread("worker")} == {"test-modern", "test-legacy"}
-    assert len(queries) == 2  # one discovery, one bounded field projection; both prefixes
+    assert len(queries) == 1  # fresh combined metadata, format and guard observation
     assert "inbox:" in queries[0] and "mail:" in queries[0]
     assert G + "#seeds-ephemeral" in queries[0]
     # The admitted status vocabulary includes closed even for unread reads;
@@ -509,11 +510,11 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     assert '"deferred", "closed"))' not in queries[0]
     closed[0] = True
     assert box.find_delivery("worker", "delivered").read
-    assert len(queries) == 4
-    assert '"deferred", "closed"))' in queries[2]
+    assert len(queries) == 2
+    assert '"deferred", "closed"))' in queries[1]
 
 
-@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "disappeared", "nonmessage"])
+@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "missingfield", "nonmessage"])
 def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
     from shantytown.answer import PartialAnswer
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
@@ -525,13 +526,14 @@ def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
         calls.append(text)
         if fault == "offline":
             raise OSError("unavailable")
-        if fault == "disappeared" and len(calls) > 1:
-            return answer([])
         wire = fields(title="actual work" if fault == "nonmessage" else "inbox: payload",
                       assignee="other" if fault == "foreign" else "worker")
         if fault == "ambiguous":
             wire += fields(title="inbox: contradictory", status="closed")
-        return answer(wire)
+        if fault == "missingfield":
+            wire = [r for r in wire if r["predicate"] != seeds_plate.SCHEMA + "identifier"]
+        from shantytown.seeds_inbox import FIELDS
+        return answer([r for r in wire if r["predicate"] in FIELDS])
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     with pytest.raises(PartialAnswer):
@@ -638,3 +640,30 @@ def test_feed_type_missing_is_unknown_not_an_actionable_task(monkeypatch):
     from shantytown.answer import PartialAnswer
     with pytest.raises(PartialAnswer):
         seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()
+
+
+def test_unassigned_counts_exclude_decisions_in_both_graphs(monkeypatch):
+    from rdflib import Dataset, Literal, Namespace, RDF, URIRef
+    data = Dataset()
+    schema = Namespace(seeds_plate.SCHEMA)
+    seeds = Namespace(seeds_plate.SEEDS)
+    for suffix in ("", "#seeds-ephemeral"):
+        graph = data.graph(URIRef(G + suffix))
+        for name, priority, label, owner in (
+            ("ordinary", 1, "ordinary", None),
+            ("decision", 0, "decision-needed", None),
+            ("owned", 0, "ordinary", "worker"),
+            ("low", 3, None, None),
+        ):
+            node = URIRef(seeds_plate.SEEDS + "item/" + name + suffix)
+            graph.add((node, RDF.type, schema.Action))
+            graph.add((node, seeds["ontology/status"], Literal("open")))
+            graph.add((node, seeds["ontology/priority"], Literal(priority)))
+            if label is not None:
+                graph.add((node, schema.keywords, Literal(label)))
+            if owner is not None:
+                graph.add((node, schema.agent, Literal(owner)))
+    def query(proof, text, timeout):
+        return answer([{"n": int(row[0])} for row in data.query(text)])
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unassigned_counts(PROOF) == (4, 2)
