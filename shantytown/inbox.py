@@ -607,11 +607,28 @@ class TrackerInbox:
         preflight. Transport failures propagate; they never trigger a listing.
         This is a read, and mark_read still checks each receipt before closing.
         """
+        wanted = list(dict.fromkeys(ids))
+        if not wanted:
+            return []
+        reader = getattr(self._tracker, "inbox_receipts", None)
+        if callable(reader):
+            # The metadata reader is already exact and graph-scoped. Hydrating
+            # each selected item here would undo the bounded receipt read.
+            items = reader(me, wanted).exact()
+            by_id = {item.id: item for item in items}
+            if len(by_id) != len(items) or not set(by_id).issubset(wanted):
+                raise ValueError("selected receipt identities differ")
+        else:
+            by_id = {}
+            for item_id in wanted:
+                try:
+                    by_id[item_id] = self._tracker.get(item_id)
+                except LookupError:
+                    continue
         messages = []
-        for item_id in dict.fromkeys(ids):
-            try:
-                item = self._tracker.get(item_id)
-            except LookupError:
+        for item_id in wanted:
+            item = by_id.get(item_id)
+            if item is None:
                 continue
             if item.status not in ("open", "hooked", "in_progress", "blocked",
                                    "deferred", "closed", "tombstone"):

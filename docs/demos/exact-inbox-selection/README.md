@@ -1,9 +1,12 @@
 # Acknowledge known receipts without listing the whole inbox
 
-The same private receipt is acknowledged using the base CLI function and the
-candidate. Watch `enumerate` fall from one to zero; exact GETs rise from one to
-two, and the intended close remains one. The second GET still validates the
-receipt immediately before closing. Other messages are explicitly unenumerated.
+The same private named receipt is acknowledged with the original selector at
+`e834ef6395e0b4edae094f29515177006d5f5ba5` and the candidate selector. Both avoid
+queue enumeration. Watch hydrated `get` calls fall from one to zero: selection
+now uses exact receipt metadata, while a separate fresh metadata read still
+validates the receipt immediately before its one close. Other messages remain
+explicitly unenumerated. Adapters without `inbox_receipts` keep their existing
+per-ID compatibility path.
 
 ```sh
 python3 docs/demos/exact-inbox-selection/reproduce.py

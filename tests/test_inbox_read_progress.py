@@ -223,3 +223,75 @@ def test_count_with_explicit_ids_keeps_whole_queue_read_and_zero_writes(tmp_path
     assert cli._inbox_read(a, 'reader') == cli.OK
     assert capsys.readouterr().out.strip() == '3'
     assert len(box.unread('reader')) == 3
+
+
+def metadata_box(tmp_path, monkeypatch):
+    """A metadata-capable adapter whose hydrated get must never be reached."""
+    from shantytown.answer import Answer
+    tracker, box, messages = setup_box(tmp_path, monkeypatch)
+    rows = {m.id: tracker.get(m.id) for m in messages}
+    calls, writes = [], []
+    def receipts(me, identifiers):
+        calls.append((me, list(identifiers)))
+        # Adapter ordering need not equal the caller's selection ordering.
+        return Answer.complete_read([rows[i] for i in reversed(identifiers) if i in rows],
+                                    how='fixture exact metadata')
+    monkeypatch.setattr(tracker, 'inbox_receipts', receipts, raising=False)
+    monkeypatch.setattr(tracker, 'get', lambda *a: pytest.fail('no per-ID hydration'))
+    monkeypatch.setattr(tracker, 'update', lambda i, **kw: writes.append((i, kw)))
+    box._items = lambda: pytest.fail('no inbox enumeration')
+    return tracker, box, messages, rows, calls, writes
+
+
+def test_named_metadata_selection_preserves_order_and_fresh_preclose(tmp_path, monkeypatch, capsys):
+    _, box, messages, _, calls, writes = metadata_box(tmp_path, monkeypatch)
+    identifiers = [messages[1].id, messages[0].id]
+    assert [m.id for m in box.unread_selected('reader', identifiers*2)] == identifiers
+    assert calls == [('reader', identifiers)]
+    calls.clear()
+    a = args(); a.read_id = identifiers*2
+    assert cli._inbox_read(a, 'reader') == cli.OK
+    assert calls == [('reader', identifiers), ('reader', identifiers[:1]),
+                     ('reader', identifiers[1:])]
+    assert writes == [(i, {'status': 'closed'}) for i in identifiers]
+    output = capsys.readouterr().out
+    assert output.index('payload 1') < output.index('payload 0')
+
+
+@pytest.mark.parametrize('bad_kind', ['foreign', 'closed', 'ordinary', 'missing'])
+def test_named_metadata_selection_refuses_whole_batch_before_close(tmp_path, monkeypatch,
+                                                                 capsys, bad_kind):
+    from dataclasses import replace
+    _, _, messages, rows, _, writes = metadata_box(tmp_path, monkeypatch)
+    row = rows[messages[1].id]
+    if bad_kind == 'foreign': rows[row.id] = replace(row, assignee='other')
+    elif bad_kind == 'closed': rows[row.id] = replace(row, status='closed')
+    elif bad_kind == 'ordinary': rows[row.id] = replace(row, title='ordinary work')
+    else: del rows[row.id]
+    a = args(); a.read_id = [m.id for m in messages[:2]]
+    assert cli._inbox_read(a, 'reader') == cli.REFUSED
+    assert writes == [] and 'Nothing marked read' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('failure', ['partial', 'unexpected', 'duplicate', 'timeout'])
+def test_named_metadata_uncertainty_never_hydrates_or_closes(tmp_path, monkeypatch,
+                                                          capsys, failure):
+    from shantytown.answer import Answer
+    tracker, _, messages, rows, _, writes = metadata_box(tmp_path, monkeypatch)
+    def receipts(me, identifiers):
+        if failure == 'partial':
+            return Answer.capped([], how='fixture', caveat='truncated')
+        if failure == 'timeout': raise TimeoutError('fixture')
+        selected = rows[messages[0].id]
+        values = [selected, selected] if failure == 'duplicate' else [rows[messages[2].id]]
+        return Answer.complete_read(values, how='fixture malformed identity')
+    monkeypatch.setattr(tracker, 'inbox_receipts', receipts)
+    a = args(); a.read_id = [messages[0].id]
+    assert cli._inbox_read(a, 'reader') == cli.CANNOT_TELL
+    assert writes == [] and not capsys.readouterr().out
+
+
+def test_empty_named_metadata_selection_does_not_read(tmp_path, monkeypatch):
+    _, box, _, _, calls, writes = metadata_box(tmp_path, monkeypatch)
+    assert box.unread_selected('reader', []) == []
+    assert calls == writes == []
