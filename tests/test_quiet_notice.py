@@ -138,3 +138,54 @@ def test_pending_delivery_metric_retains_failures_and_corruption(tmp_path):
     assert 'notice_pending 0\n' in quiet_notice.metrics(tmp_path)
     (tmp_path/'notify/quiet_time_delivery.json').write_text('broken')
     assert 'notice_pending 1\n' in quiet_notice.metrics(tmp_path)
+
+
+@pytest.mark.parametrize("legacy_held", [True, False])
+def test_actual_cli_first_clear_migrates_before_legacy_write(tmp_path, monkeypatch, legacy_held):
+    from shantytown import cli, config, notify
+    folder = tmp_path / 'notify'
+    folder.mkdir()
+    legacy = folder / 'gaming_hold.json'
+    if legacy_held:
+        legacy.write_text('{"local":{"key":"held:media","risk":0,"failure":false}}')
+    clear = quiet.Status((('media', quiet.Observation('clear')),))
+    reg, panes, sent = roster(), SimpleNamespace(exists=lambda p: True), []
+    monkeypatch.setattr(config, 'load', lambda root: SimpleNamespace(quiet_time=SimpleNamespace(detectors=[])))
+    monkeypatch.setattr(cli.quiet_time_mod, 'probe', lambda root: clear)
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_panes', lambda a: panes)
+    monkeypatch.setattr(notify, 'push_to_own_pane', lambda r, p, n, text: sent.append((n, text)) or n)
+    monkeypatch.setattr(notify, 'push_to_admin', lambda *a: pytest.fail('unexpected admin delivery'))
+    args = SimpleNamespace(root=tmp_path, kind='all', metrics=None, slowdown=False,
+                           probe=True, status=False, enable_detection=False,
+                           disable_detection=False, clear=False)
+    assert cli._cmd_hold(args) == 0
+    assert len(sent) == (2 if legacy_held else 0)
+    assert all('LIFTED' in text for _, text in sent)
+    if legacy_held:
+        assert json.loads(legacy.read_text())['local']['key'] == 'clear:'
+    sent.clear()
+    assert cli._cmd_hold(args) == 0
+    assert sent == []
+
+
+def test_actual_cli_journal_failure_retains_legacy_for_retry(tmp_path, monkeypatch):
+    from shantytown import cli, config, notify
+    (tmp_path / 'notify').mkdir()
+    legacy = tmp_path / 'notify/gaming_hold.json'
+    raw = '{"local":{"key":"held:media","risk":0,"failure":false}}'
+    legacy.write_text(raw)
+    clear = quiet.Status((('media', quiet.Observation('clear')),))
+    reg, panes = roster(), SimpleNamespace(exists=lambda p: True)
+    monkeypatch.setattr(config, 'load', lambda root: SimpleNamespace(quiet_time=SimpleNamespace(detectors=[])))
+    monkeypatch.setattr(cli.quiet_time_mod, 'probe', lambda root: clear)
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_panes', lambda a: panes)
+    monkeypatch.setattr(quiet_notice, 'write_json_atomic', lambda *a: (_ for _ in ()).throw(OSError('private journal failure')))
+    monkeypatch.setattr(notify, 'push_to_own_pane', lambda *a: pytest.fail('unexpected pane delivery'))
+    monkeypatch.setattr(cli, '_gaming_advisory', lambda *a: pytest.fail('legacy state must survive'))
+    args = SimpleNamespace(root=tmp_path, kind='all', metrics=None, slowdown=False,
+                           probe=True, status=False, enable_detection=False,
+                           disable_detection=False, clear=False)
+    assert cli._cmd_hold(args) == 0
+    assert legacy.read_text() == raw

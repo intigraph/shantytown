@@ -12491,9 +12491,6 @@ def _cmd_hold(a) -> int:
             tmp.unlink(missing_ok=True)
     print(status.render())
     if not a.status:
-        sent = _gaming_advisory(a, status)
-        if sent:
-            print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
         # Hold/lift delivery is operational, not routine budget advice. The
         # routine advisory filter deliberately logs risk-zero transitions.
         from . import quiet_notice
@@ -12504,6 +12501,12 @@ def _cmd_hold(a) -> int:
                 print("quiet-time transition delivered: " + ", ".join(notified))
         except Exception as exc:
             print(f"quiet-time transition delivery UNKNOWN ({type(exc).__name__})", file=sys.stderr)
+        else:
+            # Migrate/journal the old held state before the legacy writer can
+            # replace it with clear. On failure retain it for the next probe.
+            sent = _gaming_advisory(a, status)
+            if sent:
+                print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
         # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
         # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
