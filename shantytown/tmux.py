@@ -104,6 +104,22 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
 
 
+def _codex_owned_activity(screen: str, text: str) -> bool:
+    """Read runtime activity without treating our framed input as chrome.
+
+    Mask only a proven exact owned composer, preserving its prompt and row
+    count so the bounded chrome window still includes real activity above it.
+    Unrecognized or foreign frames retain the conservative activity reader.
+    """
+    from . import triage
+    framed = triage.codex_composer(screen)
+    if framed is not None and _codex_owned_input(screen, text):
+        prefix, separator, suffix = screen.rpartition(framed)
+        if separator:
+            screen = prefix + "›" + "\n" * framed.count("\n") + suffix
+    return triage.mid_flight(screen)
+
+
 def _codex_queued(screen: str, text: str) -> bool:
     """Measured queue chrome, paired with this message's preview."""
     from .triage import strip_attrs
@@ -714,7 +730,7 @@ class Tmux:
                     raise PaneSubmissionUnverified(
                         "UNVERIFIED: busy composer ownership/runtime changed; no submission key sent")
                 self._refuse_in_mode(pane, sent=len(chunks))
-                submit_key = "Tab" if triage.mid_flight(fresh) else "Enter"
+                submit_key = "Tab" if _codex_owned_activity(fresh, text) else "Enter"
                 before = fresh
         subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
         if codex:
@@ -743,7 +759,7 @@ class Tmux:
 
     def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
-        was_busy = triage.mid_flight(before)
+        was_busy = _codex_owned_activity(before, text)
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
         deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
@@ -785,7 +801,7 @@ class Tmux:
                 # the runtime may have exited or become unreadable meanwhile.
                 if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
-                busy = triage.mid_flight(screen)
+                busy = _codex_owned_activity(screen, text)
                 self._refuse_in_mode(pane, sent=1)
                 subprocess.run(self._cmd("send-keys", "-t", pane,
                                          "Tab" if busy else "Enter"), check=True)

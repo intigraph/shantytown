@@ -95,3 +95,29 @@ def test_copy_mode_entered_during_settle_blocks_initial_tab(monkeypatch):
     with pytest.raises(RuntimeError, match='copy-mode control'):
         pane._send('private-fixture', BODY)
     assert submit_keys(calls) == []
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("still_busy", [False, True])
+def test_owned_busy_quote_is_not_runtime_chrome(monkeypatch, wrapped, still_busy):
+    body = "Please report whether Working (esc to interrupt) appears."
+    rendered = body.replace("Working", "\n  Working") if wrapped else body
+    owned = "\x1b[1m›\x1b[0m " + rendered + FOOTER
+    fresh = ("Working (esc to interrupt)\n" if still_busy else "") + owned
+    queued = ("Working (esc to interrupt)\n"
+              "Messages to be submitted after next tool call\n  ↳ " + body + "\n" + READY)
+    pane, calls = transport(monkeypatch, [BUSY, fresh, queued if still_busy else BUSY])
+    if still_busy:
+        with pytest.raises(tmux.PaneSubmissionUnverified, match="queued"):
+            pane._send("private-fixture", body)
+    else:
+        pane._send("private-fixture", body)
+    assert submit_keys(calls) == ["Tab" if still_busy else "Enter"]
+
+
+def test_owned_retry_ignores_quote_after_busy_turn_ends(monkeypatch):
+    body = "Please report whether Working (esc to interrupt) appears."
+    owned = "\x1b[1m›\x1b[0m " + body + FOOTER
+    pane, calls = transport(monkeypatch, [owned, owned, owned, owned, BUSY])
+    pane.submit_owned("private-fixture", body)
+    assert submit_keys(calls) == ["Enter"]
