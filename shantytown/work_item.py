@@ -117,7 +117,7 @@ def command(args, tracker):
             item = current
             prospective = asdict(item) | fields
         if owner and active(prospective, owner):
-            ensure_room(tracker, owner, item)
+            ensure_room(tracker, owner, item, candidate=prospective)
         if not args.dry_run:
             from .br import BrTracker
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
