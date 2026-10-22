@@ -9,13 +9,17 @@
 
 ## Assignment capacity
 
-A crew member may own at most ten active work items. Open, hooked,
+Ordinary assignments are capped at ten active work items per crew member. Open, hooked,
 in-progress and blocked tasks count; closed, tombstoned and deferred work,
 future-dated deferrals, messages and permanent records do not. `st crew`
 shows `plate: N/10`, and its JSON rows expose `plate_size` and `plate_cap`.
-An unreadable count is UNKNOWN (`null` in JSON), never zero.
+An unreadable count is UNKNOWN (`null` in JSON), never zero. A full refusal lists
+the exact `counted_ids`, including blocked work that is absent from the visible
+ready plate. Closing inbox messages or repooling excluded alarm records does
+not free a work slot. Admission reads fresh owner membership; it never borrows
+the frozen observation used to render a crew report.
 
-`st go` refuses a new assignment at capacity before sending or updating the
+`st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
 unknown count refuses without creating anything. Dry runs make no writes.
@@ -23,11 +27,23 @@ The exact-ID work update path applies the same gate to assignment and
 reactivation. Haul/feed may resume an already-owned active item at ten because
 that does not add a slot; existing overfull plates are not silently repooled.
 
+A proven priority-zero item may acquire an owner above the cap. A technical
+blocker uses the existing `st work defer ... bead --dependency-reason ...`
+priority-inheritance path to become P0; a `blocks-p0` label alone is insufficient.
+The count must still be complete and current, and all other ownership,
+dispatch, governor and operator guards remain in force. Before a mutating
+attempt, the local owner lock protects a durable `overflow_admission` record in
+`~/.local/state/shantytown/plate-capacity/overflow.jsonl`, with the item, owner,
+count and counted IDs. A create records the requested title and an unknown item
+ID. This records admission, **not** backend commit or delivery: a timeout may
+follow a committed write, so never retry it from this journal. A journal write
+failure refuses before mutation. Pure plans and dry runs write no record.
+
 Cooperating assignment commands on one host serialize admission and mutation.
 The configured owner reader must cover all selected stores; partial reads
 refuse. This is not an atomic cross-host backend limit: direct tracker writes
 and independent writers on another host require a backend admission contract
-or a single assignment writer. No force or hold override bypasses capacity.
+or a single assignment writer. No force or hold override grants a cap exception.
 
 ## The whole surface
 
@@ -1965,6 +1981,15 @@ only when no detector supplies a healthy observation and at least one is unknown
 the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.
+
+Scheduled probes deliver operational hold/lift transitions to live crew panes,
+separately from routine budget advice. Failed pane deliveries remain pending.
+An unknown detector or failed slowdown verification warns the administrator;
+a continuous hold lasting 30 minutes warns once and never clears automatically.
+Before honouring a hold copied from notes, run `st fleet hold all --status`.
+With the default 120-second lift delay and minute probes, a continuously negative
+media signal clears within 180 seconds. A message saying one reason ended does
+not override another active reason or the budget governor.
 
 ```toml
 [[quiet_time.detector]]
