@@ -1605,6 +1605,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--review-routing", action="store_true",
+                    help="bounded local identity/pane observation; no full crew census")
     cr.add_argument("--no-priority-advice", action="store_true",
                     help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
@@ -2553,6 +2555,9 @@ def _run_command(a) -> int:
     if a.cmd == "defer":
         return _cmd_defer(a)
     if a.cmd == "crew":
+        if getattr(a, "review_routing", False):
+            from .review_routing import command
+            return command(a)
         return _cmd_crew(a)
     if a.cmd == "roles":
         # aegis-fagvi: one noun, three verbs. `set`/`sync` reuse the same
