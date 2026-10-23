@@ -496,7 +496,15 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
     missing pane marker preserves the ordinary non-tmux fallback; a present but
     stale/unresolvable marker refuses attribution, exactly as the stop path does.
     """
-    sender = _me(a)
+    from .actor_identity import authenticated_actor, IdentityError
+    try:
+        authenticated = authenticated_actor()
+    except IdentityError as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return None, False
+    sender = authenticated or _me(a)
+    if authenticated and getattr(a, "me", None) not in (None, authenticated):
+        return None, False
     if not sender:
         return None, True
     if not os.environ.get("TMUX_PANE"):
@@ -516,8 +524,9 @@ def _wire(a) -> Dispatcher:
     # One resolution, the same one `st inbox` attributes with — a coordinator must
     # not be one name on a message and another on the work it hands out.
     from .feed_audit import FeedAudit
+    from .actor_identity import authenticated_actor
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
-                      governor=_dispatch_gate(a), sender=_me(a),
+                      governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
                       audit=FeedAudit(Path(a.root)))
 
 
@@ -2533,7 +2542,15 @@ def _main(a, argv: list[str] | None = None) -> int:
             a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
                       "tend", "window"})):
         try:
+            from .actor_identity import authenticated_actor, IdentityError
+            # The trusted root introducer may create an isolated child; it is
+            # not an agent and cannot use this exception to send/work as one.
+            if not (os.geteuid() == 0 and a.cmd in {"new", "start", "cycle"}):
+                authenticated_actor()
             return _run_command(a)
+        except IdentityError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except NamespaceUnconfigured as e:
             print(f"  {e}", file=sys.stderr)
             return REFUSED
@@ -5815,6 +5832,9 @@ def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
     attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
     import shlex
     import subprocess
+    from .actor_identity import POLICY_PATH, IdentityError
+    if POLICY_PATH.exists():
+        raise IdentityError("cross-host live attribution needs a key-authenticated broker; durable sender remains verified")
     q = shlex.quote
     remote_cmd = (
         (f"SHANTY_AGENT={q(sender)} " if sender else "")
@@ -5840,6 +5860,7 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
     was up and busy, while `st go` reached the same pane through the peer path.
     """
     import subprocess
+    from .actor_identity import IdentityError
     from .deployment import local_host
     local = local_host(a.root)
     if local is None:
@@ -5851,6 +5872,8 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
         return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        return False, str(e)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
     if res.returncode == OK:
@@ -5895,8 +5918,12 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         print("\n  0 writes. 1 relay.")
         return OK
     import subprocess
+    from .actor_identity import IdentityError
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -13826,6 +13853,10 @@ def _actor() -> str:
     ambiguity permanently. `unknown` when neither is readable: this is an audit
     line, so it must be able to say it does not know rather than guess.
     """
+    from .actor_identity import authenticated_actor
+    verified = authenticated_actor()
+    if verified:
+        return verified
     who = os.environ.get("SHANTY_AGENT")
     if who:
         return who
