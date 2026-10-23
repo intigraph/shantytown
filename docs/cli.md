@@ -353,6 +353,15 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
+A `closed:` deferral with a marker-only reason can resume automatically when
+the named item closes. The required one-line `--dependency-reason` and the
+command's exact scope flag are informational metadata; they do not turn that
+reason into a prose gate. Any additional prose, historical notes, unknown
+fields or extra resume markers still require judgement. Human, access,
+external and parked labels, future deadlines and other open dependencies
+continue to hold the item. The scheduled sweep reads the complete item and its
+condition again before reopening it.
+
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
 command, path, URL or query. Each binding names one item, producer, host, unit,
