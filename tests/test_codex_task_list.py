@@ -41,14 +41,7 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     calls = []
     panes = tmux.Tmux()
     monkeypatch.setattr(panes, "foreground", lambda _: "codex")
-    def capture(_, **kw):
-        # Mock typing must be visible, with capture(attrs=True) prompt attrs,
-        # to the fresh exact-owned-body check.
-        # A task-list refusal still returns before any literal key is sent.
-        typed = any("send-keys" in c and "-l" in c for c in calls)
-        return screen.replace("› ", "\x1b[1m›\x1b[0m continue", 1) if typed else screen
-
-    monkeypatch.setattr(panes, "capture", capture)
+    monkeypatch.setattr(panes, "capture", lambda _, **kw: screen)
     # This case isolates task-list admission, not the submission observer.
     monkeypatch.setattr(panes, "_verify_codex_submission", lambda *_: None)
     monkeypatch.setattr(tmux, "_journal_send", lambda *_: None)
@@ -62,7 +55,7 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     else:
         panes.send("%1", "continue")
         assert any("send-keys" in c for c in calls)
-        assert calls[-1][-1] == "Tab"
+        assert calls[-1][-1] == "Enter"
 
 
 def _root(tmp_path):

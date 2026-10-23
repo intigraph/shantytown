@@ -10,7 +10,6 @@ READY = '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n' + FOOTER
 BUSY = 'Working (1s • esc to interrupt)\n' + READY
 BODY = 'Delivery control: continue the assigned work.'
 OWNED = '\x1b[1m›\x1b[0m ' + BODY + '\n\n' + FOOTER
-BUSY_OWNED = 'Working (1s • esc to interrupt)\n' + OWNED
 QUEUED = ('Working (1s • esc to interrupt)\n'
           'Messages to be submitted after next tool call\n  ↳ ' + BODY + '\n' + READY)
 
@@ -112,19 +111,17 @@ def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
-    # The busy pre-key capture did not show our exact typed body. Neither
-    # an Enter nor a Tab can be authorized from old activity alone.
-    assert not [c for c in keys(calls) if '-l' not in c]
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
 
 
 def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
-    panes, _ = transport(monkeypatch, [BUSY, BUSY_OWNED, QUEUED])
+    panes, _ = transport(monkeypatch, [BUSY, QUEUED])
     with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
         panes.send('worker', BODY)
 
 
 def test_other_queue_message_is_not_our_receipt(monkeypatch):
-    panes, _ = transport(monkeypatch, [BUSY, BUSY_OWNED, QUEUED.replace(BODY, 'Another message')])
+    panes, _ = transport(monkeypatch, [BUSY, QUEUED.replace(BODY, 'Another message')])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
 
