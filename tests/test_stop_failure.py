@@ -52,7 +52,12 @@ def test_real_hook_payload_event_inbox_and_fallback_dedup(tmp_path):
                              plate=lambda name: ("fixture-item", "in_progress"), deliver=deliver)
     pending = events.pending("admin")
     assert len(pending) == len(inbox.unread("admin")) == 1
-    assert pending[0].reason == "stop-failure"
+    assert pending[0].kind == pending[0].reason == "stop-failure"
+    assert pending[0].error == PAYLOAD["error"]
+    assert pending[0].error_details == PAYLOAD["error_details"]
+    assert pending[0].last_assistant_message == PAYLOAD["last_assistant_message"]
+    persisted = json.loads(next((tmp_path / "events").glob("ev-*.json")).read_text())
+    assert persisted["kind"] == "stop-failure"
     detail = json.loads(pending[0].detail)
     assert detail["kind"] == "stop-failure"
     assert all(detail[k] == v for k, v in PAYLOAD.items())
@@ -131,7 +136,8 @@ def test_provisioned_async_hook_and_live_snapshot(tmp_path):
     assert stop_failure.verify_wiring(tmp_path, CARD.name, CARD.pane, lambda p: "claude") == "missing"
 
 
-def test_main_reads_hook_stdin_with_existing_identity_and_backend(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("optional", [{}, {"error_details": None, "session_id": None}])
+def test_main_reads_hook_stdin_with_existing_identity_and_backend(tmp_path, monkeypatch, capsys, optional):
     import io
     from shantytown import stop_event
     setup_root(tmp_path)
@@ -141,7 +147,7 @@ def test_main_reads_hook_stdin_with_existing_identity_and_backend(tmp_path, monk
     monkeypatch.setenv("SHANTY_AGENT", CARD.name)
     monkeypatch.delenv("TMUX_PANE", raising=False)
     monkeypatch.setattr(stop_failure.sys, "stdin", io.StringIO(json.dumps(
-        {**PAYLOAD, "hook_event_name": "StopFailure"})))
+        {**PAYLOAD, **optional, "hook_event_name": "StopFailure"})))
     monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: box)
     monkeypatch.setattr(stop_event, "_plate_of", lambda root, name: ("fixture-item", "in_progress", []))
     assert stop_failure.main(["--root", str(tmp_path)]) == 0
@@ -240,3 +246,21 @@ def test_slow_read_cannot_silence_durable_error_notice(tmp_path, monkeypatch):
         assert events.pending("admin")[0].item_status == "?"
     finally:
         gate.set()
+
+
+def test_event_fields_survive_null_delivery_and_legacy_files(tmp_path):
+    from shantytown.events import NullEvents
+    null = NullEvents()
+    event = null.persist("admin", CARD.name, "stop-failure", False,
+                         kind="stop-failure", error="server_error",
+                         error_details="fixture details", last_assistant_message="fixture message")
+    assert null.drain("admin") == [event]
+    assert null._events[0].kind == "stop-failure"
+    assert null._events[0].error_details == "fixture details"
+    assert null._events[0].last_assistant_message == "fixture message"
+    old = {"to": "admin", "frm": CARD.name, "reason": None, "rose": False}
+    directory = tmp_path / "events"
+    directory.mkdir()
+    (directory / "ev-1.json").write_text(json.dumps(old))
+    restored = FilesEvents(directory).pending("admin")[0]
+    assert restored.kind == "stop" and restored.error is None

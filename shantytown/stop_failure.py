@@ -142,7 +142,10 @@ def capture(root, agent, payload, *, administrator, events, plate, deliver):
         _save(path, record)
         detail = json.dumps({"kind": "stop-failure", "verdict": verdict, **payload}, sort_keys=True)
         events.persist(administrator, agent, "stop-failure", False, item=item,
-                       item_status=item_status, detail=detail, key=event_key)
+                       item_status=item_status, detail=detail, key=event_key,
+                       kind="stop-failure", error=payload.get("error", "unknown"),
+                       error_details=payload.get("error_details"),
+                       last_assistant_message=payload.get("last_assistant_message"))
         # Limit/auth paths are consumed by tend; all other failures also reach
         # the durable inbox, independent of the administrator's Stop hook.
         if verdict in ("limited", "auth-dead"):
@@ -175,6 +178,8 @@ def main(argv=None):
         if not isinstance(payload, dict) or payload.get("hook_event_name") != "StopFailure":
             raise ValueError("not a StopFailure payload")
         for field in ("error", "error_details", "last_assistant_message", "session_id"):
+            if field != "error" and payload.get(field) is None:
+                payload.pop(field, None)
             if field in payload and not isinstance(payload[field], str):
                 raise ValueError(f"invalid {field}")
         # Capture only documented error fields, never transcript content/files.
