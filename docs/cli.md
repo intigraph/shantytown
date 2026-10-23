@@ -2661,13 +2661,22 @@ selected board is not permission to retry against another board.
 `st repo pr` earns a separate slot because it creates an external review object;
 `repo context` remains a read. Use the guarded creation path after committing and
 pushing the candidate branch. It requires the explicit GitHub repository to match
-`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+`origin`, with the mapped owner-move exception below. It does not push, merge,
+close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
-again. This command never rewrites remotes or silently migrates aliases. A
+again. A legacy-owner `origin` can remain unchanged when the deployment's
+`scripts/lib/stack_repos.py canonical` helper maps it to the requested current
+slug **and** GitHub resolves it to that slug with the same stable repository ID.
+The optional helper lives under
+`${XDG_DATA_HOME:-~/.local/share}/aegis-exec-src/`; exact origins need no helper.
+Missing, unreadable or unmapped policy, a foreign host/owner, an unproven redirect,
+or a redirect race refuses before POST and names a concrete `git remote set-url`
+fix. The requested repository must still be the forge's canonical slug.
+This command never rewrites remotes or silently migrates aliases. A
 repository identity change during preflight also refuses before POST. A lost or
 malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
 reported on stderr as well as JSON stdout. Inspect the canonical repository for
