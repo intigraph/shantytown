@@ -4085,6 +4085,14 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     but it should be a ruling, not a side effect of adding a check.
     """
     need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
+    if harness_mod.name_for(card, a.root) == "claude":
+        from .stop_failure import verify_wiring
+        verdict = verify_wiring(a.root, card.name, session, getattr(panes, "cmdline", None))
+        if verdict != "verified":
+            print(f"  StopFailure {verdict}: {card.name}; live notification hook "
+                  "not verified. Re-provision settings and start through st; "
+                  "the running pane was left intact.", file=sys.stderr)
+            return REFUSED if verdict == "missing" else CANNOT_TELL
     if not need:
         # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
         # doubt about a requirement that does not exist. An isolated agent (no
@@ -7980,6 +7988,10 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain),
                 limited=limit_reached(runtime, plain))
+            from .stop_failure import state as failure_state
+            failure = failure_state(getattr(runtime, "_root", None), ag.name)
+            if failure in ("safeguard-blocked", "auth-dead", "limited"):
+                work = failure
             if triage_mod.input_state(screen) == triage_mod.INPUT_QUEUED:
                 work = f"{work}·stranded input"
             cmdline = None
@@ -10198,7 +10210,10 @@ def _safeguard_reports(a, agents, rep, panes):
         if not getattr(message, "id", None):
             raise RuntimeError("safeguard report: durable receipt UNKNOWN")
         return message.id
-    return safeguard.report(a.root, rep.findings, agents, panes, _plate(a), deliver,
+    from .stop_failure import state as failure_state
+    fallback = [f for f in rep.findings
+                if failure_state(a.root, f.agent) != "safeguard-blocked"]
+    return safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver,
                             lambda text: print("  " + text, file=sys.stderr))
 
 
@@ -10207,6 +10222,9 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
     """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
         return ""
+    from .stop_failure import state as failure_state
+    if failure_state(root, card.name) == "safeguard-blocked":
+        return "pane reads safeguard-blocked, held for administrator review"
 
     def pane_refusal(screen):
         plain = triage_mod.strip_attrs(screen)

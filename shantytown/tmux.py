@@ -605,6 +605,10 @@ class Tmux:
         # rule.
         codex = False
         if not allow_shell:
+            from .stop_failure import pane_state
+            if pane_state(self.delivery_root, pane) == "safeguard-blocked":
+                raise PaneNotAgent(f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
+        if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
                 raise PaneNotAgent(

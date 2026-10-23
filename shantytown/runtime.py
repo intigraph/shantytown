@@ -1296,6 +1296,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}],
+            # API errors bypass Stop. This handler is notification-only and
+            # asynchronous: its network/plate reads cannot delay the harness.
+            "StopFailure": [{"hooks": [{
+                "type": "command", "async": True, "timeout": 30,
+                "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
+                           + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
+            }]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],

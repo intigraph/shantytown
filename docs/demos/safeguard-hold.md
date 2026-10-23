@@ -4,7 +4,12 @@ The same incident refusal prefix reads `idle` at base `8fdc5f1` and
 `safeguard-blocked` at implementation `bf93391`. Two report passes produce one
 durable administrator inbox message, zero automatic recovery actions and zero
 pane input. Cleared, historical, auth and usage controls do not become safeguard
-findings. Current-main integration changes no demonstrated safeguard code.
+findings. The amended primary path provisions an asynchronous Claude `StopFailure` hook:
+the untouched base has no registration. Two synthetic API-error deliveries now
+produce one persisted stop-failure event and one durable administrator inbox.
+The primary hold remains visible with no pane banner. Live-process-selected
+settings and launch snapshot verification run against the private fixture.
+The real safeguard error enum is unknown: the demo triggers no real API error.
 
 The [transcript](safeguard-hold.transcript.txt) and [timing file](safeguard-hold.timing.txt)
 are an actual private terminal recording under the HOME/resource guard. Download
@@ -23,7 +28,7 @@ The retained capture after human clearing is a separate negative control.
 Repeat the public source controls with:
 
 ```sh
-python3 -m pytest -q tests/test_safeguard.py
+python3 -m pytest -q tests/test_safeguard.py tests/test_stop_failure.py
 ```
 
 A current refusal stays held for human review. There is no automatic context

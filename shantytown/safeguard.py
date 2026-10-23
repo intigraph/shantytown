@@ -56,6 +56,33 @@ def _save(path, value):
             os.unlink(tmp)
 
 
+def notify(root, agent, ids, fallback_key, text, record, deliver, log=lambda text: None):
+    directory = Path(root) / "safeguard-reports"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    key = hashlib.sha256(json.dumps([agent, ids or fallback_key]).encode()).hexdigest()
+    path = directory / (key + ".json")
+    with (directory / ".delivery-lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if path.exists():
+            previous = json.loads(path.read_text())
+            if previous.get("state") != "delivered":
+                log(f"safeguard report UNKNOWN for {agent}: inspect {path}; not retried")
+            return False
+        record = dict(record, state="pending")
+        _save(path, record)
+        try:
+            receipt = deliver(text)
+            if not receipt:
+                raise RuntimeError("durable delivery not confirmed")
+        except Exception:
+            record["state"] = "UNKNOWN"
+            _save(path, record)
+            raise
+        record.update(state="delivered", receipt=str(receipt))
+        _save(path, record)
+        return True
+
+
 def report(root, findings, agents, panes, plate, deliver, log):
     """One persist-first admin report per observed refusal; no pane input.
 
@@ -103,16 +130,6 @@ def report(root, findings, agents, panes, plate, deliver, log):
             # Preserve bounded, attributable metadata only, never pane content.
             record = {"agent": card.name, "requests": ids, "plate": items,
                       "state": "pending"}
-            _save(path, record)
-            try:
-                receipt = deliver(text)
-                if not receipt:
-                    raise RuntimeError("durable delivery not confirmed")
-            except Exception:
-                record["state"] = "UNKNOWN"
-                _save(path, record)
-                raise
-            record.update(state="delivered", receipt=str(receipt))
-            _save(path, record)
-            sent.append(card.name)
+            if notify(root, card.name, ids, block.splitlines()[0], text, record, deliver, log):
+                sent.append(card.name)
     return sent

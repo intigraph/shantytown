@@ -2914,6 +2914,29 @@ do not remove unread messages or revert while routine entries remain pending.
 
 ### Provider safety refusals
 
+Claude crew settings provision an asynchronous `StopFailure` command hook.
+[Claude Code runs this instead of `Stop` for API errors](https://code.claude.com/docs/en/hooks#stopfailure),
+so the failure is recorded without waiting for a normal turn-end hook or a pane
+banner. The hook persists a `stop-failure` event with the agent, plate, error,
+optional error details and rendered API message. Missing plate/request evidence
+stays `UNKNOWN`; a plate read gets a two-second budget so it cannot silence
+the error notice. The actual error enum used for a safeguard refusal remains
+unknown until a real hook payload is observed; fixtures do not establish it.
+
+A rendered API message containing `safeguards` takes priority over every other
+error category. It records a hold for that launch and durably notifies the
+canonical administrator, with request IDs extracted from the rendered message.
+The hold also prevents ordinary input and automatic cycles when the pane has no
+banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
+does not clear a safeguard hold. Rate-limit and authentication failures enter the
+existing `limited` and `auth-dead` supervision paths; a later successful Stop can
+retire these transient signals. Other errors produce a durable administrator
+inbox notice. Notification work runs asynchronously with a bounded timeout and
+never asks the model to continue. Launch verification checks the running
+process's selected settings against its recorded launch snapshot; a newly
+rewritten settings file is not proof that an old process loaded the hook.
+
+The following pane check remains the fallback for Codex and missed hooks.
 A current provider banner saying `safeguards flagged this message` or
 `safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
 reports. Tend treats it as a fault and holds it for administrator review. It

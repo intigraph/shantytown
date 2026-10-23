@@ -515,6 +515,10 @@ class Tender:
         pane_up = self._panes.exists(card.pane)
         shell = shell_foreground(self._panes, card.pane) if pane_up else None
         up = pane_up and shell is None
+        from .stop_failure import state as failure_state
+        if failure_state(getattr(self._runtime, "_root", None), card.name) == SAFEGUARD_BLOCKED:
+            return Finding(card.name, "up" if up else "down", SAFEGUARD_BLOCKED,
+                           "StopFailure hold for administrator review; no automatic recovery or input")
 
         # RETIREMENT FIRST, before anything can decide to act. Ordering is the
         # guarantee: a check that runs after the respawn logic is a check that
@@ -656,13 +660,15 @@ class Tender:
         from .runtime import auth_expired
         plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
         from .runtime import safeguard_blocked
-        if safeguard_blocked(self._runtime, plain):
+        from .stop_failure import pane_state
+        failure = pane_state(getattr(self._runtime, "_root", None), card.pane)
+        if failure == SAFEGUARD_BLOCKED or safeguard_blocked(self._runtime, plain):
             from .safeguard import request_ids
             return Finding(card.name, "up", SAFEGUARD_BLOCKED,
                            "provider refusal; requests=" +
                            (",".join(request_ids(plain)) or "UNKNOWN") +
                            "; held for administrator review: no automatic recovery or input")
-        if auth_expired(self._runtime, plain):
+        if failure == AUTH_DEAD or auth_expired(self._runtime, plain):
             return Finding(card.name, "up", AUTH_DEAD,
                            "alive and LOGIN-EXPIRED: every API call fails; the "
                            "pane renders idle and nothing can run. Not respawned "
@@ -676,7 +682,7 @@ class Tender:
         # questions below for the reason auth-dead is — those are moot for a
         # session that cannot run anything.
         from .runtime import limit_reached
-        if limit_reached(self._runtime, plain):
+        if failure == LIMITED or limit_reached(self._runtime, plain):
             return self._failover(card)
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:
