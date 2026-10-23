@@ -28,6 +28,7 @@ the tool built to prevent it.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -54,6 +55,7 @@ ABSENT = "NO-BOX"
 # passes the runtime's own verdict in, exactly as work_state takes `awaiting`.
 PICKER = "PICKER"
 TASK_LIST = "TASK-LIST"
+BUSY = "BUSY"
 
 _FROM_TRIAGE = {
     triage.INPUT_EMPTY: EMPTY,
@@ -78,11 +80,52 @@ class Report:
     detail: str = ""
 
 
+def _codex_box(screen: str) -> tuple[str, str, str] | None:
+    """Read only the bounded composer immediately above Codex's model footer."""
+    rows = screen.splitlines()
+    while rows and not triage.strip_attrs(rows[-1]).strip():
+        rows.pop()
+    plain = [triage.strip_attrs(row) for row in rows]
+    footers = [i for i in range(max(0, len(rows) - 8), len(rows))
+               if re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+·\s+(?:~|/)", plain[i])]
+    if not footers:
+        return None
+    end = footers[-1]
+    for start in range(end - 1, max(-1, end - 81), -1):
+        if not plain[start].lstrip().startswith("›"):
+            continue
+        raw = "\n".join(rows[start:end]).rstrip()
+        text = "\n".join(plain[start:end]).lstrip()[1:].strip()
+        if not text or text == "Ask Codex to do anything":
+            return EMPTY, raw, ""
+        # Other suggestions need their actual dim attribute; typed runs win.
+        if "\x1b" in raw:
+            typed, ghost = triage._split_dim(raw[raw.index("›") + 1:])
+            if not typed.strip() and ghost.strip():
+                return GHOST, raw, text
+        return TYPED, raw, text
+    return None
+
+
+def _codex_busy(screen: str) -> bool:
+    rows = triage.strip_attrs(screen).splitlines()
+    prompts = [i for i, row in enumerate(rows) if row.lstrip().startswith("›")]
+    if not prompts:
+        return True
+    start = prompts[-1]
+    return (any(re.match(r"\s*[•·]?\s*Working\b.*esc to interrupt", row, re.I)
+                for row in rows[max(0, start - 8):start])
+            or any("tab to queue message" in row.lower() for row in rows[start:]))
+
+
 def _classify(screen: str) -> tuple[str, str, str]:
     from .harness import task_list_evidence
     evidence = task_list_evidence(screen)
     if evidence:
         return TASK_LIST, evidence, ""
+    codex = _codex_box(screen)
+    if codex is not None:
+        return codex
     state = triage.input_state(screen)
     raw = triage.input_evidence(screen)
     plain = triage.strip_attrs(raw).strip()
@@ -118,7 +161,7 @@ def show(panes, pane: str, awaiting: bool = False) -> Report:
 
 
 def _prompt_line(screen: str) -> str:
-    return triage.input_evidence(screen)
+    return _classify(screen)[1]
 
 
 def _settle(panes, pane: str, before: str) -> tuple[str, bool]:
@@ -180,6 +223,8 @@ def clear(panes, pane: str, awaiting: bool = False) -> Report:
             "REFUSED: a BLOCKING option-picker is up. Clearing would send C-u "
             "into a prompt that is waiting on a decision, and the ❯ on screen "
             "is the selected OPTION, not typed input. Answer it, or attach."))
+    if _codex_box(screen) is not None and _codex_busy(screen):
+        return Report(BUSY, raw, text, detail="REFUSED: Codex is busy; no editing keys sent.")
     if verdict == GHOST:
         return Report(verdict, raw, text, detail=(
             "REFUSED: this is a SUGGESTION, not typed input — the buffer is "
@@ -197,6 +242,33 @@ def clear(panes, pane: str, awaiting: bool = False) -> Report:
             "REFUSED: cannot tell typed text from a suggestion on this capture, "
             "so clearing would be acting blind on a pane that may be perfectly "
             "healthy. This is the refusal the whole module exists to make."))
+
+    if _codex_box(screen) is not None:
+        # C-u kills one logical line; BSpace then removes its preceding newline.
+        # No Enter, Tab, Escape or interrupt is sent, even on a busy refusal.
+        for _ in range(81):
+            if _codex_busy(screen):
+                return Report(BUSY, raw, text, detail="REFUSED: Codex is busy; no further editing keys sent.")
+            before = _prompt_line(screen)
+            previous_text = text
+            for key in ("C-e", "C-u", "BSpace"):
+                panes.control(pane, key)
+            screen, changed = _settle(panes, pane, before)
+            after = _codex_box(screen)
+            if after is None:
+                return Report(UNKNOWN, "", "", detail="REFUSED: Codex composer disappeared during clear.")
+            verdict, raw, text = after
+            if verdict in (EMPTY, GHOST):
+                return Report(verdict, raw, text, detail="cleared — Codex empty placeholder verified.")
+            if not changed:
+                return Report(verdict, raw, text, changed=False,
+                              detail="No repaint after clear; buffer state UNKNOWN.")
+            if _codex_busy(screen):
+                return Report(BUSY, raw, text, detail="REFUSED: Codex became busy; no further editing keys sent.")
+            if len(text) >= len(previous_text) or not previous_text.startswith(text):
+                return Report(TYPED, raw, text,
+                              detail="REFUSED: composer changed unexpectedly; preserving remaining text.")
+        return Report(TYPED, raw, text, detail="REFUSED: Codex clear exceeded bounded line budget.")
 
     before = _prompt_line(screen)
     panes.control(pane, "C-e")   # to end of line first: C-u kills to the LEFT of
