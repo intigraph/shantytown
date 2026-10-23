@@ -10223,11 +10223,17 @@ def _safeguard_reports(a, agents, rep, panes):
         if not getattr(message, "id", None):
             raise RuntimeError("safeguard report: durable receipt UNKNOWN")
         return message.id
-    from .stop_failure import state as failure_state
-    fallback = [f for f in rep.findings
-                if failure_state(a.root, f.agent) != "safeguard-blocked"]
-    return safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver,
-                            lambda text: print("  " + text, file=sys.stderr))
+    from .stop_failure import state as failure_state, reconcile
+    log = lambda text: print("  " + text, file=sys.stderr)
+    primary, fallback = [], []
+    for finding in rep.findings:
+        if (finding.verdict == SAFEGUARD_BLOCKED
+                and failure_state(a.root, finding.agent) == "safeguard-blocked"):
+            if reconcile(a.root, finding.agent, deliver, log):
+                primary.append(finding.agent)
+        else:
+            fallback.append(finding)
+    return primary + safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver, log)
 
 
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,

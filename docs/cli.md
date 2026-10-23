@@ -2950,4 +2950,9 @@ remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
 crew root; long ID/plate lists are abbreviated in the inbox and retained there.
 A pending or uncertain delivery is reported loudly and never automatically
 replayed: inspect its ledger and durable inbox before any manual retry. Human
-review determines the next step.
+review determines the next step. A saved primary hold is not delivery evidence:
+tend reconciles a demonstrably absent notification attempt from the saved error
+metadata, including when event persistence was interrupted and no pane banner
+exists. The shared reservation still prevents replay of pending or UNKNOWN
+attempts and keeps their uncertainty visible. Missing launch provenance cannot
+retire a saved safety hold; only positively different known launch stamps can.

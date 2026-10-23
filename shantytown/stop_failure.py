@@ -36,7 +36,8 @@ def state(root, agent):
     path = Path(root) / "stop-failures" / (hashlib.sha256(agent.encode()).hexdigest() + ".json")
     try:
         record = json.loads(path.read_text())
-        if record["launch"] != _launch(root, agent):
+        launch = _launch(root, agent)
+        if launch != "UNKNOWN" and record["launch"] != "UNKNOWN" and record["launch"] != launch:
             return ""
         return record["verdict"]
     except FileNotFoundError:
@@ -150,14 +151,38 @@ def capture(root, agent, payload, *, administrator, events, plate, deliver):
         # the durable inbox, independent of the administrator's Stop hook.
         if verdict in ("limited", "auth-dead"):
             return record
-        from .safeguard import notify
-        def clip(value, size):
-            return str(value).encode("utf-8")[:size].decode("utf-8", errors="ignore")
-        text = (f"{verdict} agent={clip(agent, 32)}; error={clip(payload.get('error', 'unknown'), 40)}; "
-                f"requests={','.join(ids[:2]) or 'UNKNOWN'}; plate={clip(item or 'UNKNOWN', 64)}. "
-                "No automatic recovery; inspect local stop-failure event.")
-        notify(root, agent, ids, event_key, text, record, deliver)
+        _notify_record(root, record, deliver)
         return record
+
+
+def _notify_record(root, record, deliver, log=lambda text: None):
+    """Use the same durable reservation for hook and scheduled reconciliation."""
+    from .safeguard import notify
+    agent, payload = record["agent"], record["payload"]
+    ids = sorted(set(_REQUEST.findall(payload.get("last_assistant_message", ""))))
+    event_key = "stop-failure:" + hashlib.sha256(json.dumps(
+        [agent, payload], sort_keys=True).encode()).hexdigest()
+    def clip(value, size):
+        return str(value).encode("utf-8")[:size].decode("utf-8", errors="ignore")
+    text = (f"{record['verdict']} agent={clip(agent, 32)}; error={clip(payload.get('error', 'unknown'), 40)}; "
+            f"requests={','.join(ids[:2]) or 'UNKNOWN'}; plate={clip(record.get('plate') or 'UNKNOWN', 64)}. "
+            "No automatic recovery; inspect saved stop-failure metadata.")
+    return notify(root, agent, ids, event_key, text, record, deliver, log)
+
+
+def reconcile(root, agent, deliver, log):
+    """A hold is not a receipt: resume only an absent notification attempt.
+
+    notify owns the shared reservation lock. Pending/UNKNOWN attempts stay loud
+    without replay, including a lost reply after an inbox write. No pane needed.
+    """
+    if state(root, agent) != "safeguard-blocked":
+        return False
+    path = Path(root) / "stop-failures" / (hashlib.sha256(agent.encode()).hexdigest() + ".json")
+    record = json.loads(path.read_text())
+    if record["agent"] != agent or not isinstance(record["payload"], dict):
+        raise ValueError("stop-failure notification provenance UNKNOWN")
+    return _notify_record(root, record, deliver, log)
 
 
 def main(argv=None):

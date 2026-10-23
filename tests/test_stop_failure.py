@@ -264,3 +264,67 @@ def test_event_fields_survive_null_delivery_and_legacy_files(tmp_path):
     (directory / "ev-1.json").write_text(json.dumps(old))
     restored = FilesEvents(directory).pending("admin")[0]
     assert restored.kind == "stop" and restored.error is None
+
+
+@pytest.mark.parametrize("boundary", ["event-persist", "before-notify"])
+@pytest.mark.parametrize("screen", ["❯ ", "● API Error: safeguards stopped the response\nreq_fixture\n❯ "])
+def test_interrupted_primary_notification_reconciles_once_without_banner(tmp_path, monkeypatch, boundary, screen):
+    setup_root(tmp_path)
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    box = FilesInbox(tmp_path / "inbox")
+    events = FilesEvents(tmp_path / "events")
+    def interrupted(*a, **kw):
+        raise OSError("fixture primary interrupted before notification reservation")
+    with monkeypatch.context() as patch:
+        if boundary == "event-persist":
+            patch.setattr(events, "persist", interrupted)
+        else:
+            patch.setattr(safeguard, "notify", interrupted)
+        with pytest.raises(OSError):
+            stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+                events=events, plate=lambda n: (None, None),
+                deliver=lambda text: box.deliver("admin", text).id)
+    assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
+    assert box.unread("admin") == []
+    monkeypatch.setattr(cli, "_registry", lambda a: registry)
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: box)
+    monkeypatch.setattr(cli, "_plate", lambda a: lambda n: [])
+    report = SimpleNamespace(findings=[tend.Finding(CARD.name, "up", tend.SAFEGUARD_BLOCKED)])
+    for expected in ([CARD.name], []):
+        assert cli._safeguard_reports(SimpleNamespace(root=tmp_path), [CARD], report, NullPanes(screen)) == expected
+    assert len(box.unread("admin")) == 1
+    assert "req_fixture" in box.unread("admin")[0].body
+    assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
+
+
+def test_missing_launch_metadata_preserves_existing_safety_hold(tmp_path):
+    setup_root(tmp_path)
+    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+        events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, None), deliver=lambda t: "receipt")
+    (tmp_path / "launched" / (CARD.name + ".json")).unlink()
+    assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
+
+
+@pytest.mark.parametrize("reservation", ["UNKNOWN", "pending"])
+def test_primary_unconfirmed_notification_stays_loud_without_retry(tmp_path, monkeypatch, capsys, reservation):
+    setup_root(tmp_path)
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    calls = []
+    def uncertain(text):
+        calls.append(text)
+        raise TimeoutError("fixture delivery may have committed")
+    with pytest.raises(TimeoutError):
+        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+            events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, None), deliver=uncertain)
+    ledger = next((tmp_path / "safeguard-reports").glob("*.json"))
+    value = json.loads(ledger.read_text()); value["state"] = reservation
+    ledger.write_text(json.dumps(value))
+    monkeypatch.setattr(cli, "_registry", lambda a: registry)
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: pytest.fail("uncertain delivery retried"))
+    monkeypatch.setattr(cli, "_plate", lambda a: lambda n: [])
+    report = SimpleNamespace(findings=[tend.Finding(CARD.name, "up", tend.SAFEGUARD_BLOCKED)])
+    for _ in range(2):
+        assert cli._safeguard_reports(SimpleNamespace(root=tmp_path), [CARD], report, NullPanes("❯ ")) == []
+    assert len(calls) == 1 and "UNKNOWN" in capsys.readouterr().err
