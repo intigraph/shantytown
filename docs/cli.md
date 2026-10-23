@@ -93,7 +93,9 @@ st agent                      one agent
                               idle time, and any posted relatedness signal. --related P
                               / --decision keep|cycle --by WHO posts one. --json.
   input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
-                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+                              capture evidence. --clear (typed only) --dismiss. NEVER submits.
+                              Codex multiline clear verifies the empty placeholder;
+                              BUSY refuses editing, and no repaint stays UNKNOWN.
   ask <agent>                 the QUESTION they're blocked on: prompt, the command being
                               approved, and the numbered options VERBATIM. read-only.
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
