@@ -52,15 +52,19 @@ def _locked(root):
         yield directory
 
 
-def enqueue(root, card, item, backend, wait, *, now=None):
-    """Persist already-durable receipt before withholding its live nudge."""
+def enqueue(root, card, item, backend, wait, *, now=None, retain=False):
+    """Persist already-durable receipt before withholding its live nudge.
+
+    ``retain`` carries ``--retain-pointer``: the batch delivers it live but
+    leaves its durable pointer unread, as the immediate send does.
+    """
     now = time.time() if now is None else now
     if not math.isfinite(now) or not math.isfinite(wait) or not 0 < wait <= 900:
         raise ValueError('routine deadline unknown')
     value = dict(id=item.id, recipient=card.name, backend=backend,
                  pane=card.pane, host=getattr(card, 'host', None),
                  body_hash=hashlib.sha256(item.body.encode()).hexdigest(),
-                 created=now, due=now + wait, state='pending')
+                 created=now, due=now + wait, state='pending', retain=bool(retain))
     key = hashlib.sha256(json.dumps([backend, card.name, item.id]).encode()).hexdigest()
     with _locked(root) as directory:
         path = directory / (key + '.json')
@@ -113,7 +117,11 @@ def sweep(root, agents, panes, box_for, *, now=None, log=lambda message: None):
             box = box_for(backend)
             unread = {msg.id: msg for msg in box.unread(name)}
             ready = []
-            for path, row in sorted(entries, key=lambda entry: (entry[1]['created'], entry[1]['id']))[:20]:
+            # Bound the batch by deliverable pointers, not by queue rows: rows
+            # already read elsewhere stay queued and must not starve newer ones.
+            for path, row in sorted(entries, key=lambda entry: (entry[1]['created'], entry[1]['id'])):
+                if len(ready) == 20:
+                    break
                 msg = unread.get(row['id'])
                 if msg is None:
                     # Missing from this reader is not proof of an ACK.
@@ -124,23 +132,26 @@ def sweep(root, agents, panes, box_for, *, now=None, log=lambda message: None):
                     continue
                 row['state'] = 'attempted'
                 write_json_atomic(path, row)
-                ready.append((path, msg))
+                ready.append((path, msg, row.get('retain', False)))
             if not ready:
                 continue
-            body = '\n\n'.join(msg.body for _, msg in ready)
+            body = '\n\n'.join(msg.body for _, msg, _ in ready)
             try:
                 panes.send(card.pane, body)
                 # Same conservative post-send composer check as durable inbox.
                 from .cli import _looks_stranded
                 if _looks_stranded(panes, card.pane):
                     raise RuntimeError('live input remains stranded')
-                box.mark_read(name, ids=[msg.id for _, msg in ready])
+                acked = [msg.id for _, msg, retain in ready if not retain]
+                if acked:
+                    box.mark_read(name, ids=acked)
             except Exception as error:
                 log(f'routine inbox: {name} live/ACK UNKNOWN ({type(error).__name__}); '
                     'durable pointers retained, no automatic resend')
                 continue
-            for path, msg in ready:
+            for path, msg, _ in ready:
                 path.unlink()
                 sent.append((name, msg.id))
-            log(f'routine inbox: {name} batch delivered and ACKed {len(ready)} pointer(s)')
+            log(f'routine inbox: {name} batch delivered {len(ready)} pointer(s), '
+                f'ACKed {len(acked)}, retained {len(ready) - len(acked)} by request')
     return sent

@@ -6036,7 +6036,8 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
         return CANNOT_TELL
     if routine_wait:
         try:
-            admin_inbox.enqueue(a.root, agent, item, backend, routine_wait)
+            admin_inbox.enqueue(a.root, agent, item, backend, routine_wait,
+                                retain=getattr(a, "retain_pointer", False))
         except Exception as error:
             # A failed write may have committed; never create a second live
             # attempt by guessing. The durable pointer remains the fallback.

@@ -158,3 +158,56 @@ def test_recipient_binding_change_does_not_send_to_replacement(tmp_path, monkeyp
     setattr(card, changed, 'replacement')
     assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=110) == []
     assert sent == [] and len(box.unread(card.name)) == 1
+
+
+def test_retained_pointer_survives_the_batch_ack(tmp_path, monkeypatch):
+    # aegis-rwhc #326 review: --routine --retain-pointer must keep its pointer
+    # unread after the batch delivers, as the immediate durable send does.
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    kept = box.deliver(card.name, 'retained')
+    ai.enqueue(tmp_path, card, kept, 'files', 10, now=100, retain=True)
+    ai.enqueue(tmp_path, card, box.deliver(card.name, 'routine'), 'files', 10, now=100)
+    assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=110)) == 2
+    assert sent == ['retained\n\nroutine']
+    assert [msg.id for msg in box.unread(card.name)] == [kept.id]
+    assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=111) == []
+    assert len(sent) == 1
+
+
+def test_cli_routine_records_retain_pointer(tmp_path, monkeypatch):
+    from shantytown import cli
+    from test_inbox_durable import _root, _RecordingInbox
+    box = _RecordingInbox()
+    root = _root(tmp_path)
+    monkeypatch.setattr(cli, '_inbox', lambda *a, **kw: box)
+    monkeypatch.setattr(ai, 'wait_for', lambda *a, **kw: 600)
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **kw: NS(
+        exists=lambda p: True, send=lambda p, text: None))
+    assert cli.main(['--root', str(root), 'inbox', '-d', '--routine', '--retain-pointer',
+                     'ian', 'progress']) == 0
+    [row] = [json.loads(p.read_text()) for p in ai._directory(root).glob('*.json')]
+    assert row['retain'] is True and box.marked == []
+
+
+@pytest.mark.parametrize('old', [19, 20, 25])
+def test_already_read_pointers_do_not_starve_newer_progress(tmp_path, monkeypatch, old):
+    # aegis-rwhc #326 review: pointers read through the ordinary inbox stay
+    # queued (a reader miss is not proof of an ACK). They must not fill the
+    # per-batch bound ahead of newer unread progress.
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    stale = [box.deliver(card.name, f'old {n}') for n in range(old)]
+    for n, msg in enumerate(stale):
+        ai.enqueue(tmp_path, card, msg, 'files', 10, now=100 + n)
+    box.mark_read(card.name, ids=[msg.id for msg in stale])
+    ai.enqueue(tmp_path, card, box.deliver(card.name, 'new'), 'files', 10, now=500)
+    assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=510)) == 1
+    assert sent == ['new']
+    assert len(list(ai._directory(tmp_path).glob('*.json'))) == old
+
+
+def test_batch_bound_still_applies_to_eligible_pointers(tmp_path, monkeypatch):
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    for n in range(21):
+        ai.enqueue(tmp_path, card, box.deliver(card.name, f'p{n}'), 'files', 10, now=100 + n)
+    assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=200)) == 20
+    assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=201)) == 1
