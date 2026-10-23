@@ -367,6 +367,14 @@ A `blocked:external` hold can be satisfied by an unambiguous `closed:`,
 MET. An unmet condition, an UNKNOWN read, additional prose or a human/access
 hold keeps the item deferred. A `date:` review never grants that permission.
 
+The sweep keeps a complete observation of all selected deferrals. If Quipu
+rejects a field batch with its explicit structural-cost HTTP 400 and asks for
+smaller requests, the reader halves that batch and retries each half within the
+original batch's time budget. It keeps both graphs and every evaluation field.
+A single candidate that still exceeds the limit is UNKNOWN; no candidate is
+skipped and no partial observation permits a release. Other HTTP failures are
+not retried by this split path. The server's structural limit stays unchanged.
+
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
 command, path, URL or query. Each binding names one item, producer, host, unit,
