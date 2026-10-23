@@ -2132,7 +2132,7 @@ ambiguous or changed evidence refuses acceptance.
 
 After the actual resource reviewers accept that exact window, prepare a decision
 JSON containing `schema_version: 1`, `window_sha256`, `decision: "accept"`,
-`mode: "bounded-pilot"`, `reviewer` and an `evidence_ref` to the ruling. The file
+`mode: "bounded-pilot"` (or explicitly reviewed `"bounded-continuous"`), `reviewer` and an `evidence_ref` to the ruling. The file
 records the decision; it is not an authentication or authority grant.
 `st work cost --accept-window SHA256 --decision-file FILE` validates and describes
 the successor without changing state. Add `--execute` only through the normal
@@ -2144,7 +2144,20 @@ preserves the original files, lifetime counters, refusals, snapshot ledger and
 cooldown, then atomically commits `cost-active-generation.json`. The successor
 starts a new bounded audit window; no history is reset and no tokens are counted
 or published by this operation. Caps and the default twenty-shape pause remain.
-It does **not** enable continuous publication. Read the review status after a
+Pilot mode does **not** enable continuous publication. An explicit
+`bounded-continuous` ruling instead authorizes subsequent in-envelope windows
+under that same policy: the scheduler archives each completed 20-shape window
+and advances a new generation under its existing lock. The inherited reviewer
+and evidence reference identify the original policy, not a fresh human review.
+Only the pointer-hashed manifest grants this mode; editing mutable budget history
+cannot enable it. Every predecessor remains on disk, and the live rotation keeps
+only the current window. Lifetime runs/maxima/refusals, cooldown, snapshot ledger
+and uncertain-write guards remain intact. Camayoc still enforces one snapshot,
+eight items, 1000 records and 4 MiB before networking. A completed window with an
+out-of-envelope observation stays paused for explicit review. Source installation
+alone never selects this policy or accepts a real pending window.
+
+Read the review status after a
 lost reply rather than replaying acceptance. A visible successor is evidence of
 the transition, not evidence of a subsequent successful cost publication.
 Before the first transition, source rollback can restore the previous release.

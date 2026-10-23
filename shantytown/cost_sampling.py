@@ -123,7 +123,12 @@ def attempted(root, source, since):
     state = _load(path)
     state['last'] = [source['agent'], source['session']]
     receipt = _load(state_path(root).with_suffix('.receipt.json'))
-    evidence = state.setdefault('samples', [])
+    # Completed generations archive their exact source evidence. Keep only
+    # the current publisher-owned window in the live rotation journal; a long
+    # running continuous sampler must not copy an ever-growing journal per roll.
+    current_stamps = {s['attempted_at'] for s in receipt.get('budget_history', {}).get('distinct_samples', [])}
+    evidence = [s for s in state.get('samples', []) if s['attempted_at'] in current_stamps]
+    state['samples'] = evidence
     known = {s['attempted_at'] for s in evidence}
     # Preserve provenance for each actual distinct preflight observation; no
     # selection, no-op, refused budget or backoff counts as a new sample.

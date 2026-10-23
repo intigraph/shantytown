@@ -339,7 +339,12 @@ def _run_locked(args, config):
             for state in cost_sampling.guard_states(args.root):
                 if state.with_suffix('.pending.json').exists() or state.with_suffix('.pending.json').is_symlink():
                     raise RuntimeError('indeterminate cost snapshot requires reconciliation')
-            if report := cost_sampling.review(args.root):
+            report = cost_sampling.review(args.root)
+            if report:
+                from . import cost_review
+                if cost_review.rollover(args.root):
+                    report = None
+            if report:
                 _atomic_json(Path(args.root) / 'cost-active-review.json', report)
                 refreshed = subprocess.run([sys.executable, config['publish_script'],
                     '--actor', 'st-cost', '--state', str(cost_sampling.state_path(args.root)),

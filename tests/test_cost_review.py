@@ -255,3 +255,117 @@ def test_decision_flags_cannot_fall_through_to_the_parser(population, monkeypatc
 def test_fifo_evidence_cannot_block_a_bounded_review(population, name):
     p = population / name;p.unlink();os.mkfifo(p)
     assert cost.run(arguments(population)) == 2
+
+
+def next_window(root, *, oversized=False):
+    state = review.state_path(root)
+    old = json.loads(state.with_suffix('.budget.json').read_text())
+    samples = [{'run': old['runs'] + n + 1, 'attempted_at': 3000 + old['runs'] + n,
+                'items': 9 if oversized and n == 0 else 1,
+                'records': 20 + n, 'body_bytes': 200 + n} for n in range(20)]
+    old.update(runs=old['runs'] + 20, samples=samples, distinct_samples=samples,
+               review_due=True, distinct_shapes=20, distinct_shapes_saturated=True)
+    write(state.with_suffix('.budget.json'), old)
+    write(root / 'cost-active-rotation.json', {'last': ['worker', 'session'], 'samples': [
+        {**s, 'source': {'agent': 'worker', 'harness': 'codex',
+                        'session': 'session', 'path': '/synthetic/transcript'}} for s in samples]})
+    return state
+
+
+def test_continuous_policy_archives_without_lifetime_or_ledger_reset(population):
+    digest = review.window(population)['window_sha256']
+    policy = {**decision(digest), 'mode': 'bounded-continuous'}
+    review.advance(population, digest, policy, execute=True)
+    previous = next_window(population)
+    saved = {p: p.read_bytes() for p in previous.parent.rglob('*') if p.is_file()}
+    assert review.rollover(population) is True
+    state = review.state_path(population)
+    assert state != previous and all(p.read_bytes() == raw for p, raw in saved.items())
+    history = json.loads(state.with_suffix('.budget.json').read_text())
+    assert history['runs'] == 120 and history['max_items'] == 15
+    assert history['refusal_accounting'] == {'attempts': 81, 'refusals': 3}
+    assert history['distinct_samples'] == [] and not history['review_due']
+    assert state.read_bytes() == previous.read_bytes()
+    receipt = json.loads(state.with_suffix('.receipt.json').read_text())
+    assert receipt['next_request_after'] == 9999999999 and receipt['status'] == 'UNKNOWN'
+
+
+def test_pilot_does_not_auto_accept_its_next_window(population):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, decision(digest), execute=True)
+    next_window(population)
+    before = files(population)
+    assert review.rollover(population) is False
+    assert files(population) == before
+
+
+@pytest.mark.parametrize('blocked', ['oversized', 'pending', 'manifest', 'orphan'])
+def test_continuous_rollover_preserves_refusals_and_uncertainty(population, blocked):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, {**decision(digest), 'mode': 'bounded-continuous'}, execute=True)
+    state = next_window(population, oversized=blocked == 'oversized')
+    if blocked == 'pending': state.with_suffix('.pending.json').write_text('{}')
+    if blocked == 'manifest':
+        p = state.parent / 'review.json'; p.write_bytes(p.read_bytes() + b' ')
+    if blocked == 'orphan':
+        folder = population / review.GENERATIONS / review.window(population)['window_sha256']
+        folder.mkdir()
+    before = files(population)
+    if blocked == 'oversized': assert review.rollover(population) is False
+    else:
+        with pytest.raises(ValueError): review.rollover(population)
+    assert files(population) == before
+
+
+def test_mutable_history_cannot_enable_continuous_mode(population):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, decision(digest), execute=True)
+    state = next_window(population)
+    history = json.loads(state.with_suffix('.budget.json').read_text())
+    history['accepted_review']['mode'] = 'bounded-continuous'
+    write(state.with_suffix('.budget.json'), history)
+    assert review.rollover(population) is False
+
+
+def test_continuous_policy_survives_second_roll_and_never_replays(population):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, {**decision(digest), 'mode': 'bounded-continuous'}, execute=True)
+    first = next_window(population)
+    review.rollover(population)
+    second = next_window(population)
+    assert review.rollover(population) is True
+    assert review.describe(population)['lifetime_runs'] == 140
+    assert first.exists() and second.exists()
+    before = files(population)
+    with pytest.raises(ValueError, match='no complete'):
+        review.rollover(population)
+    assert files(population) == before
+
+
+def test_scheduler_rolls_under_existing_lock_then_obeys_cooldown(population, monkeypatch):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, {**decision(digest), 'mode': 'bounded-continuous'}, execute=True)
+    old = next_window(population)
+    write(population / 'cost.json', {'sample_active_sources': True, 'publish_script': 'synthetic'})
+    monkeypatch.setattr(cost, '_scheduler_status', lambda *_: None)
+    monkeypatch.setattr(cost, '_publish_metrics', lambda *_args, **_kw: None)
+    monkeypatch.setattr(cost, '_run_selected', lambda *_: pytest.fail('cooldown bypassed'))
+    monkeypatch.setattr(cost_sampling, 'select', lambda *_: pytest.fail('selected during cooldown'))
+    assert cost.run(SimpleNamespace(root=population, sync=True, bead=None)) == 0
+    assert review.state_path(population) != old
+    assert review.describe(population)['lifetime_runs'] == 120
+
+
+def test_rotation_prunes_only_previously_archived_source_evidence(population):
+    digest = review.window(population)['window_sha256']
+    review.advance(population, digest, {**decision(digest), 'mode': 'bounded-continuous'}, execute=True)
+    state = review.state_path(population)
+    sample = {'run': 101, 'attempted_at': 5000, 'items': 1, 'records': 2, 'body_bytes': 3}
+    write(state.with_suffix('.receipt.json'), {'attempted_at': 5000,
+          'budget_history': {'distinct_samples': [sample]}})
+    cost_sampling.attempted(population, {'agent': 'worker', 'harness': 'codex',
+                            'session': 'session', 'path': '/synthetic/transcript'}, 5000)
+    rotation = json.loads((population / 'cost-active-rotation.json').read_text())
+    assert len(rotation['samples']) == 1 and rotation['samples'][0]['attempted_at'] == 5000
+    archived = state.parent / 'predecessor' / 'rotation.json'
+    assert len(json.loads(archived.read_text())['samples']) == 20

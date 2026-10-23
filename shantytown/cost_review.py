@@ -2,7 +2,8 @@
 
 The pointer is the only commit point. A successor keeps the prior snapshot
 ledger, lifetime accounting and cooldown; predecessor files remain untouched.
-This grants another bounded pilot, never continuous publication or larger caps.
+Pilot mode pauses again; explicit bounded-continuous mode archives later windows.
+Neither mode raises publication caps or resolves uncertain writes.
 """
 from __future__ import annotations
 
@@ -192,9 +193,9 @@ def advance(root, expected, decision, *, execute=False):
     if (set(decision) != {'schema_version', 'window_sha256', 'decision', 'mode', 'reviewer', 'evidence_ref'}
             or type(decision.get('schema_version')) is not int or decision['schema_version'] != 1
             or decision.get('window_sha256') != expected
-            or decision.get('decision') != 'accept' or decision.get('mode') != 'bounded-pilot'
+            or decision.get('decision') != 'accept' or decision.get('mode') not in {'bounded-pilot', 'bounded-continuous'}
             or any(not isinstance(decision.get(k), str) or not decision[k].strip() for k in ('reviewer', 'evidence_ref'))):
-        raise ValueError('decision must bind this accepted bounded-pilot window and ruling')
+        raise ValueError('decision must bind this accepted bounded policy window and ruling')
     state = state_path(root)
     for path in (root / 'cost-graph-state.json', root / LEGACY, state):
         if path.with_suffix('.pending.json').exists() or path.with_suffix('.pending.json').is_symlink():
@@ -203,7 +204,7 @@ def advance(root, expected, decision, *, execute=False):
     folder = parent / expected
     if parent.is_symlink() or folder.exists() or folder.is_symlink():
         raise ValueError('pre-existing generation requires readback, never overwrite')
-    result = {'status': 'READY', 'window_sha256': expected, 'mode': 'bounded-pilot',
+    result = {'status': 'READY', 'window_sha256': expected, 'mode': decision['mode'],
               'successor': str((folder / 'state.json').relative_to(root)), 'published': False}
     if not execute:
         return result
@@ -253,6 +254,40 @@ def advance(root, expected, decision, *, execute=False):
     if state_path(root) != folder / 'state.json':
         raise ValueError('generation readback differs; preserve outcome uncertainty')
     return {**result, 'status': 'ADVANCED', 'published': False}
+
+
+def rollover(root):
+    """Caller holds cost.lock; only a hash-bound continuous ruling can roll.
+
+    This applies the original policy, not a new human acceptance. The original
+    decision and every completed population stay in predecessor archives.
+    Camayoc still enforces the hard per-publication envelope before networking.
+    A refused/out-of-envelope observation needs a new explicit review instead.
+    """
+    root = Path(root)
+    state = state_path(root)
+    if state == root / LEGACY:
+        return False
+    manifest = _json(_bytes(state.parent / 'review.json', required=True))
+    policy = manifest.get('decision', {})
+    if policy.get('mode') != 'bounded-continuous':
+        return False
+    # The selected manifest is bound by the pointer hash. Do not accept a
+    # mutable budget's accepted_review as policy authority.
+    if (manifest.get('predecessor', {}).get('identity', {}).get('limits') != LIMITS
+            or set(policy) != {'schema_version', 'window_sha256', 'decision',
+                               'mode', 'reviewer', 'evidence_ref'}
+            or policy.get('schema_version') != 1 or policy.get('decision') != 'accept'
+            or any(not isinstance(policy.get(k), str) or not policy[k].strip()
+                   for k in ('reviewer', 'evidence_ref'))):
+        raise ValueError('continuous policy binding differs; review required')
+    current = window(root)
+    for sample in current['identity']['history']['distinct_samples']:
+        if any(sample[key] > LIMITS[key] for key in ('items', 'records', 'body_bytes')):
+            return False
+    inherited = {**policy, 'window_sha256': current['window_sha256']}
+    advance(root, current['window_sha256'], inherited, execute=True)
+    return True
 
 
 def run(args):
