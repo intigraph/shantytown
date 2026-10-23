@@ -26,7 +26,7 @@ def claude_work_class(item) -> tuple[bool, str]:
 
 def exempt(card, policy) -> bool:
     """A configured lead exemption concerns only this filter, never a budget."""
-    return (card.role in ("lead", "administrator")
+    return (card.role in ("lead", "administrator", "keeper")
             and card.name in policy.class_exempt)
 
 
@@ -64,5 +64,4 @@ def read_item(root, item):
     except Exception:
         return SimpleNamespace(id=item.id, priority=getattr(item, "priority", None),
                                labels=None)
-
 
