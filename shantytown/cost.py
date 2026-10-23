@@ -392,6 +392,8 @@ def _run_locked(args, config):
 
 def _run_selected(args, config, graph_state):
     result, records, method = retrieve(args.root, config)
+    from . import cost_coverage
+    result = {**result, 'cost_coverage': cost_coverage.completed(records, args.bead)}
     if args.sync:
         # Do not publish a clean-looking replacement on a failed source.
         if result['errors']:
@@ -412,7 +414,11 @@ def _run_selected(args, config, graph_state):
         print(json.dumps({'receipt': result['receipt'], 'commented': posted}))
     elif args.bead:
         value = receipt(result, args.bead)
-        print(json.dumps(result, indent=2) if args.json else value[1] if value else 'cost: UNKNOWN (no attributable requests)')
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(value[1] if value else 'cost: UNKNOWN (no attributable requests)')
+            print(cost_coverage.describe(result['cost_coverage']))
     else:
         print(json.dumps(result, indent=2))
     return 0

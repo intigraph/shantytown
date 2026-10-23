@@ -2165,6 +2165,20 @@ After a generation is selected, retain a generation-aware reader: older releases
 ignore the pointer. Pause and reconcile publication through the normal operator
 path before a rollback to such a release; never discard generation evidence.
 
+Cost displays also report `cost_coverage`: completed and UNKNOWN-cost seed
+counts, their share, the whole-session limit, and the cohort's scope. This
+reuses the seed records already read for the command; it is not a board-wide
+completed-seed census and adds no tracker queries. A missing or malformed
+cohort remains UNKNOWN. A verified empty cohort has no percentage. Human
+single-seed output prints the same limit and count/share.
+
+Current policy accounts only for eligible whole sessions of at most eight
+items. Oversized sources are refused, never estimated. Observed token groups
+can still be useful partial evidence, but without an independent census across
+every session and cycle they do not establish complete cost for a closed seed.
+Partitioning is not enabled by this display change. Closure receipts and token
+arithmetic retain their existing parser-owned contracts.
+
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
 publisher partitions token and coverage samples by rig/agent/harness/session,
