@@ -1,4 +1,4 @@
-Script started on 2026-10-22 20:37:43-04:00 [COMMAND="python3 docs/demos/context-threshold/demo.py 5d5d967" <not executed on terminal>]
+Script started on 2026-10-22 20:41:07-04:00 [COMMAND="stty -onlcr && python3 docs/demos/context-threshold/demo.py 5d5d967" <not executed on terminal>]
 BASE 5d5d967
 Input: 500/1000 tokens; declared monitoring, default thresholds
 Hint emitted: False
@@ -13,4 +13,4 @@ Input: 750/1000 tokens; declared monitoring, default thresholds
 {"decision": "block", "reason": "CONTEXT HINT: context 75% (750 of 1,000); configured hint at 50%. Write a checkpoint, then request `st agent cycle --self --checkpoint-file <notes-file>`. No cycle has been scheduled. HARD HANDOFF at 75%: finish only the operation needed to leave work safe, then hand off. No Jev override; do not start further work.", "systemMessage": "CONTEXT HINT: context 75% (750 of 1,000); configured hint at 50%. Write a checkpoint, then request `st agent cycle --self --checkpoint-file <notes-file>`. No cycle has been scheduled. HARD HANDOFF at 75%: finish only the operation needed to leave work safe, then hand off. No Jev override; do not start further work."}
 Hint emitted: True
 
-Script done on 2026-10-22 20:37:43-04:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-22 20:41:07-04:00 [COMMAND_EXIT_CODE="0"]
