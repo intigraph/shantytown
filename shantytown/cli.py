@@ -4084,18 +4084,28 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
-    need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
-    if harness_mod.name_for(card, a.root) == "claude":
+    def failure_check():
+        if harness_mod.name_for(card, a.root) != "claude":
+            return None
         from .stop_failure import verify_wiring
         verdict = verify_wiring(a.root, card.name, session, getattr(panes, "cmdline", None))
-        if verdict != "verified":
-            print(f"  StopFailure {verdict}: {card.name}; live notification hook "
-                  "not verified. Re-provision settings and start through st; "
-                  "the running pane was left intact.", file=sys.stderr)
-            return REFUSED if verdict == "missing" else CANNOT_TELL
+        if verdict == "verified":
+            print(f"  StopFailure VERIFIED for {card.name}: process-selected settings "
+                  "match the recorded launch snapshot.")
+            return None
+        label = "FAILED" if verdict == "missing" else "UNVERIFIED"
+        print(f"  StopFailure {label} ({verdict}): {card.name}; live notification hook "
+              "not verified. Re-provision settings and start through st; "
+              "the running pane was left intact.", file=sys.stderr)
+        return REFUSED if verdict == "missing" else CANNOT_TELL
+
+    need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
     if not need:
-        # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
-        # doubt about a requirement that does not exist. An isolated agent (no
+        failure = failure_check()
+        if failure is not None:
+            return failure
+        # No NORMAL Stop directions are required. Claude's independent API-error
+        # hook was checked above; do not invent a send/drain requirement. An isolated agent (no
         # lead above, no reports below) has no stop event to route in either
         # direction; reporting could-not-tell here would be a false alarm on
         # every leaf agent, and false alarms are what teach an operator to stop
@@ -4145,6 +4155,9 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
               f"with `st agent stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
+    failure = failure_check()
+    if failure is not None:
+        return failure
     verified = sorted(need) if need else "none required by the graph"
     print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
