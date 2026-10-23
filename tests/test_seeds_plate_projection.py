@@ -481,6 +481,26 @@ def test_decision_and_roster_capacity_preserve_blocked_scope_in_actual_rdf(
         data.close()
 
 
+def inbox_wide_rows(wire):
+    """Wire fixtures for the wide inbox projection and its status rows."""
+    from shantytown.seeds_inbox import FIELDS
+    grouped, extra = {}, []
+    for field in wire:
+        if field["predicate"] not in FIELDS:
+            continue
+        key = (field["subject"], field["graph"])
+        row = grouped.setdefault(key, {"subject": key[0], "graph": key[1]})
+        name = FIELDS[field["predicate"]]
+        if name in row and row[name] != field["value"]:
+            extra.append({**row, name: field["value"]})
+        else:
+            row[name] = field["value"]
+    selected = list(grouped.values()) + extra
+    return selected + [{"subject": row["subject"], "graph": row["graph"],
+                        "kind": "owner-status", "owner_status": row.get("status"),
+                        "plain_status": True} for row in selected]
+
+
 def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     from shantytown.inbox import TrackerInbox
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
@@ -495,7 +515,7 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
         if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
             wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
         from shantytown.seeds_inbox import FIELDS
-        return answer([r for r in wire if r["predicate"] in FIELDS])
+        return answer(inbox_wide_rows(wire))
 
     closed = [False]
     monkeypatch.setattr(seeds_plate, "_query", query)
@@ -533,7 +553,7 @@ def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
         if fault == "missingfield":
             wire = [r for r in wire if r["predicate"] != seeds_plate.SCHEMA + "identifier"]
         from shantytown.seeds_inbox import FIELDS
-        return answer([r for r in wire if r["predicate"] in FIELDS])
+        return answer(inbox_wide_rows(wire))
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     with pytest.raises(PartialAnswer):
