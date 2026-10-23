@@ -135,7 +135,8 @@ with p.open('a') as f:
         process.stdout.close()
 # Policy is portable; reader coordinates and credentials emphatically are not.
 POLICY_FIELDS = ('window', 'on_signal_lost', 'relax_margin', 'max_age_seconds',
-                 'max_agents', 'delegation_reserve_pct', 'exempt', 'limit_id')
+                 'max_agents', 'delegation_reserve_pct', 'exempt', 'limit_id',
+                 'admit_class', 'class_exempt')
 
 
 def policy_wire(policy):

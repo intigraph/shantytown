@@ -959,7 +959,8 @@ class IdleFleetAlerter:
             card = self._reg.get(worker)
             verdict = (self._verdict_for(card) if self._verdict_for else
                        feed_check.haul_governor_verdict(self._shanty_root, card))
-            admitted = feed_check.admitted_haul(candidates, card, verdict, self._log)
+            admitted = feed_check.admitted_haul(
+                candidates, card, verdict, self._log, root=self._shanty_root)
             allowed_ids = active_ids | {b.get("id") for b in admitted}
             queues[worker] = [bid for bid in queue if bid in allowed_ids]
         # A whole turn can fit between idle scrapes, and assignments can arrive

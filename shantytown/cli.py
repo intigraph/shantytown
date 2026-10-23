@@ -937,8 +937,12 @@ def _governor_verdicts_for(a, cards):
     fleet = getattr(a, '_account_governor', None)
     if fleet is not None and fleet.errors:
         raise RuntimeError(fleet.fallback())
+    from . import work_class
     if not governors:
-        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+        return {card.name: (harness_mod.name_for(card, root=a.root),
+                work_class.for_card(
+                    gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                    cfg.governor, card, a.root) if cfg.governor.admit_class else None)
                 for card in cards}
     from . import account_state
     verdicts, out = {}, {}
@@ -949,7 +953,8 @@ def _governor_verdicts_for(a, cards):
         if lane not in verdicts:
             verdicts[lane] = (unconfigured if unconfigured is not None else
                               governor.evaluate(persist=False))
-        out[card.name] = lane, verdicts[lane]
+        out[card.name] = lane, work_class.for_card(
+            verdicts[lane], cfg.governor, card, a.root)
     return out
 
 
@@ -981,7 +986,7 @@ def _dispatch_gate(a):
     if fleet is not None and fleet.errors:
         return lambda item, agent=None: fleet.fallback()
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
-    if not governors and not stood_down:
+    if not governors and not stood_down and not cfg.governor.admit_class:
         return None
     cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
@@ -1052,7 +1057,11 @@ def _dispatch_gate(a):
                 print(f"  ⚠ {mem.warning}", file=sys.stderr)
 
         if not governors:
-            return ""
+            from . import work_class
+            verdict = work_class.for_card(
+                gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                cfg.governor, card, a.root)
+            return verdict.admits(item, agent)
 
         if sender is not None and (cfg.governor.by_harness or getattr(cfg, "accounts", {})) and not delegated:
             _sh, source_governor, source_unconfigured = _governor_for(
@@ -1078,7 +1087,8 @@ def _dispatch_gate(a):
                                  else governor.evaluate(persist=False))
             if verdicts[harness].alarm:
                 print(f"  ⚠ {verdicts[harness].alarm}", file=sys.stderr)
-        verdict = verdicts[harness]
+        from . import work_class
+        verdict = work_class.for_card(verdicts[harness], cfg.governor, card, a.root)
         refusal = verdict.admits(item, agent)
         if not refusal and verdict.waives(item, agent):
             print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
@@ -1605,6 +1615,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--review-routing", action="store_true",
+                    help="bounded local identity/pane observation; no full crew census")
     cr.add_argument("--no-priority-advice", action="store_true",
                     help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
@@ -1874,6 +1886,10 @@ def build_parser() -> argparse.ArgumentParser:
     ib.add_argument("--routine", action="store_true",
                     help="with -d only: opt-in batchable progress; scoped admin "
                          "ENFORCE may defer its live nudge to the existing tend tick")
+    ib.add_argument("--retain-pointer", action="store_true",
+                    help="with -d: retain the unread durable pointer after live "
+                         "delivery; on Seeds use a fresh delivery slug and avoid "
+                         "the automatic inbox retirement read")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
         "--count", action="store_true",
@@ -2556,6 +2572,9 @@ def _run_command(a) -> int:
     if a.cmd == "defer":
         return _cmd_defer(a)
     if a.cmd == "crew":
+        if getattr(a, "review_routing", False):
+            from .review_routing import command
+            return command(a)
         return _cmd_crew(a)
     if a.cmd == "roles":
         # aegis-fagvi: one noun, three verbs. `set`/`sync` reuse the same
@@ -5567,6 +5586,12 @@ def _cmd_inbox(a) -> int:
     if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
         print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
         return REFUSED
+    if getattr(a, "retain_pointer", False) and (
+            not getattr(a, "durable", False) or not a.message
+            or getattr(a, "count", False) or getattr(a, "read", False)
+            or getattr(a, "read_id", [])):
+        print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
+        return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
     if not a.message and (getattr(a, "durable", False) or a.dry_run) \
@@ -5953,7 +5978,16 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
-        item = box.deliver(a.agent, msg, frm=_me(a))
+        if getattr(a, "retain_pointer", False) and backend == "seeds":
+            # A fresh namespace avoids repeated probes of short-id collisions
+            # on a large board. This uses the SDK's ordinary --slug contract;
+            # persist-first and the store's compare-and-set remain unchanged.
+            import secrets
+            if not isinstance(box, TrackerInbox):
+                raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
+            item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
+        else:
+            item = box.deliver(a.agent, msg, frm=_me(a))
     except MessageTooLong as e:                  # PERMANENT: the message will never fit
         # Not a "could not tell" (2) — the store is fine; the message is too long,
         # and retrying it unchanged will fail identically. That is a REFUSED (1)
@@ -6036,6 +6070,10 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
                   f"the message survives and they read it with `st inbox`.")
             return OK
 
+        if getattr(a, "retain_pointer", False):
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  "+ live; durable pointer retained by request")
+            return OK
         try:
             box.mark_read(agent.name, ids=[item.id])
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
@@ -6078,6 +6116,8 @@ def _inbox_read(a, me: str) -> int:
     explicit ack. An inbox that emptied itself because a status bar looked at it
     would be worse than no inbox: the recipient would never learn what was said.
     """
+    read_ids = getattr(a, "read_id", [])
+    selected_only = False
     try:
         # SAME DEFAULT AS THE DURABLE WRITE. The write side defaults to beads
         # (dearing, qdal.2); if the read side defaulted to files, a bare
@@ -6088,7 +6128,9 @@ def _inbox_read(a, me: str) -> int:
         # module's own docstring exists to forbid. An inbox you cannot read is
         # not an inbox, so the two defaults move together or not at all.
         box = _inbox(a, default="beads")
-        unread = box.unread(me)
+        select = getattr(box, "unread_selected", None)
+        selected_only = bool(read_ids) and not getattr(a, "count", False) and callable(select)
+        unread = select(me, read_ids) if selected_only else box.unread(me)
     except Exception as e:
         # Could-not-look is never "you have no mail" (the whole reason exit 2
         # exists here). --count stays silent on stdout so a parser sees nothing.
@@ -6099,7 +6141,6 @@ def _inbox_read(a, me: str) -> int:
         print(len(unread))
         return OK
 
-    read_ids = getattr(a, "read_id", [])
     if getattr(a, "read", False) or read_ids:
         if read_ids:
             unread_ids = {m.id for m in unread}
@@ -6117,8 +6158,10 @@ def _inbox_read(a, me: str) -> int:
                     if read_ids else unread[:15])
         remaining = len(unread) - len(selected)
         if getattr(a, "dry_run", False):
+            remainder = ("other messages not enumerated" if selected_only else
+                         f"{remaining} snapshot message(s) not selected")
             print(f"  would mark {len(selected)} message(s) read for {me}; "
-                  f"{remaining} snapshot message(s) not selected. 0 writes.")
+                  f"{remainder}. 0 writes.")
             return OK
         print(f"  acknowledging {len(selected)} message(s) for {me}; "
               "closes are independent, not atomic.", flush=True)
@@ -6151,6 +6194,8 @@ def _inbox_read(a, me: str) -> int:
         if remaining:
             next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
             print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
+        if selected_only:
+            print("  other messages not enumerated.", flush=True)
         if failed:
             # A timed-out close may have landed. Keep its payload on stderr
             # too: consumers may retain the error channel separately.
