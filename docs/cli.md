@@ -2147,6 +2147,10 @@ or published by this operation. Caps and the default twenty-shape pause remain.
 It does **not** enable continuous publication. Read the review status after a
 lost reply rather than replaying acceptance. A visible successor is evidence of
 the transition, not evidence of a subsequent successful cost publication.
+Before the first transition, source rollback can restore the previous release.
+After a generation is selected, retain a generation-aware reader: older releases
+ignore the pointer. Pause and reconcile publication through the normal operator
+path before a rollback to such a release; never discard generation evidence.
 
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
