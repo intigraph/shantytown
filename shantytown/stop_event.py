@@ -710,7 +710,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             from .feed_check import admitted_haul, haul_governor_verdict
             mine = admitted_haul(
                 mine, card, haul_governor_verdict(root, card),
-                lambda msg: print(msg, file=sys.stderr))
+                lambda msg: print(msg, file=sys.stderr), root=root)
             if not mine:
                 return 0
 
