@@ -129,7 +129,10 @@ CODEX_DAEMON_WEDGED = "codex-daemon-wedged"  # named launch-depth blocker
 # is what a fault means here. So the verdict is split at the point of action —
 # see _live — rather than by making the whole condition non-faulty, which would
 # hide the un-fixable half in the same silence auth-dead was rescued from.
+SAFEGUARD_BLOCKED = "safeguard-blocked"  # held for human review, never auto-cycled
+
 _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP,
+                     SAFEGUARD_BLOCKED,
                      LIMITED, RUNTIME_EXITED})
 
 # RESPAWN BACKOFF (GitHub #12). A crash-looping agent — bad card, broken
@@ -652,6 +655,13 @@ class Tender:
         # command is `st fleet tend --reauth` — one command, operator-timed.
         from .runtime import auth_expired
         plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
+        from .runtime import safeguard_blocked
+        if safeguard_blocked(self._runtime, plain):
+            from .safeguard import request_ids
+            return Finding(card.name, "up", SAFEGUARD_BLOCKED,
+                           "provider refusal; requests=" +
+                           (",".join(request_ids(plain)) or "UNKNOWN") +
+                           "; held for administrator review: no automatic recovery or input")
         if auth_expired(self._runtime, plain):
             return Finding(card.name, "up", AUTH_DEAD,
                            "alive and LOGIN-EXPIRED: every API call fails; the "

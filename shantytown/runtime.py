@@ -208,6 +208,12 @@ def limit_reached(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def safeguard_blocked(rt, plain: str) -> bool:
+    """An explicit current provider refusal holds every unattended send path."""
+    from .safeguard import current
+    return bool(current(plain))
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""

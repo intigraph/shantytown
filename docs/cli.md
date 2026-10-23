@@ -2897,3 +2897,20 @@ feature is source-only until reviewed adoption and a separately authorized scope
 trial proves the actual scheduled path and declared-exemption coverage. Rollback:
 set the scoped policy OFF, drain/read retained pointers, then revert the source;
 do not remove unread messages or revert while routine entries remain pending.
+
+### Provider safety refusals
+
+A current provider banner saying `safeguards flagged this message` or
+`safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
+reports. Tend treats it as a fault and holds it for administrator review. It
+never clears context, switches models, cycles, or sends recovery input for this
+condition. Ordinary sends refuse while the banner is current.
+
+Tend persists one administrator inbox report per observed refusal, including the
+agent, request IDs when visible, and plate items (or `UNKNOWN` on a failed read).
+Old scrollback, a later response, and a cleared session do not count. Missing IDs
+remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
+crew root; long ID/plate lists are abbreviated in the inbox and retained there.
+A pending or uncertain delivery is reported loudly and never automatically
+replayed: inspect its ledger and durable inbox before any manual retry. Human
+review determines the next step.

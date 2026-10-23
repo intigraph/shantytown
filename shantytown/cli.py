@@ -10183,6 +10183,25 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
+def _safeguard_reports(a, agents, rep, panes):
+    """Persist refusal reports to the canonical administrator, never the worker."""
+    from . import safeguard
+    from .tend import SAFEGUARD_BLOCKED
+    from .tier import find_administrator
+    if not any(f.verdict == SAFEGUARD_BLOCKED for f in rep.findings):
+        return []
+    administrator = find_administrator(_registry(a))
+    if not administrator:
+        raise RuntimeError("safeguard report: administrator UNKNOWN")
+    def deliver(text):
+        message = _inbox(a, default="beads").deliver(administrator, text, frm="st-tend")
+        if not getattr(message, "id", None):
+            raise RuntimeError("safeguard report: durable receipt UNKNOWN")
+        return message.id
+    return safeguard.report(a.root, rep.findings, agents, panes, _plate(a), deliver,
+                            lambda text: print("  " + text, file=sys.stderr))
+
+
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
     """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
@@ -13252,6 +13271,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                              generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
+        _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A

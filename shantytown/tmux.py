@@ -290,6 +290,11 @@ class PaneInMode(PaneNotAgent):
 
 
 def _refuse_task_list(pane: str, screen: str) -> None:
+    from .triage import strip_attrs
+    from .safeguard import current
+    if current(strip_attrs(screen)):
+        raise PaneNotAgent(
+            f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
     from .harness import task_list_evidence
     if task_list_evidence(screen):
         raise PaneTaskList(
