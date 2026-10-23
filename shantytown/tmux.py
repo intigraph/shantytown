@@ -104,22 +104,6 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
 
 
-def _codex_owned_activity(screen: str, text: str) -> bool:
-    """Read runtime activity without treating our framed input as chrome.
-
-    Mask only a proven exact owned composer, preserving its prompt and row
-    count so the bounded chrome window still includes real activity above it.
-    Unrecognized or foreign frames retain the conservative activity reader.
-    """
-    from . import triage
-    framed = triage.codex_composer(screen)
-    if framed is not None and _codex_owned_input(screen, text):
-        prefix, separator, suffix = screen.rpartition(framed)
-        if separator:
-            screen = prefix + "›" + "\n" * framed.count("\n") + suffix
-    return triage.mid_flight(screen)
-
-
 def _codex_queued(screen: str, text: str) -> bool:
     """Measured queue chrome, paired with this message's preview."""
     from .triage import strip_attrs
@@ -706,33 +690,13 @@ class Tmux:
                            check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
-        # Recheck copy mode after typing. Busy Codex also gets a fresh owned
-        # composer/runtime check after the paste-settle delay below.
+        # Before the settle, so the settle stays the last thing before Enter.
         self._refuse_in_mode(pane, sent=len(chunks))
-        submit_key = "Enter"
         if codex:
             # A key inside the terminal's paste burst can become text instead
             # of a submit. Chunking alone does not separate the final Enter.
             time.sleep(_CODEX_SETTLE_S)
-            from . import triage
-            if triage.mid_flight(before):
-                # Busy Codex advertises Tab to queue, not Enter. Do not leave
-                # our first submission dependent on a later retry. Re-read
-                # exact ownership and runtime immediately before that key;
-                # ghost/foreign/clipped input never authorizes a Tab.
-                try:
-                    fresh = self.capture(pane, attrs=True, timeout=2)
-                except (OSError, subprocess.SubprocessError) as exc:
-                    raise PaneSubmissionUnverified(
-                        "UNVERIFIED: busy composer cannot be re-read; no submission key sent") from exc
-                if (not _codex_owned_input(fresh, text)
-                        or not self._confirmed_codex(pane, self.foreground(pane))):
-                    raise PaneSubmissionUnverified(
-                        "UNVERIFIED: busy composer ownership/runtime changed; no submission key sent")
-                self._refuse_in_mode(pane, sent=len(chunks))
-                submit_key = "Tab" if _codex_owned_activity(fresh, text) else "Enter"
-                before = fresh
-        subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
+        subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
         if codex:
             self._verify_codex_submission(pane, text, before)
 
@@ -759,7 +723,7 @@ class Tmux:
 
     def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
-        was_busy = _codex_owned_activity(before, text)
+        was_busy = triage.mid_flight(before)
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
         deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
@@ -801,7 +765,7 @@ class Tmux:
                 # the runtime may have exited or become unreadable meanwhile.
                 if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
-                busy = _codex_owned_activity(screen, text)
+                busy = triage.mid_flight(screen)
                 self._refuse_in_mode(pane, sent=1)
                 subprocess.run(self._cmd("send-keys", "-t", pane,
                                          "Tab" if busy else "Enter"), check=True)
