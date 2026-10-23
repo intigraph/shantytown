@@ -506,6 +506,33 @@ def evaluate(rows, now: datetime, is_closed=None) -> list:
     return out
 
 
+def _mechanical_notes(notes: str, condition: Condition) -> bool:
+    """A marker alone, or the exact informational metadata the closed writer adds.
+
+    Free prose, historical notes, unknown fields and additional markers retain
+    judgement. The metadata exception is closed-only and matches the writer's
+    order and complete scope-flag values, never arbitrary key/value lines.
+    """
+    text = notes.strip()
+    if _CONDITION.fullmatch(text) is not None:
+        return True
+    lines = text.splitlines()
+    if (condition.kind != "closed" or len(lines) not in (2, 3)
+            or _CONDITION.fullmatch(lines[0]) is None
+            or parse_condition(lines[0]) != condition):
+        return False
+    prefix = "dependency_reason: "
+    if not lines[1].startswith(prefix):
+        return False
+    reason = lines[1][len(prefix):]
+    if not reason or reason != reason.strip():
+        return False
+    return len(lines) == 2 or lines[2] in (
+        "gate_scope_flag: cross-repo/epic; Sattler notification pending natural tend",
+        "gate_scope_flag: UNKNOWN repo/epic; Sattler verification pending natural tend",
+    )
+
+
 def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     """Only an unambiguous mechanical condition may change tracker state.
 
@@ -518,7 +545,13 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     if row.get("status") == "open" and not row.get("defer_until"):
         return False
     labels = row.get("labels") or []
-    if any(HOLDING_LABEL.match(l) and l != BEAD_BLOCK_LABEL and l not in TOPIC_LABELS
+    mechanical_labels = {BEAD_BLOCK_LABEL}
+    # A definite closed/released/installed fact can satisfy its external hold.
+    # A review date is not that fact; human/access labels remain independent.
+    if (finding.met is True and finding.condition is not None
+            and finding.condition.kind in ("closed", "release", "installed")):
+        mechanical_labels.add("blocked:external")
+    if any(HOLDING_LABEL.match(l) and l not in mechanical_labels and l not in TOPIC_LABELS
            for l in labels):
         return False
     if any(d.get("dependency_type") == "blocks" and d.get("status") != "closed"
@@ -537,10 +570,10 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
         if (len(markers) != 1 or len(_MARKER_PRESENT.findall(notes)) != 1
                 or not finding.met):
             return False
-        # The defer command stores the supplied reason verbatim. Only a
-        # marker-only reason is mechanically decidable; prose on ANY line may
-        # carry an additional approval gate that a parser must not discard.
-        return _CONDITION.fullmatch(notes.strip()) is not None
+        # The closed writer appends required dependency metadata even to a
+        # marker-only reason. Recognize that exact envelope without discarding
+        # prose that may carry an additional approval gate.
+        return _mechanical_notes(notes, finding.condition)
     return bool(finding.lapsed_at and not notes.strip())
 
 
