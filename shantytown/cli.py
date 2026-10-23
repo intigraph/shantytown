@@ -11814,7 +11814,7 @@ def _cmd_input(a) -> int:
 
     if not rep.changed:
         return CANNOT_TELL
-    if rep.verdict == input_box.TASK_LIST and (a.clear or a.dismiss):
+    if rep.verdict in (input_box.TASK_LIST, input_box.BUSY, input_box.ABSENT) and (a.clear or a.dismiss):
         return REFUSED
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL

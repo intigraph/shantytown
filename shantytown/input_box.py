@@ -295,9 +295,8 @@ def clear(panes, pane: str, awaiting: bool = False) -> Report:
 def dismiss(panes, pane: str) -> Report:
     """Send Escape to make a suggestion go away.
 
-    Only useful against a GHOST box, but permitted on any — Escape is harmless
-    and an operator who wants the box visually clean should not have to argue
-    with the tool about it.
+    Only useful against a GHOST box. Busy Codex refuses because Escape
+    interrupts its turn; no editing or interrupt key is sent in that state.
     """
     screen = panes.capture(pane, attrs=True)
     before = _prompt_line(screen)
@@ -305,6 +304,12 @@ def dismiss(panes, pane: str) -> Report:
     if verdict == TASK_LIST:
         return Report(TASK_LIST, raw, text, detail=(
             "REFUSED: pane is on the task list; open the intended task first."))
+    if verdict in (ABSENT, UNKNOWN):
+        return Report(verdict, raw, text, detail=(
+            "REFUSED: no verified input box; Escape could interrupt an unknown surface."))
+    if _codex_box(screen) is not None and _codex_busy(screen):
+        return Report(BUSY, raw, text, detail=(
+            "REFUSED: Codex is busy; Escape would interrupt the turn. No keys sent."))
     panes.control(pane, "Escape")
     screen, changed = _settle(panes, pane, before)
     verdict, raw, text = _classify(screen)

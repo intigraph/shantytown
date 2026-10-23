@@ -95,3 +95,40 @@ def test_foreign_text_stops_further_deletion():
 def test_terminal_padding_does_not_hide_composer():
     screen = capture("ian-before.txt") + "\n" * 20
     assert input_box.show(Panes([screen]), "p").verdict == input_box.TYPED
+
+
+@pytest.mark.parametrize("box", ["typed", "empty", "ghost"])
+@pytest.mark.parametrize("activity", ["working", "queue"])
+def test_busy_dismiss_never_sends_escape(box, activity):
+    if box == "ghost":
+        screen = "\x1b[1m›\x1b[0m \x1b[2mImprove documentation\x1b[0m\n\n  GPT-6.1-Sol default · ~/project · Task\n ? for shortcuts"
+    else:
+        screen = capture("ian-before.txt" if box == "typed" else "ian-after.txt")
+    screen = ("• Working (12s • esc to interrupt)\n" + screen if activity == "working"
+              else screen + "tab to queue message\n")
+    p = Panes([screen])
+    result = input_box.dismiss(p, "p")
+    assert result.verdict == input_box.BUSY
+    assert "REFUSED" in result.detail
+    assert p.keys == []
+
+
+def test_cli_busy_dismiss_exits_refused(monkeypatch):
+    from types import SimpleNamespace
+    from shantytown import cli, runtime
+    p = Panes(["• Working (12s • esc to interrupt)\n" + capture("ian-after.txt")])
+    p.exists = lambda pane: True
+    monkeypatch.setattr(cli, "_panes", lambda args: p)
+    monkeypatch.setattr(cli, "_registry", lambda args: SimpleNamespace(get=lambda agent: SimpleNamespace(pane="p")))
+    monkeypatch.setattr(cli, "_runtime", lambda *args: None)
+    monkeypatch.setattr(runtime, "asks_a_question", lambda *args: False)
+    args = SimpleNamespace(agent="example", clear=False, dismiss=True)
+    assert cli._cmd_input(args) == cli.REFUSED
+    assert p.keys == []
+
+
+@pytest.mark.parametrize("screen", ["ordinary output", "❯ unclassified text"])
+def test_dismiss_unverified_surface_refuses_without_keys(screen):
+    p = Panes([screen])
+    assert "REFUSED" in input_box.dismiss(p, "p").detail
+    assert p.keys == []
