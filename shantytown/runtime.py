@@ -1767,7 +1767,8 @@ class ClaudeRuntime:
         assert program.carries_settings(launch, settings_path), \
             "compose produced a settings-less launch"
         from .account_auth import wrap
-        return wrap(card, launch, self._root)
+        from .isolated_launch import wrap as isolate
+        return isolate(card, wrap(card, launch, self._root))
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
