@@ -1892,6 +1892,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
+    ib.add_argument("--routine", action="store_true",
+                    help="with -d only: opt-in batchable progress; scoped admin "
+                         "ENFORCE may defer its live nudge to the existing tend tick")
     ib.add_argument("--retain-pointer", action="store_true",
                     help="with -d: retain the unread durable pointer after live "
                          "delivery; on Seeds use a fresh delivery slug and avoid "
@@ -5597,6 +5600,9 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
+        print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
+        return REFUSED
     if getattr(a, "retain_pointer", False) and (
             not getattr(a, "durable", False) or not a.message
             or getattr(a, "count", False) or getattr(a, "read", False)
@@ -5974,6 +5980,13 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     local = local_host(a.root)
     offhost = agent.host is not None and agent.host != local
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
+    from . import admin_inbox
+    routine_wait = (admin_inbox.wait_for(a.root, agent)
+                    if getattr(a, "routine", False) and not offhost else 0)
+    if a.dry_run and routine_wait:
+        print(f"  would: persist routine pointer via {backend}; batch live nudge "
+              f"after {routine_wait:.0f}s on the next tend tick; 0 writes, 0 send-keys")
+        return OK
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
         if offhost:
@@ -6048,6 +6061,20 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    if routine_wait:
+        try:
+            admin_inbox.enqueue(a.root, agent, item, backend, routine_wait,
+                                retain=getattr(a, "retain_pointer", False))
+        except Exception as error:
+            # A failed write may have committed; never create a second live
+            # attempt by guessing. The durable pointer remains the fallback.
+            print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine "
+                  f"scheduling UNKNOWN ({type(error).__name__}); pointer retained, "
+                  "no live submission. Read with st inbox.")
+            return OK
+        print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine live "
+              f"nudge queued for {routine_wait:.0f}s + next tend tick; pointer remains unread")
+        return OK
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
     # WRAPPED (GitHub #26): the send was outside the try, so a tmux failure after
     # a SUCCESSFUL persist exited 1 with a traceback. Every consumer reading the
@@ -13232,6 +13259,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         _fleet_sweep("ceiling-transfer",
                      lambda: _ceiling_transfer_sweep(a, agents, rep, log=_log))
 
+        from . import admin_inbox
+        _sweep("admin-routine-inbox", lambda: admin_inbox.sweep(
+            Path(a.root), agents, panes,
+            lambda backend: _inbox(argparse.Namespace(**(vars(a) | {"backend": backend})),
+                                   default="beads"), log=_log))
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
             agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
