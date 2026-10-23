@@ -754,8 +754,12 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """
     result = set()
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
-    for offset in range(0, len(rows), 250):
-        chunk = rows[offset : offset + 250]
+    # A correlated NOT EXISTS costs seconds per batch on a real board (61gx).
+    # Return eligibility and active-blocker evidence in one observation instead.
+    # Two evidence branches share the former 250-subject VALUES budget.
+    batch_size = 250 // 2
+    for offset in range(0, len(rows), batch_size):
+        chunk = rows[offset : offset + batch_size]
         expected = {row["id"] for row in chunk}
         branches = []
         for graph in graphs:
@@ -763,20 +767,33 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
                 bindings = " ".join(
                     _iri(SEEDS + "item/" + quote(row["id"], safe=""))
                     for row in chunk if row["status"] == state)
-                branches.append(
-                    f"{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {bindings} }} "
+                candidate = (
+                    f"VALUES ?s {{ {bindings} }} "
                     f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
-                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
-                    f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . ")
+                blocker = (
+                    f"?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
                     f"?blocker <{SEEDS}ontology/status> ?bs . "
-                    'FILTER(?bs != "closed" && ?bs != "tombstone") } } }')
-        query = "SELECT DISTINCT ?id WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
+                    'FILTER(?bs != "closed" && ?bs != "tombstone") ')
+                for evidence, extra in (("eligible", ""), ("blocked", blocker)):
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ {candidate}{extra} }} "
+                        f"BIND({json.dumps(graph)} AS ?graph) "
+                        f"BIND({json.dumps(evidence)} AS ?evidence) }}")
+        query = "SELECT DISTINCT ?id ?graph ?evidence WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
         wire = _query(proof, query, timeout)["rows"]
         if len(wire) >= 1000 or any(
-            not isinstance(r.get("id"), str) or r["id"] not in expected for r in wire
+            not isinstance(r.get("id"), str) or r["id"] not in expected
+            or r.get("graph") not in graphs
+            or r.get("evidence") not in ("eligible", "blocked") for r in wire
         ):
             raise ValueError("invalid readiness response")
-        result.update(r["id"] for r in wire)
+        eligible = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "eligible"}
+        blocked = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "blocked"}
+        if not blocked <= eligible:
+            raise ValueError("invalid readiness evidence")
+        # A blocker in another graph must not suppress an eligible observation.
+        result.update(identifier for _, identifier in eligible - blocked)
     return result
 
 
