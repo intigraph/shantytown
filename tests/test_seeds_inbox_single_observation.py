@@ -48,7 +48,7 @@ def test_one_read_combines_prefixes_graphs_owners_and_format(wire):
     rows = si.read(PROOF, 'crew/worker').exact()
     assert {r['id'] for r in rows} == {'demo-message', 'demo-legacy'}
     assert len(calls) == 1 and calls[0].startswith('SELECT')
-    assert 'revision' in calls[0] and 'unsupported-owner-status' in calls[0]
+    assert 'revision' in calls[0] and 'owner-status' in calls[0]
     assert not any(p in calls[0] for p in ('description', 'notes', 'retained'))
 
 
@@ -143,3 +143,53 @@ def test_ack_empty_is_noop_and_large_selection_is_bounded(wire, monkeypatch):
     assert box.mark_read('worker', []) == [] and not calls and not writes
     assert [m.id for m in box.mark_read('worker', ids)] == ids
     assert len(calls) == 2 and writes == ids
+
+
+def test_owner_first_query_is_bounded_and_skips_closed_field_hydration(wire):
+    data, calls = wire
+    add(data)
+    for i in range(20):
+        # Closed receipts need no field hydration for an unread enumeration.
+        add(data, f'demo-old-{i}', status='closed', title='inbox: old')
+    rows = si.read(PROOF, 'worker').exact()
+    assert [r['id'] for r in rows] == ['demo-message']
+    assert len(calls) == 1 and len(calls[0].encode()) < 6000
+    assert 'SELECT DISTINCT ?s' not in calls[0]
+    assert 'FILTER NOT EXISTS' not in calls[0]
+    assert '?s ?predicate' not in calls[0] and 'GRAPH ?' not in calls[0]
+
+
+def test_foreign_bad_status_is_not_global_and_owned_mixed_work_stays_supported(wire):
+    data, calls = wire
+    add(data)
+    add(data, 'demo-foreign-bad', owner='other', status=None, title='work')
+    g, subject = add(data, 'demo-mixed-work', status='open', title='ordinary work')
+    g.add((subject, URIRef(sp.SEEDS+'ontology/status'), Literal('alien')))
+    assert [r['id'] for r in si.read(PROOF, 'worker').exact()] == ['demo-message']
+    g.remove((subject, URIRef(sp.SEEDS+'ontology/status'), Literal('open')))
+    assert not si.read(PROOF, 'worker').complete
+
+
+def test_principal_iri_owner_and_dual_spelling_do_not_duplicate_receipts(wire):
+    data, calls = wire
+    g, subject = add(data)
+    g.add((subject, URIRef(sp.SCHEMA+'agent'), URIRef(sp.SEEDS+'principal/worker')))
+    rows = si.read(PROOF, 'worker').exact()
+    assert len(rows) == 1 and rows[0]['id'] == 'demo-message'
+    g.remove((subject, URIRef(sp.SCHEMA+'agent'), Literal('worker')))
+    assert si.read(PROOF, 'worker').exact() == rows
+
+
+def test_unsupported_wire_cannot_be_reported_as_an_empty_inbox(monkeypatch):
+    monkeypatch.setattr(sp, '_query', lambda *a: {'rows': [
+        {'subject': sp.SEEDS+'item/demo-message', 'graph': G,
+         'predicate': sp.SCHEMA+'name', 'value': 'inbox: old wire'}]})
+    assert not si.read(PROOF, 'worker').complete
+
+
+def test_nonliteral_owned_status_is_not_a_known_status(wire):
+    data, calls = wire
+    add(data)
+    g, subject = add(data, 'demo-nonliteral', title='ordinary work', status=None)
+    g.add((subject, URIRef(sp.SEEDS+'ontology/status'), URIRef('https://example.test/open')))
+    assert not si.read(PROOF, 'worker').complete

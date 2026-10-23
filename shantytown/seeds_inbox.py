@@ -35,27 +35,22 @@ def read(proof, agent: str, *, include_closed=False, identifiers=None,
                     not isinstance(i, str) or not i for i in identifiers):
                 raise ValueError("receipt batch must contain 1..25 exact IDs")
         graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        if identifiers is None:
+            rows = sp._query(proof, _owned_query(graphs, owners, include_closed), timeout)["rows"]
+            if len(rows) >= 10000:
+                raise ValueError("inbox field budget reached")
+            if any(r.get("problem") == "legacy-schema" for r in rows):
+                raise LegacyInboxSchema("positive legacy revision marker")
+            return Answer.complete_read(
+                _decode(_owned_fields(rows, graphs, include_closed), graphs,
+                        owners, None, include_closed), how=how)
         branches = []
         for graph in graphs:
             branches.append(f'{{ GRAPH {sp._iri(graph)} {{ ?legacy '
                             f'<{sp.SEEDS}ontology/revision> ?revision }} '
                             'BIND("legacy-schema" AS ?problem) }')
-            if identifiers is not None:
-                scopes = [f'BIND({sp._iri(sp.SEEDS + "item/" + quote(i, safe=""))} AS ?s) '
-                          f'?s a <{sp.SCHEMA}Action> . ' for i in identifiers]
-            else:
-                scopes = []
-                statuses = STATUSES if include_closed else STATUSES[:-1]
-                status_filter = ', '.join(json.dumps(s) for s in statuses)
-                for owner in owners:
-                    for term in (json.dumps(owner),
-                                 sp._iri(sp.SEEDS + "principal/" + quote(owner, safe=""))):
-                        scopes.append(f'?s a <{sp.SCHEMA}Action> ; '
-                                      f'<{sp.SCHEMA}agent> {term} ; '
-                                      f'<{sp.SEEDS}ontology/status> ?wanted ; '
-                                      f'<{sp.SCHEMA}name> ?title . '
-                                      f'FILTER(?wanted IN ({status_filter})) '
-                                      f'FILTER(REGEX(STR(?title), {sp.MESSAGE_PATTERN})) ')
+            scopes = [f'BIND({sp._iri(sp.SEEDS + "item/" + quote(i, safe=""))} AS ?s) '
+                      f'?s a <{sp.SCHEMA}Action> . ' for i in identifiers]
             for scope in scopes:
                 # Every predicate and graph stays constant, as in owner_rows;
                 # a variable-predicate graph scan is not a read-count saving.
@@ -64,9 +59,6 @@ def read(proof, agent: str, *, include_closed=False, identifiers=None,
                                     f'?s {sp._iri(predicate)} ?value }} '
                                     f'BIND({json.dumps(graph)} AS ?graph) '
                                     f'BIND({json.dumps(predicate)} AS ?predicate) }}')
-        if identifiers is None:
-            branches.append('{ { ' + ' UNION '.join(sp._unsupported_owner_branches(proof, agent))
-                            + ' } BIND("unsupported-owner-status" AS ?problem) }')
         rows = sp._query(proof, 'SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value ?problem '
                          'WHERE { ' + ' UNION '.join(branches) + ' } LIMIT 10000', timeout)['rows']
         if len(rows) >= 10000:
@@ -80,6 +72,63 @@ def read(proof, agent: str, *, include_closed=False, identifiers=None,
         raise
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"inbox metadata unreadable: {error}")
+
+
+def _owned_query(graphs, owners, include_closed):
+    # Avoid subquery/OPTIONAL joins and anti-joins over the whole board.
+    # Each branch starts at one constant recipient and graph.
+    branches = []
+    wanted = ', '.join(json.dumps(v) for v in (STATUSES if include_closed else STATUSES[:-1]))
+    fields = ' '.join(f'OPTIONAL {{ ?s {sp._iri(p)} ?{key} }}' for p, key in FIELDS.items())
+    for graph in graphs:
+        g = sp._iri(graph)
+        for owner in owners:
+            for term in (json.dumps(owner), sp._iri(sp.SEEDS + "principal/" + quote(owner, safe=""))):
+                scope = f'?s <{sp.SCHEMA}agent> {term} . ?s a <{sp.SCHEMA}Action> . '
+                selected = (f'?s <{sp.SEEDS}ontology/status> ?wanted ; <{sp.SCHEMA}name> ?message . '
+                            f'FILTER(?wanted IN ({wanted})) FILTER(REGEX(STR(?message), {sp.MESSAGE_PATTERN})) ')
+                branches.append('{ GRAPH ' + g + ' { ' + scope + selected + fields + ' } '
+                                + f'BIND({json.dumps(graph)} AS ?graph) }}')
+                branches.append('{ GRAPH ' + g + ' { ' + scope
+                                + f'OPTIONAL {{ ?s <{sp.SEEDS}ontology/status> ?owner_status . '
+                                + 'BIND(isLiteral(?owner_status) && sameTerm(?owner_status, STR(?owner_status)) AS ?plain_status) } } '
+                                + f'BIND({json.dumps(graph)} AS ?graph) '
+                                + 'BIND("owner-status" AS ?kind) }')
+        branches.append(f'{{ GRAPH {g} {{ ?legacy <{sp.SEEDS}ontology/revision> ?revision }} '
+                        'BIND("legacy-schema" AS ?problem) }')
+    return ('SELECT (STR(?s) AS ?subject) ?graph ?id ?title ?assignee ?status '
+            '?priority ?created_at ?problem ?kind ?owner_status ?plain_status WHERE { ' + ' UNION '.join(branches) + ' } LIMIT 10000')
+
+
+def _owned_fields(rows, graphs, include_closed):
+    """Check all owned statuses, then decode only selected message fields."""
+    grouped, statuses = {}, {}
+    for row in rows:
+        if "problem" in row:
+            raise ValueError("unsupported-owner-status")
+        subject, graph = row.get("subject"), row.get("graph")
+        if not isinstance(subject, str) or graph not in graphs:
+            raise ValueError("invalid inbox owner row")
+        if row.get("kind") == "owner-status":
+            good = row.get("plain_status") is True and row.get("owner_status") in (*STATUSES, "tombstone")
+            key = (subject, graph)
+            statuses[key] = statuses.get(key, False) or good
+        elif "kind" in row or not any(key in row for key in FIELDS.values()):
+            raise ValueError("invalid inbox field row")
+        else:
+            grouped.setdefault((subject, graph), []).append(row)
+    if not all(statuses.values()) or not grouped.keys() <= statuses.keys():
+        raise ValueError("unsupported-owner-status")
+    fields = []
+    for (subject, graph), found in grouped.items():
+        for row in found:
+            for predicate, key in FIELDS.items():
+                if key in row:
+                    fields.append({"subject": subject, "graph": graph,
+                                   "predicate": predicate, "value": row[key]})
+                    if len(fields) >= 10000:
+                        raise ValueError("inbox field budget reached")
+    return fields
 
 
 def _decode(wire, graphs, owners, identifiers, include_closed):
