@@ -1,0 +1,10 @@
+Script started on 2026-10-23 11:33:29-04:00 [COMMAND="venv/bin/python demo.py" <not executed on terminal>]
+Same incident prefix: before=idle; after=safeguard-blocked
+Two tend report passes: automatic actions=0; durable administrator messages=1
+Ordinary input: REFUSED; pane messages=0
+cleared tail: no safeguard finding
+old scrollback: no safeguard finding
+auth: no safeguard finding
+usage: no safeguard finding
+
+Script done on 2026-10-23 11:33:29-04:00 [COMMAND_EXIT_CODE="0"]
