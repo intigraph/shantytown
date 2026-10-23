@@ -545,7 +545,13 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     if row.get("status") == "open" and not row.get("defer_until"):
         return False
     labels = row.get("labels") or []
-    if any(HOLDING_LABEL.match(l) and l != BEAD_BLOCK_LABEL and l not in TOPIC_LABELS
+    mechanical_labels = {BEAD_BLOCK_LABEL}
+    # A definite closed/released/installed fact can satisfy its external hold.
+    # A review date is not that fact; human/access labels remain independent.
+    if (finding.met is True and finding.condition is not None
+            and finding.condition.kind in ("closed", "release", "installed")):
+        mechanical_labels.add("blocked:external")
+    if any(HOLDING_LABEL.match(l) and l not in mechanical_labels and l not in TOPIC_LABELS
            for l in labels):
         return False
     if any(d.get("dependency_type") == "blocks" and d.get("status") != "closed"

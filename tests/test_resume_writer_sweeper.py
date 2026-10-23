@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from shantytown import resume_kinds
 from shantytown.dispatch import Dispatcher
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.notify import DeferralAlerter
@@ -11,7 +12,7 @@ from shantytown.tmux import NullPanes
 
 
 class World:
-    def __init__(self, root, prose="", old_notes=None):
+    def __init__(self, root, prose="", old_notes=None, *, condition="closed:blocker", kind="bead"):
         self.tracker = FilesTracker(root / "items")
         self.registry = FilesRegistry(root / "crew")
         self.panes = NullPanes()
@@ -19,10 +20,10 @@ class World:
             self.tracker.update(ident, title="private resume fixture", status="open", priority=2)
         if old_notes:
             self.tracker.update("waiter", notes=old_notes)
-        reason = (prose + "\n" if prose else "") + "resume_when: closed:blocker"
+        reason = (prose + "\n" if prose else "") + "resume_when: " + condition
         Dispatcher(self.registry, self.tracker, self.panes).defer(
-            "waiter", "bead", reason,
-            dependency_reason="Requires completed fixture blocker")
+            "waiter", kind, reason,
+            dependency_reason="Requires completed fixture blocker" if condition.startswith("closed:") else "")
         self.tracker.update("blocker", status="closed")
         self.released = []
         self.root = root
@@ -67,7 +68,7 @@ def test_reason_prose_is_still_a_judgement_gate(tmp_path, prose):
     assert not w.released and w.row()["status"] == "deferred"
 
 
-@pytest.mark.parametrize("label", ["blocked:human", "blocked:access", "blocked:external", "needs-human", "parked:by-design"])
+@pytest.mark.parametrize("label", ["blocked:human", "blocked:access", "needs-human", "parked:by-design"])
 def test_other_blocker_labels_still_hold(tmp_path, label):
     w = World(tmp_path)
     w.tracker.update("waiter", labels=w.row()["labels"] + [label])
@@ -104,4 +105,40 @@ def test_historical_prose_is_not_erased_by_a_new_closed_marker(tmp_path):
 def test_fresh_read_finds_new_prose_before_mutation(tmp_path):
     w = World(tmp_path)
     w.sweep(fresh=lambda row: dict(row, notes=row["notes"] + "\nNeeds Stiwi sign-off"))
+    assert not w.released
+
+
+MECHANICAL = ["closed:blocker", "release:example/project@v1.0.0", "installed:sd@0.6.7"]
+
+
+@pytest.mark.parametrize("condition", MECHANICAL)
+@pytest.mark.parametrize("answer", [True, False, None])
+def test_external_kind_requires_a_definite_met_mechanical_condition(tmp_path, monkeypatch, condition, answer):
+    w = World(tmp_path, condition=condition, kind="external")
+    monkeypatch.setattr(resume_kinds, "evaluate", lambda *_: (answer, "private fact read"))
+    w.sweep(closed_read=lambda _: answer)
+    assert w.released == (["waiter"] if answer is True else [])
+
+
+@pytest.mark.parametrize("condition", MECHANICAL)
+@pytest.mark.parametrize("label", ["blocked:human", "blocked:access"])
+def test_met_external_condition_never_clears_human_or_access_holds(tmp_path, monkeypatch, condition, label):
+    w = World(tmp_path, condition=condition, kind="external")
+    w.tracker.update("waiter", labels=w.row()["labels"] + [label])
+    monkeypatch.setattr(resume_kinds, "evaluate", lambda *_: (True, "private fact met"))
+    w.sweep()
+    assert not w.released
+
+
+@pytest.mark.parametrize("condition", MECHANICAL)
+def test_met_external_condition_never_discards_prose(tmp_path, monkeypatch, condition):
+    w = World(tmp_path, "Needs Stiwi sign-off", condition=condition, kind="external")
+    monkeypatch.setattr(resume_kinds, "evaluate", lambda *_: (True, "private fact met"))
+    w.sweep()
+    assert not w.released
+
+
+def test_external_date_review_is_not_automatic_permission(tmp_path):
+    w = World(tmp_path, condition="date:2020-01-01", kind="external")
+    w.sweep()
     assert not w.released
