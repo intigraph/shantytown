@@ -90,11 +90,12 @@ def test_unreadable_class_is_ordinary_and_not_a_design_permission(tmp_path, monk
     assert not checks['coder'](item)
 
 
-def test_class_exemption_cannot_waive_floor_freeze_or_drain():
+@pytest.mark.parametrize('role', ['lead', 'administrator', 'keeper'])
+def test_class_exemption_cannot_waive_floor_freeze_or_drain(role):
     policy = gov.Policy(admit_class=True, class_exempt=('chief', 'worker'))
     ordinary = NS(id='job', priority=2, labels=[])
     verdict = gov.Verdict(reading=gov.Reading(source='none'))
-    chief = Agent('chief', role='lead', harness='claude')
+    chief = Agent('chief', role=role, harness='claude')
     exempt = work_class.for_card(verdict, policy, chief)
     assert not exempt.admits(ordinary, 'chief')
     worker = work_class.for_card(verdict, policy, Agent('worker', harness='claude'))
