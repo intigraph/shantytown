@@ -166,7 +166,8 @@ Context occupancy hints are opt-in in `shantytown.toml`:
 ```toml
 [session_budget]
 context_window = 1000000
-context_threshold_pct = 70
+context_threshold_pct = 50
+context_hard_pct = 70
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
