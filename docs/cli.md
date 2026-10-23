@@ -93,7 +93,9 @@ st agent                      one agent
                               idle time, and any posted relatedness signal. --related P
                               / --decision keep|cycle --by WHO posts one. --json.
   input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
-                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+                              capture evidence. --clear (typed only) --dismiss. NEVER submits.
+                              Codex multiline clear verifies the empty placeholder;
+                              BUSY refuses editing, and no repaint stays UNKNOWN.
   ask <agent>                 the QUESTION they're blocked on: prompt, the command being
                               approved, and the numbered options VERBATIM. read-only.
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
@@ -350,6 +352,28 @@ writes and verifies the reason and condition before changing status, then verifi
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
+
+A `closed:` deferral with a marker-only reason can resume automatically when
+the named item closes. The required one-line `--dependency-reason` and the
+command's exact scope flag are informational metadata; they do not turn that
+reason into a prose gate. Any additional prose, historical notes, unknown
+fields or extra resume markers still require judgement. Human, access
+and parked labels, future deadlines and other open dependencies
+continue to hold the item. The scheduled sweep reads the complete item and its
+condition again before reopening it.
+
+A `blocked:external` hold can be satisfied by an unambiguous `closed:`,
+`release:` or `installed:` condition only when its evaluator returns a definite
+MET. An unmet condition, an UNKNOWN read, additional prose or a human/access
+hold keeps the item deferred. A `date:` review never grants that permission.
+
+The sweep keeps a complete observation of all selected deferrals. If Quipu
+rejects a field batch with its explicit structural-cost HTTP 400 and asks for
+smaller requests, the reader halves that batch and retries each half within the
+original batch's time budget. It keeps both graphs and every evaluation field.
+A single candidate that still exceeds the limit is UNKNOWN; no candidate is
+skipped and no partial observation permits a release. Other HTTP failures are
+not retried by this split path. The server's structural limit stays unchanged.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -2645,13 +2669,22 @@ selected board is not permission to retry against another board.
 `st repo pr` earns a separate slot because it creates an external review object;
 `repo context` remains a read. Use the guarded creation path after committing and
 pushing the candidate branch. It requires the explicit GitHub repository to match
-`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+`origin`, with the mapped owner-move exception below. It does not push, merge,
+close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
-again. This command never rewrites remotes or silently migrates aliases. A
+again. A legacy-owner `origin` can remain unchanged when the deployment's
+`scripts/lib/stack_repos.py canonical` helper maps it to the requested current
+slug **and** GitHub resolves it to that slug with the same stable repository ID.
+The optional helper lives under
+`${XDG_DATA_HOME:-~/.local/share}/aegis-exec-src/`; exact origins need no helper.
+Missing, unreadable or unmapped policy, a foreign host/owner, an unproven redirect,
+or a redirect race refuses before POST and names a concrete `git remote set-url`
+fix. The requested repository must still be the forge's canonical slug.
+This command never rewrites remotes or silently migrates aliases. A
 repository identity change during preflight also refuses before POST. A lost or
 malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
 reported on stderr as well as JSON stdout. Inspect the canonical repository for
@@ -2858,3 +2891,76 @@ transaction and continue to block relaunch; they are not routine quota holds.
 Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
 holds remain respected during automatic recovery. Nothing here starts a second
 administrator, changes an account cap, or clears an operator hold.
+
+### Explicit routine progress for scoped administrator budgets
+
+`st inbox -d --routine <agent> <pointer>` declares batchable progress. Use it only
+when no immediate decision, blocked-work response, ownership handoff, or active
+window coordination is needed. Operator messages, urgent controls, governance
+notifications, gate/decision requests and handoffs use the unchanged immediate
+path. These are declared exemptions, not authenticated identity or urgency inferred
+from body text. Omitting `--routine` always preserves existing delivery behavior.
+
+Only an explicitly named administrator using Claude, with ENFORCE enabled and a
+fresh quota/cadence observation, can defer the routine live nudge. The durable
+message is persisted first and stays unread. The existing `fleet tend` pass
+submits one batch after the original cadence deadline (at most 900 seconds) plus
+its next actual scheduled tick. OFF, unknown evidence or clock reversal releases
+early. No new daemon/timer is installed, no off-host relay is delayed, and a dry
+run neither persists nor sends. This does not bound ongoing-turn or account spend.
+
+A live attempt is durably claimed before submission. Ambiguous submission,
+stranded input or failed acknowledgement keeps the inbox pointer and does not
+retry the live send. Read it through `st inbox`; sender success means persistence,
+not live arrival. A stopped/overloaded tend schedule, down recipient, malformed
+queue or incomplete unread coverage prevents a wall-clock delivery guarantee;
+those cases remain visible/UNKNOWN and require the normal inbox read path. The
+feature is source-only until reviewed adoption and a separately authorized scoped
+trial proves the actual scheduled path and declared-exemption coverage. Rollback:
+set the scoped policy OFF, drain/read retained pointers, then revert the source;
+do not remove unread messages or revert while routine entries remain pending.
+
+### Provider safety refusals
+
+Claude crew settings provision an asynchronous `StopFailure` command hook.
+[Claude Code runs this instead of `Stop` for API errors](https://code.claude.com/docs/en/hooks#stopfailure),
+so the failure is recorded without waiting for a normal turn-end hook or a pane
+banner. The hook persists a `stop-failure` event with the agent, plate, error,
+optional error details and rendered API message. Missing plate/request evidence
+stays `UNKNOWN`; a plate read gets a two-second budget so it cannot silence
+the error notice. The actual error enum used for a safeguard refusal remains
+unknown until a real hook payload is observed; fixtures do not establish it.
+
+A rendered API message containing `safeguards` takes priority over every other
+error category. It records a hold for that launch and durably notifies the
+canonical administrator, with request IDs extracted from the rendered message.
+The hold also prevents ordinary input and automatic cycles when the pane has no
+banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
+does not clear a safeguard hold. Rate-limit and authentication failures enter the
+existing `limited` and `auth-dead` supervision paths; a later successful Stop can
+retire these transient signals. Other errors produce a durable administrator
+inbox notice. Notification work runs asynchronously with a bounded timeout and
+never asks the model to continue. Launch verification checks the running
+process's selected settings against its recorded launch snapshot; a newly
+rewritten settings file is not proof that an old process loaded the hook.
+
+The following pane check remains the fallback for Codex and missed hooks.
+A current provider banner saying `safeguards flagged this message` or
+`safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
+reports. Tend treats it as a fault and holds it for administrator review. It
+never clears context, switches models, cycles, or sends recovery input for this
+condition. Ordinary sends refuse while the banner is current.
+
+Tend persists one administrator inbox report per observed refusal, including the
+agent, request IDs when visible, and plate items (or `UNKNOWN` on a failed read).
+Old scrollback, a later response, and a cleared session do not count. Missing IDs
+remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
+crew root; long ID/plate lists are abbreviated in the inbox and retained there.
+A pending or uncertain delivery is reported loudly and never automatically
+replayed: inspect its ledger and durable inbox before any manual retry. Human
+review determines the next step. A saved primary hold is not delivery evidence:
+tend reconciles a demonstrably absent notification attempt from the saved error
+metadata, including when event persistence was interrupted and no pane banner
+exists. The shared reservation still prevents replay of pending or UNKNOWN
+attempts and keeps their uncertainty visible. Missing launch provenance cannot
+retire a saved safety hold; only positively different known launch stamps can.
