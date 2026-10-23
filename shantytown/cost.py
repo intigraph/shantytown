@@ -304,6 +304,10 @@ def _scheduler_status(config, state, phase):
 
 
 def run(args):
+    if (getattr(args, 'review_window', False) or getattr(args, 'accept_window', None)
+            or getattr(args, 'decision_file', None) or getattr(args, 'execute', False)):
+        from . import cost_review
+        return cost_review.run(args)
     try:
         config = json.loads((Path(args.root) / 'cost.json').read_text())
         config={**config,'_authority_args':args}
@@ -332,8 +336,8 @@ def _run_locked(args, config):
             from . import cost_sampling
             # Changing population must not bypass the previous producer's
             # request cooldown or an unresolved write.
-            for state in (Path(args.root) / 'cost-graph-state.json', graph_state):
-                if state.with_suffix('.pending.json').exists():
+            for state in cost_sampling.guard_states(args.root):
+                if state.with_suffix('.pending.json').exists() or state.with_suffix('.pending.json').is_symlink():
                     raise RuntimeError('indeterminate cost snapshot requires reconciliation')
             if report := cost_sampling.review(args.root):
                 _atomic_json(Path(args.root) / 'cost-active-review.json', report)
@@ -345,7 +349,7 @@ def _run_locked(args, config):
                 _publish_metrics(config, paused=True)
                 print(json.dumps(report, sort_keys=True))
                 return 0
-            for state in (Path(args.root) / 'cost-graph-state.json', graph_state):
+            for state in cost_sampling.guard_states(args.root):
                 receipt_path = state.with_suffix('.receipt.json')
                 prior = json.loads(receipt_path.read_text()) if receipt_path.exists() else {}
                 if prior.get('next_request_after', 0) > time.time():

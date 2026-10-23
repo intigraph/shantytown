@@ -76,7 +76,15 @@ def active_sources(root):
 
 def state_path(root):
     # Separate population: never erase the pinned pilot's history or cooldown.
-    return Path(root) / 'cost-active-graph-state.json'
+    from .cost_review import state_path as selected_state
+    return selected_state(root)
+
+
+def guard_states(root):
+    # A successor never makes an uncertain predecessor request disappear.
+    root = Path(root)
+    return list(dict.fromkeys([root / 'cost-graph-state.json',
+                               root / 'cost-active-graph-state.json', state_path(root)]))
 
 
 def _load(path):
