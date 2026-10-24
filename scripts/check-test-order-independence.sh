@@ -100,7 +100,6 @@ PY
     chk "INDUCED"                     "reports INDUCED"
     chk "test_d_victim.py::test_clean_state"          "names the induced test"
     chk "FLAKY"                       "reports FLAKY"
-    chk "odd invocation"               "preserves the failing assertion"
     chk "test_e_flaky.py::test_alternates"            "names the flaky test"
     # Match a test ID ("file.py::test_x"), not a bare filename: run A prints
     # every file it visits as progress, so grepping the filename asserts
@@ -123,24 +122,13 @@ ids_from() { grep -E '^(FAILED|ERROR) ' "$1" | awk '{print $2}' | sort -u; }
 # A file may be entirely skipped -- that is a RESULT, not a failure to run.
 usable() { grep -qE '[0-9]+ (passed|failed|skipped|error)|no tests ran' "$1"; }
 
-# Preserve the actual assertion before temporary logs are removed. Verdict
-# classification still uses the same test IDs, never a traceback heuristic.
-failure_trace() {
-    if grep -qE '^(FAILED|ERROR) ' "$1"; then
-        printf '\n== failure trace: %s ==\n' "$2"
-        sed -n '/^=\{1,\} \(FAILURES\|ERRORS\) /,$p' "$1"
-    fi
-}
-
-
 echo "== run W: the whole suite in one process =="
 # shellcheck disable=SC2086
-$PYTEST -q --tb=short -rfE "$TESTS" > "$outdir/whole.log" 2>&1
+$PYTEST -q --tb=no -rfE "$TESTS" > "$outdir/whole.log" 2>&1
 if ! usable "$outdir/whole.log"; then
     echo "CANNOT TELL: the whole-suite run produced no result line." >&2
     tail -20 "$outdir/whole.log" >&2; exit 2
 fi
-failure_trace "$outdir/whole.log" "whole suite"
 ids_from "$outdir/whole.log" > "$outdir/whole.ids"
 tail -1 "$outdir/whole.log"
 
@@ -152,12 +140,11 @@ n=$(echo "$files" | wc -l); i=0
 for f in $files; do
     i=$((i+1))
     # shellcheck disable=SC2086
-    $PYTEST -q --tb=short -rfE "$f" > "$outdir/one.log" 2>&1
+    $PYTEST -q --tb=no -rfE "$f" > "$outdir/one.log" 2>&1
     if ! usable "$outdir/one.log"; then
         echo "CANNOT TELL: $f produced no result line." >&2
         tail -20 "$outdir/one.log" >&2; exit 2
     fi
-    failure_trace "$outdir/one.log" "$f alone"
     ids_from "$outdir/one.log" >> "$outdir/alone.ids"
     printf '\r  %d/%d %-50s' "$i" "$n" "$f"
 done
@@ -189,21 +176,19 @@ flaky=""
 if [ -n "$disagree" ]; then
     echo "== confirm: re-measuring $(printf '%s\n' "$disagree" | wc -l) disagreement(s) =="
     # shellcheck disable=SC2086
-    $PYTEST -q --tb=short -rfE "$TESTS" > "$outdir/whole2.log" 2>&1
+    $PYTEST -q --tb=no -rfE "$TESTS" > "$outdir/whole2.log" 2>&1
     if ! usable "$outdir/whole2.log"; then
         echo "CANNOT TELL: the confirming whole-suite run produced no result line." >&2
         exit 2
     fi
-    failure_trace "$outdir/whole2.log" "confirming whole suite"
     ids_from "$outdir/whole2.log" > "$outdir/whole2.ids"
     : > "$outdir/flaky.ids"
     for id in $disagree; do
         seen=""
-        for confirm_round in 1 2 3; do
+        for _ in 1 2 3; do
             # shellcheck disable=SC2086
-            if $PYTEST -q --tb=short "$id" > "$outdir/c.log" 2>&1
+            if $PYTEST -q --tb=no "$id" > "$outdir/c.log" 2>&1
             then seen="${seen}P"; else seen="${seen}F"; fi
-            failure_trace "$outdir/c.log" "$id confirmation $confirm_round"
         done
         w1=N; grep -qxF "$id" "$outdir/whole.ids"  && w1=Y
         w2=N; grep -qxF "$id" "$outdir/whole2.ids" && w2=Y
