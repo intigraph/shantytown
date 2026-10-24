@@ -123,6 +123,8 @@ def run(arguments, tracker, execute, notify):
         current = tracker.get(arguments[1])
         owner = owner if owner is not None else current.assignee
         candidate = proposed_fields(arguments, vars(current))
+    from .ask_visibility import refuse_deferral
+    refuse_deferral(current or {}, candidate)
     if not owner:
         return execute(arguments)
     with assignment_lock(tracker, owner, dry_run=option(arguments, '--dry-run') is True):
@@ -132,6 +134,7 @@ def run(arguments, tracker, execute, notify):
             if current.assignee != previous.assignee:
                 raise ValueError('producer owner changed during admission')
             candidate = proposed_fields(arguments, vars(current))
+            refuse_deferral(current, candidate)
         if not active(candidate | {'assignee': owner}, owner):
             return execute(arguments)
         full = False

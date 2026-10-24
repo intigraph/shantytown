@@ -290,6 +290,11 @@ class PaneInMode(PaneNotAgent):
 
 
 def _refuse_task_list(pane: str, screen: str) -> None:
+    from .triage import strip_attrs
+    from .safeguard import current
+    if current(strip_attrs(screen)):
+        raise PaneNotAgent(
+            f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
     from .harness import task_list_evidence
     if task_list_evidence(screen):
         raise PaneTaskList(
@@ -599,6 +604,10 @@ class Tmux:
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
         codex = False
+        if not allow_shell:
+            from .stop_failure import pane_state
+            if pane_state(self.delivery_root, pane) == "safeguard-blocked":
+                raise PaneNotAgent(f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
         if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
