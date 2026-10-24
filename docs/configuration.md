@@ -277,3 +277,19 @@ A governor refusal is terminal for post-cycle redispatch. The fallback itself
 requires the existing governor to admit a lowest-priority status prompt; it
 cannot borrow a checkpoint's priority when the current plate is unreadable.
 The recovery prompt asks for verification before work, and creates no work item.
+
+## Per-crew file memory (default OFF)
+
+`[memory.<crew>]` declares one opt-in Claude plan. `enabled` is boolean and
+defaults to false; the remaining fields are `server`, `deployment`, `project`,
+`account` (optional exact named-account/`legacy` pin; empty uses the selected account), `source` (the actual existing
+native directory), `outbox` and `staging`. Enabled plans require all three
+directories to exist, not overlap and satisfy the private-directory checks.
+See [crew memory](crew-memory.md) for the identity, conflict and rollout contract.
+No memory body, bearer or account credential belongs in this table.
+
+`SHANTY_MEMORY_GENERATION` is an internal per-launch marker emitted into a
+prepared Claude settings artifact. It identifies a pending/active retained
+generation; it is not an operator override or authority to import arbitrary
+paths. SessionStart must acknowledge the matching pending selection before
+Stop can ingest it. Codex and OpenCode receive no generated-writeback adapter.

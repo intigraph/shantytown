@@ -1,6 +1,6 @@
 {
-  "source_revision": "93949ebf1a4addff731e0893ff7d066a2961a110",
-  "reviewed_at": "2026-10-24T14:57:59.778212Z",
+  "source_revision": "9f299b6b0b9436db08c486670dba78a48e07b73a",
+  "reviewed_at": "2026-10-24T18:47:32.759460+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "30c65ebdab9df566b13866760530c5e75a3c7ce1dd2a6347a23e3db41f055e0e",
+      "source_sha256": "528800229a58bfc8bb87eab532583e63870a9a1228dd429baca8e4c56b52de90",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
+      "source_sha256": "463767abf402559b59d0e12e2736e2990fb64b94842117e8f9049cf340238edd",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "1ccc9d8d95970fb08d8141b6984b8cdda339d8b3c59a35945c132a2e434a23bd",
+      "source_sha256": "6f7f2b6bcba5ec5cf3de705f1a2c15e9bb05835cf4ece4b9bb246f54be1c41e2",
       "properties": {
         "startHereOrder": 2
       }
