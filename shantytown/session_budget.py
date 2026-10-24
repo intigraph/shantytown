@@ -97,7 +97,8 @@ class BudgetError(ValueError):
 class ContextLimits:
     """An advisory occupancy threshold, independent of the sticky work ceiling."""
     window: int | None = None
-    threshold_pct: float = 70.0
+    threshold_pct: float = 50.0
+    hard_pct: float = 75.0
 
 
 @dataclass(frozen=True)
@@ -202,7 +203,7 @@ def parse(tbl: dict) -> Limits:
     if not tbl:
         return Limits()
     known = {"max_hours", "max_items", "max_risk", "on_signal_lost",
-             "context_window", "context_threshold_pct", "context_by_role", "context_by_agent"}
+             "context_window", "context_threshold_pct", "context_hard_pct", "context_by_role", "context_by_agent"}
     for k in tbl:
         if k not in known:
             raise BudgetError(
@@ -228,16 +229,20 @@ def parse(tbl: dict) -> Limits:
     def context(values, inherited=None):
         window = values.get("context_window", inherited.window if inherited else None)
         pct = values.get("context_threshold_pct",
-                         inherited.threshold_pct if inherited else 70.0)
+                         inherited.threshold_pct if inherited else 50.0)
+        hard = values.get("context_hard_pct", inherited.hard_pct if inherited else 75.0)
         if window is not None and (type(window) is not int or window <= 0):
             raise BudgetError("[session_budget] context_window must be a positive integer")
         if (type(pct) not in (float, int) or not math.isfinite(pct)
                 or not 0 < pct < 100):
             raise BudgetError("[session_budget] context_threshold_pct must be finite and between 0 and 100")
-        return ContextLimits(window, float(pct))
+        if (type(hard) not in (float, int) or not math.isfinite(hard)
+                or not pct < hard <= 80):
+            raise BudgetError("[session_budget] context_hard_pct must exceed context_threshold_pct and be at most 80")
+        return ContextLimits(window, float(pct), float(hard))
 
     base = (context(tbl) if any(k in tbl for k in
-            ("context_window", "context_threshold_pct")) else None)
+            ("context_window", "context_threshold_pct", "context_hard_pct")) else None)
     def overrides(key):
         entries = tbl.get(key, {})
         if not isinstance(entries, dict):
@@ -245,7 +250,7 @@ def parse(tbl: dict) -> Limits:
         result = {}
         for name, values in entries.items():
             if (not isinstance(values, dict) or not values
-                    or set(values) - {"context_window", "context_threshold_pct"}):
+                    or set(values) - {"context_window", "context_threshold_pct", "context_hard_pct"}):
                 raise BudgetError(f"[session_budget.{key}.{name}] expected context_window/context_threshold_pct")
             result[name] = context(values, base)
         return result

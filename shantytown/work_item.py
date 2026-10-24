@@ -70,7 +70,7 @@ def command(args, tracker):
             _comments(tracker, item.id, body)
             if not any(_comment_body(row) == body
                        for row in _comments(tracker, item.id)):
-                raise RuntimeError("comment readback unproven; write may have landed, do not resend")
+                raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
     fields = {}
     replace_text = getattr(args, "replace_text", False)
@@ -116,14 +116,16 @@ def command(args, tracker):
                 raise ValueError("item owner changed before admission; reread before updating")
             item = current
             prospective = asdict(item) | fields
+        from .ask_visibility import refuse_deferral
+        refuse_deferral(item, fields)
         if owner and active(prospective, owner):
-            ensure_room(tracker, owner, item)
+            ensure_room(tracker, owner, item, candidate=prospective)
         if not args.dry_run:
             from .br import BrTracker
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
             tracker.update(item.id, **options, **fields)
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
-                raise RuntimeError("update readback unproven; write may have landed, do not resend")
+                raise RuntimeError("update readback unproven; write may have landed; verify exact readback before retrying")
     return {"id": item.id, "fields": fields,
             "result": "planned" if args.dry_run else "verified"}

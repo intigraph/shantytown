@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .answer import Answer
 from .query_identity import read_headers, declared_read_operation
+from . import seeds_read_cache
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -29,6 +30,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/rank": "rank",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -44,6 +46,19 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    def fetch():
+        return _query_wire(proof, query, timeout, verbose=verbose)
+
+    # Explicit profiling must observe a real execution, not cached timing.
+    if verbose:
+        return fetch()
+    return seeds_read_cache.read(
+        proof.quipu_url, query, timeout, opener=urlopen, fetch=fetch,
+        validate=lambda result: _validate_query(result, query),
+    )
+
+
+def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     headers.update(read_headers())
     payload = {"query": query}
@@ -62,6 +77,10 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
         if len(body) > 8 * 1024 * 1024:
             raise ValueError("plate response byte budget reached")
         result = json.loads(body)
+    return _validate_query(result, query)
+
+
+def _validate_query(result, query: str) -> dict:
     if not isinstance(result, dict):
         raise TypeError("invalid plate response")
     if query.lstrip().startswith("ASK"):
@@ -181,6 +200,13 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
 
 @declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
+    branches = _unsupported_owner_branches(proof, agent)
+    return not branches or not _query(
+        proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+
+
+def _unsupported_owner_branches(proof, agent):
+    """The same counterexample relation for standalone and inbox admission."""
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
@@ -189,7 +215,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                    for term in (json.dumps(owner),
                                 _iri(SEEDS + "principal/" + quote(owner, safe="")))]
     if not clauses:
-        return True
+        return []
     known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
     branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
@@ -210,7 +236,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
             ):
                 branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
                                 f"{clause} {type_clause} }} }}")
-    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+    return branches
 
 
 class RenderShapeReads:
@@ -266,7 +292,14 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         if include_deferred and scope is None:
             raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        if scope is not None and not shape_check(proof, scope, timeout=timeout):
+        # A single owner's guard shares the candidate observation, as inbox
+        # reads already do. Keep explicitly shared roster observations intact.
+        # No cross-read cache or failed-read fallback: every invocation checks
+        # the same counterexample relation before hydrating any fields.
+        inline_owner_guard = messages_only or (
+            isinstance(scope, str) and shape_reads is None
+        )
+        if scope is not None and not inline_owner_guard and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
         graphs = (graph, graph + "#seeds-ephemeral")
@@ -348,14 +381,22 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
+        if inline_owner_guard:
+            branches.append(
+                "{ { " + " UNION ".join(_unsupported_owner_branches(proof, scope))
+                + ' } BIND("unsupported-owner-status" AS ?problem) }'
+            )
         query = (
-            "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+            "SELECT (STR(?s) AS ?subject) ?graph "
+            + ("?problem " if inline_owner_guard else "") + "WHERE { "
             + " UNION ".join(branches)
             + " } LIMIT 10000"
         )
         candidates = _query(proof, query, timeout)["rows"]
         if len(candidates) >= 10000:
             raise ValueError("plate candidate budget reached")
+        if inline_owner_guard and any("problem" in row for row in candidates):
+            raise ValueError("owner has an unsupported or absent status")
         selected = {}
         for candidate in candidates:
             subject, graph = candidate.get("subject"), candidate.get("graph")
@@ -446,6 +487,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             raise ValueError("plate candidate disappeared during projection")
         rows = []
         for subject, row in grouped.items():
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
             if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (
@@ -486,6 +529,58 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
+
+
+def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
+    """Split only the server's explicit structural-cost request refusal.
+
+    Keep one wall budget per original batch. No candidate is discarded: a
+    singleton refusal makes the whole observation incomplete, naming the item.
+    Other HTTP failures retain their original refusal without a retry.
+    """
+    deadline = time.monotonic() + timeout
+
+    def read(chunk):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("deferral field time budget reached")
+        branches = []
+        for subject, _ in chunk:
+            for graph in graphs:
+                for predicate in fields:
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} '
+                        f'BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}'
+                    )
+        query = ("SELECT (STR(?s) AS ?subject) ?graph "
+                 "(STR(?p) AS ?predicate) ?value WHERE { "
+                 + " UNION ".join(branches) + " } LIMIT 10000")
+        try:
+            rows = _query(proof, query, remaining)["rows"]
+            if time.monotonic() >= deadline:
+                raise ValueError("deferral field time budget reached")
+            return rows
+        except HTTPError as error:
+            if error.code != 400:
+                raise
+            try:
+                message = json.loads(error.read(4096)).get("error")
+            except (ValueError, AttributeError, OSError):
+                message = None
+            if not isinstance(message, str) or not re.fullmatch(
+                r"SPARQL request is too deeply nested or too long a chain: "
+                r"structural cost \d+ exceeds the limit of \d+\. "
+                r"Split it into smaller requests\.", message
+            ):
+                raise
+            if len(chunk) == 1:
+                raise ValueError(f"deferral candidate {chunk[0][0]} UNKNOWN: "
+                                 "structural request limit at batch size 1") from error
+            middle = len(chunk) // 2
+            return read(chunk[:middle]) + read(chunk[middle:])
+
+    return read(pairs)
 
 
 @declared_read_operation("deferred-rows")
@@ -570,20 +665,10 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
         pairs = list(selected.items())
         total = 0
         for offset in range(0, len(pairs), 25):
-            branches = []
-            # Read both graphs for every selected subject: even a shadow with
-            # a different status must refuse, rather than hide a condition.
-            for subject, _ in pairs[offset:offset + 25]:
-                for graph in graphs:
-                    for predicate in fields:
-                        branches.append(
-                            f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} '
-                            f'BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) '
-                            f'BIND({json.dumps(graph)} AS ?graph) }}'
-                        )
-            wire = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph "
-                          "(STR(?p) AS ?predicate) ?value WHERE { "
-                          + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
+            # The server may refuse this batch's structural cost. Halve only
+            # that explicit refusal; retain both graphs and every field.
+            wire = _deferred_field_rows(proof, pairs[offset:offset + 25],
+                                        graphs, fields, timeout)
             total += len(wire)
             if len(wire) >= 10000 or total >= 100000:
                 raise ValueError("deferral field budget reached")
@@ -660,7 +745,9 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
             branches.append(
                 f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/status> "open" ; '
                 f"a <{SCHEMA}Action> . FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
-                'FILTER(STR(?owner) != "") } ' + priority + "} }"
+                'FILTER(STR(?owner) != "") } '
+                f'FILTER NOT EXISTS {{ ?s <{SCHEMA}keywords> "decision-needed" }} '
+                + priority + "} }"
             )
         query = (
             "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { "
@@ -685,8 +772,12 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """
     result = set()
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
-    for offset in range(0, len(rows), 250):
-        chunk = rows[offset : offset + 250]
+    # A correlated NOT EXISTS costs seconds per batch on a real board (61gx).
+    # Return eligibility and active-blocker evidence in one observation instead.
+    # Two evidence branches share the former 250-subject VALUES budget.
+    batch_size = 250 // 2
+    for offset in range(0, len(rows), batch_size):
+        chunk = rows[offset : offset + batch_size]
         expected = {row["id"] for row in chunk}
         branches = []
         for graph in graphs:
@@ -694,20 +785,33 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
                 bindings = " ".join(
                     _iri(SEEDS + "item/" + quote(row["id"], safe=""))
                     for row in chunk if row["status"] == state)
-                branches.append(
-                    f"{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {bindings} }} "
+                candidate = (
+                    f"VALUES ?s {{ {bindings} }} "
                     f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
-                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
-                    f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . ")
+                blocker = (
+                    f"?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
                     f"?blocker <{SEEDS}ontology/status> ?bs . "
-                    'FILTER(?bs != "closed" && ?bs != "tombstone") } } }')
-        query = "SELECT DISTINCT ?id WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
+                    'FILTER(?bs != "closed" && ?bs != "tombstone") ')
+                for evidence, extra in (("eligible", ""), ("blocked", blocker)):
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ {candidate}{extra} }} "
+                        f"BIND({json.dumps(graph)} AS ?graph) "
+                        f"BIND({json.dumps(evidence)} AS ?evidence) }}")
+        query = "SELECT DISTINCT ?id ?graph ?evidence WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
         wire = _query(proof, query, timeout)["rows"]
         if len(wire) >= 1000 or any(
-            not isinstance(r.get("id"), str) or r["id"] not in expected for r in wire
+            not isinstance(r.get("id"), str) or r["id"] not in expected
+            or r.get("graph") not in graphs
+            or r.get("evidence") not in ("eligible", "blocked") for r in wire
         ):
             raise ValueError("invalid readiness response")
-        result.update(r["id"] for r in wire)
+        eligible = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "eligible"}
+        blocked = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "blocked"}
+        if not blocked <= eligible:
+            raise ValueError("invalid readiness evidence")
+        # A blocker in another graph must not suppress an eligible observation.
+        result.update(identifier for _, identifier in eligible - blocked)
     return result
 
 

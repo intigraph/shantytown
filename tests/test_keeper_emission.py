@@ -37,3 +37,10 @@ def test_unknown_role_still_refuses(tmp_path):
     declare(tmp_path)
     with pytest.raises(ValueError, match="unknown role"):
         runtime.role_stop_hooks("unreviewed-role", root=tmp_path)
+
+
+@pytest.mark.parametrize("role", ["worker", "keeper", "lead", "administrator"])
+def test_every_claude_role_emits_failure_hook(tmp_path, role):
+    declare(tmp_path)
+    assert runtime.claude_settings_for_role(role, root=tmp_path)["hooks"]["StopFailure"] == (
+        runtime.stop_failure_hooks(tmp_path))

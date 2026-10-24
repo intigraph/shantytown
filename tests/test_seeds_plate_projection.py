@@ -179,7 +179,7 @@ def test_projected_readiness_drives_open_rank_and_preserves_unknown(monkeypatch)
         if "AS ?subject" in query:
             return answer(wire)
         assert "blockedOn" in query and "related" not in query
-        return answer([{"id": "test-z"}])
+        return answer([{"id": "test-z", "graph": G, "evidence": "eligible"}])
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("CLI hydration"))
@@ -268,6 +268,117 @@ def test_readiness_response_cannot_escape_its_batch(monkeypatch):
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([{"id": "test-250"}]))
     with pytest.raises(ValueError, match="readiness"):
         seeds_plate.unblocked_ids(PROOF, rows)
+
+
+def test_readiness_keeps_blocker_evidence_graph_local(monkeypatch):
+    ephemeral = G + "#seeds-ephemeral"
+    wire = [
+        {"id": "test-free", "graph": G, "evidence": "eligible"},
+        {"id": "test-held", "graph": G, "evidence": "eligible"},
+        {"id": "test-held", "graph": G, "evidence": "blocked"},
+        {"id": "test-shadow", "graph": G, "evidence": "eligible"},
+        {"id": "test-shadow", "graph": ephemeral, "evidence": "eligible"},
+        {"id": "test-shadow", "graph": ephemeral, "evidence": "blocked"},
+    ]
+    calls = []
+
+    def query(proof, query, timeout):
+        calls.append(query)
+        return answer(wire)
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    rows = [{"id": ident, "status": "open"}
+            for ident in ("test-free", "test-held", "test-shadow")]
+    assert seeds_plate.unblocked_ids(PROOF, rows) == {"test-free", "test-shadow"}
+    assert len(calls) == 1, "eligibility and blockers must share one observation"
+
+
+def test_readiness_native_semantics_in_actual_rdf(monkeypatch):
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    native = URIRef("https://scbrown.github.io/quechua/ns#blockedOn")
+    status = URIRef(seeds_plate.SEEDS + "ontology/status")
+    identifier = URIRef(seeds_plate.SCHEMA + "identifier")
+    action = URIRef(seeds_plate.SCHEMA + "Action")
+    rows = []
+
+    def item(name, graph=G, state="open", expected_state="open"):
+        subject = URIRef(seeds_plate.SEEDS + "item/" + name)
+        target = data.graph(URIRef(graph))
+        target.add((subject, RDF.type, action))
+        target.add((subject, identifier, Literal(name)))
+        target.add((subject, status, Literal(state)))
+        if not any(row["id"] == name for row in rows):
+            rows.append({"id": name, "status": expected_state})
+        return subject, target
+
+    for name, state in (("free", None), ("closed", "closed"),
+                        ("tombstone", "tombstone"), ("active", "open"),
+                        ("missing", None), ("unknown", "unrecognized")):
+        subject, target = item(name)
+        if name != "free":
+            blocker = URIRef("https://example.test/blocker/" + name)
+            target.add((subject, native, blocker))
+            if state is not None:
+                target.add((blocker, status, Literal(state)))
+    subject, target = item("related")
+    blocker = URIRef("https://example.test/blocker/related")
+    target.add((subject, URIRef(seeds_plate.SEEDS + "ontology/related"), blocker))
+    target.add((blocker, status, Literal("open")))
+    subject, target = item("foreign-status")
+    blocker = URIRef("https://example.test/blocker/foreign")
+    target.add((subject, native, blocker))
+    data.graph(URIRef(G + "#seeds-ephemeral")).add((blocker, status, Literal("open")))
+    item("changed-status", state="blocked")
+    item("ephemeral", graph=G + "#seeds-ephemeral")
+    subject, target = item("shadow")
+    blocker = URIRef("https://example.test/blocker/shadow")
+    target.add((subject, native, blocker))
+    target.add((blocker, status, Literal("open")))
+    item("shadow", graph=G + "#seeds-ephemeral")
+
+    def query(proof, query, timeout):
+        result = data.query(query)
+        return answer([{str(k): value.toPython() for k, value in row.asdict().items()}
+                       for row in result])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unblocked_ids(PROOF, rows) == {
+        "free", "closed", "tombstone", "missing", "related",
+        "foreign-status", "ephemeral", "shadow"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "test-a", "graph": "https://example.test/foreign", "evidence": "eligible"},
+    {"id": "test-a", "graph": G, "evidence": "unknown"},
+    {"id": "test-a", "graph": G},
+    {"id": "test-a", "graph": G, "evidence": "blocked"},
+])
+def test_incomplete_or_foreign_readiness_evidence_is_unknown(monkeypatch, bad):
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([bad]))
+    with pytest.raises(ValueError, match="readiness"):
+        seeds_plate.unblocked_ids(PROOF, [{"id": "test-a", "status": "open"}])
+
+
+def test_readiness_preserves_wire_and_values_budgets(monkeypatch):
+    queries = []
+
+    def query(proof, query, timeout):
+        queries.append(query)
+        # The old batch bound allowed 250 subjects in each of two graphs.
+        assert query.count("<https://seeds.local/item/") <= 500
+        assert query.endswith("LIMIT 1000")
+        return answer([])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unblocked_ids(PROOF, [
+        {"id": f"test-{i}", "status": "open"} for i in range(251)]) == set()
+    assert len(queries) == 3
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([
+        {"id": "test-a", "graph": G, "evidence": "eligible"}] * 1000))
+    with pytest.raises(ValueError, match="readiness"):
+        seeds_plate.unblocked_ids(PROOF, [{"id": "test-a", "status": "open"}])
 
 
 def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):
@@ -481,6 +592,26 @@ def test_decision_and_roster_capacity_preserve_blocked_scope_in_actual_rdf(
         data.close()
 
 
+def inbox_wide_rows(wire):
+    """Wire fixtures for the wide inbox projection and its status rows."""
+    from shantytown.seeds_inbox import FIELDS
+    grouped, extra = {}, []
+    for field in wire:
+        if field["predicate"] not in FIELDS:
+            continue
+        key = (field["subject"], field["graph"])
+        row = grouped.setdefault(key, {"subject": key[0], "graph": key[1]})
+        name = FIELDS[field["predicate"]]
+        if name in row and row[name] != field["value"]:
+            extra.append({**row, name: field["value"]})
+        else:
+            row[name] = field["value"]
+    selected = list(grouped.values()) + extra
+    return selected + [{"subject": row["subject"], "graph": row["graph"],
+                        "kind": "owner-status", "owner_status": row.get("status"),
+                        "plain_status": True} for row in selected]
+
+
 def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     from shantytown.inbox import TrackerInbox
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
@@ -492,26 +623,29 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
         queries.append(text)
         wire = fields("test-modern", title="inbox: marker payload", status="open")
         wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
-        if '"closed"' in text or '?predicate ?value' in text and closed[0]:
+        if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
             wire += fields("test-receipt", title="inbox: delivered payload", status="closed")
-        return answer(wire)
+        from shantytown.seeds_inbox import FIELDS
+        return answer(inbox_wide_rows(wire))
 
     closed = [False]
     monkeypatch.setattr(seeds_plate, "_query", query)
     box = TrackerInbox(tracker, lambda: pytest.fail("whole board read"),
                        items_for=tracker.inbox_items)
     assert {message.id for message in box.unread("worker")} == {"test-modern", "test-legacy"}
-    assert len(queries) == 2  # one discovery, one bounded field projection; both prefixes
+    assert len(queries) == 1  # fresh combined metadata, format and guard observation
     assert "inbox:" in queries[0] and "mail:" in queries[0]
     assert G + "#seeds-ephemeral" in queries[0]
-    assert '"closed"' not in queries[0]
+    # The admitted status vocabulary includes closed even for unread reads;
+    # only the candidate status filter determines whether receipts are selected.
+    assert '"deferred", "closed"))' not in queries[0]
     closed[0] = True
     assert box.find_delivery("worker", "delivered").read
-    assert len(queries) == 4
-    assert '"closed"' in queries[2]
+    assert len(queries) == 2
+    assert '"deferred", "closed"))' in queries[1]
 
 
-@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "disappeared", "nonmessage"])
+@pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "missingfield", "nonmessage"])
 def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
     from shantytown.answer import PartialAnswer
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
@@ -523,13 +657,14 @@ def test_native_inbox_uncertainty_does_not_fall_back_to_sdk(monkeypatch, fault):
         calls.append(text)
         if fault == "offline":
             raise OSError("unavailable")
-        if fault == "disappeared" and len(calls) > 1:
-            return answer([])
         wire = fields(title="actual work" if fault == "nonmessage" else "inbox: payload",
                       assignee="other" if fault == "foreign" else "worker")
         if fault == "ambiguous":
             wire += fields(title="inbox: contradictory", status="closed")
-        return answer(wire)
+        if fault == "missingfield":
+            wire = [r for r in wire if r["predicate"] != seeds_plate.SCHEMA + "identifier"]
+        from shantytown.seeds_inbox import FIELDS
+        return answer(inbox_wide_rows(wire))
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     with pytest.raises(PartialAnswer):
@@ -613,7 +748,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     def query(_proof, text, timeout):
         seen.append(text)
         result = data.query(text)
-        assert [str(v) for v in result.vars] == ["subject", "graph"]
+        assert [str(v) for v in result.vars] == ["subject", "graph", "problem"]
         actual = [(str(row.subject), str(row.graph)) for row in result]
         assert Counter(actual) == Counter(expected)
         # Stop before hydration: this test checks the real candidate query,
@@ -625,7 +760,7 @@ def test_exact_owner_status_filter_selects_expected_subject_graphs(monkeypatch, 
     try:
         assert seeds_plate.owner_rows(PROOF, "worker", **options).exact() == []
         assert len(seen) == 1
-        assert seen[0].count(" UNION ") == 3
+        assert 'BIND("unsupported-owner-status" AS ?problem)' in seen[0]
     finally:
         data.close()
 
@@ -636,3 +771,30 @@ def test_feed_type_missing_is_unknown_not_an_actionable_task(monkeypatch):
     from shantytown.answer import PartialAnswer
     with pytest.raises(PartialAnswer):
         seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()
+
+
+def test_unassigned_counts_exclude_decisions_in_both_graphs(monkeypatch):
+    from rdflib import Dataset, Literal, Namespace, RDF, URIRef
+    data = Dataset()
+    schema = Namespace(seeds_plate.SCHEMA)
+    seeds = Namespace(seeds_plate.SEEDS)
+    for suffix in ("", "#seeds-ephemeral"):
+        graph = data.graph(URIRef(G + suffix))
+        for name, priority, label, owner in (
+            ("ordinary", 1, "ordinary", None),
+            ("decision", 0, "decision-needed", None),
+            ("owned", 0, "ordinary", "worker"),
+            ("low", 3, None, None),
+        ):
+            node = URIRef(seeds_plate.SEEDS + "item/" + name + suffix)
+            graph.add((node, RDF.type, schema.Action))
+            graph.add((node, seeds["ontology/status"], Literal("open")))
+            graph.add((node, seeds["ontology/priority"], Literal(priority)))
+            if label is not None:
+                graph.add((node, schema.keywords, Literal(label)))
+            if owner is not None:
+                graph.add((node, schema.agent, Literal(owner)))
+    def query(proof, text, timeout):
+        return answer([{"n": int(row[0])} for row in data.query(text)])
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unassigned_counts(PROOF) == (4, 2)

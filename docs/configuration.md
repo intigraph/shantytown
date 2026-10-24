@@ -75,6 +75,7 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 | `SHANTY_PANE_MAX_GIB` | `MemoryMax` on each agent pane's own systemd scope — the KILL line. Sits above measured normal peak (an agent plus a Rust build runs 10-13 GiB) and below the runaway that caused this to exist (31.8 GiB in ten minutes, which tripped host-wide oomd and killed an unrelated agent). Lowering it toward normal peak does not make the host safer: a pane held near its limit reclaims continuously, and that reclaim is itself what raises slice pressure. | `20` |
 | `SHANTY_PANE_HIGH_GIB` | `MemoryHigh` on the same scope — the THROTTLE line, where a pane is slowed rather than killed. Defaults to the same value as `SHANTY_PANE_MAX_GIB`, i.e. no throttle band, because a band is only useful when you have measured where the workload actually sits. A value above `MAX` is clamped to it rather than refused: a throttle that can never fire before the kill is meaningless, and a misconfigured pair should still get a working ceiling. | `SHANTY_PANE_MAX_GIB` |
 | `SHANTY_PANE_SWAP_MAX` | `MemorySwapMax` on the scope. `0` — no swap — is deliberate and is a HYPOTHESIS, not a settled default: a capped scope with swap to thrash into grinds against its limit and raises pressure on the whole user slice, which is how a correctly-capped pane still got a bystander killed. With no swap it is killed promptly instead. On a host carrying resident swap use that trades a short hard failure for a long soft one, so raise it if panes start dying that used to survive. | `0` |
+| `SHANTY_REGISTRY` | default identity registry: `files` (generated cards), `quipu` (graph), or `toml` (hand-authored crew configuration). Explicit `--registry` wins; otherwise `[env]` in `<root>/shantytown.toml` takes precedence over the ambient environment. Invalid declared values refuse instead of silently selecting files. This setting does not change the tracker backend. | `files` |
 | `SHANTY_BACKEND` | the deployment's default tracker backend (`files`\|`beads`\|`br`\|`forgejo`) when `--backend` is not given. Set it ONCE (under `[env]` in `<root>/shantytown.toml`, or the env) on a fleet whose plates live in a shared tracker and every plain `st anchor`/`st crew` call — including the status-bar segment and the session picker, which by design pass no flags — resolves the real tracker instead of rendering an empty files plate. An unrecognized value refuses; it never silently means files. Explicit `--backend` always wins. | per-command (`files`; `inbox -d` → `beads`) |
 | `SHANTY_BEADS_REPO` | the bead store directory for `--backend beads` when `--repo` is not given (bd's `-C`). Same one-time deployment setting as `SHANTY_BACKEND`; explicit `--repo` wins, and unset falls back to the `.beads` walk-up. | the `.beads` walk-up |
 | `SHANTY_BR_REPO` | the SQLite+JSONL store directory for `--backend br` when `--repo` is not given. Explicit `--repo` wins; when unset, the beads repo setting and then the `.beads` walk-up remain compatible migration fallbacks. | migration fallback |
@@ -127,6 +128,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_CONFIG_SERVER` | Explicit server for the configuration source; the graph cannot redirect its own bootstrap reader. | unset |
 | `SHANTY_INSTRUCTIONS_MODE` | `compare` reports byte-level migration differences; `apply` realizes the reviewed fragment body during provision. Local identity files stay untouched. | compare |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
+| `SHANTY_RULES_QUERY` | Name of the stored Quipu query that returns this deployment's crew process rules. When set, the session-start anchor tells every session to run it for its role and that a failed or empty read means the rules are UNKNOWN. Process rules then live in the graph, not in instruction files. | unset (no rules pointer) |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
 | `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
@@ -245,13 +247,39 @@ establish that a real subscription or its native refresh works.
 
 ### Context reminders
 
-`[session_budget] context_threshold_pct` configures the advisory context reminder;
+`[session_budget] context_threshold_pct` configures the context handoff target
+(default 50% when context monitoring is declared);
 `context_window` supplies capacity when the transcript does not report it. Role
 and agent overrides use the existing `context_by_role` and `context_by_agent`
-tables. A threshold crossing produces one visible hook message and one model
-instruction to checkpoint and request `st agent cycle --self`. Remaining above
-the threshold does not repeatedly wake the agent; dropping below it or beginning
-a new session re-arms the reminder. It never schedules a cycle automatically.
+tables. A threshold crossing produces a visible hook instruction to checkpoint
+and request `st agent cycle --self --checkpoint-file <notes-file>`.
+`context_hard_pct` sets a separate handoff line (default 75%, configurable above
+the target and at most 80%). At that line every Stop instructs handoff before
+further work; no advisor can override it. These are turn-boundary instructions,
+not asynchronous interruption or a scheduled cycle. Leave an in-progress
+operation safe before handing off. A single long turn can cross either line
+before its next Stop, so retain the harness's pre-compaction safety hook.
+
+Between the target and hard line, the hook asks Jev through
+`SHANTY_CONTEXT_JEV_COMMAND` (falling back to `SHANTY_CREATE_JEV_COMMAND`). The
+request contains percentage, capacity, bounded active-work titles and a recent
+call-in rebuild estimate when available. Missing work or cost remains UNKNOWN.
+The existing `st agent advise` signal supplies the optional relatedness/next-need
+estimate; its reason is bounded to 500 characters. No conversation is sent.
+The judge has a five-second wall-time budget. A continue choice requires 0.75
+confidence and lasts at most ten minutes or five additional percentage points,
+then Jev is asked again. Missing, failed or uncertain advice asks for handoff.
+`context-decisions.jsonl` retains the input, decision, chosen criterion and Jev
+provenance; failed logging grants no exception. Without an exception, the soft
+hint is once per crossing. Dropping below target or beginning a new session
+re-arms it. Worker, lead and administrator Stop paths all use this policy.
+
+For example, `context_threshold_pct = 50` and `context_hard_pct = 70` leave a
+20-point exception range. Declare `context_window` for every Claude session:
+its model name does not distinguish window variants. Codex uses native capacity
+when no override is present. Check each host's effective configuration and hook
+registration; a source change does not arm a deployment or establish live
+handoff acceptance.
 
 SessionStart binds the hook's exact session and transcript before the anchor is
 rendered. Until the new transcript contains usage, occupancy is UNKNOWN, rather

@@ -359,3 +359,12 @@ def test_optional_sections_vanish(world):
                  knowledge=['"auth-api was cowboy-deployed" — 2026-06-30']).render()
     assert "CONTEXT (bobbin)" in rich
     assert "KNOWN (quipu)" in rich
+
+
+def test_fix_prompt_is_lightweight_and_skips_new_work(world):
+    _, registry, tracker = world
+    text = anchor("ellie", registry, NullPanes(), plate=lambda w: plate(tracker, w)).render()
+    assert "For a fix, note what is broken in one line and check it after" in text
+    assert "Skip this for new docs, features or research" in text
+    assert "record a BASELINE" not in text
+    assert "Choose the success metric" not in text

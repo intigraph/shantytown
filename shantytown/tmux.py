@@ -68,7 +68,7 @@ _SEND_CHUNK_GAP_S = 0.05
 _CODEX_SETTLE_S = 0.5
 _CODEX_POLL_S = 0.15
 _CODEX_POLLS = 8
-_CODEX_ATTEMPTS = 8
+_CODEX_ATTEMPTS = 2
 _CODEX_DEADLINE_S = 25
 
 
@@ -80,8 +80,12 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     retry. Never accept the dim suggestion as typed input.
     """
     from . import triage
-    if not text or triage.input_state(screen) == triage.INPUT_PLACEHOLDER:
+    if not text or triage.input_state(screen) != triage.INPUT_QUEUED:
         return False
+    framed = triage.codex_composer(screen)
+    if framed is not None:
+        body = triage.strip_attrs(framed).lstrip()[1:]
+        return ' '.join(body.split()) == ' '.join(text.split())
     lines = triage.strip_attrs(screen).rstrip().splitlines()
     prompts = [i for i, line in enumerate(lines) if line.lstrip().startswith("›")]
     if not prompts:
@@ -286,6 +290,11 @@ class PaneInMode(PaneNotAgent):
 
 
 def _refuse_task_list(pane: str, screen: str) -> None:
+    from .triage import strip_attrs
+    from .safeguard import current
+    if current(strip_attrs(screen)):
+        raise PaneNotAgent(
+            f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
     from .harness import task_list_evidence
     if task_list_evidence(screen):
         raise PaneTaskList(
@@ -332,9 +341,10 @@ def shell_foreground(panes, pane: str) -> str | None:
 
 
 class Tmux:
-    def __init__(self, socket: str | None = None) -> None:
+    def __init__(self, socket: str | None = None, *, root=None) -> None:
         # Explicit arg wins; else the env; else bare tmux (default server).
         self.socket = socket if socket is not None else os.environ.get("SHANTY_TMUX_SOCKET") or None
+        self.delivery_root = root or os.environ.get('SHANTY_ROOT')
 
     def _cmd(self, *args: str) -> list[str]:
         # -L must precede the subcommand.
@@ -550,13 +560,35 @@ class Tmux:
             raise PaneSubmissionUnverified(
                 f"pane {pane} entered a tmux mode (copy-mode) during the send: "
                 f"{sent} chunk(s) were typed before it, nothing after and no "
-                f"Enter. NOT SUBMITTED; do not blindly resend.")
+                f"Enter. NOT SUBMITTED; check delivery before retrying.")
         raise PaneInMode(
             f"pane {pane} is in a tmux mode (copy-mode scrollback): NOT DELIVERED, "
             f"nothing typed. Its mode was left alone; retry once it exits, or use "
             f"st inbox -d so the message waits.")
 
     def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
+        if allow_shell or not self.delivery_root:
+            return self._send(pane, text, allow_shell=allow_shell)
+        from .delivery import Custody
+        try:
+            with Custody(self.delivery_root, pane, self.socket) as custody:
+                try:
+                    self._send(pane, text, custody=custody)
+                except Exception:
+                    # A failed observation must not discard the original failure
+                    # or its durable ownership record.
+                    try:
+                        custody.failed(self)
+                    except Exception:
+                        pass
+                    raise
+                custody.finish('delivered')
+        except OSError as exc:
+            raise PaneSubmissionUnverified(
+                'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
+
+    def _send(self, pane: str, text: str, *, allow_shell: bool = False,
+              custody=None) -> None:
         # REFUSE A PANE IN COPY-MODE (aegis-6jx) before anything else reads or
         # types. See PaneInMode for what each key does to a person scrolling back.
         self._refuse_in_mode(pane)
@@ -572,6 +604,10 @@ class Tmux:
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
         codex = False
+        if not allow_shell:
+            from .stop_failure import pane_state
+            if pane_state(self.delivery_root, pane) == "safeguard-blocked":
+                raise PaneNotAgent(f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
         if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
@@ -592,8 +628,15 @@ class Tmux:
                     self._verify_codex_submission(pane, text, before)
                     return
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
-                    raise PaneSubmissionUnverified(
-                        f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
+                    if custody is not None and custody.clear_previous(self, before):
+                        before = self.capture(pane, attrs=True, timeout=2)
+                    if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                        # Journal the refusal (aegis-9t4). One stranded body makes
+                        # every later send refuse here; unjournaled, a 64-minute
+                        # outage on tim read as an empty send log, not a deaf pane.
+                        _journal_send(pane, "<refused:occupied-composer:" + text + ">")
+                        raise PaneSubmissionUnverified(
+                            f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
@@ -631,6 +674,8 @@ class Tmux:
         # — dispatch, escalations, tend prompts. The defect was found on inbox
         # and was never inbox's: it belongs to the one place st types into a pane.
         _journal_send(pane, text)
+        if codex and custody is not None:
+            custody.begin(text, self.session_created(pane))
         # `or [""]` keeps the empty-body case sending exactly one `-l ""`, which
         # is what this always did — the split of an empty string is no chunks.
         chunks = [text[i:i + _SEND_CHUNK]
@@ -697,8 +742,8 @@ class Tmux:
         def observed(screen):
             return (triage.input_state(screen) in
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
-                    ((_codex_queued(screen, text) and not _codex_queued(before, text)) or
-                     (not was_busy and triage.mid_flight(screen))))
+                    not _codex_queued(screen, text) and
+                    not was_busy and triage.mid_flight(screen))
         for attempt in range(_CODEX_ATTEMPTS):
             screen = ""
             for _ in range(_CODEX_POLLS):
@@ -714,6 +759,9 @@ class Tmux:
                 # remain typed while an older turn is still working.
                 if observed(screen):
                     return
+                if _codex_queued(screen, text):
+                    raise PaneSubmissionUnverified(
+                        f'UNVERIFIED: Codex queued input in {pane}; not delivered')
             if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
                     and _codex_owned_input(screen, text)):
                 # Submit only the exact body we own. Busy Codex queues with
@@ -740,7 +788,7 @@ class Tmux:
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
             f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
-            "body was not resent, do not blindly resend")
+            "body was not resent, check delivery before retrying")
 
     def control(self, pane: str, key: str) -> None:
         """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.

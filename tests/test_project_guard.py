@@ -49,7 +49,7 @@ def panes(monkeypatch, *live):
     the graph has no idea what is running — the whole reason it must not
     restructure the crew unsupervised."""
     class FakeTmux:
-        def __init__(self, socket=None):     # the CLI now names the fleet's socket
+        def __init__(self, socket=None, *, root=None):
             self.socket = socket
 
         def exists(self, pane):

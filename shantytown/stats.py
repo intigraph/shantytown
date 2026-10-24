@@ -535,6 +535,12 @@ def capture(root: Path, payload: dict) -> None:
     agent = _agent()
     session = payload.get("session_id") or ""
     hook = payload.get("hook_event_name") or ""
+    if agent and agent != "unknown" and session:
+        try:
+            from .owned_work import OwnedWork
+            OwnedWork(root).heartbeat(agent, now=now)
+        except Exception:
+            print("liveness heartbeat UNKNOWN", file=sys.stderr)
     conn = _db(root)
     try:
         from . import task_order

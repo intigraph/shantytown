@@ -132,10 +132,8 @@ class Anchoring:
                          " — nothing ready is on your plate. Chase the blocker,"
                          " or ask your lead for ready work.")
             else:
-                L.append("      Before a fix or improvement, record a BASELINE on this item"
-                         " before the first change: time, version, probe and result.")
-                L.append("      Choose the success metric now; rerun the same probe afterwards."
-                         " If measurement is impossible, record why.")
+                L.append("      For a fix, note what is broken in one line and check it after."
+                         " Skip this for new docs, features or research.")
         else:
             # Say it plainly. An empty plate is an answer, not a blank section.
             L.append("    nothing. Consult Top of your plate and Coming due; ask your lead.")
