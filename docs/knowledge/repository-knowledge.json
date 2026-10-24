@@ -1,6 +1,6 @@
 {
-  "source_revision": "8e8f7bcc4e0a9b9f85a5b0c8803852cb150fee14",
-  "reviewed_at": "2026-10-24T05:55:41.177617Z",
+  "source_revision": "e23e8b0eb72e9848196ffc03304dc0c1d202c437",
+  "reviewed_at": "2026-10-24T08:26:23.406678Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "e9257a974cccb355813ed378da30a27b1077bc4c2f6c33175ec406ff30599a58",
+      "source_sha256": "7dc5b4a73dee7402a7796e6f624aec04378e8347d94f5626f3650b1265fd32aa",
       "properties": {
         "startHereOrder": 2
       }
