@@ -191,7 +191,7 @@ def test_the_grouping_is_the_one_ruled():
         "attach": None,
         "work": frozenset({"item", "repool", "defer", "hold-feed", "cost", "dream", "triage", "jobs"}),
         "agent": frozenset({"new", "stop", "harness", "account", "cycle", "advise", "input", "ask",
-                            "answer", "log", "history", "stats", "remote"}),
+                            "answer", "log", "history", "stats", "remote", "memory"}),
         "fleet": frozenset({"start", "tend", "roles", "init", "hold", "window",
                             "dashboard", "watch"}),
         "repo": frozenset({"worktree", "push", "context", "pr"}),

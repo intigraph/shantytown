@@ -5,7 +5,7 @@
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
-            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair}
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
@@ -1986,6 +1986,9 @@ def build_parser() -> argparse.ArgumentParser:
     jb_hist.add_argument("name", nargs="?")
     jb_hist.add_argument("--limit", type=int, default=20)
 
+    from .memory_cli import configure as configure_memory
+    configure_memory(leaf("memory", help="explicit crew file-memory transport; no native root replacement"))
+
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
     cx.add_argument("-b", "--budget", type=int, default=5)
@@ -2591,6 +2594,9 @@ def _main(a, argv: list[str] | None = None) -> int:
 
 
 def _run_command(a) -> int:
+    if a.cmd == "memory":
+        from .memory_cli import command
+        return command(a)
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a) and not _administrator_launch(a):
