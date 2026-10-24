@@ -2,7 +2,7 @@
 <h1 align="center">shantytown</h1>
 <p align="center"><em>🏭 Ship software and organize everyday work with a crew of AI agents.</em></p>
 <p align="center">
-<a href="https://github.com/scbrown/shantytown/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"/></a>
+<a href="https://github.com/scbrown/shantytown/blob/main/LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache_2.0-blue"/></a>
 <a href="https://github.com/scbrown/shantytown/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg"/></a>
 <a href="https://github.com/scbrown/caboodle"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
 </p>
@@ -24,7 +24,25 @@ ownership and controls organize both. Quipu integration is optional.
 
 ## Install
 
-Python 3.11+, [pipx](https://pipx.pypa.io/) and `tmux` are prerequisites.
+Python 3.11+ and `tmux` are prerequisites.
+For the shell installer, Python needs venv and pip; pipx is only needed for
+the alternative below. Pin a release and choose its installation prefix on
+the receiving shell:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/scbrown/shantytown/main/install.sh |
+  STACK_VERSION=v0.7.1 STACK_INSTALL_ROOT="$HOME/.local" sh
+export PATH="$HOME/.local/bin:$PATH"
+st --version
+```
+
+Omit `STACK_VERSION` to select the latest stable release. `STACK_INSTALL_ROOT`
+defaults to `~/.local`; the installer stores each release in
+`share/shantytown/<tag>` under that prefix and links `bin/st` to it.
+For another prefix, put that prefix's `bin` directory on `PATH`.
+
+### Alternative: pipx
+
 Install the verified wheel from the [latest release](https://github.com/scbrown/shantytown/releases/latest):
 
 ```sh
@@ -44,6 +62,25 @@ To install from source instead:
 git clone https://github.com/scbrown/shantytown
 pipx install ./shantytown
 ```
+
+### Removal
+
+For a pipx installation, run `pipx uninstall shantytown`.
+
+For the shell installer, choose the prefix and release you installed. Remove
+its command link only when it still points to that release, then remove that
+release's virtual environment:
+
+```sh
+prefix="$HOME/.local"
+version=v0.7.1
+if [ "$(readlink "$prefix/bin/st")" = "$prefix/share/shantytown/$version/bin/st" ]; then
+  rm "$prefix/bin/st"
+fi
+rm -r "$prefix/share/shantytown/$version"
+```
+
+Other installed releases and your project or crew configuration remain in place.
 
 Choose an installed [agent harness](https://scbrown.github.io/shantytown/harnesses.html)
 and configure a tracker in [Getting started](https://scbrown.github.io/shantytown/getting-started.html).
@@ -157,4 +194,4 @@ Read [CONTRIBUTING.md](https://github.com/scbrown/shantytown/blob/main/CONTRIBUT
 
 ## 📜 License
 
-[MIT](https://github.com/scbrown/shantytown/blob/main/LICENSE)
+[Apache-2.0](https://github.com/scbrown/shantytown/blob/main/LICENSE)
