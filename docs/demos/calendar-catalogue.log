@@ -1,0 +1,7 @@
+Script started on 2026-10-20 21:49:30-04:00 [COMMAND="stty -onlcr && python3 docs/demos/calendar-catalogue.py" <not executed on terminal>]
+Base 82c0f0394b06acbb2e3738a6bb7ec5bb7f1160cf calendar refused: calendar qualifiers are not admitted by the fixed-interval reader
+Positive fixed control: identical decoded fields before/after
+Candidate disabled weekly declaration: {"anchor_s": 1793020620, "enabled": false, "event": "urn:example:event", "host": "urn:example:location", "interval_s": null, "iri": "urn:example:job", "local_time": "09:17", "name": "weekly-fixture", "owner": "operator", "revision": "r1", "schedule": "urn:example:schedule", "target": "urn:example:target", "timezone": "America/New_York", "weekday": 0}
+SOURCE READ ONLY: no graph, TOML, runtime admission or firing
+
+Script done on 2026-10-20 21:49:30-04:00 [COMMAND_EXIT_CODE="0"]

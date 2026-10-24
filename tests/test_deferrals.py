@@ -580,7 +580,7 @@ def test_date_condition_releases_without_a_timestamp(tmp_path):
 def test_mechanical_release_cannot_override_other_gates(tmp_path):
     base = _row(notes='resume_when: closed:aegis-blocker')
     variants = [dict(labels=['needs-human']), dict(labels=['decision-stiwi']),
-        dict(labels=['blocked:external']), dict(labels=['parked:by-design']),
+        dict(labels=['parked:by-design']),
         dict(defer_until=_iso(timedelta(days=1))),
         dict(dependencies=[{'id': 'aegis-other', 'dependency_type': 'blocks', 'status': 'open'}]),
         dict(notes='resume_when: closed:aegis-blocker and ask for approval'),

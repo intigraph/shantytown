@@ -324,6 +324,7 @@ class FilesTracker:
             priority=_priority(d),
             rank=d.get("rank"), due_at=d.get("due_at"), created_at=d.get("created_at"),
             blocker_kind=blocker_kind(d.get("labels")),
+            labels=tuple(d.get("labels") or ()),
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
             updated_at=d.get("updated_at"),

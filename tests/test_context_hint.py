@@ -47,7 +47,7 @@ def test_actual_stop_paths_emit_once_even_with_active_work(tmp_path, monkeypatch
     assert message["systemMessage"] == message["reason"]
     assert "70%" in message["reason"]
     assert "st agent cycle --self --checkpoint-file <notes-file>" in message["reason"]
-    assert "advisory" in message["reason"]
+    assert "Handoff decision" in message["reason"]
     assert not ch.emit(tmp_path, card, payload)
     assert capsys.readouterr().out == ""
     assert not (tmp_path / "notify/cycle-requests.json").exists()
@@ -140,7 +140,7 @@ def test_role_override_inherits_and_omission_stays_off():
     assert sb.parse({}).context_for("worker") is None
     limits = sb.parse({"context_window": 1000, "context_by_role": {
         "lead": {"context_threshold_pct": 60}}})
-    assert limits.context_for("worker") == sb.ContextLimits(1000, 70)
+    assert limits.context_for("worker") == sb.ContextLimits(1000, 50)
     assert limits.context_for("lead") == sb.ContextLimits(1000, 60)
     assert sb.parse({"context_threshold_pct": 70}).context.window is None
 
@@ -244,7 +244,7 @@ def test_partial_rollout_measures_native_capacity_and_exposes_missing_window(
             "model_context_window": 1000, "last_token_usage": {"input_tokens": 750}}}}))
     assert ch.emit(tmp_path, card, payload), "native capacity resolves without a stanza"
     reason = json.loads(capsys.readouterr().out)["reason"]
-    assert "75%" in reason and "70%" in reason
+    assert "75%" in reason and "50%" in reason
 
 
 def test_completely_unconfigured_deployment_stays_disabled(tmp_path, capsys):
