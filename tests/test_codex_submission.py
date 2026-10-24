@@ -99,6 +99,17 @@ def test_existing_foreign_input_is_not_appended_to_or_submitted(monkeypatch):
     assert keys(calls) == []
 
 
+def test_refused_send_into_occupied_composer_is_journaled(monkeypatch):
+    # aegis-9t4: a stranded body silently refused every later sender for an hour.
+    panes, calls = transport(monkeypatch, [OWNED.replace(BODY, "Operator input")])
+    journal = []
+    monkeypatch.setattr(tmux, '_journal_send', lambda pane, text: journal.append((pane, text)))
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='nothing added'):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+    assert journal == [('worker', '<refused:occupied-composer:' + BODY + '>')]
+
+
 def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
     clipped = '\n'.join(['typed text wrapped beyond the prompt'] * 20) + '\n' + FOOTER
     panes, calls = transport(monkeypatch, [clipped])
