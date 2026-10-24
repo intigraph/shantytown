@@ -1,6 +1,6 @@
 {
-  "source_revision": "38559ea02a6ee484a006948834f610f5c6886830",
-  "reviewed_at": "2026-10-24T02:07:51.732562Z",
+  "source_revision": "085afb5394bd9bad89b8a25a574fc1c9c47844a7",
+  "reviewed_at": "2026-10-24T02:04:07.168021Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "dfffe03a7b43455c0511fae70628b2bea7c573dd2061c4de378a9bfadf2e5b69",
+      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
       "type": "Concept"
     },
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "8058e4ac85c28cdbb9be3b873fd59ff975bf3c4e16ec59d16e9aef3ccf7e0013",
+      "source_sha256": "053ea7dd86b5f7e666579c2adee72b69784a840179057633c7bc50be01301b80",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "dfffe03a7b43455c0511fae70628b2bea7c573dd2061c4de378a9bfadf2e5b69",
+      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "c672261d8c2abfbaa4fc340368a2e3084ea788068c1a1cc28fdbbccc1541a742",
+      "source_sha256": "e9257a974cccb355813ed378da30a27b1077bc4c2f6c33175ec406ff30599a58",
       "properties": {
         "startHereOrder": 2
       }
