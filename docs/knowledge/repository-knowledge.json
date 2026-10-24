@@ -1,6 +1,6 @@
 {
-  "source_revision": "8830cf64fdc787836c4e4b71f65fb0cd77f15299",
-  "reviewed_at": "2026-10-24T07:27:06.378416Z",
+  "source_revision": "fa45c14589334b19834a3652da2bc5780d91ae3a",
+  "reviewed_at": "2026-10-24T07:24:59.855920Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "f29f76eaca550729e712646b60d6b355912114823dd9ad1ee918e2488dd94a57",
+      "source_sha256": "30c65ebdab9df566b13866760530c5e75a3c7ce1dd2a6347a23e3db41f055e0e",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "1ccc9d8d95970fb08d8141b6984b8cdda339d8b3c59a35945c132a2e434a23bd",
+      "source_sha256": "e9257a974cccb355813ed378da30a27b1077bc4c2f6c33175ec406ff30599a58",
       "properties": {
         "startHereOrder": 2
       }
