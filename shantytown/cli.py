@@ -1911,6 +1911,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the recipient when sending; whose inbox when reading "
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
+    ib.add_argument("--to", action="append", default=[], dest="broadcast_to",
+                    help="with inbox broadcast: exact recipient (repeat for up to 64)")
+    ib.add_argument("--delivery-key", help="with broadcast: stable caller operation key for replay")
+    ib.add_argument("--json", action="store_true", help="with broadcast: per-recipient durable receipts")
     ib.add_argument("-d", "--durable", action="store_true",
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
@@ -5656,6 +5660,12 @@ def _cmd_inbox(a) -> int:
             or getattr(a, "count", False) or getattr(a, "read", False)
             or getattr(a, "read_id", [])):
         print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
+        return REFUSED
+    if a.agent == "broadcast":
+        from .inbox_broadcast import command
+        return command(a)
+    if getattr(a, "broadcast_to", []) or getattr(a, "delivery_key", None) or getattr(a, "json", False):
+        print("  refused: --to, --delivery-key and --json require inbox broadcast", file=sys.stderr)
         return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.

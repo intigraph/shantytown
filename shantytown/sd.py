@@ -79,6 +79,49 @@ class SdTracker(BrTracker):
         self._native_projection: bool | None = None
         self._decision_candidates: dict[str, Answer[list[dict]]] = {}
 
+    def create_inbox_message(self, title: str, *, delivery_key: str, **fields) -> WorkItem:
+        """Retry only CAS conflicts, using the SDK's existing keyed create.
+
+        The run/step/visit identity survives every retry. Unknown outcomes stop;
+        the broadcast caller retains its explicit key rather than minting mail.
+        This optional seam is message-only, never an assignment-guard bypass.
+        """
+        import hashlib
+        import random
+        import time
+        from .inbox import validate_delivery_key
+        validate_delivery_key(delivery_key)
+        if (not is_message(title) or fields.get("labels") != "inbox"
+                or not fields.get("assignee")
+                or set(fields) - {"assignee", "labels", "description", "slug"}):
+            raise ValueError("stable inbox create requires only message identity fields")
+        identity = json.dumps([delivery_key, fields.get("description")], separators=(",", ":"))
+        run = "urn:shantytown:inbox:" + hashlib.sha256(identity.encode()).hexdigest()
+        args = ["create", title, "--json", f"--workflow-run={run}",
+                f"--step={fields['assignee']}", "--visit=1"]
+        args.extend(f"--{key}={value}" for key, value in fields.items() if value is not None)
+        for attempt in range(16):
+            result = self._bd(*args)
+            if result.returncode == 4 and attempt < 15:
+                time.sleep(random.uniform(0.002, 0.01) * (attempt + 1))
+                continue
+            if result.returncode == 4:
+                raise RuntimeError(f"sd inbox create conflict after 16 attempts: {_failure_reason(result)}")
+            if result.returncode:
+                raise RuntimeError(f"sd inbox create failed: {_failure_reason(result)}")
+            try:
+                value = json.loads(result.stdout)
+                if not isinstance(value, dict) or not isinstance(value.get("id"), str) or not value["id"]:
+                    raise ValueError("missing exact receipt id")
+                item = self.get(value["id"])
+            except (ValueError, TypeError, KeyError) as error:
+                raise RuntimeError("stable inbox receipt identity UNKNOWN") from error
+            if (item.id != value["id"] or item.title != title
+                    or item.assignee != fields["assignee"]):
+                raise RuntimeError("delivery key binds a different receipt identity/content")
+            return item
+        raise AssertionError("bounded inbox retry exhausted")
+
     @property
     def _bin(self) -> str:
         return os.environ.get("SHANTY_SD_BIN", "sd")
