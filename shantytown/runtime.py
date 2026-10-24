@@ -1348,6 +1348,51 @@ _CARRIED_ENV = ("QUIPU_SERVER", "SHANTY_ONTO_NS", "SHANTY_CANONICAL_SOURCE",
                 "QUIPU_HOOK_GROUP")
 
 
+# DP values can predate canonical delivery. Unlike _CARRIED_ENV, these names
+# are not removal-owned: absence preserves them until an explicit migration.
+_DP_METRICS_ENV = ("DESIRE_PATH_METRICS_PUSHGATEWAY",
+                   "DESIRE_PATH_METRICS_PASSWORD_FILE")
+
+
+def check_dp_metrics_migration(previous: dict, requested: dict) -> None:
+    """Refuse conflicting unowned values without disclosing either value."""
+    for key in _DP_METRICS_ENV:
+        if key in requested and key in previous and previous[key] != requested[key]:
+            raise ValueError("DP metrics migration required: conflicting unowned "
+                             "configuration; reconcile explicitly before delivery")
+
+
+def _dp_metrics_env(root=None) -> dict:
+    """Carry the supported URL/file pair; never open the credential file.
+
+    No ownership is inferred from equal values, and no absence means removal.
+    Render/launch output is configuration, not evidence of a producer run.
+    """
+    from urllib.parse import urlsplit
+    from .deployment import deployment_default
+    pair = {key: deployment_default(root, key) for key in _DP_METRICS_ENV}
+    gateway, password_file = pair.values()
+    if not gateway and not password_file:
+        return {}
+    if not gateway or not password_file:
+        raise ValueError("DP metrics requires both gateway and password-file configuration")
+    try:
+        url = urlsplit(gateway)
+        # Accessing port validates malformed authorities without making a request.
+        _ = url.port
+        valid = (url.scheme in ("http", "https") and url.hostname
+                 and url.password is None and not url.query and not url.fragment
+                 and not any(c.isspace() or ord(c) < 32 for c in gateway))
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError("DP metrics requires a valid HTTP(S) URL without an inline secret")
+    if not Path(password_file).is_absolute() or any(ord(c) < 32 for c in password_file):
+        raise ValueError("DP metrics requires an absolute password-file path")
+    check_dp_metrics_migration(os.environ, pair)
+    return pair
+
+
 def _settings_env(role: str, root=None) -> dict:
     """The env block an emitted settings file carries.
 
@@ -1385,6 +1430,7 @@ def _settings_env(role: str, root=None) -> dict:
             else os.environ.get(key)
         if val:
             env[key] = val
+    env.update(_dp_metrics_env(root))
     return env
 
 

@@ -47,6 +47,22 @@ Every CLI command loads `[env]` after resolving its root. These values also reac
 child processes and readers that use the process environment directly. The CLI
 restores the caller's environment on return when invoked as a Python function.
 
+Optional Desire Path metrics delivery uses the supported
+`DESIRE_PATH_METRICS_PUSHGATEWAY` and `DESIRE_PATH_METRICS_PASSWORD_FILE`
+pair in `[env]` (with the normal ambient fallback). Claude settings and both
+harness launch commands carry the same pair. The gateway must be an HTTP(S) URL
+without an inline password, query or fragment; the password-file path must be
+absolute. Rendering never opens that file. An incomplete pair refuses explicitly.
+No configured pair emits no placeholder and makes no successful-delivery claim.
+
+DP values are deliberately excluded from removal-owned environment keys. Existing
+manually configured values survive canonical absence, including a later render
+with the pair removed. Conflicting existing Claude settings or inherited launch
+values refuse with a migration error instead of being overwritten. Equal values
+do not establish ownership. Reconciliation or removal needs an explicit operator
+migration; changing canonical configuration alone does not clear old values.
+Rendered configuration does not prove a natural hook ran or metrics arrived.
+
 | variable | what it points at | default |
 |---|---|---|
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
