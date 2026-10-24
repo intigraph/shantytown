@@ -92,3 +92,21 @@ def test_normalized_existing_ask_cannot_be_disguised_during_deferral():
     before = WorkItem('lab-1', title=' \tASK Stiwi: choose')
     with pytest.raises(ValueError, match='Brief.*Later'):
         refuse_deferral(before, {'title': 'Technical disguise', 'defer_until': '2027-01-01'})
+
+@pytest.mark.parametrize('change', [{'labels': ['decision-stiwi']}, {'labels': ['desk']}, {'title': 'ASK Stiwi: choose'}])
+def test_existing_deferred_cannot_gain_ask_class_without_reopening(change):
+    before = WorkItem('lab-1', title='Technical control', status='deferred')
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(before, change)
+    refuse_deferral(before, change | {'status': 'open', 'defer_until': ''})
+    refuse_deferral(before, {'labels': ['technical']})
+
+
+def test_decision_stiwi_is_ask_and_producer_label_update_refuses_before_write():
+    assert is_ask({'labels': ['decision-stiwi']})
+    tracker = Mock()
+    tracker.get.return_value = WorkItem('lab-1', title='Technical control', status='deferred')
+    execute = Mock()
+    with pytest.raises(ValueError, match='bsf8'):
+        producer_capacity.run(['update', 'lab-1', '--add-label', 'decision-stiwi'], tracker, execute, Mock())
+    execute.assert_not_called()
