@@ -34,6 +34,8 @@ def test_go_returns_2_on_a_dropped_send_not_a_traceback(tmp_path, monkeypatch, c
     assert rc == CANNOT_TELL
     err = capsys.readouterr().err
     assert "could not tell" in err
+    assert "check delivery and custody before retrying" in err
+    assert "re-dispatch" not in err
     # and, per verify-then-record, the item was NOT marked in_progress
     assert json.loads((root / "items" / "item-1.json").read_text())["status"] == "open"
 
