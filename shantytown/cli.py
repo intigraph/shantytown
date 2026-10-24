@@ -1,4 +1,4 @@
-"""st — the CLI. Seven verbs, five groups, thirty-eight grouped commands: forty-five, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-nine grouped commands: forty-six, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
