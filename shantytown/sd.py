@@ -348,10 +348,16 @@ class SdTracker(BrTracker):
             # Admission callers without that render scope still read live.
             if getattr(self, "render_shape_reads", None) is not None and agent in roster:
                 return roster[agent]
+            return self.capacity_admission_rows(agent)
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
+
+    def capacity_admission_rows(self, agent: str) -> Answer[list[dict]]:
+        """A mutation cannot borrow a frozen crew-render membership snapshot."""
+        try:
             if self._use_remote_projection():
                 from .seeds_plate import owner_rows
-                return owner_rows(self.prove_store(), agent, timeout=self.timeout,
-                                  capacity=True, shape_reads=getattr(self, "render_shape_reads", None))
+                return owner_rows(self.prove_store(), agent, timeout=self.timeout, capacity=True)
             return self._owner_rows(agent)
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
@@ -594,14 +600,10 @@ class SdTracker(BrTracker):
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
         try:
-            projected = self._use_remote_projection()
+            answer = self._inbox_metadata(agent, include_closed=include_closed)
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds inbox format proof", caveat=str(error))
-        if projected:
-            from .seeds_plate import owner_rows
-            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout,
-                                messages_only=True, include_closed=include_closed)
-        else:
+        if answer is None:
             answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
         # Each bounded read is ordered, but their union must keep the SDK's
         # global priority/creation/id order before dates leave the projection.
@@ -615,6 +617,48 @@ class SdTracker(BrTracker):
         if answer.complete:
             return Answer.complete_read(items, how=how)
         return Answer.capped(items, how=how, caveat=answer.caveat)
+
+    def _inbox_metadata(self, agent, *, include_closed=False, identifiers=None):
+        """One fresh read; only a positive legacy marker permits SDK fallback."""
+        proof = self.prove_store()
+        if not self.quipu or not proof.graph or self._native_projection is False:
+            return None
+        from .seeds_inbox import LegacyInboxSchema, read
+        from .query_identity import declared_read_operation
+        try:
+            with declared_read_operation("show" if identifiers is not None else "owner-rows"):
+                answer = read(proof, agent, include_closed=include_closed,
+                              identifiers=identifiers, timeout=self.timeout)
+        except LegacyInboxSchema:
+            self._native_projection = False
+            return None
+        if answer.complete:
+            self._native_projection = True
+        return answer
+
+    def inbox_receipts(self, agent, identifiers):
+        """Fresh exact identity fields before acknowledging known receipts.
+
+        Do not hydrate descriptions/comments just to prove id/title/recipient.
+        The subsequent SDK close retains its own current-state CAS checks.
+        """
+        try:
+            identifiers = list(dict.fromkeys(identifiers))
+            items = []
+            for start in range(0, len(identifiers), 25):
+                batch = identifiers[start:start + 25]
+                answer = self._inbox_metadata(agent, include_closed=True, identifiers=batch)
+                if answer is None:
+                    items.extend(self.get(i) for i in batch)
+                    continue
+                if not answer.complete:
+                    return Answer.capped([], how=answer.how, caveat=answer.caveat)
+                items.extend(WorkItem(id=r["id"], title=r["title"], status=r["status"],
+                                      assignee=r["assignee"], priority=r["priority"])
+                             for r in answer.exact())
+            return Answer.complete_read(items, how="fresh exact inbox receipt batches")
+        except (OSError, ValueError, RuntimeError, LookupError) as error:
+            return Answer.capped([], how="exact inbox receipts", caveat=str(error))
 
     def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
         """Read readiness only for the owner spellings used by plate selection."""
@@ -672,7 +716,8 @@ class SdTracker(BrTracker):
 
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         self.prove_store()
-        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        from .actor_identity import authenticated_actor
+        actor = authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip()
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]

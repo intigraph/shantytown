@@ -576,14 +576,15 @@ class TrackerInbox:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
         return matches[0] if matches else None
 
-    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
-        return self._deliver(to, body, frm, None)
+    def deliver(self, to: str, body: str, frm: str | None = None,
+                *, slug: str | None = None) -> Message:
+        return self._deliver(to, body, frm, None, slug)
 
     def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
         validate_delivery_key(key)
         return self._deliver(to, body, frm, key)
 
-    def _deliver(self, to, body, frm, key):
+    def _deliver(self, to, body, frm, key, slug=None):
         title = f"{PREFIX} {body}"
         # If the concrete tracker declares a title cap, honour it HERE — a clean
         # refusal before the write beats bd rejecting the create with a validation
@@ -630,6 +631,8 @@ class TrackerInbox:
                 unit=unit,
             )
         fields = {"assignee": to, "labels": "inbox"}
+        if slug is not None:
+            fields["slug"] = slug
         if frm:
             fields["description"] = f"from {frm}"
         stable_create = getattr(self._tracker, "create_inbox_message", None)
@@ -652,6 +655,45 @@ class TrackerInbox:
             and it.status != "closed"
         ]
 
+    def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
+        """Read named receipts without enumerating the recipient's queue.
+
+        Omitted IDs remain visibly missing to the caller's whole-selection
+        preflight. Transport failures propagate; they never trigger a listing.
+        This is a read, and mark_read still checks each receipt before closing.
+        """
+        wanted = list(dict.fromkeys(ids))
+        if not wanted:
+            return []
+        reader = getattr(self._tracker, "inbox_receipts", None)
+        if callable(reader):
+            # The metadata reader is already exact and graph-scoped. Hydrating
+            # each selected item here would undo the bounded receipt read.
+            items = reader(me, wanted).exact()
+            by_id = {item.id: item for item in items}
+            if len(by_id) != len(items) or not set(by_id).issubset(wanted):
+                raise ValueError("selected receipt identities differ")
+        else:
+            by_id = {}
+            for item_id in wanted:
+                try:
+                    by_id[item_id] = self._tracker.get(item_id)
+                except LookupError:
+                    continue
+        messages = []
+        for item_id in wanted:
+            item = by_id.get(item_id)
+            if item is None:
+                continue
+            if item.status not in ("open", "hooked", "in_progress", "blocked",
+                                   "deferred", "closed", "tombstone"):
+                raise ValueError("selected receipt status unreadable")
+            if (item.id == item_id and is_message(item.title)
+                    and item.assignee in (me, me.split("/")[-1])
+                    and item.status not in ("closed", "tombstone")):
+                messages.append(Message(id=item.id, to=me, body=_body_of(item.title)))
+        return messages
+
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         marked, failed = [], []
         if ids is None:
@@ -662,8 +704,19 @@ class TrackerInbox:
             # a slow listing must not prevent acknowledgment of a known message.
             # Validate the whole selection before closing any of it.
             messages = []
-            for item_id in dict.fromkeys(ids):
-                item = self._tracker.get(item_id)
+            wanted = list(dict.fromkeys(ids))
+            if not wanted:
+                return []
+            reader = getattr(self._tracker, "inbox_receipts", None)
+            if callable(reader):
+                items = reader(me, wanted).exact()
+                if len(items) != len(wanted) or {it.id for it in items} != set(wanted):
+                    raise RuntimeError("exact inbox receipt selection is incomplete")
+                by_id = {it.id: it for it in items}
+            else:
+                by_id = {i: self._tracker.get(i) for i in wanted}
+            for item_id in wanted:
+                item = by_id[item_id]
                 if (item.id != item_id or not is_message(item.title)
                         or item.assignee not in (me, me.split("/")[-1])):
                     raise RuntimeError(f"refused inbox acknowledgment of {item_id}: "
