@@ -1848,6 +1848,11 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
     co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
+    review = co.add_mutually_exclusive_group()
+    review.add_argument("--review-window", action="store_true", help="describe the exact paused cost window")
+    review.add_argument("--accept-window", metavar="SHA256", help="prepare a reviewed successor generation")
+    co.add_argument("--decision-file", help="exact-window bounded-pilot ruling JSON")
+    co.add_argument("--execute", action="store_true", help="commit the reviewed successor pointer; no publication")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")

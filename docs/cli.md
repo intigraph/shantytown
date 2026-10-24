@@ -2133,6 +2133,61 @@ preserve cached cost gauges and their last-success timestamp; without a cached
 sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
+`st work cost --review-window --json` describes the exact paused window without
+running the parser or publisher. It shares the existing producer lock and binds
+the samples, recorded source identities, snapshot ledger, cooldown and reviewed
+budget envelope. Heartbeat timestamps do not change this identity. Missing,
+ambiguous or changed evidence refuses acceptance.
+
+After the actual resource reviewers accept that exact window, prepare a decision
+JSON containing `schema_version: 1`, `window_sha256`, `decision: "accept"`,
+`mode: "bounded-pilot"` (or explicitly reviewed `"bounded-continuous"`), `reviewer` and an `evidence_ref` to the ruling. The file
+records the decision; it is not an authentication or authority grant.
+`st work cost --accept-window SHA256 --decision-file FILE` validates and describes
+the successor without changing state. Add `--execute` only through the normal
+reviewed runtime path. A stale hash, busy lock, pending write, malformed decision,
+symlink or existing preparation refuses; never delete a preparation to retry.
+
+Execution archives the predecessor under `cost-review-generations/SHA256/`,
+preserves the original files, lifetime counters, refusals, snapshot ledger and
+cooldown, then atomically commits `cost-active-generation.json`. The successor
+starts a new bounded audit window; no history is reset and no tokens are counted
+or published by this operation. Caps and the default twenty-shape pause remain.
+Pilot mode does **not** enable continuous publication. An explicit
+`bounded-continuous` ruling instead authorizes subsequent in-envelope windows
+under that same policy: the scheduler archives each completed 20-shape window
+and advances a new generation under its existing lock. The inherited reviewer
+and evidence reference identify the original policy, not a fresh human review.
+Only the pointer-hashed manifest grants this mode; editing mutable budget history
+cannot enable it. Every predecessor remains on disk, and the live rotation keeps
+only the current window. Lifetime runs/maxima/refusals, cooldown, snapshot ledger
+and uncertain-write guards remain intact. Camayoc still enforces one snapshot,
+eight items, 1000 records and 4 MiB before networking. A completed window with an
+out-of-envelope observation stays paused for explicit review. Source installation
+alone never selects this policy or accepts a real pending window.
+
+Read the review status after a
+lost reply rather than replaying acceptance. A visible successor is evidence of
+the transition, not evidence of a subsequent successful cost publication.
+Before the first transition, source rollback can restore the previous release.
+After a generation is selected, retain a generation-aware reader: older releases
+ignore the pointer. Pause and reconcile publication through the normal operator
+path before a rollback to such a release; never discard generation evidence.
+
+Cost displays also report `cost_coverage`: completed and UNKNOWN-cost seed
+counts, their share, the whole-session limit, and the cohort's scope. This
+reuses the seed records already read for the command; it is not a board-wide
+completed-seed census and adds no tracker queries. A missing or malformed
+cohort remains UNKNOWN. A verified empty cohort has no percentage. Human
+single-seed output prints the same limit and count/share.
+
+Current policy accounts only for eligible whole sessions of at most eight
+items. Oversized sources are refused, never estimated. Observed token groups
+can still be useful partial evidence, but without an independent census across
+every session and cycle they do not establish complete cost for a closed seed.
+Partitioning is not enabled by this display change. Closure receipts and token
+arithmetic retain their existing parser-owned contracts.
+
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
 publisher partitions token and coverage samples by rig/agent/harness/session,
