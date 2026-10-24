@@ -27,6 +27,13 @@ receipts; it is not the historical source. Its single JSON comment is replaced
 atomically through `/set`, avoiding an unbounded latest-revision history query.
 Partial coverage is explicit. Each changed head has a strictly increasing head
 revision; source state revisions are separate and may contain gaps.
+The head also retains a bounded `agent_versions` map: each published agent's
+revision and canonical payload digest. These fences survive omissions from
+partial heads. A second agent's newer revision cannot mask a replayed older
+state and receipt, nor can an equal revision publish changed content. A known
+source agent disappearing from local state is refused. Pending coverage remains
+partial; it never clears the last published fence. The map shares the existing
+100-agent and 64 KiB head bounds and needs no lifecycle history scan.
 
 `/set` is not compare-and-set. A separate nonblocking `graph.lock` serializes the
 entire remote head read, write and read-back across lifecycle and supervisor

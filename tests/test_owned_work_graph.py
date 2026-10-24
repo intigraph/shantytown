@@ -286,3 +286,99 @@ def test_local_lease_expiry_advances_graph_revision_without_fresh_liveness(world
     assert head['agents'][0]['state'] == 'expired'
     assert head['agents'][0]['revision'] == state['graph_revision']
     assert head['agents'][0]['observed_at'] == before['graph_observed_at']
+
+
+@pytest.fixture
+def published_pair(world):
+    root, service, registry = world
+    service.launch('other', now=101)
+    graph.flush(root, registry)
+    old_state = service.snapshot()['worker']
+    receipts = service.root / 'graph-receipts.json'
+    old_receipt = json.loads(receipts.read_text())['worker']
+    service.stop('worker', at=110)
+    service.heartbeat('other', now=500)
+    graph.flush(root, registry)
+    return root, service, registry, old_state, old_receipt
+
+
+@pytest.mark.parametrize('partial_first', [False, True])
+def test_other_agent_max_cannot_mask_replayed_state_and_receipt(published_pair, partial_first):
+    root, service, registry, old_state, old_receipt = published_pair
+    source = graph.producer(service.root)
+    with service.locked() as states:
+        states['worker'] = old_state
+    if partial_first:
+        # A state-only replay remains explicitly partial. Its omission must not
+        # erase the published stop's fence before the old receipt is replayed.
+        graph.flush(root, registry)
+        partial = graph._head(registry, source)[1]
+        assert not partial['complete']
+        assert all(entry['agent'] != 'worker' for entry in partial['agents'])
+    receipt_file = service.root / 'graph-receipts.json'
+    receipts = json.loads(receipt_file.read_text())
+    receipts['worker'] = old_receipt
+    receipt_file.write_text(json.dumps(receipts))
+    before = graph._head(registry, source)[1]
+    with pytest.raises(ValueError, match='replay refused'):
+        graph.flush(root, registry)
+    assert graph._head(registry, source)[1] == before
+    # An actual newer launch still supersedes the stop on a backwards clock.
+    service.launch('worker', now=80)
+    graph.flush(root, registry)
+    latest = graph._head(registry, source)[1]
+    entry = next(e for e in latest['agents'] if e['agent'] == 'worker')
+    assert latest['complete'] and entry['state'] == 'live' and entry['revision'] > 4
+
+
+def test_equal_agent_revision_cannot_publish_changed_payload(published_pair):
+    root, service, registry, _, _ = published_pair
+    source = graph.producer(service.root)
+    before = graph._head(registry, source)[1]
+    with service.locked() as states:
+        states['worker']['state'] = 'live'
+    state = service.snapshot()['worker']
+    iri, payload, _ = graph.fact('worker', state, registry.onto, source)
+    receipt_file = service.root / 'graph-receipts.json'
+    receipts = json.loads(receipt_file.read_text())
+    receipts['worker'] = dict(revision=state['graph_revision'], iri=iri, payload=payload)
+    receipt_file.write_text(json.dumps(receipts))
+    with pytest.raises(ValueError, match='content replay refused'):
+        graph.flush(root, registry)
+    assert graph._head(registry, source)[1] == before
+
+
+def test_known_agent_cannot_disappear_behind_another_agents_max(published_pair):
+    root, service, registry, _, _ = published_pair
+    source = graph.producer(service.root)
+    before = graph._head(registry, source)[1]
+    with service.locked() as states:
+        del states['worker']
+    with pytest.raises(ValueError, match='agent disappeared'):
+        graph.flush(root, registry)
+    assert graph._head(registry, source)[1] == before
+
+
+@pytest.mark.parametrize('invalid', [None, [1], [True, 'a' * 64], [1, 'g' * 64]])
+def test_malformed_remote_agent_fence_is_not_repaired_by_guessing(published_pair, invalid):
+    root, service, registry, _, _ = published_pair
+    source = graph.producer(service.root)
+    iri, head = graph._head(registry, source)
+    head['revision'] += 1
+    head['agent_versions']['worker'] = invalid
+    registry.rows[iri] = [dict(payload=json.dumps(head))]
+    before_sets = len(registry.head_sets)
+    with pytest.raises(ValueError, match='version fences malformed'):
+        graph.flush(root, registry)
+    assert len(registry.head_sets) == before_sets
+
+
+def test_hundred_normal_agents_fit_the_head_cap_with_persistent_fences(tmp_path, monkeypatch):
+    monkeypatch.setattr(graph, '_set_comment', lambda r, i, p: r.set_comment(i, p))
+    service, registry = OwnedWork(tmp_path), Registry()
+    for number in range(100):
+        service.launch('agent' + str(number), now=100)
+    graph.flush(tmp_path, registry, limit=100, budget=5)
+    head = graph._head(registry, graph.producer(service.root))[1]
+    assert head['complete'] and len(head['agents']) == 100
+    assert len(json.dumps(head, sort_keys=True, separators=(',', ':')).encode()) <= 65536

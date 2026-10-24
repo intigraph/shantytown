@@ -134,6 +134,33 @@ def _head(registry, source):
     return iri, value
 
 
+def _agent_versions(head, onto):
+    """Keep published fences even when a partial head omits a pending agent."""
+    versions = head.get('agent_versions', {})
+    if not isinstance(versions, dict) or len(versions) > head['source_agents']:
+        raise ValueError('lifecycle agent version fences malformed')
+    versions = dict(versions)
+    for name, value in versions.items():
+        if (len(_agent(name)) > 64 or not isinstance(value, list) or len(value) != 2
+                or type(value[0]) is not int or not 1 <= value[0] <= 9007199254740991
+                or not isinstance(value[1], str) or len(value[1]) != 64
+                or any(c not in '0123456789abcdef' for c in value[1])):
+            raise ValueError('lifecycle agent version fences malformed')
+    seen = set()
+    for entry in head['agents']:
+        name = entry['agent']
+        iri, payload, _ = fact(name, dict(state=entry['state'], generation=entry['generation'],
+                                        observed_at=entry['observed_at'],
+                                        graph_revision=entry['revision']), onto, head['source'])
+        value = [entry['revision'], iri[-64:]]
+        if (name in seen or entry != dict(fact=iri, **json.loads(payload))
+                or name in versions and versions[name] != value):
+            raise ValueError('lifecycle head agent content changed')
+        seen.add(name)
+        versions[name] = value
+    return versions
+
+
 def _advance_head(registry, service, receipts):
     # One bounded current projection. The immutable facts remain history, but
     # the reader never aggregates that history on every poll.
@@ -173,8 +200,18 @@ def _advance_head(registry, service, receipts):
         if receipt.get('iri') != expected_iri or payload != expected_payload:
             raise ValueError('local lifecycle receipt changed')
         agents.append(dict(fact=receipt['iri'], **json.loads(payload)))
+    versions = _agent_versions(previous, registry.onto) if previous else {}
+    if any(name not in states for name in versions):
+        raise ValueError('known lifecycle agent disappeared; replay refused')
+    for entry in agents:
+        name = entry['agent']
+        current = [entry['revision'], entry['fact'][-64:]]
+        prior = versions.get(name)
+        if prior and (current[0] < prior[0] or current[0] == prior[0] and current != prior):
+            raise ValueError('agent lifecycle revision or content replay refused')
+        versions[name] = current
     value = dict(contract=HEAD_CONTRACT, source=source, host=socket.gethostname(), state_revision=revision,
-                 complete=complete, source_agents=len(states), agents=agents)
+                 complete=complete, source_agents=len(states), agents=agents, agent_versions=versions)
     if previous and {k: v for k, v in previous.items() if k != 'revision'} == value:
         payload = json.dumps(previous, sort_keys=True, separators=(',', ':'))
         write_json_atomic(head_receipt_file, dict(iri=iri, revision=previous['revision'],
