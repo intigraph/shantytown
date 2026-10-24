@@ -1021,10 +1021,19 @@ class CodexHarness:
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
         daemon_start = ""
+        from .session_storage import configured, Storage
+        try:
+            session_storage = configured(root)
+        except ValueError as error:
+            raise Unsupported(str(error)) from error
         remote_control = self._remote_control(root)
+        if session_storage is not None and not remote_control:
+            raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
         if remote_control:
             managed = codex_standalone_binary(home)
             if not managed.is_file():
+                if session_storage is not None:
+                    raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
                 # A copied relay preference is not a standalone installation.
                 # A fresh host must still be able to start its first worker;
                 # leave its config intact so installing the payload enables
@@ -1094,6 +1103,17 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
+            session_preflight = ""
+            if session_storage is not None:
+                if not card.name or Path(card.name).name != card.name or card.name in {".", ".."}:
+                    raise Unsupported("session storage requires a single-component agent name")
+                session_storage = Storage(
+                    session_storage.root / card.name / "sessions", session_storage.mount,
+                    session_storage.device, session_storage.minimum_free)
+                durable_sessions = session_storage.root
+                # A missing/wrong mount must refuse BEFORE stopping the old daemon.
+                # This opt-in is a capacity boundary, unlike best-effort durability.
+                session_preflight = session_storage.command() + " && "
             data_base = Path(os.environ.get(
                 "XDG_DATA_HOME", Path.home() / ".local" / "share"))
             # Share the daemon package INCLUDING its native installer lock.
@@ -1202,6 +1222,10 @@ class CodexHarness:
             # (sessions/sessions), and rollouts would keep going to tmpfs with
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
+            if session_storage is not None:
+                # Never run the legacy copy/remove helper against fleet histories.
+                # Existing directories/other links require a separate cold cutover.
+                sessions_setup = session_storage.command(home=daemon_home)
             # Only a sanctioned normal launch reaches this stop/start path.
             # Existing package custody is verified after stop; no live cleanup.
             # The measured runtime-tmpfs failure and /proc custody proof are
@@ -1210,7 +1234,7 @@ class CodexHarness:
                 f"{package_setup} --migrate-stopped && "
                 if sys.platform.startswith("linux") else ""
             )
-            daemon_start = (f"{bootstrap} && {stop} && "
+            daemon_start = (f"{session_preflight}{bootstrap} && {stop} && "
                             f"{packages_after_stop}{sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
