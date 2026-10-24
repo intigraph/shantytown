@@ -1296,12 +1296,14 @@ min_priority = 0
 
 
 def test_tend_pass_invokes_inbox_recovery_but_dry_run_does_not(tmp_path, monkeypatch):
-    from shantytown import inbox_recovery
+    from shantytown import inbox_recovery, admin_inbox
     root = _roster(tmp_path, {'ellie': {'role': 'worker', 'pane': 'p-ellie', 'retired': True}})
     monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes(live=set()))
     calls = []
+    routine_calls = []
+    monkeypatch.setattr(admin_inbox, 'sweep', lambda root, agents, panes, box_for, **kw: routine_calls.append([c.name for c in agents]))
     monkeypatch.setattr(inbox_recovery, 'sweep', lambda agents, panes, box, **kw: calls.append([c.name for c in agents]))
     assert cli._cmd_tend(_Args(root, dry_run=True)) == cli.OK
-    assert calls == []
+    assert calls == [] and routine_calls == []
     assert cli._cmd_tend(_Args(root)) == cli.OK
-    assert calls == [['ellie']]
+    assert calls == [['ellie']] and routine_calls == [['ellie']]

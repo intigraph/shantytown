@@ -608,11 +608,17 @@ def haul_governor_verdict(root, card):
     from types import SimpleNamespace
     from .cli import _governors, _governor_for
     cfg, governors = _governors(SimpleNamespace(root=Path(root)))
+    from . import work_class, governor as gov_mod
     if not governors:
-        return None
+        if not cfg.governor.admit_class:
+            return None
+        return work_class.for_card(
+            gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+            cfg.governor, card, root)
     _harness, governor, unconfigured = _governor_for(cfg, governors, card, root)
-    return (unconfigured if unconfigured is not None else
-            governor.evaluate(persist=False))
+    return work_class.for_card(
+        unconfigured if unconfigured is not None else governor.evaluate(persist=False),
+        cfg.governor, card, root)
 
 
 def worker_governor_admissions(root, reg, workers):
@@ -625,20 +631,31 @@ def worker_governor_admissions(root, reg, workers):
     if hold.held:
         return {card.name: lambda item, reason=hold.refusal: reason for card in cards}
     verdicts = _governor_verdicts_for(SimpleNamespace(root=Path(root)), cards)
+    from . import work_class
+    class_items = {}
     def admission(name, lane, verdict):
         def check(item):
-            why = verdict.admits(item, name) if verdict is not None else ''
+            current = item
+            effective = verdict
+            if verdict is not None and verdict.admit_class:
+                if item.id not in class_items:
+                    class_items[item.id] = work_class.read_item(Path(root), item)
+                current = class_items[item.id]
+            why = effective.admits(current, name) if effective is not None else ''
             return f'{lane} ({name}): {why}' if why else ''
         return check
     return {name: admission(name, lane, verdict)
             for name, (lane, verdict) in verdicts.items()}
 
 
-def admitted_haul(beads, card, verdict, log):
+def admitted_haul(beads, card, verdict, log, *, root=None):
     """Keep refused work queued; both haul triggers use dispatch's own rule."""
     admitted = []
     for bead in beads:
         item = _Item(bead)
+        if verdict is not None and verdict.admit_class:
+            from .work_class import read_item
+            item = read_item(root, item)
         why = verdict.admits(item, card.name) if verdict is not None else ""
         if why:
             log(f"haul: {card.name} {item.id} parked by governor — {why}")

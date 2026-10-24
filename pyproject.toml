@@ -3,7 +3,7 @@ name = "shantytown"
 version = "0.7.1"
 description = "A small harness for running a crew of coding agents."
 requires-python = ">=3.11"
-license = "MIT"
+license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Steve Brown", email = "scbrown3@gmail.com" }]
 dependencies = []
@@ -14,7 +14,7 @@ dependencies = []
 #  2. Without a build-system table, PEP 660 EDITABLE installs (pip/pipx -e)
 #     fail — which silently freezes the install and stops `git pull` from
 #     deploying anything to the running fleet.
-# setuptools>=77 is required by the PEP 639 `license = "MIT"` string form above;
+# setuptools>=77 is required by the PEP 639 `license = "Apache-2.0"` string form above;
 # an older pin fails on that line.
 [build-system]
 requires = ["setuptools>=77"]

@@ -1,0 +1,17 @@
+name: Agent identity isolation
+on:
+  pull_request:
+    paths: ['shantytown/actor_identity.py', 'shantytown/isolated_launch.py', 'shantytown/runtime.py', 'shantytown/cli.py', 'shantytown/sd.py', 'tests/test_actor_identity.py', 'tests/uid_boundary.py', '.github/workflows/identity-isolation.yml']
+  push:
+    branches: [main]
+    paths: ['shantytown/actor_identity.py', 'shantytown/isolated_launch.py', 'shantytown/runtime.py', 'shantytown/cli.py', 'shantytown/sd.py', 'tests/test_actor_identity.py', 'tests/uid_boundary.py', '.github/workflows/identity-isolation.yml']
+permissions:
+  contents: read
+jobs:
+  unix-key-boundary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify synthetic owner versus unrelated Unix UID
+        run: sudo --non-interactive /usr/bin/python3 tests/uid_boundary.py
