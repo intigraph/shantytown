@@ -12,12 +12,8 @@ reading a green roster has no way to know.
 
 The contract:
   · the count is printed when it is non-zero, with how many are P1-or-above
-  · `decision-needed` is NOT excluded and the output SAYS SO. Filtering it needs
-    labels, which `WorkItem` does not carry and the beads adapter never parses.
-    The first version of this filtered on `it.labels` and five green tests proved
-    it worked — against a fixture the test itself had given a `labels` attribute.
-    A live cross-check against `bd` (113 here, 109 there) is what caught it. The
-    guard below pins the real shape so the fixture cannot drift from it again.
+  · `decision-needed` is excluded using labels on the real WorkItem type;
+    fixtures must use the same type rather than adding attributes themselves
   · an unreachable tracker prints `?` and says it is NOT zero — never a bare 0,
     which is the could-not-tell-rendered-as-fine bug in the one number a
     coordinator would use to decide there is nothing to route
@@ -36,7 +32,7 @@ from shantytown.protocols import WorkItem
 
 def _item(id_, status="open", assignee=None, priority=2, labels=()):
     return WorkItem(id=id_, title=f"t-{id_}", status=status,
-                    assignee=assignee, priority=priority)
+                    assignee=assignee, priority=priority, labels=labels)
 
 
 def _store(tmp_path: Path) -> Path:
@@ -86,23 +82,13 @@ def test_an_unreachable_tracker_is_NOT_zero(tmp_path, monkeypatch):
     assert "connection refused" in why
 
 
-def test_WorkItem_still_carries_no_labels():
-    """THE GUARD ON THE FIXTURE, not on the code.
-
-    `_unassigned_open` cannot exclude `decision-needed` because a WorkItem has no
-    labels — and the previous version of this file "proved" that it could, by
-    handing the fixture a `labels` attribute the real type does not have. A test
-    that constructs its own reality tests nothing.
-
-    So this asserts the SHAPE. If someone adds `labels` to WorkItem, this goes red
-    and the message says what to do — which is the moment the exclusion becomes
-    implementable and the caveat in the output should come back out.
-    """
-    import dataclasses
-    fields = {f.name for f in dataclasses.fields(WorkItem)}
-    assert "labels" not in fields, (
-        "WorkItem now carries labels — reinstate the `decision-needed` exclusion "
-        "in cli._unassigned_open and drop the caveat line from `st crew`.")
+def test_decision_needed_is_excluded_using_real_work_item_labels(tmp_path, monkeypatch):
+    _rows(monkeypatch, [
+        _item("decision", priority=0, labels=("decision-needed",)),
+        _item("work", priority=1),
+        _item("other-label", priority=2, labels=("ordinary",)),
+    ])
+    assert cli._unassigned_open(type("A", (), {"root": _store(tmp_path)})()) == (2, 1, "")
 
 
 def test_a_clean_board_prints_nothing(tmp_path, monkeypatch):

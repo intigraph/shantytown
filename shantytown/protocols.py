@@ -292,6 +292,9 @@ class WorkItem:
     rank: str | None = None
     due_at: str | None = None
     created_at: str | None = None
+    # Admission must distinguish detector/delivery records from existing work.
+    # Carry this from the same item read; append to preserve positional callers.
+    labels: tuple = ()
 
 
 @runtime_checkable

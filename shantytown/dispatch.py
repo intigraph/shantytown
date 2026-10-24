@@ -887,6 +887,11 @@ class Dispatcher:
         item = self.tracker.get(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
+        from .ask_visibility import refuse_deferral
+        try:
+            refuse_deferral(item, {"status": "deferred", "blocker_kind": label})
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if not getattr(self.tracker, "_structured_defer", False):
             raise DeferRefused("this tracker backend cannot record structured deferrals")
         date = until or item.defer_until or ""
@@ -928,7 +933,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -938,11 +943,17 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date> or event:<binding>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> or installed:<tool><op><version>")
         if active.kind == "event":
             from .resume_events import binding_for
             try:
                 binding_for(active.arg, item_id)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
+        if active.kind in ("release", "installed"):
+            from .resume_kinds import validate as validate_kind
+            try:
+                validate_kind(active.kind, active.arg)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
         gate_target = None

@@ -63,7 +63,7 @@ Update both in the same commit.
 - The `[build-system]` table is required for PEP 660 editable installs. Without it, an
   editable install fails in a way that silently freezes the installed version, so pulling
   the repo stops deploying anything.
-- `setuptools>=77` is required by the PEP 639 `license = "MIT"` string form.
+- `setuptools>=77` is required by the PEP 639 `license = "Apache-2.0"` string form.
 
 ## Conventions
 
