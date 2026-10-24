@@ -539,6 +539,8 @@ def capture(root: Path, payload: dict) -> None:
         try:
             from .owned_work import OwnedWork
             OwnedWork(root).heartbeat(agent, now=now)
+            from .owned_work_graph import publish
+            publish(root, agents={agent})
         except Exception:
             print("liveness heartbeat UNKNOWN", file=sys.stderr)
     conn = _db(root)

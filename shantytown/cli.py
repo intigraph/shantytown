@@ -2874,6 +2874,11 @@ def _owned_work_rows(tracker, name):
     raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
 
 
+def _owned_work_publish(a, *, agents=None):
+    from . import owned_work_graph
+    owned_work_graph.publish(Path(a.root), agents=agents)
+
+
 def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
     from .owned_work import OwnedWork
     try:
@@ -2913,6 +2918,8 @@ def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
         print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
               "); ownership not measured", file=sys.stderr)
         return []
+    finally:
+        _owned_work_publish(a, agents={card.name} if card else None)
 
 
 def _launched_now(a, card_name: str, settings_path=None) -> None:
@@ -2932,6 +2939,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     _stops(a).forget(card_name)
     from .owned_work import OwnedWork
     OwnedWork(a.root).launch(card_name)
+    _owned_work_publish(a, agents={card_name})
     agent_hold.clear(a.root, card_name)
 
 
