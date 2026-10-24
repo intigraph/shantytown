@@ -1537,6 +1537,40 @@ st inbox --read                      ACK: mark up to 15 unread messages read; re
 st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
 
+A keyed durable broadcast is available for a bounded, explicit recipient list:
+
+```bash
+st inbox broadcast --to alice --to bob --delivery-key rollout-notice-1 --json "see the rollout item"
+```
+
+This persists **only**: it sends no live nudge, marks no pointer read and claims
+no pane submission. Use the ordinary single-recipient command when live delivery
+is required, and retain its reported confirmation limits. Broadcast verifies all
+recipient identities first, then attempts each independently (at most 64 distinct
+names). JSON returns the operation key and a per-recipient `persisted`, `refused`
+or `UNKNOWN` result, with exact receipt IDs for confirmed persistence. It is not
+an atomic all-recipient transaction; partial results return exit 2.
+
+Keep the same explicit delivery key when resuming the same operation. A key is
+1–128 ASCII characters: an initial letter/digit followed by letters/digits or
+`_.:-`. On Seeds, the existing native
+`--workflow-run` / `--step` / `--visit` create contract derives the stable receipt;
+Shantytown does not guess its ID. Seeds reads that exact receipt back and verifies
+its title and recipient. A reused key with changed content refuses, including
+after the original pointer was acknowledged; it cannot reopen or overwrite it.
+The files backend also supports stable keys with locked, atomic publication.
+Other tracker adapters without this optional capability refuse keyed broadcasts
+rather than fall back to a different store or an unkeyed create.
+
+Ordinary Seeds durable sends also use a fresh operation key internally. Only a
+native CAS-conflict exit (4) is retried, with the same complete create arguments,
+up to 16 attempts with jitter. This handles different recipients contending on
+the same tracker. Timeouts, exit 8, malformed replies, readback failures and other
+refusals stop without an automatic resend. `UNKNOWN` can follow a committed write:
+inspect the native outcome before resuming, retain the operation key, and never
+invent a new key merely to hide uncertainty. Per-attempt SDK timeouts remain in
+force; this is not a total broadcast latency guarantee.
+
 When a durable message is successfully submitted to a live pane, `st` closes only
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
