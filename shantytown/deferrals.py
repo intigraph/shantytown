@@ -510,10 +510,18 @@ def _mechanical_notes(notes: str, condition: Condition) -> bool:
     """A marker alone, or the exact informational metadata the closed writer adds.
 
     Free prose, historical notes, unknown fields and additional markers retain
-    judgement. The metadata exception is closed-only and matches the writer's
-    order and complete scope-flag values, never arbitrary key/value lines.
+    judgement. Dependency metadata is closed-only and matches the writer's
+    order and complete scope-flag values. The final provenance envelope is
+    informational for every condition, never arbitrary key/value lines.
     """
-    text = notes.strip()
+    from .deferral_notes import parse_provenance
+    lines = notes.strip().splitlines()
+    # The writer's last provenance envelope is information, not another gate.
+    # Only that exact validated envelope is ignored. Malformed/extra metadata,
+    # earlier prose and duplicate envelopes still require judgement.
+    if lines and parse_provenance(lines[-1]) is not None:
+        lines.pop()
+    text = "\n".join(lines).strip()
     if _CONDITION.fullmatch(text) is not None:
         return True
     lines = text.splitlines()

@@ -4,27 +4,24 @@ from pathlib import Path
 
 from .ask_visibility import is_ask
 from .deferrals import parse_stamp
+from .deferral_notes import PROVENANCE_PREFIX as PREFIX, provenance, parse_provenance
 from .files import write_json_atomic
 
-PREFIX = "defer_provenance: "
 LIMIT = 3
-
-
-def provenance(actor, at, until):
-    return PREFIX + json.dumps({"actor": actor, "set_at": at, "until": until},
-                               sort_keys=True)
 
 
 def owner_window(row, now):
     """Unknown/legacy provenance cannot earn the owner-only route."""
     if is_ask(row):
         return False
-    lines = [line[len(PREFIX):] for line in str(row.get("notes") or "").splitlines()
+    lines = [line for line in str(row.get("notes") or "").splitlines()
              if line.startswith(PREFIX)]
     if not lines:
         return False
     try:
-        value = json.loads(lines[-1])
+        value = parse_provenance(lines[-1])
+        if value is None:
+            return False
         start = parse_stamp(value["set_at"])
         end = parse_stamp(value["until"])
         current = parse_stamp(row.get("defer_until"))
