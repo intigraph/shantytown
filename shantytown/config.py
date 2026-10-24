@@ -189,7 +189,6 @@ class Config:
     # file declares no crew, which is the normal case: cards or the graph own it.
     crew: dict[str, Agent] = field(default_factory=dict)
     accounts: dict = field(default_factory=dict)
-    memory: dict = field(default_factory=dict)
     # [env] — this deployment's plumbing, folded in from env.json (aegis-8calr).
     # KEYS ARE NOT VALIDATED, deliberately, and it is the one table here that
     # isn't: the set is open by construction (a deployment's own guard path, a
@@ -367,7 +366,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory"}
+             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -445,7 +444,6 @@ def _resolve(data: dict, path: Path) -> Config:
     return Config(mode=mode, modes=modes, overdue_enabled=overdue_enabled,
                   overdue_external_unlocks=external_unlocks,
                   accounts=_accounts(path, _table(path, data, "accounts")),
-                  memory=_memory(path, _table(path, data, "memory")),
                   keep_current_fetch_timeout_seconds=fetch_timeout,
                   harness_default=harness_default,
                   harness_by_role=harness_by_role,
@@ -585,14 +583,6 @@ def _harness(path: Path, tbl: dict,
         return out
 
     return default, _role_map("by_role"), _role_map("required_by_role")
-
-
-def _memory(path: Path, table: dict) -> dict:
-    from .memory_lifecycle import parse
-    try:
-        return parse(table)
-    except ValueError as exc:
-        raise ConfigError(f'{path}: {exc}') from None
 
 
 def _accounts(path: Path, table: dict) -> dict:
