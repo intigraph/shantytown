@@ -1,6 +1,6 @@
 {
-  "source_revision": "1170da27eeb236d7d92086dc2a56d330c9e784c6",
-  "reviewed_at": "2026-10-22T05:26:02.590321Z",
+  "source_revision": "0e4af96f8beb763c0fb088e83513d5e776ee1142",
+  "reviewed_at": "2026-10-24T02:21:22.031984Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "0110fbed51adcab8768e25cc0fede86d3b5419dcdbaf19ff014085f1662aca06",
+      "source_sha256": "b20a4dcf989b88cb37120c72855562922a4ef5cd1d749845036d64d80b719818",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
+      "source_sha256": "10eda5b4d68f729ef2581cba7736e557a364792754164fec53ff2d6ca613ad7c",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
