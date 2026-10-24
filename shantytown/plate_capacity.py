@@ -7,7 +7,10 @@ import fcntl
 from functools import wraps
 import hashlib
 import json
+import os
+import sys
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .inbox import is_anchor, is_message, _deferred_until_is_future
@@ -54,11 +57,12 @@ def active(row, owner):
             and real_work(row))
 
 
-def rows(tracker, owner):
+def rows(tracker, owner, *, admission=False):
     """Only this owner's rows, complete across the configured stores."""
     from .files import FilesTracker
     from .beads import BeadsTracker, _bd_failure
-    scoped = getattr(tracker, 'capacity_rows', None)
+    scoped = (getattr(tracker, 'capacity_admission_rows', None) if admission else None)
+    scoped = scoped or getattr(tracker, 'capacity_rows', None)
     if callable(scoped):
         found = scoped(owner).exact()
         if any(not isinstance(row, dict) or not row.get('assignee')
@@ -89,29 +93,80 @@ def rows(tracker, owner):
     raise ValueError('tracker has no complete owner assignment reader')
 
 
-def size(tracker, owner):
+def counted_rows(tracker, owner, *, admission=False):
     try:
-        seen = rows(tracker, owner)
+        seen = rows(tracker, owner, admission=admission)
         for row in seen:
             if owner_name(row.get('assignee')) == owner_name(owner):
                 if (not isinstance(row.get('id'), str) or not row['id']
                         or not isinstance(row.get('title'), str)
                         or row.get('status') not in ACTIVE | {'closed', 'tombstone', 'deferred'}):
                     raise ValueError('owner assignment fields incomplete or unsupported')
-        return sum(active(row, owner) for row in seen)
+        return [row for row in seen if active(row, owner)]
     except Exception as error:
         raise CapacityUnknown(f'{owner_name(owner)} plate size UNKNOWN: {error}') from error
 
 
-def ensure_room(tracker, owner, item=None):
-    if item is not None and not real_work(vars(item)):
+def size(tracker, owner):
+    return len(counted_rows(tracker, owner))
+
+
+def _record_overflow(owner, candidate, counted):
+    """Write ahead of a possible mutation, never claim it committed.
+
+    Pure plans and dry runs hold no assignment lock and write nothing. Nested
+    producer guards share the outer decision. A failed journal blocks the write;
+    a later backend timeout leaves an admission record, not a success receipt.
+    """
+    owner = owner_name(owner)
+    if hashlib.sha256(owner.encode()).hexdigest() not in getattr(_locks, 'held', set()):
+        return
+    identifiers = sorted(row['id'] for row in counted)
+    key = (owner, candidate.get('id'), tuple(identifiers))
+    recorded = _locks.overflow_recorded
+    if key in recorded:
+        return
+    path = Path.home() / '.local/state/shantytown/plate-capacity/overflow.jsonl'
+    event = dict(event='overflow_admission', owner=owner, item=candidate.get('id'),
+                 title=candidate.get('title'),
+                 priority=0, count=len(counted), cap=MAX_ACTIVE, counted_ids=identifiers,
+                 at=datetime.now(timezone.utc).isoformat(), mutation_outcome='not_observed')
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            length = os.fstat(fd).st_size
+            if length and os.pread(fd, 1, length - 1) != b'\n':
+                raise OSError('incomplete overflow journal; preserve and reconcile it')
+            handle.write(json.dumps(event, sort_keys=True) + '\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError as error:
+        raise CapacityUnknown(f'P0 overflow journal unavailable; no assignment attempted: {error}') from error
+    recorded.add(key)
+    print(f'capacity overflow: {owner} {len(counted)}/{MAX_ACTIVE}; '
+          f'item={candidate.get("id") or "new"}; counted_ids={",".join(identifiers)}; '
+          f'admission recorded at {path} (not a mutation receipt)', file=sys.stderr)
+
+
+def ensure_room(tracker, owner, item=None, *, candidate=None):
+    prospective = candidate if candidate is not None else (vars(item) if item is not None else {})
+    if prospective and not real_work(prospective):
         return
     # Resuming one's own haul consumes no new slot, even on an older overfull plate.
     if item is not None and active(vars(item), owner):
         return
-    count = size(tracker, owner)
+    counted = counted_rows(tracker, owner, admission=True)
+    count = len(counted)
     if count >= MAX_ACTIVE:
+        # Blockers inherit priority 0 through the existing verified technical
+        # dependency path. A label or an unknown/Boolean priority is no proof.
+        if type(prospective.get('priority')) is int and prospective['priority'] == 0:
+            _record_overflow(owner, prospective, counted)
+            return
+        identifiers = ','.join(sorted(row['id'] for row in counted))
         raise PlateFull(f'{owner_name(owner)} plate full ({count}/{MAX_ACTIVE}); '
+                        f'counted_ids=[{identifiers}]; '
                         'new work stays unassigned in the pool')
 
 
@@ -125,7 +180,7 @@ def observed_size(tracker, owner):
 def ensure_update_room(tracker, owner, current, candidate):
     """Admission follows slot membership, including delivery-to-work changes."""
     if active(candidate, owner) and not active(vars(current), owner):
-        ensure_room(tracker, owner)
+        ensure_room(tracker, owner, current, candidate=candidate)
 
 
 _locks = threading.local()
@@ -153,9 +208,12 @@ def assignment_lock(tracker, owner, *, dry_run=False):
     with (folder / (key + '.lock')).open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         _locks.held = held | {key}
+        previous_records = getattr(_locks, 'overflow_recorded', set())
+        _locks.overflow_recorded = set()
         try:
             yield
         finally:
+            _locks.overflow_recorded = previous_records
             _locks.held = held
             fcntl.flock(handle, fcntl.LOCK_UN)
 
@@ -196,7 +254,7 @@ def guard_producers(tracker, notify):
         with assignment_lock(tracker, owner):
             full = False
             try:
-                ensure_room(tracker, owner)
+                ensure_room(tracker, owner, candidate={'status': 'open', 'title': title} | fields)
             except PlateFull:
                 fields['assignee'] = None
                 full = True

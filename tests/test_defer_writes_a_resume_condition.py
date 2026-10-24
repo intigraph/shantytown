@@ -80,7 +80,7 @@ def test_a_defer_until_THAT_NEVER_LANDS_is_caught_by_read_back(world):
 def test_existing_condition_is_preserved(world):
     d, tracker = world
     tracker.update("item-1", defer_until="2026-12-01")
-    r = d.defer("item-1", "human", "waiting on a person")
+    r = d.defer("item-1", "external", "waiting on a technical event")
     assert r.condition == "2026-12-01"
     assert tracker.get("item-1").status == "deferred"
 
@@ -97,7 +97,7 @@ def test_a_resume_when_MARKER_counts_as_a_condition(world):
     reader to ignore it, which costs more than never having warned.
     """
     d, tracker = world
-    r = d.defer("item-1", "human", "resume_when: closed:aegis-u6mdxf\n\nblocked on the window", dependency_reason="Required tested code path")
+    r = d.defer("item-1", "external", "resume_when: closed:aegis-u6mdxf\n\nblocked on the window", dependency_reason="Required tested code path")
     assert r.condition == "resume_when closed:aegis-u6mdxf", (
         "a sweeper-readable marker in the notes IS a machine-testable resume "
         f"condition; got {r.condition!r}")
@@ -108,7 +108,7 @@ def test_the_marker_is_parsed_with_the_SWEEPERS_regex(world):
     disagree about which deferrals are visible — which is the whole defect."""
     from shantytown.deferrals import _CONDITION
     d, tracker = world
-    d.defer("item-1", "human", "resume_when = date: 2026-12-01")
+    d.defer("item-1", "external", "resume_when = date: 2026-12-01")
     got = tracker.get("item-1")
     assert _CONDITION.search(got.notes or ""), "sweeper must see it too"
 
