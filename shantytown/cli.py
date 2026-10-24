@@ -9704,6 +9704,16 @@ def _cycle_stop_refusal(a, agent_name) -> str:
     return ""
 
 
+def _record_cycle_refusal(root, agent, reason, risks):
+    """A receipt failure must not hide or replace the already printed refusal."""
+    from .cycle import Requests
+    try:
+        Requests(root).mark_refused(agent, reason, risks)
+    except OSError as error:
+        print(f"  warning: could not save refusal receipt ({error}); "
+              "cycle remains refused", file=sys.stderr)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -9950,8 +9960,7 @@ def _cmd_cycle(a) -> int:
         # tell "in flight" from "refused an hour ago". A no-op when nothing is
         # pending, so an operator's ad-hoc cycle of an agent that never asked
         # cannot mint a request.
-        cycle_mod.Requests(a.root).mark_refused(
-            agent_name, verdict.reason, verdict.risks)
+        _record_cycle_refusal(a.root, agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -9976,7 +9985,7 @@ def _cmd_cycle(a) -> int:
     gate = _durable_checkpoint_gate(a, agent_name)
     if gate.ok is False and not a.allow_loss:
         print(f"  refused: {gate.render()}", file=sys.stderr)
-        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        _record_cycle_refusal(a.root, agent_name, gate.render(), [])
         return REFUSED
     if gate.ok is None:
         # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,
