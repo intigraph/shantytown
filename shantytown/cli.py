@@ -7037,11 +7037,11 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded — a human re-dispatches rather than the
-        # tracker claiming an assignment that may never have arrived. This must be
+        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
+        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
               file=sys.stderr)
         return CANNOT_TELL
     except LookupError as e:

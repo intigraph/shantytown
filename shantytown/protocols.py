@@ -381,9 +381,21 @@ class Tracker(Protocol):
     def create(self, title: str, **fields) -> WorkItem: ...
 
 
+@dataclass(frozen=True)
+class SubmissionObserved:
+    """Adapter evidence for this exact body, not merely send-keys success."""
+    pane: str
+    body_sha256: str
+
+    def matches(self, pane: str, text: str) -> bool:
+        import hashlib
+        return (self.pane == pane
+                and self.body_sha256 == hashlib.sha256(text.encode()).hexdigest())
+
+
 @runtime_checkable
 class Panes(Protocol):
-    def send(self, pane: str, text: str) -> None: ...
+    def send(self, pane: str, text: str) -> SubmissionObserved | None: ...
     def exists(self, pane: str) -> bool: ...
     # history=0 (default) returns the VISIBLE pane — what triage must judge on,
     # since a marker in scrollback is an agent TALKING about a state, not being
