@@ -1,6 +1,6 @@
 {
-  "source_revision": "9d7cf057558450f3feb5dc029694de4ba0e0b793",
-  "reviewed_at": "2026-10-24T02:47:55.476179Z",
+  "source_revision": "57d11dab2966a134495f1c6cdae6e6d1ae6b2c50",
+  "reviewed_at": "2026-10-24T02:47:32.893345Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "9837efb9318c186d8a6368cbf4ceb13c596d7a21f87292d5630d0f50cc8d70f2",
+      "source_sha256": "8ddf2cd747e3a036dff9a4d792963eb75b69e4e7f62d099c4a4b57360d340149",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "463767abf402559b59d0e12e2736e2990fb64b94842117e8f9049cf340238edd",
+      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "923bff94f53a954f2da944114217c26cab4524896fbb49c9b95068e9bdfa301b",
+      "source_sha256": "e9257a974cccb355813ed378da30a27b1077bc4c2f6c33175ec406ff30599a58",
       "properties": {
         "startHereOrder": 2
       }
