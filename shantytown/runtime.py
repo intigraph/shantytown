@@ -208,6 +208,12 @@ def limit_reached(rt, screen: str) -> bool:
     return bool(ask(screen)) if callable(ask) else False
 
 
+def safeguard_blocked(rt, plain: str) -> bool:
+    """An explicit current provider refusal holds every unattended send path."""
+    from .safeguard import current
+    return bool(current(plain))
+
+
 @runtime_checkable
 class Runtime(Protocol):
     """An agent runtime does three things (adapters.md). start() is this ruling."""
@@ -1291,6 +1297,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
             "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}] + memory_hooks(root, 'stop'),
+            # API errors bypass Stop. This handler is notification-only and
+            # asynchronous: its network/plate reads cannot delay the harness.
+            "StopFailure": [{"hooks": [{
+                "type": "command", "async": True, "timeout": 30,
+                "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
+                           + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
+            }]}],
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
@@ -1781,7 +1794,8 @@ class ClaudeRuntime:
         assert program.carries_settings(launch, settings_path), \
             "compose produced a settings-less launch"
         from .account_auth import wrap
-        return wrap(card, launch, self._root)
+        from .isolated_launch import wrap as isolate
+        return isolate(card, wrap(card, launch, self._root))
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""

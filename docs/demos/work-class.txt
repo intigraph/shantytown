@@ -1,0 +1,18 @@
+
+BASE b485f80a
+Class filter: not implemented
+labels=[]; target=claude: ADMITTED
+labels=[]; target=codex: ADMITTED
+labels=['work:design']; target=claude: ADMITTED
+labels=['work:design']; target=codex: ADMITTED
+labels=['work:important-quipu-code']; target=claude: ADMITTED
+labels=['work:important-quipu-code']; target=codex: ADMITTED
+
+CANDIDATE (work-class filter enabled)
+Class filter: enabled explicitly
+labels=[]; target=claude: claude lane admits designs and important Quipu code only (aegis-x1q); dispatch to codex: no admitted work-class label
+labels=[]; target=codex: ADMITTED
+labels=['work:design']; target=claude: ADMITTED
+labels=['work:design']; target=codex: work class requires claude, but explicit target synthetic-worker uses codex: authoritative work:design label (aegis-x1q); target and harness unchanged
+labels=['work:important-quipu-code']; target=claude: ADMITTED
+labels=['work:important-quipu-code']; target=codex: work class requires claude, but explicit target synthetic-worker uses codex: authoritative work:important-quipu-code label (aegis-x1q); target and harness unchanged

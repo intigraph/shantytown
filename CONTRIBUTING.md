@@ -119,7 +119,7 @@ they take precedence over this file where the two overlap.
 
 ## Licence
 
-MIT — see `LICENSE`. Contributions are accepted under the same licence.
+Apache-2.0 — see `LICENSE`. Contributions are accepted under the same licence.
 
 ## Pull request and squash titles
 
