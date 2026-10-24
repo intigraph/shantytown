@@ -67,6 +67,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "unreadable_deps": 0, "description": "body preserved",
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
         "rank": None, "due_at": None, "created_at": None,
+        "labels": ("blocked:external",),
     }
     assert len(calls) == 1
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]

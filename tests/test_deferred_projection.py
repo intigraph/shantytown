@@ -255,3 +255,121 @@ def test_split_candidate_set_equals_union_on_real_graphs(monkeypatch):
     original = 'SELECT (STR(?s) AS ?subject) ?graph WHERE { ' + ' UNION '.join(arms) + ' } LIMIT 10000'
     union = {(str(row.subject), str(row.graph)) for row in dataset.query(original)}
     assert union == found == expected
+
+
+def structural_fixture(monkeypatch, limit=4096, failure=None):
+    """Native refusal shape/cost measured on 25x2x14 arms, without a server."""
+    import io
+    import json
+    import re
+    from urllib.error import HTTPError
+    candidates = [dict(subject=seeds_plate.SEEDS + f'item/test-{i:03}', graph=G) for i in range(25)]
+    calls = []
+    def query(proof, text, timeout):
+        if 'AS ?predicate' not in text:
+            return dict(rows=candidates, count=len(candidates), truncated=False)
+        identifiers = sorted(set(re.findall(r'<https://seeds.local/item/(test-\d+)>', text)))
+        calls.append((identifiers, timeout))
+        cost = (text.count(' UNION ') + 1) * 6 + 4
+        if failure or cost > limit:
+            status, message = failure or (400, f'SPARQL request is too deeply nested or too long a chain: structural cost {cost} exceeds the limit of {limit}. Split it into smaller requests.')
+            raise HTTPError(PROOF.quipu_url + '/query', status, 'fixture refusal', {},
+                            io.BytesIO(json.dumps({'error': message}).encode()))
+        result = []
+        for identifier in identifiers:
+            for field in wire(id=identifier):
+                result.append(dict(field, subject=seeds_plate.SEEDS + 'item/' + identifier))
+        return dict(rows=result, count=len(result), truncated=False)
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    return calls
+
+
+@pytest.mark.parametrize('limit', [4096, 600])
+def test_structural_refusal_splits_until_all_25_candidates_are_evaluated(monkeypatch, tmp_path, limit):
+    from shantytown.notify import DeferralAlerter
+    calls = structural_fixture(monkeypatch, limit)
+    observation = seeds_plate.deferred_rows(PROOF)
+    released = []
+    rows = {row['id']: row for row in observation.exact()} if observation.complete else {}
+    DeferralAlerter(tmp_path, None, None, read=observation.exact,
+                    show=lambda ident: rows[ident], is_closed=lambda ident: True,
+                    release=released.append, push=lambda *a: None).sweep()
+    assert sorted(released) == [f'test-{i:03}' for i in range(25)]
+    assert len(calls[0][0]) == 25
+    assert all(timeout > 0 for _, timeout in calls)
+    assert len(calls) <= 49  # finite binary split tree, even if every leaf refuses
+    assert sorted(ident for ids, _ in calls if len(ids) * 168 + 4 <= limit for ident in ids) == sorted(released)
+
+
+def test_single_candidate_structural_refusal_is_unknown_never_skipped(monkeypatch):
+    calls = structural_fixture(monkeypatch, limit=1)
+    result = seeds_plate.deferred_rows(PROOF)
+    with pytest.raises(PartialAnswer, match='test-000.*UNKNOWN'):
+        result.exact()
+    assert not result.complete and result.at_least() == [] and len(calls[-1][0]) == 1
+    assert len(calls) <= 6
+
+
+@pytest.mark.parametrize('failure', [(400, 'malformed query'), (403, 'Forbidden'),
+                                    (500, 'server error'), (400, 'structural cost refused')])
+def test_other_http_refusals_never_split_or_hide_partial_read(monkeypatch, failure):
+    calls = structural_fixture(monkeypatch, failure=failure)
+    with pytest.raises(PartialAnswer):
+        seeds_plate.deferred_rows(PROOF).exact()
+    assert len(calls) == 1
+
+
+def test_split_fields_share_original_batch_wall_budget(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(seeds_plate.time, 'monotonic', lambda: clock[0])
+    calls = structural_fixture(monkeypatch)
+    original = seeds_plate._query
+    def query(proof, text, timeout):
+        try:
+            return original(proof, text, timeout)
+        finally:
+            if 'AS ?predicate' in text:
+                clock[0] = 31.0
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    with pytest.raises(PartialAnswer, match='field time budget'):
+        seeds_plate.deferred_rows(PROOF, timeout=30).exact()
+    assert len(calls) == 1
+
+
+def test_later_half_failure_never_returns_partial_candidates(monkeypatch):
+    import io
+    from urllib.error import HTTPError
+    calls = structural_fixture(monkeypatch)
+    original = seeds_plate._query
+    observed = []
+    def query(proof, text, timeout):
+        if 'AS ?predicate' in text:
+            # Original 25 refuses; left half completes; right half fails.
+            import re
+            ids = set(re.findall(r'<https://seeds.local/item/(test-\d+)>', text))
+            observed.append(len(ids))
+            if len(ids) == 13:
+                raise HTTPError(PROOF.quipu_url, 500, 'fixture failure', {}, io.BytesIO(b'{}'))
+        return original(proof, text, timeout)
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    result = seeds_plate.deferred_rows(PROOF)
+    with pytest.raises(PartialAnswer):
+        result.exact()
+    assert not result.complete and result.at_least() == []
+    assert observed == [25, 12, 13]
+
+
+def test_slow_success_still_respects_original_field_wall_budget(monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr(seeds_plate.time, 'monotonic', lambda: clock[0])
+    calls = structural_fixture(monkeypatch, limit=10000)
+    original = seeds_plate._query
+    def query(proof, text, timeout):
+        result = original(proof, text, timeout)
+        if 'AS ?predicate' in text:
+            clock[0] = 31.0
+        return result
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    with pytest.raises(PartialAnswer, match='field time budget'):
+        seeds_plate.deferred_rows(PROOF, timeout=30).exact()
+    assert len(calls) == 1

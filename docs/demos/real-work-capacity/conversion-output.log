@@ -1,0 +1,81 @@
+Script started on 2026-10-20 13:12:47-04:00 [COMMAND="python3 docs/demos/real-work-capacity/conversion-record.py" <not executed on terminal>]
+buggy
+{
+  "source_sha256": "fefe4cd394bbd9297b666f555597f1884ac972b9bf40ea02b0cf83d5e53ff327",
+  "expected": "buggy",
+  "results": [
+    {
+      "mode": "tracker",
+      "before_real": 9,
+      "after_real": 10,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    },
+    {
+      "mode": "sdk",
+      "before_real": 9,
+      "after_real": 10,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    },
+    {
+      "mode": "tracker",
+      "before_real": 10,
+      "after_real": 11,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    },
+    {
+      "mode": "sdk",
+      "before_real": 10,
+      "after_real": 11,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    }
+  ]
+}
+fixed
+{
+  "source_sha256": "c32992725a6358f4267da77c5034a5fd8885e16ee603087fd9c313c9e3789e20",
+  "expected": "fixed",
+  "results": [
+    {
+      "mode": "tracker",
+      "before_real": 9,
+      "after_real": 10,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    },
+    {
+      "mode": "sdk",
+      "before_real": 9,
+      "after_real": 10,
+      "refused": false,
+      "writes": 1,
+      "unchanged": false
+    },
+    {
+      "mode": "tracker",
+      "before_real": 10,
+      "after_real": 10,
+      "refused": true,
+      "writes": 0,
+      "unchanged": true
+    },
+    {
+      "mode": "sdk",
+      "before_real": 10,
+      "after_real": 10,
+      "refused": true,
+      "writes": 0,
+      "unchanged": true
+    }
+  ]
+}
+
+Script done on 2026-10-20 13:12:47-04:00 [COMMAND_EXIT_CODE="0"]
