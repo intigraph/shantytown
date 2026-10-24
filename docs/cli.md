@@ -2467,6 +2467,12 @@ identity source. With no agent argument it equips every local crew workspace.
 It never creates, starts, stops, or restarts an agent. Existing sessions pick up
 registration on their next start.
 
+For Claude, provisioning also repairs the `StopFailure` handler in the selected
+role or per-agent settings file, including files emitted before that event was
+added. It refreshes only the shantytown handler, preserving other settings and
+operator hooks. An unreadable selected file refuses provisioning. Already-running
+sessions still require their natural relaunch boundary to load the repaired hook.
+
 Caboodle owns binary installation and functional proof; this command owns harness
 registration. It requires existing crew workspaces and a nonempty
 `SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
