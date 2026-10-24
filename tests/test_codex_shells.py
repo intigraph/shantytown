@@ -136,9 +136,7 @@ def exact(sock, size):
 
 @pytest.mark.parametrize('rows', [[], [terminal('42')]])
 def test_actual_unix_websocket_wire(tmp_path, rows):
-    # Reuse the suite's existing private short runtime fixture: guarded
-    # tmp_path names can exceed AF_UNIX's address limit before any RPC runs.
-    path = str(Path(os.environ['XDG_RUNTIME_DIR']) / 'rpc')
+    path = str(tmp_path / 'rpc')
     listener = socket.socket(socket.AF_UNIX); listener.bind(path); listener.listen()
     errors = []
     def serve():
@@ -180,9 +178,7 @@ def binding_fixture(tmp_path):
     (entry / 'cmdline').write_bytes(b'codex\0app-server\0--remote-control\0--listen\0unix://\0')
     (entry / 'stat').write_text('42 (codex) S ' + '0 ' * 18 + '123\n')
     (entry / 'fd' / '3').symlink_to('socket:[1234]')
-    listener = socket.socket(socket.AF_UNIX)
-    endpoint = Path(os.environ['XDG_RUNTIME_DIR']) / 'rpc'
-    listener.bind(str(endpoint))
+    listener = socket.socket(socket.AF_UNIX); endpoint = tmp_path / 'rpc'; listener.bind(str(endpoint))
     (proc / 'net' / 'unix').write_text('header\n0: 2 0 00010000 0001 01 1234 ' + str(endpoint) + '\n')
     root = tmp_path / 'root'; (root / 'context_budget').mkdir(parents=True)
     (home / 'sessions').mkdir(); transcript = home / 'sessions' / 'rollout.jsonl'
