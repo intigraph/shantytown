@@ -152,19 +152,24 @@ def test_worker_without_exclusive_parent_channel_refuses_before_work(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux process-state observation only')
-def test_actual_parent_sigkill_stops_only_its_isolated_worker(tmp_path):
+@pytest.mark.parametrize('pid_write_pause', [0, 0.05])
+def test_actual_parent_sigkill_stops_only_its_isolated_worker(tmp_path, pid_write_pause):
     import os
     from pathlib import Path
     import signal
     import subprocess
+    # Existence is the readiness fence: publish only a fully written PID.
+    # The delayed case keeps creation and publication observably separate.
     ready = tmp_path / 'worker-ready'
     command = worker(tmp_path, f'''import os, sys, time
 from shantytown.memory_deadline import _watch_parent
 _watch_parent(int(sys.argv[2]))
-with open({str(ready)!r}, 'x') as stream:
+with open({str(ready)!r} + '.pending', 'x') as stream:
+    time.sleep({pid_write_pause})
     stream.write(str(os.getpid()))
     stream.flush()
     os.fsync(stream.fileno())
+os.rename({str(ready)!r} + '.pending', {str(ready)!r})
 time.sleep(30)
 ''')
     parent_script = tmp_path / 'parent.py'
