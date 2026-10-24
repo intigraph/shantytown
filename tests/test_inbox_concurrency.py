@@ -205,6 +205,30 @@ def test_same_key_distinct_recipients_have_independent_receipts():
     assert one.id != two.id and len(tracker.rows) == 2
 
 
+def test_retained_pointer_slug_reaches_native_inbox_create():
+    tracker = ContendedSeeds()
+    slug = 'rr' + '1' * 24
+    message = TrackerInbox(tracker, lambda: []).deliver(
+        'worker', 'retained pointer', frm='sender', slug=slug)
+    assert message.id in tracker.rows
+    assert len(tracker.calls) == 1
+    assert f'--slug={slug}' in tracker.calls[0]
+    assert '--assignee=worker' in tracker.calls[0]
+    assert '--labels=inbox' in tracker.calls[0]
+
+
+@pytest.mark.parametrize('extra', [
+    {'priority': 0}, {'status': 'closed'}, {'defer_until': 'tomorrow'},
+])
+def test_native_inbox_create_still_refuses_non_message_fields(extra):
+    tracker = ContendedSeeds()
+    with pytest.raises(ValueError, match='only message identity fields'):
+        tracker.create_inbox_message(
+            'inbox: retained pointer', delivery_key='operation',
+            assignee='worker', labels='inbox', slug='rr' + '1' * 24, **extra)
+    assert tracker.calls == []
+
+
 def test_files_unkeyed_concurrent_delivery_preserves_every_message(tmp_path):
     box = FilesInbox(tmp_path/'inbox')
     with ThreadPoolExecutor(max_workers=12) as pool:

@@ -93,7 +93,7 @@ class SdTracker(BrTracker):
         validate_delivery_key(delivery_key)
         if (not is_message(title) or fields.get("labels") != "inbox"
                 or not fields.get("assignee")
-                or set(fields) - {"assignee", "labels", "description"}):
+                or set(fields) - {"assignee", "labels", "description", "slug"}):
             raise ValueError("stable inbox create requires only message identity fields")
         identity = json.dumps([delivery_key, fields.get("description")], separators=(",", ":"))
         run = "urn:shantytown:inbox:" + hashlib.sha256(identity.encode()).hexdigest()
