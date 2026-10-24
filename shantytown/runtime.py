@@ -1272,6 +1272,15 @@ def admin_budget_prompt_hooks(role: str, root=None) -> list:
     return [{"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}]
 
 
+def stop_failure_hooks(root=None) -> list[dict]:
+    """API errors bypass Stop; regeneration and old-artifact repair share this."""
+    return [{"hooks": [{
+        "type": "command", "async": True, "timeout": 30,
+        "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
+                   + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
+    }]}]
+
+
 def claude_settings_for_role(role: str, root=None) -> dict:
     """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (this
     container and its keys) — owned by ClaudeHarness, which is the only thing
@@ -1299,11 +1308,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
                      {"hooks": [capture]}] + memory_hooks(root, 'stop'),
             # API errors bypass Stop. This handler is notification-only and
             # asynchronous: its network/plate reads cannot delay the harness.
-            "StopFailure": [{"hooks": [{
-                "type": "command", "async": True, "timeout": 30,
-                "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
-                           + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
-            }]}],
+            "StopFailure": stop_failure_hooks(root),
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
