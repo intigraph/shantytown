@@ -1,6 +1,6 @@
 {
-  "source_revision": "b36a1c11607bce0a28337bd8aba0d6b6efca545a",
-  "reviewed_at": "2026-10-24T02:19:08.866474Z",
+  "source_revision": "085afb5394bd9bad89b8a25a574fc1c9c47844a7",
+  "reviewed_at": "2026-10-24T02:04:07.168021Z",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "dfffe03a7b43455c0511fae70628b2bea7c573dd2061c4de378a9bfadf2e5b69",
+      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
       "type": "Concept"
     },
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "940bd1ff24cfd89254d07cfd1acf8a39f12a0a50d5644740edd6417ff42ad4b0",
+      "source_sha256": "053ea7dd86b5f7e666579c2adee72b69784a840179057633c7bc50be01301b80",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "463767abf402559b59d0e12e2736e2990fb64b94842117e8f9049cf340238edd",
+      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "dfffe03a7b43455c0511fae70628b2bea7c573dd2061c4de378a9bfadf2e5b69",
+      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "e69742530cdde0aff2822dde058e915c7841936aa41a963233b9148ed2a517b8",
+      "source_sha256": "e9257a974cccb355813ed378da30a27b1077bc4c2f6c33175ec406ff30599a58",
       "properties": {
         "startHereOrder": 2
       }
