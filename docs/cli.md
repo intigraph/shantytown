@@ -2595,6 +2595,17 @@ resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
+Short owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive and at most 60 minutes, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item; on the third
+unchanged scheduled observation it returns to the administrator path. An item
+update resets that budget. Failed owner delivery also retains the admin path.
+
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
 old, including items with future deadlines, as a reading list. Age does not
