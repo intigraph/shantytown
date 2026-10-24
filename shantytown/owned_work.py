@@ -165,6 +165,8 @@ class OwnedWork:
         with self.locked() as data:
             if data.get(agent) != before:
                 return False
+            if after.get("state") != before.get("state"):
+                after["graph_revision"] = self._graph_revision(data)
             data[agent] = after
         return True
 

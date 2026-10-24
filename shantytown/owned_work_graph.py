@@ -44,7 +44,7 @@ def fact(agent, state, onto, source):
     if type(revision) is not int or not 0 <= revision <= 9007199254740991:
         raise ValueError('invalid lifecycle revision')
     status = state['state']
-    if status not in {'live', 'stopped', 'ceiling'}:
+    if status not in {'live', 'stopped', 'ceiling', 'expired'}:
         raise ValueError('invalid lifecycle state')
     observed = _time(state.get('graph_observed_at', state['observed_at']))
     generation = state['generation']

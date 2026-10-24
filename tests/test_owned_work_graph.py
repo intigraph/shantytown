@@ -265,3 +265,24 @@ def test_root_config_enables_existing_hooks_without_relaunching_agents(tmp_path,
     assert graph.enabled(tmp_path)
     monkeypatch.setenv('SHANTY_OWNED_WORK_PUBLISH', '0')
     assert not graph.enabled(tmp_path)
+
+
+def test_local_lease_expiry_advances_graph_revision_without_fresh_liveness(world):
+    from types import SimpleNamespace
+    from shantytown.answer import Answer
+    root, service, registry = world
+    graph.flush(root, registry)
+    before = service.snapshot()['worker']
+    cards = SimpleNamespace(get=lambda name: SimpleNamespace(reports_to='lead'))
+    inbox = SimpleNamespace(unread=lambda name: [])
+    service.tick(cards, lambda name: Answer.complete_read([], how='empty private owner scope'),
+                 inbox, now=before['expires_at'])
+    state = service.snapshot()['worker']
+    assert state['state'] == 'expired'
+    assert state['graph_revision'] > before['graph_revision']
+    assert state['graph_observed_at'] == before['graph_observed_at']
+    graph.flush(root, registry)
+    head = graph._head(registry, graph.producer(service.root))[1]
+    assert head['agents'][0]['state'] == 'expired'
+    assert head['agents'][0]['revision'] == state['graph_revision']
+    assert head['agents'][0]['observed_at'] == before['graph_observed_at']

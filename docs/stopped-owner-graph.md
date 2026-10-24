@@ -16,7 +16,9 @@ advances before state, so a crash may leave gaps but does not reuse revisions.
 An explicit stop ignores delayed heartbeats; a sanctioned launch supersedes it.
 Live heartbeat observations renew at most once per five minutes. Evidence older
 than the 30-minute lease is UNKNOWN, not proof of death or proof of continued life.
-No native engine expiry capability is claimed.
+Local lease expiry is also published with a newer writer revision and the
+original observation time. Consumers label that state UNKNOWN even if a clock
+shift makes the timestamp look recent. No native engine expiry capability is claimed.
 
 An immutable fact is read back before its local receipt advances. A lost response
 is reconciled on a later hook by exact point read, without blindly resending.
