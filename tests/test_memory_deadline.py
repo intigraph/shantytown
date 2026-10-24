@@ -10,6 +10,43 @@ from shantytown import memory_cli, memory_deadline as deadline
 from shantytown.memory_remote import Unproven
 
 
+def _fixture_process_exited(pid):
+    from pathlib import Path
+    try:
+        state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+    except (FileNotFoundError, ProcessLookupError):
+        # Linux can report ENOENT on open or ESRCH during read as a task exits.
+        return True
+    return state in {'Z', 'X'}
+
+
+@pytest.mark.parametrize('error', [FileNotFoundError, ProcessLookupError])
+def test_fixture_process_exit_during_stat_read(monkeypatch, error):
+    from pathlib import Path
+    def gone(path):
+        assert str(path) == '/proc/123/stat'
+        raise error('fixture process disappeared during read')
+    monkeypatch.setattr(Path, 'read_text', gone)
+    assert _fixture_process_exited(123)
+
+
+@pytest.mark.parametrize('state,exited', [('R', False), ('S', False), ('Z', True), ('X', True)])
+def test_fixture_process_stat_state(monkeypatch, state, exited):
+    from pathlib import Path
+    monkeypatch.setattr(Path, 'read_text', lambda path: f'123 (worker name) {state} 1')
+    assert _fixture_process_exited(123) is exited
+
+
+@pytest.mark.parametrize('error', [PermissionError, OSError, ValueError])
+def test_fixture_process_stat_unrelated_error_remains_unknown(monkeypatch, error):
+    from pathlib import Path
+    def unreadable(path):
+        raise error('not proof of process exit')
+    monkeypatch.setattr(Path, 'read_text', unreadable)
+    with pytest.raises(error):
+        _fixture_process_exited(123)
+
+
 def worker(tmp_path, source):
     path = tmp_path / 'worker.py'
     path.write_text(source)
@@ -193,11 +230,7 @@ _supervise({command!r}, b'{{}}', watch_parent=True)
         parent.wait(timeout=1)
         end = time.monotonic() + 1
         while time.monotonic() < end:
-            try:
-                state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
-            except FileNotFoundError:
-                break
-            if state in {'Z', 'X'}:  # Exited; orphan reaping belongs to PID1.
+            if _fixture_process_exited(pid):  # Orphan reaping belongs to PID1.
                 break
             time.sleep(0.01)
         else:
