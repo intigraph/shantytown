@@ -63,7 +63,9 @@ def _world(tmp_path: Path, *, role="worker", pane="crew-ellie", settings=True,
     (crew / "ellie.json").write_text(json.dumps(card))
     if settings:
         sdir = tmp_path / "settings"; sdir.mkdir()
-        (sdir / f"{role}.settings.json").write_text("{}")
+        from shantytown.runtime import claude_settings_for_role
+        (sdir / f"{role}.settings.json").write_text(
+            json.dumps(claude_settings_for_role(role, root=tmp_path)))
     return tmp_path
 
 
@@ -431,8 +433,10 @@ def _hooked_world(tmp_path, *, directions=("send",), role="worker"):
     sdir = tmp_path / "settings"; sdir.mkdir()
     hooks = [{"hooks": [{"command": f"python -m shantytown.stop_event {d}"}]}
              for d in directions]
+    from shantytown.runtime import claude_settings_for_role
     (sdir / f"{role}.settings.json").write_text(
-        json.dumps({"hooks": {"Stop": hooks}}))
+        json.dumps({"hooks": {"Stop": hooks, "StopFailure":
+            claude_settings_for_role(role, root=tmp_path)["hooks"]["StopFailure"]}}))
     return tmp_path
 
 
@@ -760,7 +764,10 @@ def test_launch_provisions_capture_against_selected_agent_settings(tmp_path, mon
     root = _world(tmp_path, workspace=str(ws))
     cli._emit_role_settings(root, {"worker"}, harness_name="claude")
     override = root / "settings" / "agent-ellie.settings.json"
-    override.write_text("{}")
+    # The override is missing metrics capture, but still has the mandatory
+    # API-error notification hook. A hookless override must now refuse launch.
+    emitted = runtime.claude_settings_for_role("worker", root)
+    override.write_text(json.dumps({"hooks": {"StopFailure": emitted["hooks"]["StopFailure"]}}))
     panes = NullPanes(screen=READY, live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
     assert cli._cmd_new(_Args(root=root)) == cli.OK

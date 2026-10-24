@@ -125,6 +125,22 @@ def test_it_injects_the_anchor_render_and_role_startup(monkeypatch, capsys):
     assert sa._EMPTY not in out                    # plate is not empty
 
 
+def test_configured_rules_query_is_named_with_the_role(monkeypatch):
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
+    monkeypatch.setenv("SHANTY_RULES_QUERY", "crew_rules")
+    out = sa.render(None, "ana")
+    assert "Process rules: run stored query `crew_rules` for role `lead` now" in out
+    assert "UNKNOWN" in out
+
+
+def test_without_a_rules_query_the_startup_is_unchanged(monkeypatch):
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
+    monkeypatch.delenv("SHANTY_RULES_QUERY", raising=False)
+    out = sa.render(None, "ana")
+    assert "Process rules" not in out
+    assert sa.rules_line(None, "lead") is None and sa.rules_line("", "lead") is None
+
+
 def test_launch_render_remains_plain_text(monkeypatch):
     monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
     assert sa.render("/r", "ana").startswith(sa.BANNER)

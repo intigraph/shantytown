@@ -19,8 +19,28 @@ st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:rev
 The graph must contain the opt-in Quechua scheduled-jobs profile: an Event links
 an Action through `schema:potentialAction` and a Schedule through
 `schema:eventSchedule`. The reader requires explicit RDF types, revision,
-owner, host, target, enabled state, timezone, anchor and a fixed interval of at
-least sixty seconds. Calendar qualifiers and ambiguous times are refused.
+owner, host, target, enabled state, timezone and anchor. It admits either a
+fixed interval of at least sixty seconds, or `P7D` with exactly one Schema.org
+weekday and `startTime HH:MM:00` in the IANA zone. Weekly anchors must match
+that local weekday/time. Gaps and overlaps refuse; other calendar syntax stays
+unsupported. The weekly JSON form has `interval_s: null`, integer `weekday`
+(Monday=0) and `local_time: HH:MM`, so no consumer can mistake it for elapsed
+604800 seconds. Fixed JSON keeps its existing fields. Each weekly occurrence
+needs a fresh UTC deadline from a compatible calendar scheduler.
+
+### Calendar admission demonstration
+
+`python3 docs/demos/calendar-catalogue.py` applies the same synthetic typed RDF
+rows to base `82c0f0394b06acbb2e3738a6bb7ec5bb7f1160cf` and the candidate.
+The base refuses the weekly form; the candidate reports a disabled weekly job
+with `interval_s: null`, while the fixed control's decoded fields are identical.
+The exact source head is supplied in the PR. This is a read-only source fixture,
+not a server query, installed reader or execution admission.
+
+Download the [recording](demos/calendar-catalogue.log) and
+[timing](demos/calendar-catalogue.timing), then use
+`scriptreplay --log-out calendar-catalogue.log --log-timing calendar-catalogue.timing`.
+Terminal playback was checked; no inline video is claimed.
 Disabled declarations stay visible. Multiple schedules per job require a future
 explicit overlap admission and are currently refused.
 
@@ -44,6 +64,12 @@ status; JSON without `--graph` refuses before reading local TOML.
 This source capability does not load the profile into a server, register a
 signing key, fire a schedule or retire an existing cron job. Calls without
 `--graph` retain the existing TOML behavior below.
+
+The opt-in [fixed inbox child](scheduled-inbox.md) supplies the result descriptor
+expected by Chaski's signed scheduled receiver. It reuses normal durable inbox
+delivery; it does not change this catalogue reader, enable a schedule or remove
+the tend sweep. Calendar recurrence and production pilot acceptance remain
+separate gates.
 
 The source-only [seed-before-assignment library](scheduled-seeds.md) supplies
 keyed creation/readback and a durable no-repeat boundary for an admitted agent
