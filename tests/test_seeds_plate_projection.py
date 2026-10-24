@@ -179,7 +179,7 @@ def test_projected_readiness_drives_open_rank_and_preserves_unknown(monkeypatch)
         if "AS ?subject" in query:
             return answer(wire)
         assert "blockedOn" in query and "related" not in query
-        return answer([{"id": "test-z"}])
+        return answer([{"id": "test-z", "graph": G, "evidence": "eligible"}])
 
     monkeypatch.setattr(seeds_plate, "_query", query)
     monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("CLI hydration"))
@@ -268,6 +268,117 @@ def test_readiness_response_cannot_escape_its_batch(monkeypatch):
     monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([{"id": "test-250"}]))
     with pytest.raises(ValueError, match="readiness"):
         seeds_plate.unblocked_ids(PROOF, rows)
+
+
+def test_readiness_keeps_blocker_evidence_graph_local(monkeypatch):
+    ephemeral = G + "#seeds-ephemeral"
+    wire = [
+        {"id": "test-free", "graph": G, "evidence": "eligible"},
+        {"id": "test-held", "graph": G, "evidence": "eligible"},
+        {"id": "test-held", "graph": G, "evidence": "blocked"},
+        {"id": "test-shadow", "graph": G, "evidence": "eligible"},
+        {"id": "test-shadow", "graph": ephemeral, "evidence": "eligible"},
+        {"id": "test-shadow", "graph": ephemeral, "evidence": "blocked"},
+    ]
+    calls = []
+
+    def query(proof, query, timeout):
+        calls.append(query)
+        return answer(wire)
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    rows = [{"id": ident, "status": "open"}
+            for ident in ("test-free", "test-held", "test-shadow")]
+    assert seeds_plate.unblocked_ids(PROOF, rows) == {"test-free", "test-shadow"}
+    assert len(calls) == 1, "eligibility and blockers must share one observation"
+
+
+def test_readiness_native_semantics_in_actual_rdf(monkeypatch):
+    from rdflib import Dataset, URIRef, Literal, RDF
+
+    data = Dataset()
+    native = URIRef("https://scbrown.github.io/quechua/ns#blockedOn")
+    status = URIRef(seeds_plate.SEEDS + "ontology/status")
+    identifier = URIRef(seeds_plate.SCHEMA + "identifier")
+    action = URIRef(seeds_plate.SCHEMA + "Action")
+    rows = []
+
+    def item(name, graph=G, state="open", expected_state="open"):
+        subject = URIRef(seeds_plate.SEEDS + "item/" + name)
+        target = data.graph(URIRef(graph))
+        target.add((subject, RDF.type, action))
+        target.add((subject, identifier, Literal(name)))
+        target.add((subject, status, Literal(state)))
+        if not any(row["id"] == name for row in rows):
+            rows.append({"id": name, "status": expected_state})
+        return subject, target
+
+    for name, state in (("free", None), ("closed", "closed"),
+                        ("tombstone", "tombstone"), ("active", "open"),
+                        ("missing", None), ("unknown", "unrecognized")):
+        subject, target = item(name)
+        if name != "free":
+            blocker = URIRef("https://example.test/blocker/" + name)
+            target.add((subject, native, blocker))
+            if state is not None:
+                target.add((blocker, status, Literal(state)))
+    subject, target = item("related")
+    blocker = URIRef("https://example.test/blocker/related")
+    target.add((subject, URIRef(seeds_plate.SEEDS + "ontology/related"), blocker))
+    target.add((blocker, status, Literal("open")))
+    subject, target = item("foreign-status")
+    blocker = URIRef("https://example.test/blocker/foreign")
+    target.add((subject, native, blocker))
+    data.graph(URIRef(G + "#seeds-ephemeral")).add((blocker, status, Literal("open")))
+    item("changed-status", state="blocked")
+    item("ephemeral", graph=G + "#seeds-ephemeral")
+    subject, target = item("shadow")
+    blocker = URIRef("https://example.test/blocker/shadow")
+    target.add((subject, native, blocker))
+    target.add((blocker, status, Literal("open")))
+    item("shadow", graph=G + "#seeds-ephemeral")
+
+    def query(proof, query, timeout):
+        result = data.query(query)
+        return answer([{str(k): value.toPython() for k, value in row.asdict().items()}
+                       for row in result])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unblocked_ids(PROOF, rows) == {
+        "free", "closed", "tombstone", "missing", "related",
+        "foreign-status", "ephemeral", "shadow"}
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": "test-a", "graph": "https://example.test/foreign", "evidence": "eligible"},
+    {"id": "test-a", "graph": G, "evidence": "unknown"},
+    {"id": "test-a", "graph": G},
+    {"id": "test-a", "graph": G, "evidence": "blocked"},
+])
+def test_incomplete_or_foreign_readiness_evidence_is_unknown(monkeypatch, bad):
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([bad]))
+    with pytest.raises(ValueError, match="readiness"):
+        seeds_plate.unblocked_ids(PROOF, [{"id": "test-a", "status": "open"}])
+
+
+def test_readiness_preserves_wire_and_values_budgets(monkeypatch):
+    queries = []
+
+    def query(proof, query, timeout):
+        queries.append(query)
+        # The old batch bound allowed 250 subjects in each of two graphs.
+        assert query.count("<https://seeds.local/item/") <= 500
+        assert query.endswith("LIMIT 1000")
+        return answer([])
+
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.unblocked_ids(PROOF, [
+        {"id": f"test-{i}", "status": "open"} for i in range(251)]) == set()
+    assert len(queries) == 3
+    monkeypatch.setattr(seeds_plate, "_query", lambda *a: answer([
+        {"id": "test-a", "graph": G, "evidence": "eligible"}] * 1000))
+    with pytest.raises(ValueError, match="readiness"):
+        seeds_plate.unblocked_ids(PROOF, [{"id": "test-a", "status": "open"}])
 
 
 def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):

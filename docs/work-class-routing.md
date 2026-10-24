@@ -22,7 +22,7 @@ semantics.
 notifies the executive, without assigning a worker. A later `st go` follows the
 same class rule as any other dispatch.
 
-`class_exempt = ["lead-name"]` can exempt explicitly named lead or administrator
+`class_exempt = ["lead-name"]` can exempt explicitly named lead, administrator or keeper
 cards from this filter only. Listing a worker does not exempt it. Usage freezes,
 drains, priority floors, maintenance and other dispatch holds remain in force.
 The existing `exempt` priority-floor setting does not waive work-class admission.

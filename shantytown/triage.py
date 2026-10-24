@@ -490,6 +490,9 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False,
     RESTART verdict, repeated one column over. Only the POSITIVE ready signal is
     consulted here.
     """
+    from .runtime import safeguard_blocked
+    if safeguard_blocked(None, strip_attrs(screen)):
+        return "safeguard-blocked"
     if looks_wedged(screen):
         return WEDGED
     if mid_flight(screen):
@@ -667,6 +670,10 @@ def triage(panes, target: str, new_work: str) -> Decision:
     # it. Every other predicate here strips internally, so this one capture
     # serves both views of the SAME instant.
     screen = panes.capture(target, attrs=True)
+    from .runtime import safeguard_blocked
+    if safeguard_blocked(None, strip_attrs(screen)):
+        return Decision(Action.REFUSE, "safeguard-blocked: administrator review required",
+                        {"pane": target})
     lines = len(screen.splitlines())
     # Recorded on EVERY screen-based verdict, including the ones it does not
     # change (aegis-q73g ask 1). Whether a live background shell should block a

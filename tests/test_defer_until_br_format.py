@@ -46,18 +46,18 @@ def test_dry_run_and_write_agree_with_real_br(tmp_path, until, accepted):
     if not accepted:
         for dry_run in (True, False):
             with pytest.raises(DeferRefused, match="YYYY-MM-DDTHH:MM:SSZ"):
-                dispatch.defer(bead, "human", "wait for the window", until=until,
+                dispatch.defer(bead, "external", "wait for the window", until=until,
                                dry_run=dry_run)
         assert tracker.get(bead).defer_until == before.defer_until
         assert tracker.get(bead).status == before.status
         return
 
-    planned = dispatch.defer(bead, "human", "wait for the window", until=until,
+    planned = dispatch.defer(bead, "external", "wait for the window", until=until,
                              dry_run=True)
     assert planned.condition == until
     assert tracker.get(bead).defer_until == before.defer_until
 
-    dispatch.defer(bead, "human", "wait for the window", until=until)
+    dispatch.defer(bead, "external", "wait for the window", until=until)
     stored = tracker.get(bead)
     assert stored.status == "deferred"
     if "T" in until:

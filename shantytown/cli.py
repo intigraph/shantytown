@@ -1848,6 +1848,11 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
     co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
+    review = co.add_mutually_exclusive_group()
+    review.add_argument("--review-window", action="store_true", help="describe the exact paused cost window")
+    review.add_argument("--accept-window", metavar="SHA256", help="prepare a reviewed successor generation")
+    co.add_argument("--decision-file", help="exact-window bounded-pilot ruling JSON")
+    co.add_argument("--execute", action="store_true", help="commit the reviewed successor pointer; no publication")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -4084,10 +4089,28 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
+    def failure_check():
+        if harness_mod.name_for(card, a.root) != "claude":
+            return None
+        from .stop_failure import verify_wiring
+        verdict = verify_wiring(a.root, card.name, session, getattr(panes, "cmdline", None))
+        if verdict == "verified":
+            print(f"  StopFailure VERIFIED for {card.name}: process-selected settings "
+                  "match the recorded launch snapshot.")
+            return None
+        label = "FAILED" if verdict == "missing" else "UNVERIFIED"
+        print(f"  StopFailure {label} ({verdict}): {card.name}; live notification hook "
+              "not verified. Re-provision settings and start through st; "
+              "the running pane was left intact.", file=sys.stderr)
+        return REFUSED if verdict == "missing" else CANNOT_TELL
+
     need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
     if not need:
-        # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
-        # doubt about a requirement that does not exist. An isolated agent (no
+        failure = failure_check()
+        if failure is not None:
+            return failure
+        # No NORMAL Stop directions are required. Claude's independent API-error
+        # hook was checked above; do not invent a send/drain requirement. An isolated agent (no
         # lead above, no reports below) has no stop event to route in either
         # direction; reporting could-not-tell here would be a false alarm on
         # every leaf agent, and false alarms are what teach an operator to stop
@@ -4137,6 +4160,9 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
               f"with `st agent stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
+    failure = failure_check()
+    if failure is not None:
+        return failure
     verified = sorted(need) if need else "none required by the graph"
     print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
@@ -7980,6 +8006,10 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain),
                 limited=limit_reached(runtime, plain))
+            from .stop_failure import state as failure_state
+            failure = failure_state(getattr(runtime, "_root", None), ag.name)
+            if failure in ("safeguard-blocked", "auth-dead", "limited"):
+                work = failure
             if triage_mod.input_state(screen) == triage_mod.INPUT_QUEUED:
                 work = f"{work}·stranded input"
             cmdline = None
@@ -10183,11 +10213,42 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
+def _safeguard_reports(a, agents, rep, panes):
+    """Persist refusal reports to the canonical administrator, never the worker."""
+    from . import safeguard
+    from .tend import SAFEGUARD_BLOCKED
+    from .tier import find_administrator
+    if not any(f.verdict == SAFEGUARD_BLOCKED for f in rep.findings):
+        return []
+    administrator = find_administrator(_registry(a))
+    if not administrator:
+        raise RuntimeError("safeguard report: administrator UNKNOWN")
+    def deliver(text):
+        message = _inbox(a, default="beads").deliver(administrator, text, frm="st-tend")
+        if not getattr(message, "id", None):
+            raise RuntimeError("safeguard report: durable receipt UNKNOWN")
+        return message.id
+    from .stop_failure import state as failure_state, reconcile
+    log = lambda text: print("  " + text, file=sys.stderr)
+    primary, fallback = [], []
+    for finding in rep.findings:
+        if (finding.verdict == SAFEGUARD_BLOCKED
+                and failure_state(a.root, finding.agent) == "safeguard-blocked"):
+            if reconcile(a.root, finding.agent, deliver, log):
+                primary.append(finding.agent)
+        else:
+            fallback.append(finding)
+    return primary + safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver, log)
+
+
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
     """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
         return ""
+    from .stop_failure import state as failure_state
+    if failure_state(root, card.name) == "safeguard-blocked":
+        return "pane reads safeguard-blocked, held for administrator review"
 
     def pane_refusal(screen):
         plain = triage_mod.strip_attrs(screen)
@@ -13252,6 +13313,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                              generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
+        _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A

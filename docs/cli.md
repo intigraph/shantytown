@@ -168,7 +168,8 @@ Context occupancy hints are opt-in in `shantytown.toml`:
 ```toml
 [session_budget]
 context_window = 1000000
-context_threshold_pct = 70
+context_threshold_pct = 50
+context_hard_pct = 70
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
@@ -366,6 +367,14 @@ A `blocked:external` hold can be satisfied by an unambiguous `closed:`,
 `release:` or `installed:` condition only when its evaluator returns a definite
 MET. An unmet condition, an UNKNOWN read, additional prose or a human/access
 hold keeps the item deferred. A `date:` review never grants that permission.
+
+The sweep keeps a complete observation of all selected deferrals. If Quipu
+rejects a field batch with its explicit structural-cost HTTP 400 and asks for
+smaller requests, the reader halves that batch and retries each half within the
+original batch's time budget. It keeps both graphs and every evaluation field.
+A single candidate that still exceeds the limit is UNKNOWN; no candidate is
+skipped and no partial observation permits a release. Other HTTP failures are
+not retried by this split path. The server's structural limit stays unchanged.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -2124,6 +2133,61 @@ preserve cached cost gauges and their last-success timestamp; without a cached
 sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
+`st work cost --review-window --json` describes the exact paused window without
+running the parser or publisher. It shares the existing producer lock and binds
+the samples, recorded source identities, snapshot ledger, cooldown and reviewed
+budget envelope. Heartbeat timestamps do not change this identity. Missing,
+ambiguous or changed evidence refuses acceptance.
+
+After the actual resource reviewers accept that exact window, prepare a decision
+JSON containing `schema_version: 1`, `window_sha256`, `decision: "accept"`,
+`mode: "bounded-pilot"` (or explicitly reviewed `"bounded-continuous"`), `reviewer` and an `evidence_ref` to the ruling. The file
+records the decision; it is not an authentication or authority grant.
+`st work cost --accept-window SHA256 --decision-file FILE` validates and describes
+the successor without changing state. Add `--execute` only through the normal
+reviewed runtime path. A stale hash, busy lock, pending write, malformed decision,
+symlink or existing preparation refuses; never delete a preparation to retry.
+
+Execution archives the predecessor under `cost-review-generations/SHA256/`,
+preserves the original files, lifetime counters, refusals, snapshot ledger and
+cooldown, then atomically commits `cost-active-generation.json`. The successor
+starts a new bounded audit window; no history is reset and no tokens are counted
+or published by this operation. Caps and the default twenty-shape pause remain.
+Pilot mode does **not** enable continuous publication. An explicit
+`bounded-continuous` ruling instead authorizes subsequent in-envelope windows
+under that same policy: the scheduler archives each completed 20-shape window
+and advances a new generation under its existing lock. The inherited reviewer
+and evidence reference identify the original policy, not a fresh human review.
+Only the pointer-hashed manifest grants this mode; editing mutable budget history
+cannot enable it. Every predecessor remains on disk, and the live rotation keeps
+only the current window. Lifetime runs/maxima/refusals, cooldown, snapshot ledger
+and uncertain-write guards remain intact. Camayoc still enforces one snapshot,
+eight items, 1000 records and 4 MiB before networking. A completed window with an
+out-of-envelope observation stays paused for explicit review. Source installation
+alone never selects this policy or accepts a real pending window.
+
+Read the review status after a
+lost reply rather than replaying acceptance. A visible successor is evidence of
+the transition, not evidence of a subsequent successful cost publication.
+Before the first transition, source rollback can restore the previous release.
+After a generation is selected, retain a generation-aware reader: older releases
+ignore the pointer. Pause and reconcile publication through the normal operator
+path before a rollback to such a release; never discard generation evidence.
+
+Cost displays also report `cost_coverage`: completed and UNKNOWN-cost seed
+counts, their share, the whole-session limit, and the cohort's scope. This
+reuses the seed records already read for the command; it is not a board-wide
+completed-seed census and adds no tracker queries. A missing or malformed
+cohort remains UNKNOWN. A verified empty cohort has no percentage. Human
+single-seed output prints the same limit and count/share.
+
+Current policy accounts only for eligible whole sessions of at most eight
+items. Oversized sources are refused, never estimated. Observed token groups
+can still be useful partial evidence, but without an independent census across
+every session and cycle they do not establish complete cost for a closed seed.
+Partitioning is not enabled by this display change. Closure receipts and token
+arithmetic retain their existing parser-owned contracts.
+
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
 publisher partitions token and coverage samples by rig/agent/harness/session,
@@ -2911,3 +2975,48 @@ feature is source-only until reviewed adoption and a separately authorized scope
 trial proves the actual scheduled path and declared-exemption coverage. Rollback:
 set the scoped policy OFF, drain/read retained pointers, then revert the source;
 do not remove unread messages or revert while routine entries remain pending.
+
+### Provider safety refusals
+
+Claude crew settings provision an asynchronous `StopFailure` command hook.
+[Claude Code runs this instead of `Stop` for API errors](https://code.claude.com/docs/en/hooks#stopfailure),
+so the failure is recorded without waiting for a normal turn-end hook or a pane
+banner. The hook persists a `stop-failure` event with the agent, plate, error,
+optional error details and rendered API message. Missing plate/request evidence
+stays `UNKNOWN`; a plate read gets a two-second budget so it cannot silence
+the error notice. The actual error enum used for a safeguard refusal remains
+unknown until a real hook payload is observed; fixtures do not establish it.
+
+A rendered API message containing `safeguards` takes priority over every other
+error category. It records a hold for that launch and durably notifies the
+canonical administrator, with request IDs extracted from the rendered message.
+The hold also prevents ordinary input and automatic cycles when the pane has no
+banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
+does not clear a safeguard hold. Rate-limit and authentication failures enter the
+existing `limited` and `auth-dead` supervision paths; a later successful Stop can
+retire these transient signals. Other errors produce a durable administrator
+inbox notice. Notification work runs asynchronously with a bounded timeout and
+never asks the model to continue. Launch verification checks the running
+process's selected settings against its recorded launch snapshot; a newly
+rewritten settings file is not proof that an old process loaded the hook.
+
+The following pane check remains the fallback for Codex and missed hooks.
+A current provider banner saying `safeguards flagged this message` or
+`safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
+reports. Tend treats it as a fault and holds it for administrator review. It
+never clears context, switches models, cycles, or sends recovery input for this
+condition. Ordinary sends refuse while the banner is current.
+
+Tend persists one administrator inbox report per observed refusal, including the
+agent, request IDs when visible, and plate items (or `UNKNOWN` on a failed read).
+Old scrollback, a later response, and a cleared session do not count. Missing IDs
+remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
+crew root; long ID/plate lists are abbreviated in the inbox and retained there.
+A pending or uncertain delivery is reported loudly and never automatically
+replayed: inspect its ledger and durable inbox before any manual retry. Human
+review determines the next step. A saved primary hold is not delivery evidence:
+tend reconciles a demonstrably absent notification attempt from the saved error
+metadata, including when event persistence was interrupted and no pane banner
+exists. The shared reservation still prevents replay of pending or UNKNOWN
+attempts and keeps their uncertainty visible. Missing launch provenance cannot
+retire a saved safety hold; only positively different known launch stamps can.
