@@ -121,3 +121,31 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
                             gate_authority="worker").noop
     assert tracker.get("test-ci").notes == notes
     assert result.reason in notes
+
+
+@pytest.mark.parametrize("extra", ["duplicate", "other-setter", "malformed", "indented", "missing-space"])
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_ambiguous_envelopes_keep_admin_route_end_to_end(tmp_path, extra, position):
+    item = row()
+    valid = item["notes"].splitlines()[-1]
+    candidate = {
+        "duplicate": valid,
+        "other-setter": valid.replace('"worker"', '"administrator"'),
+        "malformed": 'defer_provenance: {broken',
+        "indented": '  ' + valid,
+        "missing-space": valid.replace('defer_provenance: ', 'defer_provenance:'),
+    }[extra]
+    item["notes"] = (candidate + "\n" + item["notes"] if position == "before"
+                     else item["notes"] + "\n" + candidate)
+    assert not owner_window(item, NOW)
+    sent, admin, result = sweep(tmp_path, [item])
+    assert sent == [] and admin and result == ["test-ci"]
+    assert item["status"] == "deferred"
+
+
+def test_single_canonical_envelope_keeps_owner_route_end_to_end(tmp_path):
+    item = row()
+    assert owner_window(item, NOW)
+    sent, admin, result = sweep(tmp_path, [item])
+    assert len(sent) == 1 and "OWNER-PACING" in sent[0][1]
+    assert admin == result == [] and item["status"] == "deferred"

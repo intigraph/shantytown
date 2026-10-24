@@ -15,11 +15,12 @@ def owner_window(row, now):
     if is_ask(row):
         return False
     lines = [line for line in str(row.get("notes") or "").splitlines()
-             if line.startswith(PREFIX)]
-    if not lines:
+             if line.lstrip().startswith(PREFIX.rstrip(": "))]
+    # Count malformed/indented candidates too: none may hide behind a valid last line.
+    if len(lines) != 1:
         return False
     try:
-        value = parse_provenance(lines[-1])
+        value = parse_provenance(lines[0])
         if value is None:
             return False
         start = parse_stamp(value["set_at"])
