@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 from urllib.parse import quote
@@ -126,10 +128,38 @@ def git(checkout, *args):
     return r.stdout if "-z" in args else r.stdout.strip()
 
 
-def candidate(checkout, repo, base, api):
+def verify_origin(checkout, repo, api):
+    """A mapped owner move still needs the forge's same-ID redirect proof."""
     parsed = parse_remote(git(checkout, "remote", "get-url", "origin"))
-    if parsed != ("github.com", *repo.split("/")):
-        raise Refused("candidate origin must be the explicitly named GitHub repository")
+    if parsed == ("github.com", *repo.split("/")):
+        return
+    fix = ("candidate origin does not match the requested GitHub repository; "
+           "stack mapping and redirect must both be verified; use: git -C "
+           + shlex.quote(str(checkout)) + " remote set-url origin "
+           + shlex.quote(f"https://github.com/{repo}.git"))
+    if parsed is None or parsed[0] != "github.com":
+        raise Refused(fix)
+    origin = "/".join(parsed[1:])
+    # Optional deployment helper: exact origins work without it. Never widen an
+    # unknown mapping into an owner-name heuristic (aegis-udp).
+    data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+    helper = data / "aegis-exec-src/scripts/lib/stack_repos.py"
+    try:
+        mapping = subprocess.run([sys.executable, str(helper), "canonical", origin],
+                                 capture_output=True, text=True, timeout=5)
+        if mapping.returncode or mapping.stdout.strip() != repo:
+            raise Refused(fix)
+        expected_id = canonical_identity(api, repo)
+        redirect = api(f"repos/{origin}")
+        if (not isinstance(redirect, dict) or type(redirect.get("id")) is not int
+                or redirect["id"] != expected_id or redirect.get("full_name") != repo):
+            raise Refused(fix)
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
+        raise Refused(fix) from error
+
+
+def candidate(checkout, repo, base, api):
+    verify_origin(checkout, repo, api)
     head_ref = git(checkout, "symbolic-ref", "--short", "HEAD")
     git(checkout, "check-ref-format", "--branch", base)
     if base == head_ref:

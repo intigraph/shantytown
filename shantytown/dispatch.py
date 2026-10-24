@@ -882,6 +882,11 @@ class Dispatcher:
         item = self.tracker.get(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
+        from .ask_visibility import refuse_deferral
+        try:
+            refuse_deferral(item, {"status": "deferred", "blocker_kind": label})
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if not getattr(self.tracker, "_structured_defer", False):
             raise DeferRefused("this tracker backend cannot record structured deferrals")
         date = until or item.defer_until or ""
