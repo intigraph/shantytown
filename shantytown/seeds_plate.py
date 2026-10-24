@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from .answer import Answer
 from .query_identity import read_headers, declared_read_operation
+from . import seeds_read_cache
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -49,6 +50,19 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    def fetch():
+        return _query_wire(proof, query, timeout, verbose=verbose)
+
+    # Explicit profiling must observe a real execution, not cached timing.
+    if verbose:
+        return fetch()
+    return seeds_read_cache.read(
+        proof.quipu_url, query, timeout, opener=urlopen, fetch=fetch,
+        validate=lambda result: _validate_query(result, query),
+    )
+
+
+def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     headers.update(read_headers())
     payload = {"query": query}
@@ -67,6 +81,10 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
         if len(body) > 8 * 1024 * 1024:
             raise ValueError("plate response byte budget reached")
         result = json.loads(body)
+    return _validate_query(result, query)
+
+
+def _validate_query(result, query: str) -> dict:
     if not isinstance(result, dict):
         raise TypeError("invalid plate response")
     if query.lstrip().startswith("ASK"):
