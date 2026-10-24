@@ -1,6 +1,11 @@
-# shantytown
-
-[![CI](https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg)](https://github.com/scbrown/shantytown/actions/workflows/ci.yml)
+<p align="center"><img src="assets/logo.svg" alt="shantytown" width="200"/></p>
+<h1 align="center">shantytown</h1>
+<p align="center"><em>🏭 Ship software and organize everyday work with a crew of AI agents.</em></p>
+<p align="center">
+<a href="LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache_2.0-blue"/></a>
+<a href="https://github.com/scbrown/shantytown/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg"/></a>
+<a href="https://github.com/scbrown/caboodle"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
+</p>
 
 **A crew of AI agents for shipping software and running everyday operations:
 part of the Quipu stack.** Use it to coordinate a software factory where agents and CI plan, build,
@@ -84,8 +89,8 @@ when.
 | [camayoc](https://github.com/scbrown/camayoc) | prepares knowledge and vocabulary for Quipu, with checks before it is admitted |
 | [quechua](https://github.com/scbrown/quechua) | shared vocabulary and shapes for interoperable knowledge |
 | [chaski](https://github.com/scbrown/chaski) | reacts to graph changes and delivers governed notifications |
-| [bobbin](https://github.com/scbrown/bobbin) | searches your code and can include related knowledge from Quipu |
-| [yupana](https://github.com/scbrown/yupana) | shows code impact and can read policies from Quipu to check changes |
+| [bobbin](https://github.com/scbrown/bobbin) | indexes your codebase and injects context from that index and Quipu knowledge |
+| [yupana](https://github.com/scbrown/yupana) | shows code impact and can read policies from Quipu to govern agent actions |
 | [desire-path](https://github.com/scbrown/desire-path) | turns agent mistakes into feature requests; works on its own without Quipu |
 | [seeds](https://github.com/scbrown/seeds) | a work item tracker backed by the Quipu knowledge base |
 | [shantytown](https://github.com/scbrown/shantytown) | runs crews of AI agents on work items, triggered by hand, on a schedule or by events; can share work and memory through Quipu |
@@ -94,4 +99,14 @@ when.
 
 <!-- stack-table:end -->
 
-[License](LICENSE).
+## Contributing
+
+```sh
+python3 -m pytest -q
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for conventions and validation.
+
+## 📜 License
+
+[Apache-2.0](LICENSE)

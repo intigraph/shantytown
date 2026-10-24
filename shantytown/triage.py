@@ -71,7 +71,7 @@ _TAIL_LINES = 8
 # for the marker silently stops matching. One capture, two views of the same
 # instant: a second capture-pane would be a different moment.
 _ANSI = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"          # CSI (colour, cursor, …)
+    r"\x1b\[[0-9;:?]*[ -/]*[@-~]"         # CSI (colour, cursor, …)
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC (hyperlinks: \x1b]8;;URL\x1b\)
     r"|\x1b[@-Z\\-_]"                      # lone two-byte escapes
 )
@@ -87,7 +87,29 @@ _PROMPT_GLYPHS = ("❯", "›", ">")
 
 # Only SGR (`CSI … m`) can turn dim on or off; every other CSI is cursor/erase
 # chrome and must not disturb the state machine below.
-_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+_SGR = re.compile(r"\x1b\[([0-9;:]*)m")
+
+
+def _sgr_modes(parameters):
+    """Yield modes, not the subparameters of indexed/RGB colour controls.
+
+    XTerm SGR 38/48/58 consume their colour parameters; the 2 in 38;2;r;g;b
+    is NOT faint. Colon-delimited colour subparameters stay in one field.
+    """
+    fields = (parameters or '0').split(';')
+    i = 0
+    while i < len(fields):
+        value = fields[i]
+        if ':' in value:
+            i += 1
+            continue
+        if value in {'38', '48', '58'} and i + 1 < len(fields):
+            count = {'2': 5, '5': 3}.get(fields[i + 1])
+            if count is not None:
+                i += count
+                continue
+        yield value
+        i += 1
 
 
 def _split_dim(segment: str) -> tuple[str, str]:
@@ -113,7 +135,7 @@ def _split_dim(segment: str) -> tuple[str, str]:
         (dimmed if dim else undimmed).append(segment[pos:m.start()])
         # An empty parameter list (`\x1b[m`) means 0. Compound forms like
         # `\x1b[0;2m` are applied left to right, exactly as a terminal would.
-        for p in (m.group(1) or "0").split(";"):
+        for p in _sgr_modes(m.group(1)):
             if p in ("0", "", "22"):
                 dim = False
             elif p == "2":
@@ -261,6 +283,49 @@ def running_shells(screen: str) -> int | None:
 
 # --- what is in the input box? ----------------------------------------------
 
+def codex_composer(screen: str) -> str | None:
+    """Bounded, attribute-carrying Codex composer above its current footer.
+
+    A wrapped body can put the prompt outside the old eight-row tail. Only
+    widen for a bold Codex prompt AND model/shortcuts footer; arbitrary old
+    prompts without that frame retain the narrow reader's UNKNOWN/ABSENT.
+    """
+    lines = screen.splitlines()
+    while lines and not strip_attrs(lines[-1]).strip():
+        lines.pop()
+    tail_start = max(0, len(lines) - _TAIL_LINES)
+    footers = [i for i in range(tail_start, len(lines))
+               if re.search(r'\b(?:GPT-[\w.-]+|gpt-[\w.-]+|codex)\b', strip_attrs(lines[i]))]
+    if not footers:
+        return None
+    footer = footers[-1]
+    if not any('shortcuts' in strip_attrs(row) for row in lines[footer + 1:]):
+        return None
+    for start in range(footer - 1, max(-1, len(lines) - 81), -1):
+        raw = lines[start]
+        if not strip_attrs(raw).lstrip().startswith('›'):
+            continue
+        bold = False
+        for match in _SGR.finditer(raw[:raw.index('›')]):
+            for mode in _sgr_modes(match.group(1)):
+                if mode in {'0', '', '22'}:
+                    bold = False
+                elif mode == '1':
+                    bold = True
+        if bold:
+            return '\n'.join(lines[start:footer]).rstrip()
+    return None
+
+
+def _input_lines(screen):
+    framed = codex_composer(screen)
+    if framed is not None:
+        return [framed]
+    lines = screen.splitlines()
+    while lines and not strip_attrs(lines[-1]).strip():
+        lines.pop()
+    return lines[-_TAIL_LINES:]
+
 # ABSENT is not EMPTY and UNKNOWN is not EMPTY. Three different not-a-queue
 # answers, kept apart on purpose — collapsing "I did not see an input box",
 # "the box was empty" and "the box had text I could not classify" into one
@@ -293,16 +358,13 @@ def input_state(screen: str) -> str:
     decision) printed `idle` that way in one coordination session, each needing
     a hand pane-capture to even find.
     """
-    lines = screen.splitlines()
-    while lines and not strip_attrs(lines[-1]).strip():
-        lines.pop()
-    for raw in reversed(lines[-_TAIL_LINES:]):
+    for raw in reversed(_input_lines(screen)):
         plain = strip_attrs(raw).strip()
         if not plain or plain[0] not in _PROMPT_GLYPHS:
             continue
         # \xa0 (NBSP) is what the runtime actually puts after ❯; ordinary space
         # is what the older panes and the tests use. Both are the gutter.
-        if plain[1:].strip("\xa0 \t"):
+        if plain[1:].strip("\xa0 \t\r\n"):
             after = raw[raw.find(plain[0]) + 1:]
             # No escapes at all on this line = attributes were stripped before we
             # got here, so the ABSENCE of dim proves nothing. Measured: a live
@@ -324,9 +386,9 @@ def input_state(screen: str) -> str:
             # undimmed runs is identical to the old behaviour on every specimen
             # that does occur, and safe on the one I could not rule out.
             typed, ghost = _split_dim(after)
-            if typed.strip("\xa0 \t"):
+            if typed.strip("\xa0 \t\r\n"):
                 return INPUT_QUEUED
-            if ghost.strip("\xa0 \t"):
+            if ghost.strip("\xa0 \t\r\n"):
                 return INPUT_PLACEHOLDER
             # Escapes present, glyph followed by something `plain` counted as
             # text, but neither run holds any: chrome only.
@@ -343,10 +405,7 @@ def input_evidence(screen: str) -> str:
     output, saw text in a box, and ran the stranded-input SOP on a suggestion.
     Returns the RAW prompt line (escapes intact, safe-rendered by the caller).
     """
-    lines = screen.splitlines()
-    while lines and not strip_attrs(lines[-1]).strip():
-        lines.pop()
-    for raw in reversed(lines[-_TAIL_LINES:]):
+    for raw in reversed(_input_lines(screen)):
         plain = strip_attrs(raw).strip()
         if plain and plain[0] in _PROMPT_GLYPHS:
             return raw
@@ -431,6 +490,9 @@ def work_state(screen: str, ui_up: bool, awaiting: bool = False,
     RESTART verdict, repeated one column over. Only the POSITIVE ready signal is
     consulted here.
     """
+    from .runtime import safeguard_blocked
+    if safeguard_blocked(None, strip_attrs(screen)):
+        return "safeguard-blocked"
     if looks_wedged(screen):
         return WEDGED
     if mid_flight(screen):
@@ -608,6 +670,10 @@ def triage(panes, target: str, new_work: str) -> Decision:
     # it. Every other predicate here strips internally, so this one capture
     # serves both views of the SAME instant.
     screen = panes.capture(target, attrs=True)
+    from .runtime import safeguard_blocked
+    if safeguard_blocked(None, strip_attrs(screen)):
+        return Decision(Action.REFUSE, "safeguard-blocked: administrator review required",
+                        {"pane": target})
     lines = len(screen.splitlines())
     # Recorded on EVERY screen-based verdict, including the ones it does not
     # change (aegis-q73g ask 1). Whether a live background shell should block a

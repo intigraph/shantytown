@@ -58,6 +58,21 @@ _BY_ROLE = {
 }
 
 
+def rules_line(query: str | None, role: str) -> str | None:
+    """Where this deployment keeps its process rules, if it declared one.
+
+    Process rules live in the graph, not in instruction files (aegis-94s). The
+    stored-query name is deployment data (SHANTY_RULES_QUERY), so this public
+    package names no deployment. A read that fails or returns nothing is
+    UNKNOWN: an agent must not fall back to a remembered rulebook.
+    """
+    if not query:
+        return None
+    who = f" for role `{role}`" if role else ""
+    return (f"    Process rules: run stored query `{query}`{who} now; "
+            "a failed or empty read means the rules are UNKNOWN.")
+
+
 def startup_lines(role: str, plate_empty: bool, plate_stale: bool = False) -> list[str]:
     """The role's startup instructions. Generic by design: no deployment names,
     because this ships in a public package and every deployment reads it."""
@@ -128,8 +143,12 @@ def render(root: str, agent: str) -> str:
     role = m.group(1) if m else ""
     empty = "ON YOUR PLATE\n    nothing." in text or "Current work: nothing." in text
     stale = "\n      STALE PLATE:" in text
-    return "\n".join((BANNER, text.rstrip(), "",
-                       "\n".join(startup_lines(role, empty, stale)))) + suffix
+    lines = startup_lines(role, empty, stale)
+    from .deployment import deployment_default
+    rules = rules_line(deployment_default(root, "SHANTY_RULES_QUERY"), role)
+    if rules:
+        lines.append(rules)
+    return "\n".join((BANNER, text.rstrip(), "", "\n".join(lines))) + suffix
 
 
 if __name__ == "__main__":
