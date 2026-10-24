@@ -112,6 +112,12 @@ class StopEvent:
                                  # coordinator read a failed lookup as finished
                                  # work — the aegis-mt0r class.
 
+    # API errors bypass normal Stop. Additive fields preserve legacy events.
+    kind: str = "stop"
+    error: str | None = None
+    error_details: str | None = None
+    last_assistant_message: str | None = None
+
 
 @runtime_checkable
 class Events(Protocol):
@@ -123,7 +129,10 @@ class Events(Protocol):
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
                 context_k: float | None = None,
-                detail: str | None = None) -> StopEvent:
+                detail: str | None = None,
+                kind: str = "stop", error: str | None = None,
+                error_details: str | None = None,
+                last_assistant_message: str | None = None) -> StopEvent:
         """SEND: durably record an event addressed to `to`. Survival guarantee —
         it is on the store before it is read, so it cannot vanish if `to` is down.
 
@@ -189,7 +198,10 @@ class FilesEvents:
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
                 context_k: float | None = None,
-                detail: str | None = None, *, key: str | None = None) -> StopEvent:
+                detail: str | None = None, *, key: str | None = None,
+                kind: str = "stop", error: str | None = None,
+                error_details: str | None = None,
+                last_assistant_message: str | None = None) -> StopEvent:
         self.root.mkdir(parents=True, exist_ok=True)
         # A stable producer key makes a retried terminal notification idempotent,
         # including after its consumer has marked the first event delivered.
@@ -201,7 +213,9 @@ class FilesEvents:
         ev = StopEvent(id=event_id, to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
                        item_status=item_status, context_k=context_k,
-                       detail=detail)
+                       detail=detail, kind=kind, error=error,
+                       error_details=error_details,
+                       last_assistant_message=last_assistant_message)
         # ATOMIC: tmp + rename. write_text() straight to the final name is how
         # the empty ev-172.json happened — a writer killed between open() and
         # write left a 0-byte file that every pending() then choked on. rename
@@ -212,6 +226,8 @@ class FilesEvents:
             "rose": ev.rose, "delivered": ev.delivered, "shells": ev.shells,
             "ts": ev.ts, "item": ev.item, "item_status": ev.item_status,
             "context_k": ev.context_k, "detail": ev.detail,
+            "kind": ev.kind, "error": ev.error, "error_details": ev.error_details,
+            "last_assistant_message": ev.last_assistant_message,
         }
         path = self.root / f"{ev.id}.json"
         if key is None:
@@ -248,7 +264,9 @@ class FilesEvents:
                          ts=float(d.get("ts") or 0.0), item=d.get("item"),
                          item_status=d.get("item_status"),
                          context_k=d.get("context_k"),
-                         detail=d.get("detail"))
+                         detail=d.get("detail"), kind=d.get("kind", "stop"),
+                         error=d.get("error"), error_details=d.get("error_details"),
+                         last_assistant_message=d.get("last_assistant_message"))
 
     def pending(self, me: str) -> list[StopEvent]:
         """PURE READ — no mkdir, no rewrite, nothing marked.
@@ -325,12 +343,17 @@ class NullEvents:
                 shells: int | None = None, item: str | None = None,
                 item_status: str | None = None,
                 context_k: float | None = None,
-                detail: str | None = None) -> StopEvent:
+                detail: str | None = None,
+                kind: str = "stop", error: str | None = None,
+                error_details: str | None = None,
+                last_assistant_message: str | None = None) -> StopEvent:
         self._n += 1
         ev = StopEvent(id=f"ev-{self._n}", to=to, frm=frm, reason=reason, rose=rose,
                        shells=shells, ts=time.time(), item=item,
                        item_status=item_status, context_k=context_k,
-                       detail=detail)
+                       detail=detail, kind=kind, error=error,
+                       error_details=error_details,
+                       last_assistant_message=last_assistant_message)
         self._events.append(ev)
         return ev
 
@@ -346,5 +369,7 @@ class NullEvents:
                 id=e.id, to=e.to, frm=e.frm, reason=e.reason, rose=e.rose,
                 delivered=True, shells=e.shells, ts=e.ts, item=e.item,
                 item_status=e.item_status, context_k=e.context_k,
-                detail=e.detail)
+                detail=e.detail, kind=e.kind, error=e.error,
+                error_details=e.error_details,
+                last_assistant_message=e.last_assistant_message)
         return mine

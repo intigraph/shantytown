@@ -116,6 +116,8 @@ def command(args, tracker):
                 raise ValueError("item owner changed before admission; reread before updating")
             item = current
             prospective = asdict(item) | fields
+        from .ask_visibility import refuse_deferral
+        refuse_deferral(item, fields)
         if owner and active(prospective, owner):
             ensure_room(tracker, owner, item, candidate=prospective)
         if not args.dry_run:
