@@ -2,8 +2,8 @@
 
 # arming: library; stop/launch/capture hooks and the existing tend timer.
 
-No agent polling, reassignment, launch or graph writes. Native Quipu lease expiry
-and the Brief producer remain Unsupported until their governed adapters exist.
+No agent polling, reassignment or launch. The opt-in owned_work_graph adapter
+publishes observed lifecycle facts; native Quipu lease expiry remains unsupported.
 A lease expiry means missing heartbeat evidence, NOT proof of process death.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from .inbox import is_message
 
 GRACE = 300
 LEASE = 1800
-NATIVE_EXPIRY = "Unsupported: no admitted Quipu heartbeat/expiry contract"
+NATIVE_EXPIRY = "Unsupported: no native Quipu expiry engine; lifecycle observations are opt-in"
 
 
 def _time(value):
@@ -44,6 +44,36 @@ class OwnedWork:
     def __init__(self, root):
         self.root = Path(root) / "owned-work"
 
+    def _graph_revision(self, data):
+        # Persist the writer counter BEFORE state. A crash may leave a gap,
+        # never a reused revision. It is independent of wall-clock ordering.
+        path = self.root / "graph-revision"
+        previous = json.loads(path.read_text()) if path.exists() else 0
+        if type(previous) is not int or previous < 0:
+            raise ValueError("invalid graph writer revision")
+        revision = max([previous, *(s.get("graph_revision", 0) for s in data.values())]) + 1
+        if revision > 9007199254740991:
+            raise ValueError("graph writer revision exceeds portable integer range")
+        write_json_atomic(path, revision)
+        return revision
+
+    def version_graph_observations(self, *, agents=None):
+        """Version retained local evidence without inventing a fresh heartbeat.
+
+        First publication of an older local store keeps its original observation
+        time. Expired evidence stays expired; a revision is not renewed liveness.
+        """
+        with self.locked() as data:
+            if len(data) > 100:
+                raise ValueError("lifecycle writer exceeds 100-agent coverage cap")
+            for agent in sorted(data):
+                if agents is not None and agent not in agents:
+                    continue
+                state = data[agent]
+                if state.get("graph_revision", 0) == 0:
+                    state.update(graph_revision=self._graph_revision(data),
+                                 graph_observed_at=state.get("graph_observed_at", state["observed_at"]))
+
     @contextmanager
     def locked(self):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -59,7 +89,9 @@ class OwnedWork:
         agent, now = _agent(agent), _time(time.time() if now is None else now)
         with self.locked() as data:
             data[agent] = dict(generation=uuid.uuid4().hex, state="live",
-                               observed_at=now, expires_at=now + LEASE, launched_at=now)
+                               observed_at=now, expires_at=now + LEASE, launched_at=now,
+                               graph_revision=self._graph_revision(data),
+                               graph_observed_at=now)
 
     def heartbeat(self, agent, *, now=None):
         agent, now = _agent(agent), _time(time.time() if now is None else now)
@@ -70,9 +102,14 @@ class OwnedWork:
             if old and now < old["observed_at"]:
                 raise ValueError("heartbeat moved backwards")
             generation = old["generation"] if old else uuid.uuid4().hex
+            publish = bool(old and now - old.get("graph_observed_at", old["observed_at"]) >= 300)
             data[agent] = dict(generation=generation, state="live",
                                observed_at=now, expires_at=now + LEASE,
-                               launched_at=(old or {}).get("launched_at"))
+                               launched_at=(old or {}).get("launched_at"),
+                               graph_revision=self._graph_revision(data) if publish else
+                                              (old or {}).get("graph_revision", 0),
+                               graph_observed_at=now if publish else
+                                   (old or {}).get("graph_observed_at", (old or {}).get("observed_at", now)))
 
     def stop(self, agent, *, at=None, reason="", ceiling=False, wake=False, generation=None):
         agent, at = _agent(agent), _time(time.time() if at is None else at)
@@ -87,7 +124,9 @@ class OwnedWork:
             data[agent] = dict(generation=(old or {}).get("generation", uuid.uuid4().hex),
                                state="ceiling" if ceiling else "stopped",
                                observed_at=at, expires_at=at, next_at=at,
-                               reason=reason, notice="pending", event=uuid.uuid4().hex)
+                               reason=reason, notice="pending", event=uuid.uuid4().hex,
+                               graph_revision=self._graph_revision(data),
+                               graph_observed_at=at)
 
     def wake(self, agent, *, now=None):
         """A new input can invalidate an earlier empty queue, not a receipt."""
@@ -98,7 +137,7 @@ class OwnedWork:
                 old.update(notice="pending", next_at=now)
 
     def snapshot(self):
-        """Read-only local evidence for a future admitted Brief producer."""
+        """Read-only local evidence, also consumed by the opt-in graph publisher."""
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 

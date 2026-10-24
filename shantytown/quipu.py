@@ -873,6 +873,8 @@ class QuipuRegistry:
             headers = quipu_auth.write_headers(self.server)
         except quipu_auth.CredentialRefused as error:
             raise QuipuWriteRejected(str(error)) from None
+        if getattr(self, "client_label", None):
+            headers["X-Quipu-Client"] = self.client_label
         req = urllib.request.Request(
             self.server + "/knot",
             data=json.dumps({"turtle": turtle}).encode(),
