@@ -83,6 +83,35 @@ def entries():
     return list(seeds_read_cache._directory().glob("read-*.json"))
 
 
+def test_bounded_routing_reads_never_attempt_watermark_and_keep_six_read_cap(service):
+    from shantytown.review_routing import read_budget, ReadBudgetExceeded
+    proof, state = service
+    with read_budget() as usage:
+        for _ in range(6):
+            assert read(proof)["rows"][0]["value"] == "before"
+        with pytest.raises(ReadBudgetExceeded):
+            read(proof)
+    assert usage == {"reads": 6, "timeouts": 0}
+    assert state["queries"] == 6 and state["watermarks"] == 0
+    assert read(proof)["rows"][0]["value"] == "before"
+    assert state["queries"] == 7 and state["watermarks"] == 2
+    read(proof)
+    assert state["queries"] == 7 and state["watermarks"] == 3
+
+
+def test_direct_reads_restore_after_exception_and_do_not_change_other_threads(service):
+    proof, state = service
+    with pytest.raises(RuntimeError, match="fixture"):
+        with seeds_read_cache.direct_reads():
+            read(proof)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(read, proof).result()
+            assert state["queries"] == 2 and state["watermarks"] == 2
+            raise RuntimeError("fixture")
+    read(proof)
+    assert state["queries"] == 2 and state["watermarks"] == 3
+
+
 def test_same_probe_before_after_and_current_positive_control(service, monkeypatch):
     proof, state = service
     monkeypatch.setenv("ST_SEEDS_READ_CACHE", "0")
