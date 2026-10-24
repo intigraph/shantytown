@@ -49,6 +49,8 @@ restores the caller's environment on return when invoked as a Python function.
 
 | variable | what it points at | default |
 |---|---|---|
+| `SHANTY_WORKTREE_ROOT` | optional storage root for NEW project worktrees; must be paired with `SHANTY_WORKTREE_MOUNT` on a separate mounted filesystem. Existing trees are reused; invalid explicit selection refuses. See [mounted worktree storage](worktree-storage.md). | adjacent `<repository>-wt/<agent>`; or `worktree-storage.json` |
+| `SHANTY_WORKTREE_MOUNT` | required mount for `SHANTY_WORKTREE_ROOT`; both environment variables take precedence over the optional schema-1 config. Keep the configured root while external trees exist for enumeration. | unset |
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
 | `SHANTY_MODEL` | Launch-generated provenance: exact resolved card/role/fleet model carried to client and tools; absent selection clears inherited metadata. Configure selection through cards or `[model]`, not this carrier. | resolved model; else unset |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
