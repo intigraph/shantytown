@@ -189,3 +189,52 @@ def test_actual_cli_journal_failure_retains_legacy_for_retry(tmp_path, monkeypat
                            disable_detection=False, clear=False)
     assert cli._cmd_hold(args) == 0
     assert legacy.read_text() == raw
+
+
+def test_a_lift_supersedes_the_stranded_hold_notice_custody(tmp_path):
+    # aegis-185l: the hold body typed earlier must never be resent after a lift.
+    from shantytown import delivery
+    from shantytown.attribution import ST_TEND, attribute
+    reg, panes = roster(), SimpleNamespace(exists=lambda p: True)
+    held = quiet.Status((('media', quiet.Observation('active')),))
+    sent = []
+    push = lambda r, p, name, text: sent.append(text) or name
+    quiet_notice.sweep(tmp_path, held, reg, panes, now=1000, push=push, page=lambda *a: None)
+    hold = attribute(sent[-1], ST_TEND)
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(hold, 17.0)
+        custody.finish('queued')
+        custody.record = None
+        custody.begin('[from sattler] real mail', 17.0)
+        custody.finish('queued')
+    lifted = quiet.Status((('media', quiet.Observation('clear')),))
+    quiet_notice.sweep(tmp_path, lifted, reg, panes, now=1060, push=push, page=lambda *a: None)
+    assert 'LIFTED' in sent[-1]
+    states = {json.loads(p.read_text())['text']: json.loads(p.read_text())['state']
+              for p in (tmp_path / 'delivery').glob('send-*.json')}
+    assert states == {hold: 'superseded', '[from sattler] real mail': 'queued'}
+    assert quiet_notice.is_notice(hold) and not quiet_notice.is_notice('[from sattler] real mail')
+
+
+def test_mail_quoting_the_marker_is_not_superseded_but_a_genuine_notice_is(tmp_path):
+    # Review of #386: recognition is bound to tend's own notice, not a substring.
+    from shantytown import delivery
+    from shantytown.attribution import ST_TEND, attribute
+    reg, panes = roster(), SimpleNamespace(exists=lambda p: True)
+    held = quiet.Status((('media', quiet.Observation('active')),))
+    sent = []
+    push = lambda r, p, name, text: sent.append(text) or name
+    quiet_notice.sweep(tmp_path, held, reg, panes, now=1000, push=push, page=lambda *a: None)
+    hold = attribute(sent[-1], ST_TEND)
+    quoted = '[from sattler] tend said:' + quiet_notice.NOTICE_MARK + ' please read the item'
+    for text in (hold, quoted):
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(text, 17.0)
+            custody.finish('queued')
+    lifted = quiet.Status((('media', quiet.Observation('clear')),))
+    quiet_notice.sweep(tmp_path, lifted, reg, panes, now=1060, push=push, page=lambda *a: None)
+    states = {json.loads(p.read_text())['text']: json.loads(p.read_text())['state']
+              for p in (tmp_path / 'delivery').glob('send-*.json')}
+    assert states == {hold: 'superseded', quoted: 'queued'}
+    assert not quiet_notice.is_notice(quoted)
+    assert not quiet_notice.is_notice(attribute('a tend note' + quiet_notice.NOTICE_MARK, ST_TEND))
