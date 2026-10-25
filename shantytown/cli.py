@@ -341,6 +341,22 @@ def _backend(a, default="files") -> str:
     return default
 
 
+def _print_exact_context(a, item):
+    """Query-first starts with the exact item (aegis-ayj): a NO CONTEXT search
+    for an ID can hide linked rulings and episodes. Seeds-backed boards only;
+    fail-open, so beginning a task never waits long or fails on a read."""
+    try:
+        tracker = _raw_tracker(a, "files")
+        if not hasattr(tracker, "prove_store"):
+            return
+        from .quipu import resolve_onto
+        from .work_context import context, render
+        print(render(context(tracker, item, onto=resolve_onto(None, a.root), timeout=3)))
+    except Exception as exc:
+        print(f"exact context UNKNOWN ({type(exc).__name__}); "
+              f"run `st work item context {item}` before searching")
+
+
 def _tracker(a, default="files"):
     from .plate_capacity import guard_producers
     tracker = _raw_tracker(a, default)
@@ -1575,8 +1591,10 @@ def build_parser() -> argparse.ArgumentParser:
     # The whole hand-back, in one verified write (aegis-ap4gm fix #1): the
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
-    wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close; "
+                           "`context` reads an item's linked rulings, episodes and "
+                           "comments by exact ID")
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "context"))
     wi.add_argument("item")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
@@ -2608,6 +2626,11 @@ def _run_command(a) -> int:
     if a.cmd == "item":
         from .work_item import command
         try:
+            if a.item_action == "context":
+                from .quipu import resolve_onto
+                from .work_context import context, render
+                print(render(context(_tracker(a), a.item, onto=resolve_onto(None, a.root))))
+                return 0
             print(json.dumps(command(a, _tracker(a)), indent=2))
             return 0
         except ValueError as exc:
@@ -2668,6 +2691,7 @@ def _run_command(a) -> int:
                 # A bare CLI invocation does not invent a binding from the plate.
                 print(task_order.marker(a.begin_task))
                 print("The tool hook records this declaration; use --task-order to verify.")
+                _print_exact_context(a, a.begin_task)
                 return 0
             data = task_order.report(a.root, time.time() - a.since * 3600, a.agent)
             print(json.dumps(data, indent=2))
