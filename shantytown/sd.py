@@ -778,12 +778,26 @@ class SdTracker(BrTracker):
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
-        return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
+        options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
                                       "show", "list", "ready", "where", "search", "count", "info", "stats",
                                       "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        # Reads retain their original route and budget. Optional signing
+        # observation belongs only to the actual Seeds mutation child.
+        from .advise_signing import mutation, run
+        if mutation(self._translate(args)):
+            asserted = actor
+            for i, arg in enumerate(args):
+                if arg.startswith('--actor='):
+                    asserted = arg.partition('=')[2]
+                elif arg == '--actor' and i + 1 < len(args):
+                    asserted = args[i + 1]
+            return run(cmd, actor=actor, asserted_actor=asserted,
+                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                       options=options, runner=subprocess.run)
+        return subprocess.run(cmd, **options)
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu
