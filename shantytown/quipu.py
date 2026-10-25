@@ -41,7 +41,8 @@ def request_headers() -> dict:
     or empty — an empty value must not become a wrong credential — nothing
     changes against today's open server.
     """
-    headers = {"Content-Type": "application/json"}
+    from . import quipu_provenance
+    headers = {"Content-Type": "application/json", **quipu_provenance.headers()}
     from . import quipu_auth
     try:
         token = quipu_auth.token()
