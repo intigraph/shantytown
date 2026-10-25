@@ -10,13 +10,26 @@ def _fields(item):
     return dict(item) if isinstance(item, Mapping) else vars(item).copy()
 
 
-def is_ask(item):
-    value = _fields(item)
-    labels = value.get('labels') or []
+def label_names(labels):
+    """Read supported label values; mapping keys are never label entries."""
     if isinstance(labels, str):
         labels = labels.split(',')
-    labels = {label.get('name', '') if isinstance(label, Mapping) else label for label in labels}
+    if not isinstance(labels, (list, tuple, set, frozenset)):
+        return frozenset()
+    names = set()
+    for label in labels:
+        if isinstance(label, Mapping):
+            label = label.get('name')
+        if isinstance(label, str):
+            names.add(label.strip())
+    return frozenset(names)
+
+
+def is_ask(item):
+    value = _fields(item)
+    labels = label_names(value.get('labels'))
     return (bool(ASK_LABELS & labels)
+            or value.get('blocker_kind') == 'blocked:human'
             or str(value.get('title', '')).strip().startswith('ASK Stiwi'))
 
 

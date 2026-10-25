@@ -19,6 +19,14 @@ ready plate. Closing inbox messages or repooling excluded alarm records does
 not free a work slot. Admission reads fresh owner membership; it never borrows
 the frozen observation used to render a crew report.
 
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
 `st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
@@ -2630,6 +2638,17 @@ silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
+
+Short owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive and at most 60 minutes, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item; on the third
+unchanged scheduled observation it returns to the administrator path. An item
+update resets that budget. Failed owner delivery also retains the admin path.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
