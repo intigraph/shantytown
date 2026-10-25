@@ -81,4 +81,6 @@ def write_headers(server: str) -> dict[str, str]:
         raise refuse(server, 'unreadable or invalid') from None
     if not value:
         raise refuse(server, 'missing')
-    return {'Content-Type': 'application/json', 'Authorization': f'Bearer {value}'}
+    from . import quipu_provenance
+    return {'Content-Type': 'application/json', 'Authorization': f'Bearer {value}',
+            **quipu_provenance.headers()}
