@@ -451,3 +451,20 @@ def test_repeated_undelivered_sends_page_once_and_rearm_after_a_delivery(tmp_pat
         custody.finish('delivered')
     observe(tmp_path, f, BUSY, t + 3 * delivery.STRANDED_SECONDS)
     assert len(stranded_events(tmp_path)) == 1    # a delivery ends the episode
+
+
+def test_capture_error_while_clearing_keeps_a_superseded_body_terminal(tmp_path, monkeypatch):
+    # Review of #386: failed() persists `unknown` before it captures the pane.
+    # A capture that raises must not leave the old notice resubmittable.
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('superseded')
+    def capture(*a, **kw):
+        raise OSError('pane unreadable')
+    monkeypatch.setattr(panes, 'capture', capture)
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        with pytest.raises(OSError):
+            custody.clear_previous(panes, OWNED)
+    assert {r['text']: r['state'] for r in records(tmp_path)} == {BODY: 'superseded'}
+    assert keys(calls) == []

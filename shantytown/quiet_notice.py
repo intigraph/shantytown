@@ -16,8 +16,20 @@ LONG_HOLD_SECONDS = 1800
 NOTICE_MARK = ' Re-check st fleet hold all --status before honouring hold notes;'
 
 
+# How each quiet-time render begins (quiet_time.Status.render, gaming render).
+_NOTICE_STARTS = ('GOVERNOR HOLD', 'QUIET-TIME HOLD LIFTED',
+                  'quiet-time observation UNKNOWN', 'quiet-time detection off')
+
+
 def is_notice(text):
-    return NOTICE_MARK in text
+    """A hold/lift notice tend itself typed: its own attribution, a quiet-time
+    render, and the marker. Mail that merely quotes the marker is still mail."""
+    from .attribution import ST_TEND, attribute
+    prefix = attribute('', ST_TEND)
+    if not text.startswith(prefix):
+        return False
+    body = text[len(prefix):]
+    return body.startswith(_NOTICE_STARTS) and NOTICE_MARK in body
 
 
 def metrics(root):

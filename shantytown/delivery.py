@@ -132,11 +132,13 @@ class Custody:
         original = self.record['state']
         try:
             self.failed(panes)
-            cleared = self.record['state'] == 'cleared'
+            return self.record['state'] == 'cleared'
+        finally:
+            # failed() persists `unknown` before it captures the pane. On every
+            # path, a raised capture included, a superseded body stays terminal:
+            # an `unknown` one would be resubmitted by the next tend pass.
             if original == 'superseded':
                 self.finish('superseded')
-            return cleared
-        finally:
             self.record = None
 
 
