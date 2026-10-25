@@ -590,3 +590,20 @@ The migration shares the native installer
 lock inode and serializes provisioning; it never forces a cycle, deletes live
 releases or falls back to downloading into RAM. The harness leaves other platforms' existing package launch path unchanged;
 calling the Linux migration helper there directly refuses.
+
+## Work-class admission
+
+When `[governor] admit_class = true`, authoring and review use Codex for every
+work class. The authoritative `work:design` and `work:important-quipu-code`
+labels remain intact; neither selects a Claude worker. Missing or unreadable
+labels confer no extra permission. Explicit targets keep their configured
+harness, and an ineligible target is refused before dispatch writes.
+
+A name in `class_exempt` retains its Claude allowance only when the actual crew
+card has the `administrator` role. A lead, keeper or worker cannot obtain that
+allowance from the name alone. This filter never waives usage floors, freezes,
+drains, holds, plate limits or busy-pane checks. Review identity and review
+eligibility retain their separate normal admission checks.
+
+The generic default remains `admit_class = false`; disabling the optional
+filter does not change any other governor or dispatch safeguard.

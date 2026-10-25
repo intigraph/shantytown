@@ -43,11 +43,12 @@ def put(tracker, labels):
 
 
 @pytest.mark.parametrize('labels,target,admitted', [
-    (['work:design'], 'writer', True),
-    (['work:important-quipu-code'], 'writer', True),
+    (['work:design'], 'writer', False),
+    (['work:important-quipu-code'], 'writer', False),
     ([], 'coder', True), (['work:docs'], 'writer', False),
     (['work:important-code', 'tier:2'], 'writer', False),
-    (['work:design'], 'coder', False),
+    (['work:design'], 'coder', True),
+    (['work:important-quipu-code'], 'coder', True),
 ])
 def test_real_go_reads_class_before_any_dispatch_write(tmp_path, monkeypatch, labels, target, admitted):
     _, tracker, panes = world(tmp_path, monkeypatch)
@@ -78,8 +79,8 @@ def test_feed_positive_selection_does_not_trust_ready_labels(tmp_path, monkeypat
     put(tracker, ['work:important-quipu-code'])
     # A new scheduling pass re-reads the authoritative row.
     checks = feed_check.worker_governor_admissions(tmp_path, reg, ['writer', 'coder'])
-    assert not checks['writer'](forged)
-    assert checks['coder'](forged)
+    assert 'important-quipu-code' in checks['writer'](forged)
+    assert not checks['coder'](forged)
 
 
 def test_unreadable_class_is_ordinary_and_not_a_design_permission(tmp_path, monkeypatch):
@@ -97,7 +98,7 @@ def test_class_exemption_cannot_waive_floor_freeze_or_drain(role):
     verdict = gov.Verdict(reading=gov.Reading(source='none'))
     chief = Agent('chief', role=role, harness='claude')
     exempt = work_class.for_card(verdict, policy, chief)
-    assert not exempt.admits(ordinary, 'chief')
+    assert bool(exempt.admits(ordinary, 'chief')) is (role != 'administrator')
     worker = work_class.for_card(verdict, policy, Agent('worker', harness='claude'))
     assert worker.admits(ordinary, 'worker')
     floor = gov.Tier(at=50, min_priority=0)
@@ -117,9 +118,9 @@ def test_sling_keeps_executive_handoff_then_downstream_go_checks_class(tmp_path,
     assert not tracker.get('job').assignee
     assert len(panes.sent) == 1
     assert cli.main(['--root', str(tmp_path), '--backend', 'files',
-                     'go', 'job', 'writer', '--dry-run']) == 0
+                     'go', 'job', 'writer', '--dry-run']) != 0
     assert cli.main(['--root', str(tmp_path), '--backend', 'files',
-                     'go', 'job', 'coder', '--dry-run']) != 0
+                     'go', 'job', 'coder', '--dry-run']) == 0
     assert len(panes.sent) == 1
 
 
@@ -135,7 +136,7 @@ def test_configuration_is_explicit_and_strict(tmp_path):
     assert policy.admit_class and policy.class_exempt == ('chief',)
 
 
-@pytest.mark.parametrize('labels,selected', [([], 'coder'), (['work:design'], 'writer')])
+@pytest.mark.parametrize('labels,selected', [([], 'coder'), (['work:design'], 'coder')])
 def test_scheduled_feed_returns_only_matching_positive_candidates(tmp_path, monkeypatch, labels, selected):
     reg, tracker, panes = world(tmp_path, monkeypatch)
     put(tracker, labels)
@@ -160,10 +161,15 @@ def test_assigned_haul_rechecks_authoritative_class(tmp_path, monkeypatch):
     assert not feed_check.admitted_haul(
         [dict(id='job', priority=1, labels=['work:design'])], card, verdict,
         log.append, root=tmp_path)
-    assert log and 'dispatch to codex' in log[0]
+    assert log and 'work class requires codex' in log[0]
     put(tracker, ['work:design'])
-    assert len(feed_check.admitted_haul([dict(id='job', priority=1)], card,
-                                       verdict, log.append, root=tmp_path)) == 1
+    assert not feed_check.admitted_haul([dict(id='job', priority=1)], card,
+                                        verdict, log.append, root=tmp_path)
+    assert 'work:design' in log[-1]
+    coder = reg.get('coder')
+    coder_verdict = work_class.for_card(verdict, config.load(tmp_path).governor, coder, tmp_path)
+    assert len(feed_check.admitted_haul([dict(id='job', priority=1)], coder,
+                                       coder_verdict, log.append, root=tmp_path)) == 1
 
 
 def test_feeder_uses_effective_policy_not_a_second_local_policy(tmp_path, monkeypatch):
@@ -182,13 +188,13 @@ def test_bare_governor_cannot_grant_an_unverified_role_exemption(tmp_path):
     assert verdict.admits(NS(id='job', priority=1, labels=[]), 'worker')
 
 
-def test_feed_never_falls_back_to_codex_when_only_important_work_is_ready(tmp_path, monkeypatch):
+def test_feed_never_falls_back_to_claude_when_only_important_work_is_ready(tmp_path, monkeypatch):
     reg, tracker, panes = world(tmp_path, monkeypatch)
     put(tracker, ['work:important-quipu-code'])
-    monkeypatch.setattr(feed_check, 'free_feedable_workers', lambda *a, **kw: ['coder'])
+    monkeypatch.setattr(feed_check, 'free_feedable_workers', lambda *a, **kw: ['writer'])
     monkeypatch.setattr(feed_check, 'queue_state', lambda *a, **kw: ([
         dict(id='job', title='Important code', priority=1)], []))
     _, ready, held = feed_check.gate_inputs(tmp_path, reg, panes, None)
     assert ready == []
-    assert len(held) == 1 and 'work class requires claude' in held[0][2]
+    assert len(held) == 1 and 'work class requires codex' in held[0][2]
     assert not tracker.get('job').assignee and not panes.sent
