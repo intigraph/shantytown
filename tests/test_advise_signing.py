@@ -105,11 +105,17 @@ def test_failed_mutation_never_retried_with_original_credentials(profile):
     assert json.loads((root / 'writes.jsonl').read_text())['command_exit'] == 2
 
 
-@pytest.mark.parametrize('change', ['hash', 'mode', 'symlink', 'fifo'])
+@pytest.mark.parametrize('change', ['hash', 'mode', 'symlink', 'fifo', 'scalar'])
 def test_unqualified_profile_cannot_change_original_writer(profile, change, capsys):
     root, policy = profile
     if change == 'hash':
         (root / 'seeds/config.toml').write_text('changed')
+    elif change == 'scalar':
+        config = root / 'seeds/config.toml'
+        config.write_text('quipu = "not-a-table"')
+        value = json.loads(policy.read_text())
+        value['profiles']['worker']['config_sha256'] = hashlib.sha256(config.read_bytes()).hexdigest()
+        policy.write_text(json.dumps(value))
     elif change == 'mode':
         policy.chmod(0o666)
     elif change == 'symlink':

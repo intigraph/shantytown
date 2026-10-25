@@ -81,7 +81,7 @@ def _profile(actor):
     if hashlib.sha256(raw).hexdigest() != row['config_sha256']:
         raise ValueError('profile changed')
     cfg = tomllib.loads(raw.decode())['quipu']
-    if (cfg.get('require_identity') is not False
+    if (not isinstance(cfg, dict) or cfg.get('require_identity') is not False
             or cfg.get('actor_principal_mode') != 'observe'
             or not all(isinstance(cfg.get(k), str) and cfg[k] for k in
                        ('signing_key_file', 'signing_session', 'signing_introducer'))):
@@ -119,7 +119,7 @@ def run(command, *, actor, asserted_actor, identity_command, options, runner):
     """Run the mutation exactly once; observations never imply it committed."""
     try:
         root = _profile(actor)
-    except (OSError, ValueError, KeyError, TypeError):
+    except Exception:
         _warn()
         return runner(command, **options)
     if root is None:
