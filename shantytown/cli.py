@@ -1,11 +1,11 @@
-"""st — the CLI. Seven verbs, five groups, thirty-seven grouped commands: forty-four, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-eight grouped commands: forty-five, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → item · repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
-            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair}
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
@@ -1905,6 +1905,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the recipient when sending; whose inbox when reading "
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
+    ib.add_argument("--to", action="append", default=[], dest="broadcast_to",
+                    help="with inbox broadcast: exact recipient (repeat for up to 64)")
+    ib.add_argument("--delivery-key", help="with broadcast: stable caller operation key for replay")
+    ib.add_argument("--json", action="store_true", help="with broadcast: per-recipient durable receipts")
     ib.add_argument("-d", "--durable", action="store_true",
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
@@ -1972,6 +1976,9 @@ def build_parser() -> argparse.ArgumentParser:
     jb_hist = jb_sub.add_parser("history", help="recent attempts from logs/jobs.jsonl")
     jb_hist.add_argument("name", nargs="?")
     jb_hist.add_argument("--limit", type=int, default=20)
+
+    from .memory_cli import configure as configure_memory
+    configure_memory(leaf("memory", help="explicit crew file-memory transport; no native root replacement"))
 
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
@@ -2578,6 +2585,9 @@ def _main(a, argv: list[str] | None = None) -> int:
 
 
 def _run_command(a) -> int:
+    if a.cmd == "memory":
+        from .memory_cli import command
+        return command(a)
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a) and not _administrator_launch(a):
@@ -2864,6 +2874,11 @@ def _owned_work_rows(tracker, name):
     raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
 
 
+def _owned_work_publish(a, *, agents=None):
+    from . import owned_work_graph
+    owned_work_graph.publish(Path(a.root), agents=agents)
+
+
 def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
     from .owned_work import OwnedWork
     try:
@@ -2903,6 +2918,8 @@ def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
         print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
               "); ownership not measured", file=sys.stderr)
         return []
+    finally:
+        _owned_work_publish(a, agents={card.name} if card else None)
 
 
 def _launched_now(a, card_name: str, settings_path=None) -> None:
@@ -2922,6 +2939,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     _stops(a).forget(card_name)
     from .owned_work import OwnedWork
     OwnedWork(a.root).launch(card_name)
+    _owned_work_publish(a, agents={card_name})
     agent_hold.clear(a.root, card_name)
 
 
@@ -5651,6 +5669,12 @@ def _cmd_inbox(a) -> int:
             or getattr(a, "read_id", [])):
         print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
         return REFUSED
+    if a.agent == "broadcast":
+        from .inbox_broadcast import command
+        return command(a)
+    if getattr(a, "broadcast_to", []) or getattr(a, "delivery_key", None) or getattr(a, "json", False):
+        print("  refused: --to, --delivery-key and --json require inbox broadcast", file=sys.stderr)
+        return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
     if not a.message and (getattr(a, "durable", False) or a.dry_run) \
@@ -6975,11 +6999,11 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded — a human re-dispatches rather than the
-        # tracker claiming an assignment that may never have arrived. This must be
+        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
+        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
               file=sys.stderr)
         return CANNOT_TELL
     except LookupError as e:
@@ -9680,6 +9704,16 @@ def _cycle_stop_refusal(a, agent_name) -> str:
     return ""
 
 
+def _record_cycle_refusal(root, agent, reason, risks):
+    """A receipt failure must not hide or replace the already printed refusal."""
+    from .cycle import Requests
+    try:
+        Requests(root).mark_refused(agent, reason, risks)
+    except OSError as error:
+        print(f"  warning: could not save refusal receipt ({error}); "
+              "cycle remains refused", file=sys.stderr)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -9926,8 +9960,7 @@ def _cmd_cycle(a) -> int:
         # tell "in flight" from "refused an hour ago". A no-op when nothing is
         # pending, so an operator's ad-hoc cycle of an agent that never asked
         # cannot mint a request.
-        cycle_mod.Requests(a.root).mark_refused(
-            agent_name, verdict.reason, verdict.risks)
+        _record_cycle_refusal(a.root, agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -9952,7 +9985,7 @@ def _cmd_cycle(a) -> int:
     gate = _durable_checkpoint_gate(a, agent_name)
     if gate.ok is False and not a.allow_loss:
         print(f"  refused: {gate.render()}", file=sys.stderr)
-        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        _record_cycle_refusal(a.root, agent_name, gate.render(), [])
         return REFUSED
     if gate.ok is None:
         # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,

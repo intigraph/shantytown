@@ -8,6 +8,7 @@ serializing all owners. Cache/metadata failures fall back to the original read.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 import fcntl
 import hashlib
 import json
@@ -25,6 +26,22 @@ _LIMIT = 1024 * 1024
 _ENTRIES = 64
 _MAX_AGE = 60
 _CACHE_ERRORS = (OSError, ValueError, TypeError, AttributeError, KeyError)
+_DIRECT_READS = ContextVar("seeds_direct_reads", default=False)
+
+
+@contextmanager
+def direct_reads():
+    """Keep bounded readers on their admitted query-only transport.
+
+    Cache watermark requests are additional reads. A query-only consumer must
+    opt out of acceleration rather than quietly widening its transport budget.
+    Context-local state leaves concurrent ordinary readers unchanged.
+    """
+    token = _DIRECT_READS.set(True)
+    try:
+        yield
+    finally:
+        _DIRECT_READS.reset(token)
 
 
 def _directory() -> Path:
@@ -122,7 +139,7 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     ST_SEEDS_READ_CACHE=0 disables acceleration for rollback/measurement.
     """
     parsed = urlsplit(server)
-    if (os.environ.get("ST_SEEDS_READ_CACHE") == "0"
+    if (_DIRECT_READS.get() or os.environ.get("ST_SEEDS_READ_CACHE") == "0"
             or parsed.scheme not in ("http", "https") or not parsed.hostname
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
         return fetch()

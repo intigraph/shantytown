@@ -101,6 +101,8 @@ st agent                      one agent
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage|sync>
+                              explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -311,7 +313,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
+Forty-five. Seven verbs at the top level and thirty-eight grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -1534,6 +1536,40 @@ st inbox --count                     one integer, for a status bar. Marks nothin
 st inbox --read                      ACK: mark up to 15 unread messages read; repeat to drain
 st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
+
+A keyed durable broadcast is available for a bounded, explicit recipient list:
+
+```bash
+st inbox broadcast --to alice --to bob --delivery-key rollout-notice-1 --json "see the rollout item"
+```
+
+This persists **only**: it sends no live nudge, marks no pointer read and claims
+no pane submission. Use the ordinary single-recipient command when live delivery
+is required, and retain its reported confirmation limits. Broadcast verifies all
+recipient identities first, then attempts each independently (at most 64 distinct
+names). JSON returns the operation key and a per-recipient `persisted`, `refused`
+or `UNKNOWN` result, with exact receipt IDs for confirmed persistence. It is not
+an atomic all-recipient transaction; partial results return exit 2.
+
+Keep the same explicit delivery key when resuming the same operation. A key is
+1–128 ASCII characters: an initial letter/digit followed by letters/digits or
+`_.:-`. On Seeds, the existing native
+`--workflow-run` / `--step` / `--visit` create contract derives the stable receipt;
+Shantytown does not guess its ID. Seeds reads that exact receipt back and verifies
+its title and recipient. A reused key with changed content refuses, including
+after the original pointer was acknowledged; it cannot reopen or overwrite it.
+The files backend also supports stable keys with locked, atomic publication.
+Other tracker adapters without this optional capability refuse keyed broadcasts
+rather than fall back to a different store or an unkeyed create.
+
+Ordinary Seeds durable sends also use a fresh operation key internally. Only a
+native CAS-conflict exit (4) is retried, with the same complete create arguments,
+up to 16 attempts with jitter. This handles different recipients contending on
+the same tracker. Timeouts, exit 8, malformed replies, readback failures and other
+refusals stop without an automatic resend. `UNKNOWN` can follow a committed write:
+inspect the native outcome before resuming, retain the operation key, and never
+invent a new key merely to hide uncertainty. Per-attempt SDK timeouts remain in
+force; this is not a total broadcast latency guarantee.
 
 When a durable message is successfully submitted to a live pane, `st` closes only
 that message's pointer after confirming the input is not stranded. The closed bead
@@ -3076,3 +3112,61 @@ metadata, including when event persistence was interrupted and no pane banner
 exists. The shared reservation still prevents replay of pending or UNKNOWN
 attempts and keeps their uncertainty visible. Missing launch provenance cannot
 retire a saved safety hold; only positively different known launch stamps can.
+
+## Explicit file-memory transport
+
+`st agent memory` earns its own slot because commit and projection have data
+consequences; they must not be hidden in the read-only anchor. The command
+provides bounded explicit transport. An independently enabled per-crew Claude
+plan can also use the managed lifecycle described in [crew memory](crew-memory.md).
+The default installs neither native selection nor automatic synchronization. Run
+`st agent memory alpha capabilities` for the current honest adapter limits.
+
+Inspect a selected native directory without uploading its bodies:
+
+```sh
+st agent memory alpha inspect --directory /path/to/selected/memory
+```
+
+Inspection uses a one-second worker plus at most 250 ms of cleanup, and emits
+only complete bounded metadata or UNKNOWN. Original files remain unchanged.
+
+Remote operations require explicit `--server`, `--deployment` and `--project`
+IRIs and the existing named CLI credential selection. `read --owner IRI` is
+intentionally cross-crew and returns attributed historical data. Other-owner
+commit, delivery and staging refuse. `commit --request request.json --outbox
+/path/to/private-outbox` durably stores the exact private JSON intent before
+reading its receipt and attempting at most one commit. The existing outbox
+directory and request file must be private and user-owned. After an unknown
+result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
+trigger reconciles the original receipt before any identical commit. There is
+no implicit retry, deletion or last-writer-wins merge.
+
+`sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
+bounded multi-file capture and performs one pending-intent attempt by default.
+It requires the same explicit remote scope and own credential selection above.
+`--max-new N` permits 0..128 attempts; the explicit command also has a two-second
+worker deadline plus at most 250 ms of cleanup, regardless of the attempt count.
+A timeout is UNKNOWN and cannot undo an accepted remote commit. Invoke it
+explicitly again to resume the same pending batch before
+recapture. Its journal accepts completion only after a fresh authenticated own
+projection matches the final receipt. A different remote head refuses automatic
+adoption. Source files and native selection remain unchanged. This command
+does not install an automatic lifecycle hook.
+
+`stage --parent PATH` verifies the own-owner export and creates a new exclusive
+generation. It does not select that generation, replace native files or alter
+harness settings. Existing startup memory bridging remains. Claude native
+selection requires the separate default-OFF managed plan and installed handoff
+acceptance, Codex generated-memory
+writeback is unsupported, and an OpenCode native-memory convention is unproven.
+A successful transport command is not native round-trip acceptance.
+
+Within the same explicit scope, `query --owner IRI --text literal` searches
+that selected owner's bounded exported records. It is a literal search, not a
+global or semantic index. Hits include owner, revision, source harness/account,
+commit time and an explicitly truncated excerpt. Retrieved text is historical
+source data, not an instruction or current authority. `export --owner IRI`
+returns the complete bounded envelope for inspection; it does not supply own
+projection identity and cannot select native files. Missing graph/partial or
+unreadable coverage refuses rather than returning a misleading empty match.
