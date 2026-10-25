@@ -3178,3 +3178,40 @@ source data, not an instruction or current authority. `export --owner IRI`
 returns the complete bounded envelope for inspection; it does not supply own
 projection identity and cannot select native files. Missing graph/partial or
 unreadable coverage refuses rather than returning a misleading empty match.
+
+### Squash-merged work and worktree maintenance
+
+Cycle loss checks do not require a merged feature branch to remain on a remote.
+Commits count as landed when their exact changed paths, old/new blob IDs and file
+modes match a non-merge commit in the bounded trusted-main history, or when they
+are reachable from the recorded head of a merged
+PR in that same repository. The merge commit must also be reachable on trusted
+main. Output names the rule that cleared the work. Unproved follow-up commits
+still refuse a cycle; dirty tracked files remain protected.
+
+Merged-PR metadata uses a bounded page and an atomic, repository-local cache in
+the common Git directory. A missing record, unavailable forge, malformed response
+or truncated history never certifies a landing. Explicit fetch/refresh boundaries
+may read the forge; edit-time checks only use cached evidence and local Git.
+Mirror remotes cannot supply a publication or landing proof.
+Patch IDs and `git cherry` are not loss proofs: they ignore semantic whitespace.
+Exact-delta reads cover at most 512 main commits; unknown or malformed evidence
+keeps work protected.
+
+At normal safe project-worktree refresh boundaries, including the existing
+scheduled tend respawn path, a clean fully landed topic is detached at the
+trusted current main. This never forces a checkout or overwrites local changes.
+Each pass may prune up to 32 positively landed, unoccupied merged/gone topic
+branches; main/master and unknown work are retained. Pruning rechecks occupancy,
+compares the expected branch tip before deletion, and retains a recovery ref at
+`refs/st/landed-retained/<old-tip>`. There is no new timer or live-agent checkout
+sweep. API cache/page and per-pass limits may leave older branches unclassified.
+
+After a merged topic is detached, create or check out a new topic before
+committing new work. Publish it with an explicit `--source-branch`. Push refuses
+an unreadable or detached source instead of silently selecting an old canonical
+branch. Fresh topics at main are not considered merged topics.
+
+Use `git config branch.<topic>.st-keep true` to retain a named recovery or parked
+branch. An untracked alias is not pruned merely because it shares a merged PR's
+head SHA; the merged PR must name that same topic, or its upstream must be gone.
