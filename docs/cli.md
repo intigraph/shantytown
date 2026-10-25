@@ -3178,3 +3178,40 @@ source data, not an instruction or current authority. `export --owner IRI`
 returns the complete bounded envelope for inspection; it does not supply own
 projection identity and cannot select native files. Missing graph/partial or
 unreadable coverage refuses rather than returning a misleading empty match.
+
+### Graph-owned role responsibilities
+
+When `SHANTY_RULES_QUERY` names the deployment's process-rule query, human
+`st anchor` output includes the current role's responsibility summaries.
+Session-start uses that same anchor render. `st fleet roles show` reads all role
+scopes once and lists their summaries, including additive roles such as reviewer.
+An unavailable, empty, capped or malformed read prints `UNKNOWN`; the program
+never substitutes a built-in responsibility text.
+
+The named query accepts a canonical role IRI (the namespace comes from
+`SHANTY_ONTO_NS`), and `*` for the role catalogue. It returns `topic`, `rule`,
+`summary`, `text`, and `scope`. Responsibilities have topic `responsibilities`
+and an exact role `scope`; ordinary process rules remain in the same result.
+Deployments may also accept local role names. Publish the query definition and
+role-scoped rules through the deployment's governed graph lane before adoption.
+The graph owns the wording; this package owns only its bounded read and render.
+
+On the fleet-owner host, the existing `st fleet tend` pass includes an
+administrator ranking check. It names each live agent whose canonical plate
+is below strictly higher-priority unowned READY work, and lists all unowned P0
+items in the complete active/deferred metadata projection. Blocked work is not
+promoted to READY, and owned work is not relabeled unowned. No assignment,
+priority or rank changes automatically.
+
+The digest includes P0 work created/closed counts for seven UTC calendar dates,
+including the current partial date. This is explicitly not a rolling 168-hour
+count. `SHANTY_BOARD_METRICS_QUERY` may select the aggregate query (default
+`seeds_board_metrics_v1`). It must supply independent `coverage` and
+`aggregation_control` rows plus reconciled `created`/`closed` grouped counts and
+matching totals; capped, inconsistent or failed reads stay `UNKNOWN`. Inbox
+counts do not become work counts. The aggregate has an eight-second client budget;
+role-summary reads retain a two-second budget. Neither changes the server deadline.
+Changed actionable digests use the existing
+administrator advisory route; repeated digests are quiet. Routine healthy
+results remain in the scheduled pass log. The pass budget may defer this
+advisory sweep without interrupting supervision.

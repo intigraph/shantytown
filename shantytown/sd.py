@@ -621,6 +621,18 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def ranking_rows(self):
+        """Complete lean active/deferred metadata and proven unowned READY rows."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .priority_advisory import workable
+        rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          include_deferred=True, include_messages=False).exact()
+        candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
+        ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        return [r for r in candidates if r["id"] in ready], rows
+
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
