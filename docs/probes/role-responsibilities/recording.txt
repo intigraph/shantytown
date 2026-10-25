@@ -1,0 +1,45 @@
+Script started on 2026-10-25 11:33:20-04:00 [COMMAND="python reproduce.py BEFORE_CHECKOUT"; private checkout path redacted]
+
+before: actual CLI, isolated files and graph-response fixtures
+$ st anchor member
+You are member — worker, reports to team.
+
+  Top of your plate: UNKNOWN
+  Coming due: UNKNOWN
+  Current work: nothing.
+    nothing. Consult Top of your plate and Coming due; ask your lead.
+
+  YOUR LEAD
+    team (lead) — up. Your stop events go to them.
+$ st fleet roles show
+chief       administrator  reports_to: —
+  member      worker         reports_to: team
+  team        lead           reports_to: chief
+
+after: actual CLI, isolated files and graph-response fixtures
+$ st anchor member
+You are member — worker, reports to team.
+
+  ROLE RESPONSIBILITIES
+    worker: worker duty from the graph fixture
+
+  Top of your plate: UNKNOWN
+  Coming due: UNKNOWN
+  Current work: nothing.
+    nothing. Consult Top of your plate and Coming due; ask your lead.
+
+  YOUR LEAD
+    team (lead) — up. Your stop events go to them.
+$ st fleet roles show
+chief       administrator  reports_to: —
+  member      worker         reports_to: team
+  team        lead           reports_to: chief
+  ROLE RESPONSIBILITIES
+    administrator: administrator duty from the graph fixture
+    executive: UNKNOWN (graph responsibilities unreadable or empty)
+    keeper: keeper duty from the graph fixture
+    lead: lead duty from the graph fixture
+    reviewer: reviewer duty from the graph fixture
+    worker: worker duty from the graph fixture
+
+Script done on 2026-10-25 11:33:20-04:00 [COMMAND_EXIT_CODE="0"]
