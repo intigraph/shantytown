@@ -81,6 +81,96 @@ def test_incomplete_owner_snapshot_never_authorizes_assignment():
         ensure_room(Partial(), 'worker')
 
 
+@pytest.mark.parametrize('classification', [
+    {'labels': [label]} for label in
+    ('needs-stiwi', 'blocked:human', 'desk', 'decision-needed', 'decision-stiwi')
+] + [
+    {'title': ' \tASK Stiwi: choose'},
+    {'blocker_kind': 'blocked:human'},
+    {'labels': 'technical, needs-stiwi '},
+    {'labels': [{'name': 'desk'}]},
+])
+def test_waiting_on_human_does_not_consume_capacity(classification):
+    from shantytown.plate_capacity import real_work
+    row = dict(id='fixture-ask', title='Choose an option', assignee='worker',
+               status='open', priority=1) | classification
+    before = json.dumps(row, sort_keys=True)
+    assert not real_work(row)
+    assert json.dumps(row, sort_keys=True) == before
+    assert real_work(dict(row, title='Discuss ASK Stiwi syntax',
+                          labels=['desk-notes'], blocker_kind='blocked:external'))
+
+
+def test_five_work_and_five_owned_asks_admit_priority_one_without_hiding_asks(tmp_path):
+    root, tracker = world(tmp_path, 5)
+    asks = [tracker.create('ASK Stiwi: choose', assignee='worker', labels=[label])
+            for label in ('needs-stiwi', 'blocked:human', 'desk',
+                          'decision-needed', 'decision-stiwi')]
+    before = {item.id: tracker._path(item.id).read_bytes() for item in asks}
+    assert size(tracker, 'worker') == 5
+    pool = tracker.create('New priority one request', priority=1)
+    dispatcher = Dispatcher(FilesRegistry(root / 'crew'), tracker, NullPanes())
+    dispatcher.go(pool.id, 'worker')
+    assert tracker.get(pool.id).assignee == 'worker'
+    assert size(tracker, 'worker') == 6
+    assert {item.id: tracker._path(item.id).read_bytes() for item in asks} == before
+    assert all(tracker.get(item.id).status == 'open' for item in asks)
+
+
+def test_converting_ask_to_ordinary_work_requires_a_fresh_slot(tmp_path):
+    from shantytown.plate_capacity import ensure_update_room
+    _, tracker = world(tmp_path, 10)
+    ask = tracker.create('ASK Stiwi: choose', assignee='worker', labels=['desk'])
+    before = tracker._path(ask.id).read_bytes()
+    with pytest.raises(PlateFull):
+        ensure_update_room(tracker, 'worker', ask,
+                           vars(ask) | {'title': 'Implementation', 'labels': [],
+                                        'blocker_kind': None})
+    assert tracker._path(ask.id).read_bytes() == before
+
+
+@pytest.mark.parametrize('metadata', [
+    {'labels': None}, {'labels': [None]}, {'labels': {'unreadable': 'desk'}},
+    {'blocker_kind': 'unknown'}, {'blocker_kind': 'blocked:external'},
+    {'title': 'Blocked waiting for a service'}, {'labels': ['blocked:external']},
+])
+def test_unknown_or_external_classification_is_still_work(metadata):
+    from shantytown.plate_capacity import real_work
+    assert real_work(dict(title='Ordinary work', labels=[]) | metadata)
+
+
+def test_resolved_ask_then_reclassified_crew_work_does_not_keep_a_free_slot():
+    class Snapshot:
+        def __init__(self, row):
+            self.row = row
+        def capacity_rows(self, owner):
+            return Answer.complete_read([self.row], how='fixture')
+
+    row = dict(id='fixture-1', title='ASK Stiwi: choose', labels=['desk'],
+               assignee='worker', status='closed')
+    tracker = Snapshot(row)
+    assert size(tracker, 'worker') == 0
+    # The canonical ASK markers are removed when next action becomes crew work.
+    row.update(title='Implement the decision', labels=[], blocker_kind=None, status='open')
+    assert size(tracker, 'worker') == 1
+
+
+def test_cached_ask_weight_does_not_replace_fresh_admission_snapshot():
+    ordinary = [dict(id=str(i), title='Work', assignee='worker', status='open')
+                for i in range(10)]
+    asks = [dict(id='ask-'+str(i), title='ASK Stiwi: choose', labels=['desk'],
+                 assignee='worker', status='open') for i in range(5)]
+    class Snapshot:
+        def capacity_rows(self, owner):
+            return Answer.complete_read(ordinary[:5] + asks, how='cached render')
+        def capacity_admission_rows(self, owner):
+            return Answer.complete_read(ordinary + asks, how='fresh admission')
+    tracker = Snapshot()
+    assert size(tracker, 'worker') == 5
+    with pytest.raises(PlateFull):
+        ensure_room(tracker, 'worker', candidate={'title': 'New work', 'priority': 1})
+
+
 def test_seeds_capacity_does_not_stop_at_held_rank(monkeypatch):
     tracker = SdTracker(quipu='https://example.test', prefix='fixture')
     monkeypatch.setattr(tracker, '_use_remote_projection', lambda: False)

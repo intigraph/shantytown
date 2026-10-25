@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .inbox import is_anchor, is_message, _deferred_until_is_future
+from .ask_visibility import is_ask
 
 MAX_ACTIVE = 10
 ACTIVE = frozenset({'open', 'hooked', 'in_progress', 'blocked'})
@@ -32,7 +33,7 @@ def owner_name(owner):
 
 
 def real_work(row):
-    """Messages and detector records are delivery, not implementation slots.
+    """Count work the holder can perform, excluding delivery and human decisions.
 
     Match the producers' explicit labels and legacy title prefixes. A bug filed
     to repair an alarm remains work unless it carries a detector record marker.
@@ -43,6 +44,7 @@ def real_work(row):
         labels = labels.split(',')
     labels = {str(v.get('name', '') if isinstance(v, dict) else v).strip() for v in labels}
     return (not is_message(title)
+            and not is_ask(dict(row, title=title, labels=labels))
             and not labels.intersection({'inbox', 'inbox-body', 'mail', 'alarm', 'alerting', 'recurring-alarm'})
             and not title.startswith(('Recurring alarm:', 'ALARM:', 'alert:'))
             and not is_anchor(labels)

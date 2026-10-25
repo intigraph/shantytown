@@ -15,8 +15,10 @@ def is_ask(item):
     labels = value.get('labels') or []
     if isinstance(labels, str):
         labels = labels.split(',')
-    labels = {label.get('name', '') if isinstance(label, Mapping) else label for label in labels}
+    labels = {str(label.get('name', '') if isinstance(label, Mapping) else label).strip()
+              for label in labels}
     return (bool(ASK_LABELS & labels)
+            or value.get('blocker_kind') == 'blocked:human'
             or str(value.get('title', '')).strip().startswith('ASK Stiwi'))
 
 

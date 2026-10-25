@@ -50,6 +50,22 @@ def test_new_human_label_and_ask_title_are_guarded_but_clear_and_technical_defer
     assert not is_ask(WorkItem('lab-3', title='Discuss ASK Stiwi syntax', labels=['desk-notes']))
 
 
+def test_structured_human_blocker_uses_the_same_ask_and_no_deferral_rule():
+    item = WorkItem('lab-1', title='Choose an option', blocker_kind='blocked:human')
+    assert is_ask(item)
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(item, {'status': 'deferred', 'blocker_kind': None})
+    assert not is_ask(WorkItem('lab-2', title='Wait for service', blocker_kind='blocked:external'))
+
+
+@pytest.mark.parametrize('labels', ['technical, needs-stiwi ', [{'name': ' desk '}]])
+def test_wire_label_forms_share_the_no_deferral_classification(labels):
+    item = {'title': 'Choose an option', 'labels': labels}
+    assert is_ask(item)
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(item, {'status': 'deferred', 'labels': []})
+
+
 @pytest.mark.parametrize('title,labels', CASES)
 def test_unassigned_sdk_producer_refuses_before_execute(title, labels):
     tracker = Mock()
