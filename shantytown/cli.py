@@ -6502,6 +6502,8 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import crew_rules
+    p.responsibilities = crew_rules.render(crew_rules.load(a.root, [p.me.role]))
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
@@ -8706,6 +8708,9 @@ def _cmd_roles(a) -> int:
         for ag in sorted(agents, key=lambda x: x.name):
             print(f"  {ag.name:<11} {ag.role:<14} "
                   f"reports_to: {ag.reports_to or '—'}")
+        from . import crew_rules
+        names = set(_catalog(a).roles) | {role for ag in agents for role in ag.effective_roles()}
+        print(crew_rules.render(crew_rules.load_all(a.root, names)))
         print()
         return OK
 
@@ -13411,6 +13416,22 @@ def _tend_once(a, quiet: bool = False) -> int:
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
+        def _role_ranking_report():
+            from . import ranking_check
+            def snapshot():
+                trk = _tracker(a)
+                projection = getattr(trk, "ranking_rows", None)
+                packet = projection() if callable(projection) else None
+                if packet is not None:
+                    return packet
+                if not isinstance(trk, FilesTracker):
+                    raise ValueError("selected backend lacks a bounded ranking projection")
+                ready, _active = _priority_snapshot(a)
+                rows = [json.loads(path.read_text()) | {"id": path.stem}
+                        for path in trk.root.glob("*.json")]
+                return ready, rows
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log)
+        _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
         _fleet_sweep("ceiling-transfer",

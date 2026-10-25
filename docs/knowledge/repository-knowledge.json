@@ -1,6 +1,6 @@
 {
-  "source_revision": "df008dd7d11e467ae864171bc1f344599294c868",
-  "reviewed_at": "2026-10-25T08:05:33.114905+00:00",
+  "source_revision": "54265f6bbc654dae7069867a24ae7940d581c384",
+  "reviewed_at": "2026-10-25T18:10:14.062734+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "cc1c8401af057b63798ad69bcc935ddb5356df633625057a0df440b8c144a7e7",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN.",
+      "source_sha256": "7645430242b24c8ef8683274296090065711287101ac77bf19fb1a7cda087088",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -82,8 +82,8 @@
       "kind": "start-here",
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
-      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "1e53e37d03bbe5089ecb53a2113be8c70363f26ba07e0266e58a2fe7fb411d3d",
+      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
+      "source_sha256": "214cdefb1a31955e8b7d695ef96eb174faf94e9ab73c94d75d238f55bb5e0685",
       "properties": {
         "startHereOrder": 2
       }
