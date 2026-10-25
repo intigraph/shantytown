@@ -19,6 +19,14 @@ ready plate. Closing inbox messages or repooling excluded alarm records does
 not free a work slot. Admission reads fresh owner membership; it never borrows
 the frozen observation used to render a crew report.
 
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
 `st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
