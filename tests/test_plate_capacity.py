@@ -422,3 +422,39 @@ t.create('automatic work', assignee='worker')
     assert all(p.returncode == 0 for p in processes), results
     assert size(tracker, 'worker') == 10
     assert sorted(tracker.get(f'st-{n}').assignee or '' for n in (10,11)) == ['', 'worker']
+
+
+MALFORMED_DECISION_LABELS = [
+    {'desk': False}, {'desk': True}, {'needs-stiwi': False}, {'name': 'desk'},
+    {'alarm': False}, 42, True, [42], [None], [{'desk': False}],
+    ['technical', {}], ['technical', []], [{'name': ['desk']}],
+]
+
+
+@pytest.mark.parametrize('labels', MALFORMED_DECISION_LABELS)
+def test_malformed_labels_on_owned_rows_do_not_free_work_slots(labels):
+    class Rows:
+        def capacity_rows(self, owner):
+            return Answer.complete_read([
+                dict(id=f'work-{i}', title='Ordinary work', labels=labels,
+                     assignee='worker', status='open', priority=1) for i in range(10)],
+                how='isolated complete owner snapshot')
+    tracker = Rows()
+    assert size(tracker, 'worker') == 10
+    with pytest.raises(PlateFull):
+        ensure_room(tracker, 'worker', candidate=dict(title='New work', priority=1))
+
+
+@pytest.mark.parametrize('labels', MALFORMED_DECISION_LABELS)
+def test_malformed_candidate_labels_cannot_skip_admission(labels):
+    class Rows:
+        def capacity_rows(self, owner):
+            return Answer.complete_read([
+                dict(id=f'work-{i}', title='Ordinary work', labels=[],
+                     assignee='worker', status='open', priority=1) for i in range(10)],
+                how='isolated complete owner snapshot')
+    candidate = dict(title='Ordinary incoming work', priority=1, labels=labels)
+    before = json.dumps(candidate, sort_keys=True)
+    with pytest.raises(PlateFull):
+        ensure_room(Rows(), 'worker', candidate=candidate)
+    assert json.dumps(candidate, sort_keys=True) == before
