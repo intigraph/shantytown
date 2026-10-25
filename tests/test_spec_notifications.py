@@ -1,6 +1,11 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+import hashlib
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 from shantytown.answer import Answer
@@ -9,6 +14,55 @@ from shantytown.spec_reader import SpecReader
 from shantytown.spec_boundary import consume
 
 NOW = datetime(2026,10,15,tzinfo=timezone.utc)
+
+
+def test_recipient_boundary_refuses_fifo_without_waiting(tmp_path):
+    folder = tmp_path / "notify"
+    folder.mkdir()
+    receipt = folder / ("spec-boundary-" + hashlib.sha256(b"owner").hexdigest() + ".json")
+    os.mkfifo(receipt)
+    program = """
+import sys
+from shantytown.answer import Answer
+from shantytown.spec_boundary import consume
+try:
+    consume(sys.argv[1], "owner", lambda: Answer.complete_read([], how="fixture"))
+except ValueError:
+    pass
+else:
+    raise AssertionError("FIFO receipt was admitted")
+"""
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    result = subprocess.run([sys.executable, "-c", program, str(tmp_path)],
+                            env=env, capture_output=True, text=True, timeout=2)
+    assert result.returncode == 0, result.stderr
+
+
+def test_recipient_boundary_caps_bytes_even_when_size_check_is_stale(tmp_path, monkeypatch):
+    folder = tmp_path / "notify"
+    folder.mkdir()
+    receipt = folder / ("spec-boundary-" + hashlib.sha256(b"owner").hexdigest() + ".json")
+    receipt.write_bytes(b'{"seen":[]}' + b" " * 1048576)
+    real_stat, real_fstat = Path.stat, os.fstat
+    identity = real_stat(receipt)
+
+    def stale_size(info):
+        fields = list(info)
+        fields[6] = 0
+        return os.stat_result(fields)
+
+    def path_stat(path, *args, **kwargs):
+        info = real_stat(path, *args, **kwargs)
+        return stale_size(info) if path == receipt else info
+
+    def fd_stat(fd):
+        info = real_fstat(fd)
+        return stale_size(info) if (info.st_dev, info.st_ino) == (identity.st_dev, identity.st_ino) else info
+
+    monkeypatch.setattr(Path, "stat", path_stat)
+    monkeypatch.setattr(os, "fstat", fd_stat)
+    with pytest.raises(ValueError, match="byte cap"):
+        consume(tmp_path, "owner", lambda: Answer.complete_read([], how="fixture"))
 
 
 class Registry:

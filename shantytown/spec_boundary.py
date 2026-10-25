@@ -5,6 +5,7 @@ Reads only bounded spec metadata; never claims, ACKs, or rewrites a work item.
 """
 import fcntl
 import os
+import stat
 import tempfile
 import hashlib
 import json
@@ -12,6 +13,26 @@ from pathlib import Path
 
 from . import due_brief
 from .answer import Answer
+
+
+def _read_receipt(path):
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return {"seen": []}
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("unsafe spec boundary receipt")
+        if metadata.st_size > 1048576:
+            raise ValueError("spec boundary receipt byte cap reached")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            payload = source.read(1048577)
+        if len(payload) > 1048576:
+            raise ValueError("spec boundary receipt byte cap reached")
+        return json.loads(payload.decode("utf-8"))
+    finally:
+        os.close(fd)
 
 
 def consume(root, recipient, rows, *, now=None):
@@ -36,9 +57,7 @@ def _consume(root, recipient, rows, *, now=None):
                 or row["assignee"].split("/")[-1] == recipient]
     if path.is_symlink() or path.parent.is_symlink():
         raise ValueError("unsafe spec boundary receipt")
-    if path.exists() and path.stat().st_size > 1048576:
-        raise ValueError("spec boundary receipt byte cap reached")
-    state = json.loads(path.read_text()) if path.exists() else {"seen":[]}
+    state = _read_receipt(path)
     if set(state) != {"seen"} or not isinstance(state["seen"],list) or len(state["seen"]) >= 10000:
         raise ValueError("spec boundary receipt UNKNOWN or capped")
     for value in state["seen"]:
