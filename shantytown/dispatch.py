@@ -1027,6 +1027,14 @@ class Dispatcher:
         if dry_run:
             return result
 
+        # Persist setter and deadline together with the reason. updated_at is
+        # an item touch, not evidence of who chose a short CI pacing window.
+        from datetime import datetime, timezone
+        from .deferral_pacing import provenance
+        reason += "\n" + provenance(gate_authority,
+                                    datetime.now(timezone.utc).isoformat(), date)
+        result.reason = reason
+
         def write_verified(fields, final=False):
             # A timeout can follow commit. Read once for evidence, but do not
             # retry or claim success after an indeterminate write.
