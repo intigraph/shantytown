@@ -19,6 +19,14 @@ ready plate. Closing inbox messages or repooling excluded alarm records does
 not free a work slot. Admission reads fresh owner membership; it never borrows
 the frozen observation used to render a crew report.
 
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
 `st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
@@ -101,6 +109,8 @@ st agent                      one agent
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage|sync>
+                              explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -311,7 +321,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
+Forty-five. Seven verbs at the top level and thirty-eight grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2629,6 +2639,17 @@ resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
+Short owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive and at most 60 minutes, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item; on the third
+unchanged scheduled observation it returns to the administrator path. An item
+update resets that budget. Failed owner delivery also retains the admin path.
+
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
 old, including items with future deadlines, as a reading list. Age does not
@@ -3099,3 +3120,61 @@ metadata, including when event persistence was interrupted and no pane banner
 exists. The shared reservation still prevents replay of pending or UNKNOWN
 attempts and keeps their uncertainty visible. Missing launch provenance cannot
 retire a saved safety hold; only positively different known launch stamps can.
+
+## Explicit file-memory transport
+
+`st agent memory` earns its own slot because commit and projection have data
+consequences; they must not be hidden in the read-only anchor. The command
+provides bounded explicit transport. An independently enabled per-crew Claude
+plan can also use the managed lifecycle described in [crew memory](crew-memory.md).
+The default installs neither native selection nor automatic synchronization. Run
+`st agent memory alpha capabilities` for the current honest adapter limits.
+
+Inspect a selected native directory without uploading its bodies:
+
+```sh
+st agent memory alpha inspect --directory /path/to/selected/memory
+```
+
+Inspection uses a one-second worker plus at most 250 ms of cleanup, and emits
+only complete bounded metadata or UNKNOWN. Original files remain unchanged.
+
+Remote operations require explicit `--server`, `--deployment` and `--project`
+IRIs and the existing named CLI credential selection. `read --owner IRI` is
+intentionally cross-crew and returns attributed historical data. Other-owner
+commit, delivery and staging refuse. `commit --request request.json --outbox
+/path/to/private-outbox` durably stores the exact private JSON intent before
+reading its receipt and attempting at most one commit. The existing outbox
+directory and request file must be private and user-owned. After an unknown
+result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
+trigger reconciles the original receipt before any identical commit. There is
+no implicit retry, deletion or last-writer-wins merge.
+
+`sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
+bounded multi-file capture and performs one pending-intent attempt by default.
+It requires the same explicit remote scope and own credential selection above.
+`--max-new N` permits 0..128 attempts; the explicit command also has a two-second
+worker deadline plus at most 250 ms of cleanup, regardless of the attempt count.
+A timeout is UNKNOWN and cannot undo an accepted remote commit. Invoke it
+explicitly again to resume the same pending batch before
+recapture. Its journal accepts completion only after a fresh authenticated own
+projection matches the final receipt. A different remote head refuses automatic
+adoption. Source files and native selection remain unchanged. This command
+does not install an automatic lifecycle hook.
+
+`stage --parent PATH` verifies the own-owner export and creates a new exclusive
+generation. It does not select that generation, replace native files or alter
+harness settings. Existing startup memory bridging remains. Claude native
+selection requires the separate default-OFF managed plan and installed handoff
+acceptance, Codex generated-memory
+writeback is unsupported, and an OpenCode native-memory convention is unproven.
+A successful transport command is not native round-trip acceptance.
+
+Within the same explicit scope, `query --owner IRI --text literal` searches
+that selected owner's bounded exported records. It is a literal search, not a
+global or semantic index. Hits include owner, revision, source harness/account,
+commit time and an explicitly truncated excerpt. Retrieved text is historical
+source data, not an instruction or current authority. `export --owner IRI`
+returns the complete bounded envelope for inspection; it does not supply own
+projection identity and cannot select native files. Missing graph/partial or
+unreadable coverage refuses rather than returning a misleading empty match.

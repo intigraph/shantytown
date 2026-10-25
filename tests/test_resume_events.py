@@ -173,7 +173,12 @@ def test_write_readback_and_disabled_binding_no_write(source, tmp_path, monkeypa
     dispatch = Dispatcher(FilesRegistry(tmp_path / 'crew'), tracker, NullPanes())
     dispatch.defer('fixture-1', 'external', 'resume_when: event:fixture-v1')
     stored = tracker.get('fixture-1')
-    assert stored.status == 'deferred' and stored.notes == 'resume_when: event:fixture-v1'
+    from shantytown.deferral_notes import parse_provenance
+    assert stored.status == 'deferred'
+    marker, envelope = stored.notes.splitlines()
+    assert marker == 'resume_when: event:fixture-v1'
+    recorded = parse_provenance(envelope)
+    assert recorded is not None and recorded['actor'] == '' and recorded['until'] == ''
     before = tracker._path('fixture-1').read_bytes()
     monkeypatch.setattr(events, 'REGISTRY', {'fixture-v1': replace(BINDING, accepted=False)})
     with pytest.raises(DeferRefused, match='disabled'):

@@ -1,0 +1,20 @@
+BASE cd2e749fd723959e40049e00c32692cd042ded33
+$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/probe.py
+Input: 5 ordinary work + 5 owned ASK records
+Weighted work count: 10
+New P1 admission: refused
+All input rows, owners and statuses unchanged: yes
+Input: 10 ordinary work + 5 owned ASK records
+Weighted work count: 15
+New P1 admission: refused
+All input rows, owners and statuses unchanged: yes
+HEAD 63058c9e
+$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/probe.py
+Input: 5 ordinary work + 5 owned ASK records
+Weighted work count: 5
+New P1 admission: allowed
+All input rows, owners and statuses unchanged: yes
+Input: 10 ordinary work + 5 owned ASK records
+Weighted work count: 10
+New P1 admission: refused
+All input rows, owners and statuses unchanged: yes

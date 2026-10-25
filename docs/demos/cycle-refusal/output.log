@@ -1,0 +1,9 @@
+Script started on 2026-10-24 05:17:22-04:00 [COMMAND="PYTHONPATH=. python3 docs/demos/cycle-refusal/run.py" <not executed on terminal>]
+BEFORE bf6869199bdeae416c88284c3e9106abd65a4402 same input: two writes ready before either rename
+write errors: ['FileNotFoundError']
+AFTER cycle.py SHA256 011702f250260fbb4b987eb7d8f5d1f844cba72a7ffe783ca4ec79ec6f4c3ce1
+write errors: []
+positive control: request and named refusal retained
+Private file fixtures only; no cycle, pane or running service changed.
+
+Script done on 2026-10-24 05:17:23-04:00 [COMMAND_EXIT_CODE="0"]
