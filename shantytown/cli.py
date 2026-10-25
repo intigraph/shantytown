@@ -9438,10 +9438,8 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
 def _worktree_branch(dest: Path) -> str | None:
     """The branch `dest` has checked out, or None if it cannot be determined.
 
-    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
-    unreadable worktree is not evidence that the wrong branch is about to be
-    pushed, and refusing on it would break the canonical path for a condition we
-    have not observed. The refusal fires only on a POSITIVE disagreement.
+    None means CANNOT TELL. Push must refuse it: after a merged topic is detached,
+    selecting its stale canonical ref would silently omit newly committed work.
     """
     import subprocess
 
@@ -9897,7 +9895,8 @@ def _cmd_cycle(a) -> int:
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes, no_in_place=no_in_place)
+                                           quipu_nodes, no_in_place=no_in_place,
+                                           allow_loss=bool(getattr(a, "allow_loss", False)))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -10101,7 +10100,8 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "no_graph_context": "" if nodes else
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
-        "allow_loss": False, "dry_run": False}))
+        "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "dry_run": False}))
 
 
 SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
@@ -10943,8 +10943,9 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
-    if source_branch is not None and checked_out is None:
-        print("  refused before push: explicit source branch cannot be verified; "
+    if checked_out is None:
+        print("  refused before push: source branch cannot be verified (possibly detached HEAD); "
+              "create or check out the intended topic and name --source-branch; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
     if checked_out is not None and checked_out != branch:
@@ -11533,7 +11534,7 @@ def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
 
 
 def _refresh_worktree(dest, base: str | None = None) -> str | None:
-    """Bring a project WORKTREE current — by REBASE onto its upstream, not ff-pull.
+    """Refresh a project worktree, retiring proved merged topics first.
 
     The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
     is on `wt/<agent>`, so an ff-only pull either no-ops (wrong branch) or fails —
@@ -11568,9 +11569,15 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
         # --prune: see tree_staleness. Without it, refs for branches deleted
         # upstream survive and launder orphaned commits into "on a remote".
         from .workspace import run_with_group_timeout
-        run_with_group_timeout(
+        fetched = run_with_group_timeout(
             ["git", "-C", str(dest), "fetch", "--all", "--prune", "--quiet"], 60,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if fetched.returncode != 0:
+            return "worktree fetch failed — no checkout, pruning or rebase attempted"
+        from .workspace import publication_remotes, _git
+        from .landed import retire_and_prune
+        if retired := retire_and_prune(dest, publication_remotes(dest, _git), _git):
+            return retired
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not

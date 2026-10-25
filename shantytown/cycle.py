@@ -271,11 +271,13 @@ class Verdict:
     #: never a refusal — see TreeUnverified.
     unverified: list = field(default_factory=list)
     per_install: list = field(default_factory=list)
+    landed: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
         """The non-blocking reports (untracked, stranded-by-outage, unverified
         currency), or []."""
         lines = []
+        lines.extend(self.landed)
         for u in self.untracked:
             lines += u.render()
         for st_ in self.stranded:
@@ -352,6 +354,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     stranded: list[TreeStranded] = []
     unverified: list[TreeUnverified] = []
     per_install: list[TreePerInstall] = []
+    landed = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -362,6 +365,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             return remote_reachable(tree, cache=reach_cache)
     for tree in trees:
         s = staleness(tree)
+        landed.extend(f"{tree}: landed — {why}" for why in getattr(s, "landed", ()))
         if getattr(s, "error", None):
             # CANNOT TELL IS NOT CLEAN — the same rule tree_staleness itself keeps
             # for a failed `git status`. A tree we could not read is a tree that
@@ -420,11 +424,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded, unverified=unverified, per_install=per_install)
+            stranded=stranded, unverified=unverified, per_install=per_install, landed=landed)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
                    untracked=notices, stranded=stranded,
-                   unverified=unverified, per_install=per_install)
+                   unverified=unverified, per_install=per_install, landed=landed)
 
 
 def _parse_ts(value):
@@ -607,7 +611,8 @@ class Requests:
 
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
-                no_in_place: bool = False, auto: bool = False) -> None:
+                no_in_place: bool = False, auto: bool = False,
+                allow_loss: bool = False) -> None:
         with self._locked():
             data = self._load()
             data[agent] = {"checkpoint": checkpoint,
@@ -635,6 +640,10 @@ class Requests:
                            # already be resolved — the same cannot-tell-read-as-fact
                            # error in the other direction.
                            "refused": None}
+            # An explicit one-request override must survive the detached waiter.
+            # Ordinary and automatic requests retain the safe default.
+            if allow_loss and not auto:
+                data[agent]["allow_loss"] = True
             self._save(data)
 
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
