@@ -257,7 +257,7 @@ def test_split_candidate_set_equals_union_on_real_graphs(monkeypatch):
     assert union == found == expected
 
 
-def structural_fixture(monkeypatch, limit=4096, failure=None):
+def structural_fixture(monkeypatch, limit=4096, failure=None, *, accepted=None):
     """Native refusal shape/cost measured on 25x2x14 arms, without a server."""
     import io
     import json
@@ -275,6 +275,8 @@ def structural_fixture(monkeypatch, limit=4096, failure=None):
             status, message = failure or (400, f'SPARQL request is too deeply nested or too long a chain: structural cost {cost} exceeds the limit of {limit}. Split it into smaller requests.')
             raise HTTPError(PROOF.quipu_url + '/query', status, 'fixture refusal', {},
                             io.BytesIO(json.dumps({'error': message}).encode()))
+        if accepted is not None:
+            accepted.extend(identifiers)
         result = []
         for identifier in identifiers:
             for field in wire(id=identifier):
@@ -287,7 +289,8 @@ def structural_fixture(monkeypatch, limit=4096, failure=None):
 @pytest.mark.parametrize('limit', [4096, 600])
 def test_structural_refusal_splits_until_all_25_candidates_are_evaluated(monkeypatch, tmp_path, limit):
     from shantytown.notify import DeferralAlerter
-    calls = structural_fixture(monkeypatch, limit)
+    accepted = []
+    calls = structural_fixture(monkeypatch, limit, accepted=accepted)
     observation = seeds_plate.deferred_rows(PROOF)
     released = []
     rows = {row['id']: row for row in observation.exact()} if observation.complete else {}
@@ -298,7 +301,7 @@ def test_structural_refusal_splits_until_all_25_candidates_are_evaluated(monkeyp
     assert len(calls[0][0]) == 25
     assert all(timeout > 0 for _, timeout in calls)
     assert len(calls) <= 49  # finite binary split tree, even if every leaf refuses
-    assert sorted(ident for ids, _ in calls if len(ids) * 168 + 4 <= limit for ident in ids) == sorted(released)
+    assert sorted(accepted) == sorted(released)
 
 
 def test_single_candidate_structural_refusal_is_unknown_never_skipped(monkeypatch):
