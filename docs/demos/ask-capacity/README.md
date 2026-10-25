@@ -17,3 +17,21 @@ not provided. These small artifacts remain in Git with the change.
 
 Tests separately cover no-deferral behavior, unknown and external blockers,
 ASK-to-work conversion and fresh admission despite a cached display snapshot.
+
+## Malformed-label repair
+
+The [second recording](malformed.cast) and [transcript](malformed.txt) run the
+same [probe](malformed-probe.py) on pre-repair head
+`5a000cc04d894d5ef05afe8d06558a2b2c445cc6` and repaired code head
+`71e89f4fa761c234d72a2d193afd34991a0a29dd`.
+Ten ordinary rows carrying the malformed top-level map `{"desk": false}`
+previously counted zero and admitted a P1; the repair counts ten and refuses.
+A malformed candidate on an already full plate also changes from allowed to
+refused. Supported ASK labels, title and human blockers retain their existing
+behavior; the affected suite includes no-deferral positives.
+
+Repeat with `PYTHONPATH=. python3 docs/demos/ask-capacity/malformed-probe.py`
+from either source checkout (copy the probe into the old checkout first).
+These are isolated read-only library fixtures, not production tracker calls.
+Download the cast and use `asciinema play malformed.cast`; no inline player is
+claimed. The later demo-only commit preserves the demonstrated code.
