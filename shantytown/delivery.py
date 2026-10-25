@@ -15,6 +15,10 @@ import tempfile
 import time
 import uuid
 
+# A body is finished when it was submitted, its pointer was read, or a newer
+# notice from the same owner replaced it. A superseded body is never resent.
+TERMINAL = ('delivered', 'acknowledged', 'superseded')
+
 
 class Custody:
     def __init__(self, root, pane, socket=None):
@@ -64,7 +68,7 @@ class Custody:
         # A retry retains the first timestamp and the same recovery episode.
         matches = [r for r in self.records() if r['text'] == text
                    and r['session'] == session
-                   and r['state'] not in ('delivered', 'acknowledged')]
+                   and r['state'] not in TERMINAL]
         if len(matches) > 1:
             raise OSError('ambiguous delivery custody')
         self.record = matches[0] if matches else dict(
@@ -109,23 +113,75 @@ class Custody:
             self.finish('cleared')
 
     def clear_previous(self, panes, screen):
-        """A later sender may unblock only an earlier owned, failed send."""
+        """A later sender may unblock only an earlier owned, failed send.
+
+        `queued` counts as failed once Codex has moved that exact body back into
+        an idle composer (aegis-185l: a GOVERNOR HOLD notice sat there for 10h,
+        and every later send was refused because only `unknown` was eligible).
+        A superseded body is cleared but stays superseded, so it is never resent.
+        """
         from .tmux import _codex_owned_input
         matches = [r for r in self.records()
-                   if r['state'] == 'unknown' and r['session'] is not None
+                   if r['state'] in ('unknown', 'queued', 'superseded')
+                   and r['session'] is not None
                    and r['session'] == panes.session_created(self.pane)
                    and _codex_owned_input(screen, r['text'])]
         if len(matches) != 1:
             return False
         self.record = matches[0]
+        original = self.record['state']
         try:
             self.failed(panes)
-            return self.record['state'] == 'cleared'
+            cleared = self.record['state'] == 'cleared'
+            if original == 'superseded':
+                self.finish('superseded')
+            return cleared
         finally:
             self.record = None
 
 
+def supersede(root, is_stale, *, keep):
+    """Mark every unfinished body `is_stale` accepts, except `keep`, superseded.
+
+    For notices that describe state rather than carry mail (quiet-time hold and
+    lift): once the state moves on, the old text is wrong, so it must neither be
+    resent nor get a pointer. Typed text is left alone here; the next send to an
+    idle composer clears it through clear_previous. A pane whose custody lock is
+    busy is skipped and retried on the next transition. Returns the record ids.
+    """
+    directory = Path(root) / 'delivery'
+    if not directory.is_dir():
+        return []
+    panes = set()
+    for path in directory.glob('send-*.json'):
+        try:
+            record = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if record.get('state') not in TERMINAL and is_stale(record.get('text', '')):
+            panes.add((record['pane'], record['socket']))
+    done = []
+    for pane, socket in sorted(panes, key=lambda key: (key[0], str(key[1]))):
+        try:
+            with Custody(root, pane, socket) as custody:
+                for record in custody.records():
+                    if (record['state'] not in TERMINAL and record['text'] != keep
+                            and is_stale(record['text'])):
+                        record['state'] = 'superseded'
+                        custody.save(record)
+                        done.append(record['id'])
+        except OSError:
+            continue
+    return done
+
+
 STALL_SECONDS = 300
+# aegis-185l. The backlog watch below re-arms only on an EMPTY backlog, which a
+# busy agent never reaches, so it fired once on 10-20 and then stayed silent
+# while panes were stranded for 3h and 10h. These two conditions are episodic
+# on their own evidence, whatever the backlog holds.
+STRANDED_SECONDS = 900
+FAILED_SENDS = 5
 
 
 def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
@@ -145,8 +201,9 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
     socket = getattr(panes, 'socket', None)
     pending = []
     with Custody(root, card.pane, socket) as custody:
-        for record in custody.records():
-            if record['state'] in ('delivered', 'acknowledged'):
+        observed = list(custody.records())
+        for record in observed:
+            if record['state'] in TERMINAL:
                 continue
             marker = '[st delivery ' + record['id'] + ']'
             matches = [m for m in messages
@@ -230,6 +287,9 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
             pending.remove(record)
         break
 
+    if reg is not None:
+        _stranded_watch(root, reg, card, panes, socket, screen, observed, now)
+
     # Age means observed unresolved, not an invented creation timestamp for a
     # legacy inbox row. A continuous backlog retains its first observation even
     # when another message arrives. Only an empty backlog rearms the episode.
@@ -269,3 +329,80 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         wake_recipient(reg, panes, card.name, detail, catalog=catalog)
     except Exception:
         pass
+
+
+def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
+    """Page the lead when st's own text is stuck in an idle composer for 15 min,
+    or FAILED_SENDS consecutive sends to the pane were never delivered.
+
+    Each condition is its own episode. The composer episode re-arms when the
+    composer stops holding that body; the send episode re-arms after a delivery.
+    No body text enters the alert, and nothing here types into the pane.
+    """
+    from . import triage
+    from .events import FilesEvents
+    from .tier import route_stop, deployment_catalog
+    from .tmux import _codex_owned_input
+    records = sorted(records, key=lambda r: r['created'])
+    owned = None
+    if not triage.mid_flight(screen):
+        owned = next((r for r in records if r['state'] not in ('delivered', 'acknowledged')
+                      and _codex_owned_input(screen, r['text'])), None)
+    last_ok = max((i for i, r in enumerate(records)
+                   if r['state'] in ('delivered', 'acknowledged')), default=-1)
+    failing = [r for r in records[last_ok + 1:]
+               if r['state'] not in ('delivered', 'acknowledged')]
+    with Custody(root, card.pane, socket) as custody:
+        name = 'strand-' + hashlib.sha256(card.name.encode()).hexdigest()
+        path = custody.root / (name + '.json')
+        if path.is_symlink():
+            raise OSError('delivery observation is a symlink')
+        watch = json.loads(path.read_text()) if path.exists() else dict(id=name)
+        alerts = []
+        body = owned and hashlib.sha256(owned['text'].encode()).hexdigest()
+        composer = watch.get('composer') or {}
+        if body is None:
+            watch.pop('composer', None)
+        else:
+            if composer.get('body') != body:
+                composer = dict(body=body, since=now, alerted=False)
+            watch['composer'] = composer
+            if not composer['alerted'] and now - composer['since'] >= STRANDED_SECONDS:
+                alerts.append((f'composer-stranded:{card.name}:{composer["since"]}',
+                               f'{card.name}: st-typed notice unsubmitted in an idle composer '
+                               f'for {int(now - composer["since"])}s; every later send is '
+                               'refused until it clears'))
+                composer['alerted'] = True
+        episode = failing[0]['id'] if len(failing) >= FAILED_SENDS else None
+        sends = watch.get('sends') or {}
+        if episode is None:
+            watch.pop('sends', None)
+        else:
+            if sends.get('first') != episode:
+                sends = dict(first=episode, alerted=False)
+            watch['sends'] = sends
+            if (not sends['alerted']
+                    and now - failing[0]['created'] >= STRANDED_SECONDS):
+                alerts.append((f'delivery-failing:{card.name}:{episode}',
+                               f'{card.name}: {len(failing)} consecutive sends not delivered '
+                               f'over {int(now - failing[0]["created"])}s (queued, unknown or '
+                               'superseded)'))
+                sends['alerted'] = True
+        if watch.keys() == {'id'}:
+            path.unlink(missing_ok=True)
+        else:
+            custody.save(watch)
+    if not alerts:
+        return
+    catalog = deployment_catalog(root)
+    recipient = route_stop(reg, card.name, catalog=catalog).to
+    for key, summary in alerts:
+        detail = (summary + f'; box={triage.input_state(screen)}. Inspect '
+                  f'`st agent input {card.name} --show`. No foreign draft was cleared.')
+        FilesEvents(Path(root) / 'events').persist(
+            recipient, card.name, 'delivery-stalled', False, detail=detail, key=key)
+        try:
+            from .notify import wake_recipient
+            wake_recipient(reg, panes, card.name, detail, catalog=catalog)
+        except Exception:
+            pass
