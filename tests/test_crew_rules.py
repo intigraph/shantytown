@@ -1,4 +1,3 @@
-import io
 import json
 from types import SimpleNamespace
 
@@ -51,10 +50,11 @@ def test_missing_namespace_or_failed_transport_has_no_local_rulebook(tmp_path):
 @pytest.mark.parametrize("body",[{"error":"refused"},{"count":0,"rows":[],"truncated":True},
                                  {"count":2,"rows":[{}],"truncated":False},
                                  {"count":200,"rows":[{}]*200,"truncated":False}])
-def test_query_refusal_or_unproven_completeness_never_becomes_empty(tmp_path,body):
+def test_query_refusal_or_unproven_completeness_never_becomes_empty(tmp_path,body,monkeypatch):
     configure(tmp_path)
+    monkeypatch.setattr(crew_rules,"post",lambda *a,**k:json.dumps(body).encode())
     with pytest.raises(ValueError):
-        crew_rules.ask(tmp_path,"crew_rules",{},opener=lambda *a,**k:io.BytesIO(json.dumps(body).encode()))
+        crew_rules.ask(tmp_path,"crew_rules",{})
 
 
 def test_catalogue_reads_once_includes_reviewer_and_separates_roles(tmp_path,monkeypatch):

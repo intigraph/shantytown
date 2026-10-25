@@ -3209,8 +3209,13 @@ count. `SHANTY_BOARD_METRICS_QUERY` may select the aggregate query (default
 `seeds_board_metrics_v1`). It must supply independent `coverage` and
 `aggregation_control` rows plus reconciled `created`/`closed` grouped counts and
 matching totals; capped, inconsistent or failed reads stay `UNKNOWN`. Inbox
-counts do not become work counts. The aggregate has an eight-second client budget;
-role-summary reads retain a two-second budget. Neither changes the server deadline.
+counts do not become work counts. The aggregate has an eight-second total transport
+budget; role-summary reads retain a two-second total transport budget. A single
+foreground helper performs each HTTP read; the parent's monotonic deadline includes
+helper startup, DNS/connection setup, headers and body consumption. Expiry kills
+and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
+headers travel over private stdin rather than process arguments. Response and
+completeness caps still apply. Neither budget changes the server deadline.
 Changed actionable digests use the existing
 administrator advisory route; repeated digests are quiet. Routine healthy
 results remain in the scheduled pass log. The pass budget may defer this

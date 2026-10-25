@@ -7,8 +7,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from urllib.request import Request, urlopen
 
+from ._deadline_http import post
 from .deployment import deployment_default
 from .query_identity import declared_read_operation, read_headers
 from .quipu import request_headers, resolve_onto, resolve_server
@@ -17,13 +17,12 @@ MAX_BYTES = 512 * 1024
 
 
 @declared_read_operation("role-responsibilities")
-def ask(root, name, params, *, limit=200, opener=None, timeout=2):
+def ask(root, name, params, *, limit=200, timeout=2):
     """One bounded named-query read. Refusal, overflow and malformed are UNKNOWN."""
-    request = Request(resolve_server(root=root) + "/ask",
-                      data=json.dumps({"name": name, "params": params}).encode(),
-                      headers={**request_headers(), "X-Quipu-Client": "st", **read_headers()})
-    with (opener or urlopen)(request, timeout=timeout) as response:
-        body = response.read(MAX_BYTES + 1)
+    body = post(resolve_server(root=root) + "/ask",
+                json.dumps({"name": name, "params": params}),
+                {**request_headers(), "X-Quipu-Client": "st", **read_headers()},
+                timeout=timeout, max_bytes=MAX_BYTES)
     if len(body) > MAX_BYTES:
         raise ValueError("responsibility response byte cap reached")
     result = json.loads(body)
