@@ -6,6 +6,10 @@ The same explicit actor inputs reach the real Seeds adapter on base
 are synthetic: this demonstrates child selection and observation, not signature
 verification, trust enrollment or an installed deployment.
 
+The same reproducer was rerun on
+`79fa82147eac70fc5ddffd49a343f41ddc29a421`, which adds malformed-profile fallback;
+both demonstrated outputs were unchanged and the guarded command succeeded.
+
 Before: both writes use the legacy child environment, with no per-write
 principal receipt. After: each mutation selects the profile only for its child;
 a matching actor records `match: true`, and an explicit different actor records
