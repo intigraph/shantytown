@@ -271,11 +271,13 @@ class Verdict:
     #: never a refusal — see TreeUnverified.
     unverified: list = field(default_factory=list)
     per_install: list = field(default_factory=list)
+    landed: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
         """The non-blocking reports (untracked, stranded-by-outage, unverified
         currency), or []."""
         lines = []
+        lines.extend(self.landed)
         for u in self.untracked:
             lines += u.render()
         for st_ in self.stranded:
@@ -352,6 +354,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     stranded: list[TreeStranded] = []
     unverified: list[TreeUnverified] = []
     per_install: list[TreePerInstall] = []
+    landed = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -362,6 +365,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             return remote_reachable(tree, cache=reach_cache)
     for tree in trees:
         s = staleness(tree)
+        landed.extend(f"{tree}: landed — {why}" for why in getattr(s, "landed", ()))
         if getattr(s, "error", None):
             # CANNOT TELL IS NOT CLEAN — the same rule tree_staleness itself keeps
             # for a failed `git status`. A tree we could not read is a tree that
@@ -420,11 +424,11 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded, unverified=unverified, per_install=per_install)
+            stranded=stranded, unverified=unverified, per_install=per_install, landed=landed)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
                    untracked=notices, stranded=stranded,
-                   unverified=unverified, per_install=per_install)
+                   unverified=unverified, per_install=per_install, landed=landed)
 
 
 def _parse_ts(value):
@@ -589,41 +593,58 @@ class Requests:
             # conservative direction beads.parse_extra_repos takes.
             return {}
 
-    def _save(self, data: dict) -> None:
-        from .files import write_json_atomic
+    @contextmanager
+    def _locked(self):
+        """Serialize the whole shared-map read/modify/write, across agents."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        write_json_atomic(self.path, data)
+        with self.path.with_suffix('.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def _save(self, data: dict) -> None:
+        from .files import write_text_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_text_atomic(self.path, json.dumps(data, indent=2, sort_keys=True))
 
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
-                no_in_place: bool = False, auto: bool = False) -> None:
-        data = self._load()
-        data[agent] = {"checkpoint": checkpoint,
-                       "checkpoint_bead": checkpoint_bead,
-                       # aegis-x6yoq: graph references carried across the cycle, so
-                       # the fresh session queries quipu instead of re-deriving the
-                       # context it just shed. Always a list, never absent, so the
-                       # resume path never has to branch on presence.
-                       "quipu_nodes": list(quipu_nodes or []),
-                       # aegis-az0a40.1: WHEN it was asked, so a request nobody
-                       # consumes can age out of reading as a cycle in flight.
-                       "requested_at": time.time(),
-                       # aegis-2fxldr: a self-requested RELAUNCH. tend serves the
-                       # request from its own namespace, which has no --no-in-place,
-                       # so a flag not stored here never reaches the plan and every
-                       # self-cycle ran as an in-place clear.
-                       "no_in_place": bool(no_in_place),
-                       # aegis-zl7jwm: tend minted this, the agent did not ask.
-                       # tend serves an auto request only while the pane reads
-                       # idle, and withdraws it if the depth drops below the line.
-                       "auto": bool(auto),
-                       # aegis-7xptd5: a NEW request re-arms. The old refusal
-                       # described a tree state the agent has since had a chance to
-                       # fix, and carrying it forward would report a stall that may
-                       # already be resolved — the same cannot-tell-read-as-fact
-                       # error in the other direction.
-                       "refused": None}
-        self._save(data)
+                no_in_place: bool = False, auto: bool = False,
+                allow_loss: bool = False) -> None:
+        with self._locked():
+            data = self._load()
+            data[agent] = {"checkpoint": checkpoint,
+                           "checkpoint_bead": checkpoint_bead,
+                           # aegis-x6yoq: graph references carried across the cycle, so
+                           # the fresh session queries quipu instead of re-deriving the
+                           # context it just shed. Always a list, never absent, so the
+                           # resume path never has to branch on presence.
+                           "quipu_nodes": list(quipu_nodes or []),
+                           # aegis-az0a40.1: WHEN it was asked, so a request nobody
+                           # consumes can age out of reading as a cycle in flight.
+                           "requested_at": time.time(),
+                           # aegis-2fxldr: a self-requested RELAUNCH. tend serves the
+                           # request from its own namespace, which has no --no-in-place,
+                           # so a flag not stored here never reaches the plan and every
+                           # self-cycle ran as an in-place clear.
+                           "no_in_place": bool(no_in_place),
+                           # aegis-zl7jwm: tend minted this, the agent did not ask.
+                           # tend serves an auto request only while the pane reads
+                           # idle, and withdraws it if the depth drops below the line.
+                           "auto": bool(auto),
+                           # aegis-7xptd5: a NEW request re-arms. The old refusal
+                           # described a tree state the agent has since had a chance to
+                           # fix, and carrying it forward would report a stall that may
+                           # already be resolved — the same cannot-tell-read-as-fact
+                           # error in the other direction.
+                           "refused": None}
+            # An explicit one-request override must survive the detached waiter.
+            # Ordinary and automatic requests retain the safe default.
+            if allow_loss and not auto:
+                data[agent]["allow_loss"] = True
+            self._save(data)
 
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
         """Record WHY a pending cycle did not happen (aegis-7xptd5).
@@ -639,22 +660,23 @@ class Requests:
         asked must not mint a request record. Only a refusal of something already
         pending is a stall. Returns whether anything was recorded.
         """
-        data = self._load()
-        record = data.get(agent)
-        if not isinstance(record, dict):
-            # Bare-string records predate the dict form. Upgrade in place rather
-            # than refusing to annotate them — a legacy request can stall too.
-            if agent not in data:
-                return False
-            record = {"checkpoint": str(data[agent]), "checkpoint_bead": "",
-                      "quipu_nodes": []}
-        paths = [getattr(r, "path", "") or "" for r in risks]
-        record["refused"] = {"reason": reason,
-                             "paths": [p for p in paths if p],
-                             "at": time.time()}
-        data[agent] = record
-        self._save(data)
-        return True
+        with self._locked():
+            data = self._load()
+            record = data.get(agent)
+            if not isinstance(record, dict):
+                # Bare-string records predate the dict form. Upgrade in place rather
+                # than refusing to annotate them — a legacy request can stall too.
+                if agent not in data:
+                    return False
+                record = {"checkpoint": str(data[agent]), "checkpoint_bead": "",
+                          "quipu_nodes": []}
+            paths = [getattr(r, "path", "") or "" for r in risks]
+            record["refused"] = {"reason": reason,
+                                 "paths": [p for p in paths if p],
+                                 "at": time.time()}
+            data[agent] = record
+            self._save(data)
+            return True
 
     def age(self, record: dict, now: float | None = None) -> float | None:
         """Seconds since this request was made; None when that cannot be told.
@@ -699,9 +721,10 @@ class Requests:
         request cleared on intent rather than on completion is a request that
         vanishes when the relaunch refuses, and the agent waits forever for a
         cycle nobody is going to do."""
-        data = self._load()
-        if data.pop(agent, None) is not None:
-            self._save(data)
+        with self._locked():
+            data = self._load()
+            if data.pop(agent, None) is not None:
+                self._save(data)
 
 
 def refusal_summary(record) -> tuple[str, str]:

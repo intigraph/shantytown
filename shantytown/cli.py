@@ -1,11 +1,11 @@
-"""st — the CLI. Seven verbs, five groups, thirty-seven grouped commands: forty-four, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, thirty-eight grouped commands: forty-five, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → item · repool · defer · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
-            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair}
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
@@ -257,11 +257,11 @@ def _registry(a):
     """Identity backend for this invocation, selected by --registry.
 
     quipu is the SOURCE OF TRUTH (Stiwi: "quipu should be the source of truth");
-    files is the projection/cache and the leak detector. Default stays files so
-    an offline invocation still resolves identity locally; --registry quipu reads
-    it straight from the graph. Either way the SAME roles.check runs over it.
+    files is the projection/cache and the leak detector. A deployment may select
+    another default; an explicit --registry overrides it. With no declaration,
+    files remains the offline default. The SAME roles.check runs over each.
     """
-    chosen = getattr(a, "registry", "files")
+    chosen = _registry_choice(a)
     if chosen == "quipu":
         # Pass the root so the ADDRESS and the NAMESPACE both come from the
         # deployment's shantytown.toml rather than whatever this shell exported. Without
@@ -275,6 +275,17 @@ def _registry(a):
         # for a deployment that wants no ontology and no generated cards.
         return config.TomlRegistry(a.root)
     return FilesRegistry(a.root / "crew")
+
+
+def _registry_choice(a) -> str:
+    """Explicit identity selection, deployment TOML/env, then offline files."""
+    chosen = getattr(a, "registry", None)
+    if chosen is None:
+        chosen = _deployment_default(a, "SHANTY_REGISTRY") or "files"
+    if chosen not in ("files", "quipu", "toml"):
+        raise SystemExit("refused: SHANTY_REGISTRY must be files, quipu, or toml; "
+                         "fix the deployment [env] or environment")
+    return chosen
 
 
 def _deployment_default(a, key: str) -> str | None:
@@ -496,7 +507,15 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
     missing pane marker preserves the ordinary non-tmux fallback; a present but
     stale/unresolvable marker refuses attribution, exactly as the stop path does.
     """
-    sender = _me(a)
+    from .actor_identity import authenticated_actor, IdentityError
+    try:
+        authenticated = authenticated_actor()
+    except IdentityError as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return None, False
+    sender = authenticated or _me(a)
+    if authenticated and getattr(a, "me", None) not in (None, authenticated):
+        return None, False
     if not sender:
         return None, True
     if not os.environ.get("TMUX_PANE"):
@@ -516,8 +535,9 @@ def _wire(a) -> Dispatcher:
     # One resolution, the same one `st inbox` attributes with — a coordinator must
     # not be one name on a message and another on the work it hands out.
     from .feed_audit import FeedAudit
+    from .actor_identity import authenticated_actor
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
-                      governor=_dispatch_gate(a), sender=_me(a),
+                      governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
                       audit=FeedAudit(Path(a.root)))
 
 
@@ -937,8 +957,12 @@ def _governor_verdicts_for(a, cards):
     fleet = getattr(a, '_account_governor', None)
     if fleet is not None and fleet.errors:
         raise RuntimeError(fleet.fallback())
+    from . import work_class
     if not governors:
-        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+        return {card.name: (harness_mod.name_for(card, root=a.root),
+                work_class.for_card(
+                    gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                    cfg.governor, card, a.root) if cfg.governor.admit_class else None)
                 for card in cards}
     from . import account_state
     verdicts, out = {}, {}
@@ -949,7 +973,8 @@ def _governor_verdicts_for(a, cards):
         if lane not in verdicts:
             verdicts[lane] = (unconfigured if unconfigured is not None else
                               governor.evaluate(persist=False))
-        out[card.name] = lane, verdicts[lane]
+        out[card.name] = lane, work_class.for_card(
+            verdicts[lane], cfg.governor, card, a.root)
     return out
 
 
@@ -981,7 +1006,7 @@ def _dispatch_gate(a):
     if fleet is not None and fleet.errors:
         return lambda item, agent=None: fleet.fallback()
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
-    if not governors and not stood_down:
+    if not governors and not stood_down and not cfg.governor.admit_class:
         return None
     cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
@@ -1052,7 +1077,11 @@ def _dispatch_gate(a):
                 print(f"  ⚠ {mem.warning}", file=sys.stderr)
 
         if not governors:
-            return ""
+            from . import work_class
+            verdict = work_class.for_card(
+                gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                cfg.governor, card, a.root)
+            return verdict.admits(item, agent)
 
         if sender is not None and (cfg.governor.by_harness or getattr(cfg, "accounts", {})) and not delegated:
             _sh, source_governor, source_unconfigured = _governor_for(
@@ -1078,7 +1107,8 @@ def _dispatch_gate(a):
                                  else governor.evaluate(persist=False))
             if verdicts[harness].alarm:
                 print(f"  ⚠ {verdicts[harness].alarm}", file=sys.stderr)
-        verdict = verdicts[harness]
+        from . import work_class
+        verdict = work_class.for_card(verdicts[harness], cfg.governor, card, a.root)
         refusal = verdict.admits(item, agent)
         if not refusal and verdict.waives(item, agent):
             print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
@@ -1440,15 +1470,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
-                    help="tracker backend (identity is always files). Unset uses "
+                    help="tracker backend (identity uses --registry). Unset uses "
                          "the deployment's SHANTY_BACKEND ([env] in shantytown.toml, "
                          "then environment), otherwise the command default. An "
                          "explicit option overrides deployment configuration.")
     ap.add_argument("--repo", default=None,
                     help="store directory for compatibility tracker adapters (unset: deployment's "
                          "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the configured store walk-up)")
-    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
-                    help="identity backend: files (generated cards, the default), "
+    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default=None,
+                    help="identity backend (unset: deployment SHANTY_REGISTRY, else files): "
+                         "files (generated cards), "
                          "quipu (the graph), or toml ([crew.<name>] in "
                          "<root>/shantytown.toml — hand-authored, read-only, for a "
                          "deployment that wants no ontology).")
@@ -1545,11 +1576,17 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
     wi.add_argument("item")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--spec-file", type=Path)
+    wi.add_argument("--quote")
+    wi.add_argument("--requester")
+    wi.add_argument("--summary")
+    wi.add_argument("--urgent", action="store_true")
+    wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
     wi.add_argument("--replace-text", action="store_true",
@@ -1829,6 +1866,11 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
     co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
+    review = co.add_mutually_exclusive_group()
+    review.add_argument("--review-window", action="store_true", help="describe the exact paused cost window")
+    review.add_argument("--accept-window", metavar="SHA256", help="prepare a reviewed successor generation")
+    co.add_argument("--decision-file", help="exact-window bounded-pilot ruling JSON")
+    co.add_argument("--execute", action="store_true", help="commit the reviewed successor pointer; no publication")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -1869,10 +1911,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the recipient when sending; whose inbox when reading "
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
+    ib.add_argument("--to", action="append", default=[], dest="broadcast_to",
+                    help="with inbox broadcast: exact recipient (repeat for up to 64)")
+    ib.add_argument("--delivery-key", help="with broadcast: stable caller operation key for replay")
+    ib.add_argument("--json", action="store_true", help="with broadcast: per-recipient durable receipts")
     ib.add_argument("-d", "--durable", action="store_true",
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
+    ib.add_argument("--routine", action="store_true",
+                    help="with -d only: opt-in batchable progress; scoped admin "
+                         "ENFORCE may defer its live nudge to the existing tend tick")
     ib.add_argument("--retain-pointer", action="store_true",
                     help="with -d: retain the unread durable pointer after live "
                          "delivery; on Seeds use a fresh delivery slug and avoid "
@@ -1933,6 +1982,9 @@ def build_parser() -> argparse.ArgumentParser:
     jb_hist = jb_sub.add_parser("history", help="recent attempts from logs/jobs.jsonl")
     jb_hist.add_argument("name", nargs="?")
     jb_hist.add_argument("--limit", type=int, default=20)
+
+    from .memory_cli import configure as configure_memory
+    configure_memory(leaf("memory", help="explicit crew file-memory transport; no native root replacement"))
 
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
@@ -2240,10 +2292,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "uncommitted or unpushed work")
 
     ph = leaf("push",
-                        help="push your worktree branch to EVERY peer remote — "
+                        help="push your worktree branch to all peers, or select --remote — "
                              "the repo has two live peers and pushing one forks "
                              "it; declared mirrors (st-push-role=mirror) are "
                              "never pushed")
+    ph.add_argument("--remote", action="append", dest="remotes", metavar="NAME",
+                    help="publish only this configured peer (repeatable); default: all peers")
     ph.add_argument("repo",
                     help="the shared checkout: a path, or a bare name under "
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
@@ -2253,7 +2307,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"per-peer push deadline, 1–3600 seconds (default {DEFAULT_PUSH_TIMEOUT}); "
                          "includes normal pre-push hooks")
     ph.add_argument("--source-branch",
-                    help="explicit source branch; must match the selected worktree and caller")
+                    help="explicit source branch; must match the selected worktree and caller. "
+                         "Run from the selected checkout, even when its path is explicit")
     ph.add_argument("--branch",
                     help="required destination branch on each remote; no default. "
                          "Use the feature branch for source publication; reviewed "
@@ -2531,13 +2586,25 @@ def _main(a, argv: list[str] | None = None) -> int:
             a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
                       "tend", "window"})):
         try:
+            from .actor_identity import authenticated_actor, IdentityError
+            # The trusted root introducer may create an isolated child; it is
+            # not an agent and cannot use this exception to send/work as one.
+            if not (os.geteuid() == 0 and a.cmd in {"new", "start", "cycle"}):
+                authenticated_actor()
+            a.registry = _registry_choice(a)
             return _run_command(a)
+        except IdentityError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except NamespaceUnconfigured as e:
             print(f"  {e}", file=sys.stderr)
             return REFUSED
 
 
 def _run_command(a) -> int:
+    if a.cmd == "memory":
+        from .memory_cli import command
+        return command(a)
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a) and not _administrator_launch(a):
@@ -2830,6 +2897,11 @@ def _owned_work_rows(tracker, name):
     raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
 
 
+def _owned_work_publish(a, *, agents=None):
+    from . import owned_work_graph
+    owned_work_graph.publish(Path(a.root), agents=agents)
+
+
 def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
     from .owned_work import OwnedWork
     try:
@@ -2869,6 +2941,8 @@ def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
         print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
               "); ownership not measured", file=sys.stderr)
         return []
+    finally:
+        _owned_work_publish(a, agents={card.name} if card else None)
 
 
 def _launched_now(a, card_name: str, settings_path=None) -> None:
@@ -2888,6 +2962,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     _stops(a).forget(card_name)
     from .owned_work import OwnedWork
     OwnedWork(a.root).launch(card_name)
+    _owned_work_publish(a, agents={card_name})
     agent_hold.clear(a.root, card_name)
 
 
@@ -4071,10 +4146,28 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
+    def failure_check():
+        if harness_mod.name_for(card, a.root) != "claude":
+            return None
+        from .stop_failure import verify_wiring
+        verdict = verify_wiring(a.root, card.name, session, getattr(panes, "cmdline", None))
+        if verdict == "verified":
+            print(f"  StopFailure VERIFIED for {card.name}: process-selected settings "
+                  "match the recorded launch snapshot.")
+            return None
+        label = "FAILED" if verdict == "missing" else "UNVERIFIED"
+        print(f"  StopFailure {label} ({verdict}): {card.name}; live notification hook "
+              "not verified. Re-provision settings and start through st; "
+              "the running pane was left intact.", file=sys.stderr)
+        return REFUSED if verdict == "missing" else CANNOT_TELL
+
     need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
     if not need:
-        # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
-        # doubt about a requirement that does not exist. An isolated agent (no
+        failure = failure_check()
+        if failure is not None:
+            return failure
+        # No NORMAL Stop directions are required. Claude's independent API-error
+        # hook was checked above; do not invent a send/drain requirement. An isolated agent (no
         # lead above, no reports below) has no stop event to route in either
         # direction; reporting could-not-tell here would be a false alarm on
         # every leaf agent, and false alarms are what teach an operator to stop
@@ -4124,6 +4217,9 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
               f"with `st agent stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
+    failure = failure_check()
+    if failure is not None:
+        return failure
     verified = sorted(need) if need else "none required by the graph"
     print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
@@ -5587,11 +5683,20 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
+        print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
+        return REFUSED
     if getattr(a, "retain_pointer", False) and (
             not getattr(a, "durable", False) or not a.message
             or getattr(a, "count", False) or getattr(a, "read", False)
             or getattr(a, "read_id", [])):
         print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
+        return REFUSED
+    if a.agent == "broadcast":
+        from .inbox_broadcast import command
+        return command(a)
+    if getattr(a, "broadcast_to", []) or getattr(a, "delivery_key", None) or getattr(a, "json", False):
+        print("  refused: --to, --delivery-key and --json require inbox broadcast", file=sys.stderr)
         return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
@@ -5816,6 +5921,9 @@ def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
     attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
     import shlex
     import subprocess
+    from .actor_identity import POLICY_PATH, IdentityError
+    if POLICY_PATH.exists():
+        raise IdentityError("cross-host live attribution needs a key-authenticated broker; durable sender remains verified")
     q = shlex.quote
     remote_cmd = (
         (f"SHANTY_AGENT={q(sender)} " if sender else "")
@@ -5841,6 +5949,7 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
     was up and busy, while `st go` reached the same pane through the peer path.
     """
     import subprocess
+    from .actor_identity import IdentityError
     from .deployment import local_host
     local = local_host(a.root)
     if local is None:
@@ -5852,6 +5961,8 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
         return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        return False, str(e)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
     if res.returncode == OK:
@@ -5896,8 +6007,12 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         print("\n  0 writes. 1 relay.")
         return OK
     import subprocess
+    from .actor_identity import IdentityError
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -5937,7 +6052,7 @@ def _looks_stranded(panes, pane: str) -> bool:
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
-                   sender: str | None = None) -> int:
+                   sender: str | None = None, *, boundary_only: bool = False) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -5954,6 +6069,13 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     local = local_host(a.root)
     offhost = agent.host is not None and agent.host != local
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
+    from . import admin_inbox
+    routine_wait = (admin_inbox.wait_for(a.root, agent)
+                    if getattr(a, "routine", False) and not offhost else 0)
+    if a.dry_run and routine_wait:
+        print(f"  would: persist routine pointer via {backend}; batch live nudge "
+              f"after {routine_wait:.0f}s on the next tend tick; 0 writes, 0 send-keys")
+        return OK
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
         if offhost:
@@ -6028,6 +6150,23 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    if boundary_only:
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
+        return OK
+    if routine_wait:
+        try:
+            admin_inbox.enqueue(a.root, agent, item, backend, routine_wait,
+                                retain=getattr(a, "retain_pointer", False))
+        except Exception as error:
+            # A failed write may have committed; never create a second live
+            # attempt by guessing. The durable pointer remains the fallback.
+            print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine "
+                  f"scheduling UNKNOWN ({type(error).__name__}); pointer retained, "
+                  "no live submission. Read with st inbox.")
+            return OK
+        print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine live "
+              f"nudge queued for {routine_wait:.0f}s + next tend tick; pointer remains unread")
+        return OK
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
     # WRAPPED (GitHub #26): the send was outside the try, so a tmux failure after
     # a SUCCESSFUL persist exited 1 with a traceback. Every consumer reading the
@@ -6097,6 +6236,8 @@ def _inbox_read(a, me: str) -> int:
     explicit ack. An inbox that emptied itself because a status bar looked at it
     would be worse than no inbox: the recipient would never learn what was said.
     """
+    read_ids = getattr(a, "read_id", [])
+    selected_only = False
     try:
         # SAME DEFAULT AS THE DURABLE WRITE. The write side defaults to beads
         # (dearing, qdal.2); if the read side defaulted to files, a bare
@@ -6107,7 +6248,9 @@ def _inbox_read(a, me: str) -> int:
         # module's own docstring exists to forbid. An inbox you cannot read is
         # not an inbox, so the two defaults move together or not at all.
         box = _inbox(a, default="beads")
-        unread = box.unread(me)
+        select = getattr(box, "unread_selected", None)
+        selected_only = bool(read_ids) and not getattr(a, "count", False) and callable(select)
+        unread = select(me, read_ids) if selected_only else box.unread(me)
     except Exception as e:
         # Could-not-look is never "you have no mail" (the whole reason exit 2
         # exists here). --count stays silent on stdout so a parser sees nothing.
@@ -6118,7 +6261,6 @@ def _inbox_read(a, me: str) -> int:
         print(len(unread))
         return OK
 
-    read_ids = getattr(a, "read_id", [])
     if getattr(a, "read", False) or read_ids:
         if read_ids:
             unread_ids = {m.id for m in unread}
@@ -6136,8 +6278,10 @@ def _inbox_read(a, me: str) -> int:
                     if read_ids else unread[:15])
         remaining = len(unread) - len(selected)
         if getattr(a, "dry_run", False):
+            remainder = ("other messages not enumerated" if selected_only else
+                         f"{remaining} snapshot message(s) not selected")
             print(f"  would mark {len(selected)} message(s) read for {me}; "
-                  f"{remaining} snapshot message(s) not selected. 0 writes.")
+                  f"{remainder}. 0 writes.")
             return OK
         print(f"  acknowledging {len(selected)} message(s) for {me}; "
               "closes are independent, not atomic.", flush=True)
@@ -6170,6 +6314,8 @@ def _inbox_read(a, me: str) -> int:
         if remaining:
             next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
             print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
+        if selected_only:
+            print("  other messages not enumerated.", flush=True)
         if failed:
             # A timed-out close may have landed. Keep its payload on stderr
             # too: consumers may retain the error channel separately.
@@ -6373,10 +6519,29 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import crew_rules
+    p.responsibilities = crew_rules.render(crew_rules.load(a.root, [p.me.role]))
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
         fleet=p.me.role == "administrator")
+    if getattr(_anchor_tracker,"store",None):
+        try:
+            from types import SimpleNamespace
+            rows = _anchor_tracker.spec_rows(None if p.me.role == "administrator" else me)
+            spec_packet = due_brief.projected(SimpleNamespace(decision_rows=lambda _:rows),me).exact()
+            notices = [f'{row["id"]} SPEC CHANGED v{row["previous"]} -> v{row["version"]} (unacked)'
+                       for row in spec_packet["changes"]]
+            if notices:
+                notice = "  " + "; ".join(notices) + "\n"
+                if len((p.decision_view + notice).encode()) > due_brief.CAP:
+                    notice = "  SPEC CHANGED (unacked; display capped)\n"
+                p.decision_view = due_brief._cut(
+                    p.decision_view, due_brief.CAP - len(notice.encode())) + notice
+        except Exception:
+            notice = "  SPEC status UNKNOWN\n"
+            p.decision_view = due_brief._cut(
+                p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
     from . import context_hint
@@ -6879,11 +7044,11 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded — a human re-dispatches rather than the
-        # tracker claiming an assignment that may never have arrived. This must be
+        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
+        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
               file=sys.stderr)
         return CANNOT_TELL
     except LookupError as e:
@@ -7926,6 +8091,10 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain),
                 limited=limit_reached(runtime, plain))
+            from .stop_failure import state as failure_state
+            failure = failure_state(getattr(runtime, "_root", None), ag.name)
+            if failure in ("safeguard-blocked", "auth-dead", "limited"):
+                work = failure
             if triage_mod.input_state(screen) == triage_mod.INPUT_QUEUED:
                 work = f"{work}·stranded input"
             cmdline = None
@@ -8556,6 +8725,9 @@ def _cmd_roles(a) -> int:
         for ag in sorted(agents, key=lambda x: x.name):
             print(f"  {ag.name:<11} {ag.role:<14} "
                   f"reports_to: {ag.reports_to or '—'}")
+        from . import crew_rules
+        names = set(_catalog(a).roles) | {role for ag in agents for role in ag.effective_roles()}
+        print(crew_rules.render(crew_rules.load_all(a.root, names)))
         print()
         return OK
 
@@ -9288,10 +9460,8 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
 def _worktree_branch(dest: Path) -> str | None:
     """The branch `dest` has checked out, or None if it cannot be determined.
 
-    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
-    unreadable worktree is not evidence that the wrong branch is about to be
-    pushed, and refusing on it would break the canonical path for a condition we
-    have not observed. The refusal fires only on a POSITIVE disagreement.
+    None means CANNOT TELL. Push must refuse it: after a merged topic is detached,
+    selecting its stale canonical ref would silently omit newly committed work.
     """
     import subprocess
 
@@ -9580,6 +9750,16 @@ def _cycle_stop_refusal(a, agent_name) -> str:
     return ""
 
 
+def _record_cycle_refusal(root, agent, reason, risks):
+    """A receipt failure must not hide or replace the already printed refusal."""
+    from .cycle import Requests
+    try:
+        Requests(root).mark_refused(agent, reason, risks)
+    except OSError as error:
+        print(f"  warning: could not save refusal receipt ({error}); "
+              "cycle remains refused", file=sys.stderr)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -9737,7 +9917,8 @@ def _cmd_cycle(a) -> int:
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes, no_in_place=no_in_place)
+                                           quipu_nodes, no_in_place=no_in_place,
+                                           allow_loss=bool(getattr(a, "allow_loss", False)))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -9826,8 +10007,7 @@ def _cmd_cycle(a) -> int:
         # tell "in flight" from "refused an hour ago". A no-op when nothing is
         # pending, so an operator's ad-hoc cycle of an agent that never asked
         # cannot mint a request.
-        cycle_mod.Requests(a.root).mark_refused(
-            agent_name, verdict.reason, verdict.risks)
+        _record_cycle_refusal(a.root, agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -9852,7 +10032,7 @@ def _cmd_cycle(a) -> int:
     gate = _durable_checkpoint_gate(a, agent_name)
     if gate.ok is False and not a.allow_loss:
         print(f"  refused: {gate.render()}", file=sys.stderr)
-        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        _record_cycle_refusal(a.root, agent_name, gate.render(), [])
         return REFUSED
     if gate.ok is None:
         # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,
@@ -9942,7 +10122,8 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "no_graph_context": "" if nodes else
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
-        "allow_loss": False, "dry_run": False}))
+        "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "dry_run": False}))
 
 
 SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
@@ -10129,11 +10310,42 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
+def _safeguard_reports(a, agents, rep, panes):
+    """Persist refusal reports to the canonical administrator, never the worker."""
+    from . import safeguard
+    from .tend import SAFEGUARD_BLOCKED
+    from .tier import find_administrator
+    if not any(f.verdict == SAFEGUARD_BLOCKED for f in rep.findings):
+        return []
+    administrator = find_administrator(_registry(a))
+    if not administrator:
+        raise RuntimeError("safeguard report: administrator UNKNOWN")
+    def deliver(text):
+        message = _inbox(a, default="beads").deliver(administrator, text, frm="st-tend")
+        if not getattr(message, "id", None):
+            raise RuntimeError("safeguard report: durable receipt UNKNOWN")
+        return message.id
+    from .stop_failure import state as failure_state, reconcile
+    log = lambda text: print("  " + text, file=sys.stderr)
+    primary, fallback = [], []
+    for finding in rep.findings:
+        if (finding.verdict == SAFEGUARD_BLOCKED
+                and failure_state(a.root, finding.agent) == "safeguard-blocked"):
+            if reconcile(a.root, finding.agent, deliver, log):
+                primary.append(finding.agent)
+        else:
+            fallback.append(finding)
+    return primary + safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver, log)
+
+
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
     """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
         return ""
+    from .stop_failure import state as failure_state
+    if failure_state(root, card.name) == "safeguard-blocked":
+        return "pane reads safeguard-blocked, held for administrator review"
 
     def pane_refusal(screen):
         plain = triage_mod.strip_attrs(screen)
@@ -10691,6 +10903,7 @@ def _cmd_push(a) -> int:
               "source. This command does not replace the reviewed merge helper.",
               file=sys.stderr)
         return REFUSED
+    remotes = getattr(a, "remotes", None)
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
         print("  refused: no agent. `st repo push <repo> <agent>` or set "
@@ -10715,11 +10928,22 @@ def _cmd_push(a) -> int:
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
+        if source_branch is not None:
+            import shlex
+            remedy = (
+                "--source-branch does not override the caller-checkout guard. "
+                f"After verifying the selected checkout, run `cd {shlex.quote(str(Path(dest).resolve()))}` "
+                "and use that absolute source path when repeating the push command."
+            )
+        else:
+            remedy = (
+                "Run st repo push from the canonical worktree, or name the intended "
+                "branch with --source-branch after reviewing the exact ref."
+            )
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
             f"{caller_path} differs from selected source '{branch}' at {dest}. "
-            "No remote was contacted. Run st repo push from the canonical worktree, "
-            "or name the intended branch with --source-branch after reviewing the exact ref.",
+            f"No remote was contacted. {remedy}",
             file=sys.stderr,
         )
         return REFUSED
@@ -10741,8 +10965,9 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
-    if source_branch is not None and checked_out is None:
-        print("  refused before push: explicit source branch cannot be verified; "
+    if checked_out is None:
+        print("  refused before push: source branch cannot be verified (possibly detached HEAD); "
+              "create or check out the intended topic and name --source-branch; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
     if checked_out is not None and checked_out != branch:
@@ -10771,13 +10996,14 @@ def _cmd_push(a) -> int:
         print("  refused before push: --timeout must be 1–3600 seconds; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
+    selected = {"selected_remotes": tuple(remotes)} if remotes is not None else {}
     if timeout == DEFAULT_PUSH_TIMEOUT:
-        outcomes = push_every_remote(dest, branch, a.branch)
+        outcomes = push_every_remote(dest, branch, a.branch, **selected)
     else:
         from functools import partial
         from .workspace import _git_push
         outcomes = push_every_remote(dest, branch, a.branch,
-                                     push_run=partial(_git_push, timeout=timeout))
+                                     push_run=partial(_git_push, timeout=timeout), **selected)
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
               file=sys.stderr)
@@ -11330,7 +11556,7 @@ def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
 
 
 def _refresh_worktree(dest, base: str | None = None) -> str | None:
-    """Bring a project WORKTREE current — by REBASE onto its upstream, not ff-pull.
+    """Refresh a project worktree, retiring proved merged topics first.
 
     The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
     is on `wt/<agent>`, so an ff-only pull either no-ops (wrong branch) or fails —
@@ -11365,9 +11591,15 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
         # --prune: see tree_staleness. Without it, refs for branches deleted
         # upstream survive and launder orphaned commits into "on a remote".
         from .workspace import run_with_group_timeout
-        run_with_group_timeout(
+        fetched = run_with_group_timeout(
             ["git", "-C", str(dest), "fetch", "--all", "--prune", "--quiet"], 60,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if fetched.returncode != 0:
+            return "worktree fetch failed — no checkout, pruning or rebase attempted"
+        from .workspace import publication_remotes, _git
+        from .landed import retire_and_prune
+        if retired := retire_and_prune(dest, publication_remotes(dest, _git), _git):
+            return retired
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not
@@ -11814,7 +12046,7 @@ def _cmd_input(a) -> int:
 
     if not rep.changed:
         return CANNOT_TELL
-    if rep.verdict == input_box.TASK_LIST and (a.clear or a.dismiss):
+    if rep.verdict in (input_box.TASK_LIST, input_box.BUSY, input_box.ABSENT) and (a.clear or a.dismiss):
         return REFUSED
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL
@@ -13198,13 +13430,35 @@ def _tend_once(a, quiet: bool = False) -> int:
                              generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
+        _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
+        def _role_ranking_report():
+            from . import ranking_check
+            def snapshot():
+                trk = _tracker(a)
+                projection = getattr(trk, "ranking_rows", None)
+                packet = projection() if callable(projection) else None
+                if packet is not None:
+                    return packet
+                if not isinstance(trk, FilesTracker):
+                    raise ValueError("selected backend lacks a bounded ranking projection")
+                ready, _active = _priority_snapshot(a)
+                rows = [json.loads(path.read_text()) | {"id": path.stem}
+                        for path in trk.root.glob("*.json")]
+                return ready, rows
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log)
+        _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
         _fleet_sweep("ceiling-transfer",
                      lambda: _ceiling_transfer_sweep(a, agents, rep, log=_log))
 
+        from . import admin_inbox
+        _sweep("admin-routine-inbox", lambda: admin_inbox.sweep(
+            Path(a.root), agents, panes,
+            lambda backend: _inbox(argparse.Namespace(**(vars(a) | {"backend": backend})),
+                                   default="beads"), log=_log))
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
             agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
@@ -13367,7 +13621,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body):
+            def deliver_due(recipient, marker, body, *, boundary_only=False):
                 import re
                 from copy import copy
                 from contextlib import redirect_stdout
@@ -13378,7 +13632,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 output = StringIO()
                 with redirect_stdout(output):
                     code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend")
+                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
                 if code != OK:
                     return None
                 match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
@@ -13389,8 +13643,18 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 except Exception:
                     return PendingReceipt(identifier)
+            def deliver_spec(recipient, marker, body, *, urgent):
+                return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
                 unlock_reader = None
+                spec_reader = None
+                if cfg.overdue_spec_changes:
+                    from .spec_reader import SpecReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("spec changes require the selected Seeds producer")
+                    spec_reader = SpecReader(selected)
                 if cfg.overdue_external_unlocks:
                     from .unlock_reader import UnlockReader
                     from .sd import SdTracker
@@ -13405,6 +13669,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                     receipt=find_due_receipt,
                     events=unlock_reader.events if unlock_reader is not None else None,
                     ack=unlock_reader.ack if unlock_reader is not None else None,
+                    specs=spec_reader.events if spec_reader is not None else None,
+                    spec_ack=spec_reader.ack if spec_reader is not None else None,
+                    spec_deliver=deliver_spec if spec_reader is not None else None,
                     log=_log).sweep()
             overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
             if overdue_sent:
@@ -13794,6 +14061,10 @@ def _actor() -> str:
     ambiguity permanently. `unknown` when neither is readable: this is an audit
     line, so it must be able to say it does not know rather than guess.
     """
+    from .actor_identity import authenticated_actor
+    verified = authenticated_actor()
+    if verified:
+        return verified
     who = os.environ.get("SHANTY_AGENT")
     if who:
         return who

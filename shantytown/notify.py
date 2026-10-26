@@ -959,7 +959,8 @@ class IdleFleetAlerter:
             card = self._reg.get(worker)
             verdict = (self._verdict_for(card) if self._verdict_for else
                        feed_check.haul_governor_verdict(self._shanty_root, card))
-            admitted = feed_check.admitted_haul(candidates, card, verdict, self._log)
+            admitted = feed_check.admitted_haul(
+                candidates, card, verdict, self._log, root=self._shanty_root)
             allowed_ids = active_ids | {b.get("id") for b in admitted}
             queues[worker] = [bid for bid in queue if bid in allowed_ids]
         # A whole turn can fit between idle scrapes, and assignments can arrive
@@ -1806,6 +1807,36 @@ class DeferralAlerter:
                 failed(finding)
                 self._log(f"deferral-sweep: {finding.bead} release/read failed ({e!r}); retry next pass")
         budget.save()
+        from .deferral_pacing import OwnerPacing
+        pacing = OwnerPacing(self._root)
+        if store_error:
+            pacing.current.update(pacing.previous)
+
+        def live_owner(name):
+            try:
+                card = self._reg.get(name)
+                # A surviving shell is not a live runtime. Missing process
+                # evidence retains the existing administrator route.
+                return bool(not card.retired and card.pane
+                            and not (Path(self._root) / "stopped" / f"{name}.json").exists()
+                            and self._panes.exists(card.pane)
+                            and harness_mod.running_name(self._panes.cmdline(card.pane)))
+            except Exception:
+                return False
+
+        routed = []
+        for finding in reports:
+            row = by_id.get(finding.bead)
+            if (row and finding.lapsed_at and not finding.read_error
+                    and not finding.untestable and not finding.prose_gate
+                    and (finding.condition is None or finding.condition.kind == "date"
+                         or (finding.met and finding.condition.kind == "event"))
+                    and pacing.route(row, now, live_owner, deliver_backstop)):
+                self._log(f"deferral-sweep: OWNER-PACING {finding.bead}; no admin ruling")
+            else:
+                routed.append(finding)
+        pacing.save()
+        reports = routed
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)

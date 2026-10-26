@@ -34,7 +34,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
-from .query_identity import sdk_subprocess_options
+from .query_identity import sdk_subprocess_options, declared_read_operation
 from .answer import Answer
 from .protocols import WorkItem
 from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
@@ -78,6 +78,49 @@ class SdTracker(BrTracker):
         self._plate_projection_candidates: dict[str, list[dict]] = {}
         self._native_projection: bool | None = None
         self._decision_candidates: dict[str, Answer[list[dict]]] = {}
+
+    def create_inbox_message(self, title: str, *, delivery_key: str, **fields) -> WorkItem:
+        """Retry only CAS conflicts, using the SDK's existing keyed create.
+
+        The run/step/visit identity survives every retry. Unknown outcomes stop;
+        the broadcast caller retains its explicit key rather than minting mail.
+        This optional seam is message-only, never an assignment-guard bypass.
+        """
+        import hashlib
+        import random
+        import time
+        from .inbox import validate_delivery_key
+        validate_delivery_key(delivery_key)
+        if (not is_message(title) or fields.get("labels") != "inbox"
+                or not fields.get("assignee")
+                or set(fields) - {"assignee", "labels", "description", "slug"}):
+            raise ValueError("stable inbox create requires only message identity fields")
+        identity = json.dumps([delivery_key, fields.get("description")], separators=(",", ":"))
+        run = "urn:shantytown:inbox:" + hashlib.sha256(identity.encode()).hexdigest()
+        args = ["create", title, "--json", f"--workflow-run={run}",
+                f"--step={fields['assignee']}", "--visit=1"]
+        args.extend(f"--{key}={value}" for key, value in fields.items() if value is not None)
+        for attempt in range(16):
+            result = self._bd(*args)
+            if result.returncode == 4 and attempt < 15:
+                time.sleep(random.uniform(0.002, 0.01) * (attempt + 1))
+                continue
+            if result.returncode == 4:
+                raise RuntimeError(f"sd inbox create conflict after 16 attempts: {_failure_reason(result)}")
+            if result.returncode:
+                raise RuntimeError(f"sd inbox create failed: {_failure_reason(result)}")
+            try:
+                value = json.loads(result.stdout)
+                if not isinstance(value, dict) or not isinstance(value.get("id"), str) or not value["id"]:
+                    raise ValueError("missing exact receipt id")
+                item = self.get(value["id"])
+            except (ValueError, TypeError, KeyError) as error:
+                raise RuntimeError("stable inbox receipt identity UNKNOWN") from error
+            if (item.id != value["id"] or item.title != title
+                    or item.assignee != fields["assignee"]):
+                raise RuntimeError("delivery key binds a different receipt identity/content")
+            return item
+        raise AssertionError("bounded inbox retry exhausted")
 
     @property
     def _bin(self) -> str:
@@ -397,6 +440,63 @@ class SdTracker(BrTracker):
                 return held
         return self._owner_rows(agent)
 
+    @declared_read_operation("spec-boundary")
+    def spec_rows(self, owner):
+        if self.store:
+            self.prove_store()
+            value = self._spec_json("spec-changes")
+            events = value.get("events")
+            if not isinstance(events,list) or len(events) > 500:
+                raise StoreUnproven("local spec changes UNKNOWN or capped")
+            rows = []
+            for event in events:
+                recipient = event.get("recipient")
+                if owner is not None and recipient not in (owner,owner.split("/")[-1]):
+                    continue
+                rows.append({"id":event["id"],"title":event["title"],"status":event["status"],
+                    "priority":event["priority"],"labels":event["labels"],"assignee":recipient,
+                    "spec_version":event["version"],"spec_previous_version":event["previous_version"],
+                    "spec_changed_at":event["changed_at"]})
+            return Answer.complete_read(rows,how="explicit local Seeds spec changes")
+        if not self._use_remote_projection():
+            raise StoreUnproven("spec boundary projection requires the selected remote schema")
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), owner, timeout=min(self.timeout,1), decision=True, only_specs=True, include_deferred=True)
+
+    def _spec_json(self, *args):
+        result = self._bd(*args, "--json")
+        if result.returncode != 0:
+            raise StoreUnproven(f"Seeds spec operation failed: {_failure_reason(result)[:160]}; no retry")
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict):
+            raise StoreUnproven("invalid Seeds spec operation envelope")
+        return value
+
+    def spec_state(self, identifier):
+        value = self._spec_json("spec-state", identifier)
+        if (value.get("id") != identifier or type(value.get("version")) is not int
+                or value["version"] < 0 or type(value.get("unacked")) is not bool):
+            raise StoreUnproven("invalid spec state readback")
+        return value
+
+    def ack_spec(self, identifier, version, *, session=None):
+        args = ["ack", identifier, "--version", str(version)]
+        if session:
+            args.extend(["--session",session])
+        return self._spec_json(*args)
+
+    def rescope(self, identifier, path, *, quote, requester, summary, urgent, session, dry_run=False):
+        args = ["rescope", identifier, "--spec-file", str(path), "--quote", quote,
+                "--requester", requester, "--summary", summary, "--session", session]
+        if urgent:
+            args.append("--urgent")
+        if dry_run:
+            args.append("--dry-run")
+        value = self._spec_json(*args)
+        if value.get("id") != identifier or type(value.get("version")) is not int:
+            raise StoreUnproven("rescope result UNKNOWN; do not retry")
+        return value
+
     def decision_rows(self, agent: str | None) -> Answer[list[dict]]:
         """Advisory fields; reuse a fresh worker plate's complete projection."""
         if agent is not None and agent in self._decision_candidates:
@@ -405,7 +505,7 @@ class SdTracker(BrTracker):
             if not self._use_remote_projection():
                 raise ValueError("decision projection unavailable on this transport")
             from .seeds_plate import owner_rows
-            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True, include_deferred=agent is not None)
         except Exception as error:
             return Answer.capped([],how="Seeds decision fields",caveat=str(error))
 
@@ -521,6 +621,18 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def ranking_rows(self):
+        """Complete lean active/deferred metadata and proven unowned READY rows."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .priority_advisory import workable
+        rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          include_deferred=True, include_messages=False).exact()
+        candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
+        ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        return [r for r in candidates if r["id"] in ready], rows
+
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
@@ -557,14 +669,10 @@ class SdTracker(BrTracker):
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
         try:
-            projected = self._use_remote_projection()
+            answer = self._inbox_metadata(agent, include_closed=include_closed)
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds inbox format proof", caveat=str(error))
-        if projected:
-            from .seeds_plate import owner_rows
-            answer = owner_rows(self.prove_store(), agent, timeout=self.timeout,
-                                messages_only=True, include_closed=include_closed)
-        else:
+        if answer is None:
             answer = self._owner_rows(agent, include_closed=include_closed, messages_only=True)
         # Each bounded read is ordered, but their union must keep the SDK's
         # global priority/creation/id order before dates leave the projection.
@@ -578,6 +686,48 @@ class SdTracker(BrTracker):
         if answer.complete:
             return Answer.complete_read(items, how=how)
         return Answer.capped(items, how=how, caveat=answer.caveat)
+
+    def _inbox_metadata(self, agent, *, include_closed=False, identifiers=None):
+        """One fresh read; only a positive legacy marker permits SDK fallback."""
+        proof = self.prove_store()
+        if not self.quipu or not proof.graph or self._native_projection is False:
+            return None
+        from .seeds_inbox import LegacyInboxSchema, read
+        from .query_identity import declared_read_operation
+        try:
+            with declared_read_operation("show" if identifiers is not None else "owner-rows"):
+                answer = read(proof, agent, include_closed=include_closed,
+                              identifiers=identifiers, timeout=self.timeout)
+        except LegacyInboxSchema:
+            self._native_projection = False
+            return None
+        if answer.complete:
+            self._native_projection = True
+        return answer
+
+    def inbox_receipts(self, agent, identifiers):
+        """Fresh exact identity fields before acknowledging known receipts.
+
+        Do not hydrate descriptions/comments just to prove id/title/recipient.
+        The subsequent SDK close retains its own current-state CAS checks.
+        """
+        try:
+            identifiers = list(dict.fromkeys(identifiers))
+            items = []
+            for start in range(0, len(identifiers), 25):
+                batch = identifiers[start:start + 25]
+                answer = self._inbox_metadata(agent, include_closed=True, identifiers=batch)
+                if answer is None:
+                    items.extend(self.get(i) for i in batch)
+                    continue
+                if not answer.complete:
+                    return Answer.capped([], how=answer.how, caveat=answer.caveat)
+                items.extend(WorkItem(id=r["id"], title=r["title"], status=r["status"],
+                                      assignee=r["assignee"], priority=r["priority"])
+                             for r in answer.exact())
+            return Answer.complete_read(items, how="fresh exact inbox receipt batches")
+        except (OSError, ValueError, RuntimeError, LookupError) as error:
+            return Answer.capped([], how="exact inbox receipts", caveat=str(error))
 
     def plate_ready_ids(self, agent: str) -> Answer[set[str]]:
         """Read readiness only for the owner spellings used by plate selection."""
@@ -635,15 +785,31 @@ class SdTracker(BrTracker):
 
     def _bd_in(self, repo: "str | None", *args: str) -> subprocess.CompletedProcess:
         self.prove_store()
-        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        from .actor_identity import authenticated_actor
+        actor = authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip()
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
-        return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
+        options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
-                                      "show", "list", "ready", "where", "search", "count", "info", "stats"
+                                      "show", "list", "ready", "where", "search", "count", "info", "stats",
+                                      "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        # Reads retain their original route and budget. Optional signing
+        # observation belongs only to the actual Seeds mutation child.
+        from .advise_signing import mutation, run
+        if mutation(self._translate(args)):
+            asserted = actor
+            for i, arg in enumerate(args):
+                if arg.startswith('--actor='):
+                    asserted = arg.partition('=')[2]
+                elif arg == '--actor' and i + 1 < len(args):
+                    asserted = args[i + 1]
+            return run(cmd, actor=actor, asserted_actor=asserted,
+                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                       options=options, runner=subprocess.run)
+        return subprocess.run(cmd, **options)
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

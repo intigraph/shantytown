@@ -41,7 +41,8 @@ def request_headers() -> dict:
     or empty — an empty value must not become a wrong credential — nothing
     changes against today's open server.
     """
-    headers = {"Content-Type": "application/json"}
+    from . import quipu_provenance
+    headers = {"Content-Type": "application/json", **quipu_provenance.headers()}
     from . import quipu_auth
     try:
         token = quipu_auth.token()
@@ -873,6 +874,8 @@ class QuipuRegistry:
             headers = quipu_auth.write_headers(self.server)
         except quipu_auth.CredentialRefused as error:
             raise QuipuWriteRejected(str(error)) from None
+        if getattr(self, "client_label", None):
+            headers["X-Quipu-Client"] = self.client_label
         req = urllib.request.Request(
             self.server + "/knot",
             data=json.dumps({"turtle": turtle}).encode(),

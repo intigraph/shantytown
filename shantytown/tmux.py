@@ -21,12 +21,15 @@ into the harness.
 """
 from __future__ import annotations
 import os
+import hashlib
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import time
+
+from .protocols import SubmissionObserved
 
 
 # The ONLY keys Tmux.control will send (aegis-c6hli). Cursor moves, deletions
@@ -290,6 +293,11 @@ class PaneInMode(PaneNotAgent):
 
 
 def _refuse_task_list(pane: str, screen: str) -> None:
+    from .triage import strip_attrs
+    from .safeguard import current
+    if current(strip_attrs(screen)):
+        raise PaneNotAgent(
+            f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
     from .harness import task_list_evidence
     if task_list_evidence(screen):
         raise PaneTaskList(
@@ -561,14 +569,14 @@ class Tmux:
             f"nothing typed. Its mode was left alone; retry once it exits, or use "
             f"st inbox -d so the message waits.")
 
-    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
+    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> SubmissionObserved | None:
         if allow_shell or not self.delivery_root:
             return self._send(pane, text, allow_shell=allow_shell)
         from .delivery import Custody
         try:
             with Custody(self.delivery_root, pane, self.socket) as custody:
                 try:
-                    self._send(pane, text, custody=custody)
+                    observed = self._send(pane, text, custody=custody)
                 except Exception:
                     # A failed observation must not discard the original failure
                     # or its durable ownership record.
@@ -578,12 +586,13 @@ class Tmux:
                         pass
                     raise
                 custody.finish('delivered')
+                return observed
         except OSError as exc:
             raise PaneSubmissionUnverified(
                 'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
 
     def _send(self, pane: str, text: str, *, allow_shell: bool = False,
-              custody=None) -> None:
+              custody=None) -> SubmissionObserved | None:
         # REFUSE A PANE IN COPY-MODE (aegis-6jx) before anything else reads or
         # types. See PaneInMode for what each key does to a person scrolling back.
         self._refuse_in_mode(pane)
@@ -599,6 +608,10 @@ class Tmux:
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
         codex = False
+        if not allow_shell:
+            from .stop_failure import pane_state
+            if pane_state(self.delivery_root, pane) == "safeguard-blocked":
+                raise PaneNotAgent(f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
         if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
@@ -617,11 +630,15 @@ class Tmux:
                     # append it again or commit unrelated operator input.
                     _journal_send(pane, "<retry-pending:" + text + ">")
                     self._verify_codex_submission(pane, text, before)
-                    return
+                    return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
                     if custody is not None and custody.clear_previous(self, before):
                         before = self.capture(pane, attrs=True, timeout=2)
                     if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                        # Journal the refusal (aegis-9t4). One stranded body makes
+                        # every later send refuse here; unjournaled, a 64-minute
+                        # outage on tim read as an empty send log, not a deaf pane.
+                        _journal_send(pane, "<refused:occupied-composer:" + text + ">")
                         raise PaneSubmissionUnverified(
                             f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
@@ -699,6 +716,7 @@ class Tmux:
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
         if codex:
             self._verify_codex_submission(pane, text, before)
+            return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
 
     def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
         """Recover an existing body without ever appending or replacing input."""

@@ -1,0 +1,9 @@
+Script started on 2026-10-25 14:38:36-04:00 [COMMAND="bash run.sh" <not executed on terminal>]
+BASE 1b32b5e: identical synthetic context, no HTTP
+{"fixture": "complete context", "headers": {"Agent": null, "Harness": null, "Model": null, "Session": null, "Host": null}}
+{"fixture": "incomplete agent context", "headers": {"Agent": null, "Harness": null, "Model": null, "Session": null, "Host": null}}
+CANDIDATE: same helper, complete and incomplete context
+{"fixture": "complete context", "headers": {"Agent": "fixture-agent", "Harness": "codex", "Model": "fixture-model", "Session": "fixture-session", "Host": "fixture-host"}}
+{"fixture": "incomplete agent context", "headers": {"Agent": null, "Harness": "codex", "Model": null, "Session": "fixture-session", "Host": "fixture-host"}}
+
+Script done on 2026-10-25 14:38:37-04:00 [COMMAND_EXIT_CODE="0"]

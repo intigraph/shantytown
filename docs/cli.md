@@ -19,6 +19,14 @@ ready plate. Closing inbox messages or repooling excluded alarm records does
 not free a work slot. Admission reads fresh owner membership; it never borrows
 the frozen observation used to render a crew report.
 
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
 `st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
@@ -93,12 +101,16 @@ st agent                      one agent
                               idle time, and any posted relatedness signal. --related P
                               / --decision keep|cycle --by WHO posts one. --json.
   input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
-                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+                              capture evidence. --clear (typed only) --dismiss. NEVER submits.
+                              Codex multiline clear verifies the empty placeholder;
+                              BUSY refuses editing, and no repaint stays UNKNOWN.
   ask <agent>                 the QUESTION they're blocked on: prompt, the command being
                               approved, and the numbered options VERBATIM. read-only.
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage|sync>
+                              explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -166,7 +178,8 @@ Context occupancy hints are opt-in in `shantytown.toml`:
 ```toml
 [session_budget]
 context_window = 1000000
-context_threshold_pct = 70
+context_threshold_pct = 50
+context_hard_pct = 70
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
@@ -308,7 +321,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
+Forty-five. Seven verbs at the top level and thirty-eight grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -350,6 +363,28 @@ writes and verifies the reason and condition before changing status, then verifi
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
+
+A `closed:` deferral with a marker-only reason can resume automatically when
+the named item closes. The required one-line `--dependency-reason` and the
+command's exact scope flag are informational metadata; they do not turn that
+reason into a prose gate. Any additional prose, historical notes, unknown
+fields or extra resume markers still require judgement. Human, access
+and parked labels, future deadlines and other open dependencies
+continue to hold the item. The scheduled sweep reads the complete item and its
+condition again before reopening it.
+
+A `blocked:external` hold can be satisfied by an unambiguous `closed:`,
+`release:` or `installed:` condition only when its evaluator returns a definite
+MET. An unmet condition, an UNKNOWN read, additional prose or a human/access
+hold keeps the item deferred. A `date:` review never grants that permission.
+
+The sweep keeps a complete observation of all selected deferrals. If Quipu
+rejects a field batch with its explicit structural-cost HTTP 400 and asks for
+smaller requests, the reader halves that batch and retries each half within the
+original batch's time budget. It keeps both graphs and every evaluation field.
+A single candidate that still exceeds the limit is UNKNOWN; no candidate is
+skipped and no partial observation permits a release. Other HTTP failures are
+not retried by this split path. The server's structural limit stays unchanged.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -1510,6 +1545,40 @@ st inbox --read                      ACK: mark up to 15 unread messages read; re
 st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
 
+A keyed durable broadcast is available for a bounded, explicit recipient list:
+
+```bash
+st inbox broadcast --to alice --to bob --delivery-key rollout-notice-1 --json "see the rollout item"
+```
+
+This persists **only**: it sends no live nudge, marks no pointer read and claims
+no pane submission. Use the ordinary single-recipient command when live delivery
+is required, and retain its reported confirmation limits. Broadcast verifies all
+recipient identities first, then attempts each independently (at most 64 distinct
+names). JSON returns the operation key and a per-recipient `persisted`, `refused`
+or `UNKNOWN` result, with exact receipt IDs for confirmed persistence. It is not
+an atomic all-recipient transaction; partial results return exit 2.
+
+Keep the same explicit delivery key when resuming the same operation. A key is
+1–128 ASCII characters: an initial letter/digit followed by letters/digits or
+`_.:-`. On Seeds, the existing native
+`--workflow-run` / `--step` / `--visit` create contract derives the stable receipt;
+Shantytown does not guess its ID. Seeds reads that exact receipt back and verifies
+its title and recipient. A reused key with changed content refuses, including
+after the original pointer was acknowledged; it cannot reopen or overwrite it.
+The files backend also supports stable keys with locked, atomic publication.
+Other tracker adapters without this optional capability refuse keyed broadcasts
+rather than fall back to a different store or an unkeyed create.
+
+Ordinary Seeds durable sends also use a fresh operation key internally. Only a
+native CAS-conflict exit (4) is retried, with the same complete create arguments,
+up to 16 attempts with jitter. This handles different recipients contending on
+the same tracker. Timeouts, exit 8, malformed replies, readback failures and other
+refusals stop without an automatic resend. `UNKNOWN` can follow a committed write:
+inspect the native outcome before resuming, retain the operation key, and never
+invent a new key merely to hide uncertainty. Per-attempt SDK timeouts remain in
+force; this is not a total broadcast latency guarantee.
+
 When a durable message is successfully submitted to a live pane, `st` closes only
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
@@ -2108,6 +2177,61 @@ preserve cached cost gauges and their last-success timestamp; without a cached
 sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
+`st work cost --review-window --json` describes the exact paused window without
+running the parser or publisher. It shares the existing producer lock and binds
+the samples, recorded source identities, snapshot ledger, cooldown and reviewed
+budget envelope. Heartbeat timestamps do not change this identity. Missing,
+ambiguous or changed evidence refuses acceptance.
+
+After the actual resource reviewers accept that exact window, prepare a decision
+JSON containing `schema_version: 1`, `window_sha256`, `decision: "accept"`,
+`mode: "bounded-pilot"` (or explicitly reviewed `"bounded-continuous"`), `reviewer` and an `evidence_ref` to the ruling. The file
+records the decision; it is not an authentication or authority grant.
+`st work cost --accept-window SHA256 --decision-file FILE` validates and describes
+the successor without changing state. Add `--execute` only through the normal
+reviewed runtime path. A stale hash, busy lock, pending write, malformed decision,
+symlink or existing preparation refuses; never delete a preparation to retry.
+
+Execution archives the predecessor under `cost-review-generations/SHA256/`,
+preserves the original files, lifetime counters, refusals, snapshot ledger and
+cooldown, then atomically commits `cost-active-generation.json`. The successor
+starts a new bounded audit window; no history is reset and no tokens are counted
+or published by this operation. Caps and the default twenty-shape pause remain.
+Pilot mode does **not** enable continuous publication. An explicit
+`bounded-continuous` ruling instead authorizes subsequent in-envelope windows
+under that same policy: the scheduler archives each completed 20-shape window
+and advances a new generation under its existing lock. The inherited reviewer
+and evidence reference identify the original policy, not a fresh human review.
+Only the pointer-hashed manifest grants this mode; editing mutable budget history
+cannot enable it. Every predecessor remains on disk, and the live rotation keeps
+only the current window. Lifetime runs/maxima/refusals, cooldown, snapshot ledger
+and uncertain-write guards remain intact. Camayoc still enforces one snapshot,
+eight items, 1000 records and 4 MiB before networking. A completed window with an
+out-of-envelope observation stays paused for explicit review. Source installation
+alone never selects this policy or accepts a real pending window.
+
+Read the review status after a
+lost reply rather than replaying acceptance. A visible successor is evidence of
+the transition, not evidence of a subsequent successful cost publication.
+Before the first transition, source rollback can restore the previous release.
+After a generation is selected, retain a generation-aware reader: older releases
+ignore the pointer. Pause and reconcile publication through the normal operator
+path before a rollback to such a release; never discard generation evidence.
+
+Cost displays also report `cost_coverage`: completed and UNKNOWN-cost seed
+counts, their share, the whole-session limit, and the cohort's scope. This
+reuses the seed records already read for the command; it is not a board-wide
+completed-seed census and adds no tracker queries. A missing or malformed
+cohort remains UNKNOWN. A verified empty cohort has no percentage. Human
+single-seed output prints the same limit and count/share.
+
+Current policy accounts only for eligible whole sessions of at most eight
+items. Oversized sources are refused, never estimated. Observed token groups
+can still be useful partial evidence, but without an independent census across
+every session and cycle they do not establish complete cost for a closed seed.
+Partitioning is not enabled by this display change. Closure receipts and token
+arithmetic retain their existing parser-owned contracts.
+
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
 publisher partitions token and coverage samples by rig/agent/harness/session,
@@ -2387,6 +2511,12 @@ identity source. With no agent argument it equips every local crew workspace.
 It never creates, starts, stops, or restarts an agent. Existing sessions pick up
 registration on their next start.
 
+For Claude, provisioning also repairs the `StopFailure` handler in the selected
+role or per-agent settings file, including files emitted before that event was
+added. It refreshes only the shantytown handler, preserving other settings and
+operator hooks. An unreadable selected file refuses provisioning. Already-running
+sessions still require their natural relaunch boundary to load the repaired hook.
+
 Caboodle owns binary installation and functional proof; this command owns harness
 registration. It requires existing crew workspaces and a nonempty
 `SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
@@ -2508,6 +2638,17 @@ silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
+
+Short owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive and at most 60 minutes, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item; on the third
+unchanged scheduled observation it returns to the administrator path. An item
+update resets that budget. Failed owner delivery also retains the admin path.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
@@ -2645,13 +2786,22 @@ selected board is not permission to retry against another board.
 `st repo pr` earns a separate slot because it creates an external review object;
 `repo context` remains a read. Use the guarded creation path after committing and
 pushing the candidate branch. It requires the explicit GitHub repository to match
-`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+`origin`, with the mapped owner-move exception below. It does not push, merge,
+close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
-again. This command never rewrites remotes or silently migrates aliases. A
+again. A legacy-owner `origin` can remain unchanged when the deployment's
+`scripts/lib/stack_repos.py canonical` helper maps it to the requested current
+slug **and** GitHub resolves it to that slug with the same stable repository ID.
+The optional helper lives under
+`${XDG_DATA_HOME:-~/.local/share}/aegis-exec-src/`; exact origins need no helper.
+Missing, unreadable or unmapped policy, a foreign host/owner, an unproven redirect,
+or a redirect race refuses before POST and names a concrete `git remote set-url`
+fix. The requested repository must still be the forge's canonical slug.
+This command never rewrites remotes or silently migrates aliases. A
 repository identity change during preflight also refuses before POST. A lost or
 malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
 reported on stderr as well as JSON stdout. Inspect the canonical repository for
@@ -2703,7 +2853,10 @@ clients. Installing a mandatory external-client hook is a separate adoption step
 `--branch` before contacting any remote. Publish a candidate with
 `--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
 worktree is on that topic instead of its canonical agent branch. The source must
-match the selected worktree and caller. Existing authority, pre-push hooks and
+match the selected worktree and caller. An explicit path selects the source tree;
+it does not bypass the caller-checkout guard. Run the command from that selected
+checkout, including when publishing an extra worktree. When changing directories,
+use an absolute source path in the repeated push command. Existing authority, pre-push hooks and
 non-fast-forward checks still apply to every trusted peer.
 
 `--branch main` explicitly selects a destination; it does not establish independent
@@ -2784,6 +2937,42 @@ stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
 
 
+### Push freezes and selected peers
+
+`st repo push` keeps its default fan-out to all approved peer remotes. Add
+`--remote origin` to publish only that configured peer, or repeat `--remote` for
+an explicit subset. Source and destination branch checks, peer authorization,
+mirror exclusion, hooks and bounded push deadlines still apply. Selection does
+not grant authority to an unapproved upstream.
+
+Before a maintenance freeze, the operator records a reason in Git configuration
+for every effective push hostname, on each crew host that can publish:
+
+```bash
+git config --global --add st.push-freeze.forge.example 'maintenance window'
+```
+
+The key is `st.push-freeze.<host>`. Any configured value, even an empty reason,
+means HOLD. The tool reads all scopes/values; a local empty value cannot override
+a global freeze. Only the owning operator releases it by removing its values
+from the same scopes after the window passes. There is no automatic time expiry
+or push-command bypass. A chat announcement alone cannot be detected locally.
+
+Every selected peer's effective push URLs (including multiple pushurls and Git
+URL rewrites) are preflighted before any peer is contacted. A frozen host or an
+unreadable URL/config refuses the whole set. Mirrors remain uncontacted. The
+check repeats before each push; a hold appearing after an earlier publication
+stops the remaining writes and reports partial publication. It never rewrites
+an earlier remote to undo a push.
+
+Host matching uses the Git URL's hostname, not DNS or SSH alias resolution.
+Record all aliases used in push URLs. Hosts that cannot be represented by the
+freeze key (for example, a raw IPv6 literal) refuse instead of assuming unfrozen.
+This client check does not intercept raw
+`git push`, prevent other clients, or cancel a push already in flight. Operator
+freeze coordination and server-side write controls remain necessary.
+
+
 ### Request command attribution
 
 Tracker reads declare a finite command source (`st-anchor`, `st-plate`,
@@ -2858,3 +3047,213 @@ transaction and continue to block relaunch; they are not routine quota holds.
 Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
 holds remain respected during automatic recovery. Nothing here starts a second
 administrator, changes an account cap, or clears an operator hold.
+
+### Explicit routine progress for scoped administrator budgets
+
+`st inbox -d --routine <agent> <pointer>` declares batchable progress. Use it only
+when no immediate decision, blocked-work response, ownership handoff, or active
+window coordination is needed. Operator messages, urgent controls, governance
+notifications, gate/decision requests and handoffs use the unchanged immediate
+path. These are declared exemptions, not authenticated identity or urgency inferred
+from body text. Omitting `--routine` always preserves existing delivery behavior.
+
+Only an explicitly named administrator using Claude, with ENFORCE enabled and a
+fresh quota/cadence observation, can defer the routine live nudge. The durable
+message is persisted first and stays unread. The existing `fleet tend` pass
+submits one batch after the original cadence deadline (at most 900 seconds) plus
+its next actual scheduled tick. OFF, unknown evidence or clock reversal releases
+early. No new daemon/timer is installed, no off-host relay is delayed, and a dry
+run neither persists nor sends. This does not bound ongoing-turn or account spend.
+
+A live attempt is durably claimed before submission. Ambiguous submission,
+stranded input or failed acknowledgement keeps the inbox pointer and does not
+retry the live send. Read it through `st inbox`; sender success means persistence,
+not live arrival. A stopped/overloaded tend schedule, down recipient, malformed
+queue or incomplete unread coverage prevents a wall-clock delivery guarantee;
+those cases remain visible/UNKNOWN and require the normal inbox read path. The
+feature is source-only until reviewed adoption and a separately authorized scoped
+trial proves the actual scheduled path and declared-exemption coverage. Rollback:
+set the scoped policy OFF, drain/read retained pointers, then revert the source;
+do not remove unread messages or revert while routine entries remain pending.
+
+### Provider safety refusals
+
+Claude crew settings provision an asynchronous `StopFailure` command hook.
+[Claude Code runs this instead of `Stop` for API errors](https://code.claude.com/docs/en/hooks#stopfailure),
+so the failure is recorded without waiting for a normal turn-end hook or a pane
+banner. The hook persists a `stop-failure` event with the agent, plate, error,
+optional error details and rendered API message. Missing plate/request evidence
+stays `UNKNOWN`; a plate read gets a two-second budget so it cannot silence
+the error notice. The actual error enum used for a safeguard refusal remains
+unknown until a real hook payload is observed; fixtures do not establish it.
+
+A rendered API message containing `safeguards` takes priority over every other
+error category. It records a hold for that launch and durably notifies the
+canonical administrator, with request IDs extracted from the rendered message.
+The hold also prevents ordinary input and automatic cycles when the pane has no
+banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
+does not clear a safeguard hold. Rate-limit and authentication failures enter the
+existing `limited` and `auth-dead` supervision paths; a later successful Stop can
+retire these transient signals. Other errors produce a durable administrator
+inbox notice. Notification work runs asynchronously with a bounded timeout and
+never asks the model to continue. Launch verification checks the running
+process's selected settings against its recorded launch snapshot; a newly
+rewritten settings file is not proof that an old process loaded the hook.
+
+The following pane check remains the fallback for Codex and missed hooks.
+A current provider banner saying `safeguards flagged this message` or
+`safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
+reports. Tend treats it as a fault and holds it for administrator review. It
+never clears context, switches models, cycles, or sends recovery input for this
+condition. Ordinary sends refuse while the banner is current.
+
+Tend persists one administrator inbox report per observed refusal, including the
+agent, request IDs when visible, and plate items (or `UNKNOWN` on a failed read).
+Old scrollback, a later response, and a cleared session do not count. Missing IDs
+remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
+crew root; long ID/plate lists are abbreviated in the inbox and retained there.
+A pending or uncertain delivery is reported loudly and never automatically
+replayed: inspect its ledger and durable inbox before any manual retry. Human
+review determines the next step. A saved primary hold is not delivery evidence:
+tend reconciles a demonstrably absent notification attempt from the saved error
+metadata, including when event persistence was interrupted and no pane banner
+exists. The shared reservation still prevents replay of pending or UNKNOWN
+attempts and keeps their uncertainty visible. Missing launch provenance cannot
+retire a saved safety hold; only positively different known launch stamps can.
+
+## Explicit file-memory transport
+
+`st agent memory` earns its own slot because commit and projection have data
+consequences; they must not be hidden in the read-only anchor. The command
+provides bounded explicit transport. An independently enabled per-crew Claude
+plan can also use the managed lifecycle described in [crew memory](crew-memory.md).
+The default installs neither native selection nor automatic synchronization. Run
+`st agent memory alpha capabilities` for the current honest adapter limits.
+
+Inspect a selected native directory without uploading its bodies:
+
+```sh
+st agent memory alpha inspect --directory /path/to/selected/memory
+```
+
+Inspection uses a one-second worker plus at most 250 ms of cleanup, and emits
+only complete bounded metadata or UNKNOWN. Original files remain unchanged.
+
+Remote operations require explicit `--server`, `--deployment` and `--project`
+IRIs and the existing named CLI credential selection. `read --owner IRI` is
+intentionally cross-crew and returns attributed historical data. Other-owner
+commit, delivery and staging refuse. `commit --request request.json --outbox
+/path/to/private-outbox` durably stores the exact private JSON intent before
+reading its receipt and attempting at most one commit. The existing outbox
+directory and request file must be private and user-owned. After an unknown
+result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
+trigger reconciles the original receipt before any identical commit. There is
+no implicit retry, deletion or last-writer-wins merge.
+
+`sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
+bounded multi-file capture and performs one pending-intent attempt by default.
+It requires the same explicit remote scope and own credential selection above.
+`--max-new N` permits 0..128 attempts; the explicit command also has a two-second
+worker deadline plus at most 250 ms of cleanup, regardless of the attempt count.
+A timeout is UNKNOWN and cannot undo an accepted remote commit. Invoke it
+explicitly again to resume the same pending batch before
+recapture. Its journal accepts completion only after a fresh authenticated own
+projection matches the final receipt. A different remote head refuses automatic
+adoption. Source files and native selection remain unchanged. This command
+does not install an automatic lifecycle hook.
+
+`stage --parent PATH` verifies the own-owner export and creates a new exclusive
+generation. It does not select that generation, replace native files or alter
+harness settings. Existing startup memory bridging remains. Claude native
+selection requires the separate default-OFF managed plan and installed handoff
+acceptance, Codex generated-memory
+writeback is unsupported, and an OpenCode native-memory convention is unproven.
+A successful transport command is not native round-trip acceptance.
+
+Within the same explicit scope, `query --owner IRI --text literal` searches
+that selected owner's bounded exported records. It is a literal search, not a
+global or semantic index. Hits include owner, revision, source harness/account,
+commit time and an explicitly truncated excerpt. Retrieved text is historical
+source data, not an instruction or current authority. `export --owner IRI`
+returns the complete bounded envelope for inspection; it does not supply own
+projection identity and cannot select native files. Missing graph/partial or
+unreadable coverage refuses rather than returning a misleading empty match.
+
+### Squash-merged work and worktree maintenance
+
+Cycle loss checks do not require a merged feature branch to remain on a remote.
+Commits count as landed when their exact changed paths, old/new blob IDs and file
+modes match a non-merge commit in the bounded trusted-main history, or when they
+are reachable from the recorded head of a merged
+PR in that same repository. The merge commit must also be reachable on trusted
+main. Output names the rule that cleared the work. Unproved follow-up commits
+still refuse a cycle; dirty tracked files remain protected.
+
+Merged-PR metadata uses a bounded page and an atomic, repository-local cache in
+the common Git directory. A missing record, unavailable forge, malformed response
+or truncated history never certifies a landing. Explicit fetch/refresh boundaries
+may read the forge; edit-time checks only use cached evidence and local Git.
+Mirror remotes cannot supply a publication or landing proof.
+Patch IDs and `git cherry` are not loss proofs: they ignore semantic whitespace.
+Exact-delta reads cover at most 512 main commits; unknown or malformed evidence
+keeps work protected.
+
+At normal safe project-worktree refresh boundaries, including the existing
+scheduled tend respawn path, a clean fully landed topic is detached at the
+trusted current main. This never forces a checkout or overwrites local changes.
+Each pass may prune up to 32 positively landed, unoccupied merged/gone topic
+branches; main/master and unknown work are retained. Pruning rechecks occupancy,
+compares the expected branch tip before deletion, and retains a recovery ref at
+`refs/st/landed-retained/<old-tip>`. There is no new timer or live-agent checkout
+sweep. API cache/page and per-pass limits may leave older branches unclassified.
+
+After a merged topic is detached, create or check out a new topic before
+committing new work. Publish it with an explicit `--source-branch`. Push refuses
+an unreadable or detached source instead of silently selecting an old canonical
+branch. Fresh topics at main are not considered merged topics.
+
+Use `git config branch.<topic>.st-keep true` to retain a named recovery or parked
+branch. An untracked alias is not pruned merely because it shares a merged PR's
+head SHA; the merged PR must name that same topic, or its upstream must be gone.
+
+### Graph-owned role responsibilities
+
+When `SHANTY_RULES_QUERY` names the deployment's process-rule query, human
+`st anchor` output includes the current role's responsibility summaries.
+Session-start uses that same anchor render. `st fleet roles show` reads all role
+scopes once and lists their summaries, including additive roles such as reviewer.
+An unavailable, empty, capped or malformed read prints `UNKNOWN`; the program
+never substitutes a built-in responsibility text.
+
+The named query accepts a canonical role IRI (the namespace comes from
+`SHANTY_ONTO_NS`), and `*` for the role catalogue. It returns `topic`, `rule`,
+`summary`, `text`, and `scope`. Responsibilities have topic `responsibilities`
+and an exact role `scope`; ordinary process rules remain in the same result.
+Deployments may also accept local role names. Publish the query definition and
+role-scoped rules through the deployment's governed graph lane before adoption.
+The graph owns the wording; this package owns only its bounded read and render.
+
+On the fleet-owner host, the existing `st fleet tend` pass includes an
+administrator ranking check. It names each live agent whose canonical plate
+is below strictly higher-priority unowned READY work, and lists all unowned P0
+items in the complete active/deferred metadata projection. Blocked work is not
+promoted to READY, and owned work is not relabeled unowned. No assignment,
+priority or rank changes automatically.
+
+The digest includes P0 work created/closed counts for seven UTC calendar dates,
+including the current partial date. This is explicitly not a rolling 168-hour
+count. `SHANTY_BOARD_METRICS_QUERY` may select the aggregate query (default
+`seeds_board_metrics_v1`). It must supply independent `coverage` and
+`aggregation_control` rows plus reconciled `created`/`closed` grouped counts and
+matching totals; capped, inconsistent or failed reads stay `UNKNOWN`. Inbox
+counts do not become work counts. The aggregate has an eight-second total transport
+budget; role-summary reads retain a two-second total transport budget. A single
+foreground helper performs each HTTP read; the parent's monotonic deadline includes
+helper startup, DNS/connection setup, headers and body consumption. Expiry kills
+and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
+headers travel over private stdin rather than process arguments. Response and
+completeness caps still apply. Neither budget changes the server deadline.
+Changed actionable digests use the existing
+administrator advisory route; repeated digests are quiet. Routine healthy
+results remain in the scheduled pass log. The pass budget may defer this
+advisory sweep without interrupting supervision.

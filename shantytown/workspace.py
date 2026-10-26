@@ -46,6 +46,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from .protocols import Agent
+from . import worktree_storage
 
 
 class WorkspaceError(RuntimeError):
@@ -456,6 +457,14 @@ def git_worktree_holds_work(dest: Path, base: str) -> bool:
         return True                      # cannot tell -> keep, never discard
     if ahead.stdout.strip() in ("", "0"):
         return False
+    from .landed import classify
+    code, commits = _git(dest, "rev-list", "--max-count=512", f"{base}..HEAD")
+    candidates = commits.splitlines()
+    if (code == 0 and candidates and ahead.stdout.strip().isdigit()
+            and len(candidates) == int(ahead.stdout.strip())):
+        cleared, _ = classify(dest, candidates, publication_remotes(dest, _git), _git)
+        if cleared == set(candidates):
+            return False
     return not _squash_landed_tree(dest, base)
 
 
@@ -500,10 +509,74 @@ def _squash_landed_tree(dest: Path, base: str) -> bool:
         return False
 
 
+def _git_identity(repo: Path) -> tuple[Path, Path] | None:
+    """Read this checkout's Git directory and common directory, without guessing."""
+    if not (repo / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--path-format=absolute",
+             "--git-dir", "--git-common-dir"],
+            capture_output=True, text=True, timeout=10,
+        )
+        paths = [Path(line) for line in result.stdout.splitlines()]
+        if result.returncode or len(paths) != 2 or not all(path.is_absolute() for path in paths):
+            return None
+        return paths[0].resolve(strict=True), paths[1].resolve(strict=True)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _registered_shared_repo(repo: Path, common: Path) -> Path | None:
+    """Validate Git's primary entry; relocated metadata is not itself a checkout."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), "worktree", "list", "--porcelain", "-z"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise WorkspaceError("cannot read the primary checkout registration") from exc
+    first = result.stdout.split("\0", 1)[0]
+    if result.returncode or not first.startswith("worktree "):
+        raise WorkspaceError("cannot read the primary checkout registration")
+    primary = Path(first[len("worktree "):])
+    if primary.is_absolute() and _git_identity(primary) == (common, common):
+        return primary.resolve()
+    return None
+
+
 def _shared_repo(repo: Path | str) -> Path:
     """Normalize to the SHARED checkout, tolerating being handed the worktree dir
     or the `<name>-wt` container (crew-worktree.sh does the same on the name)."""
     p = Path(repo).expanduser()
+    if (p / ".git").is_file():
+        identity = _git_identity(p)
+        if identity is None:
+            raise WorkspaceError("cannot identify the shared checkout of this linked worktree")
+        git_dir, common = identity
+        if git_dir == common:
+            # A primary checkout can have a .git file after --separate-git-dir.
+            return p
+        sources = set()
+        primary = _registered_shared_repo(p, common)
+        if primary is not None:
+            sources.add(primary)
+        if p.parent.name.endswith("-wt"):
+            legacy = p.parent.parent / p.parent.name[:-len("-wt")]
+            # Preserve the legacy layout only when Git proves the same primary
+            # identity. A similarly named foreign checkout must never be chosen.
+            if _git_identity(legacy) == (common, common):
+                sources.add(legacy.resolve())
+        if len(sources) != 1:
+            raise WorkspaceError("cannot identify one shared checkout for this linked worktree")
+        return sources.pop()
+    if p.name.endswith("-wt") and p.is_dir():
+        linked = [child for child in p.iterdir() if (child / ".git").is_file()]
+        if linked:
+            sources = {_shared_repo(child) for child in linked}
+            if len(sources) != 1:
+                raise WorkspaceError("worktree container has conflicting shared checkouts")
+            return sources.pop()
     if p.parent.name.endswith("-wt"):            # <name>-wt/<agent>
         return p.parent.parent / p.parent.name[:-len("-wt")]
     if p.name.endswith("-wt"):                    # <name>-wt
@@ -514,7 +587,46 @@ def _shared_repo(repo: Path | str) -> Path:
 def worktree_for(repo: Path | str, agent: str) -> Path:
     """Where agent's isolated worktree of <repo> lives: <repo>-wt/<agent>."""
     shared = _shared_repo(repo)
-    return shared.parent / f"{shared.name}-wt" / agent
+    legacy = shared.parent / f"{shared.name}-wt" / agent
+    # Existing work remains reachable even when an external disk is absent.
+    if legacy.exists():
+        return legacy
+    # Git's registration survives configuration changes. Only accept the exact
+    # legacy path or our source-derived namespace, never another named tree.
+    if (shared / ".git").exists():
+        registered = subprocess.run(["git", "-C", str(shared), "worktree", "list", "--porcelain", "-z"],
+                                    capture_output=True, text=True)
+        if registered.returncode == 0:
+            container = worktree_storage.destination(Path("/"), shared, agent).parent.name
+            matches = []
+            for field in registered.stdout.split("\0"):
+                if field.startswith("worktree "):
+                    candidate = Path(field[len("worktree "):])
+                    if candidate.name == agent and candidate.parent.name == container:
+                        if not candidate.is_dir():
+                            raise WorkspaceError("registered external worktree is unavailable; refusing a duplicate")
+                        if _shared_repo(candidate).resolve() != shared.resolve():
+                            raise WorkspaceError("registered worktree source identity differs")
+                        matches.append(candidate)
+            if len(matches) > 1:
+                raise WorkspaceError("multiple registered worktrees match this agent and source")
+            if matches:
+                return matches[0]
+    try:
+        root = worktree_storage.configured_root()
+    except worktree_storage.StorageError as exc:
+        raise WorkspaceError(str(exc)) from exc
+    if root is None:
+        return legacy
+    if (shared / ".git").is_file() or (shared / ".git").is_symlink():
+        identity = _git_identity(shared)
+        if identity is None or _registered_shared_repo(shared, identity[1]) != shared.resolve():
+            raise WorkspaceError("external storage requires an identifiable registered primary checkout")
+    destination = worktree_storage.destination(root, shared, agent)
+    if destination.exists() and (not (destination / ".git").is_file()
+                                 or _shared_repo(destination).resolve() != shared.resolve()):
+        raise WorkspaceError("configured worktree destination is not registered to this source")
+    return destination
 
 
 def agent_worktrees(agent: str,
@@ -538,6 +650,12 @@ def agent_worktrees(agent: str,
             Path(os.environ.get("GT_ROOT", Path.home() / "gt")),
             Path(os.environ.get("WORKSPACE_ROOT", Path.home() / "workspace")),
         )
+        try:
+            storage = worktree_storage.configured_root()
+        except worktree_storage.StorageError as exc:
+            raise WorkspaceError(str(exc)) from exc
+        if storage is not None:
+            roots += (storage,)
     out: list[Path] = []
     seen: set[Path] = set()
     for raw_root in roots:
@@ -854,6 +972,7 @@ class Staleness:
     publication_remote: str = ""
     # Cycle-only exemptions; other staleness consumers still see these as dirty.
     per_install: tuple = ()
+    landed: tuple = ()
 
     def measurement_is_stale(self) -> bool:
         """Is this reading too old to be worth calling "ok"?
@@ -884,6 +1003,8 @@ class Staleness:
         if self.error:
             return f"staleness UNKNOWN ({self.error})"
         bits = []
+        if self.landed:
+            bits.append("landed: " + "; ".join(self.landed))
         if self.unverified:
             # FIRST, so the reader cannot take the measured half for the whole.
             # No behind-count is printed at all in this state — it was not
@@ -1485,6 +1606,18 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
+    landed = ()
+    if unpushed.isdigit() and int(unpushed):
+        from . import landed as landing
+        code, orphan_text = run(dest, "rev-list", f"--max-count={landing.LIMIT}",
+                                "HEAD", "--not", *saved_refs)
+        candidates = [oid for oid in orphan_text.splitlines() if landing.SHA.fullmatch(oid)]
+        trusted = refreshed if selected else [n for n in names if n not in mirrors]
+        if code == 0 and candidates:
+            cleared, why = landing.classify(dest, candidates, trusted, run,
+                                            network=bool(fetch and refreshed))
+            unpushed = str(max(0, int(unpushed) - len(cleared)))
+            landed = tuple(why)
     status_args = ["status", "--porcelain"]
     if untracked_all:
         # Directory-collapsed output (`?? .playwright-mcp/`) is enough to COUNT
@@ -1501,6 +1634,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             behind=int(behind) if behind.isdigit() else 0,
             unpushed=int(unpushed) if unpushed.isdigit() else 0,
             publication_remote=remote or "",
+            landed=landed,
             dirty=True,
             note=note,
             unverified=unverified,
@@ -1542,6 +1676,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
         publication_remote=remote or "",
+        landed=landed,
         dirty=tracked_dirty,
         provisioned=provisioned,
         per_install=per_install,
@@ -1569,7 +1704,7 @@ def ensure_worktree(repo: Path | str, agent: str, base: str = "origin/main",
             f"no shared git checkout at {shared} to provision a worktree from — "
             f"refusing to invent one. Fix: pass the path to the real checkout."
         )
-    dest = shared.parent / f"{shared.name}-wt" / agent
+    dest = worktree_for(shared, agent)
     if dest.is_dir():
         return str(dest)                 # already provisioned — idempotent
     if dest.exists():
@@ -1768,9 +1903,56 @@ def push_authority_refusal(dest: Path | str, run: GitRunner = _git,
     return ""
 
 
+def push_freeze_refusal(dest: Path | str, remotes: list[str],
+                        run: GitRunner = _git) -> str:
+    """Check every effective push URL against operator-recorded host freezes.
+
+    Git resolves pushInsteadOf/pushurl here. All configured values are read so a
+    repo-local empty value cannot erase a global hold. This is a local preflight,
+    not a server lock or a claim that a prose-only freeze can be discovered.
+    """
+    for remote in remotes:
+        rc, urls = run(dest, "remote", "get-url", "--push", "--all", remote)
+        if rc or not urls.strip():
+            return f"REFUSED BEFORE PUSH: {remote} push URLs unreadable; no push authorized."
+        for url in urls.splitlines():
+            # Git helper transports can execute arbitrary commands whose real
+            # destination is not represented by the apparent URL authority.
+            # Only ordinary Git transports expose a host we can freeze here.
+            try:
+                parsed = urlsplit(url)
+                supported = (
+                    parsed.scheme in ("ssh", "https", "http", "git")
+                    and bool(parsed.hostname)
+                ) if "://" in url else "::" not in url
+                if parsed.scheme == "file" and "://" in url:
+                    supported = parsed.hostname in (None, "", "localhost")
+            except ValueError:
+                supported = False
+            if not supported:
+                return (f"REFUSED BEFORE PUSH: {remote} uses an unsupported push "
+                        "transport; no helper or push authorized.")
+            host, _ = _remote_authority(url)
+            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", host):
+                return (f"REFUSED BEFORE PUSH: {remote} host cannot be checked "
+                        "against freeze configuration; no push authorized.")
+            rc, reason = run(dest, "config", "--get-all", f"st.push-freeze.{host}")
+            if rc == 1:
+                continue
+            if rc != 0:
+                return (f"REFUSED BEFORE PUSH: freeze state for {remote} is unreadable "
+                        f"(git config exit {rc}); no push authorized.")
+            # Presence, including an empty reason, means HOLD. No time-based
+            # expiry or command-line bypass silently releases an operator hold.
+            return (f"REFUSED BEFORE PUSH: {remote} host {host} is write-frozen "
+                    f"(st.push-freeze.{host}); no push authorized.")
+    return ""
+
+
 def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                       run: GitRunner = _git,
-                      push_run: PushRunner = _git_push) -> "list[PushOutcome]":
+                      push_run: PushRunner = _git_push, *,
+                      selected_remotes: tuple[str, ...] | None = None) -> "list[PushOutcome]":
     """Push `src` to `dst` on EVERY configured remote. NEVER forces.
 
     WHY EVERY REMOTE. shantytown has two live peers, neither a mirror, and each
@@ -1804,6 +1986,14 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
     if refusal:
         return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
 
+    if selected_remotes is not None:
+        wanted = list(dict.fromkeys(selected_remotes))
+        if not wanted or any(not r or r not in remotes for r in wanted):
+            return [PushOutcome(remote="preflight", ok=False,
+                reason="REFUSED BEFORE PUSH: selected remote is empty or unconfigured; "
+                       "no remote was contacted.")]
+        remotes = [r for r in remotes if r in wanted]
+
     # NEVER PUSH A DECLARED MIRROR (aegis-x74). A raw feature branch reached
     # skein's public, scrubbed GitHub mirror through this loop because the loop
     # had no word for "mirror". The role was validated by the preflight above.
@@ -1814,7 +2004,17 @@ def push_every_remote(dest: Path | str, src: str, dst: str = "main",
                             "mirror): not pushed; it is advanced only by its "
                             "mirror protocol."))
         for m in mirrors]
-    for remote in (r for r in remotes if r not in mirrors):
+    peers = [r for r in remotes if r not in mirrors]
+    refusal = push_freeze_refusal(dest, peers, run)
+    if refusal:
+        return [PushOutcome(remote="preflight", ok=False, reason=refusal)]
+    for remote in peers:
+        # Recheck immediately before each push as well as the whole-set check.
+        # A new hold after an earlier publication is reported, never unwound.
+        refusal = push_freeze_refusal(dest, [remote], run)
+        if refusal:
+            outcomes.append(PushOutcome(remote=remote, ok=False, reason=refusal))
+            break
         rc, out, err = push_run(dest, "--porcelain", remote,
                                 f"{src}:refs/heads/{dst}")
         if rc == 0:

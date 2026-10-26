@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from . import stores
 from .attribution import attribute
-from .protocols import BLOCKER_KIND_LABELS, Panes, Registry, Tracker
+from .protocols import BLOCKER_KIND_LABELS, Panes, Registry, Tracker, SubmissionObserved
 from .triage import Action, Decision, triage
 
 # Verify reads SCROLLBACK and polls briefly. Measured against a real Claude Code
@@ -183,8 +183,8 @@ class SendUnverified(Exception):
     leaves the item UNTOUCHED — never marked in_progress for a send that may not
     have landed. "Send-and-assume is how you believe work was assigned when it
     wasn't" (design.md). The honest failure is "I could not confirm delivery, so
-    I recorded nothing" — a human re-dispatches, rather than a tracker full of
-    items nobody was told about.
+    I recorded nothing". Check delivery and custody before retrying: an
+    unconfirmed send may already be running.
     """
 
     def __init__(self, item_id: str, pane: str):
@@ -755,10 +755,15 @@ class Dispatcher:
         # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
         # write moved AFTER a confirmed send so a dropped send never marks work
         # in_progress. verify reads the pane back for the item id — the thing we
-        # just sent must now be visible on the pane. If it is not, we sent into
-        # the void: raise SendUnverified (exit 2) and write NOTHING.
-        self.panes.send(p.pane, p.text)                # 1 send
-        if not self.verify(p.pane, item_id):
+        # just sent must have positive submission or pane evidence. If neither
+        # is available, raise SendUnverified (exit 2) and write NOTHING.
+        observed = self.panes.send(p.pane, p.text)    # 1 send
+        # Codex submission already observes idle -> working with an empty,
+        # unqueued composer. Do not discard that stronger exact-body evidence
+        # merely because its echoed item ID has left the scrollback window.
+        submitted = (isinstance(observed, SubmissionObserved)
+                     and observed.matches(p.pane, p.text))
+        if not submitted and not self.verify(p.pane, item_id):
             raise SendUnverified(item_id, p.pane)
         # THE OTHER HALF OF THE WINDOW (GitHub #20). send-then-update is the right
         # order — a dropped send must never mark work in_progress — but it leaves
@@ -882,6 +887,11 @@ class Dispatcher:
         item = self.tracker.get(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
+        from .ask_visibility import refuse_deferral
+        try:
+            refuse_deferral(item, {"status": "deferred", "blocker_kind": label})
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if not getattr(self.tracker, "_structured_defer", False):
             raise DeferRefused("this tracker backend cannot record structured deferrals")
         date = until or item.defer_until or ""
@@ -1017,6 +1027,14 @@ class Dispatcher:
         if dry_run:
             return result
 
+        # Persist setter and deadline together with the reason. updated_at is
+        # an item touch, not evidence of who chose a short CI pacing window.
+        from datetime import datetime, timezone
+        from .deferral_pacing import provenance
+        reason += "\n" + provenance(gate_authority,
+                                    datetime.now(timezone.utc).isoformat(), date)
+        result.reason = reason
+
         def write_verified(fields, final=False):
             # A timeout can follow commit. Read once for evidence, but do not
             # retry or claim success after an indeterminate write.
@@ -1061,8 +1079,8 @@ class Dispatcher:
         design.md: "verify reads the pane back. Send-and-assume is how you
         believe work was assigned when it wasn't." A false negative (the agent
         cleared it before we looked) is SAFE by construction: it maps to exit 2
-        and leaves the tracker untouched, so a human re-dispatches rather than
-        the tracker lying — never the other direction.
+        and leaves the tracker untouched. It is not permission to resend;
+        the receiver may already be working.
 
         But safe-by-construction is not an excuse for a check that can only ever
         fail. Reading the VISIBLE pane once never confirmed a real delivery to a

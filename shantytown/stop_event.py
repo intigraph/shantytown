@@ -336,6 +336,9 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           root: Path | None = None, *, payload: dict | None = None) -> int:
+    if root is not None:
+        from .stop_failure import clear_recovered
+        clear_recovered(root, me)
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -710,7 +713,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             from .feed_check import admitted_haul, haul_governor_verdict
             mine = admitted_haul(
                 mine, card, haul_governor_verdict(root, card),
-                lambda msg: print(msg, file=sys.stderr))
+                lambda msg: print(msg, file=sys.stderr), root=root)
             if not mine:
                 return 0
 
@@ -812,6 +815,9 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
     # into a working agent, spent on a phantom. `st crew` had passed attrs since
     # aegis-x6xh; this path had not, so the fleet had two classifiers' worth of
     # answers from one classifier. One capture mode, one verdict.
+    from .stop_failure import pane_state
+    if pane_state(getattr(panes, "delivery_root", None), card.pane) == "safeguard-blocked":
+        return "safeguard-blocked"
     screen = panes.capture(card.pane, attrs=True)
     # awaiting_answer is optional so a caller with no runtime still gets a verdict
     # — one degraded to `?`, exactly as before, rather than a crash.
@@ -1173,6 +1179,19 @@ def _main(argv: list[str] | None = None) -> int:
         agent_hold.finish_turn(root, me)
         return result
     if mode == "haul":
+        try:
+            from . import config
+            cfg, _error = config.load_or_default(root)
+            if cfg.overdue_enabled and cfg.overdue_spec_changes:
+                if _ceiling_took_the_stop(root,me)[0]:
+                    return 0
+                from .spec_boundary import at_boundary
+                notice = at_boundary(root,me,reg)
+                if notice:
+                    print(json.dumps({"decision":"block","reason":notice}))
+                    return 0
+        except Exception as error:
+            print(f"spec boundary UNKNOWN: {type(error).__name__}; no repeated wake", file=sys.stderr)
         return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.

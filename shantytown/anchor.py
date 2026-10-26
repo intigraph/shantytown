@@ -99,6 +99,7 @@ class Anchoring:
     # also the honest default for a deployment that never said (aegis-n549ii).
     mcp_preapproved: tuple[str, ...] = ()
     decision_view: str = ""
+    responsibilities: str = ""
 
     def render(self, *, now: datetime | None = None) -> str:
         L: list[str] = []
@@ -106,6 +107,10 @@ class Anchoring:
         if self.me.reports_to:
             who += f", reports to {self.me.reports_to}"
         L += [who + ".", ""]
+
+        if self.responsibilities:
+            L.extend(self.responsibilities.splitlines())
+            L.append("")
 
         if self.decision_view:
             L.extend(self.decision_view.rstrip().splitlines())
