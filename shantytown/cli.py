@@ -2560,6 +2560,17 @@ def _refuse_gaming(a, status) -> int:
     return REFUSED
 
 
+def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
+    """An exception's message for stderr: one line, bounded, bearer-redacted.
+
+    The type name alone hid WHY a write failed (aegis-epi). The message can
+    carry a tracker's stderr, so the WHOLE text is redacted before the bound:
+    a cut inside a token would leave a fragment too short to recognise.
+    """
+    from .br import redact_cause
+    return redact_cause(" ".join(str(exc).split()))[:limit] or "no message"
+
+
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
     with declared_command(a.cmd):
@@ -2623,6 +2634,7 @@ def _run_command(a) -> int:
     if a.cmd == "repool":
         return _cmd_repool(a)
     if a.cmd == "item":
+        from .br import NothingWritten
         from .work_item import command
         try:
             print(json.dumps(command(a, _tracker(a)), indent=2))
@@ -2630,8 +2642,13 @@ def _run_command(a) -> int:
         except ValueError as exc:
             print(f"work item refused: {exc}", file=sys.stderr)
             return 2
+        except NothingWritten as exc:
+            # A definite outcome: the tracker says nothing landed (aegis-epi).
+            print(f"work item not written: {_bounded_cause(exc)}; "
+                  "nothing landed, re-read then retry", file=sys.stderr)
+            return 2
         except Exception as exc:
-            print(f"work item operation unproven: {type(exc).__name__}; "
+            print(f"work item operation unproven: {type(exc).__name__}: {_bounded_cause(exc)}; "
                   "check write readback, then retry transient failures if not applied", file=sys.stderr)
             return 2
     if a.cmd == "defer":
