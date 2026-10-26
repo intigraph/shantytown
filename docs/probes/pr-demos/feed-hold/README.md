@@ -23,3 +23,15 @@ Download [output.log](output.log) and [timing.log](timing.log), then use
 Playback requires util-linux and is verified locally; no inline player is
 provided. The output log is also a readable transcript. These small sanitized
 artifacts follow the repository's existing demo-directory retention.
+
+## Nonregular record repair
+
+Run `python3 -m pytest -q tests/test_feed_hold.py -k nonregular_record`.
+These private controls model FIFO, socket, character-device, block-device and
+directory metadata without creating or opening a special file. At `dcf79b46`,
+all five reach the payload reader and fail; requiring a regular record makes
+all five pass. Each case first checks that a valid regular hold still works.
+Both sides ran with clean watched HOME paths and resources.
+
+This repair evidence is a paired test transcript, not a new timed recording.
+The recording above continues to demonstrate the unchanged feed-hold command.
