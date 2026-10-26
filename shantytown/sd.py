@@ -34,7 +34,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
-from .query_identity import sdk_subprocess_options
+from .query_identity import sdk_subprocess_options, declared_read_operation
 from .answer import Answer
 from .protocols import WorkItem
 from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
@@ -440,6 +440,63 @@ class SdTracker(BrTracker):
                 return held
         return self._owner_rows(agent)
 
+    @declared_read_operation("spec-boundary")
+    def spec_rows(self, owner):
+        if self.store:
+            self.prove_store()
+            value = self._spec_json("spec-changes")
+            events = value.get("events")
+            if not isinstance(events,list) or len(events) > 500:
+                raise StoreUnproven("local spec changes UNKNOWN or capped")
+            rows = []
+            for event in events:
+                recipient = event.get("recipient")
+                if owner is not None and recipient not in (owner,owner.split("/")[-1]):
+                    continue
+                rows.append({"id":event["id"],"title":event["title"],"status":event["status"],
+                    "priority":event["priority"],"labels":event["labels"],"assignee":recipient,
+                    "spec_version":event["version"],"spec_previous_version":event["previous_version"],
+                    "spec_changed_at":event["changed_at"]})
+            return Answer.complete_read(rows,how="explicit local Seeds spec changes")
+        if not self._use_remote_projection():
+            raise StoreUnproven("spec boundary projection requires the selected remote schema")
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), owner, timeout=min(self.timeout,1), decision=True, only_specs=True, include_deferred=True)
+
+    def _spec_json(self, *args):
+        result = self._bd(*args, "--json")
+        if result.returncode != 0:
+            raise StoreUnproven(f"Seeds spec operation failed: {_failure_reason(result)[:160]}; no retry")
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict):
+            raise StoreUnproven("invalid Seeds spec operation envelope")
+        return value
+
+    def spec_state(self, identifier):
+        value = self._spec_json("spec-state", identifier)
+        if (value.get("id") != identifier or type(value.get("version")) is not int
+                or value["version"] < 0 or type(value.get("unacked")) is not bool):
+            raise StoreUnproven("invalid spec state readback")
+        return value
+
+    def ack_spec(self, identifier, version, *, session=None):
+        args = ["ack", identifier, "--version", str(version)]
+        if session:
+            args.extend(["--session",session])
+        return self._spec_json(*args)
+
+    def rescope(self, identifier, path, *, quote, requester, summary, urgent, session, dry_run=False):
+        args = ["rescope", identifier, "--spec-file", str(path), "--quote", quote,
+                "--requester", requester, "--summary", summary, "--session", session]
+        if urgent:
+            args.append("--urgent")
+        if dry_run:
+            args.append("--dry-run")
+        value = self._spec_json(*args)
+        if value.get("id") != identifier or type(value.get("version")) is not int:
+            raise StoreUnproven("rescope result UNKNOWN; do not retry")
+        return value
+
     def decision_rows(self, agent: str | None) -> Answer[list[dict]]:
         """Advisory fields; reuse a fresh worker plate's complete projection."""
         if agent is not None and agent in self._decision_candidates:
@@ -448,7 +505,7 @@ class SdTracker(BrTracker):
             if not self._use_remote_projection():
                 raise ValueError("decision projection unavailable on this transport")
             from .seeds_plate import owner_rows
-            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True, include_deferred=agent is not None)
         except Exception as error:
             return Answer.capped([],how="Seeds decision fields",caveat=str(error))
 
@@ -563,6 +620,18 @@ class SdTracker(BrTracker):
         candidates = ready_candidates(ready, active) if ready_candidates else ready
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
+
+    def ranking_rows(self):
+        """Complete lean active/deferred metadata and proven unowned READY rows."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import owner_rows, unblocked_ids
+        from .priority_advisory import workable
+        rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          include_deferred=True, include_messages=False).exact()
+        candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
+        ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        return [r for r in candidates if r["id"] in ready], rows
 
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
@@ -721,11 +790,26 @@ class SdTracker(BrTracker):
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
-        return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
+        options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
-                                      "show", "list", "ready", "where", "search", "count", "info", "stats"
+                                      "show", "list", "ready", "where", "search", "count", "info", "stats",
+                                      "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        # Reads retain their original route and budget. Optional signing
+        # observation belongs only to the actual Seeds mutation child.
+        from .advise_signing import mutation, run
+        if mutation(self._translate(args)):
+            asserted = actor
+            for i, arg in enumerate(args):
+                if arg.startswith('--actor='):
+                    asserted = arg.partition('=')[2]
+                elif arg == '--actor' and i + 1 < len(args):
+                    asserted = args[i + 1]
+            return run(cmd, actor=actor, asserted_actor=asserted,
+                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                       options=options, runner=subprocess.run)
+        return subprocess.run(cmd, **options)
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

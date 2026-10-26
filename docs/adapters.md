@@ -338,3 +338,17 @@ identified legacy revision ledger retain the SDK adapter. A failed format probe,
 malformed field, ambiguous graph membership, truncated response or exhausted
 field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
 The projection sends the SDK's caller-declared attribution headers when present.
+
+## Quipu request provenance
+
+The Quipu adapters derive `X-Quipu-Agent`, `-Harness`, `-Model`, `-Session` and
+`-Host` from the current environment on each request. Explicit `QUIPU_*` values
+win; agent sessions otherwise use `SHANTY_AGENT`, `SHANTY_MODEL` and their own
+harness session ID. Unavailable fields are omitted. A standalone invocation
+identifies the `shantytown` producer with harness `cli`; it does not inherit an
+agent merely because `SHANTY_AGENT` remains in its environment. Header values
+are printable ASCII, trimmed and bounded to 128 characters.
+
+The default client label is `shantytown`; adapter-specific labels remain in
+place. These fields are declared diagnostic context. Bearer authentication,
+credential refusal and graph authority retain their existing checks.

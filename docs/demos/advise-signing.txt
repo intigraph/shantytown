@@ -1,0 +1,23 @@
+Script started on 2026-10-25 12:05:15-04:00 [COMMAND="python3 docs/demos/advise-signing.py --source /tmp/signing-demo-base --label base-15ddda519e481f70277ce94c0dad826c907d17b4 && python3 docs/demos/advise-signing.py --source . --label head-6b47777f3e0f99fe5a811c7054fe00bf5c1b9dd0" <not executed on terminal>]
+base-15ddda519e481f70277ce94c0dad826c907d17b4: real Seeds adapter, synthetic transport; no network or keys
+asserted actor: worker
+  child: mutation credentials: legacy
+  command exit: 0
+  observed: no per-write key/principal receipt
+asserted actor: different-actor
+  child: mutation credentials: legacy
+  command exit: 0
+  observed: no per-write key/principal receipt
+head-6b47777f3e0f99fe5a811c7054fe00bf5c1b9dd0: real Seeds adapter, synthetic transport; no network or keys
+asserted actor: worker
+  child: identity credentials: per-agent profile
+  child: mutation credentials: per-agent profile
+  command exit: 0
+  observed: {'actor': 'worker', 'principal': 'worker', 'match': True, 'command_exit': 0}
+asserted actor: different-actor
+  child: identity credentials: per-agent profile
+  child: mutation credentials: per-agent profile
+  command exit: 0
+  observed: {'actor': 'different-actor', 'principal': 'worker', 'match': False, 'command_exit': 0}
+
+Script done on 2026-10-25 12:05:16-04:00 [COMMAND_EXIT_CODE="0"]

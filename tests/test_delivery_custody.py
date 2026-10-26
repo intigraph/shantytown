@@ -308,3 +308,163 @@ def test_ambiguous_pointers_never_create_a_third_or_redeliver(tmp_path, monkeypa
     assert len(f[-1].unread('worker')) == 2
     assert records(tmp_path)[0]['pointer_state'] == 'ambiguous'
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+
+
+# aegis-185l: a stale GOVERNOR HOLD notice stranded dearing 3h and gennaro 10h,
+# and the backlog watch (re-armed only on an EMPTY backlog) never paged.
+
+def test_queued_body_restored_to_idle_composer_unblocks_the_next_sender(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    def capture(*a, **kw):
+        if any(c[-1] == 'Enter' for c in keys(calls)):
+            return BUSY
+        if any(c[-1] == 'C-u' for c in keys(calls)):
+            return READY
+        return OWNED
+    monkeypatch.setattr(panes, 'capture', capture)
+    panes.send('worker', 'Next notice')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert values == {BODY: 'cleared', 'Next notice': 'delivered'}
+    assert [c[-1] for c in keys(calls)] == ['C-e', 'C-u', 'Next notice', 'Enter']
+
+
+def test_queued_body_still_in_codex_queue_is_not_cleared(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [QUEUED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    monkeypatch.setattr(panes, 'capture', lambda *a, **kw: QUEUED)
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', 'Next notice')
+    assert not any(c[-1] in ('C-e', 'C-u') for c in keys(calls))
+    assert {r['text']: r['state'] for r in records(tmp_path)}[BODY] == 'queued'
+
+
+def test_superseded_notice_is_cleared_but_never_resent_or_pointed(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    assert delivery.supersede(tmp_path, lambda text: text == BODY, keep='other')
+    def capture(*a, **kw):
+        if any(c[-1] == 'Enter' for c in keys(calls)):
+            return BUSY
+        if any(c[-1] == 'C-u' for c in keys(calls)):
+            return READY
+        return OWNED
+    monkeypatch.setattr(panes, 'capture', capture)
+    panes.send('worker', 'Lifted notice')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert values == {BODY: 'superseded', 'Lifted notice': 'delivered'}
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    sent = len(keys(f[1]))
+    observe(tmp_path, f, READY, 1000)
+    assert f[-1].unread('worker') == []          # no pointer for superseded text
+    assert len(keys(f[1])) == sent               # and nothing typed again
+
+
+def test_supersede_marks_only_unfinished_stale_bodies_and_keeps_the_current_one(tmp_path):
+    for text, state in [('HOLD a', 'queued'), ('HOLD b', 'unknown'), ('HOLD c', 'delivered'),
+                        ('mail', 'queued'), ('HOLD now', 'queued')]:
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(text, 17.0)
+            custody.finish(state)
+    done = delivery.supersede(tmp_path, lambda t: t.startswith('HOLD'), keep='HOLD now')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert len(done) == 2
+    assert values == {'HOLD a': 'superseded', 'HOLD b': 'superseded', 'HOLD c': 'delivered',
+                      'mail': 'queued', 'HOLD now': 'queued'}
+    assert delivery.supersede(tmp_path / 'absent', lambda t: True, keep='') == []
+
+
+def stranded(tmp_path, monkeypatch, *, state='queued'):
+    from shantytown import notify
+    f = fixtures(tmp_path, monkeypatch, state=state)
+    wakes = []
+    monkeypatch.setattr(notify, 'wake_recipient', lambda reg, panes, worker, detail, **kw:
+                        wakes.append(detail))
+    return f, wakes
+
+
+def stranded_events(tmp_path):
+    return [e for e in FilesEvents(tmp_path / 'events').pending('lead')
+            if 'unsubmitted in an idle composer' in e.detail
+            or 'consecutive sends not delivered' in e.detail]
+
+
+def test_owned_notice_in_idle_composer_pages_lead_after_15_minutes(tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    t = time.time()
+    observe(tmp_path, f, OWNED, t)
+    observe(tmp_path, f, OWNED, t + delivery.STRANDED_SECONDS - 1)
+    assert stranded_events(tmp_path) == []
+    observe(tmp_path, f, OWNED, t + delivery.STRANDED_SECONDS)
+    [event] = stranded_events(tmp_path)
+    assert event.reason == 'delivery-stalled'
+    assert BODY not in event.detail
+    assert 'idle composer' in event.detail
+    assert len([w for w in wakes if 'idle composer' in w]) == 1
+    observe(tmp_path, f, OWNED, t + 2 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1    # one page per episode
+    # The composer empties, then the same body strands again: a new episode.
+    observe(tmp_path, f, READY, t + 2 * delivery.STRANDED_SECONDS + 1)
+    observe(tmp_path, f, OWNED, t + 3 * delivery.STRANDED_SECONDS)
+    observe(tmp_path, f, OWNED, t + 4 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 2
+    assert keys(f[1]) == []                        # the watch never types
+
+
+@pytest.mark.parametrize('screen', [BUSY.replace(READY, OWNED), OWNED.replace(BODY, 'Human draft'), READY])
+def test_busy_pane_foreign_draft_or_empty_composer_never_pages(tmp_path, monkeypatch, screen):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch, state='delivered')
+    t = time.time()
+    for k in range(3):
+        observe(tmp_path, f, screen, t + k * delivery.STRANDED_SECONDS)
+    assert stranded_events(tmp_path) == [] and wakes == []
+
+
+def test_repeated_undelivered_sends_page_once_and_rearm_after_a_delivery(tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch, state=None)
+    for n in range(delivery.FAILED_SENDS - 1):
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(f'notice {n}', 17.0)
+            custody.finish('queued')
+    t = time.time()  # after the sends: age is measured from the first of them
+    observe(tmp_path, f, BUSY, t + delivery.STRANDED_SECONDS)
+    assert stranded_events(tmp_path) == []        # four is below the threshold
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin('notice 4', 17.0)
+        custody.finish('unknown')
+    observe(tmp_path, f, BUSY, t + delivery.STRANDED_SECONDS)
+    [event] = stranded_events(tmp_path)
+    assert '5 consecutive sends not delivered' in event.detail
+    observe(tmp_path, f, BUSY, t + 2 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin('delivered one', 17.0)
+        custody.finish('delivered')
+    observe(tmp_path, f, BUSY, t + 3 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1    # a delivery ends the episode
+
+
+def test_capture_error_while_clearing_keeps_a_superseded_body_terminal(tmp_path, monkeypatch):
+    # Review of #386: failed() persists `unknown` before it captures the pane.
+    # A capture that raises must not leave the old notice resubmittable.
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('superseded')
+    def capture(*a, **kw):
+        raise OSError('pane unreadable')
+    monkeypatch.setattr(panes, 'capture', capture)
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        with pytest.raises(OSError):
+            custody.clear_previous(panes, OWNED)
+    assert {r['text']: r['state'] for r in records(tmp_path)} == {BODY: 'superseded'}
+    assert keys(calls) == []

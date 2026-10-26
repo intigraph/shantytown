@@ -192,9 +192,10 @@ def test_headers_carry_bearer_only_when_env_token_is_set(monkeypatch, tmp_path):
     # ~/.config/quipu/token, which the fallback would (correctly) read.
     monkeypatch.setenv("QUIPU_AUTH_TOKEN_FILE", str(tmp_path / "absent"))
 
-    # Unset: today's open-server behaviour, byte-identical headers.
+    # Unset: no bearer; structured provenance is independent of authentication.
     monkeypatch.delenv("QUIPU_AUTH_TOKEN", raising=False)
-    assert request_headers() == {"Content-Type": "application/json"}
+    assert request_headers()["Content-Type"] == "application/json"
+    assert "Authorization" not in request_headers()
 
     # Empty: must NOT become `Bearer ` — an empty env var is unset, not a
     # (wrong) credential that turns a misconfiguration into 401s.

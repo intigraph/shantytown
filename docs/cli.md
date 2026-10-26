@@ -49,6 +49,14 @@ ready plate. Closing inbox messages or repooling excluded alarm records does
 not free a work slot. Admission reads fresh owner membership; it never borrows
 the frozen observation used to render a crew report.
 
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
 `st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
@@ -2663,6 +2671,17 @@ resets on recovery. An already released item is not written again. Known unmet
 mechanical conditions remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
+Short owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive and at most 60 minutes, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item; on the third
+unchanged scheduled observation it returns to the administrator path. An item
+update resets that budget. Failed owner delivery also retains the admin path.
+
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
 old, including items with future deadlines, as a reading list. Age does not
@@ -3191,3 +3210,82 @@ source data, not an instruction or current authority. `export --owner IRI`
 returns the complete bounded envelope for inspection; it does not supply own
 projection identity and cannot select native files. Missing graph/partial or
 unreadable coverage refuses rather than returning a misleading empty match.
+
+### Squash-merged work and worktree maintenance
+
+Cycle loss checks do not require a merged feature branch to remain on a remote.
+Commits count as landed when their exact changed paths, old/new blob IDs and file
+modes match a non-merge commit in the bounded trusted-main history, or when they
+are reachable from the recorded head of a merged
+PR in that same repository. The merge commit must also be reachable on trusted
+main. Output names the rule that cleared the work. Unproved follow-up commits
+still refuse a cycle; dirty tracked files remain protected.
+
+Merged-PR metadata uses a bounded page and an atomic, repository-local cache in
+the common Git directory. A missing record, unavailable forge, malformed response
+or truncated history never certifies a landing. Explicit fetch/refresh boundaries
+may read the forge; edit-time checks only use cached evidence and local Git.
+Mirror remotes cannot supply a publication or landing proof.
+Patch IDs and `git cherry` are not loss proofs: they ignore semantic whitespace.
+Exact-delta reads cover at most 512 main commits; unknown or malformed evidence
+keeps work protected.
+
+At normal safe project-worktree refresh boundaries, including the existing
+scheduled tend respawn path, a clean fully landed topic is detached at the
+trusted current main. This never forces a checkout or overwrites local changes.
+Each pass may prune up to 32 positively landed, unoccupied merged/gone topic
+branches; main/master and unknown work are retained. Pruning rechecks occupancy,
+compares the expected branch tip before deletion, and retains a recovery ref at
+`refs/st/landed-retained/<old-tip>`. There is no new timer or live-agent checkout
+sweep. API cache/page and per-pass limits may leave older branches unclassified.
+
+After a merged topic is detached, create or check out a new topic before
+committing new work. Publish it with an explicit `--source-branch`. Push refuses
+an unreadable or detached source instead of silently selecting an old canonical
+branch. Fresh topics at main are not considered merged topics.
+
+Use `git config branch.<topic>.st-keep true` to retain a named recovery or parked
+branch. An untracked alias is not pruned merely because it shares a merged PR's
+head SHA; the merged PR must name that same topic, or its upstream must be gone.
+
+### Graph-owned role responsibilities
+
+When `SHANTY_RULES_QUERY` names the deployment's process-rule query, human
+`st anchor` output includes the current role's responsibility summaries.
+Session-start uses that same anchor render. `st fleet roles show` reads all role
+scopes once and lists their summaries, including additive roles such as reviewer.
+An unavailable, empty, capped or malformed read prints `UNKNOWN`; the program
+never substitutes a built-in responsibility text.
+
+The named query accepts a canonical role IRI (the namespace comes from
+`SHANTY_ONTO_NS`), and `*` for the role catalogue. It returns `topic`, `rule`,
+`summary`, `text`, and `scope`. Responsibilities have topic `responsibilities`
+and an exact role `scope`; ordinary process rules remain in the same result.
+Deployments may also accept local role names. Publish the query definition and
+role-scoped rules through the deployment's governed graph lane before adoption.
+The graph owns the wording; this package owns only its bounded read and render.
+
+On the fleet-owner host, the existing `st fleet tend` pass includes an
+administrator ranking check. It names each live agent whose canonical plate
+is below strictly higher-priority unowned READY work, and lists all unowned P0
+items in the complete active/deferred metadata projection. Blocked work is not
+promoted to READY, and owned work is not relabeled unowned. No assignment,
+priority or rank changes automatically.
+
+The digest includes P0 work created/closed counts for seven UTC calendar dates,
+including the current partial date. This is explicitly not a rolling 168-hour
+count. `SHANTY_BOARD_METRICS_QUERY` may select the aggregate query (default
+`seeds_board_metrics_v1`). It must supply independent `coverage` and
+`aggregation_control` rows plus reconciled `created`/`closed` grouped counts and
+matching totals; capped, inconsistent or failed reads stay `UNKNOWN`. Inbox
+counts do not become work counts. The aggregate has an eight-second total transport
+budget; role-summary reads retain a two-second total transport budget. A single
+foreground helper performs each HTTP read; the parent's monotonic deadline includes
+helper startup, DNS/connection setup, headers and body consumption. Expiry kills
+and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
+headers travel over private stdin rather than process arguments. Response and
+completeness caps still apply. Neither budget changes the server deadline.
+Changed actionable digests use the existing
+administrator advisory route; repeated digests are quiet. Routine healthy
+results remain in the scheduled pass log. The pass budget may defer this
+advisory sweep without interrupting supervision.

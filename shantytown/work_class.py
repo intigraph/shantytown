@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from . import harness
 
 
-def claude_work_class(item) -> tuple[bool, str]:
+def important_work_class(item) -> tuple[bool, str]:
     labels = getattr(item, "labels", None)
     if not isinstance(labels, (tuple, list, set, frozenset)) or not all(
             isinstance(label, str) for label in labels):
@@ -24,22 +24,26 @@ def claude_work_class(item) -> tuple[bool, str]:
     return True, "authoritative work:important-quipu-code label"
 
 
+# Retain the historical internal name for callers inspecting class metadata.
+# Important/design labels stay truthful; they no longer select a Claude worker.
+claude_work_class = important_work_class
+
+
 def exempt(card, policy) -> bool:
-    """A configured lead exemption concerns only this filter, never a budget."""
-    return (card.role in ("lead", "administrator", "keeper")
-            and card.name in policy.class_exempt)
+    """Only a configured actual administrator retains the Claude allowance."""
+    return card.role == "administrator" and card.name in policy.class_exempt
 
 
 def lane_refusal(item, actual, agent=None) -> str:
-    eligible, reason = claude_work_class(item)
-    wanted = "claude" if eligible else "codex"
-    if actual == wanted:
+    _, reason = important_work_class(item)
+    # The current rule (2026-10-25) routes every author and reviewer to
+    # Codex. The former important/design preference caused real dispatch
+    # refusals after that rule changed; do not infer a harness from the class.
+    if actual == "codex":
         return ""
-    if actual == "claude":
-        return ("claude lane admits designs and important Quipu code only "
-                f"(aegis-x1q); dispatch to codex: {reason}")
-    return (f"work class requires {wanted}, but explicit target {agent} uses "
-            f"{actual}: {reason} (aegis-x1q); target and harness unchanged")
+    return (f"work class requires codex for authoring and review, but explicit "
+            f"target {agent} uses {actual}: {reason} (aegis-x1q); "
+            "target and harness unchanged")
 
 
 def for_card(verdict, policy, card, root=None):

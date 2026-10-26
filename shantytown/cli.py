@@ -1576,11 +1576,17 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
     wi.add_argument("item")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--spec-file", type=Path)
+    wi.add_argument("--quote")
+    wi.add_argument("--requester")
+    wi.add_argument("--summary")
+    wi.add_argument("--urgent", action="store_true")
+    wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
     wi.add_argument("--replace-text", action="store_true",
@@ -2885,6 +2891,11 @@ def _owned_work_rows(tracker, name):
     raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
 
 
+def _owned_work_publish(a, *, agents=None):
+    from . import owned_work_graph
+    owned_work_graph.publish(Path(a.root), agents=agents)
+
+
 def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
     from .owned_work import OwnedWork
     try:
@@ -2924,6 +2935,8 @@ def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
         print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
               "); ownership not measured", file=sys.stderr)
         return []
+    finally:
+        _owned_work_publish(a, agents={card.name} if card else None)
 
 
 def _launched_now(a, card_name: str, settings_path=None) -> None:
@@ -2943,6 +2956,7 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
     _stops(a).forget(card_name)
     from .owned_work import OwnedWork
     OwnedWork(a.root).launch(card_name)
+    _owned_work_publish(a, agents={card_name})
     agent_hold.clear(a.root, card_name)
 
 
@@ -6032,7 +6046,7 @@ def _looks_stranded(panes, pane: str) -> bool:
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
-                   sender: str | None = None) -> int:
+                   sender: str | None = None, *, boundary_only: bool = False) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -6130,6 +6144,9 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    if boundary_only:
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
+        return OK
     if routine_wait:
         try:
             admin_inbox.enqueue(a.root, agent, item, backend, routine_wait,
@@ -6496,10 +6513,29 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import crew_rules
+    p.responsibilities = crew_rules.render(crew_rules.load(a.root, [p.me.role]))
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
         fleet=p.me.role == "administrator")
+    if getattr(_anchor_tracker,"store",None):
+        try:
+            from types import SimpleNamespace
+            rows = _anchor_tracker.spec_rows(None if p.me.role == "administrator" else me)
+            spec_packet = due_brief.projected(SimpleNamespace(decision_rows=lambda _:rows),me).exact()
+            notices = [f'{row["id"]} SPEC CHANGED v{row["previous"]} -> v{row["version"]} (unacked)'
+                       for row in spec_packet["changes"]]
+            if notices:
+                notice = "  " + "; ".join(notices) + "\n"
+                if len((p.decision_view + notice).encode()) > due_brief.CAP:
+                    notice = "  SPEC CHANGED (unacked; display capped)\n"
+                p.decision_view = due_brief._cut(
+                    p.decision_view, due_brief.CAP - len(notice.encode())) + notice
+        except Exception:
+            notice = "  SPEC status UNKNOWN\n"
+            p.decision_view = due_brief._cut(
+                p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
     from . import feed_hold
@@ -8728,6 +8764,9 @@ def _cmd_roles(a) -> int:
         for ag in sorted(agents, key=lambda x: x.name):
             print(f"  {ag.name:<11} {ag.role:<14} "
                   f"reports_to: {ag.reports_to or '—'}")
+        from . import crew_rules
+        names = set(_catalog(a).roles) | {role for ag in agents for role in ag.effective_roles()}
+        print(crew_rules.render(crew_rules.load_all(a.root, names)))
         print()
         return OK
 
@@ -9460,10 +9499,8 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
 def _worktree_branch(dest: Path) -> str | None:
     """The branch `dest` has checked out, or None if it cannot be determined.
 
-    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
-    unreadable worktree is not evidence that the wrong branch is about to be
-    pushed, and refusing on it would break the canonical path for a condition we
-    have not observed. The refusal fires only on a POSITIVE disagreement.
+    None means CANNOT TELL. Push must refuse it: after a merged topic is detached,
+    selecting its stale canonical ref would silently omit newly committed work.
     """
     import subprocess
 
@@ -9752,6 +9789,16 @@ def _cycle_stop_refusal(a, agent_name) -> str:
     return ""
 
 
+def _record_cycle_refusal(root, agent, reason, risks):
+    """A receipt failure must not hide or replace the already printed refusal."""
+    from .cycle import Requests
+    try:
+        Requests(root).mark_refused(agent, reason, risks)
+    except OSError as error:
+        print(f"  warning: could not save refusal receipt ({error}); "
+              "cycle remains refused", file=sys.stderr)
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -9909,7 +9956,8 @@ def _cmd_cycle(a) -> int:
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes, no_in_place=no_in_place)
+                                           quipu_nodes, no_in_place=no_in_place,
+                                           allow_loss=bool(getattr(a, "allow_loss", False)))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -9998,8 +10046,7 @@ def _cmd_cycle(a) -> int:
         # tell "in flight" from "refused an hour ago". A no-op when nothing is
         # pending, so an operator's ad-hoc cycle of an agent that never asked
         # cannot mint a request.
-        cycle_mod.Requests(a.root).mark_refused(
-            agent_name, verdict.reason, verdict.risks)
+        _record_cycle_refusal(a.root, agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -10024,7 +10071,7 @@ def _cmd_cycle(a) -> int:
     gate = _durable_checkpoint_gate(a, agent_name)
     if gate.ok is False and not a.allow_loss:
         print(f"  refused: {gate.render()}", file=sys.stderr)
-        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        _record_cycle_refusal(a.root, agent_name, gate.render(), [])
         return REFUSED
     if gate.ok is None:
         # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,
@@ -10114,7 +10161,8 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "no_graph_context": "" if nodes else
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
-        "allow_loss": False, "dry_run": False}))
+        "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "dry_run": False}))
 
 
 SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
@@ -10956,8 +11004,9 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
-    if source_branch is not None and checked_out is None:
-        print("  refused before push: explicit source branch cannot be verified; "
+    if checked_out is None:
+        print("  refused before push: source branch cannot be verified (possibly detached HEAD); "
+              "create or check out the intended topic and name --source-branch; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
     if checked_out is not None and checked_out != branch:
@@ -11546,7 +11595,7 @@ def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
 
 
 def _refresh_worktree(dest, base: str | None = None) -> str | None:
-    """Bring a project WORKTREE current — by REBASE onto its upstream, not ff-pull.
+    """Refresh a project worktree, retiring proved merged topics first.
 
     The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
     is on `wt/<agent>`, so an ff-only pull either no-ops (wrong branch) or fails —
@@ -11581,9 +11630,15 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
         # --prune: see tree_staleness. Without it, refs for branches deleted
         # upstream survive and launder orphaned commits into "on a remote".
         from .workspace import run_with_group_timeout
-        run_with_group_timeout(
+        fetched = run_with_group_timeout(
             ["git", "-C", str(dest), "fetch", "--all", "--prune", "--quiet"], 60,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if fetched.returncode != 0:
+            return "worktree fetch failed — no checkout, pruning or rebase attempted"
+        from .workspace import publication_remotes, _git
+        from .landed import retire_and_prune
+        if retired := retire_and_prune(dest, publication_remotes(dest, _git), _git):
+            return retired
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not
@@ -13417,6 +13472,22 @@ def _tend_once(a, quiet: bool = False) -> int:
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
+        def _role_ranking_report():
+            from . import ranking_check
+            def snapshot():
+                trk = _tracker(a)
+                projection = getattr(trk, "ranking_rows", None)
+                packet = projection() if callable(projection) else None
+                if packet is not None:
+                    return packet
+                if not isinstance(trk, FilesTracker):
+                    raise ValueError("selected backend lacks a bounded ranking projection")
+                ready, _active = _priority_snapshot(a)
+                rows = [json.loads(path.read_text()) | {"id": path.stem}
+                        for path in trk.root.glob("*.json")]
+                return ready, rows
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log)
+        _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
         _fleet_sweep("ceiling-transfer",
@@ -13589,7 +13660,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body):
+            def deliver_due(recipient, marker, body, *, boundary_only=False):
                 import re
                 from copy import copy
                 from contextlib import redirect_stdout
@@ -13600,7 +13671,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 output = StringIO()
                 with redirect_stdout(output):
                     code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend")
+                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
                 if code != OK:
                     return None
                 match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
@@ -13611,8 +13682,18 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 except Exception:
                     return PendingReceipt(identifier)
+            def deliver_spec(recipient, marker, body, *, urgent):
+                return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
                 unlock_reader = None
+                spec_reader = None
+                if cfg.overdue_spec_changes:
+                    from .spec_reader import SpecReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("spec changes require the selected Seeds producer")
+                    spec_reader = SpecReader(selected)
                 if cfg.overdue_external_unlocks:
                     from .unlock_reader import UnlockReader
                     from .sd import SdTracker
@@ -13627,6 +13708,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                     receipt=find_due_receipt,
                     events=unlock_reader.events if unlock_reader is not None else None,
                     ack=unlock_reader.ack if unlock_reader is not None else None,
+                    specs=spec_reader.events if spec_reader is not None else None,
+                    spec_ack=spec_reader.ack if spec_reader is not None else None,
+                    spec_deliver=deliver_spec if spec_reader is not None else None,
                     log=_log).sweep()
             overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
             if overdue_sent:
