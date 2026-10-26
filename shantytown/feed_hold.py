@@ -101,7 +101,7 @@ def reason(root, agent, *, now=None, closed=None):
             return ""
         with _lock(path):
             info = path.lstat()
-            if stat.S_ISLNK(info.st_mode) or info.st_size > 32768:
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 32768:
                 raise ValueError("invalid feed hold record")
             record = json.loads(path.read_text())
         if (record.get("schema") != "st.feed-hold/1" or record.get("agent") != agent

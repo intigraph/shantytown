@@ -2,6 +2,8 @@
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -9,6 +11,30 @@ import pytest
 from shantytown import agent_hold, cli, feed_check, feed_hold, stop_event
 from shantytown.tmux import NullPanes
 from test_go_cli import _root
+
+
+@pytest.mark.parametrize('mode', [stat.S_IFIFO, stat.S_IFSOCK, stat.S_IFCHR,
+                                  stat.S_IFBLK, stat.S_IFDIR])
+def test_nonregular_record_is_refused_before_payload_read(tmp_path, monkeypatch, mode):
+    feed_hold.hold(tmp_path, 'worker', 'operator', '2099-01-01', 'regular control')
+    assert 'regular control' in feed_hold.reason(tmp_path, 'worker')
+    record = tmp_path / 'feed-holds/worker.json'
+    original_lstat, original_read = Path.lstat, Path.read_text
+
+    def lstat(path, *args, **kwargs):
+        if path == record:
+            return SimpleNamespace(st_mode=mode | 0o600, st_size=0)
+        return original_lstat(path, *args, **kwargs)
+
+    def read(path, *args, **kwargs):
+        if path == record:
+            pytest.fail('nonregular hold record reached the payload reader')
+        return original_read(path, *args, **kwargs)
+
+    # Model metadata only: opening a real pipe would hang the regression itself.
+    monkeypatch.setattr(Path, 'lstat', lstat)
+    monkeypatch.setattr(Path, 'read_text', read)
+    assert 'record unreadable' in feed_hold.reason(tmp_path, 'worker')
 
 
 def stamp(value):
