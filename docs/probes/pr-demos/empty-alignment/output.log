@@ -1,9 +1,0 @@
-Script started on 2026-10-26 06:56:23-04:00 [COMMAND="/usr/bin/python3.14 docs/probes/pr-demos/empty-alignment/reproduce.py" <not executed on terminal>]
-Target: source helpers and disposable synthetic envelope; no native engine
-Base: 4c3d91b9941153c079c461f08590917c542b22e2 candidate helper source: 3ad7c45
-Same reviewed carrier: bytes 401 SHA256 f74d895765cf2975b23c6a095b3c09a992865950f9199a7e53f9d2042679db10
-BEFORE exact carrier package: REFUSED: unexpected or non-regular share member
-AFTER exact carrier package + independent readback: PASS
-CONTROL modified carrier: REFUSED: alignment member hash differs from the reviewed empty carrier
-
-Script done on 2026-10-26 06:56:23-04:00 [COMMAND_EXIT_CODE="0"]
