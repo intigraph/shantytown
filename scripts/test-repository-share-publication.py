@@ -5,6 +5,9 @@
 """
 
 import importlib.util
+import hashlib
+import io
+import tarfile
 import json
 from pathlib import Path
 import tempfile
@@ -60,6 +63,9 @@ class Publication(unittest.TestCase):
             "bobbin_sha256": "3" * 64,
             "engine_source_revision": "4" * 40,
         }
+        alignment = publisher.alignment_digest(self.stage)
+        if alignment is not None:
+            self.proof.update(publisher.alignment_provenance(self.stage))
         self.proof_path = self.archive.with_name(self.archive.name + ".provenance.json")
         self.proof_path.write_text(json.dumps(self.proof))
 
@@ -212,6 +218,178 @@ class Publication(unittest.TestCase):
         with patch.dict(os.environ, self.host_environment()):
             (result,) = builder.local_mcp(child, self.root / "fixture.db", [("fixture", {})])
         self.assertEqual(result, {"isolated": True})
+
+
+    def add_alignment(self):
+        data = (ROOT.parent / "docs/knowledge/alignments.ttl").read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), publisher.ALIGNMENTS_SHA256)
+        (self.stage / "alignments.ttl").write_bytes(data)
+        path = self.stage / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest.update(files={"alignments": "alignments.ttl"}, alignments_hash=publisher.ALIGNMENTS_SHA256)
+        path.write_text(json.dumps(manifest))
+        return data
+
+    def test_alignment_export_archive_independent_readback(self):
+        builder = load("builder_alignment_test", ROOT / "build-repository-share.py")
+        data = self.add_alignment()
+        calls = []
+        native_manifest = (self.stage / "manifest.json").read_text()
+        (self.stage / "alignments.ttl").unlink()
+
+        def native_fixture(args):
+            # Synthetic native transport: this proves argv and envelope plumbing,
+            # not execution of an admitted native engine artifact.
+            calls.append(args)
+            self.assertEqual(args[args.index("--alignments") + 1], ROOT.parent / "docs/knowledge/alignments.ttl")
+            self.assertEqual(args[args.index("--output") + 1], self.stage)
+            (self.stage / "alignments.ttl").write_bytes(Path(args[args.index("--alignments") + 1]).read_bytes())
+            (self.stage / "manifest.json").write_text(native_manifest)
+
+        builder.export_share(native_fixture, "fixture-quipu", ROOT.parent,
+                             self.root / "fixture.db", "CONSTRUCT {} WHERE {}", self.stage)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual((self.stage / "alignments.ttl").read_bytes(), data)
+        self.prepare()
+        verifier.verify(self.root, "v1.2.3", self.revision)
+        other = self.root / "alignment-second.tar.gz"
+        publisher.package(self.stage, other)
+        self.assertEqual(self.archive.read_bytes(), other.read_bytes())
+
+    def test_alignment_member_manifest_and_hash_are_one_binding(self):
+        data = self.add_alignment()
+        path = self.stage / "manifest.json"
+        original = path.read_text()
+        for field, value in (("files", {}), ("files", {"alignments": "foreign.ttl"}),
+                             ("alignments_hash", None), ("alignments_hash", "0" * 64)):
+            manifest = json.loads(original)
+            manifest[field] = value
+            path.write_text(json.dumps(manifest))
+            with self.subTest(field=field, value=value), self.assertRaises(ValueError):
+                publisher.check_share(self.stage)
+        path.write_text(original)
+        member = self.stage / "alignments.ttl"
+        for foreign in (data + b"# modified\n", b"# foreign empty carrier\n",
+                        b"<https://example.org/a> <https://example.org/p> <https://example.org/b> .\n"):
+            member.write_bytes(foreign)
+            # Even a self-consistent foreign hash is not the reviewed carrier.
+            manifest = json.loads(original)
+            manifest["alignments_hash"] = hashlib.sha256(foreign).hexdigest()
+            path.write_text(json.dumps(manifest))
+            with self.subTest(foreign=foreign), self.assertRaises(ValueError):
+                publisher.check_share(self.stage)
+        path.write_text(original)
+        member.unlink()
+        with self.assertRaises(ValueError):
+            publisher.check_share(self.stage)
+
+    def test_alignment_unsafe_stage_members_refuse(self):
+        self.add_alignment()
+        member = self.stage / "alignments.ttl"
+        member.unlink()
+        member.symlink_to(self.root / "absent")
+        with self.assertRaises(ValueError):
+            publisher.check_share(self.stage)
+        member.unlink()
+        os.mkfifo(member)
+        with self.assertRaises(ValueError):
+            publisher.check_share(self.stage)
+        member.unlink()
+        member.write_bytes(b"x" * (publisher.MAX_ALIGNMENT_BYTES + 1))
+        with self.assertRaises(ValueError):
+            publisher.check_share(self.stage)
+
+    def test_alignment_input_status_and_special_files_refuse(self):
+        builder = load("builder_input_refusal_test", ROOT / "build-repository-share.py")
+        source = self.root / "source"
+        knowledge = source / "docs/knowledge"
+        knowledge.mkdir(parents=True)
+        for name in ("alignments.ttl", "alignment-status.json"):
+            (knowledge / name).write_bytes((ROOT.parent / "docs/knowledge" / name).read_bytes())
+        carrier = knowledge / "alignments.ttl"
+        status_path = knowledge / "alignment-status.json"
+        original = status_path.read_text()
+        for field, value in (("status", "approved"), ("approved_record_count", 1),
+                             ("carrier_sha256", "0" * 64)):
+            status = json.loads(original)
+            status[field] = value
+            status_path.write_text(json.dumps(status))
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                builder.alignment_carrier(source)
+        status_path.write_text(original)
+        carrier.unlink()
+        carrier.symlink_to(ROOT.parent / "docs/knowledge/alignments.ttl")
+        with self.assertRaises(ValueError):
+            builder.alignment_carrier(source)
+        carrier.unlink()
+        os.mkfifo(carrier)
+        with self.assertRaises(ValueError):
+            builder.alignment_carrier(source)
+
+    def test_alignment_provenance_without_carrier_refuses(self):
+        with self.assertRaisesRegex(ValueError, "new repository build omitted"):
+            publisher.alignment_provenance(self.stage)
+        self.prepare()
+        self.proof_path.write_text(json.dumps({**self.proof, "alignments_sha256": publisher.ALIGNMENTS_SHA256}))
+        with self.assertRaisesRegex(ValueError, "alignment provenance"):
+            verifier.verify(self.root, "v1.2.3", self.revision)
+
+    def test_alignment_provenance_must_match_verified_member(self):
+        self.add_alignment()
+        self.prepare()
+        for value in (None, "f" * 64):
+            proof = dict(self.proof)
+            if value is None:
+                proof.pop("alignments_sha256")
+            else:
+                proof["alignments_sha256"] = value
+            self.proof_path.write_text(json.dumps(proof))
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "alignment provenance"):
+                verifier.verify(self.root, "v1.2.3", self.revision)
+
+    def test_alignment_archive_paths_duplicates_links_and_size_refuse(self):
+        self.add_alignment()
+        self.prepare()
+        original = self.archive.read_bytes()
+        for name, kind, size in (("../alignments.ttl", tarfile.REGTYPE, 1),
+                                 ("/alignments.ttl", tarfile.REGTYPE, 1),
+                                 ("alignments.ttl", tarfile.SYMTYPE, 0),
+                                 ("alignments.ttl", tarfile.REGTYPE, 1),
+                                 ("alignments.ttl", tarfile.REGTYPE, publisher.MAX_ALIGNMENT_BYTES + 1)):
+            with tarfile.open(fileobj=io.BytesIO(original)) as source:
+                entries = [(m, source.extractfile(m).read()) for m in source.getmembers()
+                           if m.name != "alignments.ttl" or (name == "alignments.ttl" and kind == tarfile.REGTYPE and size == 1)]
+            with tarfile.open(self.archive, "w:gz") as archive:
+                for metadata, content in entries:
+                    archive.addfile(metadata, io.BytesIO(content))
+                extra = tarfile.TarInfo(name)
+                extra.type, extra.size, extra.linkname = kind, size, "manifest.json"
+                archive.addfile(extra, io.BytesIO(b"x" * size) if size else None)
+            sha = publisher.digest(self.archive)
+            self.archive.with_name(self.archive.name + ".sha256").write_text(sha + "  " + self.archive.name + "\n")
+            self.proof_path.write_text(json.dumps({**self.proof, "archive_sha256": sha}))
+            with self.subTest(name=name, kind=kind, size=size), self.assertRaisesRegex(ValueError, "unsafe archive"):
+                verifier.verify(self.root, "v1.2.3", self.revision)
+
+    def test_native_export_missing_binding_refuses_without_repair(self):
+        builder = load("builder_alignment_refusal_test", ROOT / "build-repository-share.py")
+        self.add_alignment()
+        manifest = self.stage / "manifest.json"
+        original = manifest.read_text()
+        for mutation in ("missing", "declaration", "hash", "bytes"):
+            self.add_alignment()
+            def native_fixture(args):
+                if mutation == "missing":
+                    (self.stage / "alignments.ttl").unlink()
+                elif mutation == "bytes":
+                    (self.stage / "alignments.ttl").write_bytes(b"x" * 401)
+                else:
+                    value = json.loads(original)
+                    value["files" if mutation == "declaration" else "alignments_hash"] = {} if mutation == "declaration" else "0" * 64
+                    manifest.write_text(json.dumps(value))
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                builder.export_share(native_fixture, "fixture-quipu", ROOT.parent,
+                                     self.root / "fixture.db", "CONSTRUCT {} WHERE {}", self.stage)
 
     def test_wait_is_bounded(self):
         calls, pauses = [], []

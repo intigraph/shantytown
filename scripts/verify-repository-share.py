@@ -48,13 +48,17 @@ def verify(folder, tag, revision):
         with tarfile.open(archive) as tar:
             members = tar.getmembers()
             if len(members) != len({m.name for m in members}) or any(
-                not m.isfile() or m.name not in publisher.MEMBERS for m in members
+                not m.isfile() or m.name not in publisher.MEMBERS
+                or (m.name == "alignments.ttl" and not 0 < m.size <= publisher.MAX_ALIGNMENT_BYTES)
+                for m in members
             ):
                 raise ValueError("unexpected, duplicate, or unsafe archive member")
             # Every member is a flat allowlisted regular file; no path, link or device extraction.
             for member in members:
                 (stage / member.name).write_bytes(tar.extractfile(member).read())
         publisher.check_share(stage)
+        if proof.get("alignments_sha256") != publisher.alignment_digest(stage):
+            raise ValueError("alignment provenance differs from the verified member")
     return expected
 
 

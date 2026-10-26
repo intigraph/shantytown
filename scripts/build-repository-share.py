@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import io
 import tarfile
 import subprocess
@@ -178,6 +179,22 @@ def materialize_release(source, revision, destination):
     return destination
 
 
+def read_alignment(path):
+    limit = 2 * 1024 * 1024  # The native ancillary-member bound.
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= limit:
+        raise ValueError("alignment input must be a bounded regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(path, flags), "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            raise ValueError("alignment input must be a bounded regular file")
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("alignment input exceeds byte limit")
+    return data
+
+
 def alignment_carrier(source):
     """An explicit empty reviewed carrier differs from missing or corrupt data.
 
@@ -185,7 +202,7 @@ def alignment_carrier(source):
     not interpret a dependency, lexical match, or candidate as an identity.
     """
     source = Path(source)
-    data = (source / "docs/knowledge/alignments.ttl").read_bytes()
+    data = read_alignment(source / "docs/knowledge/alignments.ttl")
     status = json.loads((source / "docs/knowledge/alignment-status.json").read_text())
     if (
         status.get("status") != "no-approved-mappings"
@@ -205,6 +222,22 @@ def alignment_carrier(source):
         ):
             raise ValueError("empty alignment profile contains mapping data")
     return data.decode()
+
+
+def export_share(run, binary, source, database, query, stage):
+    # Let the native API seal the member; never patch a manifest after export.
+    expected = alignment_carrier(source).encode()
+    run([binary, "share", "--construct", query, "--turtle", "--alignments",
+         source / "docs/knowledge/alignments.ttl", "--output", stage, "--db", database])
+    member = stage / "alignments.ttl"
+    if member.is_symlink() or not member.is_file() or member.stat().st_size != len(expected):
+        raise ValueError("native share omitted or changed the alignment carrier")
+    manifest = json.loads((stage / "manifest.json").read_text())
+    files = manifest.get("files", {})
+    if (read_alignment(member) != expected or not isinstance(files, dict)
+        or files.get("alignments") != "alignments.ttl"
+        or manifest.get("alignments_hash") != hashlib.sha256(expected).hexdigest()):
+        raise ValueError("native share did not bind the exact alignment carrier")
 
 
 def build(revision, source, tooling, binary, bobbin, output):
@@ -325,7 +358,7 @@ aegis:repo-embedded-knowledge-databases-directive-2026-09-03 a aegis:Directive ;
     register_queries(binary, database, json.loads(queries.read_text()))
     query = (source / "queries/repository-share-shantytown.rq").read_text()
     stage = private / "share"
-    run([binary, "share", "--construct", query, "--turtle", "--output", stage, "--db", database])
+    export_share(run, binary, source, database, query, stage)
     if not (stage / "shapes.ttl").is_file() or (stage / "shapes.ttl").stat().st_size == 0:
         raise ValueError("repository share omitted receiver shapes")
     receiver = private / "receiver.db"

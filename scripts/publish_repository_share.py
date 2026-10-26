@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -18,7 +19,45 @@ import tempfile
 sys.dont_write_bytecode = True
 
 REPOSITORY = "scbrown/shantytown"
-MEMBERS = {"export.nt", "export.ttl", "payload.nq", "manifest.json", "manifest.ttl", "shapes.ttl", "queries.ttl"}
+MEMBERS = {"export.nt", "export.ttl", "payload.nq", "manifest.json", "manifest.ttl", "shapes.ttl", "queries.ttl", "alignments.ttl"}
+
+# Same ancillary byte bound as the native share contract. This source route
+# carries only the reviewed empty graph, not arbitrary mapping assertions.
+MAX_ALIGNMENT_BYTES = 2 * 1024 * 1024
+ALIGNMENTS_SHA256 = "f74d895765cf2975b23c6a095b3c09a992865950f9199a7e53f9d2042679db10"
+
+
+def alignment_digest(stage):
+    manifest = json.loads((stage / "manifest.json").read_text())
+    files = manifest.get("files", {})
+    if not isinstance(files, dict):
+        raise ValueError("invalid alignment member declaration")
+    member = stage / "alignments.ttl"
+    present = os.path.lexists(member)
+    declared, sealed = files.get("alignments"), manifest.get("alignments_hash")
+    if not present and declared is None and sealed is None:
+        return None  # Legacy no-carrier envelopes keep their existing identity.
+    if not present or declared != "alignments.ttl" or sealed != ALIGNMENTS_SHA256:
+        raise ValueError("alignment member must be declared, reviewed, sealed and present together")
+    metadata = member.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_ALIGNMENT_BYTES:
+        raise ValueError("alignment member must be a bounded regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(member, flags), "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_ALIGNMENT_BYTES:
+            raise ValueError("alignment member must be a bounded regular file")
+        data = handle.read(MAX_ALIGNMENT_BYTES + 1)
+    if len(data) > MAX_ALIGNMENT_BYTES or hashlib.sha256(data).hexdigest() != sealed:
+        raise ValueError("alignment member hash differs from the reviewed empty carrier")
+    return sealed
+
+
+def alignment_provenance(stage):
+    digest = alignment_digest(stage)
+    if digest is None:
+        raise ValueError("new repository build omitted the reviewed alignment carrier")
+    return {"alignments_sha256": digest}
 
 
 def command(args):
@@ -40,6 +79,7 @@ def check_share(stage):
     for name in ("export.nt", "manifest.json", "manifest.ttl", "shapes.ttl", "queries.ttl"):
         if not (stage / name).is_file() or not (stage / name).stat().st_size:
             raise ValueError("required nonempty share member missing: " + name)
+    alignment_digest(stage)
     recipe = json.loads((stage / "manifest.json").read_text()).get("embedding")
     if (
         not isinstance(recipe, dict)
@@ -126,6 +166,7 @@ def publish(tag, revision, output):
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
         builder.build(revision, source, tooling, binary, bobbin, stage)
+        alignment_proof = alignment_provenance(stage)
         archive_name = "shantytown-" + tag + "-repository.pendant.tar.gz"
         prepared = private / "assets"
         prepared.mkdir(mode=0o700)
@@ -138,6 +179,7 @@ def publish(tag, revision, output):
             "source_revision": revision,
             "release_tag": tag,
             "archive_sha256": digest(archive),
+            **alignment_proof,
             "quipu_sha256": digest(binary),
             "engine_source_revision": engine_revision,
             "bobbin_sha256": digest(bobbin),
