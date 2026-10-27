@@ -705,6 +705,46 @@ class SdTracker(BrTracker):
             self._native_projection = True
         return answer
 
+    def inbox_count(self, agent):
+        """Count membership independently of the metadata field budget."""
+        from .seeds_inbox import LegacyInboxSchema
+        from .seeds_inbox_window import count
+        try:
+            proof = self.prove_store()
+            if not self.quipu or not proof.graph or self._native_projection is False:
+                return None
+            return count(proof, agent, timeout=self.timeout)
+        except LegacyInboxSchema:
+            self._native_projection = False
+            return None
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped(0, how="Seeds inbox membership count", caveat=str(error))
+
+    def inbox_page(self, agent, *, limit=100, oldest_first=False):
+        """A counted view, never a claim that the window is the whole queue."""
+        from .seeds_inbox_window import page_ids
+        from .answer import PartialAnswer
+        try:
+            observed = self.inbox_count(agent)
+            if observed is None:
+                return None
+            total = observed.exact()
+            if not total:
+                return Answer.complete_read((0, []), how=observed.how)
+            ids = page_ids(self.prove_store(), agent, limit=limit,
+                           oldest_first=oldest_first, timeout=self.timeout).exact()
+            if not ids:
+                raise ValueError("inbox changed between count and identity window; retry read")
+            items = self.inbox_receipts(agent, ids).exact()
+            by_id = {item.id: item for item in items}
+            values = [by_id[i] for i in ids if by_id[i].status not in ("closed", "tombstone")]
+            if not values or len(values) > total:
+                raise ValueError("inbox membership changed during the view; retry read")
+            return Answer.complete_read((total, values),
+                how="membership count then bounded identities and fresh exact metadata; not atomic")
+        except (OSError, ValueError, RuntimeError, KeyError, PartialAnswer) as error:
+            return Answer.capped((0, []), how="Seeds bounded inbox view", caveat=str(error))
+
     def inbox_receipts(self, agent, identifiers):
         """Fresh exact identity fields before acknowledging known receipts.
 

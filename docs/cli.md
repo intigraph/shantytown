@@ -3317,3 +3317,17 @@ Changed actionable digests use the existing
 administrator advisory route; repeated digests are quiet. Routine healthy
 results remain in the scheduled pass log. The pass budget may defer this
 advisory sweep without interrupting supervision.
+
+### Large durable inboxes
+
+On the native Seeds reader, `st inbox --count` counts message membership without
+loading every message’s metadata. Listing shows at most the newest 100 messages
+and prints `showing N of M` when more are unread. `st inbox --read` selects up to
+15 oldest messages, then uses the existing fresh receipt checks and independent
+closes. Explicit `--read-id` selection still reads only those receipts.
+
+The membership count and selected metadata are separate observations, not an
+atomic snapshot; concurrent changes can require retrying a read. Unsupported
+owner statuses, duplicate receipts across graphs, legacy format uncertainty and
+transport failures remain UNKNOWN. These bounds never authorize bulk draining
+an operator’s inbox; reading and acknowledging stay separate actions.
