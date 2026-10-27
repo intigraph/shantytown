@@ -1315,6 +1315,18 @@ queue remains feedable unless it carries `anchor`; reserve the label for records
 that have no completion state. Existing legacy coordinator title exclusions
 remain, but haul exclusion uses the explicit label.
 
+### ASK records do not enter worker hooks
+
+The haul uses the same ASK classifier as assignment capacity: ASK labels,
+a title beginning `ASK Stiwi`, or a structured `blocked:human` blocker. It skips
+these records in both ready and in-progress queues, then feeds executable work.
+`st go` also refuses an ASK for a worker, lead or keeper before changing the item
+or sending input. Ownership, status and visibility stay intact.
+
+When only ASKs remain, the worker is allowed to stop. The existing durable stop
+stream reports `plate blocked on human` to its lead (or normal escalation route),
+once for that unchanged set of items, rather than repeatedly resuming the ASK.
+
 ### Human-only ready work is not dispatchable
 
 The shared unfeedable predicate excludes `desk` and `needs-stiwi` labels as well

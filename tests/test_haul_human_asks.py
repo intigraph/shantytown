@@ -11,7 +11,7 @@ from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.plate_capacity import real_work
 from shantytown.protocols import Agent
 from shantytown.tmux import NullPanes
-from test_haul import _Reg, _Panes, _run, _haul_at
+from test_haul import _Reg, _run, _haul_at
 
 
 MARKERS = [
@@ -103,3 +103,29 @@ def test_ordinary_work_mentioning_ask_or_desk_stays_eligible():
     assert feed_check.hauls([], [item]) == {'billy': ['fixture-ask']}
     assert feed_check.dispatchable(set(), [dict(item, assignee=None)]) == [
         ('fixture-ask', item['title'])]
+
+
+def test_tend_resume_gate_excludes_ask_but_keeps_active_work(tmp_path, monkeypatch):
+    from test_lead_haul_feed_by_tend import _gate_world
+    reg, panes, runtime = _gate_world(monkeypatch)
+    monkeypatch.setattr("shantytown.harness.name_for", lambda *a, **k: "codex")
+    monkeypatch.setattr("shantytown.runtime.limit_reached", lambda *a: False)
+    held = ask(labels=['desk'])
+    assert feed_check.idle_resumable_codex(reg, panes, runtime, [held], root=tmp_path) == []
+    work = dict(id='fixture-work', title='Repair query', assignee='billy')
+    assert feed_check.idle_resumable_codex(reg, panes, runtime, [held, work], root=tmp_path) == ['billy']
+
+
+def test_tend_does_not_resume_ask_ahead_of_ready_work(tmp_path, monkeypatch):
+    from test_lead_haul_feed_by_tend import _lead_hauling_world
+    claims = []
+    alerter, panes = _lead_hauling_world(tmp_path, monkeypatch, claims)
+    held = ask(assignee='dearing', labels=['desk'])
+    before = json.dumps(held, sort_keys=True)
+    alerter._bd_in_progress = lambda *a: [held]
+    monkeypatch.setattr(feed_check, 'idle_resumable_codex', lambda *a, **k: ['dearing'])
+    assert alerter.sweep([]) == ['dearing']
+    assert claims == ['aegis-2b2tti']
+    assert 'fixture-ask' not in panes.sent[0][1]
+    assert 'HAUL RESUME' not in panes.sent[0][1]
+    assert json.dumps(held, sort_keys=True) == before

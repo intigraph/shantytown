@@ -874,10 +874,12 @@ class IdleFleetAlerter:
         # work), but is exactly the state this fallback must recover.
         try:
             cwd = feed_check.bd_cwd(self._reg)
+            from .ask_visibility import is_ask
             active = self._bd_in_progress(cwd)
             self._audit.record(window_id, leg="anchor", backend=backend,
                                attempted=True, acted_on=True,
                                reason=f"read {len(active)} active item(s)")
+            active = [row for row in active if not is_ask(row)]
         except Exception as exc:      # noqa: BLE001
             self._audit.record(window_id, leg="anchor", backend=backend,
                                attempted=True, refused=True,
@@ -1036,6 +1038,8 @@ class IdleFleetAlerter:
                 cwd = feed_check.bd_cwd(self._reg)
                 open_anchors: dict[str, set[str]] | None = {}
                 for b in self._bd_in_progress(cwd):
+                    if is_ask(b):
+                        continue
                     w = (b.get("assignee") or "").split("/")[-1]
                     if w:
                         open_anchors.setdefault(w, set()).add(b.get("id"))

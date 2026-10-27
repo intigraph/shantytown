@@ -47,6 +47,7 @@ from pathlib import Path
 
 from .answer import Answer
 from .inbox import is_anchor, is_decision, is_message, is_unfeedable
+from .ask_visibility import is_ask
 from . import handoff_text
 
 
@@ -295,8 +296,7 @@ def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[s
     from .tend import is_retired
 
     stamped = st_launched_agents(root) if root is not None else None
-    names = sorted({(b.get("assignee") or "").split("/")[-1]
-                    for b in active_beads if b.get("assignee")})
+    names = sorted(hauls([], active_beads))
     out = []
     for name in names:
         try:
@@ -428,7 +428,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
                        or str(label).strip().lower() == "feed:manual"
                        for label in (b.get("labels") or []))
                 or is_message(b.get("title", ""))
-                or is_decision(b.get("labels"))
+                or is_ask(b) or is_decision(b.get("labels"))
                 or is_unfeedable(b.get("title", ""), b.get("labels"))):
             continue
         out.append((b.get("id", "?"), b.get("title", "")))
@@ -472,7 +472,7 @@ def hauls(ready_beads, in_progress_beads=()) -> dict[str, list[str]]:
         # it must stay on the coordinator's feedable free list rather than read
         # as self-feeding (aegis-2og7d) — the same reasoning as messages above.
         if (not assignee or is_message(b.get("title", ""))
-                or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
+                or is_ask(b) or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
         if not name:
