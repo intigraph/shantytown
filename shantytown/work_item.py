@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 
 
 def exact(tracker, item_id):
@@ -52,6 +54,29 @@ def _comment_body(row):
             or any(value != values[0] for value in values[1:])):
         return None
     return values[0]
+
+
+TIMEOUT_READBACK_SKEW = timedelta(seconds=30)
+
+
+def _landed_since(rows, body, started):
+    """True when a row with exactly `body` was written at or after `started`.
+
+    Only a timed-out write uses this, so an identical OLDER comment must not
+    count: the row needs a parseable created_at no earlier than the attempt
+    start, less a small allowance for clock skew between hosts.
+    """
+    floor = started - TIMEOUT_READBACK_SKEW
+    for row in rows:
+        if _comment_body(row) != body or not isinstance(row.get("created_at"), str):
+            continue
+        try:
+            at = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is not None and at >= floor:
+            return True
+    return False
 
 
 def command(args, tracker):
@@ -112,7 +137,19 @@ def command(args, tracker):
     if args.item_action == "comment":
         body = _body(args.file)
         if not args.dry_run:
-            _comments(tracker, item.id, body)
+            started = datetime.now(timezone.utc)
+            try:
+                _comments(tracker, item.id, body)
+            except subprocess.TimeoutExpired as timed_out:
+                # The child was killed, but its write may already have committed
+                # (aegis-epi: a contended comment landed after st's 30s limit and
+                # st printed "unproven"). Read back once; never re-send.
+                if _landed_since(_comments(tracker, item.id), body, started):
+                    return {"id": item.id, "comment": "verified"}
+                raise RuntimeError(
+                    f"comment write timed out after {timed_out.timeout:g}s and readback "
+                    "does not show it; write may still land; verify exact readback "
+                    "before retrying") from None
             if not any(_comment_body(row) == body
                        for row in _comments(tracker, item.id)):
                 raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
