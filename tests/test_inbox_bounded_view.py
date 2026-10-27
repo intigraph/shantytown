@@ -113,3 +113,22 @@ def test_legacy_count_requires_positive_marker(wire):
 @pytest.mark.parametrize('limit', [0, 101, True])
 def test_bad_window_bound_is_unknown(wire, limit):
     assert not window.page_ids(PROOF, 'worker', limit=limit).complete
+
+
+@pytest.mark.parametrize('oldest_first', [False, True])
+@pytest.mark.parametrize('limit', [2, 100])
+def test_inbox_windows_put_undated_last_with_stable_ties(wire, oldest_first, limit):
+    data, _ = wire
+    for identifier, date in [
+        ('demo-undated-b', None), ('demo-old-b', '2026-01-01T00:00:00Z'),
+        ('demo-new', '2026-01-02T00:00:00Z'), ('demo-undated-a', None),
+        ('demo-old-a', '2026-01-01T00:00:00Z'),
+    ]:
+        graph, subject = add(data, identifier)
+        if date is not None:
+            graph.add((subject, URIRef(window.sp.SCHEMA+'dateCreated'), Literal(date)))
+    dated = (['demo-old-a', 'demo-old-b', 'demo-new'] if oldest_first
+             else ['demo-new', 'demo-old-a', 'demo-old-b'])
+    expected = dated + ['demo-undated-a', 'demo-undated-b']
+    assert window.page_ids(PROOF, 'worker', limit=limit,
+                           oldest_first=oldest_first).exact() == expected[:limit]

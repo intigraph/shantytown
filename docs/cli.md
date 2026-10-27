@@ -1328,8 +1328,9 @@ remain, but haul exclusion uses the explicit label.
 The haul uses the same ASK classifier as assignment capacity: ASK labels,
 a title beginning `ASK Stiwi`, or a structured `blocked:human` blocker. It skips
 these records in both ready and in-progress queues, then feeds executable work.
-`st go` also refuses an ASK for a worker, lead or keeper before changing the item
-or sending input. Ownership, status and visibility stay intact.
+`st go` also refuses an ASK for every crew role, including an administrator
+dispatching to itself, before changing the item or sending input. Ownership,
+status and visibility stay intact.
 
 When only ASKs remain, the worker is allowed to stop. The existing durable stop
 stream reports `plate blocked on human` to its lead (or normal escalation route),
@@ -3332,7 +3333,8 @@ On the native Seeds reader, `st inbox --count` counts message membership without
 loading every message’s metadata. Listing shows at most the newest 100 messages
 and prints `showing N of M` when more are unread. `st inbox --read` selects up to
 15 oldest messages, then uses the existing fresh receipt checks and independent
-closes. Explicit `--read-id` selection still reads only those receipts.
+closes. Undated messages sort after dated messages in both views; ties use stable
+message IDs. Explicit `--read-id` selection still reads only those receipts.
 
 The membership count and selected metadata are separate observations, not an
 atomic snapshot; concurrent changes can require retrying a read. Unsupported
