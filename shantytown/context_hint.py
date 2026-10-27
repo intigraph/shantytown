@@ -197,6 +197,9 @@ def emit(root, card, payload=None) -> bool:
                        "under-threshold reading. Check the transcript and "
                        "[session_budget] context_window configuration. "
                        "No cycle has been scheduled; work may continue.")
+        if category in ("high", "hard"):
+            from .handoff_text import background_tasks
+            message += " " + background_tasks()
         print(json.dumps({"decision": "block", "reason": message,
                           "systemMessage": message}))
         return True

@@ -253,3 +253,15 @@ def test_completely_unconfigured_deployment_stays_disabled(tmp_path, capsys):
     assert not ch.emit(tmp_path, card, payload)
     assert ch.crew_label(tmp_path, card) is None
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize('tokens,decision', [(700, 'handoff'), (700, 'continue'), (950, 'handoff')])
+def test_cycle_hint_names_owned_background_task_cleanup(tmp_path, monkeypatch, capsys, tokens, decision):
+    card, payload = world(tmp_path)
+    turn(payload['transcript_path'], tokens)
+    monkeypatch.setattr(ch, '_decide', lambda *a: dict(decision=decision, reason='fixture'))
+    assert ch.emit(tmp_path, card, payload)
+    message = json.loads(capsys.readouterr().out)['reason']
+    assert 'stop or await only your own running background tasks' in message
+    assert 'Claude: TaskStop' in message and 'Codex: /ps' in message
+    assert 'Before ending your turn' in message

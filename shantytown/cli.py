@@ -10021,13 +10021,14 @@ def _cmd_cycle(a) -> int:
                   f"— named in your resume dispatch.")
         elif gctx.exemption:
             print(f"  no graph context: {gctx.exemption} — recorded.")
+        print(f"  {handoff_text.background_tasks()}")
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
                   f"End your turn now; nothing is lost if it never fires.")
         else:
-            print(f"  `st fleet tend` performs it. You stay up until it does, so keep "
-                  f"working; nothing is lost if it never fires.")
+            print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
+                  "then end your turn; the request stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
@@ -10258,6 +10259,7 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
     from . import cycle as cycle_mod
     deadline = clock() + SELF_SERVE_TIMEOUT_S
     blocker = "never idle (last read: pane unreadable)"
+    last_shells = None
     while clock() < deadline:
         request = cycle_mod.Requests(a.root).pending().get(agent)
         if request is None:
@@ -10272,6 +10274,12 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
             print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
         if read is not None:
             blocker = _self_serve_blocker(read)
+            if read.shells and read.shells != last_shells:
+                n = read.shells
+                print(f"  {agent}: waiting: {n} background shell{'s' * (n != 1)} running; "
+                      "stop or await your own tasks before ending the turn.",
+                      file=sys.stderr, flush=True)
+            last_shells = read.shells
         if (read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED)
                 and not read.shells):
             if _serve_cycle_request(a, agent, request) == OK:

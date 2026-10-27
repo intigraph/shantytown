@@ -234,6 +234,14 @@ cache tokens, and give one advisory per threshold crossing or session change.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 
+Before ending the turn for a cycle, stop or await only your own running background
+tasks. Claude agents use `TaskStop` for their running tasks; Codex agents inspect
+with `/ps`, then stop or await their running processes. A remaining background
+shell prevents the cycle from reaching its idle boundary. The self-cycle waiter
+logs the observed shell count when it changes and still waits safely; it never
+stops those tasks itself. After the tasks exit, the next idle poll can serve the
+existing request.
+
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
 takes the tmux session down:

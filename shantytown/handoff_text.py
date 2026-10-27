@@ -50,6 +50,14 @@ NO_CLEAR = "Do NOT run /clear — it drops bypass into MANUAL."
 HELP_POINTER = "Why/details: `st ops help handoff`."
 
 
+def background_tasks() -> str:
+    """Name the agent-owned work that otherwise prevents an idle cycle."""
+    return ("Before ending your turn for a cycle, stop or await only your own running "
+            "background tasks. Claude: TaskStop each running task you own. "
+            "Codex: /ps to inspect, then stop or await your running processes. "
+            "The cycle waits for an idle turn with no running background tasks.")
+
+
 def cycle_now(depth_k: float | int | None = None,
               threshold_k: float | int | None = None) -> str:
     """The context-high remedy. Two lines, naming the action and the command.
@@ -62,7 +70,7 @@ def cycle_now(depth_k: float | int | None = None,
             f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
             f"{NO_CLEAR} Cycle keeps bypass/MCP/skills/hooks and re-dispatches "
-            f"your plate. Keep working until it fires. {HELP_POINTER}")
+            f"your plate. {background_tasks()} {HELP_POINTER}")
 
 
 def haul_handoff(context_k: float | int, line_k: float | int) -> str:
@@ -75,12 +83,12 @@ def haul_handoff(context_k: float | int, line_k: float | int) -> str:
             f"start the next item. CHECKPOINT, then cycle:\n"
             f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
             f"--checkpoint-file <notes>\n"
-            f"{NO_CLEAR} Your haul resumes itself afterwards. {HELP_POINTER}")
+            f"{NO_CLEAR} Your haul resumes itself afterwards. {background_tasks()} {HELP_POINTER}")
 
 
 def deep_context_hint() -> str:
     """One clause for the haul feed message — the nudge, not the procedure."""
-    return (f"Context deep? Checkpoint + `{CYCLE_CMD}` first — not /clear; "
+    return (f"Context deep? Checkpoint, stop or await your own background tasks, then `{CYCLE_CMD}` — not /clear; "
             f"the haul survives it.")
 
 
