@@ -331,6 +331,52 @@ def test_busy_reachable_authority_still_refuses(tmp_path, monkeypatch):
     assert not (tmp_path / 'governor' / 'admission.lock').exists()
 
 
+def _owner_helper(monkeypatch, script, root='/remote'):
+    import subprocess
+    original = subprocess.Popen
+    monkeypatch.setattr(fg.subprocess, 'Popen', lambda argv, **kw: original(
+        ['/bin/sh', '-c', script.replace('{HELPER}', argv[-1])], **kw))
+    return HostPeer('desktop', 'user@example.test', root)
+
+
+def test_slow_connect_busy_owner_is_busy_not_unreachable(tmp_path, monkeypatch):
+    """SSH connect+auth delays the helper's own 10s wait past ours; when it then
+    exits BUSY, the owner is up and locked by another launch: refuse, never
+    admit locally (review follow-up on #396)."""
+    monkeypatch.setattr(fg, 'REMOTE_LOCK_READY_S', .2)
+    monkeypatch.setattr(fg, 'REMOTE_LOCK_BUSY_GRACE_S', 5)
+    peer = _owner_helper(monkeypatch, f'sleep .8; exit {fg.REMOTE_LOCK_BUSY}')
+    with pytest.raises(fg.AdmissionUnavailable, match='busy'):
+        with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}, owner='desktop'):
+            pytest.fail('admitted locally while the owner was busy')
+    assert not (tmp_path / 'governor' / 'admission.lock').exists()
+
+
+def test_helper_hung_past_the_grace_is_unreachable(tmp_path, monkeypatch):
+    monkeypatch.setattr(fg, 'REMOTE_LOCK_READY_S', .2)
+    monkeypatch.setattr(fg, 'REMOTE_LOCK_BUSY_GRACE_S', .3)
+    peer = _owner_helper(monkeypatch, 'exec sleep 30')
+    with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}, owner='desktop') as admission:
+        assert admission.unreachable == 'desktop'
+
+
+def test_shell_noise_before_locked_still_takes_the_owner_lock(tmp_path, monkeypatch):
+    remote = tmp_path / 'remote'
+    peer = _owner_helper(monkeypatch, 'echo "Welcome to desktop"; printf "rc noise\\r\\n"; {HELPER}',
+                         str(remote))
+    with fg.admission_lock(tmp_path / 'local', 'laptop', {'desktop': peer},
+                           owner='desktop') as admission:
+        assert admission == fg.Admission(lock_host='desktop', owner='desktop')
+        assert _lock_is_held(remote)
+    assert not _lock_is_held(remote)
+
+
+def test_noise_without_locked_is_unreachable(tmp_path, monkeypatch):
+    peer = _owner_helper(monkeypatch, 'echo banner; echo "locked-ish"; exit 0')
+    with fg.admission_lock(tmp_path, 'laptop', {'desktop': peer}, owner='desktop') as admission:
+        assert admission.unreachable == 'desktop'
+
+
 def test_asymmetric_membership_cannot_choose_two_lock_authorities(tmp_path):
     local = sample()
     peer = sample('laptop')
