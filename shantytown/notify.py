@@ -46,6 +46,7 @@ from typing import NamedTuple
 from . import governor_balance as balance_mod
 from . import harness as harness_mod
 from . import triage as triage_mod
+from .ask_visibility import is_ask
 from .attribution import ST_TEND, attribute
 from .tmux import PaneNotAgent
 from .protocols import Agent
@@ -874,7 +875,6 @@ class IdleFleetAlerter:
         # work), but is exactly the state this fallback must recover.
         try:
             cwd = feed_check.bd_cwd(self._reg)
-            from .ask_visibility import is_ask
             active = self._bd_in_progress(cwd)
             self._audit.record(window_id, leg="anchor", backend=backend,
                                attempted=True, acted_on=True,

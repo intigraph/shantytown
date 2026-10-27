@@ -583,7 +583,7 @@ class Dispatcher:
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
         from .ask_visibility import is_ask
-        if agent.role in {"worker", "lead", "keeper"} and is_ask(item):
+        if is_ask(item):
             raise HumanDecision(item_id, agent_name)
         # ...AND AN UNMET BLOCKER IS THE SAME REFUSAL (internal-ref). Third
         # variant of the one hole: an item whose `blocks` dependency is open

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from shantytown import feed_check, stop_event
-from shantytown.dispatch import Blocked, Dispatcher
+from shantytown.dispatch import HumanDecision, Dispatcher
 from shantytown.events import FilesEvents
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.plate_capacity import real_work
@@ -81,16 +81,18 @@ def test_ask_only_plate_reports_once_to_lead_without_hook_or_claim(tmp_path, mon
 
 @pytest.mark.parametrize('marker', [m for m in MARKERS if 'blocker_kind' not in m])
 @pytest.mark.parametrize('dry_run', [False, True])
-def test_go_refuses_ask_before_any_item_change_or_send(tmp_path, marker, dry_run):
+@pytest.mark.parametrize('role', ['worker', 'administrator'])
+def test_go_refuses_ask_before_any_item_change_or_send(tmp_path, monkeypatch, marker, dry_run, role):
     crew = tmp_path / 'crew'
     crew.mkdir()
-    (crew / 'billy.json').write_text(json.dumps({'role': 'worker', 'pane': '%1'}))
+    (crew / 'billy.json').write_text(json.dumps({'role': role, 'pane': '%1'}))
+    monkeypatch.setenv('SHANTY_AGENT', 'billy')
     tracker = FilesTracker(tmp_path / 'items')
     fields = dict(title='Choose a provider', labels=[]) | marker
     item = tracker.create(fields.pop('title'), assignee='billy', **fields)
     before = tracker._path(item.id).read_bytes()
     panes = NullPanes()
-    with pytest.raises(Blocked, match='human'):
+    with pytest.raises(HumanDecision, match='human'):
         Dispatcher(FilesRegistry(crew), tracker, panes).go(item.id, 'billy', dry_run=dry_run)
     assert tracker._path(item.id).read_bytes() == before
     assert panes.sent == []
@@ -128,4 +130,31 @@ def test_tend_does_not_resume_ask_ahead_of_ready_work(tmp_path, monkeypatch):
     assert claims == ['aegis-2b2tti']
     assert 'fixture-ask' not in panes.sent[0][1]
     assert 'HAUL RESUME' not in panes.sent[0][1]
+    assert json.dumps(held, sort_keys=True) == before
+
+
+def test_tend_recovered_anchor_read_filters_asks_after_initial_cwd_failure(tmp_path, monkeypatch):
+    from test_idle_fleet import _hauling_world
+    held = ask(labels=['desk'])
+    before = json.dumps(held, sort_keys=True)
+    claims = []
+    alerter, panes = _hauling_world(tmp_path, monkeypatch, in_progress=[held], claims=claims)
+    calls = []
+    # Isolate the first anchor read, rather than failing backend discovery
+    # before sweep enters its recovery blocks.
+    monkeypatch.setattr(feed_check, 'backend_kind', lambda *a: 'bd')
+    monkeypatch.setattr(feed_check, 'idle_resumable_codex', lambda *a, **k: [])
+
+    def cwd(reg):
+        calls.append(reg)
+        if len(calls) == 1:
+            raise OSError('first anchor context unavailable')
+        return None
+
+    monkeypatch.setattr(feed_check, 'bd_cwd', cwd)
+    assert alerter.sweep([]) == ['billy']
+    assert len(calls) >= 2
+    assert claims == ['aegis-9']
+    assert len(panes.sent) == 1 and 'aegis-9' in panes.sent[0][1]
+    assert 'fixture-ask' not in panes.sent[0][1]
     assert json.dumps(held, sort_keys=True) == before

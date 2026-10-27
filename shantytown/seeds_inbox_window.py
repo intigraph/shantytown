@@ -86,6 +86,7 @@ def count(proof, agent, *, timeout=30):
 
 @declared_read_operation("owner-rows")
 def page_ids(proof, agent, *, limit=100, oldest_first=False, timeout=30):
+    """Dated receipts first, with undated receipts last in either direction."""
     how = 'Seeds bounded inbox identity window'
     try:
         if type(limit) is not int or not 1 <= limit <= 100:
@@ -97,7 +98,8 @@ def page_ids(proof, agent, *, limit=100, oldest_first=False, timeout=30):
                             + f'BIND({json.dumps(graph)} AS ?graph) }}')
         order = '?created_at' if oldest_first else 'DESC(?created_at)'
         query = ('SELECT DISTINCT (STR(?s) AS ?subject) ?graph ?created_at WHERE { '
-                 + ' UNION '.join(branches) + f' }} ORDER BY {order} ?subject ?graph LIMIT {limit}')
+                 + ' UNION '.join(branches)
+                 + f' }} ORDER BY DESC(BOUND(?created_at)) {order} ?subject ?graph LIMIT {limit}')
         ids, seen = [], set()
         for row in sp._query(proof, query, timeout)['rows']:
             subject, graph = row.get('subject'), row.get('graph')
