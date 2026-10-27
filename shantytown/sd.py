@@ -723,6 +723,7 @@ class SdTracker(BrTracker):
     def inbox_page(self, agent, *, limit=100, oldest_first=False):
         """A counted view, never a claim that the window is the whole queue."""
         from .seeds_inbox_window import page_ids
+        from .answer import PartialAnswer
         try:
             observed = self.inbox_count(agent)
             if observed is None:
@@ -741,7 +742,7 @@ class SdTracker(BrTracker):
                 raise ValueError("inbox membership changed during the view; retry read")
             return Answer.complete_read((total, values),
                 how="membership count then bounded identities and fresh exact metadata; not atomic")
-        except (OSError, ValueError, RuntimeError, KeyError) as error:
+        except (OSError, ValueError, RuntimeError, KeyError, PartialAnswer) as error:
             return Answer.capped((0, []), how="Seeds bounded inbox view", caveat=str(error))
 
     def inbox_receipts(self, agent, identifiers):
