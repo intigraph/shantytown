@@ -146,6 +146,7 @@ from __future__ import annotations
 
 from .plate_capacity import PlateFull, CapacityUnknown
 import argparse
+import contextlib
 import dataclasses
 import json
 import os
@@ -615,15 +616,8 @@ def _governors(a):
         snapshot = fg.snapshot(host, local, _governor_agents(a),
                                hosts=[host, *cfg.host_peers],
                                admission_owner=cfg.host_admission_owner)
-        from . import accounts
-        declared = [dict(name=card.name, host=card.host, live=True,
-                         harness=harness_mod.name_for(card, root=a.root),
-                         account=(account.name if (account := accounts.selected(card, cfg))
-                                  else None))
-                    for card in _registry(a).all().exact()
-                    if card.host in cfg.host_peers and not getattr(card, 'retired', False)]
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
-                                 peer_config=cfg.host_peers, declared_agents=declared)
+                                 peer_config=cfg.host_peers)
         a._account_governor = fleet
         for warning in fleet.warnings:
             print('  ⚠ ' + warning, file=sys.stderr)
@@ -685,6 +679,29 @@ def _administrator_launch(a, card=None) -> bool:
         return False
 
 
+@contextlib.contextmanager
+def _held_admission(a, lock):
+    """Enter an admission lock and expose its `Admission` to the launch gates."""
+    with lock as admission:
+        previous = getattr(a, '_admission', None)
+        a._admission = admission
+        try:
+            yield admission
+        finally:
+            a._admission = previous
+
+
+def _say_degraded_admission(a, fleet):
+    """Print the one degraded-admission line, once per census."""
+    from . import fleet_governor as fg
+    if fleet is None or getattr(fleet, '_admission_said', False):
+        return
+    line = fg.degraded_admission_line(getattr(a, '_admission', None), fleet)
+    if line:
+        print('  ' + line, file=sys.stderr)
+        fleet._admission_said = True
+
+
 def _launch_admission_lock(a, card, cfg):
     from . import fleet_governor as fg
     if _administrator_launch(a, card):
@@ -744,7 +761,10 @@ def _account_launch_refusal(a, card, *, replacing=False):
             return refusal
         _h, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
         verdict = unconfigured or (governor.evaluate(persist=False) if governor else None)
-        return verdict.excludes(card, _catalog(a)) if verdict else ''
+        refusal = verdict.excludes(card, _catalog(a)) if verdict else ''
+        if not refusal:
+            _say_degraded_admission(a, fleet)
+        return refusal
     except Exception as exc:
         return f'account governor cannot establish admission ({type(exc).__name__})'
 
@@ -3017,11 +3037,13 @@ FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
                 "blocked-misstatus")
 
 
-def runs_fleet_sweeps(cfg) -> bool:
+def runs_fleet_sweeps(cfg, owner_unreachable: bool = False) -> bool:
     """True on the host that owns fleet-wide sweeps: the declared
-    [host] admission_owner, or any host when none is declared (single host)."""
+    [host] admission_owner, or any host when none is declared. When the owner
+    cannot be reached, this host runs them itself: a powered-off owner must
+    not leave the fleet-wide sweeps unrun everywhere."""
     owner = getattr(cfg, "host_admission_owner", None)
-    return owner is None or owner == getattr(cfg, "host_name", None)
+    return owner is None or owner == getattr(cfg, "host_name", None) or owner_unreachable
 
 
 def tend_fate(launches, agent: str) -> str:
@@ -3749,7 +3771,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
                                 window_restore=window_restore,
                                 reuse_session=reuse_session)
     try:
-        with _launch_admission_lock(a, card, cfg):
+        with _held_admission(a, _launch_admission_lock(a, card, cfg)):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -10502,7 +10524,7 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED, chosen.mode
     try:
-        with _launch_admission_lock(a, card, cfg):
+        with _held_admission(a, _launch_admission_lock(a, card, cfg)):
             if hasattr(a, '_account_governor'):
                 del a._account_governor
             a._cycle_admission_locked = True
@@ -13371,10 +13393,11 @@ def _tend_once(a, quiet: bool = False) -> int:
             print('  held: administrator launch serialization: ' + str(exc), file=sys.stderr)
             return CANNOT_TELL
     workers = [card for card in agents if card not in administrators]
+    tend_admission = None
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner,
-                               **({"local_required": True} if cfg.accounts else {})):
+        with _held_admission(a, fg.admission_lock(
+                a.root, cfg.host_name, cfg.host_peers, owner=cfg.host_admission_owner,
+                **({"local_required": True} if cfg.accounts else {}))) as tend_admission:
             if cfg.host_peers:
                 if hasattr(a, '_account_governor'):
                     del a._account_governor
@@ -13458,9 +13481,12 @@ def _tend_once(a, quiet: bool = False) -> int:
         # read the shared board and push to the LOCAL admin, so a second host's
         # tend (the Mac) duplicated every one of them to its own admin, with no
         # dedup across hosts. Host-local supervision (respawn, blocked worker,
-        # cycles, stalled) still runs everywhere. No declared owner means a
-        # single-host fleet, which is its own owner.
-        fleet_owner = runs_fleet_sweeps(cfg)
+        # cycles, stalled) still runs everywhere. With no declared owner every
+        # host runs them; with an UNREACHABLE owner this host stands in for it.
+        owner_down = getattr(tend_admission, "unreachable", None)
+        fleet_owner = runs_fleet_sweeps(cfg, owner_unreachable=bool(owner_down))
+        if owner_down:
+            _log(f"· {owner_down} unreachable; running fleet-wide sweeps on {cfg.host_name}")
         skipped_fleet: list[str] = []
 
         def _fleet_sweep(label, fn):

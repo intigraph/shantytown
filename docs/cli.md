@@ -2327,42 +2327,55 @@ holds new launches and dispatch until the policies are reconciled. The strictest
 remembered window hold survives until the ordinary relaxation rules release it.
 
 Account usage is account-scoped; an unreachable peer makes its **occupancy**
-unknown. The configured local admission owner can use that peer's cached agent
-count for up to 24 hours. If no census has ever been seen, it counts every declared,
-non-retired card on that peer as live, using each card's harness. Diagnostics name
-the unreachable peer and count age (unknown for never-seen peers); JSON includes
-`warnings` and marks estimated agent rows. Estimates count toward admission caps,
-but do not prove a live session exists to refresh session-derived usage.
+unknown, and an unreachable peer is never by itself a refusal: `st` works on any
+host without another host running `st`. A peer is unreachable when SSH fails,
+times out, or its `st` exits non-zero. Any host counts an unreachable peer as
+occupying exactly what its last reachable census reported, however old (the
+diagnostic flags a census older than 24 hours). A peer with no usable census on
+record (never seen, corrupt cache, or a last census that was invalid) is counted
+as 0 and flagged. Diagnostics name the unreachable peer and count age; JSON
+includes `warnings` and marks estimated agent rows. Estimates count toward
+admission caps, but do not prove a live session exists to refresh session-derived
+usage. A lane that only an unreachable peer declared keeps that peer's last
+policy, so its `max_agents` still binds; its readings keep their original age and
+fall to `on_signal_lost` like any stale reading.
 
-This fallback requires usable local account readings. Cached usage readings and
-holds are never reused as fresh evidence. An expired, corrupt or incompatible
-census still holds launches and dispatch, as does a known policy, membership or
-owner disagreement, including disagreement remembered before an outage. Caches
-live under `governor/peers/` and are tied to the declared peer endpoint. The
-non-owner receives no offline fallback and still needs the owner's lock.
-Existing agents keep running. Each peer call has a 20-second deadline and peers
-are queried concurrently. A received census older than 60 seconds or more than
-30 seconds in the future is rejected; keep host clocks synchronized.
+Cached usage readings and holds are never reused as fresh evidence. A REACHABLE
+peer that sends an invalid census, or disagrees on policy, membership or owner,
+still holds launches and dispatch. A disagreement remembered only in an
+unreachable peer's cache is reported as a warning. Caches live under
+`governor/peers/` and are tied to the declared peer endpoint. Existing agents
+keep running. Each peer call has a 20-second deadline and peers are queried
+concurrently. A received census older than 60 seconds or more than 30 seconds in
+the future is rejected; keep host clocks synchronized.
 
-All hosts must declare the same set of uniquely named peers; differing membership
-is reported and holds admission before either host can use another authority. Every multi-host
-deployment must explicitly set `[host] admission_owner` to the same declared host.
-Choose an always-on host; names no longer elect the authority alphabetically.
-A single-host deployment needs no setting and never reaches for a peer.
-Launch admission is serialized on the chosen host using an SSH-held file lock under that
-host's governor state directory. The census is read after acquiring the lock,
-then the lock remains held through launch. `tend` recounts local agents between
-respawns, so one pass cannot reuse a slot. A busy or unavailable authority holds
-admission instead of electing another authority. The remote lock needs `python3`
-and POSIX file locking on the SSH host. No additional daemon or package is needed.
+All hosts should declare the same set of uniquely named peers; differing
+membership reported by a reachable peer holds admission. `[host] admission_owner`
+is optional. When it names a reachable host, launch admission is serialized on
+that host using an SSH-held file lock under its governor state directory, the
+census is read after acquiring the lock, and the lock remains held through
+launch. `tend` recounts local agents between respawns, so one pass cannot reuse
+a slot. A BUSY owner (another launch holds its lock) still refuses; retry.
 
-The local governor JSON includes `admission_owner`. A missing or disagreeing peer
-value holds growth, including when a peer runs an older binary. To migrate, pause
-new admissions on every host and let in-flight launches finish, upgrade every host,
-configure the same owner everywhere, and check the local JSON on each before resuming.
-Do not switch only one host or use an unavailable authority as a reason to take a
-different local lock. The owner-only occupancy fallback above does not change
-which host owns the admission lock.
+When the owner is unreachable, or none is configured, the launching host takes
+its own lock and admits against fresh censuses of reachable peers plus the last
+census of each unreachable one. Real policy still refuses: FULL STOP, a frozen
+account, the account cap, and a gaming hold (unless `--despite-hold`). Every
+launch admitted without a fresh census of every host prints one line, for example
+`admission: rig-a unreachable; admitted locally against rig-a's last census (age
+14h, 3 live)`. While the owner is unreachable, `st fleet tend` on the launching
+host also runs the fleet-wide sweeps the owner normally runs.
+
+Degraded admission trades the single lock for availability. Two hosts admitting
+at the same moment without a common lock can each miss the other's newest launch,
+so the cap can be exceeded by at most one launch per concurrently admitting host,
+and only while the owner is unreachable or unconfigured. Every count is otherwise
+conservative: an unreachable peer is charged its last observed occupancy, never
+less. The remote lock needs `python3` and POSIX file locking on the SSH host.
+
+The local governor JSON includes `admission_owner`. A reachable peer whose value
+is missing or disagrees holds growth, including when it runs an older binary. To
+change the owner, configure the same value (or none) on every host.
 
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat

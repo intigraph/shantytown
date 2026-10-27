@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN.",
-      "source_sha256": "d8ab48b2a06f7ec45c934b90466d020166330d98d84a4c97c3fd7e4d2582bac1",
+      "source_sha256": "a299da76ccd35b97ba06caaa63a875edd9272e793031d5a7d08addbcd0836da2",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "214cdefb1a31955e8b7d695ef96eb174faf94e9ab73c94d75d238f55bb5e0685",
+      "source_sha256": "389a6453c5ee94943529d74a056715edeb5b478a52ba7a9a5b6c20592a542c4f",
       "properties": {
         "startHereOrder": 2
       }
