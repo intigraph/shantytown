@@ -138,3 +138,73 @@ def test_a_known_token_is_redacted_before_lower_level_cuts(monkeypatch, rc, tool
     with pytest.raises(RuntimeError) as caught:
         br_mod.append_comment(_Stub(tool, rc, _bare_at_cut(cut)), "aegis-x", "body")
     assert "K" not in str(caught.value)
+
+
+# A contended comment can commit after st's subprocess limit kills sd. st then
+# printed "unproven: TimeoutExpired" for a comment that had landed (aegis-epi,
+# reproduced with four concurrent `st work item comment` on one item).
+
+def _timing_out_tracker(rows_after):
+    import json
+    from shantytown.protocols import WorkItem
+    from shantytown.sd import SdTracker
+
+    class TimesOut(SdTracker):
+        def __init__(self):
+            self.writes = 0
+
+        def get(self, item_id):
+            return WorkItem(item_id)
+
+        def _bd_for(self, item_id, *command):
+            if command[:2] == ("comments", "add"):
+                self.writes += 1
+                raise subprocess.TimeoutExpired(["sd", *command], 30)
+            assert command == ("comments", item_id, "--json")
+            return subprocess.CompletedProcess(command, 0, json.dumps(rows_after), "")
+
+    return TimesOut()
+
+
+def _comment(tmp_path, tracker, text="the body"):
+    from shantytown import work_item
+    body = tmp_path / "comment.txt"
+    body.write_text(text)
+    operation = Namespace(item="aegis-x", item_action="comment", dry_run=False, file=body)
+    return work_item.command(operation, tracker)
+
+
+def _now(offset=0):
+    from datetime import datetime, timedelta, timezone
+    at = datetime.now(timezone.utc) + timedelta(seconds=offset)
+    return at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_timed_out_comment_that_landed_is_verified_without_a_resend(tmp_path):
+    tracker = _timing_out_tracker([{"text": "the body", "created_at": _now()}])
+    assert _comment(tmp_path, tracker) == {"id": "aegis-x", "comment": "verified"}
+    assert tracker.writes == 1
+
+
+def test_timed_out_comment_absent_from_readback_stays_unproven(tmp_path):
+    tracker = _timing_out_tracker([{"text": "other", "created_at": _now()}])
+    with pytest.raises(RuntimeError, match="timed out after 30s.*may still land") as caught:
+        _comment(tmp_path, tracker)
+    assert not isinstance(caught.value, br_mod.NothingWritten)
+    assert tracker.writes == 1
+
+
+def test_timed_out_comment_ignores_an_identical_older_comment(tmp_path):
+    # The same text posted an hour ago is not proof this attempt landed.
+    tracker = _timing_out_tracker([{"text": "the body", "created_at": _now(-3600)}])
+    with pytest.raises(RuntimeError, match="timed out"):
+        _comment(tmp_path, tracker)
+
+
+@pytest.mark.parametrize("created_at", [None, "", "not-a-time", "2026-10-27T15:36:26"])
+def test_timed_out_comment_needs_a_readable_zoned_time(tmp_path, created_at):
+    row = {"text": "the body"}
+    if created_at is not None:
+        row["created_at"] = created_at
+    with pytest.raises(RuntimeError, match="timed out"):
+        _comment(tmp_path, _timing_out_tracker([row]))
