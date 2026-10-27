@@ -995,10 +995,13 @@ def test_stale_ref_qualifies_phantom_ahead_details(tmp_path, monkeypatch, age):
 
     up = _repo(tmp_path / "up")
     wt = _clone(up, tmp_path / "wt")
+    frozen = _run(wt, "rev-parse", "origin/main")
     _commit(wt, "already-published")
-    # Push through a URL so origin/main stays frozen in this clone.
     _run(up, "checkout", "--detach", "-q")
     _run(wt, "push", str(up), "HEAD:main")
+    # git >= 2.56 also moves origin/main on a push to a URL that matches the
+    # remote's; put it back so this clone's cached ref stays stale.
+    _run(wt, "update-ref", "refs/remotes/origin/main", frozen)
     cached = tree_staleness(wt)
     assert cached.unpushed == 1
     assert _run(up, "rev-parse", "main") == _run(wt, "rev-parse", "HEAD")
