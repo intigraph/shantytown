@@ -655,6 +655,20 @@ class TrackerInbox:
             and it.status != "closed"
         ]
 
+    def unread_count(self, me: str) -> int:
+        reader = getattr(self._tracker, "inbox_count", None)
+        answer = reader(me) if callable(reader) else None
+        return answer.exact() if answer is not None else len(self.unread(me))
+
+    def unread_view(self, me: str, *, limit=100, oldest_first=False):
+        reader = getattr(self._tracker, "inbox_page", None)
+        answer = reader(me, limit=limit, oldest_first=oldest_first) if callable(reader) else None
+        if answer is None:
+            values = self.unread(me)
+            return len(values), values
+        total, items = answer.exact()
+        return total, [Message(id=item.id, to=me, body=_body_of(item.title)) for item in items]
+
     def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
         """Read named receipts without enumerating the recipient's queue.
 

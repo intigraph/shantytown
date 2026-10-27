@@ -6283,7 +6283,18 @@ def _inbox_read(a, me: str) -> int:
         box = _inbox(a, default="beads")
         select = getattr(box, "unread_selected", None)
         selected_only = bool(read_ids) and not getattr(a, "count", False) and callable(select)
-        unread = select(me, read_ids) if selected_only else box.unread(me)
+        counter = getattr(box, "unread_count", None)
+        if getattr(a, "count", False) and callable(counter):
+            print(counter(me))
+            return OK
+        view = getattr(box, "unread_view", None)
+        total = None
+        if not selected_only and not getattr(a, "count", False) and callable(view):
+            total, unread = view(me, limit=15 if getattr(a, "read", False) else 100,
+                                 oldest_first=bool(getattr(a, "read", False)))
+        else:
+            unread = select(me, read_ids) if selected_only else box.unread(me)
+        total = len(unread) if total is None else total
     except Exception as e:
         # Could-not-look is never "you have no mail" (the whole reason exit 2
         # exists here). --count stays silent on stdout so a parser sees nothing.
@@ -6309,7 +6320,7 @@ def _inbox_read(a, me: str) -> int:
         wanted = set(read_ids)
         selected = ([m for m in unread if m.id in wanted]
                     if read_ids else unread[:15])
-        remaining = len(unread) - len(selected)
+        remaining = total - len(selected)
         if getattr(a, "dry_run", False):
             remainder = ("other messages not enumerated" if selected_only else
                          f"{remaining} snapshot message(s) not selected")
@@ -6371,7 +6382,9 @@ def _inbox_read(a, me: str) -> int:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
             print(f"  {m.id}{src}  {m.body}")
-        print(f"\n  {len(unread)} unread. `st inbox --read` to ack up to 15, or "
+        if total > len(unread):
+            print(f"\n  showing {len(unread)} of {total} observed unread messages (newest window).")
+        print(f"\n  {total} unread. `st inbox --read` to ack up to 15, or "
               "`st inbox --read-id <id>` to ack selectively.")
     print()
     return OK
