@@ -2356,6 +2356,9 @@ that host using an SSH-held file lock under its governor state directory, the
 census is read after acquiring the lock, and the lock remains held through
 launch. `tend` recounts local agents between respawns, so one pass cannot reuse
 a slot. A BUSY owner (another launch holds its lock) still refuses; retry.
+The owner's helper may print login noise before its ready line, and a helper
+still waiting on the owner's lock gets up to 12 more seconds to report BUSY, so
+a slow SSH connection to a busy owner is never mistaken for an unreachable one.
 
 When the owner is unreachable, or none is configured, the launching host takes
 its own lock and admits against fresh censuses of reachable peers plus the last

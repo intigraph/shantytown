@@ -103,6 +103,38 @@ with p.open('a') as f:
     sys.stdin.buffer.read(1)
 '''
 REMOTE_LOCK_BUSY = 2
+# How long this host waits for the owner's helper to print `locked`.
+REMOTE_LOCK_READY_S = 16
+# After that, how long a helper still waiting on the owner's lock may take to
+# reach its own 10s deadline and exit BUSY. SSH connect+auth time is spent
+# before the helper's clock starts, so the two deadlines are not aligned; a
+# helper that is merely waiting must not be mistaken for an unreachable owner.
+REMOTE_LOCK_BUSY_GRACE_S = 12
+_LOCK_LINE_MAX = 64 * 1024
+
+
+def _await_locked(process, timeout):
+    """True once the helper prints a `locked` line, tolerating shell noise
+    (login banners, rc output) before it. False on EOF, timeout or a flood."""
+    fd = process.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    pending = b''
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            return False
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return False
+        lines = (pending + chunk).split(b'\n')
+        pending = lines.pop()
+        if any(line.rstrip(b'\r') == b'locked' for line in lines):
+            return process.poll() is None
+        if len(pending) > _LOCK_LINE_MAX:
+            return False
 
 
 @contextmanager
@@ -149,11 +181,7 @@ def admission_lock(root, host, peers, *, owner=None, local_required=False):
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
         process = None
-    locked = False
-    if process is not None:
-        ready, _, _ = select.select([process.stdout], [], [], 16)
-        locked = (bool(ready) and process.stdout.readline() == b'locked\n'
-                  and process.poll() is None)
+    locked = process is not None and _await_locked(process, REMOTE_LOCK_READY_S)
     if locked:
         try:
             yield Admission(lock_host=owner, owner=owner)
@@ -162,11 +190,10 @@ def admission_lock(root, host, peers, *, owner=None, local_required=False):
         return
     busy = False
     if process is not None:
-        try:
-            busy = process.wait(timeout=.5) == REMOTE_LOCK_BUSY
-        except subprocess.TimeoutExpired:
-            pass
-        _release(process)
+        # Let a helper that is still waiting on the owner's lock reach its own
+        # deadline: exit BUSY means the owner is up and another launch holds it.
+        _release(process, grace=REMOTE_LOCK_BUSY_GRACE_S)
+        busy = process.returncode == REMOTE_LOCK_BUSY
     if busy:
         raise AdmissionUnavailable(f'account admission authority {owner} busy; '
                                    'retry after the current launch')
@@ -176,13 +203,13 @@ def admission_lock(root, host, peers, *, owner=None, local_required=False):
         yield Admission(lock_host=host, owner=owner, unreachable=owner)
 
 
-def _release(process):
+def _release(process, grace=3):
     try:
         process.stdin.close()
     except OSError:
         pass
     try:
-        process.wait(timeout=3)
+        process.wait(timeout=grace)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
