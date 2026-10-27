@@ -185,3 +185,26 @@ def test_any_other_failure_is_not_retried():
 
     with pytest.raises(RuntimeError):
         br_mod.append_comment(_T(), "aegis-x", "body")
+
+
+@pytest.mark.parametrize('waiter', ['/fixture-log', ''])
+def test_cycle_request_names_background_task_cleanup(admin, monkeypatch, capsys, waiter):
+    root, plate = admin
+    plate['bead'] = 'fixture-checkpoint'
+    monkeypatch.setattr(cli, '_spawn_self_cycle_server', lambda *a: waiter)
+    assert cli._cmd_cycle(_args(root, reason='checkpoint ready')) == cli.OK
+    message = capsys.readouterr().out
+    assert 'stop or await only your own running background tasks' in message
+    assert 'Claude: TaskStop' in message and 'Codex: /ps' in message
+
+
+def test_waiter_reports_shell_hold_then_cycles_when_it_exits(tmp_path, monkeypatch, capsys):
+    cycle.Requests(tmp_path).request('hammond', 'checkpoint', 'fixture-checkpoint')
+    served = _waiter_world(tmp_path, monkeypatch, [IDLE_WITH_SHELL, IDLE_WITH_SHELL, IDLE])
+    sleeps = []
+    rc = cli._serve_own_request(argparse.Namespace(root=tmp_path), 'hammond',
+        sleep=sleeps.append, clock=itertools.count().__next__)
+    output = capsys.readouterr().err
+    assert rc == cli.OK and len(served) == 1 and len(sleeps) == 2
+    assert output.count('waiting: 1 background shell running') == 1
+    assert 'stop or await your own tasks' in output
