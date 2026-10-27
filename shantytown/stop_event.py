@@ -57,6 +57,7 @@ from .answer import PartialAnswer
 from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_anchor, is_decision, is_message
+from .ask_visibility import is_ask
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
@@ -511,7 +512,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     return json.loads(r.stdout)
 
 
-def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
+def _haul_active(me: str, cwd: str | None, root=None, reg=None, *, held_asks=None) -> list[dict]:
     if root is not None:
         from .feed_check import _br_tracker
         tracker = _br_tracker(root, reg)
@@ -519,10 +520,16 @@ def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
         if project is not None:
             rows = project(me)
             if rows is not None:
-                return _assigned_to(me, rows.exact())
+                values = rows.exact()
+                if held_asks is not None:
+                    held_asks.extend(_owned_asks(me, values))
+                return _assigned_to(me, values)
     # Only a backend without the native projection keeps the old CLI path.
     args = ["list", "--status", "in_progress", "--limit", "0"]
-    return _assigned_to(me, _bd_json(args, cwd, root=root, reg=reg))
+    values = _bd_json(args, cwd, root=root, reg=reg)
+    if held_asks is not None:
+        held_asks.extend(_owned_asks(me, values))
+    return _assigned_to(me, values)
 
 
 def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
@@ -552,10 +559,34 @@ def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
         assignee = b.get("assignee") or ""
         if (assignee.split("/")[-1] == me
                 and not is_message(b.get("title", ""))
+                and not is_ask(b)
                 and not is_decision(b.get("labels"))
                 and not is_anchor(b.get("labels"))):
             out.append(b)
     return out
+
+
+def _owned_asks(me, rows):
+    return [row for row in rows
+            if (row.get("assignee") or "").split("/")[-1] == me and is_ask(row)]
+
+
+def _human_plate_notice(root, reg, panes, me, asks):
+    """Report to the existing durable lead stream, never wake the worker."""
+    ids = sorted({row["id"] for row in asks})
+    detail = "plate blocked on human: " + ", ".join(ids) + "; ownership and visibility retained"
+    print(f"haul: {me} {detail}", file=sys.stderr)
+    if root is None:
+        return
+    try:
+        routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
+                             catalog=deployment_catalog(root))
+        FilesEvents(root / "events").persist(
+            to=routing.to, frm=me, reason=routing.reason.value if routing.reason else None,
+            rose=routing.rose, detail=detail,
+            key="haul-human:" + me + ":" + ",".join(ids))
+    except Exception as error:
+        print(f"haul human-plate notice UNKNOWN: {type(error).__name__}", file=sys.stderr)
 
 
 def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
@@ -663,7 +694,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         cwd = bd_cwd(reg)
         # Resume only this owner's anchors: global SDK hydration made every
         # stop pay for other workers' active work (aegis-dnw).
-        active = _haul_active(me, cwd, root=root, reg=reg)
+        held_asks = []
+        active = _haul_active(me, cwd, root=root, reg=reg, held_asks=held_asks)
         resume = active[0] if (active and
                                harness_name == "codex") else None
         if active and resume is None:
@@ -706,6 +738,9 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             all_ready = _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg)
             mine = _assigned_to(me, all_ready)
             if not mine:
+                asks = held_asks + _owned_asks(me, all_ready)
+                if asks:
+                    _human_plate_notice(root, reg, panes, me, asks)
                 return 0
             # A ready assignment is not governor admission (aegis-4kd6ux).
             # Filter before claiming, spending a session item, or requesting a
