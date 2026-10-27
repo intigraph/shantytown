@@ -144,6 +144,15 @@ def test_a_known_token_is_redacted_before_lower_level_cuts(monkeypatch, rc, tool
 # printed "unproven: TimeoutExpired" for a comment that had landed (aegis-epi,
 # reproduced with four concurrent `st work item comment` on one item).
 
+@pytest.fixture(autouse=True)
+def _writer_is_hammond(monkeypatch):
+    # The read-back matches the author st writes as; pin it so no test asks
+    # this host's real identity service.
+    import shantytown.actor_identity as actor_identity
+    monkeypatch.setattr(actor_identity, "authenticated_actor", lambda **_: None)
+    monkeypatch.setenv("SHANTY_AGENT", "hammond")
+
+
 def _timing_out_tracker(rows_after):
     import json
     from shantytown.protocols import WorkItem
@@ -161,6 +170,8 @@ def _timing_out_tracker(rows_after):
                 self.writes += 1
                 raise subprocess.TimeoutExpired(["sd", *command], 30)
             assert command == ("comments", item_id, "--json")
+            if callable(rows_after):
+                return rows_after(command)
             return subprocess.CompletedProcess(command, 0, json.dumps(rows_after), "")
 
     return TimesOut()
@@ -208,3 +219,56 @@ def test_timed_out_comment_needs_a_readable_zoned_time(tmp_path, created_at):
         row["created_at"] = created_at
     with pytest.raises(RuntimeError, match="timed out"):
         _comment(tmp_path, _timing_out_tracker([row]))
+
+
+def _read_times_out(command):
+    raise subprocess.TimeoutExpired(["sd", *command], 30)
+
+
+def _read_fails(command):
+    return subprocess.CompletedProcess(command, 1, "", "sd: quipu 503\n")
+
+
+def _read_garbled(command):
+    return subprocess.CompletedProcess(command, 0, "{not json", "")
+
+
+@pytest.mark.parametrize("read", [_read_times_out, _read_fails, _read_garbled],
+                         ids=["timeout", "sd-error", "bad-json"])
+def test_failed_readback_keeps_the_may_still_land_wording(tmp_path, read):
+    # A read-back that cannot answer says nothing about the write; a bare
+    # "comments failed" would invite a blind retry and a duplicate comment.
+    tracker = _timing_out_tracker(read)
+    with pytest.raises(RuntimeError,
+                       match="timed out after 30s.*readback failed.*may still land; "
+                             "verify exact readback before retrying") as caught:
+        _comment(tmp_path, tracker)
+    assert not isinstance(caught.value, br_mod.NothingWritten)
+    assert tracker.writes == 1
+
+
+def test_same_text_by_another_author_is_not_verified(tmp_path):
+    tracker = _timing_out_tracker(
+        [{"text": "the body", "author": "sattler", "created_at": _now()}])
+    with pytest.raises(RuntimeError, match="timed out.*may still land"):
+        _comment(tmp_path, tracker)
+
+
+def test_same_text_by_the_writer_is_verified(tmp_path):
+    tracker = _timing_out_tracker(
+        [{"text": "the body", "author": "hammond", "created_at": _now()}])
+    assert _comment(tmp_path, tracker) == {"id": "aegis-x", "comment": "verified"}
+
+
+def test_skew_allowance_counts_a_comment_stamped_20s_early(tmp_path):
+    # The tracker's clock may run behind st's; 30s back still counts.
+    tracker = _timing_out_tracker(
+        [{"text": "the body", "author": "hammond", "created_at": _now(-20)}])
+    assert _comment(tmp_path, tracker) == {"id": "aegis-x", "comment": "verified"}
+
+
+def test_skew_allowance_stops_at_30s(tmp_path):
+    tracker = _timing_out_tracker(
+        [{"text": "the body", "author": "hammond", "created_at": _now(-40)}])
+    with pytest.raises(RuntimeError, match="timed out.*may still land"):
+        _comment(tmp_path, tracker)

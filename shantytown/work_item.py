@@ -59,16 +59,23 @@ def _comment_body(row):
 TIMEOUT_READBACK_SKEW = timedelta(seconds=30)
 
 
-def _landed_since(rows, body, started):
+def _landed_since(rows, body, started, author=None):
     """True when a row with exactly `body` was written at or after `started`.
 
     Only a timed-out write uses this, so an identical OLDER comment must not
     count: the row needs a parseable created_at no earlier than the attempt
-    start, less a small allowance for clock skew between hosts.
+    start, less a small allowance for clock skew between hosts. When the
+    writer is known (`author`) and the row carries an `author` field, the two
+    must match, so a same-text comment by another writer is not this write.
+    A row WITHOUT an `author` field falls back to the body + time rule alone:
+    the tracker gave nothing to compare, and refusing it would turn every
+    landed write on such a tracker into "may still land".
     """
     floor = started - TIMEOUT_READBACK_SKEW
     for row in rows:
         if _comment_body(row) != body or not isinstance(row.get("created_at"), str):
+            continue
+        if author and "author" in row and row["author"] != author:
             continue
         try:
             at = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
@@ -77,6 +84,19 @@ def _landed_since(rows, body, started):
         if at.tzinfo is not None and at >= floor:
             return True
     return False
+
+
+def _writer(tracker):
+    """The actor st wrote the comment as, or None when st does not choose it.
+
+    Mirrors SdTracker._bd_in: the authenticated principal, else SHANTY_AGENT.
+    br picks its own author, so a br write has no known writer here.
+    """
+    from .sd import SdTracker
+    if not isinstance(tracker, SdTracker):
+        return None
+    from .actor_identity import authenticated_actor
+    return authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip() or None
 
 
 def command(args, tracker):
@@ -144,7 +164,20 @@ def command(args, tracker):
                 # The child was killed, but its write may already have committed
                 # (aegis-epi: a contended comment landed after st's 30s limit and
                 # st printed "unproven"). Read back once; never re-send.
-                if _landed_since(_comments(tracker, item.id), body, started):
+                try:
+                    landed = _landed_since(_comments(tracker, item.id), body,
+                                           started, _writer(tracker))
+                except Exception as unreadable:
+                    # A failed read-back (timeout, tracker error, bad JSON) says
+                    # nothing about the write; keep the may-still-land wording
+                    # so nobody takes it as license for a blind retry.
+                    from .br import redact_cause
+                    cause = redact_cause(f"{type(unreadable).__name__}: {unreadable}")[:160]
+                    raise RuntimeError(
+                        f"comment write timed out after {timed_out.timeout:g}s and readback "
+                        f"failed ({cause}); write may still land; verify exact readback "
+                        "before retrying") from None
+                if landed:
                     return {"id": item.id, "comment": "verified"}
                 raise RuntimeError(
                     f"comment write timed out after {timed_out.timeout:g}s and readback "
