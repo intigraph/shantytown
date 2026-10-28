@@ -360,11 +360,11 @@ class ClaudeHarness:
     # already and the test that caught it exists for that reason.
     picker_markers = ()
     ready_patterns = ()
-    # Claude Code submits what st types; no stranded-paste signature has been
-    # observed. Empty means UNMEASURED, not "cannot happen" — if a long send is
-    # ever seen sitting in its box, the marker goes here and the check below
-    # starts covering it with no other change.
-    stranded_markers = ()
+    # MEASURED 2026-10-28 on the Mac (aegis-g9w): an ephemeral job prompt sent
+    # in one burst sat in the composer as `[Pasted text #1 +N lines]`, never
+    # submitted, while st counted it delivered; one later Enter started it. The
+    # number and line count vary, so the marker is the stable prefix.
+    stranded_markers = ("[Pasted text #",)
     # THE CLEAR COMMAND — what st types into a LIVE pane to empty its context
     # without touching the process (aegis-3laza's successor, Stiwi 2026-09-21).
     #

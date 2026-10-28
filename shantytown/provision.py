@@ -484,7 +484,13 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             gaps.append("skills(retired in Quipu)")
     except tooling.ToolingError:
         gaps.append("skills(receipt or retired link unreadable)")
-    if card.harness == "codex":
+    from .ephemeral import is_ephemeral_name
+    # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-g9w review of #411):
+    # the #406 guard covered only the Claude StopFailure refresh. This block
+    # re-rendered the shared codex worker config.toml with the SPAWNING st's
+    # interpreter, so a spawn from a checkout repointed every codex worker's
+    # hooks at a temporary venv. An ephemeral card reads the role file as is.
+    if card.harness == "codex" and not is_ephemeral_name(card.name):
         from . import codex as codex_mod
         config = _codex_config(card, root)
         want = _codex_servers(rendered["mcpServers"])
@@ -1182,7 +1188,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # self-healing channel is the config.toml selected by the card, so refresh
     # the workspace hooks here on every launch (aegis-jlmqn).  Prefer a per-agent
     # override exactly as the launcher does, then fall back to the role artifact.
-    if card.harness == "codex":
+    from .ephemeral import is_ephemeral_name
+    # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-g9w review of #411):
+    # the #406 guard covered only the Claude StopFailure refresh. This block
+    # re-rendered the shared codex worker config.toml with the SPAWNING st's
+    # interpreter, so a spawn from a checkout repointed every codex worker's
+    # hooks at a temporary venv. An ephemeral card reads the role file as is.
+    if card.harness == "codex" and not is_ephemeral_name(card.name):
         from . import codex as codex_mod
         config = _codex_config(card, root)
         if config is not None:

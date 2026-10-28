@@ -893,3 +893,29 @@ def test_verified_identity_setting_rejects_non_boolean(store):
     (root / 'shantytown.toml').write_text('[ephemeral]\nrequire_verified_identity = "yes"\n')
     with pytest.raises(config.ConfigError, match='require_verified_identity'):
         config.load(root)
+
+
+def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
+    """#411 review: the #406 guard covered only Claude's StopFailure refresh.
+    provision() re-rendered the SHARED codex worker config.toml with the
+    spawning st's interpreter, so a spawn from a checkout repointed every
+    codex worker's hooks at its temporary venv."""
+    from shantytown import codex
+    from shantytown.protocols import Agent
+    from shantytown.provision import provision
+    root = tmp_path / "store"
+    config = root / "settings" / "codex" / "worker" / "config.toml"
+    config.parent.mkdir(parents=True)
+    import sys
+    stale = codex.render(codex.settings_for_role("worker", root=root)).replace(
+        sys.executable, "/crew/venv/bin/python")
+    assert "/crew/venv/bin/python" in stale
+    config.write_text(stale)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    provision(Agent(name="eph-review-abcdef", role="worker", harness="codex",
+                    workspace=str(ws)), root)
+    assert config.read_text() == stale
+    provision(Agent(name="franklin", role="worker", harness="codex",
+                    workspace=str(ws)), root)
+    assert config.read_text() != stale      # control: crew launches still refresh it

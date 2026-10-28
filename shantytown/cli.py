@@ -3796,7 +3796,8 @@ def _cmd_spawn(a) -> int:
         if not a._startup_delivered:
             # A pane that never received its job would idle at turn 0 until the
             # deadline. End it now and say so; never leave an unfed agent up.
-            _spawn_end(a, rec["name"], "failed", "job prompt not delivered to the pane",
+            why = getattr(a, "_startup_failure", "") or "job prompt not delivered to the pane"
+            _spawn_end(a, rec["name"], "failed", f"job not started: {why}",
                        "launch failed", detached=False)
             print(f"  refused: {rec['name']} came up but its job was not delivered; "
                   "ended and reported", file=sys.stderr)
@@ -4630,6 +4631,19 @@ def _startup_inbox_batch(unread, budget: int = _STARTUP_INBOX_MAX_CHARS):
 _STARTUP_VERIFY_LOOKS = 8
 
 
+def _agent_foreground(panes, session: str) -> bool | None:
+    """Is the agent process still the pane's foreground? False when a shell is
+    back (the agent exited), None when the foreground cannot be read."""
+    from .tmux import SHELL_COMMANDS
+    try:
+        fg = panes.foreground(session)
+    except Exception:  # noqa: BLE001 -- unreadable is "cannot tell", not dead
+        return None
+    if not fg:
+        return None
+    return fg not in SHELL_COMMANDS
+
+
 def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     """Inject unread durable mail into a verified new session, then acknowledge it.
 
@@ -4698,6 +4712,31 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
                       f"`st inbox {card.name}`."]
     lines += ["", marker]
     prompt = "\n".join(lines)
+
+    if job is not None and harness_mod.name_for(card, root=a.root) != "codex":
+        # AN EPHEMERAL JOB IS NOT DELIVERED UNTIL ITS TURN STARTS (aegis-g9w).
+        # send() types and presses Enter in one burst; Claude Code folded the
+        # job into `[Pasted text #1 +N lines]`, ate the Enter, and the job idled
+        # at turn 0 until its deadline while this check saw the text and called
+        # it delivered. deliver() types, waits to SEE the job in the box, presses
+        # Enter on its own, and waits to SEE the turn start. Codex keeps its own
+        # verified rail inside send().
+        typed = attribute(prompt, "st startup")
+        try:
+            started, why = _eph.deliver(
+                typed,
+                type_text=lambda t: panes.type_text(session, t),
+                submit=lambda: panes.submit(session),
+                capture=lambda: panes.capture(session, history=200, attrs=True),
+                alive=lambda: _agent_foreground(panes, session))
+        except Exception as e:  # noqa: BLE001 -- ends as "launch failed", loudly
+            started, why = False, f"{type(e).__name__}: {str(e)[:120]}"
+        if not started:
+            a._startup_failure = why
+            print(f"  ⚠ ephemeral {card.name}: job not started ({why}).", file=sys.stderr)
+            return
+        print(f"  ephemeral {card.name}: job delivered; {why}.")
+        return True
 
     try:
         panes.send(session, attribute(prompt, "st startup"))

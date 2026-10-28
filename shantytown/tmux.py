@@ -591,8 +591,38 @@ class Tmux:
             raise PaneSubmissionUnverified(
                 'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
 
+    def type_text(self, pane: str, text: str) -> None:
+        """Type `text` into an agent pane WITHOUT submitting it (aegis-g9w).
+
+        Every guard send() has (copy-mode, shell foreground, safeguard, task
+        list, chunking, journal) and NO Enter. The caller owns the submit, and
+        submits with submit() only after it has SEEN the text in the box: a
+        Claude Code composer that absorbs a long write as `[Pasted text #1 +N
+        lines]` swallows an Enter sent in the same burst, so a send() there
+        types the job and never starts it. Not wrapped in delivery custody:
+        nothing was delivered yet, and custody is the Codex rail's record.
+        """
+        self._send(pane, text, submit=False)
+
+    def submit(self, pane: str) -> None:
+        """Press Enter ONCE in an agent pane, as its own keystroke (aegis-g9w).
+
+        Only for a caller that has just verified the box holds text it typed
+        itself (ephemeral.deliver); st never presses Enter on text it did not
+        put there. Refuses copy-mode and a shell foreground exactly like
+        send(): an Enter at a bare shell runs whatever sits on its line.
+        Journaled, because every keystroke st puts into a pane is an action.
+        """
+        self._refuse_in_mode(pane)
+        fg = self.foreground(pane)
+        if fg is not None and fg in SHELL_COMMANDS:
+            raise PaneNotAgent(
+                f"pane {pane} is running {fg!r}, not an agent runtime: Enter withheld.")
+        _journal_send(pane, "<submit>")
+        subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
+
     def _send(self, pane: str, text: str, *, allow_shell: bool = False,
-              custody=None) -> SubmissionObserved | None:
+              custody=None, submit: bool = True) -> SubmissionObserved | None:
         # REFUSE A PANE IN COPY-MODE (aegis-6jx) before anything else reads or
         # types. See PaneInMode for what each key does to a person scrolling back.
         self._refuse_in_mode(pane)
@@ -709,6 +739,8 @@ class Tmux:
                 time.sleep(_SEND_CHUNK_GAP_S)
         # Before the settle, so the settle stays the last thing before Enter.
         self._refuse_in_mode(pane, sent=len(chunks))
+        if not submit:
+            return None
         if codex:
             # A key inside the terminal's paste burst can become text instead
             # of a submit. Chunking alone does not separate the final Enter.
@@ -1245,6 +1277,18 @@ class NullPanes:
         # eats every message, which is not a pane. Unless drops=True.
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
+
+    def type_text(self, pane: str, text: str) -> None:
+        """Tmux.type_text's double: the text lands, no Enter is recorded."""
+        self.send(pane, text)
+
+    def submit(self, pane: str) -> None:
+        """Tmux.submit's double: one Enter, recorded apart from text and keys."""
+        if self.in_mode:
+            raise PaneInMode(f"pane {pane} is in a tmux mode: NOT DELIVERED.")
+        if self.foreground_cmd in SHELL_COMMANDS:
+            raise PaneNotAgent(f"pane {pane} is a shell: Enter withheld.")
+        self.submits = getattr(self, "submits", []) + [pane]
 
     def control(self, pane: str, key: str) -> None:
         """Records the key; enforces the SAME allowlist as Tmux.control.

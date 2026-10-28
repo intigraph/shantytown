@@ -350,6 +350,174 @@ def prompt(rec: dict) -> str:
     return (_COMMON.format(**fields) + "\n" + _JOBS[rec["job"]].format(**fields)).strip()
 
 
+# --- delivering the job: paste, SEE it, submit, SEE the turn start -----------
+#
+# THE BUG THIS CLOSES (aegis-g9w, live twice on the Mac 10/28). The job went in
+# through send(), which types the text and presses Enter in the same burst.
+# Claude Code absorbed the long write as `[Pasted text #1 +N lines]`, the Enter
+# was eaten by the paste, and the job sat at turn 0 until its deadline while the
+# delivery check counted it delivered. One manual Enter to the pane started it.
+#
+# So delivery is four observed steps, never one fire-and-forget write:
+#   1. the composer is EMPTY before anything is typed (else refuse: never type
+#      onto, or press Enter on, text the job did not put there);
+#   2. type the job with NO Enter, and wait until the box shows it (the paste
+#      placeholder, or the job's own last line) and holds nothing else;
+#   3. press Enter as its OWN keystroke;
+#   4. see the turn start: the agent process is STILL the pane's foreground
+#      (not a shell: an agent that crashed on Enter left a shell prompt, and
+#      that is "launch failed", never "started"), its box is drawn and empty,
+#      AND a positive sign of work shows: a busy marker, a spinner, or the
+#      context-left figure dropping. An echo of the job is not work.
+#      No start -> press Enter again, but only while the box still holds just
+#      the job, a bounded number of times; then "launch failed".
+
+PASTE_TOKEN = re.compile(r"\[Pasted text #\d+(?: \+\d+ lines)?\]")
+SUBMIT_ATTEMPTS = 3
+LOOK_S = 0.4
+SHOW_LOOKS = 20      # ~8s for the box to show the typed job
+START_LOOKS = 15     # ~6s per Enter for the turn to start
+_PROMPT = "\u276f"   # the Claude Code composer glyph
+_BORDER = set("\u2500\u2501")
+#: A Claude Code spinner line, e.g. "✶ Roosting…" or "· Finagling… (1s · thinking)".
+_SPINNER = re.compile(r"^\s*[^\w\s\u276f\u2500\u23bf]\s+\w[\w-]*\u2026")
+_CTX_LEFT = re.compile(r"(\d{1,3})% left")
+EMPTY, OURS, PARTIAL, FOREIGN, UNSEEN = "empty", "ours", "partial", "foreign", "unseen"
+
+
+def _composer(screen: str):
+    """(raw prompt line, plain body lines, plain lines above) of the LAST
+    composer frame on screen, or None. A frame is a line opening with the
+    prompt glyph and closed by a border row below it; transcript echoes of
+    earlier messages carry the glyph but no border under them."""
+    from .triage import strip_attrs
+    raw = screen.splitlines()
+    while raw and not strip_attrs(raw[-1]).strip():
+        raw.pop()
+    plain = [strip_attrs(line) for line in raw]
+    for i in range(len(plain) - 1, max(-1, len(plain) - 200), -1):
+        if not plain[i].lstrip().startswith(_PROMPT):
+            continue
+        body = []
+        for row in plain[i:]:
+            s = row.strip()
+            if s and set(s) <= _BORDER:
+                return raw[i], body, plain[:i]
+            body.append(row)
+        return None
+    return None
+
+
+def box_state(screen: str, text: str) -> str:
+    """What the composer holds, judged against the job text we typed.
+
+    EMPTY (nothing, or only the dimmed suggestion), OURS (only our text and the
+    job's last line is in), PARTIAL (only our text, still arriving), FOREIGN
+    (anything we did not type) or UNSEEN (no composer frame on screen)."""
+    from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+    frame = _composer(screen)
+    if frame is None:
+        return UNSEEN
+    prompt_raw, body, _above = frame
+    first = body[0].split(_PROMPT, 1)[1] if body else ""
+    pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
+    if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+        return EMPTY
+    pasted = False
+    for piece in pieces:
+        rest, n = PASTE_TOKEN.subn("", piece)
+        pasted = pasted or n > 0
+        rest = rest.strip("\xa0 \t")
+        if rest and rest not in text:
+            return FOREIGN
+    last = text.rstrip().splitlines()[-1].strip() if text.strip() else ""
+    joined = "\n".join(pieces)
+    return OURS if pasted or (last and last in joined) else PARTIAL
+
+
+def _ctx_left(screen: str) -> int | None:
+    from .triage import strip_attrs
+    found = _CTX_LEFT.findall(strip_attrs(screen))
+    return int(found[-1]) if found else None
+
+
+def turn_started(before: str, screen: str, text: str) -> bool:
+    """Does the screen show the job's turn WORKING? The agent's box must be
+    drawn and have let go of the job (a vanished box is a dead UI, not a
+    submit), AND one positive sign of work must show: a busy marker, a spinner
+    above the box, or the context-left figure lower than before typing. The
+    caller separately requires the agent process to still be alive."""
+    from .triage import mid_flight
+    if box_state(screen, text) != EMPTY:
+        return False
+    if mid_flight(screen):
+        return True
+    frame = _composer(screen)
+    above = frame[2] if frame else screen.splitlines()
+    if any(_SPINNER.match(row) for row in above[-6:]):
+        return True
+    was, now = _ctx_left(before), _ctx_left(screen)
+    return was is not None and now is not None and now < was
+
+
+def deliver(text: str, *, type_text, submit, capture, alive, sleep=time.sleep,
+            attempts: int = SUBMIT_ATTEMPTS, show_looks: int = SHOW_LOOKS,
+            start_looks: int = START_LOOKS, look_s: float = LOOK_S) -> tuple[bool, str]:
+    """Put the job in the box and start its turn, or say exactly why not.
+
+    Returns (started, what happened). Never presses Enter unless the box holds
+    only text this call typed; every failure leaves the job for the caller to
+    end as "launch failed" rather than idle until its deadline. `alive()` says
+    whether the agent process is still the pane's foreground: True, False (a
+    shell is back) or None (cannot tell). Started needs a True."""
+    before = capture()
+    state = box_state(before, text)
+    for _ in range(show_looks if state == UNSEEN else 0):
+        sleep(look_s)
+        before = capture()
+        state = box_state(before, text)
+        if state != UNSEEN:
+            break
+    if state == UNSEEN:
+        return False, "no composer on screen; nothing typed"
+    if state != EMPTY:
+        return False, ("the composer already holds text st did not put there; "
+                       "refused: nothing typed, Enter withheld")
+    type_text(text)
+    screen = before
+    for _ in range(show_looks):
+        sleep(look_s)
+        screen = capture()
+        state = box_state(screen, text)
+        # Only OURS ends the wait. A FOREIGN frame can be transient (seen live
+        # once, right after a turn: a redraw mid-type), so it is judged at the
+        # end of the wait, and Enter is pressed only on a frame that is OURS.
+        if state == OURS:
+            break
+    if state == FOREIGN:
+        return False, "the composer holds text that is not the job's; Enter withheld"
+    if state != OURS:
+        return False, f"the job never showed in the composer ({state}); Enter withheld"
+    for n in range(1, attempts + 1):
+        if alive() is False:
+            return False, "the agent exited to the shell; Enter withheld"
+        submit()
+        for _ in range(start_looks):
+            sleep(look_s)
+            screen = capture()
+            live = alive()
+            if live is False:
+                return False, (f"the agent exited to the shell after Enter {n}; "
+                               "not started")
+            if live and turn_started(before, screen, text):
+                return True, f"turn started after {n} Enter(s)"
+        state = box_state(screen, text)
+        if state != OURS:
+            return False, (f"no turn started and the composer no longer holds just "
+                           f"the job ({state}); Enter not pressed again")
+    return False, f"no turn started after {attempts} Enters; the job is still in the box"
+
+
 # --- the guarded merge (only a live merge job, only its own PR) ---------------
 
 #: Associations that make a PR crew/owner work. Anything else is an outside
