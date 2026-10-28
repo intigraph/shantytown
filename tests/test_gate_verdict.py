@@ -342,7 +342,7 @@ def test_review_verdict_writes_nothing_when_off_and_never_for_other_jobs(root, q
 
 def test_a_review_report_without_the_head_is_refused(root, monkeypatch, capsys):
     rec = _rec(root, job="review", state=eph.LIVE)
-    monkeypatch.setattr(cli, "_spawn_inside", lambda a: rec["name"])
+    monkeypatch.setattr(cli, "_spawn_inside", lambda a, **kw: rec["name"])
     assert cli.main(["--root", str(root), "agent", "spawn", "--report", "--verdict",
                      "approve", "--summary", "ok"]) == cli.REFUSED
     assert "--head" in capsys.readouterr().err
