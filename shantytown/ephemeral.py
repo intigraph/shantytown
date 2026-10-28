@@ -101,6 +101,30 @@ def write(root, rec: dict) -> None:
     os.replace(tmp, p)
 
 
+def provision_worktree(root, name: str, repo, *, ensure=None) -> str:
+    """Record job-owned destinations BEFORE provisioning, including interruptions.
+
+    The ordinary ledger lock serializes this with result recording and teardown.
+    Persistent agents use the existing provisioner without creating a ledger.
+    """
+    from .workspace import ensure_worktree, worktree_for, _shared_repo, WorkspaceError
+    ensure = ensure_worktree if ensure is None else ensure
+    if not is_ephemeral_name(name):
+        return ensure(repo, name)
+    with lock(root):
+        rec = read(root, name)
+        if rec is None or rec.get('state') not in (LAUNCHING, LIVE):
+            raise WorkspaceError(f'no active ephemeral job for {name}')
+        shared = _shared_repo(repo).resolve()
+        dest = worktree_for(shared, name).absolute()
+        entry = dict(workspace=str(dest), worktree_of=str(shared))
+        entries = rec.setdefault('worktrees', [])
+        if entry not in entries:
+            entries.append(entry)
+            write(root, rec)
+        return ensure(shared, name)
+
+
 def records(root) -> list[dict]:
     out = []
     for p in sorted(ledger_dir(root).glob(f"{PREFIX}*.json")):
@@ -506,6 +530,16 @@ def remove_workspace(rec: dict, root, git=_git) -> str:
             shutil.rmtree(dest, ignore_errors=True)
             return "removed"
         return "kept (not st's scratch)"
+    if dest.is_symlink():
+        return f"kept (symlink): {dest}"
+    common = git('-C', str(dest), 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    source = git('-C', str(shared), 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    branch = git('-C', str(dest), 'symbolic-ref', '--quiet', '--short', 'HEAD')
+    if (common.returncode or source.returncode or branch.returncode
+            or not common.stdout.strip() or not source.stdout.strip()
+            or Path(common.stdout.strip()).resolve() != Path(source.stdout.strip()).resolve()
+            or branch.stdout.strip() != f"wt/{rec['name']}"):
+        return f"kept (worktree identity uncertain or branch changed): {dest}"
     if worktree_holds_work(dest, git=git):
         return f"kept (holds work): {dest}"
     r = git("-C", shared, "worktree", "remove", "--force", str(dest))
@@ -513,6 +547,13 @@ def remove_workspace(rec: dict, root, git=_git) -> str:
         return f"kept (git worktree remove failed: {(r.stderr or '').strip()[:120]})"
     git("-C", shared, "branch", "-D", f"wt/{rec['name']}")
     return "removed"
+
+
+def _try_remove_workspace(rec: dict, root, git=_git) -> str:
+    try:
+        return remove_workspace(rec, root, git=git)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"kept (cleanup uncertain: {type(exc).__name__}): {rec.get('workspace')}"
 
 
 def teardown(root, name: str, *, kill_session, git=_git, now: float | None = None) -> dict:
@@ -532,10 +573,25 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
         kill_session(f"st-{name}")
     except Exception:  # noqa: BLE001 — an already-dead session is the goal state
         pass
-    rec["workspace_teardown"] = remove_workspace(rec, root, git=git)
-    rec["state"] = DONE
-    rec["torn_down_at"] = time.time() if now is None else now
-    write(root, rec)
+    # A provisioner may have held the ledger lock while the pane was killed.
+    # Re-read AFTER that lock is released: never overwrite its new destinations
+    # with the stale spawn record read at the beginning of teardown.
+    with lock(root):
+        rec = read(root, name)
+        rec["workspace_teardown"] = _try_remove_workspace(rec, root, git=git)
+        results = []
+        seen = {str(Path(rec['workspace']).resolve())} if rec.get('workspace') else set()
+        for entry in rec.get('worktrees', []):
+            dest = str(Path(entry['workspace']).resolve())
+            if dest in seen:
+                continue
+            seen.add(dest)
+            owned = dict(entry, name=name)
+            results.append(dict(entry, result=_try_remove_workspace(owned, root, git=git)))
+        rec['worktree_teardowns'] = results
+        rec["state"] = DONE
+        rec["torn_down_at"] = time.time() if now is None else now
+        write(root, rec)
     return rec
 
 

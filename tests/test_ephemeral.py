@@ -557,3 +557,157 @@ def test_a_spawn_never_rewrites_the_shared_role_settings(tmp_path):
     assert shared.read_text() == before
     _refresh_failure_hook(Agent(name="lex", harness="claude"), tmp_path, shared)
     assert shared.read_text() != before        # control: crew launches still repair it
+
+
+# A scratch-launched job can provision several repository trees during its turn.
+def _job_tree(root, name, label):
+    repo = root / label
+    repo.mkdir()
+    _git('init', '-q', cwd=repo)
+    (repo / 'tracked.txt').write_text('base\n')
+    _git('add', '.', cwd=repo)
+    _git('-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+         'commit', '-qm', 'base', cwd=repo)
+    _git('update-ref', 'refs/remotes/origin/main', 'HEAD', cwd=repo)
+
+    def create(shared, agent):
+        from shantytown.workspace import worktree_for
+        dest = worktree_for(shared, agent)
+        # The receipt exists before Git runs, including when Git is interrupted.
+        assert any(e['workspace'] == str(dest.absolute())
+                   for e in eph.read(root, name)['worktrees'])
+        if not dest.exists():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            _git('worktree', 'add', '-q', '-b', f'wt/{agent}', str(dest),
+                 'origin/main', cwd=shared)
+        return str(dest)
+
+    tree = Path(eph.provision_worktree(root, name, repo, ensure=create))
+    eph.provision_worktree(root, name, repo, ensure=create)  # idempotent receipt
+    return repo, tree
+
+
+def test_teardown_collects_multiple_job_created_trees_and_keeps_output(tmp_path):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    scratch = eph.ledger_dir(tmp_path) / 'scratch' / rec['name']
+    scratch.mkdir(parents=True)
+    rec['workspace'] = str(scratch)
+    eph.write(tmp_path, rec)
+    _, clean = _job_tree(tmp_path, rec['name'], 'clean')
+    _, dirty = _job_tree(tmp_path, rec['name'], 'dirty')
+    (clean / '.mcp.json').write_text('{}')  # launcher kit alone is removable
+    (dirty / 'tracked.txt').write_text('output\n')
+    assert len(eph.read(tmp_path, rec['name'])['worktrees']) == 2
+    # A destination recorded during pane termination must survive the stale
+    # record that teardown read before calling kill_session.
+    late = []
+    def kill(_):
+        late.append(_job_tree(tmp_path, rec['name'], 'late')[1])
+    done = eph.teardown(tmp_path, rec['name'], kill_session=kill)
+    assert not scratch.exists() and not clean.exists() and not late[0].exists()
+    assert (dirty / 'tracked.txt').read_text() == 'output\n'
+    outcomes = {e['workspace']: e['result'] for e in done['worktree_teardowns']}
+    assert outcomes[str(clean)] == outcomes[str(late[0])] == 'removed'
+    assert outcomes[str(dirty)].startswith('kept (holds work)')
+    assert eph.read(tmp_path, rec['name']) == done
+
+
+@pytest.mark.parametrize('output', ['untracked', 'commit', 'branch', 'git-error'])
+def test_job_tree_cleanup_preserves_output_and_uncertainty(tmp_path, output):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    repo, tree = _job_tree(tmp_path, rec['name'], 'project')
+    if output == 'untracked':
+        (tree / 'notes.txt').write_text('keep this')
+    elif output == 'commit':
+        _git('-c', 'user.email=test@example.org', '-c', 'user.name=Test',
+             'commit', '-q', '--allow-empty', '-m', 'output', cwd=tree)
+    elif output == 'branch':
+        _git('switch', '-qc', 'published-work', cwd=tree)
+    else:
+        _git('update-ref', '-d', 'refs/remotes/origin/main', cwd=repo)
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert tree.is_dir()
+    assert done['worktree_teardowns'][0]['result'].startswith('kept (')
+    assert len(subprocess.run(['git', '-C', str(repo), 'worktree', 'list', '--porcelain'],
+                             check=True, capture_output=True, text=True).stdout.split('worktree ')) == 3
+
+
+def test_recorded_provision_survives_failure_and_result_updates(tmp_path):
+    from shantytown.workspace import WorkspaceError
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    def interrupted(repo, name):
+        assert len(eph.read(tmp_path, name)['worktrees']) == 1
+        raise WorkspaceError('interrupted')
+    with pytest.raises(WorkspaceError, match='interrupted'):
+        eph.provision_worktree(tmp_path, rec['name'], tmp_path / 'project', ensure=interrupted)
+    eph.on_stop(tmp_path, rec['name'], None, NOW)
+    assert len(eph.read(tmp_path, rec['name'])['worktrees']) == 1
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert done['worktree_teardowns'][0]['result'] == 'none'
+    with pytest.raises(WorkspaceError, match='no active'):
+        eph.provision_worktree(tmp_path, rec['name'], tmp_path / 'project', ensure=interrupted)
+
+
+def test_persistent_provision_does_not_create_ephemeral_ledger(tmp_path):
+    assert eph.provision_worktree(tmp_path, 'worker', tmp_path / 'repo',
+                                 ensure=lambda repo, name: 'tree') == 'tree'
+    assert not eph.ledger_dir(tmp_path).exists()
+
+
+def test_repo_worktree_command_records_for_the_target_job(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    dest = tmp_path / 'project-wt' / rec['name']
+    dest.mkdir(parents=True)
+    monkeypatch.setattr(cli, '_resolve_repo', lambda _: tmp_path / 'project')
+    monkeypatch.setattr(cli, 'ensure_worktree', lambda repo, name: str(dest))
+    monkeypatch.setattr(cli, '_check_worktree_resume', lambda *a, **kw: None)
+    monkeypatch.setattr(cli.guard_mod, 'install', lambda _: (False, ''))
+    monkeypatch.setattr(cli, '_refresh_worktree', lambda _: 'not refreshed in test')
+    args = SimpleNamespace(root=tmp_path, agent=rec['name'], repo='project', gc=False)
+    assert cli._cmd_worktree(args) == cli.OK
+    [entry] = eph.read(tmp_path, rec['name'])['worktrees']
+    assert entry['workspace'] == str(dest)
+
+
+def test_teardown_keeps_git_errors_and_never_sweeps_other_agents(tmp_path):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    repo, tree = _job_tree(tmp_path, rec['name'], 'project')
+    foreign = tmp_path / 'project-wt' / 'other-worker'
+    _git('worktree', 'add', '-q', '-b', 'wt/other-worker', str(foreign),
+         'origin/main', cwd=repo)
+    def unreadable(*args, **kw):
+        raise OSError('git unavailable')
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None, git=unreadable)
+    assert tree.exists() and foreign.exists()
+    assert done['worktree_teardowns'][0]['result'].startswith('kept (cleanup uncertain:')
+    assert len(done['worktree_teardowns']) == 1
+
+
+def test_missing_job_identity_cannot_acquire_a_worktree_receipt(tmp_path):
+    from shantytown.workspace import WorkspaceError
+    called = []
+    with pytest.raises(WorkspaceError, match='no active'):
+        eph.provision_worktree(tmp_path, 'eph-task-abcdef', tmp_path / 'repo',
+                               ensure=lambda *a: called.append(a))
+    assert not called and eph.records(tmp_path) == []
+
+
+def test_spawn_tree_recorded_again_is_only_cleaned_once(tmp_path):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    repo, tree = _job_tree(tmp_path, rec['name'], 'project')
+    latest = eph.read(tmp_path, rec['name'])
+    latest.update(workspace=str(tree), worktree_of=str(repo))
+    eph.write(tmp_path, latest)
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert done['workspace_teardown'] == 'removed'
+    assert done['worktree_teardowns'] == [] and not tree.exists()
+
+
+def test_ending_job_cannot_provision_another_tree(tmp_path):
+    from shantytown.workspace import WorkspaceError
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.ENDING)
+    with pytest.raises(WorkspaceError, match='no active'):
+        eph.provision_worktree(tmp_path, rec['name'], tmp_path / 'repo',
+                               ensure=lambda *a: pytest.fail('must not provision'))
+    assert 'worktrees' not in eph.read(tmp_path, rec['name'])

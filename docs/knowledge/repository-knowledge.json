@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN.",
-      "source_sha256": "a70bc04597bb543ec900925c72f19a1971fa008a3c5c4a172fb8abd7ac01c797",
+      "source_sha256": "e69abce73204bb8131a5953ed39a873d2d4566dfa94b77401afb5481694d33ea",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
