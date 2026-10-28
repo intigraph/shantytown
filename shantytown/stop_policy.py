@@ -187,6 +187,8 @@ class Inputs:
     capacity: Capacity = field(default_factory=Capacity)
     p0_last: str | None = None
     p0_held: int = 0
+    throttled_ids: set[str] = field(default_factory=set)
+    p0_held_ids: set[str] = field(default_factory=set)
     admin_wake_mode: str = "off"
     admin_usage_pct: float | None = None
     admin_wake_elapsed: float | None = None
@@ -363,7 +365,7 @@ def decide(inp: Inputs) -> Verdict:
     # a way to make work dispatchable. Deliberately AFTER the event ranks: a
     # throttled queue is no reason to sit on someone's undelivered report.
     idle = len(inp.free_feedable) + inp.capacity.ephemeral_slots
-    held = inp.throttled + inp.p0_held
+    held = inp.throttled + inp.p0_held - len(inp.throttled_ids & inp.p0_held_ids)
     if idle and held and not inp.dispatchable:
         return Verdict(False,
                        f"the usage governor is holding the queue: "
@@ -395,11 +397,16 @@ def _name(item: P0Item) -> str:
 def p0_state(inp: Inputs) -> str:
     """The (startable plate, capacity) fingerprint rank 2a refuses to block on
     twice. Order-insensitive in the plate; capacity by its three numbers and the
-    free crew's names, so a crew member freeing up re-arms the block."""
+    free crew's names only when unassigned work can use them. Unrelated
+    capacity churn must not re-arm a block over the administrator's own P0s."""
     ids = ",".join(sorted(i.id for i in inp.p0_startable))
     c = inp.capacity
-    return (f"{ids}|crew={','.join(sorted(c.free_crew))}"
-            f"|eph={c.ephemeral_slots}|self={c.self_slots}")
+    unassigned = any(not item.owner for item in inp.p0_startable)
+    own = any(item.owner for item in inp.p0_startable)
+    crew = c.free_crew if unassigned else ()
+    return (f"{ids}|crew={','.join(sorted(crew))}"
+            f"|eph={c.ephemeral_slots if unassigned else 0}"
+            f"|self={c.self_slots if own else 0}")
 
 
 def p0_ledger_update(inp: Inputs, verdict: Verdict) -> str | None:
@@ -522,10 +529,22 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
         # the tier while the delegating half kept running.
         return inp
 
+    # Rule Zero and rank 2a must judge the same board snapshot. Include my
+    # plate in Rule Zero's scoped read so rank 2a never needs a second query.
+    queue = None
+
+    def queue_reader(*, owners):
+        nonlocal queue
+        if queue is None:
+            queue = feed_mod.queue_state(root, reg, owners=sorted(set(owners) | {me}))
+        return queue
+
     try:
-        free, ready, held = feed_mod.gate_inputs(root, reg, panes, runtime, me)
+        free, ready, held = feed_mod.gate_inputs(
+            root, reg, panes, runtime, me, queue_reader=queue_reader)
         inp.free_feedable, inp.dispatchable = free, ready
         inp.throttled = len(held)
+        inp.throttled_ids = {item[0] for item in held}
         inp.throttled_why = held[0][2] if held else ""
     except Exception as exc:      # noqa: BLE001 — fail open: no gate, no block
         print(f"stop_policy: Rule Zero feed-path read FAILED ({exc!r}) — "
@@ -538,8 +557,10 @@ def gather(root, me: str, *, reg=None, panes=None, runtime=None,
         slots = ephemeral_free_slots(root)
         # No possible capacity, no board read: the rank could not fire.
         if inp.free_feedable or slots or cfg.fleet.admin_self_slots:
-            plate, in_flight, inp.p0_held = gather_p0(root, reg, me,
-                                                      p0_reader=p0_reader)
+            plate, in_flight, inp.p0_held = gather_p0(
+                root, reg, me,
+                p0_reader=p0_reader or (lambda: queue_reader(owners=[me])),
+                held_ids=inp.p0_held_ids)
             inp.p0_plate = plate
             inp.capacity = Capacity(
                 free_crew=tuple(inp.free_feedable), ephemeral_slots=slots,
@@ -631,7 +652,7 @@ def _plate_order(row: dict):
         return (int(row.get("priority", 9)), (True,), str(row.get("id")))
 
 
-def p0_plate(ready_rows, active_rows, me: str, *, admits=None, now=None):
+def p0_plate(ready_rows, active_rows, me: str, *, admits=None, now=None, held_ids=None):
     """(ordered P0 plate, my in-flight count, governor-held count) from rows.
 
     Pure over tracker rows. A row is on the plate when it is READY (the reader
@@ -662,6 +683,8 @@ def p0_plate(ready_rows, active_rows, me: str, *, admits=None, now=None):
         owner = _owner(row)
         if not owner and admits is not None and admits(feed_mod._Item(row)):
             held += 1
+            if held_ids is not None:
+                held_ids.add(str(row.get("id")))
             continue
         plate.append(P0Item(id=str(row.get("id")), title=str(row.get("title") or ""),
                             owner=owner))
@@ -670,15 +693,15 @@ def p0_plate(ready_rows, active_rows, me: str, *, admits=None, now=None):
     return plate, in_flight, held
 
 
-def gather_p0(root, reg, me: str, *, p0_reader=None):
+def gather_p0(root, reg, me: str, *, p0_reader=None, held_ids=None):
     """Read the board ONCE for rank 2a: ready rows scoped to me + unassigned,
     and my active rows. Raises; the caller fails open."""
     if p0_reader is not None:
         ready_rows, active_rows = p0_reader()
     else:
         ready_rows, active_rows = feed_mod.queue_state(root, reg, owners=[me])
-    return p0_plate(ready_rows, active_rows, me,
-                    admits=feed_mod.governor_admits(root))
+    return p0_plate(feed_mod.startable_here(root, reg, ready_rows), active_rows, me,
+                    admits=feed_mod.governor_admits(root), held_ids=held_ids)
 
 
 def _load_per_core() -> float | None:
