@@ -210,6 +210,9 @@ class Config:
     # which is every deployment written before this existed.
     host_name: str | None = None
     host_admission_owner: str | None = None
+    # [host] peer_census_max_age (seconds): a peer's remembered census older
+    # than this is advisory only and never holds local launches (aegis-lfeg).
+    host_peer_census_max_age: int = 6 * 60 * 60
     host_min_sync_version: int = 1
     # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
     # ephemeral inbox reaches an agent whose card says it lives elsewhere.
@@ -374,7 +377,8 @@ _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
-_HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner"}
+_HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner",
+              "peer_census_max_age"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 _CYCLE_ADVICE_KEYS = set(CycleAdvicePolicy.__dataclass_fields__)
@@ -467,6 +471,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   host_name=_host_name(path, _table(path, data, "host")),
                   host_admission_owner=_host_admission_owner(path, _table(path, data, "host")),
+                  host_peer_census_max_age=_host_census_max_age(path, _table(path, data, "host")),
                   host_min_sync_version=_host_sync_version(path, _table(path, data, "host")),
                   host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
@@ -866,6 +871,14 @@ def _host_admission_owner(path: Path, tbl: dict) -> str | None:
     if owner not in {_host_name(path, tbl), *_host_peers(path, tbl)}:
         raise ConfigError(f"{path}: [host] admission_owner must name this host or a declared peer")
     return owner
+
+
+def _host_census_max_age(path: Path, tbl: dict) -> int:
+    value = tbl.get("peer_census_max_age", 6 * 60 * 60)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{path}: [host] peer_census_max_age must be a positive "
+                          "integer number of seconds")
+    return value
 
 
 def _host_peers(path: Path, tbl: dict) -> dict:

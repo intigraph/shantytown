@@ -617,10 +617,13 @@ def _governors(a):
                                hosts=[host, *cfg.host_peers],
                                admission_owner=cfg.host_admission_owner)
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
-                                 peer_config=cfg.host_peers)
+                                 peer_config=cfg.host_peers,
+                                 census_max_age=cfg.host_peer_census_max_age)
         a._account_governor = fleet
-        for warning in fleet.warnings:
-            print('  ⚠ ' + warning, file=sys.stderr)
+        # One short line per command; the full list is `st crew --governor`.
+        notice = fleet.notice()
+        if notice:
+            print('  ⚠ ' + notice, file=sys.stderr)
         if fleet.errors:
             print('  ⚠ ' + fleet.fallback(), file=sys.stderr)
     policies = {name: g.policy for name, g in fleet.governors.items()}

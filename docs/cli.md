@@ -2350,20 +2350,24 @@ remembered window hold survives until the ordinary relaxation rules release it.
 Account usage is account-scoped; an unreachable peer makes its **occupancy**
 unknown, and an unreachable peer is never by itself a refusal: `st` works on any
 host without another host running `st`. A peer is unreachable when SSH fails,
-times out, or its `st` exits non-zero. Any host counts an unreachable peer as
-occupying exactly what its last reachable census reported, however old (the
-diagnostic flags a census older than 24 hours). A peer with no usable census on
-record (never seen, corrupt cache, or a last census that was invalid) is counted
-as 0 and flagged. Diagnostics name the unreachable peer and count age; JSON
-includes `warnings` and marks estimated agent rows. Estimates count toward
-admission caps, but do not prove a live session exists to refresh session-derived
-usage. A lane that only an unreachable peer declared keeps that peer's last
-policy, so its `max_agents` still binds; its readings keep their original age and
-fall to `on_signal_lost` like any stale reading.
+times out, or its `st` exits non-zero. A peer that answers with an invalid census
+(unparseable, version skew, or stamped more than 60 seconds old) is treated the
+same way. Any host counts such a peer as occupying exactly what its last good
+census reported while that census is younger than `[host] peer_census_max_age`
+(seconds, default 21600 = 6 hours). An older or future-stamped census, a corrupt
+cache, or no census at all is **advisory only**: reported, counted as 0, never a
+source of policy, so it can never hold this host's launches; local capacity and
+the local governor still apply. Each command prints at most one short `peers:`
+line on stderr; `st crew --governor` lists every detail, and JSON includes
+`warnings`, marks estimated agent rows, and the degraded admission line
+marks advisory peers. Estimates count toward admission caps, but do not prove a live
+session exists to refresh session-derived usage. A lane that only an unreachable
+peer declared keeps that peer's last policy while its census is within the bound,
+so its `max_agents` still binds; its readings keep their original age and fall to
+`on_signal_lost` like any stale reading.
 
 Cached usage readings and holds are never reused as fresh evidence. A REACHABLE
-peer that sends an invalid census, or disagrees on policy, membership or owner,
-still holds launches and dispatch. A disagreement remembered only in an
+peer whose valid census disagrees on policy, membership or owner still holds launches and dispatch. A disagreement remembered only in an
 unreachable peer's cache is reported as a warning. Caches live under
 `governor/peers/` and are tied to the declared peer endpoint. Existing agents
 keep running. Each peer call has a 20-second deadline and peers are queried
