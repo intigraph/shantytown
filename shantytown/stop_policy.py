@@ -716,18 +716,34 @@ def _load_per_core() -> float | None:
         return None
 
 
+def stop_advice(root, card):
+    """One payload consumer for optional memory advice and existing context hints."""
+    from . import context_hint, ruling_memory
+    payload = None
+    if ruling_memory.enabled(root):
+        try:
+            payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+            if not isinstance(payload, dict):
+                payload = {}
+        except (OSError, ValueError):
+            payload = {}
+        if reason := ruling_memory.check(root, card.name, payload):
+            print(json.dumps(dict(decision='block', reason=reason)))
+            return True
+    return context_hint.emit(root, card, payload=payload)
+
+
 def run(root, me: str, **kw) -> int:
     """Gather, decide, emit. Returns the process exit code (always 0 — a stop hook
     that exits non-zero is a stop hook that breaks the agent)."""
     import time
     try:
-        from . import context_hint
         reg = kw.get("reg") or FilesRegistry(root / "crew")
         try:
             card = reg.get(me)
         except Exception:
             card = None  # gather owns the existing unreadable-card diagnostic
-        if card is not None and context_hint.emit(root, card):
+        if card is not None and stop_advice(root, card):
             return 0
         inp = gather(root, me, **kw)
         verdict = decide(inp)
