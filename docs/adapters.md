@@ -352,3 +352,23 @@ are printable ASCII, trimmed and bounded to 128 characters.
 The default client label is `shantytown`; adapter-specific labels remain in
 place. These fields are declared diagnostic context. Bearer authentication,
 credential refusal and graph authority retain their existing checks.
+
+## Tmux server lifetime under user services
+
+A detached tmux client can leave its server inside the launching oneshot service.
+Normal service cleanup then kills the server, including its sessions, even when
+individual panes have their own scopes. When `Tmux.new_session` runs inside a
+Linux user service, it launches the client through a separate transient user
+scope (`st-tmux-<unique-id>.scope`). This retains the sanitized launch environment
+and keeps the server outside the launching service's cleanup boundary. A scope
+failure refuses the launch; it never retries in the unsafe service cgroup.
+Interactive scopes, the user manager itself and non-Linux platforms retain their
+existing launch path. Existing servers are neither moved nor restarted.
+
+The isolated Linux acceptance test uses fresh random sockets and temporary user
+services: the raw control server dies at oneshot exit, while the protected server
+survives. Set `SHANTY_TEST_SYSTEMD_TMUX=1` and run
+`python -m pytest -s tests/test_tmux_scope_systemd.py` through the normal test guard on a host with a
+working user manager. It never addresses the fleet socket. Remove any temporary
+service-cleanup mitigation only after this control and the normal deployed source
+have been verified by the incident owner.
