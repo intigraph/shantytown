@@ -47,6 +47,13 @@ holds commits or uncommitted changes is **kept**, and the result says so,
 because discarding an agent's output is the data-loss class `cleanup_worktree`
 exists to refuse.
 
+Worktrees provisioned later by `st repo worktree` or `st go --worktree` for an
+active job are recorded in its ledger before creation. Teardown checks these
+alongside the spawn workspace, once per destination. Clean trees on the job's
+original branch are removed; tracked changes, untracked output, ahead commits,
+a changed branch or an uncertain Git identity keep the tree. Per-tree outcomes
+are retained in `worktree_teardowns`. Provisioning after a job ends is refused.
+
 Names are generated as `eph-<job>-<6 hex>`. Each agent has its own worktree on
 branch `wt/<name>` when `--repo` names a checkout. Without `--repo` it gets a
 scratch directory under the ledger.

@@ -7482,7 +7482,9 @@ def _cmd_go(a) -> int:
     # like keep-current's does, visible to both ends.
     if a.worktree:
         try:
-            wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+            from .ephemeral import provision_worktree
+            wt_path = provision_worktree(a.root, a.agent, _resolve_repo(a.worktree),
+                                         ensure=ensure_worktree)
             _check_worktree_resume(Path(wt_path), a.agent)
         except WorkspaceError as e:
             print(f"  refused: worktree — {e}", file=sys.stderr)
@@ -11387,7 +11389,8 @@ def _cmd_worktree(a) -> int:
             dest = worktree_for(repo, agent)
             print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
             return OK
-        path = ensure_worktree(repo, agent)
+        from .ephemeral import provision_worktree
+        path = provision_worktree(a.root, agent, repo, ensure=ensure_worktree)
         _check_worktree_resume(Path(path), agent, resume=getattr(a, "resume", False))
         # ENFORCE, HAVING JUST ASSISTED (aegis-xig5m). Provisioning a worktree is
         # the moment st KNOWS this shared checkout is in play — so it is the
