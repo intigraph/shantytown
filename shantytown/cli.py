@@ -3329,15 +3329,29 @@ def _cmd_new(a) -> int:
 
 # --- st agent spawn: ephemeral agents (aegis-c01c.2) ---------------------------
 
-def _spawn_actor() -> str | None:
-    from .actor_identity import authenticated_actor
-    return authenticated_actor() or os.environ.get("SHANTY_AGENT") or None
+def _spawn_actor(*, require_verified=False) -> str | None:
+    from .actor_identity import authenticated_actor, IdentityError
+    from .ephemeral import Refused
+    try:
+        actor = authenticated_actor()
+    except IdentityError:
+        raise Refused("ephemeral mutations require a verified protected UID identity") from None
+    if not require_verified:
+        return actor or os.environ.get("SHANTY_AGENT") or None
+    if not actor:
+        raise Refused("ephemeral mutations require a verified protected UID identity; "
+                      "environment or anonymous callers are not admitted")
+    return actor
 
 
-def _spawn_inside(a) -> str | None:
-    """The live ephemeral job this process runs inside, read from cwd and
-    process ancestry — never from $SHANTY_AGENT alone, which a pane can unset."""
+def _spawn_inside(a, *, principal=None) -> str | None:
+    """A verified job principal survives session detachment. Workspace/ancestry
+    remain conservative restrictions, never a substitute for authenticated role."""
     from . import ephemeral as eph
+    if eph.is_ephemeral_name(principal):
+        if eph.read(a.root, principal) is None:
+            raise eph.Refused("verified job identity has no ledger entry on this root")
+        return principal
     if not eph.live(a.root):
         return None
     panes = _panes(a)
@@ -3508,8 +3522,6 @@ def _cmd_spawn(a) -> int:
                 continue
         return None
     try:
-        actor = _spawn_actor()
-        inside = _spawn_inside(a)
         if a.list:
             recs = eph.records(a.root)
             if a.json:
@@ -3519,17 +3531,16 @@ def _cmd_spawn(a) -> int:
                 print("\n".join("  " + line for line in lines) if lines
                       else "  no ephemeral jobs.")
             return OK
+        actor = _spawn_actor(require_verified=policy.require_verified_identity)
+        inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
         if a.report:
-            # Only the job itself reports its verdict. Identity is the pane's
-            # SHANTY_AGENT, checked against the ledger: a stray report from a
-            # crew pane cannot end someone else's job.
-            # The process must BE the job (its workspace or its pane's process
-            # tree). $SHANTY_AGENT alone is settable by any pane, so a crew pane
-            # exporting another job's name could forge that job's verdict.
+            # Migrated hosts require the verified job principal. Compatibility
+            # mode retains the workspace/ancestry and matching-claim checks.
             me = inside
             claimed = os.environ.get("SHANTY_AGENT") or actor
-            if not me or not eph.is_ephemeral(a.root, me):
-                raise eph.Refused("--report is run by an ephemeral agent from its own pane")
+            if not me or (policy.require_verified_identity and actor != me) or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--report requires its verified job identity" if policy.require_verified_identity
+                                  else "--report is run by an ephemeral agent from its own pane")
             if claimed and claimed != me:
                 raise eph.Refused(f"this process runs inside {me}; it cannot report as {claimed}")
             if not a.verdict:
@@ -3547,13 +3558,14 @@ def _cmd_spawn(a) -> int:
         if a.merge:
             me = inside
             claimed = os.environ.get("SHANTY_AGENT")
-            if not me or not eph.is_ephemeral(a.root, me):
-                raise eph.Refused("--merge is run by a merge job from its own pane")
+            if not me or (policy.require_verified_identity and actor != me) or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--merge requires its verified merge-job identity" if policy.require_verified_identity
+                                  else "--merge is run by a merge job from its own pane")
             if claimed and claimed != me:
                 raise eph.Refused(f"this process runs inside {me}; it cannot merge as {claimed}")
             return _spawn_merge(a, me)
         # An ephemeral process that unset $SHANTY_AGENT is still that job.
-        eph.authority(inside or actor, role_of)
+        eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
         if a.stop:
@@ -3579,9 +3591,6 @@ def _cmd_spawn(a) -> int:
             if attempt > eph.MAX_ATTEMPTS:
                 raise eph.Refused(f"{a.retry} already ran {attempt - 1} attempts; "
                                   "a fourth is a decision for the administrator, not a retry")
-            if old.get("state") != eph.DONE and not a.dry_run:
-                _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor or 'operator'})",
-                           "retried", detached=False)
             req = eph.Request(job=old["job"], item=old["item"], harness=old["harness"],
                               repo=old.get("repo"), pr=old.get("pr"),
                               checkout=old.get("checkout"))
@@ -3593,6 +3602,13 @@ def _cmd_spawn(a) -> int:
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None)
         admin, admin_dangerous = _spawn_administrator(files, cfg)
         unattended = admin_dangerous if policy.unattended is None else policy.unattended
+        if unattended and not policy.unattended_uid_ready:
+            raise eph.Refused("unattended ephemeral launches are gated: "
+                              "ephemeral.unattended_uid_ready is false; "
+                              "a distinct protected job UID must be established first")
+        if a.retry and old.get("state") != eph.DONE and not a.dry_run:
+            _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
+                       "retried", detached=False)
         with eph.lock(a.root):
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),

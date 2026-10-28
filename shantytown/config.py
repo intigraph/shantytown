@@ -156,6 +156,8 @@ class Ephemeral:
     merge_spacing_minutes: int = 10
     # None = inherit the administrator card's `dangerous` posture.
     unattended: bool | None = None
+    require_verified_identity: bool = False
+    unattended_uid_ready: bool = False
     harness_by_job: dict = field(default_factory=dict)
 
 
@@ -1120,7 +1122,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                   "merge_spacing_minutes", "unattended", "harness_by_job"}
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "harness_by_job"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1140,6 +1142,12 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     unattended = tbl.get("unattended")
     if unattended is not None and not isinstance(unattended, bool):
         raise ConfigError(f"{path}: ephemeral.unattended must be true or false")
+    verified = tbl.get("require_verified_identity", False)
+    if type(verified) is not bool:
+        raise ConfigError(f"{path}: ephemeral.require_verified_identity must be true or false")
+    uid_ready = tbl.get("unattended_uid_ready", False)
+    if type(uid_ready) is not bool:
+        raise ConfigError(f"{path}: ephemeral.unattended_uid_ready must be true or false")
     by_job = tbl.get("harness_by_job", {})
     if not isinstance(by_job, dict):
         raise ConfigError(f"{path}: [ephemeral.harness_by_job] must be a table")
@@ -1147,7 +1155,9 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
-    return Ephemeral(unattended=unattended, harness_by_job=dict(by_job), **values)
+    return Ephemeral(unattended=unattended, require_verified_identity=verified,
+                     unattended_uid_ready=uid_ready,
+                     harness_by_job=dict(by_job), **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:

@@ -91,16 +91,42 @@ lifetime_minutes = 60       # hard deadline per job
 max_turns = 40              # Stop-hook turns before the budget ends the job
 max_context_k = 300         # context ceiling in k tokens
 merge_spacing_minutes = 10  # minimum gap between merge jobs on one repo
-unattended = true           # launch without approval prompts; default: the administrator card's setting
+unattended = false          # keep approval prompts; omission inherits the administrator card
+require_verified_identity = false # opt in after protected UID migration
+unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
 
 [ephemeral.harness_by_job]
 review = "codex"
 ```
 
+`require_verified_identity` defaults to false while hosts migrate. In this
+compatibility mode, an administrator's environment identity or a human shell
+can manage jobs, and report/merge retain the existing workspace/ancestry and
+matching environment checks. A job in its workspace or process tree remains
+unable to manage other jobs even after clearing its environment identity.
+This mode retains the session-detachment limitation of the old guards.
+
+After the host has protected UID bindings, set `require_verified_identity = true`.
+Then spawn, retry, stop/reap (including merge-lane release), report and merge
+require the protected identity described in
+[agent identity migration](agent-identity-migration.md). Environment and
+anonymous fallbacks are refused. Report/merge require the authenticated job's
+own identity, independent of cwd/ancestry. Read-only `--list` remains available.
+An existing policy's authentication errors still fail closed in either mode;
+this setting does not bypass a broken or mismatching protected binding.
+
+The `unattended_uid_ready` flag is an operator readiness declaration, not a UID
+installer or proof of isolation. Keep it false pending the distinct-job-UID
+migration decision and verification. `unattended = true` or an inherited
+dangerous administrator card alone cannot enable unattended jobs. Gate refusal
+happens before a retry ends the old job or writes a new ledger/card/worktree.
+This change creates no users and changes no system policy or host configuration.
+The trusted code-side tend reaper can still finish expired jobs.
+
 ## Known limits
 
 - **One GitHub identity.** The merge gate counts approvals by GitHub login, and the author never counts. If every agent posts as the same account, a non-author APPROVE can never exist, so merge jobs report `blocked`. That is the safe outcome. Review jobs post their verdict as a PR comment.
-- **Identity can be escaped.** A pane that runs `setsid` or double-forks and then leaves its worktree loses the process-tree and workspace link that identifies it as a job. The cap, the governor and the deadline still bound it.
+- **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
 - **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
 
