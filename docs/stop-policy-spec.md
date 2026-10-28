@@ -84,6 +84,7 @@ able to answer "why did my coordinator not stop?" from this list alone.
 | 0 | *(side effect, never blocks)* route + persist my own stop event upward | — | survival before any decision; a verdict must not be able to lose the event |
 | 1 | a pending event is **urgent** — a governance alert, or one that ROSE past an unreachable lead | **BLOCK**: deliver | the alert's content is "an agent is working untracked right now"; a risen event means the tier already failed once |
 | 2 | **Rule Zero**: free feedable workers AND dispatchable work both exist | **BLOCK**: dispatch | there is work to hand out. Sleeping through this is the stall the gate exists to prevent, and it OVERRIDES hibernate |
+| 2a | **P0 plate**: a ready P0 nobody is working on AND capacity to start it, in a state not already blocked on | **BLOCK** once: start, or re-rank/defer and say why | Rule Zero for the administrator's own plate and for ephemeral slots (§3.1). Yields to stood-down and over-capacity; overrides hibernate out loud |
 | 3 | **hibernate** declines (policy on, schedule not elapsed) | **ALLOW**, loudly | nothing to dispatch and nothing urgent: quiet is correct. Says how many events stay pending |
 | 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver | the ordinary drain |
 | 5 | idle because a **usage-governor tier** holds the whole queue | **ALLOW**, loudly | idle is the CORRECT state under an engaged floor — and indistinguishable from a broken feeder unless something says so |
@@ -99,6 +100,51 @@ for the coordinator to stop hearing from its crew. And rank 2's `dispatchable`
 now means *passes the governor's priority floor* — computed by the governor's own
 `Verdict.admits`, the resolver `st go` gates on, so the gate can no longer demand
 a dispatch that dispatch will refuse.
+
+### 3.1 Rank 2a — the P0 plate (aegis-c01c.1)
+
+Measured 2026-10-28 on the Mac: the only crew member was busy, ~10 P0s sat
+unstarted, and the administrator's stop was **allowed** — Rule Zero only sees
+*(free crew) × (unassigned ready work)*, so the administrator's own plate and
+its own in-flight work were invisible. Stiwi: *"you keep stopping when there is
+much work to do."*
+
+**The plate.** READY items (open, unblocked — the tracker's own readiness read,
+scoped to the administrator and unassigned work) with priority 0, not deferred
+into the future, owned by nobody or by the administrator, and passing
+`feed_check.dispatchable`'s exclusions (epic, `parked:*`, `feed:manual`,
+message, ASK, decision-gated, unfeedable). Ordered by Seeds priority, then
+rank (`protocols.rank_order`), then id; the block names the top three.
+Unassigned items the governor's floor refuses are HELD, not plate — rank 5
+names them, exactly as for Rule Zero.
+
+**Capacity** is one value with three sources, so new sources plug in as a
+number rather than as a new rank:
+
+| source | starts | measured as |
+|---|---|---|
+| free crew | unassigned items | Rule Zero's free feedable workers (idle, unhauled) |
+| ephemeral slots | unassigned items | `shantytown.ephemeral.free_slots(root)` — 0 until aegis-c01c.2 ships that module |
+| self slots | the administrator's own items | `[fleet] admin_self_slots` (default 1) minus the administrator's own `in_progress` items — its in-flight (subagent) work is counted HERE, as occupancy |
+
+A coordinator is never told to execute unassigned work itself: a self slot
+starts only its own items.
+
+**No loop.** The rank blocks ONCE per state, where the state is the
+(startable ids, free crew, ephemeral slots, self slots) fingerprint, recorded in
+`<root>/stop-policy/<agent>.p0.json` after the block. A later stop over the
+**same** state falls through to ranks 3–6 (so hibernate and event delivery
+behave as if the plate were empty) and the final allow names the plate as
+`p0-plate-unchanged`. Any change to the plate or to capacity re-arms it. The
+ledger is untouched when a rank above 2a decided (2a never looked), kept while
+the plate is unchanged, and cleared when nothing is startable — a plate that
+empties and refills is a new state. A missing or unreadable ledger reads as
+"never judged": the worst case is one extra block, never a silent one.
+
+**Fail-open.** A failed board read leaves the plate empty and says
+`P0-plate read FAILED` on stderr; a failed ephemeral read counts 0 slots. When
+no capacity is possible (no free crew, no ephemeral slots, `admin_self_slots =
+0`) the board is not read at all.
 
 ### Inputs, gathered ONCE
 
