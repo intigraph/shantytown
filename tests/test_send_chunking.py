@@ -160,7 +160,7 @@ def test_the_markers_are_DERIVED_from_the_registry():
     declaring its own measured chrome, not by editing the predicate. An empty
     tuple means NOBODY HAS MEASURED THIS PROGRAM — never "it always submits"."""
     assert "[Pasted Content" in harness_mod.stranded_markers()
-    assert harness_mod.get("claude").stranded_markers == ()
+    assert harness_mod.get("claude").stranded_markers == ("[Pasted text #",)
 
 
 # --- the dead pane must not become a shell that runs the fleet's mail ---------
