@@ -858,6 +858,12 @@ def _refresh_failure_hook(card, root, settings_path) -> None:
     import shlex
     if card is None or settings_path is None or name_for(card, root=root) != "claude":
         return
+    from .ephemeral import is_ephemeral_name
+    if is_ephemeral_name(card.name):
+        # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-c01c.2 review). The
+        # worker file is the crew's; a spawn run from an uninstalled checkout
+        # repointed lex's StopFailure hook at a temporary venv.
+        return
     path = Path(settings_path)
     try:
         cfg = json.loads(path.read_text())

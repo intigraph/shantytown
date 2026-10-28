@@ -545,3 +545,15 @@ def test_report_needs_the_process_to_be_the_job_not_just_the_env(store, monkeypa
     monkeypatch.setattr(eph, "detached_teardown", lambda root_, name: None)
     assert _st(root, "--report", "--verdict", "done", "--summary", "ok") in (cli.OK, cli.CANNOT_TELL)
     assert eph.read(root, rec["name"])["result"]["verdict"] == "done"
+
+
+def test_a_spawn_never_rewrites_the_shared_role_settings(tmp_path):
+    from shantytown.protocols import Agent
+    from shantytown.provision import _refresh_failure_hook
+    shared = tmp_path / "worker.settings.json"
+    shared.write_text('{"hooks": {"StopFailure": []}}')
+    before = shared.read_text()
+    _refresh_failure_hook(Agent(name="eph-task-abcdef", harness="claude"), tmp_path, shared)
+    assert shared.read_text() == before
+    _refresh_failure_hook(Agent(name="lex", harness="claude"), tmp_path, shared)
+    assert shared.read_text() != before        # control: crew launches still repair it

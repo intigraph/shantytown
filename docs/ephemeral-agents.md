@@ -93,6 +93,8 @@ review = "codex"
 ## Known limits
 
 - **One GitHub identity.** The merge gate counts approvals by GitHub login, and the author never counts. If every agent posts as the same account, a non-author APPROVE can never exist, so merge jobs report `blocked`. That is the safe outcome. Review jobs post their verdict as a PR comment.
+- **Identity can be escaped.** A pane that runs `setsid` or double-forks and then leaves its worktree loses the process-tree and workspace link that identifies it as a job. The cap, the governor and the deadline still bound it.
+- **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
 
 ## Out of scope here
