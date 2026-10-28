@@ -321,3 +321,42 @@ def test_a_worktree_refresh_failure_NEVER_blocks_the_respawn(tmp_path):
     rep = t.pass_over([card])
     assert panes.made == ["p-zia"], "a worktree refresh failure blocked the respawn"
     assert rep.findings[0].verdict == tend_mod.RESPAWNED
+
+
+def test_tend_refresh_sheds_remaining_trees_after_shared_deadline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from shantytown import cli
+
+    trees = [tmp_path / 'one', tmp_path / 'two']
+    clock = [0.0]
+    calls = []
+    monkeypatch.setattr(cli, 'agent_worktrees', lambda name: trees)
+    monkeypatch.setattr(cli.time, 'monotonic', lambda: clock[0])
+
+    def refresh(path, *, retire_topics=True):
+        calls.append((path, retire_topics))
+        clock[0] = 31.0
+
+    monkeypatch.setattr(cli, '_refresh_worktree', refresh)
+    args, card = SimpleNamespace(), SimpleNamespace(name='worker')
+    warnings = cli._refresh_agent_worktrees(args, card, deadline=30.0)
+    assert calls == [(trees[0], False)]
+    assert 'remaining worktrees deferred' in warnings[0]
+    # The same pass budget applies to the next agent too.
+    cli._refresh_agent_worktrees(args, card, deadline=30.0)
+    assert len(calls) == 1
+
+
+def test_tend_refresh_does_not_query_remote_landing_proofs(tmp_path, monkeypatch):
+    from shantytown import cli, landed
+
+    source = _repo(tmp_path / 'source')
+    clone = _clone(source, tmp_path / 'clone')
+    _run(clone, 'checkout', '-qb', 'topic')
+    monkeypatch.setattr(landed, 'retire_and_prune',
+                        lambda *a: pytest.fail('remote landing scan under admission'))
+    assert cli._refresh_worktree(clone, retire_topics=False) is None
+    assert _run(clone, 'symbolic-ref', '--short', 'HEAD') == 'topic'
+    # Explicit refresh keeps the positive-proof path; this guard must go red.
+    with pytest.raises(pytest.fail.Exception):
+        cli._refresh_worktree(clone)

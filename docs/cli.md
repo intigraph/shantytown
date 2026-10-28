@@ -3376,3 +3376,15 @@ atomic snapshot; concurrent changes can require retrying a read. Unsupported
 owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
+
+### Recovery source maintenance
+
+A normal tend pass gives optional clone and project-worktree refreshes one shared
+30-second start budget. It lets an in-flight operation finish under its existing
+timeout, then defers remaining refreshes rather than interrupting Git mutations.
+Tend does not run merged-topic retirement, remote landing-proof scans or branch
+pruning; those remain on explicit worktree refresh commands. A stale intact
+checkout must not prevent crew recovery. The account admission lock still covers
+the census, governor decisions and session creation; capacity, holds and duplicate
+launch checks remain in force. This budget bounds maintenance starts, not total
+pass duration or the duration of runtime startup and notification sweeps.
