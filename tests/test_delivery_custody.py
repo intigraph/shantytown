@@ -285,10 +285,10 @@ def test_recovery_preserves_original_sender(tmp_path, monkeypatch):
 
 def test_missing_pointer_is_not_invented_acknowledgment(tmp_path, monkeypatch):
     f = fixtures(tmp_path, monkeypatch)
-    observe(tmp_path, f, QUEUED, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
     for path in (tmp_path / 'inbox').glob('msg-*.json'):
         path.unlink()
-    observe(tmp_path, f, QUEUED, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
     assert records(tmp_path)[0]['state'] == 'queued'
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
 
