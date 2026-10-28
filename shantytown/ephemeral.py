@@ -47,7 +47,15 @@ MAX_ATTEMPTS = 3
 #: kit, not the agent's output, so they never make a worktree "hold work".
 KIT_PATHS = (".mcp.json", ".claude", ".agents", ".codex", "AGENTS.md", "CLAUDE.md",
              ".shantytown-tooling.json")
-LIVE, ENDING, DONE = "live", "ending", "done"
+LAUNCHING, LIVE, ENDING, DONE = "launching", "live", "ending", "done"
+#: How long a LAUNCHING job may have no pane before the reaper calls it dead.
+#: Covers the whole launch (codex readiness waits included). Without it a tend
+#: pass between "ledger written" and "pane up" reaped the job as died, removed
+#: the card, and the pane then came up with no ledger, no cap slot and no bounds.
+LAUNCH_GRACE_S = 600
+#: The stop-event reason a job RESULT carries. It is a finished job, never a
+#: stopped crew member to re-dispatch (tier.GOVERNANCE_REASONS renders it apart).
+RESULT_REASON = "ephemeral-result"
 _NAME = re.compile(r"eph-[a-z]+-[0-9a-f]{6}")
 _ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -105,7 +113,7 @@ def records(root) -> list[dict]:
 
 def live(root) -> list[dict]:
     """Every job not yet torn down. ENDING counts: its pane may still be up."""
-    return [r for r in records(root) if r.get("state") in (LIVE, ENDING)]
+    return [r for r in records(root) if r.get("state") in (LAUNCHING, LIVE, ENDING)]
 
 
 def is_ephemeral(root, name: str | None) -> bool:
@@ -189,7 +197,7 @@ def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     """The repo's serialized merge lane: one merge job at a time, and a gap
     between them. A merge job HOLDS the lane for its whole life."""
     merges = [r for r in records(root) if r.get("job") == "merge" and r.get("repo") == repo]
-    holder = next((r for r in merges if r.get("state") in (LIVE, ENDING)), None)
+    holder = next((r for r in merges if r.get("state") in (LAUNCHING, LIVE, ENDING)), None)
     if holder:
         return f"merge lane for {repo} is held by {holder['name']}; one merge at a time"
     ended = [r.get("ended_at") or 0 for r in merges]
@@ -222,7 +230,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         "host": host, "spawned_at": now,
         "deadline": now + policy.lifetime_minutes * 60,
         "max_turns": policy.max_turns, "max_context_k": policy.max_context_k,
-        "turns": 0, "state": LIVE, "attempt": attempt, "retry_of": retry_of,
+        "turns": 0, "state": LAUNCHING, "attempt": attempt, "retry_of": retry_of,
         "workspace": None, "worktree_of": None, "result": None,
     }
 
@@ -266,8 +274,11 @@ for as long as you live; it is why no other merge can run beside you. Never merg
 2. Require ALL of: not draft; every required check green (`gh pr checks {pr} --repo {repo} --required`);
    an APPROVE review from someone OTHER than the author, on the CURRENT head; no unresolved request-changes.
    An outside (non-crew) contribution is never merged by an agent: report blocked.
-3. Merge only with the head pinned: `gh pr merge {pr} --repo {repo} --squash --match-head-commit <head-sha>`.
-   NEVER `--admin`, never push to the base branch, never bypass or edit branch protection, never force-push.
+3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, a non-author approval
+   and the author's association in code before it calls gh with the head pinned:
+     st agent spawn --merge --head <head-sha>
+   NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
+   edit branch protection, never force-push.
 4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
     "triage": """JOB: triage the failure behind {item}{target_short}.
 1. Find the failing run (`gh run list` / `gh pr checks` / the item text) and read its log.
@@ -285,8 +296,96 @@ def prompt(rec: dict) -> str:
         f" — {rec['repo']}" if rec.get("repo") else "")
     fields = dict(rec, target=target, target_short=target,
                   verdicts="|".join(VERDICTS),
-                  deadline=time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(rec["deadline"])))
+                  deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
     return (_COMMON.format(**fields) + "\n" + _JOBS[rec["job"]].format(**fields)).strip()
+
+
+# --- the guarded merge (only a live merge job, only its own PR) ---------------
+
+#: Associations that make a PR crew/owner work. Anything else is an outside
+#: contribution, which an agent never merges (DIRECTIVE 10/21).
+INSIDE = ("OWNER", "MEMBER", "COLLABORATOR")
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list) -> str:
+    """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
+    (GET /repos/R/pulls/N), `reviews` and the head's check runs. Enforced in
+    code so "reviews never merge", the pinned head and the lane do not rest on
+    prompt text alone."""
+    if rec is None or rec.get("job") != "merge":
+        return "only a merge job may merge; review, triage and task jobs never do"
+    if rec.get("state") not in (LAUNCHING, LIVE):
+        return f"{rec['name']} is no longer live; its merge lane is released"
+    if not _SHA.fullmatch(head or ""):
+        return "--head must be the full 40-hex head SHA you verified"
+    if (pr.get("head") or {}).get("sha") != head:
+        return "the PR head moved since you verified it; re-verify, never merge a moving head"
+    if pr.get("state") != "open" or pr.get("merged"):
+        return "the PR is not open"
+    if pr.get("draft"):
+        return "the PR is a draft"
+    if pr.get("author_association") not in INSIDE:
+        return "outside contribution: agents never merge these; report blocked for a human"
+    author = (pr.get("user") or {}).get("login")
+    latest = {}
+    for r in reviews:
+        login = (r.get("user") or {}).get("login")
+        if login and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+            latest[login] = r
+    if any(r.get("state") == "CHANGES_REQUESTED" for r in latest.values()):
+        return "a reviewer's latest review requests changes"
+    if not any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
+               for login, r in latest.items()):
+        return "no non-author APPROVE on the current head"
+    if not checks:
+        return "no check runs on the head; green is unproven"
+    bad = [c.get("name", "?") for c in checks
+           if c.get("status") != "completed"
+           or c.get("conclusion") not in ("success", "neutral", "skipped")]
+    if bad:
+        return "checks not green on the head: " + ", ".join(sorted(bad)[:5])
+    return ""
+
+
+# --- identity that does not rest on the environment ---------------------------
+
+def inside_ephemeral(root, *, cwd: Path, ancestors: list[int],
+                     pane_pid: Callable[[str], int | None]) -> str | None:
+    """The live ephemeral job this process runs inside, or None. Independent of
+    $SHANTY_AGENT, which a pane can unset: the process is inside a job's
+    workspace, or descends from the shell of a job's tmux pane."""
+    cwd = Path(cwd).resolve()
+    for rec in live(root):
+        ws = rec.get("workspace")
+        if ws:
+            ws = Path(ws).resolve()
+            if cwd == ws or ws in cwd.parents:
+                return rec["name"]
+        try:
+            pid = pane_pid(f"st-{rec['name']}")
+        except Exception:  # noqa: BLE001
+            pid = None
+        if pid and pid in ancestors:
+            return rec["name"]
+    return None
+
+
+def ancestor_pids(start: int | None = None, run=subprocess.run) -> list[int]:
+    """This process's ancestry, via ps (works on Linux and macOS)."""
+    out, pid = [], os.getpid() if start is None else start
+    for _ in range(64):
+        out.append(pid)
+        try:
+            r = run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True,
+                    text=True, timeout=5)
+            ppid = int(r.stdout.strip())
+        except (OSError, ValueError, subprocess.SubprocessError):
+            break
+        if ppid <= 1 or ppid == pid:
+            break
+        pid = ppid
+    return out
 
 
 # --- per-Stop budget (event-driven: the agent's own Stop hook) ----------------
@@ -294,11 +393,12 @@ def prompt(rec: dict) -> str:
 def on_stop(root, name: str, context_k: float | None, now: float) -> str:
     """Count one turn and return why the job must END now, or "". Called from
     the Stop hook, so enforcement needs no poller: every turn boundary checks."""
-    rec = read(root, name)
-    if rec is None or rec.get("state") != LIVE:
-        return ""
-    rec["turns"] = int(rec.get("turns", 0)) + 1
-    write(root, rec)
+    with lock(root):
+        rec = read(root, name)
+        if rec is None or rec.get("state") not in (LAUNCHING, LIVE):
+            return ""
+        rec["turns"] = int(rec.get("turns", 0)) + 1
+        write(root, rec)
     if now >= rec["deadline"]:
         return "timeout"
     if rec["turns"] >= rec["max_turns"]:
@@ -310,19 +410,28 @@ def on_stop(root, name: str, context_k: float | None, now: float) -> str:
 
 # --- ending: result -> report -> teardown -------------------------------------
 
+def mark_live(root, name: str) -> None:
+    with lock(root):
+        rec = read(root, name)
+        if rec is not None and rec.get("state") == LAUNCHING:
+            rec["state"] = LIVE
+            write(root, rec)
+
+
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
                   now: float) -> dict:
     """Write the result ONCE. A second ending (a report racing a timeout) keeps
     the first result, so the administrator never hears two different stories."""
-    rec = read(root, name)
-    if rec is None:
-        raise Refused(f"no ledger entry for {name}")
-    if rec.get("result") is None:
-        rec["result"] = {"verdict": verdict, "summary": summary[:1500],
-                         "cause": cause, "at": now}
-        rec["state"] = ENDING
-        rec["ended_at"] = now
-        write(root, rec)
+    with lock(root):              # a report racing a reaper: one read-modify-write
+        rec = read(root, name)
+        if rec is None:
+            raise Refused(f"no ledger entry for {name}")
+        if rec.get("result") is None:
+            rec["result"] = {"verdict": verdict, "summary": summary[:1500],
+                             "cause": cause, "at": now}
+            rec["state"] = ENDING
+            rec["ended_at"] = now
+            write(root, rec)
     return rec
 
 
@@ -343,7 +452,7 @@ def notify(rec: dict, *, persist_event, comment) -> list[str]:
     problems = []
     text = report_text(rec)
     try:
-        persist_event(to=rec["administrator"], frm=rec["name"], reason="ephemeral",
+        persist_event(to=rec["administrator"], frm=rec["name"], reason=RESULT_REASON,
                       rose=False, item=rec["item"], item_status=None,
                       detail=text[:600], key=f"ephemeral:{rec['name']}:result")
     except Exception as exc:  # noqa: BLE001
@@ -409,6 +518,8 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
         card.unlink()
     except FileNotFoundError:
         pass
+    # st's own per-agent runtime state (the published plate) under crew/<name>/.
+    shutil.rmtree(Path(root) / "crew" / name, ignore_errors=True)
     try:
         kill_session(f"st-{name}")
     except Exception:  # noqa: BLE001 — an already-dead session is the goal state
@@ -450,8 +561,10 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False) -> list[st
             if not dry_run:
                 end(name, None, None)
             continue
-        cause = ("died" if not pane_alive(f"st-{name}")
-                 else "timeout" if now >= rec["deadline"] else "")
+        launching = (rec["state"] == LAUNCHING
+                     and now - rec.get("spawned_at", 0) < LAUNCH_GRACE_S)
+        cause = ("timeout" if now >= rec["deadline"]
+                 else "" if launching or pane_alive(f"st-{name}") else "died")
         if not cause:
             continue
         out.append(f"{name}: {cause} -> reported to {rec['administrator']}, torn down")
@@ -470,7 +583,7 @@ def _left(rec, now) -> str:
 def render(recs: list[dict], now: float, *, recent: int = 5) -> list[str]:
     """Lines for `st agent spawn --list`, `st crew` and the admin's anchor."""
     lines = []
-    running = [r for r in recs if r.get("state") in (LIVE, ENDING)]
+    running = [r for r in recs if r.get("state") in (LAUNCHING, LIVE, ENDING)]
     for r in running:
         target = f" {r['repo']}#{r['pr']}" if r.get("pr") else ""
         lines.append(f"{r['name']:<20} {r['job']:<7} {r['item']}{target} · {r['harness']} · "

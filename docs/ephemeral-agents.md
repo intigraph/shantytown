@@ -15,14 +15,15 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 
 | Gap                         | Rule here |
 |-----------------------------|-----------|
-| No owner                    | The card's `reports_to` is the administrator, and only the administrator (or a human shell) may spawn, stop or retry. An ephemeral agent can never spawn another one. |
+| No owner                    | The card's `reports_to` is the administrator, and only the administrator (or a human shell) may spawn, stop or retry. An ephemeral agent cannot spawn another one. The check does not depend on `$SHANTY_AGENT`, which a pane can unset: a process whose working directory is inside a live job's workspace, or that descends from a job's tmux pane shell, *is* that job. |
 | Unbounded life              | Every job has a deadline (`lifetime_minutes`). The agent's Stop hook and every `st fleet tend` pass enforce it. Neither one is an agent poll. |
 | Unbounded spend             | A turn budget (`max_turns`) and a context budget (`max_context_k`) are checked at every Stop. The agent counts in the usage governor like any card and carries the `first` survival band, so a governor tier sheds it first. |
 | Unbounded fan-out           | `max_agents` caps how many ephemeral agents can be live on a host at once. The fleet governor's lane cap and its tier exclusions apply too. Over cap means **refused**, never queued in secret. |
-| Silent exit                 | Every ending writes a result to the ledger, comments on the work item and sends one stop event to the administrator. That includes a clean report, a timeout, a budget hit, a dead pane and a manual stop. The event is keyed, so a retried report is never sent twice. |
-| Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. |
+| Silent exit                 | Every ending writes a result to the ledger, comments on the work item and sends one `ephemeral-result` event to the administrator. That includes a clean report, a timeout, a budget hit, a dead pane, an undelivered job and a manual stop. The event is keyed, so a retried report is never sent twice. The administrator's drain renders it as a **finished job** (verdict + item), never as a stopped crew member to re-dispatch. An ephemeral agent's per-turn stops send no crew stop event at all. |
+| Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. A pane whose job was not delivered is ended at once as `launch failed`. |
+| Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
-| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. Its prompt forbids a direct push, an admin override and a branch-protection bypass. It may only merge with `--match-head-commit` after it has checked CI and a non-author review. |
+| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author APPROVE on that head and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
 
 ## Lifecycle
 
@@ -70,6 +71,7 @@ st agent spawn --list [--json]          # live + recent jobs (also in `st crew` 
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
 st agent spawn --report --verdict approve --summary-file -   # run BY the ephemeral agent
+st agent spawn --merge --head <sha>     # run BY a merge job: the guarded merge
 st agent spawn --reap                   # the sweep tend runs; by hand for a dry look with -n
 ```
 
@@ -87,6 +89,11 @@ unattended = true           # launch without approval prompts; default: the admi
 [ephemeral.harness_by_job]
 review = "codex"
 ```
+
+## Known limits
+
+- **One GitHub identity.** The merge gate counts approvals by GitHub login, and the author never counts. If every agent posts as the same account, a non-author APPROVE can never exist, so merge jobs report `blocked`. That is the safe outcome. Review jobs post their verdict as a PR comment.
+- **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
 
 ## Out of scope here
 

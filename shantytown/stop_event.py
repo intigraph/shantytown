@@ -340,6 +340,14 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     if root is not None:
         from .stop_failure import clear_recovered
         clear_recovered(root, me)
+    from .ephemeral import is_ephemeral_name
+    if is_ephemeral_name(me):
+        # AN EPHEMERAL AGENT'S TURN BOUNDARY IS NOT A CREW STOP (aegis-c01c.2).
+        # Its one report to the administrator is the job RESULT; a per-turn
+        # stop event rendered as "STOPPED — re-dispatch". Only its bounds run here.
+        if root is not None:
+            _ephemeral_bounds(root, me, _my_context_k(reg, panes, me))
+        return 0
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -417,8 +425,6 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
             # block delivery nor echo the pane text in an exception message.
             print(f"stop samples unavailable: {type(exc).__name__}", file=sys.stderr)
     _offhost_durable(reg, root, routing.to, me, item, ev.id)
-    if root is not None:
-        _ephemeral_bounds(root, me, context_k)
     over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
@@ -976,13 +982,20 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     events = [e for e in events if e.reason != 'delivery-stalled']
     delivery_lines = ['⚠ Unconfirmed message delivery — inspect retained inbox/input:'] if stalled else []
     delivery_lines += [f'  - {e.frm} ({_age(e.ts, now)}): {e.detail}' for e in stalled]
+    results = [e for e in events if e.reason == "ephemeral-result"]
+    events = [e for e in events if e.reason != "ephemeral-result"]
+    result_lines = (["Ephemeral job results — FINISHED jobs (verdict + item), not crew "
+                     "to re-dispatch; the agents are already torn down:"]
+                    if results else [])
+    result_lines += [f"  - {e.item or '?'} ({_age(e.ts, now)}): {e.detail}"
+                     for e in sorted(results, key=lambda e: (e.ts, e.id))]
     failures = [e for e in events if e.reason == "job-failed"]
     events = [e for e in events if e.reason != "job-failed"]
     failure_lines = ["⚠ Scheduled job failures — inspect the named history; "
                      "these are alerts, not agent stops:"] if failures else []
     failure_lines += [f"  - {e.frm} ({_age(e.ts, now)}): {e.detail}"
                       for e in sorted(failures, key=lambda e: (e.ts, e.id))]
-    failure_lines = delivery_lines + failure_lines
+    failure_lines = result_lines + delivery_lines + failure_lines
     if not events:
         return "\n".join(failure_lines)
     latest: dict[str, StopEvent] = {}

@@ -1798,6 +1798,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="run BY the ephemeral agent: post its verdict and end")
     sp_mode.add_argument("--reap", action="store_true",
                          help="end dead or expired jobs (st fleet tend runs this)")
+    sp_mode.add_argument("--merge", action="store_true",
+                         help="run BY a merge job: the guarded merge of its own PR "
+                              "(lane, pinned head, green CI, non-author approval)")
+    sp.add_argument("--head", default=None, help="with --merge: the verified 40-hex head SHA")
     sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
     sp.add_argument("--item", help="the work item this job reports on")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
@@ -3309,6 +3313,59 @@ def _spawn_actor() -> str | None:
     return authenticated_actor() or os.environ.get("SHANTY_AGENT") or None
 
 
+def _spawn_inside(a) -> str | None:
+    """The live ephemeral job this process runs inside, read from cwd and
+    process ancestry — never from $SHANTY_AGENT alone, which a pane can unset."""
+    from . import ephemeral as eph
+    if not eph.live(a.root):
+        return None
+    panes = _panes(a)
+    reader = getattr(panes, "_pane_pid", None) or (lambda _s: None)
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path("/")
+    return eph.inside_ephemeral(a.root, cwd=cwd, ancestors=eph.ancestor_pids(),
+                                pane_pid=reader)
+
+
+def _gh_json(*args):
+    import subprocess
+    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"gh api {args[0]} failed: {(r.stderr or '').strip()[:160]}")
+    return json.loads(r.stdout)
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None) -> int:
+    """The ONLY merge path a merge job is given. Every condition the prompt
+    states is re-checked here, in code, against fresh forge reads."""
+    from . import ephemeral as eph
+    rec = eph.read(a.root, me)
+    if rec is None or rec.get("job") != "merge":
+        raise eph.Refused(eph.merge_gate(rec, a.head or "", {}, [], []))
+    repo, pr = rec["repo"], rec["pr"]
+    head = a.head or ""
+    info = gh(f"repos/{repo}/pulls/{pr}")
+    reviews = gh(f"repos/{repo}/pulls/{pr}/reviews?per_page=100")
+    sha = (info.get("head") or {}).get("sha") or ""
+    checks = (gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100").get("check_runs", [])
+              if sha else [])
+    if why := eph.merge_gate(rec, head, info, reviews, checks):
+        raise eph.Refused(why)
+    if a.dry_run:
+        print(f"would merge {repo}#{pr} at {head}")
+        return OK
+    import subprocess
+    run = run or subprocess.run
+    r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash",
+             "--match-head-commit", head], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
+    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    return OK
+
+
 def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:
     """(this host's administrator, its `dangerous` posture). Host-scoped: a
     multi-tenant store can hold another host's administrator card."""
@@ -3431,6 +3488,7 @@ def _cmd_spawn(a) -> int:
         return None
     try:
         actor = _spawn_actor()
+        inside = _spawn_inside(a)
         if a.list:
             recs = eph.records(a.root)
             if a.json:
@@ -3444,9 +3502,15 @@ def _cmd_spawn(a) -> int:
             # Only the job itself reports its verdict. Identity is the pane's
             # SHANTY_AGENT, checked against the ledger: a stray report from a
             # crew pane cannot end someone else's job.
-            me = os.environ.get("SHANTY_AGENT") or actor
-            if not eph.is_ephemeral(a.root, me):
+            # The process must BE the job (its workspace or its pane's process
+            # tree). $SHANTY_AGENT alone is settable by any pane, so a crew pane
+            # exporting another job's name could forge that job's verdict.
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT") or actor
+            if not me or not eph.is_ephemeral(a.root, me):
                 raise eph.Refused("--report is run by an ephemeral agent from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot report as {claimed}")
             if not a.verdict:
                 raise eph.Refused("--report needs --verdict")
             if a.dry_run:
@@ -3459,7 +3523,16 @@ def _cmd_spawn(a) -> int:
             print(f"  reported {rec['result']['verdict']} to {rec['administrator']} and "
                   f"{rec['item']}; this session is being torn down.")
             return OK if not problems else CANNOT_TELL
-        eph.authority(actor, role_of)
+        if a.merge:
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT")
+            if not me or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--merge is run by a merge job from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot merge as {claimed}")
+            return _spawn_merge(a, me)
+        # An ephemeral process that unset $SHANTY_AGENT is still that job.
+        eph.authority(inside or actor, role_of)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
         if a.stop:
@@ -3535,15 +3608,27 @@ def _cmd_spawn(a) -> int:
                 json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
         card = files.get(rec["name"])
         panes = _panes(a)
+        a._startup_delivered = False
         rc = _launch(a, card, panes, _runtime(a, panes))
         if rc == REFUSED:
             _spawn_end(a, rec["name"], "failed", "launch refused (see the spawner's stderr)",
                        "launch refused", detached=False)
             return REFUSED
+        if not a._startup_delivered:
+            # A pane that never received its job would idle at turn 0 until the
+            # deadline. End it now and say so; never leave an unfed agent up.
+            _spawn_end(a, rec["name"], "failed", "job prompt not delivered to the pane",
+                       "launch failed", detached=False)
+            print(f"  refused: {rec['name']} came up but its job was not delivered; "
+                  "ended and reported", file=sys.stderr)
+            return CANNOT_TELL
+        eph.mark_live(a.root, rec["name"])
         print(f"  spawned {rec['name']}: {rec['job']} on {rec['item']} "
               f"({rec['harness']}), reports to {rec['administrator']}, "
               f"ends by {time.strftime('%H:%MZ', time.gmtime(rec['deadline']))}")
-        return rc
+        # Delivered is what spawn promises. Unverifiable hooks (every macOS
+        # launch) are a note, not a failure: tend enforces the deadline.
+        return OK
     except eph.Refused as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -4276,8 +4361,18 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     ledger_ok = _record_launch_unretirement(a, card)
     if _observe_live(runtime, panes, session, card):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
+        from . import ephemeral as _eph
         if verified == OK:
-            _deliver_startup_inbox(a, card, panes, session)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+        elif verified == CANNOT_TELL and _eph.is_ephemeral_name(card.name):
+            # ON macOS HOOKS ARE UNREADABLE, NOT ABSENT (no /proc), so
+            # verification is CANNOT_TELL for every launch there. Withholding an
+            # ephemeral job's prompt on that left the pane idle at turn 0 until
+            # the reaper's deadline (live run, 10/28). Deliver it: the job's
+            # bounds do not depend on its hooks — tend reaps it at the deadline.
+            print(f"  ephemeral {card.name}: hooks unverifiable here; delivering the "
+                  "job anyway (tend enforces its deadline).", file=sys.stderr)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
         return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -4353,7 +4448,10 @@ def _startup_inbox_batch(unread, budget: int = _STARTUP_INBOX_MAX_CHARS):
     return batch, list(unread[len(batch):])
 
 
-def _deliver_startup_inbox(a, card, panes, session: str) -> None:
+_STARTUP_VERIFY_LOOKS = 8
+
+
+def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     """Inject unread durable mail into a verified new session, then acknowledge it.
 
     This is deliberately after process + hook verification.  A session existing is
@@ -4426,8 +4524,14 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
         panes.send(session, attribute(prompt, "st startup"))
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
-        time.sleep(0.35)
-        screen = panes.capture(session, history=200)
+        # A few patient looks, not one: a long block (an ephemeral job prompt)
+        # was still rendering at 0.35s on macOS and a delivered job read as
+        # undelivered (live run, aegis-c01c.2). Stops at the first sighting.
+        for _look in range(_STARTUP_VERIFY_LOOKS):
+            time.sleep(0.35)
+            screen = panes.capture(session, history=200)
+            if marker in screen:
+                break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
@@ -4453,7 +4557,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
 
     if not ids:
         print(f"  startup anchor: verified context for {card.name}.")
-        return
+        return True
     try:
         marked = box.mark_read(card.name, ids=ids)
     except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
@@ -4469,6 +4573,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     held_note = f"; {len(held)} held for the next launch" if held else ""
     print(f"  startup inbox: delivered and closed {len(marked)} verified "
           f"pointer(s) for {card.name}{held_note}.")
+    return True
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
@@ -13423,6 +13528,13 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 def _tend_once(a, quiet: bool = False) -> int:
     from . import account_state
+    # REAP FIRST, before every early return (a maintenance window, a hold, an
+    # unreadable registry): an expired ephemeral job must not outlive its
+    # deadline for as long as some unrelated hold lasts (aegis-c01c.2).
+    try:
+        _spawn_reap(a, dry_run=getattr(a, "dry_run", False), quiet=True)
+    except Exception as exc:  # noqa: BLE001 — a reap fault must not stop supervision
+        print(f"  ⚠ ephemeral reap failed ({type(exc).__name__}: {exc})", file=sys.stderr)
     if (rc := _window_launch_gate(a)) is not None:
         return rc
     # Best-effort sweeps shed by the pass budget (aegis-qwadc). Declared HERE
@@ -13749,10 +13861,6 @@ def _tend_once(a, quiet: bool = False) -> int:
     # administrator and it is torn down. Respawning one is exactly how a spawned
     # worker escapes supervision, which is why Gas Town's polecats were retired.
     from . import ephemeral as _eph
-    try:
-        _spawn_reap(a, dry_run=a.dry_run, quiet=True)
-    except Exception as exc:  # noqa: BLE001 — a reap fault must not stop supervision
-        print(f"  ⚠ ephemeral reap failed ({type(exc).__name__}: {exc})", file=sys.stderr)
     workers = [card for card in agents if card not in administrators
                and not _eph.is_ephemeral_name(card.name)]
     tend_admission = None
