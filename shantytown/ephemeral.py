@@ -176,6 +176,8 @@ class Request:
     repo: str | None = None          # GitHub owner/name
     pr: int | None = None
     checkout: str | None = None      # local shared checkout for the worktree
+    head: str | None = None          # merge: the exact head the item pins (aegis-c01c.7)
+    request_id: str | None = None    # merge: chaski's work request id, for lane release
 
 
 def validate(req: Request) -> None:
@@ -191,6 +193,11 @@ def validate(req: Request) -> None:
         raise Refused(f"a {req.job} job needs --repo owner/name and --pr N")
     if req.pr is not None and req.pr < 1:
         raise Refused("--pr must be a positive number")
+    if req.job == "merge" and not _SHA.fullmatch(req.head or ""):
+        raise Refused("a merge job merges exactly the item's head: pass --head <40-hex sha> "
+                      "or route it through an item carrying chaski's work request")
+    if req.request_id is not None and not re.fullmatch(r"[0-9a-f]{64}", req.request_id):
+        raise Refused("request_id must be chaski's 64-hex work request id")
 
 
 def harness_for(req: Request, policy) -> str:
@@ -234,7 +241,10 @@ def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     holder = next((r for r in merges if r.get("state") in (LAUNCHING, LIVE, ENDING)), None)
     if holder:
         return f"merge lane for {repo} is held by {holder['name']}; one merge at a time"
-    ended = [r.get("ended_at") or 0 for r in merges]
+    # Spacing follows MERGES. A job that ended without merging (blocked, failed,
+    # stopped) frees the lane at once: there is no deploy to space behind.
+    ended = [r.get("ended_at") or 0 for r in merges
+             if (r.get("result") or {}).get("verdict") == "merged"]
     last = max(ended, default=0)
     wait = last + spacing_minutes * 60 - now
     if wait > 0:
@@ -260,6 +270,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
         "pr": req.pr, "checkout": req.checkout, "harness": harness_for(req, policy),
+        "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
         "host": host, "spawned_at": now,
         "deadline": now + policy.lifetime_minutes * 60,
@@ -299,18 +310,23 @@ _JOBS = {
    and `gh pr diff {pr} --repo {repo}`. Record the head SHA you reviewed.
 2. If you (or the agent identity you run as) authored any commit on it, report --verdict blocked: a review must be independent.
 3. Review for correctness, tests that can fail, security and scope. Check CI with `gh pr checks {pr} --repo {repo}`.
-4. Post ONE verdict comment on the PR naming the exact head SHA:
-   `gh pr review {pr} --repo {repo} --approve --body-file -` or `--request-changes --body-file -` with numbered findings.
-5. NEVER push, never merge, never edit the branch. Report --verdict approve or request-changes.""",
-    "merge": """JOB: merge {repo}#{pr} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo} for you
-for as long as you live; it is why no other merge can run beside you. Never merge any other PR.
+4. Post ONE verdict comment on the PR naming the exact head SHA, headed APPROVE or REQUEST CHANGES with numbered
+   findings: `gh pr comment {pr} --repo {repo} --body-file -`. (One shared GitHub account: a GitHub approval is
+   impossible and does not count. The approval that counts is the signed verdict record st writes in step 5.)
+5. NEVER push, never merge, never edit the branch. Report with the head you read and the comment's URL:
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary-file -
+   st signs that verdict as a Quipu GateApproval record naming you as the reviewer; the merge gate reads it.""",
+    "merge": """JOB: merge {repo}#{pr} at EXACTLY head {head} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo}
+for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
 1. `gh pr view {pr} --repo {repo} --json headRefOid,mergeable,mergeStateStatus,reviews,author,isDraft`
 2. Require ALL of: not draft; every required check green (`gh pr checks {pr} --repo {repo} --required`);
-   an APPROVE review from someone OTHER than the author, on the CURRENT head; no unresolved request-changes.
+   an approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
+   shared GitHub account means a GitHub APPROVE usually cannot exist); no unresolved request-changes.
    An outside (non-crew) contribution is never merged by an agent: report blocked.
 3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, a non-author approval
    and the author's association in code before it calls gh with the head pinned:
-     st agent spawn --merge --head <head-sha>
+     st agent spawn --merge --head {head}
+   If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
    edit branch protection, never force-push.
 4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
@@ -342,7 +358,8 @@ INSIDE = ("OWNER", "MEMBER", "COLLABORATOR")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
-def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list) -> str:
+def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list,
+               verdict: dict | None = None) -> str:
     """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
     (GET /repos/R/pulls/N), `reviews` and the head's check runs. Enforced in
     code so "reviews never merge", the pinned head and the lane do not rest on
@@ -353,6 +370,9 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
         return f"{rec['name']} is no longer live; its merge lane is released"
     if not _SHA.fullmatch(head or ""):
         return "--head must be the full 40-hex head SHA you verified"
+    if rec.get("head") and head != rec["head"]:
+        return (f"this job merges exactly the item's head {rec['head'][:12]}; "
+                f"--head {head[:12]} is a different commit")
     if (pr.get("head") or {}).get("sha") != head:
         return "the PR head moved since you verified it; re-verify, never merge a moving head"
     if pr.get("state") != "open" or pr.get("merged"):
@@ -369,9 +389,18 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
             latest[login] = r
     if any(r.get("state") == "CHANGES_REQUESTED" for r in latest.values()):
         return "a reviewer's latest review requests changes"
-    if not any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
-               for login, r in latest.items()):
-        return "no non-author APPROVE on the current head"
+    # aegis-c01c.7: a SIGNED agent verdict (gate_verdict.approval, verified by
+    # Quipu) stands in for the GitHub approval the shared account cannot give.
+    if verdict and verdict.get("blocking"):
+        return "a reviewer agent's signed verdict requests changes on this head"
+    github_ok = any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
+                    for login, r in latest.items())
+    if not github_ok and not (verdict and verdict.get("approved")):
+        why = ""
+        if verdict and verdict.get("author_agent_unknown") and verdict.get("approvals"):
+            why = " (the PR's author agent is unknown, so no verdict can approve it)"
+        return ("no non-author APPROVE on the current head: neither a GitHub review nor a "
+                "trusted signed verdict from an agent other than the author" + why)
     if not checks:
         return "no check runs on the head; green is unproven"
     bad = [c.get("name", "?") for c in checks

@@ -1812,7 +1812,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode.add_argument("--merge", action="store_true",
                          help="run BY a merge job: the guarded merge of its own PR "
                               "(lane, pinned head, green CI, non-author approval)")
-    sp.add_argument("--head", default=None, help="with --merge: the verified 40-hex head SHA")
+    sp.add_argument("--head", default=None,
+                    help="40-hex head SHA: with --merge the verified head; with --job merge the "
+                         "head the job may merge (default: the item's chaski work request); "
+                         "with --report on a review the head that was reviewed")
+    sp.add_argument("--evidence", default=None,
+                    help="with --report on a review: link to the posted review comment")
     sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
     sp.add_argument("--item", help="the work item this job reports on")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
@@ -3372,7 +3377,125 @@ def _gh_json(*args):
     return json.loads(r.stdout)
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None) -> int:
+def _spawn_verdict_policy(a):
+    cfg, _err = config.load_or_default(Path(a.root))
+    return cfg.ephemeral, cfg
+
+
+def _spawn_quipu(a):
+    from . import gate_verdict as gv
+    from .quipu import resolve_server
+    return gv.Quipu(resolve_server(None, Path(a.root)))
+
+
+def _spawn_verdict_approval(a, repo, pr, node_id, head, *, quipu=None) -> dict | None:
+    """The signed agent-verdict approval of exactly `head` (aegis-c01c.7), or
+    None when verdict records are off. Any failure to read or verify is "not
+    approved", never an error that could be mistaken for a pass."""
+    from . import gate_verdict as gv
+    policy, _cfg = _spawn_verdict_policy(a)
+    if not policy.verdict_graph or not node_id:
+        return None
+    try:
+        return gv.approval(quipu or _spawn_quipu(a), repo=repo, pr=pr, node_id=node_id,
+                           head=head, graph=policy.verdict_graph,
+                           signers=gv.trusted_signers())
+    except gv.VerdictError as exc:
+        print(f"  verdict source unreadable ({exc}); counts as no approval", file=sys.stderr)
+        return None
+
+
+def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None, now=None):
+    """A review job's signed GateApproval record (aegis-c01c.7). Returns
+    (note, problem): the note goes into the job's summary; a problem means the
+    record was NOT written, so no merge can rest on this review."""
+    from . import gate_verdict as gv
+    outcome = gv.outcome_word(verdict)
+    if rec.get("job") != "review" or outcome is None:
+        return "", ""
+    policy, cfg = _spawn_verdict_policy(a)
+    if not policy.verdict_graph:
+        return "", "verdict record not written: [ephemeral] verdict_graph is unset"
+    try:
+        gh = gh or _gh_json
+        info = gh(f"repos/{rec['repo']}/pulls/{rec['pr']}")
+        quipu = quipu or _spawn_quipu(a)
+        node = info.get("node_id") or ""
+        try:
+            author = (gv.author_agent(quipu, node, graph=policy.verdict_graph)
+                      if node else None)
+        except gv.VerdictError:
+            author = None
+        record = gv.GateApproval(
+            repo=rec["repo"], pr=int(rec["pr"]), pr_node=node, head=head or "",
+            outcome=outcome, by=rec["name"],
+            recorded_at=gv.now_stamp(time.time() if now is None else now),
+            evidence=evidence or "", author_agent=author)
+        record.check()
+        signer = policy.verdict_signer or f"st-review.{cfg.host_name or 'host'}"
+        seed = gv.load_or_generate(Path(policy.verdict_key) if policy.verdict_key
+                                   else gv.default_key_path())
+        iri = gv.write(record, quipu=quipu, graph=policy.verdict_graph, seed=seed,
+                       verifier=signer)
+    except (gv.VerdictError, RuntimeError, OSError, ValueError) as exc:
+        return "", f"verdict record NOT written: {exc}"
+    return f"signed verdict record {iri} ({outcome} on {head[:12]}, signer {signer})", ""
+
+
+def _spawn_item_work_request(a, item) -> dict | None:
+    """chaski's work request from the item body, or None if unreadable/absent."""
+    from . import gate_verdict as gv
+    from .work_item import exact
+    try:
+        found = exact(_tracker(a), item)
+    except Exception:  # noqa: BLE001 — an unreadable item just means no pinned head
+        return None
+    return gv.work_request(getattr(found, "description", None))
+
+
+def _spawn_merge_pin(a, req_head, item, repo, pr) -> tuple[str | None, str | None]:
+    """(head, request_id) for a merge job: --head, or the item's chaski request.
+    Both given and different is refused: the item names the head to merge."""
+    from . import ephemeral as eph
+    wr = _spawn_item_work_request(a, item)
+    if wr is not None:
+        facts = wr.get("facts") or {}
+        if (wr.get("kind") != "merge" or wr.get("repo") != repo
+                or str(facts.get("pr", wr.get("subject", ""))).removeprefix("pr/") != str(pr)):
+            raise eph.Refused(f"{item}'s work request is not a merge of {repo}#{pr}")
+        revision = wr.get("revision")
+        if req_head and revision and req_head != revision:
+            raise eph.Refused(f"{item} pins head {str(revision)[:12]}; --head {req_head[:12]} "
+                              "differs. Merge exactly the item's head")
+        return req_head or revision, wr.get("request_id")
+    return req_head, None
+
+
+def _spawn_lane_release(a, rec, *, run=None) -> str:
+    """A merge job that ended WITHOUT merging hands chaski's lane turn back now
+    instead of waiting out the lease. Off unless [ephemeral] lane_release is set."""
+    from . import gate_verdict as gv
+    result = rec.get("result") or {}
+    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
+        return ""
+    policy, _cfg = _spawn_verdict_policy(a)
+    if not policy.lane_release:
+        return ""
+    outcome = ("stopped" if result.get("cause") in ("stopped", "retried")
+               else "blocked" if result.get("verdict") == "blocked" else "failed")
+    import subprocess
+    run = run or subprocess.run
+    try:
+        argv = gv.lane_release_argv(list(policy.lane_release), rec["request_id"], outcome)
+        r = run(argv, capture_output=True, text=True, timeout=60)
+    except (gv.VerdictError, OSError, subprocess.SubprocessError) as exc:
+        return f"merge lane NOT released ({exc}); chaski's lease will free it"
+    if getattr(r, "returncode", 1) != 0:
+        return "merge lane NOT released (chaski refused); chaski's lease will free it"
+    return ""
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -3386,7 +3509,9 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None) -> int:
     sha = (info.get("head") or {}).get("sha") or ""
     checks = (gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100").get("check_runs", [])
               if sha else [])
-    if why := eph.merge_gate(rec, head, info, reviews, checks):
+    verdict = _spawn_verdict_approval(a, repo, pr, info.get("node_id") or "", head,
+                                      quipu=quipu)
+    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict):
         raise eph.Refused(why)
     if a.dry_run:
         print(f"would merge {repo}#{pr} at {head}")
@@ -3491,6 +3616,8 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
                                schedule_teardown=schedule, now=time.time())
+    if lane := _spawn_lane_release(a, rec):
+        problems = [*problems, lane]
     # A synchronous teardown has rewritten the ledger; hand back what it says.
     return (rec if detached else eph.read(a.root, name) or rec), problems
 
@@ -3545,11 +3672,21 @@ def _cmd_spawn(a) -> int:
                 raise eph.Refused(f"this process runs inside {me}; it cannot report as {claimed}")
             if not a.verdict:
                 raise eph.Refused("--report needs --verdict")
+            job = eph.read(a.root, me) or {}
+            if job.get("job") == "review" and a.verdict in ("approve", "request-changes"):
+                if not eph._SHA.fullmatch(a.head or ""):
+                    raise eph.Refused("a review verdict needs --head <the 40-hex head you read>")
             if a.dry_run:
                 print(f"would report {me}: {a.verdict}")
                 return OK
-            rec, problems = _spawn_end(a, me, a.verdict, _spawn_summary(a), "report",
+            summary = _spawn_summary(a)
+            note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, a.evidence)
+            if note or problem:
+                summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()
+            rec, problems = _spawn_end(a, me, a.verdict, summary, "report",
                                        detached=True)
+            if problem:
+                problems = [problem, *problems]
             for p in problems:
                 print(f"  ⚠ {p}", file=sys.stderr)
             print(f"  reported {rec['result']['verdict']} to {rec['administrator']} and "
@@ -3593,13 +3730,18 @@ def _cmd_spawn(a) -> int:
                                   "a fourth is a decision for the administrator, not a retry")
             req = eph.Request(job=old["job"], item=old["item"], harness=old["harness"],
                               repo=old.get("repo"), pr=old.get("pr"),
-                              checkout=old.get("checkout"))
+                              checkout=old.get("checkout"), head=old.get("head"),
+                              request_id=old.get("request_id"))
             retry_of = a.retry
         else:
             if not a.ephemeral or not a.job or not a.item:
                 raise eph.Refused("spawn needs --ephemeral --job <kind> --item <id>")
+            head, request_id = a.head, None
+            if a.job == "merge" and a.pr_repo and a.pr:
+                head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
-                              pr=a.pr, checkout=str(a.checkout) if a.checkout else None)
+                              pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
+                              head=head if a.job == "merge" else None, request_id=request_id)
         admin, admin_dangerous = _spawn_administrator(files, cfg)
         unattended = admin_dangerous if policy.unattended is None else policy.unattended
         if unattended and not policy.unattended_uid_ready:

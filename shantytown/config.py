@@ -159,6 +159,14 @@ class Ephemeral:
     require_verified_identity: bool = False
     unattended_uid_ready: bool = False
     harness_by_job: dict = field(default_factory=dict)
+    # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
+    # Empty = off: no record is written and the merge gate reads none.
+    verdict_graph: str = ""         # registered committed graph IRI for the records
+    verdict_signer: str = ""        # verifier key id; default st-review.<host>
+    verdict_key: str = ""           # signer key file; default $XDG_STATE_HOME/shantytown/verdict-signer.pk8
+    # chaski-github-work prefix for `lane release` when a merge job ends unmerged;
+    # empty = leave it to chaski's lease.
+    lane_release: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -1122,7 +1130,8 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "harness_by_job"}
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "harness_by_job",
+                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1155,6 +1164,15 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    for key in ("verdict_graph", "verdict_signer", "verdict_key"):
+        value = tbl.get(key, "")
+        if not isinstance(value, str) or any(c in value for c in '"<>\\\n '):
+            raise ConfigError(f"{path}: ephemeral.{key} must be a plain string")
+        values[key] = value
+    release = tbl.get("lane_release", [])
+    if not isinstance(release, list) or not all(isinstance(x, str) and x for x in release):
+        raise ConfigError(f"{path}: ephemeral.lane_release must be a list of strings")
+    values["lane_release"] = tuple(release)
     return Ephemeral(unattended=unattended, require_verified_identity=verified,
                      unattended_uid_ready=uid_ready,
                      harness_by_job=dict(by_job), **values)

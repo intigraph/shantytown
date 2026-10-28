@@ -25,8 +25,11 @@ def _policy(**kw):
 
 
 def _rec(root, **kw):
-    req = eph.Request(job=kw.pop("job", "task"), item=kw.pop("item", "it-1"),
-                      repo=kw.pop("repo", None), pr=kw.pop("pr", None))
+    job = kw.pop("job", "task")
+    req = eph.Request(job=job, item=kw.pop("item", "it-1"),
+                      repo=kw.pop("repo", None), pr=kw.pop("pr", None),
+                      head=kw.pop("head", "a" * 40 if job == "merge" else None),
+                      request_id=kw.pop("request_id", None))
     rec = eph.plan(req, root=root, policy=kw.pop("policy", _policy(max_agents=10)), actor="boss",
                    administrator="boss", host=None, now=kw.pop("now", NOW),
                    role_of=lambda n: "administrator" if n == "boss" else None, name=kw.pop("name", None))
@@ -113,7 +116,7 @@ def test_merge_lane_is_serialized_and_spaced_per_repo(tmp_path):
     with pytest.raises(eph.Refused, match="held by " + first["name"]):
         _rec(tmp_path, job="merge", repo="o/n", pr=2)
     _rec(tmp_path, job="merge", repo="o/other", pr=2)          # other repo: own lane
-    first.update(state=eph.DONE, ended_at=NOW)
+    first.update(state=eph.DONE, ended_at=NOW, result={"verdict": "merged"})
     eph.write(tmp_path, first)
     with pytest.raises(eph.Refused, match="10m apart"):
         _rec(tmp_path, job="merge", repo="o/n", pr=2, now=NOW + 60)
@@ -124,7 +127,8 @@ def test_merge_lane_is_serialized_and_spaced_per_repo(tmp_path):
 
 def test_review_prompt_is_independent_and_never_merges(tmp_path):
     text = eph.prompt(_rec(tmp_path, job="review", repo="o/n", pr=7))
-    assert "NON-AUTHOR" in text and "gh pr review 7 --repo o/n --approve" in text
+    assert "NON-AUTHOR" in text and "gh pr comment 7 --repo o/n" in text
+    assert "--head <sha> --evidence <comment-url>" in text
     assert "NEVER push, never merge" in text
     assert "st agent spawn --report --verdict" in text
 

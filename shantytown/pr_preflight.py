@@ -298,7 +298,40 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
              and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
     if not valid:
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
-    return {**review, "created": result["html_url"], "number": result["number"]}
+    return {**review, "created": result["html_url"], "number": result["number"],
+            "node_id": result.get("node_id") if isinstance(result.get("node_id"), str) else None}
+
+
+def record_authorship(result, *, root=None, actor=None, quipu=None, policy=None):
+    """aegis-c01c.7: `<PR> aegis:authoredByAgent "<agent>"` in Quipu right after a
+    crew PR is created, so chaski and the guarded merge can tell the author
+    agent from a reviewer when every PR comes from one GitHub account.
+
+    Best-effort and never fatal: the PR exists either way. Without the fact a
+    verdict's own authorAgent is the only source, and an unknown author agent
+    approves nothing (fail closed). Off unless [ephemeral] verdict_graph is set.
+    Returns a one-line note, or "" when off."""
+    from . import gate_verdict as gv
+    if policy is None:
+        from . import config
+        cfg, _err = config.load_or_default(Path(root or os.environ.get("SHANTY_ROOT") or "."))
+        policy = cfg.ephemeral
+    if not policy.verdict_graph or not result.get("node_id"):
+        return ""
+    if actor is None:
+        from .actor_identity import authenticated_actor
+        actor = authenticated_actor() or os.environ.get("SHANTY_AGENT") or ""
+    if not actor:
+        return "authorship NOT recorded: no agent identity (a human-opened PR has no author agent)"
+    try:
+        if quipu is None:
+            from .quipu import resolve_server
+            quipu = gv.Quipu(resolve_server(None, root))
+        iri = gv.write_authorship(quipu=quipu, graph=policy.verdict_graph,
+                                  node_id=result["node_id"], agent=actor)
+    except gv.VerdictError as exc:
+        return f"authorship NOT recorded: {exc}"
+    return f"recorded {iri} authoredByAgent {actor}"
 
 
 def command(args):
@@ -308,6 +341,10 @@ def command(args):
         result = run(args.checkout, args.repository, args.base, args.bead, body,
                      args.title or "", decisions, bead_families=args.bead_family,
                      create=args.create, draft=args.draft, dry_run=args.dry_run)
+        if result.get("created"):
+            note = record_authorship(result, root=getattr(args, "root", None))
+            if note:
+                result["authorship"] = note
         print(json.dumps(result, indent=2))
         return 0
     except Indeterminate as error:
