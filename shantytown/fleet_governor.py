@@ -21,7 +21,11 @@ from . import governor_balance as balance_mod
 from .governor import GovernorError, Reading
 
 VERSION = 1
-PEER_COUNT_MAX_AGE = 24 * 60 * 60
+# A remembered census older than this is advisory: reported, never counted and
+# never a source of borrowed policy, so it cannot hold this host's launches.
+# `[host] peer_census_max_age` (seconds) overrides it.
+PEER_CENSUS_MAX_AGE = 6 * 60 * 60
+PEER_COUNT_MAX_AGE = PEER_CENSUS_MAX_AGE  # old name, kept for importers
 
 
 class PeerUnreachable(str):
@@ -244,6 +248,9 @@ def degraded_admission_line(admission, fleet):
             against.append(f'a fresh census of {name}')
         elif estimate['age'] is None:
             against.append(f'no usable census of {name} (counted 0 live)')
+        elif estimate.get('advisory'):
+            against.append(f"{name}'s last census (age {_age_text(estimate['age'])}, "
+                           'advisory, counted 0)')
         else:
             against.append(f"{name}'s last census (age {_age_text(estimate['age'])}, "
                            f"{estimate['live']} live)")
@@ -457,20 +464,27 @@ class MergedState:
 class FleetGovernor:
     """One invocation's account view, with explicit offline occupancy estimates.
 
-    An UNREACHABLE peer (transport failure, or its `st` not answering) is never
-    by itself a refusal. It is counted as occupying exactly what its last
-    reachable census reported, however old, and flagged in `warnings` and
-    `estimates`. A peer with no usable census on record is counted as 0 and
-    flagged. A REACHABLE peer that disagrees (policy, membership, owner) or
-    sends an invalid census still holds growth via `errors`.
+    A peer that is UNREACHABLE (transport failure, or its `st` not answering)
+    or that answers with an INVALID census is never by itself a refusal. Its
+    last good census is counted only while younger than `census_max_age`
+    (default PEER_CENSUS_MAX_AGE); an older, future-stamped, corrupt or missing
+    census is ADVISORY: reported in `warnings`, counted as 0, and never a source
+    of policy, so local launches answer to local capacity and the local
+    governor alone. A REACHABLE peer with a valid census that disagrees
+    (policy, membership, owner) still holds growth via `errors`.
     """
-    def __init__(self, local, peers, root, *, peer_config=None, now=None):
+    def __init__(self, local, peers, root, *, peer_config=None, now=None,
+                 census_max_age=None):
         self.local = local['host']
         clock = time.time() if now is None else now
+        max_age = PEER_CENSUS_MAX_AGE if census_max_age is None else census_max_age
         self.warnings = []
         self.estimated_agents = []
         # peer name -> dict(age=seconds or None when no usable census, live=int)
         self.estimates = {}
+        # one short phrase per degraded peer, for the single-line notice()
+        self._degraded = []
+        self._summarized = 0  # warnings the _degraded phrases already cover
         cached = []
         errors = []
         if peer_config:
@@ -479,17 +493,21 @@ class FleetGovernor:
                 errors.append('peer census result count disagrees with declared membership')
             for peer, (snapshot, error) in zip(ordered, peers):
                 path = _peer_cache(root, peer)
-                if not isinstance(error, PeerUnreachable):
-                    # Remember reachable disagreement/invalid data too, so the
-                    # cache never silently resurrects an older good census.
+                if not error:
                     try:
-                        _save_peer(path, snapshot, error)
+                        _save_peer(path, snapshot, '')
                     except OSError:
-                        errors.append(f'{peer.name} governor cache could not be saved')
-                    if error:
-                        errors.append(error)
+                        self.warnings.append(f'{peer.name} governor cache could not be saved')
                     continue
-                rows, age = [], None
+                # Unreachable, or reachable with an unusable census (version
+                # skew, clock skew, garbage). Neither may hold this host: fall
+                # back to the last good census while it is fresh enough.
+                state = ('unreachable' if isinstance(error, PeerUnreachable)
+                         else 'census invalid')
+                if not isinstance(error, PeerUnreachable):
+                    self.warnings.append(error)
+                    self._summarized += 1
+                rows, age, advisory = [], None, False
                 try:
                     record = json.loads(path.read_text())
                     if not isinstance(record, dict):
@@ -500,21 +518,33 @@ class FleetGovernor:
                     validate(prior, peer.name, now=prior['observed_at'])
                 except FileNotFoundError:
                     detail = 'never seen; occupancy UNKNOWN, counted 0'
+                    short = 'never seen'
                 except (OSError, ValueError, TypeError, KeyError, GovernorError) as exc:
                     detail = f'cached census unusable ({exc}); occupancy UNKNOWN, counted 0'
+                    short = 'no usable census'
                 else:
                     age = clock - prior['observed_at']
-                    cached.append(prior)
-                    rows = prior['agents']
-                    detail = (f'cached count age {max(0, age):.0f}s; '
-                              f'{sum(r["live"] for r in rows)} counted live')
-                    if age > PEER_COUNT_MAX_AGE:
-                        detail += '; older than 24h, counted anyway'
+                    advisory = age > max_age or age < -30
+                    if age > max_age:
+                        detail = (f'cached census age {age:.0f}s exceeds '
+                                  f'{max_age:.0f}s; advisory only, counted 0')
+                        short = f'census {_age_text(age)} old, advisory'
                     elif age < -30:
-                        detail += '; census stamped in the future, counted anyway'
+                        detail = 'cached census stamped in the future; advisory only, counted 0'
+                        short = 'census future-stamped, advisory'
+                    else:
+                        cached.append(prior)
+                        rows = prior['agents']
+                        live = sum(r['live'] for r in rows)
+                        detail = f'cached count age {max(0, age):.0f}s; {live} counted live'
+                        short = f'{live} counted from {_age_text(age)}-old census'
                 self.estimated_agents.extend(dict(row, estimated=True) for row in rows)
                 self.estimates[peer.name] = dict(age=age, live=sum(r['live'] for r in rows))
-                self.warnings.append(f'{peer.name} unreachable; {detail}')
+                if advisory:
+                    self.estimates[peer.name]['advisory'] = True
+                self.warnings.append(f'{peer.name} {state}; {detail}')
+                self._degraded.append(f'{peer.name} {state} ({short})')
+                self._summarized += 1
         else:
             errors.extend(error for _, error in peers if error)
         self.snapshots = [local] + [s for s, error in peers if s is not None and not error]
@@ -598,6 +628,19 @@ class FleetGovernor:
                 lane = self.lane(row.get('account') or row['harness'])
                 result[lane] = result.get(lane, 0) + 1
         return result
+
+    def notice(self):
+        """At most ONE short line for per-command stderr; '' when all is well.
+
+        The full list stays in `warnings` (`st crew --governor`, JSON)."""
+        if not self.warnings:
+            return ''
+        parts = self._degraded or [self.warnings[0]]
+        extra = len(self.warnings) - (self._summarized if self._degraded else 1)
+        line = 'peers: ' + '; '.join(parts)
+        if extra > 0:
+            line += f'; +{extra} note{"s" if extra > 1 else ""}'
+        return line + ' (st crew --governor)'
 
     def fallback(self):
         if not self.errors:

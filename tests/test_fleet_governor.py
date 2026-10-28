@@ -214,11 +214,14 @@ def test_account_admission_recounts_local_launches_in_same_tend_pass(tmp_path, m
     assert '4/3' in cli._account_launch_refusal(args, card)
 
 
-def test_dispatch_holds_on_missing_peer_instead_of_no_local_governor(tmp_path, monkeypatch):
+def test_invalid_peer_census_is_advisory_for_dispatch(tmp_path, monkeypatch, capsys):
+    """aegis-lfeg: a peer's bad census never holds this host's own dispatch."""
     args = fleet_setup(tmp_path, monkeypatch)
     monkeypatch.setattr(fg, 'collect', lambda _: [(None, 'desktop governor unavailable')])
     gate = cli._dispatch_gate(args)
-    assert 'peer occupancy or agreement UNKNOWN' in gate(None, 'local')
+    assert gate is None or not gate(None, 'local')
+    err = capsys.readouterr().err
+    assert err.count('\n') == 1 and 'desktop census invalid (never seen)' in err
 
 
 def test_local_admission_lock_excludes_another_process(tmp_path):
@@ -527,17 +530,69 @@ def test_reachable_disagreement_holds_but_remembered_one_only_warns(tmp_path, mo
     assert '3/2' in offline.admits_launch('claude', [agent('desktop', 'local')])
 
 
-@pytest.mark.parametrize('age', [fg.PEER_COUNT_MAX_AGE + 1, -31])
-def test_old_or_future_cache_is_still_counted(tmp_path, monkeypatch, age):
+@pytest.mark.parametrize('age', [fg.PEER_CENSUS_MAX_AGE + 1, -31])
+def test_stale_or_future_cache_is_advisory_only(tmp_path, monkeypatch, age):
+    """aegis-lfeg: a census past the bound never holds local launches."""
     import time
     now = time.time()
-    cache_peer(tmp_path, sample('laptop', at=now - age, agents=[
+    cache_peer(tmp_path, sample('laptop', at=now - age, cap=1, agents=[
         agent('laptop', 'a'), agent('laptop', 'b')]))
-    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    local = sample()
+    local['governors'] = {}
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local, now=now)
     assert fleet.errors == []
+    # Not counted, and its policy is not borrowed: the stale cap of 1 is gone.
+    assert fleet.counts() == {}
+    assert fleet.admits_launch('claude') == ''
+    assert fleet.estimates['laptop']['advisory'] is True
+    assert 'advisory only' in fleet.warnings[0]
+    assert len(fleet.warnings) == 1  # no "policy taken from the last census" line
+
+
+def test_census_bound_is_configurable(tmp_path, monkeypatch):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - 600, agents=[
+        agent('laptop', 'a'), agent('laptop', 'b')]))
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(OSError()))
+    tight = fg.FleetGovernor(sample(), fg.collect(peers), tmp_path, peer_config=peers,
+                             now=now, census_max_age=300)
+    assert tight.counts() == {'base': 0} and tight.admits_launch('claude') == ''
+    loose = fg.FleetGovernor(sample(), fg.collect(peers), tmp_path, peer_config=peers,
+                             now=now, census_max_age=3600)
+    assert loose.counts() == {'base': 2} and '3/2' in loose.admits_launch('claude')
+
+
+def test_fresh_reachable_peer_census_still_binds(tmp_path):
+    full = sample('laptop', agents=[agent('laptop', 'a'), agent('laptop', 'b')])
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    fleet = fg.FleetGovernor(sample(), [(full, '')], tmp_path, peer_config=peers)
+    assert fleet.errors == [] and fleet.warnings == [] and fleet.notice() == ''
     assert fleet.counts() == {'base': 2}
     assert '3/2' in fleet.admits_launch('claude')
-    assert 'counted anyway' in fleet.warnings[0]
+
+
+def test_notice_is_one_short_line(tmp_path, monkeypatch):
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - 139483, agents=[agent('laptop', 'a')]))
+    fleet = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert fleet.notice() == ('peers: laptop unreachable (census 1d old, advisory) '
+                              '(st crew --governor)')
+    assert '\n' not in fleet.notice()
+
+
+def test_config_census_max_age(tmp_path):
+    from shantytown import config
+    (tmp_path / 'shantytown.toml').write_text('[host]\nname="a"\n')
+    assert config.load(tmp_path).host_peer_census_max_age == fg.PEER_CENSUS_MAX_AGE
+    (tmp_path / 'shantytown.toml').write_text('[host]\nname="a"\npeer_census_max_age=60\n')
+    assert config.load(tmp_path).host_peer_census_max_age == 60
+    for bad in ('0', '"6h"', 'true'):
+        (tmp_path / 'shantytown.toml').write_text(f'[host]\nname="a"\npeer_census_max_age={bad}\n')
+        with pytest.raises(config.ConfigError, match='peer_census_max_age'):
+            config.load(tmp_path)
 
 
 def test_lane_only_an_unreachable_peer_declared_keeps_its_cap(tmp_path, monkeypatch):
@@ -565,14 +620,29 @@ def test_stale_local_usage_follows_the_policy_not_the_outage(tmp_path, monkeypat
     assert bool(fleet.admits_launch('claude')) is refused
 
 
-def test_invalid_reachable_snapshot_holds_then_counts_zero_when_offline(tmp_path, monkeypatch):
+def test_invalid_reachable_snapshot_is_advisory_and_keeps_last_good_census(tmp_path, monkeypatch):
+    """aegis-lfeg: version or clock skew on a peer never holds this host."""
+    import time
+    now = time.time()
+    cache_peer(tmp_path, sample('laptop', at=now - 600, agents=[agent('laptop', 'remote')]))
     peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
     monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout='not-json', stderr=''))
     results = fg.collect(peers)
     assert not isinstance(results[0][1], fg.PeerUnreachable)
-    fleet = fg.FleetGovernor(sample(), results, tmp_path, peer_config=peers)
-    assert fleet.admits_launch('claude')
+    fleet = fg.FleetGovernor(sample(), results, tmp_path, peer_config=peers, now=now)
+    assert fleet.errors == [] and fleet.admits_launch('claude') == ''
+    assert fleet.counts() == {'base': 1}  # last good census, still within the bound
+    assert 'laptop census invalid (1 counted from 10m-old census)' in fleet.notice()
+    # The invalid answer did not overwrite the good cache.
+    offline = offline_fleet(tmp_path, monkeypatch, now=now)
+    assert offline.counts() == {'base': 1}
+
+
+def test_legacy_invalid_cache_record_counts_zero(tmp_path, monkeypatch):
+    peers = {'laptop': HostPeer('laptop', 'user@example.test', '/remote')}
+    path = fg._peer_cache(tmp_path, peers['laptop'])
+    fg._save_peer(path, None, 'laptop governor unavailable')
     offline = offline_fleet(tmp_path, monkeypatch)
     assert offline.admits_launch('claude') == ''
     assert 'last reachable census was invalid' in offline.warnings[0]
