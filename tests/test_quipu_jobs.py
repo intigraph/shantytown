@@ -386,3 +386,43 @@ def test_json_without_graph_refuses_before_local_execution(tmp_path, monkeypatch
     monkeypatch.setattr(jobs, 'load', lambda *a: pytest.fail('JSON fell back to TOML'))
     assert cli.main(['--root', str(tmp_path), 'work', 'jobs', '--json', 'list']) == cli.REFUSED
     assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('factory', [catalogue, weekly_catalogue])
+def test_verbose_typed_literals_decode_without_mutating_response(factory, monkeypatch):
+    body = factory()
+    expected = q.decode_catalogue(body)
+    for row in body['rows']:
+        if not row['objectIRI']:
+            row['o'] = {'value': row['o'], 'datatype': row['datatype']}
+    original = copy.deepcopy(body)
+    assert q.decode_catalogue(body) == expected
+    assert body == original
+    # Exercise the real transport boundary, still with explicit verbose scope.
+    monkeypatch.setattr(q.urllib.request, 'urlopen',
+                        lambda req, timeout: Response(json.dumps(body).encode()))
+    assert q.JobCatalogue('urn:example:catalogue', server='http://127.0.0.1:1').read() == expected
+
+
+@pytest.mark.parametrize('cell', [
+    {'value': 'PT10M', 'datatype': q.XSD+'string'},
+    {'value': 'PT10M'},
+    {'value': 'PT10M', 'datatype': q.XSD+'duration', 'language': 'en'},
+    {'value': {'value': 'PT10M'}, 'datatype': q.XSD+'duration'},
+    {'value': ['PT10M'], 'datatype': q.XSD+'duration'},
+    {'value': None, 'datatype': q.XSD+'duration'},
+])
+def test_verbose_literal_refuses_unknown_or_contradictory_wrappers(cell):
+    body = catalogue()
+    row_for(body, q.SCHEMA+'repeatFrequency')['o'] = cell
+    with pytest.raises(q.JobsUnavailable):
+        q.decode_catalogue(body)
+
+
+def test_verbose_literal_cannot_relabel_an_iri():
+    body = catalogue()
+    row = row_for(body, q.SCHEMA+'target')
+    row['datatype'] = q.XSD+'string'
+    row['o'] = {'value': 'urn:example:manifest:revision1', 'datatype': q.XSD+'string'}
+    with pytest.raises(q.JobsUnavailable, match='contradicts'):
+        q.decode_catalogue(body)
