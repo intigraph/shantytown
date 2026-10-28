@@ -160,6 +160,12 @@ class Fleet:
     """
     stood_down: bool = False
     max_load_per_core: float = 4.0
+    # admin_self_slots — how many P0 items the ADMINISTRATOR may have in flight
+    # itself (in_progress on its own plate, typically run as in-process
+    # subagents) before its own ready P0s stop counting as startable. Feeds the
+    # stop policy's P0-plate rank (aegis-c01c.1). 0 = the administrator never
+    # starts work itself; only crew and ephemeral slots count as capacity.
+    admin_self_slots: int = 1
 
 
 @dataclass(frozen=True)
@@ -1075,7 +1081,7 @@ class TomlRegistry:
             f"source of truth.")
 
 
-_FLEET_KEYS = {"stood_down", "max_load_per_core"}
+_FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:
@@ -1089,7 +1095,13 @@ def _fleet(path: Path, tbl: dict) -> Fleet:
         raise ConfigError(f"{path}: fleet.max_load_per_core must be a "
                           f"non-negative number (0 disables the check), "
                           f"got {load!r}")
-    return Fleet(stood_down=down, max_load_per_core=float(load))
+    slots = tbl.get("admin_self_slots", Fleet.admin_self_slots)
+    if isinstance(slots, bool) or not isinstance(slots, int) or slots < 0:
+        raise ConfigError(f"{path}: fleet.admin_self_slots must be a "
+                          f"non-negative integer (0 = the administrator never "
+                          f"starts work itself), got {slots!r}")
+    return Fleet(stood_down=down, max_load_per_core=float(load),
+                 admin_self_slots=slots)
 
 
 def _hibernate(path: Path, tbl: dict) -> Hibernate:
