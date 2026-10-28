@@ -1,7 +1,7 @@
-"""st — the CLI. Seven verbs, five groups, forty grouped commands: forty-seven, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Eight verbs, five groups, forty grouped commands: forty-eight, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
-    · anchor [--short|--events|--harness] · attach [-r|--no-start]
+    · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
     agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
@@ -1485,11 +1485,14 @@ def build_parser() -> argparse.ArgumentParser:
     # only the SHA distinguishes a fresh install from a stale one.
     from . import __version__, deployed_sha
 
-    ap.add_argument(
-        "--version",
-        action="version",
-        version=f"st {__version__} ({deployed_sha()})",
-    )
+    class Version(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            parser._print_message(f"st {__version__} ({deployed_sha()})\n", sys.stdout)
+            parser.exit()
+
+    # Git metadata can block for seconds. Only --version needs that probe;
+    # ordinary parsing, especially static prime, must not run it eagerly.
+    ap.add_argument("--version", action=Version, nargs=0, help="show version and exit")
     # DEFAULT None, resolved in main() — not computed here. Two commands need
     # different answers for "nobody said": every read/launch command DISCOVERS a
     # store (walk up, then the box's pointer), while `init` must answer cwd/.shanty
@@ -1550,6 +1553,14 @@ def build_parser() -> argparse.ArgumentParser:
     mr.add_argument("--json", action="store_true",
                     help="the task context as JSON for hooks and tools: agent, harness, and "
                          "the plate item (id, title, status, priority) or null")
+
+    prime = sub.add_parser("prime", help="stack primer plus bounded, read-only anchor summary")
+    prime.add_argument("me", nargs="?", help="defaults to $SHANTY_AGENT, as for anchor")
+    prime.add_argument("--json", action="store_true")
+    prime_mode = prime.add_mutually_exclusive_group()
+    prime_mode.add_argument("--brief", action="store_true", help="five to ten lines for stack orientation")
+    prime.add_argument("--static", action="store_true", help="skip live state and configuration")
+    prime_mode.add_argument("--section", help="static primer section, by name or unique prefix")
 
     sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
     sling.add_argument("item")
@@ -2647,6 +2658,16 @@ def _main(a, argv: list[str] | None = None) -> int:
     # Kept verbatim so a refusal can hand back the operator's OWN command line
     # with the flag appended — a remedy they can paste, not one they translate.
     a.invocation = "st " + " ".join(sys.argv[1:] if argv is None else argv)
+    if a.cmd == "prime":
+        # Static orientation must work without deployment config or identity.
+        # Live resolution and normal identity admission run inside its deadline.
+        previous_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            from .prime import command
+            return command(a)
+        finally:
+            sys.dont_write_bytecode = previous_bytecode
     # RESOLVE THE STORE ONCE, here, so every handler downstream sees a real Path
     # and none of them re-derives one. `how` rides along so a surface that needs
     # to explain an empty or surprising store can say which leg answered.
@@ -6898,6 +6919,37 @@ def _lead_status(registry, panes):
     return _lead_is_up(registry, panes)
 
 
+def _resolve_anchor(a, me, *, require_complete=False):
+    """Shared startup read; publication and startup decorations stay in anchor's CLI."""
+    registry, panes = _registry(a), _panes(a)
+    # Which program this agent runs. Resolved HERE, not inside anchor(),
+    # whose docstring makes "reads only" a promise — and resolved
+    # defensively: an unknown harness must render nothing rather than
+    # assert the wrong tooling advice (aegis-h3zyq0).
+    try:
+        from . import harness as _harness_mod
+        _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
+    except Exception:
+        _hn = ""
+    # The deployment's pre-approved MCP servers, resolved HERE for the same
+    # reason `harness` is: anchor() promises reads-only and does not know a
+    # root. Without this the card described the pre-h3zyq0 world — it said
+    # every MCP write was refused while the deployment had pre-approved the
+    # servers, so a codex worker was told it lacked tools it actually had.
+    try:
+        from .runtime import codex_mcp_approve_servers
+        _mcp = tuple(codex_mcp_approve_servers(a.root))
+    except Exception:
+        _mcp = ()
+    _anchor_tracker = _tracker(a)
+    p = do_anchor(me, registry, panes,
+                  plate=_plate(a, tracker=_anchor_tracker, snapshot=require_complete,
+                               require_complete=require_complete, owners=[me]),
+                  lead_status=_lead_status(registry, panes),
+                  harness=_hn, mcp_preapproved=_mcp)
+    return p, _anchor_tracker, registry
+
+
 def _cmd_anchor(a) -> int:
     """anchor is a PURE READ. Note what is NOT here: no _wire(), because the
     Dispatcher exists to write. anchor resolves its own reads and nothing else.
@@ -6918,31 +6970,8 @@ def _cmd_anchor(a) -> int:
         return _anchor_events(a, me)
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
-    registry, panes = _registry(a), _panes(a)
     try:
-        # Which program this agent runs. Resolved HERE, not inside anchor(),
-        # whose docstring makes "reads only" a promise — and resolved
-        # defensively: an unknown harness must render nothing rather than
-        # assert the wrong tooling advice (aegis-h3zyq0).
-        try:
-            from . import harness as _harness_mod
-            _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
-        except Exception:
-            _hn = ""
-        # The deployment's pre-approved MCP servers, resolved HERE for the same
-        # reason `harness` is: anchor() promises reads-only and does not know a
-        # root. Without this the card described the pre-h3zyq0 world — it said
-        # every MCP write was refused while the deployment had pre-approved the
-        # servers, so a codex worker was told it lacked tools it actually had.
-        try:
-            from .runtime import codex_mcp_approve_servers
-            _mcp = tuple(codex_mcp_approve_servers(a.root))
-        except Exception:
-            _mcp = ()
-        _anchor_tracker = _tracker(a)
-        p = do_anchor(me, registry, panes, plate=_plate(a, tracker=_anchor_tracker),
-                      lead_status=_lead_status(registry, panes),
-                      harness=_hn, mcp_preapproved=_mcp)
+        p, _anchor_tracker, registry = _resolve_anchor(a, me)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -6976,7 +7005,7 @@ def _cmd_anchor(a) -> int:
         # that wants more (labels, links) asks its tracker with the id.
         it = p.item
         print(json.dumps({
-            "schema": "st.task-context/1", "agent": me, "harness": _hn or None,
+            "schema": "st.task-context/1", "agent": me, "harness": p.harness or None,
             "item": None if it is None else {
                 "id": it.id, "title": it.title or None, "status": it.status,
                 "priority": it.priority},

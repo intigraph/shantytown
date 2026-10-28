@@ -99,6 +99,13 @@ when.
 
 <!-- stack-table:end -->
 
+## Agent orientation
+
+Run `st prime` for the tool primer and a bounded crew/anchor summary, or
+`st prime --static` offline. [Prime contract and generated primer](docs/prime.md)
+and the [Shantytown skill](skills/shantytown/SKILL.md) share the runtime source.
+`st anchor` remains the normal session startup command.
+
 ## Contributing
 
 ```sh

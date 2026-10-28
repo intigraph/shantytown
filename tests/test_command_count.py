@@ -173,10 +173,10 @@ def test_six_verbs_five_groups_twenty_seven_leaves():
     surface = _actual_surface()
     verbs = [n for n, leaves in surface.items() if leaves is None]
     groups = {n: leaves for n, leaves in surface.items() if leaves is not None}
-    assert len(verbs) == 7, verbs
+    assert len(verbs) == 8, verbs
     assert len(groups) == 5, sorted(groups)
     assert sum(len(l) for l in groups.values()) == 40
-    assert len(_actual_leaves()) == 47, (
+    assert len(_actual_leaves()) == 48, (
         "the command count changed. If that's intended, update the number here, "
         "cli.SURFACE and the cli.py docstring together — and say why the surface "
         "grew in docs/cli.md."
@@ -187,7 +187,7 @@ def test_the_grouping_is_the_one_ruled():
     """The specific assignment, verbatim from the ruling, so a leaf cannot quietly
     migrate between groups."""
     assert _actual_surface() == {
-        "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None,
+        "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None, "prime": None,
         "attach": None,
         "work": frozenset({"item", "repool", "defer", "hold-feed", "cost", "dream", "triage", "jobs"}),
         "agent": frozenset({"new", "spawn", "stop", "harness", "account", "cycle", "advise", "input", "ask",
@@ -209,14 +209,14 @@ def test_the_prose_numbers_in_the_docstring_match_the_parser():
     was enforced, so the drift hid in the sentence ABOVE the list — the line a
     reader actually quotes. Now every number in that line is checked: verbs,
     groups, grouped commands and the total."""
-    words = {5: "five", 6: "six", 7: "seven", 20: "twenty", 21: "twenty-one",
+    words = {5: "five", 6: "six", 7: "seven", 8: "eight", 20: "twenty", 21: "twenty-one",
              22: "twenty-two", 23: "twenty-three", 24: "twenty-four",
              25: "twenty-five", 26: "twenty-six", 27: "twenty-seven",
              28: "twenty-eight", 29: "twenty-nine", 30: "thirty",
              31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
              34: "thirty-four", 35: "thirty-five", 36: "thirty-six",
              37: "thirty-seven", 38: "thirty-eight", 39: "thirty-nine",
-             40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three", 44: "forty-four", 45: "forty-five", 46: "forty-six", 47: "forty-seven"}
+             40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three", 44: "forty-four", 45: "forty-five", 46: "forty-six", 47: "forty-seven", 48: "forty-eight"}
     surface = _actual_surface()
     n_verbs = sum(1 for l in surface.values() if l is None)
     n_groups = sum(1 for l in surface.values() if l is not None)
