@@ -1,6 +1,6 @@
 {
   "source_revision": "facd890595315965675cbe267c5e53e912c84525",
-  "reviewed_at": "2026-10-28T04:11:17.755763+00:00",
+  "reviewed_at": "2026-10-28T04:54:39.413558+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "53228255f10de7cf9307a1129223b05faae5e6d9e3a475a6145d11331201f84d",
+      "source_sha256": "75343eafb7e25c6cc51030bb4122ec2a731823ae30e6bf70b5469d40f85d1227",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"

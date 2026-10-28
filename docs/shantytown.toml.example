@@ -130,10 +130,19 @@ max_quiet_minutes = 60
 #                      we cannot measure never suppresses the gate — refusing to
 #                      dispatch on an unmeasured number would be the mirror of the
 #                      bug.
+#
+#   admin_self_slots   How many P0 items the administrator may have in flight
+#                      ITSELF (in_progress on its own plate) before its own
+#                      ready P0s stop counting as startable work. The stop
+#                      policy's P0-plate rank blocks the administrator's stop
+#                      while one of its own ready P0s has a free slot here (or
+#                      an unassigned one has a free crew member or ephemeral
+#                      slot). 0 = only crew and ephemeral slots are capacity.
 # ---------------------------------------------------------------------------
 [fleet]
 stood_down = false
 max_load_per_core = 4.0
+admin_self_slots = 1
 
 # ---------------------------------------------------------------------------
 # [env] — this deployment's PLUMBING: where the tracker is, which backend, the
