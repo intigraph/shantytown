@@ -711,8 +711,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     advance must never trap a worker at its own stop."""
     try:
         card = reg.get(me)
-        from . import context_hint
-        if context_hint.emit(root, card):
+        from .stop_policy import stop_advice
+        if stop_advice(root, card):
             return 0
         from . import harness as harness_mod
         harness_name = harness_mod.name_for(card, root=root)

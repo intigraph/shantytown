@@ -482,3 +482,43 @@ older version that does not recognize this table, remove the entire
 `[admin_wake_budget]` table from deployment configuration, then revert the source
 merge through the normal lane. Leaving even an OFF unknown table behind would
 make that older version reject its configuration.
+
+## Optional ruling-memory reminder
+
+`[env] SHANTY_STOP_RULING_MEMORY = "1"` enables a reminder through the existing
+Stop policy and worker haul seam. It is **OFF by default**; no extra hook is
+installed. This is an advisory hold once per session and unchanged pending
+ruling set, using the same persisted-state pattern as rank 2a. It runs alongside
+the existing context advice before normal haul/policy work. Repeating Stop
+without changing that set proceeds through the ordinary policy; this reminder
+never requires a successful write to release the next Stop.
+
+Only a user message whose first line is `Stiwi ruling: <choice>` or
+`Stiwi decided: <choice>` qualifies (an optional `[from stiwi]` prefix is
+accepted). Assistant prose, tool output, quoted examples, questions and vague
+mentions do not qualify. This is an explicit attribution cue, not authentication
+of the human issuer. Verify the attribution before recording it.
+
+The reminder gives `cy record decision --chose ... --by person-stiwi --about ...
+--topic ...`, shell-quoting literal values. Optional `About: <entity>` and
+`Topic: <registered-topic>` lines supply those arguments. Without them the
+command uses required `RULING_ABOUT` and `RULING_TOPIC` shell variables and names
+what must be selected; it never invents entities or topics. Camayoc validates
+these fields and fills provenance. No command is executed by the hook.
+
+The checker reads only the hook's exact, session-bound transcript, at most 8 MiB
+and 20,000 rows. It recognizes Claude messages/tool results and Codex response
+items/function calls. A paired positive receipt from Quipu episode/knot or
+Camayoc record tools, or a successful direct `cy record` CLI result, discharges
+rulings observed before that call. Queued, refused, missing or unpaired results
+do not. Composite shell commands, custom-code wrappers, out-of-session writes
+and tool surfaces without a recognized receipt are unobserved; the prompt says
+"no confirmed receipt", never that the graph has no record. This check does no
+network reads or writes and does not verify graph contents.
+
+Missing, malformed, mixed-session, incomplete, nonregular or over-cap transcripts
+fail open as UNKNOWN. A ledger failure also fails open. Only hashes are stored
+under `<root>/ruling-memory/`; a state is durably claimed before the block is
+emitted. Enablement does not install the Camayoc schema or CLI, change auto-memory
+settings, or establish production acceptance. Test both harnesses through their
+normal Stop hooks before enabling it in a deployment.
