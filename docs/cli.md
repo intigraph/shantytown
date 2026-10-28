@@ -2372,9 +2372,9 @@ times out, or its `st` exits non-zero. A peer that answers with an invalid censu
 (unparseable, version skew, or stamped more than 60 seconds old) is treated the
 same way. Any host counts such a peer as occupying exactly what its last good
 census reported while that census is younger than `[host] peer_census_max_age`
-(seconds, default 21600 = 6 hours). An older or future-stamped census, a corrupt
-cache, or no census at all is **advisory only**: reported, counted as 0, never a
-source of policy, so it can never hold this host's launches; local capacity and
+(seconds, default 21600 = 6 hours). An older census, one stamped more than
+60 seconds in the future, a corrupt cache, or no census at all is **advisory only**:
+reported, counted as 0, never a source of policy, so it can never hold this host's launches; local capacity and
 the local governor still apply. Each command prints at most one short `peers:`
 line on stderr; `st crew --governor` lists every detail, and JSON includes
 `warnings`, marks estimated agent rows, and the degraded admission line
@@ -2389,8 +2389,15 @@ peer whose valid census disagrees on policy, membership or owner still holds lau
 unreachable peer's cache is reported as a warning. Caches live under
 `governor/peers/` and are tied to the declared peer endpoint. Existing agents
 keep running. Each peer call has a 20-second deadline and peers are queried
-concurrently. A received census older than 60 seconds or more than 30 seconds in
-the future is rejected; keep host clocks synchronized.
+concurrently. A received census older than 60 seconds or more than 60 seconds in
+the future is rejected: the clock-skew allowance is symmetric (inclusive ±60s).
+Usage observations and the cache's future-stamp guard share that same
+60-second future allowance.
+The six-hour bound is not a minimum grace: a never-seen peer's first invalid
+census is advisory immediately, and a local clock rollback greater than 60 seconds
+can make a saved census future-stamped and advisory immediately. Neither path
+invents zero occupancy as known fact; the warning says UNKNOWN/counting 0.
+Keep host clocks synchronized.
 
 All hosts should declare the same set of uniquely named peers; differing
 membership reported by a reachable peer holds admission. `[host] admission_owner`

@@ -530,7 +530,7 @@ def test_reachable_disagreement_holds_but_remembered_one_only_warns(tmp_path, mo
     assert '3/2' in offline.admits_launch('claude', [agent('desktop', 'local')])
 
 
-@pytest.mark.parametrize('age', [fg.PEER_CENSUS_MAX_AGE + 1, -31])
+@pytest.mark.parametrize('age', [fg.PEER_CENSUS_MAX_AGE + 1, -61])
 def test_stale_or_future_cache_is_advisory_only(tmp_path, monkeypatch, age):
     """aegis-lfeg: a census past the bound never holds local launches."""
     import time
@@ -979,3 +979,73 @@ def test_governor_json_carries_what_the_status_bar_needs(tmp_path, monkeypatch, 
     # only the numbers are cross-checked against it.
     first = capsys.readouterr().out.splitlines()[0].split()
     assert first[0] == 'ok' and first[1].split('/')[:2] == ['10', '50'] and first[2] == '?/?/?'
+
+
+@pytest.mark.parametrize('offset', [-60, -45, -30, 0, 30, 45, 60])
+def test_clock_skew_window_accepts_both_hosts_symmetrically(offset):
+    first = sample('desktop', at=10000)
+    second = sample('laptop', at=10000 + offset)
+    assert fg.validate(second, 'laptop', now=10000) is second
+    assert fg.validate(first, 'desktop', now=10000 + offset) is first
+
+
+@pytest.mark.parametrize('offset', [-60.001, 60.001])
+def test_clock_skew_outside_window_is_rejected_in_both_directions(offset):
+    with pytest.raises(ValueError, match='stale or future governor census'):
+        fg.validate(sample('laptop', at=10000 + offset), 'laptop', now=10000)
+    with pytest.raises(ValueError, match='stale or future governor census'):
+        fg.validate(sample('desktop', at=10000), 'desktop', now=10000 + offset)
+
+
+@pytest.mark.parametrize('offset,accepted', [(45, True), (60, True), (60.001, False)])
+def test_usage_timestamp_uses_the_same_future_skew_limit(offset, accepted):
+    data = sample(at=10000)
+    data['governors']['base']['readings']['five_hour']['at'] = 10000 + offset
+    if accepted:
+        assert fg.validate(data, 'desktop', now=10000) is data
+    else:
+        with pytest.raises(ValueError, match='invalid usage observation'):
+            fg.validate(data, 'desktop', now=10000)
+
+
+@pytest.mark.parametrize('bad', ['not-json', 'wrong-version'])
+def test_first_invalid_peer_is_immediately_advisory_without_a_good_cache(tmp_path, monkeypatch, bad):
+    peer = HostPeer('laptop', 'user@example.test', '/remote')
+    body = sample('laptop')
+    body['version'] = fg.VERSION + 1
+    stdout = bad if bad == 'not-json' else json.dumps(body)
+    monkeypatch.setattr(fg.subprocess, 'run', lambda *a, **kw:
+                        SimpleNamespace(returncode=0, stdout=stdout, stderr='private diagnostic'))
+    peers = {'laptop': peer}
+    fleet = fg.FleetGovernor(sample(), fg.collect(peers), tmp_path, peer_config=peers)
+    assert fleet.errors == [] and fleet.counts() == {'base': 0}
+    assert fleet.estimates['laptop'] == dict(age=None, live=0)
+    assert 'census invalid (never seen)' in fleet.notice()
+    assert fleet.admits_launch('claude') == ''
+    assert not fg._peer_cache(tmp_path, peer).exists(), "bad first response became a good census"
+
+
+@pytest.mark.parametrize('rollback', [31, 45, 60, 60.001, 61])
+def test_local_clock_rollback_counts_cache_only_within_the_skew_window(tmp_path, monkeypatch, rollback):
+    peer = HostPeer('laptop', 'user@example.test', '/remote')
+    prior = sample('laptop', cap=1, at=10000, agents=[agent('laptop', 'remote')])
+    cache_peer(tmp_path, prior)
+    path = fg._peer_cache(tmp_path, peer)
+    saved = path.read_bytes()
+    clock = 10000 - rollback
+    monkeypatch.setattr(fg.time, 'time', lambda: clock)
+    local = fg.snapshot('desktop', {}, [], now=clock, hosts=['desktop', 'laptop'],
+                        admission_owner='desktop')
+    fleet = offline_fleet(tmp_path, monkeypatch, local=local, now=clock)
+    assert path.read_bytes() == saved, "a rollback restamped the prior census"
+    assert fleet.errors == []
+    if rollback <= 60:
+        assert fleet.counts() == {'base': 1}
+        assert fleet.governors['base'].policy.max_agents == 1
+        assert fleet.admits_launch('claude'), "remembered occupancy must still bind"
+        assert not fleet.estimates['laptop'].get('advisory')
+    else:
+        assert fleet.counts() == {} and fleet.admits_launch('claude') == ''
+        assert fleet.estimates['laptop']['advisory'] is True
+        assert 'census future-stamped, advisory' in fleet.notice()
+        assert 'counted 0' in fleet.warnings[0]
