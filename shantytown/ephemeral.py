@@ -200,11 +200,13 @@ def harness_for(req: Request, policy) -> str:
         req.job, DEFAULT_HARNESS[req.job])
 
 
-def authority(actor: str | None, role_of: Callable[[str], str | None]) -> None:
-    """Only the administrator — or a human at a shell, who has no agent identity —
-    manages ephemeral agents. An ephemeral agent can never spawn another: that is
-    the unbounded fan-out the polecats were retired for."""
+def authority(actor: str | None, role_of: Callable[[str], str | None], *,
+              require_verified: bool = False) -> None:
+    """Administrators manage jobs; migration mode also admits a human shell.
+    With verified identity required, callers resolve the protected principal first."""
     if actor is None:
+        if require_verified:
+            raise Refused("ephemeral mutations require a verified protected UID identity")
         return
     if is_ephemeral_name(actor):
         raise Refused("an ephemeral agent cannot spawn, stop or retry ephemeral agents")
@@ -245,7 +247,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
          role_of, name=None, attempt=1, retry_of=None) -> dict:
     """Admit or refuse, and build the ledger record. Writes nothing."""
     validate(req)
-    authority(actor, role_of)
+    authority(actor, role_of, require_verified=policy.require_verified_identity)
     if not administrator:
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")

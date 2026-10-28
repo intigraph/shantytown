@@ -4,10 +4,13 @@ because a check that cannot fail proves nothing (AGENTS.md)."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from shantytown.actor_identity import authenticated_actor as REAL_AUTHENTICATED_ACTOR
 
 from shantytown import cli, config
 from shantytown import ephemeral as eph
@@ -24,9 +27,9 @@ def _policy(**kw):
 def _rec(root, **kw):
     req = eph.Request(job=kw.pop("job", "task"), item=kw.pop("item", "it-1"),
                       repo=kw.pop("repo", None), pr=kw.pop("pr", None))
-    rec = eph.plan(req, root=root, policy=kw.pop("policy", _policy(max_agents=10)), actor=None,
+    rec = eph.plan(req, root=root, policy=kw.pop("policy", _policy(max_agents=10)), actor="boss",
                    administrator="boss", host=None, now=kw.pop("now", NOW),
-                   role_of=lambda n: None, name=kw.pop("name", None))
+                   role_of=lambda n: "administrator" if n == "boss" else None, name=kw.pop("name", None))
     rec.update(kw)
     eph.write(root, rec)
     return rec
@@ -73,9 +76,11 @@ def test_reviews_default_to_codex_and_the_rest_to_claude():
                            _policy(harness_by_job={"task": "codex"})) == "codex"
 
 
-def test_only_the_administrator_or_a_human_manages_them():
+def test_administrator_and_opt_in_verified_authority():
     roles = {"boss": "administrator", "lex": "worker", "lead1": "lead"}.get
-    eph.authority(None, roles)
+    eph.authority(None, roles)  # unmigrated human shell
+    with pytest.raises(eph.Refused, match="verified"):
+        eph.authority(None, roles, require_verified=True)
     eph.authority("boss", roles)
     for who in ("lex", "lead1"):
         with pytest.raises(eph.Refused, match="administrator"):
@@ -99,8 +104,8 @@ def test_over_cap_is_refused_not_queued_and_done_jobs_free_the_slot(tmp_path):
 def test_no_administrator_means_no_spawn(tmp_path):
     with pytest.raises(eph.Refused, match="no administrator"):
         eph.plan(eph.Request("task", "it-1"), root=tmp_path, policy=_policy(),
-                 actor=None, administrator=None, host=None, now=NOW,
-                 role_of=lambda n: None)
+                 actor="boss", administrator=None, host=None, now=NOW,
+                 role_of=lambda n: "administrator")
 
 
 def test_merge_lane_is_serialized_and_spaced_per_repo(tmp_path):
@@ -263,9 +268,18 @@ def store(tmp_path, monkeypatch):
     (root / "crew").mkdir(parents=True)
     (root / "crew" / "boss.json").write_text(json.dumps(
         {"role": "administrator", "pane": "st-boss", "dangerous": True}))
-    (root / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 1\n")
+    (root / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 1\nunattended = false\nrequire_verified_identity = true\n")
     panes = NullPanes(live=set())
     monkeypatch.setattr(cli, "_panes", lambda a: panes)
+    from shantytown import actor_identity
+    panes.verified_actor = 'boss'
+    def authenticated():
+        principal = panes.verified_actor
+        claimed = os.environ.get('SHANTY_AGENT')
+        if principal and claimed and principal != claimed:
+            raise actor_identity.IdentityError('SHANTY_AGENT differs from authenticated principal')
+        return principal
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', authenticated)
     launched = []
 
     behaviour = {"rc": cli.OK, "delivered": True, "during": None}
@@ -295,7 +309,7 @@ def test_spawn_launches_a_supervised_card_then_refuses_over_cap(store, capsys):
     (rec,) = eph.records(root)
     card = json.loads((root / "crew" / f"{rec['name']}.json").read_text())
     assert card["reports_to"] == "boss" and card["roles"] == ["worker", "first"]
-    assert card["dangerous"] is True and card["harness"] == "claude"
+    assert card["dangerous"] is False and card["harness"] == "claude"
     assert launched[0].name == rec["name"]
     assert Path(rec["workspace"]).is_dir()
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
@@ -306,6 +320,7 @@ def test_spawn_launches_a_supervised_card_then_refuses_over_cap(store, capsys):
 def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
     root, _panes, launched = store
     (root / "crew" / "lex.json").write_text(json.dumps({"role": "worker"}))
+    _panes.verified_actor = "lex"
     monkeypatch.setenv("SHANTY_AGENT", "lex")
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
     assert "not the administrator" in capsys.readouterr().err and not launched
@@ -332,7 +347,7 @@ def test_report_is_only_for_the_ephemeral_agent_itself(store, monkeypatch, capsy
     root, _panes, _launched = store
     monkeypatch.setenv("SHANTY_AGENT", "boss")
     assert _st(root, "--report", "--verdict", "done") == cli.REFUSED
-    assert "own pane" in capsys.readouterr().err
+    assert "verified job" in capsys.readouterr().err
 
 
 def test_governor_admission_fails_closed_for_ephemeral_work(store, monkeypatch, capsys):
@@ -532,15 +547,16 @@ def test_an_ephemeral_turn_boundary_sends_no_crew_stop_event(tmp_path):
     assert eph.read(tmp_path, rec["name"])["turns"] == 1
 
 
-def test_report_needs_the_process_to_be_the_job_not_just_the_env(store, monkeypatch, capsys):
+def test_report_requires_the_verified_job_principal_not_just_the_env(store, monkeypatch, capsys):
     """Live review finding: a crew pane exporting SHANTY_AGENT=<job> could forge
-    that job's verdict. The process must be inside the job."""
+    that job's verdict. Reporting requires the verified job principal."""
     root, panes, _launched = store
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     monkeypatch.setenv("SHANTY_AGENT", rec["name"])
-    assert _st(root, "--report", "--verdict", "done") == cli.REFUSED   # not inside it
-    assert "own pane" in capsys.readouterr().err
+    assert _st(root, "--report", "--verdict", "done") == cli.REFUSED   # wrong verified principal
+    assert "authenticated principal" in capsys.readouterr().err
+    panes.verified_actor = rec["name"]
     monkeypatch.chdir(rec["workspace"])
     monkeypatch.setattr(eph, "detached_teardown", lambda root_, name: None)
     assert _st(root, "--report", "--verdict", "done", "--summary", "ok") in (cli.OK, cli.CANNOT_TELL)
@@ -711,3 +727,165 @@ def test_ending_job_cannot_provision_another_tree(tmp_path):
         eph.provision_worktree(tmp_path, rec['name'], tmp_path / 'repo',
                                ensure=lambda *a: pytest.fail('must not provision'))
     assert 'worktrees' not in eph.read(tmp_path, rec['name'])
+
+
+@pytest.mark.parametrize('args', [
+    ('--ephemeral', '--job', 'task', '--item', 'it-new'),
+    ('--report', '--verdict', 'done'),
+    ('--merge', '--head', HEAD),
+    ('--stop', 'JOB'),
+    ('--retry', 'JOB'),
+    ('--reap',),
+])
+@pytest.mark.parametrize('claimed', [None, 'boss'])
+def test_guarded_mutations_refuse_unverified_identity_without_side_effects(
+        store, monkeypatch, capsys, args, claimed):
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    before = eph.read(root, rec['name'])
+    panes.verified_actor = None
+    if claimed:
+        monkeypatch.setenv('SHANTY_AGENT', claimed)
+    else:
+        monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    for helper in ('_spawn_end', '_spawn_merge', '_spawn_reap'):
+        monkeypatch.setattr(cli, helper, lambda *a, **kw: pytest.fail('mutation before verified identity'))
+    args = tuple(rec['name'] if arg == 'JOB' else arg for arg in args)
+    assert _st(root, *args) == cli.REFUSED
+    assert 'verified protected UID identity' in capsys.readouterr().err
+    assert eph.read(root, rec['name']) == before
+    assert eph.lane_refusal(root, 'o/n', 0, NOW)
+    assert not launched
+
+
+def test_read_only_job_listing_remains_available_without_verified_actor(store, capsys):
+    root, panes, _ = store
+    panes.verified_actor = None
+    assert _st(root, '--list', '--json') == cli.OK
+    assert json.loads(capsys.readouterr().out) == []
+
+
+def test_detached_verified_job_still_cannot_manage_jobs(store, monkeypatch, capsys):
+    root, panes, launched = store
+    rec = _rec(root, state=eph.LIVE)
+    panes.verified_actor = rec['name']
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    monkeypatch.setattr(eph, 'ancestor_pids', lambda: [])
+    monkeypatch.chdir(root)  # outside the job workspace; no process-tree rail
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-other') == cli.REFUSED
+    assert 'cannot spawn' in capsys.readouterr().err and not launched
+
+
+def test_detached_job_can_report_only_its_verified_identity(store, monkeypatch, capsys):
+    root, panes, _ = store
+    rec = _rec(root, state=eph.LIVE, workspace=str(root / 'elsewhere'))
+    panes.verified_actor = rec['name']
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    monkeypatch.setattr(eph, 'ancestor_pids', lambda: [])
+    monkeypatch.chdir(root)
+    assert _st(root, '--report', '--verdict', 'done', '--dry-run') == cli.OK
+    assert rec['name'] in capsys.readouterr().out
+    assert eph.read(root, rec['name'])['state'] == eph.LIVE
+
+
+def test_verified_administrator_cannot_report_as_a_job_by_changing_cwd(store, monkeypatch, capsys):
+    root, panes, _ = store
+    rec = _rec(root, workspace=str(root / 'job'))
+    Path(rec['workspace']).mkdir()
+    monkeypatch.chdir(rec['workspace'])
+    assert panes.verified_actor == 'boss'
+    assert _st(root, '--report', '--verdict', 'done') == cli.REFUSED
+    assert 'verified job' in capsys.readouterr().err
+    assert eph.read(root, rec['name'])['result'] is None
+
+
+def test_unattended_gate_defaults_off_and_refuses_before_retry_releases_lane(store, capsys):
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 2\nunattended = true\n')
+    assert config.load(root).ephemeral.unattended_uid_ready is False
+    assert _st(root, '--retry', rec['name']) == cli.REFUSED
+    assert 'distinct protected job UID' in capsys.readouterr().err
+    assert eph.read(root, rec['name'])['state'] == eph.LIVE
+    assert eph.read(root, rec['name'])['result'] is None
+    assert not launched and len(eph.records(root)) == 1
+
+
+def test_unattended_gate_also_covers_inherited_dangerous_posture(store, capsys):
+    root, _, launched = store
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 1\n')
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1') == cli.REFUSED
+    assert 'unattended_uid_ready is false' in capsys.readouterr().err
+    assert not launched and not eph.records(root)
+
+
+def test_uid_readiness_must_be_boolean_and_only_enables_a_preview(store, capsys):
+    root, _, launched = store
+    path = root / 'shantytown.toml'
+    path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = "yes"\n')
+    with pytest.raises(config.ConfigError, match='unattended_uid_ready'):
+        config.load(root)
+    path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = true\n')
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.OK
+    assert 'would spawn' in capsys.readouterr().out
+    assert not launched and not eph.records(root)
+
+
+def test_detached_verified_merge_job_reaches_only_its_own_merge_guard(store, monkeypatch):
+    root, panes, _ = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    panes.verified_actor = rec['name']
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    monkeypatch.setattr(eph, 'ancestor_pids', lambda: [])
+    called = []
+    monkeypatch.setattr(cli, '_spawn_merge', lambda args, me: called.append(me) or cli.OK)
+    assert _st(root, '--merge', '--head', HEAD) == cli.OK
+    assert called == [rec['name']]
+
+
+def test_identity_failure_never_falls_back_to_environment_for_mutation(store, monkeypatch):
+    from shantytown import actor_identity
+    root, _, launched = store
+    monkeypatch.setenv('SHANTY_AGENT', 'boss')
+    def unavailable():
+        raise actor_identity.IdentityError('identity service unavailable')
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', unavailable)
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1') == cli.REFUSED
+    assert not launched and not eph.records(root)
+
+
+@pytest.mark.parametrize('actor', ['boss', None])
+def test_unmigrated_cli_can_spawn_stop_and_report_with_legacy_guards(store, monkeypatch, actor):
+    from shantytown import actor_identity
+    root, panes, launched = store
+    # Exercise the real resolver against a genuinely absent policy, not a
+    # mocked None result. Never inspect or change the host's actual policy.
+    resolver = REAL_AUTHENTICATED_ACTOR
+    monkeypatch.setattr(actor_identity, 'POLICY_PATH', root / 'absent-identity.json')
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', resolver)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nunattended = false\n')
+    assert config.load(root).ephemeral.require_verified_identity is False
+    if actor:
+        monkeypatch.setenv('SHANTY_AGENT', actor)
+    else:
+        monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-legacy') == cli.OK
+    rec, = eph.records(root)
+    assert launched
+    assert _st(root, '--stop', rec['name']) == cli.OK
+    assert eph.read(root, rec['name'])['state'] == eph.DONE
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-report') == cli.OK
+    rec = next(r for r in eph.records(root) if r['state'] == eph.LIVE)
+    monkeypatch.setenv('SHANTY_AGENT', rec['name'])
+    monkeypatch.chdir(rec['workspace'])
+    assert _st(root, '--report', '--verdict', 'done', '--dry-run') == cli.OK
+    # Clearing the declaration cannot escape the workspace restriction.
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-nested') == cli.REFUSED
+
+
+def test_verified_identity_setting_rejects_non_boolean(store):
+    root, _, _ = store
+    (root / 'shantytown.toml').write_text('[ephemeral]\nrequire_verified_identity = "yes"\n')
+    with pytest.raises(config.ConfigError, match='require_verified_identity'):
+        config.load(root)
