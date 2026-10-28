@@ -528,10 +528,12 @@ def _lane_rows(out: _Out, lane: str, *, verdict, utilization, readings,
     out.add("st_governor_blocked_agents", blocked, **lb)
     out.add("st_governor_setpoint_delta", setpoint_delta, **lb)
 
+    # Every counted lane needs an explicit knownness sample, including a blind
+    # lane with no utilization object. Numeric advice still requires a decision.
+    known = utilization is not None and utilization.advice is not None
+    out.add("st_governor_recommendation_known", known, **lb)
     if utilization is not None:
         out.add("st_governor_ready_work", utilization.ready, **lb)
-        known = utilization.advice is not None
-        out.add("st_governor_recommendation_known", known, **lb)
         # OMITTED, not zero, when the answer is "cannot tell" — see the module
         # docstring.  A hold is a decision; an unreadable input is not.
         if known:
