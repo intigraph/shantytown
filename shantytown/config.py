@@ -141,6 +141,25 @@ class Hibernate:
 
 
 @dataclass(frozen=True)
+class Ephemeral:
+    """[ephemeral] — bounds on `st agent spawn --ephemeral` (aegis-c01c.2).
+
+    Every number here is a SUPERVISION bound, not a tuning knob: Gas Town's
+    polecats were retired partly because a spawned worker could outlive its
+    job, spend without limit and fan out unseen. Defaults are deliberately
+    small; `max_agents = 0` turns spawning off. docs/ephemeral-agents.md.
+    """
+    max_agents: int = 2
+    lifetime_minutes: int = 60
+    max_turns: int = 40
+    max_context_k: int = 300
+    merge_spacing_minutes: int = 10
+    # None = inherit the administrator card's `dangerous` posture.
+    unattended: bool | None = None
+    harness_by_job: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Fleet:
     """Fleet-wide state that Rule Zero must respect (GitHub #29, #23).
 
@@ -254,6 +273,7 @@ class Config:
     # [cycle_advice] — keep-or-cycle tunables. Inert with no signal posted: the
     # table only prices a signal something outside st chose to send.
     cycle_advice: CycleAdvicePolicy = field(default_factory=CycleAdvicePolicy)
+    ephemeral: Ephemeral = field(default_factory=Ephemeral)
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -377,7 +397,8 @@ def load_or_default(root) -> tuple[Config, str | None]:
 _TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory"}
+             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory",
+             "ephemeral"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -489,6 +510,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   hostmem=_hostmem(path, _table(path, data, "hostmem")),
                   dream=_dream(path, _table(path, data, "dream")),
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
+                  ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
                   path=path)
 
 
@@ -1095,6 +1117,37 @@ class TomlRegistry:
 
 
 _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
+
+
+_EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
+                   "merge_spacing_minutes", "unattended", "harness_by_job"}
+EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
+
+
+def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
+    _refuse_unknown(path, "ephemeral", tbl, _EPHEMERAL_KEYS)
+    values = {}
+    for key in ("max_agents", "lifetime_minutes", "max_turns", "max_context_k",
+                "merge_spacing_minutes"):
+        value = tbl.get(key, getattr(Ephemeral, key))
+        # max_agents and spacing may be 0 (off / no gap); a zero lifetime or
+        # budget would end every job at its first stop, which is a typo.
+        floor = 0 if key in ("max_agents", "merge_spacing_minutes") else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+            raise ConfigError(f"{path}: ephemeral.{key} must be an integer >= {floor}, "
+                              f"got {value!r}")
+        values[key] = value
+    unattended = tbl.get("unattended")
+    if unattended is not None and not isinstance(unattended, bool):
+        raise ConfigError(f"{path}: ephemeral.unattended must be true or false")
+    by_job = tbl.get("harness_by_job", {})
+    if not isinstance(by_job, dict):
+        raise ConfigError(f"{path}: [ephemeral.harness_by_job] must be a table")
+    _refuse_unknown(path, "ephemeral.harness_by_job", by_job, set(EPHEMERAL_JOBS))
+    for job, harness in by_job.items():
+        if not isinstance(harness, str) or not harness.strip():
+            raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    return Ephemeral(unattended=unattended, harness_by_job=dict(by_job), **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:

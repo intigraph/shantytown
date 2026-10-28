@@ -317,18 +317,25 @@ def test_a_broken_plate_read_fails_open_loudly(tmp_path, monkeypatch, capsys):
     assert "P0-plate read FAILED" in capsys.readouterr().err
 
 
-def test_ephemeral_slots_are_zero_until_the_module_lands(tmp_path):
+def test_live_ephemeral_jobs_use_up_slots(tmp_path):
+    """The module landed (aegis-c01c.2): slots are the cap minus live jobs."""
+    from shantytown import ephemeral
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 1\n")
+    assert sp.ephemeral_free_slots(tmp_path) == 1
+    ephemeral.write(tmp_path, {"name": "eph-task-abcdef", "state": ephemeral.LIVE})
     assert sp.ephemeral_free_slots(tmp_path) == 0
 
 
 def test_ephemeral_slots_plug_in(tmp_path, monkeypatch):
-    import sys
-    import types
-    fake = types.ModuleType("shantytown.ephemeral")
-    fake.free_slots = lambda root: 3
-    monkeypatch.setitem(sys.modules, "shantytown.ephemeral", fake)
+    from shantytown import ephemeral
+    # aegis-c01c.2 landed the real plug: the cap minus live jobs.
+    assert sp.ephemeral_free_slots(tmp_path) == 2           # default max_agents
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 0\n")
+    assert sp.ephemeral_free_slots(tmp_path) == 0
+    monkeypatch.setattr(ephemeral, "free_slots", lambda root: 3)
     assert sp.ephemeral_free_slots(tmp_path) == 3
-    fake.free_slots = lambda root: (_ for _ in ()).throw(OSError("x"))
+    monkeypatch.setattr(ephemeral, "free_slots",
+                        lambda root: (_ for _ in ()).throw(OSError("x")))
     assert sp.ephemeral_free_slots(tmp_path) == 0
 
 

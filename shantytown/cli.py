@@ -1,10 +1,10 @@
-"""st — the CLI. Seven verbs, five groups, thirty-nine grouped commands: forty-six, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Seven verbs, five groups, forty grouped commands: forty-seven, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
-    agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
+    agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
@@ -35,6 +35,14 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`agent spawn` earned the forty-seventh slot (aegis-c01c.2, Stiwi 2026-10-28: "I
+would like for st to support ephemeral agents that can handle pr reviews and merging
+and whatnot", "managed by the administrator"). It is a command and not a flag on
+`new` because `new` launches a card that already exists and refuses nothing about
+its lifetime; spawn MINTS a card, owns its whole life (admission, deadline, budget,
+report, teardown) and is the one place those supervision rules live.
+docs/ephemeral-agents.md.
 
 `fleet watch` earned the fortieth slot (aegis-az0a40, Stiwi 2026-09-29: "You should
 have an alert for this. And she should have an alert for if you can't be contacted.
@@ -1398,7 +1406,7 @@ from .surface import SURFACE, GROUP_OF  # noqa: E402
 
 _GROUP_HELP = {
     "work": "the item and the board: item, repool, defer, cost, dream, triage, jobs",
-    "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
+    "agent": "one agent: new, spawn, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
     "repo": "a shared project repo: worktree, push, context, pr",
     "ops": "the installation: doctor, provision, subscribe, hooks, help",
@@ -1776,6 +1784,41 @@ def build_parser() -> argparse.ArgumentParser:
     nw.add_argument("agent")
     nw.add_argument("-n", "--dry-run", action="store_true")
     _add_despite_hold(nw)
+
+    # aegis-c01c.2: ephemeral, administrator-managed agents for one job.
+    sp = leaf("spawn", help="ephemeral agent for one job (review, merge, triage, task), "
+                            "managed by the administrator; docs/ephemeral-agents.md")
+    sp_mode = sp.add_mutually_exclusive_group(required=True)
+    sp_mode.add_argument("--ephemeral", action="store_true",
+                         help="spawn one: needs --job and --item")
+    sp_mode.add_argument("--list", action="store_true", help="live and recent jobs")
+    sp_mode.add_argument("--stop", metavar="NAME", help="end a job now: report, tear down")
+    sp_mode.add_argument("--retry", metavar="NAME", help="end it if live, spawn the same job again")
+    sp_mode.add_argument("--report", action="store_true",
+                         help="run BY the ephemeral agent: post its verdict and end")
+    sp_mode.add_argument("--reap", action="store_true",
+                         help="end dead or expired jobs (st fleet tend runs this)")
+    sp_mode.add_argument("--merge", action="store_true",
+                         help="run BY a merge job: the guarded merge of its own PR "
+                              "(lane, pinned head, green CI, non-author approval)")
+    sp.add_argument("--head", default=None, help="with --merge: the verified 40-hex head SHA")
+    sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
+    sp.add_argument("--item", help="the work item this job reports on")
+    sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
+    # dest is NOT `repo`: the top-level --repo is the tracker store directory.
+    sp.add_argument("--repo", dest="pr_repo", default=None, metavar="OWNER/NAME",
+                    help="GitHub repository the job works on")
+    sp.add_argument("--pr", type=int, default=None, help="pull request number")
+    sp.add_argument("--checkout", type=Path, default=None,
+                    help="local shared checkout to cut the worktree from "
+                         "(default: $GT_ROOT/<name>, else a scratch dir)")
+    sp.add_argument("--verdict", choices=("approve", "request-changes", "merged", "blocked",
+                                          "done", "failed"))
+    sp_sum = sp.add_mutually_exclusive_group()
+    sp_sum.add_argument("--summary", default=None)
+    sp_sum.add_argument("--summary-file", type=Path, default=None, help="file, or - for stdin")
+    sp.add_argument("--json", action="store_true", help="with --list: machine-readable")
+    sp.add_argument("-n", "--dry-run", action="store_true")
 
     hz = leaf(
         "harness",
@@ -2615,7 +2658,7 @@ def _main(a, argv: list[str] | None = None) -> int:
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
     with command_environment(a.root, a.root_how, refresh_config=(
-            a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
+            a.cmd in {"new", "spawn", "start", "cycle", "attach", "harness", "provision",
                       "tend", "window"})):
         try:
             from .actor_identity import authenticated_actor, IdentityError
@@ -2740,6 +2783,8 @@ def _run_command(a) -> int:
         return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
+    if a.cmd == "spawn":
+        return _cmd_spawn(a)
     if a.cmd == "harness":
         return _cmd_harness(a)
     if a.cmd == 'account':
@@ -3259,6 +3304,352 @@ def _cmd_new(a) -> int:
         return REFUSED
     runtime = _runtime(a, panes)
     return _launch(a, card, panes, runtime, dry_run=a.dry_run)
+
+
+# --- st agent spawn: ephemeral agents (aegis-c01c.2) ---------------------------
+
+def _spawn_actor() -> str | None:
+    from .actor_identity import authenticated_actor
+    return authenticated_actor() or os.environ.get("SHANTY_AGENT") or None
+
+
+def _spawn_inside(a) -> str | None:
+    """The live ephemeral job this process runs inside, read from cwd and
+    process ancestry — never from $SHANTY_AGENT alone, which a pane can unset."""
+    from . import ephemeral as eph
+    if not eph.live(a.root):
+        return None
+    panes = _panes(a)
+    reader = getattr(panes, "_pane_pid", None) or (lambda _s: None)
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path("/")
+    return eph.inside_ephemeral(a.root, cwd=cwd, ancestors=eph.ancestor_pids(),
+                                pane_pid=reader)
+
+
+def _gh_json(*args):
+    import subprocess
+    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"gh api {args[0]} failed: {(r.stderr or '').strip()[:160]}")
+    return json.loads(r.stdout)
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None) -> int:
+    """The ONLY merge path a merge job is given. Every condition the prompt
+    states is re-checked here, in code, against fresh forge reads."""
+    from . import ephemeral as eph
+    rec = eph.read(a.root, me)
+    if rec is None or rec.get("job") != "merge":
+        raise eph.Refused(eph.merge_gate(rec, a.head or "", {}, [], []))
+    repo, pr = rec["repo"], rec["pr"]
+    head = a.head or ""
+    info = gh(f"repos/{repo}/pulls/{pr}")
+    reviews = gh(f"repos/{repo}/pulls/{pr}/reviews?per_page=100")
+    sha = (info.get("head") or {}).get("sha") or ""
+    checks = (gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100").get("check_runs", [])
+              if sha else [])
+    if why := eph.merge_gate(rec, head, info, reviews, checks):
+        raise eph.Refused(why)
+    if a.dry_run:
+        print(f"would merge {repo}#{pr} at {head}")
+        return OK
+    import subprocess
+    run = run or subprocess.run
+    r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash",
+             "--match-head-commit", head], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
+    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    return OK
+
+
+def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:
+    """(this host's administrator, its `dangerous` posture). Host-scoped: a
+    multi-tenant store can hold another host's administrator card."""
+    host = cfg.host_name
+    for card in files.all().exact():
+        if card.role == "administrator" and getattr(card, "host", None) in (None, host):
+            return card.name, bool(card.dangerous)
+    return None, False
+
+
+def _spawn_governor_refusal(a, card) -> str:
+    """The usage governor's say, for an ephemeral launch. FAILS CLOSED, unlike a
+    crew relaunch: an ephemeral job is optional work, and launching one we
+    cannot account for is exactly the unsupervised spend this feature forbids."""
+    try:
+        cfg, governors = _governors(a)
+        if not governors:
+            return ""
+        lane, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        verdict = unconfigured or (governor.evaluate(persist=False) if governor else None)
+        if verdict is None:
+            return ""
+        if why := verdict.excludes(card, _catalog(a)):
+            return "governor: " + why
+        cap = verdict.max_agents
+        if cap is not None:
+            live = _live_by_governor(_registry(a).all().exact(), _panes(a), cfg,
+                                     governors, a.root)
+            key = lane if lane in governors else "base"
+            if live.get(key, 0) >= cap:
+                return (f"governor lane {key} is at its cap ({live.get(key, 0)}/{cap} "
+                        "live); refused, not queued")
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        return f"governor admission could not be established ({type(exc).__name__})"
+
+
+def _spawn_checkout(rec) -> Path | None:
+    """The shared checkout to cut a worktree from, or None for a scratch dir."""
+    if rec.get("checkout"):
+        return Path(rec["checkout"]).expanduser()
+    if rec.get("repo"):
+        candidate = _resolve_repo(rec["repo"].split("/", 1)[1])
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _spawn_item_comment(a):
+    from .work_item import _comments, exact
+
+    def comment(item_id, body):
+        # Built HERE, not before: a tracker that cannot be reached must cost
+        # only the comment leg, never the event or the teardown (notify()).
+        tracker = _tracker(a)
+        exact(tracker, item_id)
+        _comments(tracker, item_id, body)
+    return comment
+
+
+def _spawn_end(a, name, verdict, summary, cause, *, detached):
+    """Every ending goes through here: result once, report, teardown."""
+    from . import ephemeral as eph
+    from .events import FilesEvents
+    events = FilesEvents(Path(a.root) / "events")
+    panes = _panes(a)
+
+    def kill(session):
+        try:
+            from . import codex_daemon
+            codex_daemon.stop_owned(name)
+        except Exception:  # noqa: BLE001 — a missing daemon is the goal state
+            pass
+        panes.kill_session(session)
+
+    def schedule(n):
+        if detached:
+            eph.detached_teardown(a.root, n)
+        else:
+            eph.teardown(a.root, n, kill_session=kill)
+    rec = eph.read(a.root, name)
+    if rec is None:
+        raise eph.Refused(f"no ephemeral job named {name}")
+    if verdict is None:                   # an interrupted teardown: finish it only
+        schedule(name)
+        return rec, []
+    rec, problems = eph.finish(a.root, name, verdict, summary, cause,
+                               persist_event=events.persist,
+                               comment=_spawn_item_comment(a),
+                               schedule_teardown=schedule, now=time.time())
+    # A synchronous teardown has rewritten the ledger; hand back what it says.
+    return (rec if detached else eph.read(a.root, name) or rec), problems
+
+
+def _spawn_summary(a) -> str:
+    if getattr(a, "summary_file", None) is not None:
+        return sys.stdin.read() if str(a.summary_file) == "-" else a.summary_file.read_text()
+    return a.summary or ""
+
+
+def _cmd_spawn(a) -> int:
+    """`st agent spawn` — ephemeral, administrator-managed agents. Rules and the
+    lifecycle are in ephemeral.py and docs/ephemeral-agents.md; this wires them
+    to the real launcher, panes, tracker and event store."""
+    from . import ephemeral as eph
+    from .protocols import Agent
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  refused: {err}", file=sys.stderr)
+        return REFUSED
+    policy = cfg.ephemeral
+    files = FilesRegistry(Path(a.root) / "crew")
+
+    def role_of(name):
+        for reg in (files, _registry(a)):
+            try:
+                return reg.get(name).role
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+    try:
+        actor = _spawn_actor()
+        inside = _spawn_inside(a)
+        if a.list:
+            recs = eph.records(a.root)
+            if a.json:
+                print(json.dumps(recs, indent=2, sort_keys=True))
+            else:
+                lines = eph.render(recs, time.time())
+                print("\n".join("  " + line for line in lines) if lines
+                      else "  no ephemeral jobs.")
+            return OK
+        if a.report:
+            # Only the job itself reports its verdict. Identity is the pane's
+            # SHANTY_AGENT, checked against the ledger: a stray report from a
+            # crew pane cannot end someone else's job.
+            # The process must BE the job (its workspace or its pane's process
+            # tree). $SHANTY_AGENT alone is settable by any pane, so a crew pane
+            # exporting another job's name could forge that job's verdict.
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT") or actor
+            if not me or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--report is run by an ephemeral agent from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot report as {claimed}")
+            if not a.verdict:
+                raise eph.Refused("--report needs --verdict")
+            if a.dry_run:
+                print(f"would report {me}: {a.verdict}")
+                return OK
+            rec, problems = _spawn_end(a, me, a.verdict, _spawn_summary(a), "report",
+                                       detached=True)
+            for p in problems:
+                print(f"  ⚠ {p}", file=sys.stderr)
+            print(f"  reported {rec['result']['verdict']} to {rec['administrator']} and "
+                  f"{rec['item']}; this session is being torn down.")
+            return OK if not problems else CANNOT_TELL
+        if a.merge:
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT")
+            if not me or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--merge is run by a merge job from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot merge as {claimed}")
+            return _spawn_merge(a, me)
+        # An ephemeral process that unset $SHANTY_AGENT is still that job.
+        eph.authority(inside or actor, role_of)
+        if a.reap:
+            return _spawn_reap(a, dry_run=a.dry_run)
+        if a.stop:
+            rec = eph.read(a.root, a.stop)
+            if rec is None or rec.get("state") == eph.DONE:
+                raise eph.Refused(f"{a.stop} is not a live ephemeral job")
+            if a.dry_run:
+                print(f"would stop {a.stop}")
+                return OK
+            rec, problems = _spawn_end(a, a.stop, "failed",
+                                       f"stopped by {actor or 'operator'}", "stopped",
+                                       detached=False)
+            for p in problems:
+                print(f"  ⚠ {p}", file=sys.stderr)
+            print(f"  stopped {a.stop}; worktree {rec.get('workspace_teardown', '?')}")
+            return OK
+        retry_of, attempt = None, 1
+        if a.retry:
+            old = eph.read(a.root, a.retry)
+            if old is None:
+                raise eph.Refused(f"no ephemeral job named {a.retry}")
+            attempt = int(old.get("attempt", 1)) + 1
+            if attempt > eph.MAX_ATTEMPTS:
+                raise eph.Refused(f"{a.retry} already ran {attempt - 1} attempts; "
+                                  "a fourth is a decision for the administrator, not a retry")
+            if old.get("state") != eph.DONE and not a.dry_run:
+                _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor or 'operator'})",
+                           "retried", detached=False)
+            req = eph.Request(job=old["job"], item=old["item"], harness=old["harness"],
+                              repo=old.get("repo"), pr=old.get("pr"),
+                              checkout=old.get("checkout"))
+            retry_of = a.retry
+        else:
+            if not a.ephemeral or not a.job or not a.item:
+                raise eph.Refused("spawn needs --ephemeral --job <kind> --item <id>")
+            req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
+                              pr=a.pr, checkout=str(a.checkout) if a.checkout else None)
+        admin, admin_dangerous = _spawn_administrator(files, cfg)
+        unattended = admin_dangerous if policy.unattended is None else policy.unattended
+        with eph.lock(a.root):
+            rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
+                           administrator=admin, host=cfg.host_name, now=time.time(),
+                           role_of=role_of, attempt=attempt, retry_of=retry_of)
+            known = {h.name for h in harness_mod.all_harnesses()}
+            if rec["harness"] not in known:
+                raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "
+                                  f"{', '.join(sorted(known))}")
+            probe = Agent(name=rec["name"], role="worker", roles=("worker", "first"),
+                          harness=rec["harness"], host=rec["host"],
+                          reports_to=rec["administrator"])
+            if refusal := _spawn_governor_refusal(a, probe):
+                raise eph.Refused(refusal)
+            shared = _spawn_checkout(rec)
+            if a.dry_run:
+                print(f"would spawn {rec['name']} ({rec['job']} on {rec['item']}, "
+                      f"{rec['harness']}, worktree of {shared or 'scratch'}, "
+                      f"reports to {rec['administrator']})")
+                print(eph.prompt(rec))
+                return OK
+            if shared is not None:
+                from .workspace import ensure_worktree
+                rec["workspace"] = ensure_worktree(shared, rec["name"])
+                rec["worktree_of"] = str(shared)
+            else:
+                scratch = eph.ledger_dir(a.root) / "scratch" / rec["name"]
+                scratch.mkdir(parents=True, exist_ok=True)
+                rec["workspace"] = str(scratch)
+            # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
+            # report and a teardown, including a launch that is refused.
+            eph.write(a.root, rec)
+            files.root.mkdir(parents=True, exist_ok=True)
+            (files.root / f"{rec['name']}.json").write_text(
+                json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
+        card = files.get(rec["name"])
+        panes = _panes(a)
+        a._startup_delivered = False
+        rc = _launch(a, card, panes, _runtime(a, panes))
+        if rc == REFUSED:
+            _spawn_end(a, rec["name"], "failed", "launch refused (see the spawner's stderr)",
+                       "launch refused", detached=False)
+            return REFUSED
+        if not a._startup_delivered:
+            # A pane that never received its job would idle at turn 0 until the
+            # deadline. End it now and say so; never leave an unfed agent up.
+            _spawn_end(a, rec["name"], "failed", "job prompt not delivered to the pane",
+                       "launch failed", detached=False)
+            print(f"  refused: {rec['name']} came up but its job was not delivered; "
+                  "ended and reported", file=sys.stderr)
+            return CANNOT_TELL
+        eph.mark_live(a.root, rec["name"])
+        print(f"  spawned {rec['name']}: {rec['job']} on {rec['item']} "
+              f"({rec['harness']}), reports to {rec['administrator']}, "
+              f"ends by {time.strftime('%H:%MZ', time.gmtime(rec['deadline']))}")
+        # Delivered is what spawn promises. Unverifiable hooks (every macOS
+        # launch) are a note, not a failure: tend enforces the deadline.
+        return OK
+    except eph.Refused as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+
+def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
+    """End dead or expired ephemeral jobs. Code-side: st fleet tend calls this
+    every pass, so no agent ever polls for it (DIRECTIVE 10/9)."""
+    from . import ephemeral as eph
+    panes = _panes(a)
+
+    def end(name, verdict, cause):
+        _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
+                   detached=False)
+    lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
+                     dry_run=dry_run)
+    for line in lines:
+        print(f"  ephemeral: {line}", file=sys.stderr)
+    if not lines and not quiet:
+        print("  ephemeral: nothing to reap")
+    return OK
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
@@ -3970,8 +4361,18 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     ledger_ok = _record_launch_unretirement(a, card)
     if _observe_live(runtime, panes, session, card):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
+        from . import ephemeral as _eph
         if verified == OK:
-            _deliver_startup_inbox(a, card, panes, session)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+        elif verified == CANNOT_TELL and _eph.is_ephemeral_name(card.name):
+            # ON macOS HOOKS ARE UNREADABLE, NOT ABSENT (no /proc), so
+            # verification is CANNOT_TELL for every launch there. Withholding an
+            # ephemeral job's prompt on that left the pane idle at turn 0 until
+            # the reaper's deadline (live run, 10/28). Deliver it: the job's
+            # bounds do not depend on its hooks — tend reaps it at the deadline.
+            print(f"  ephemeral {card.name}: hooks unverifiable here; delivering the "
+                  "job anyway (tend enforces its deadline).", file=sys.stderr)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
         return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -4047,7 +4448,10 @@ def _startup_inbox_batch(unread, budget: int = _STARTUP_INBOX_MAX_CHARS):
     return batch, list(unread[len(batch):])
 
 
-def _deliver_startup_inbox(a, card, panes, session: str) -> None:
+_STARTUP_VERIFY_LOOKS = 8
+
+
+def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     """Inject unread durable mail into a verified new session, then acknowledge it.
 
     This is deliberately after process + hook verification.  A session existing is
@@ -4063,13 +4467,23 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     # context despite configured hooks. Use the verified initial-input rail,
     # combining anchor and mail so we never submit two competing startup turns.
     anchor = ""
-    if (harness_mod.name_for(card, root=a.root) == "codex"
+    from . import ephemeral as _eph
+    job = _eph.read(a.root, card.name) if _eph.is_ephemeral_name(card.name) else None
+    if job is not None:
+        # AN EPHEMERAL AGENT'S FIRST TURN IS ITS JOB (aegis-c01c.2). It has no
+        # plate and no mail: the job prompt replaces the anchor, and it rides the
+        # same verified rail so "launched" still means "the job was delivered".
+        anchor = _eph.prompt(job)
+    elif (harness_mod.name_for(card, root=a.root) == "codex"
             or card.role == "administrator"):
         from . import session_anchor
         anchor = session_anchor.render(str(a.root), card.name)
     try:
-        box = _inbox(a, default="beads")
-        unread = box.unread(card.name)
+        if job is not None:
+            box, unread = None, []
+        else:
+            box = _inbox(a, default="beads")
+            unread = box.unread(card.name)
     except Exception as e:  # noqa: BLE001 -- launch succeeded; durability survives
         print(f"  ⚠ startup inbox unreadable for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); pointers remain open.",
@@ -4110,15 +4524,21 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
         panes.send(session, attribute(prompt, "st startup"))
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
-        time.sleep(0.35)
-        screen = panes.capture(session, history=200)
+        # A few patient looks, not one: a long block (an ephemeral job prompt)
+        # was still rendering at 0.35s on macOS and a delivered job read as
+        # undelivered (live run, aegis-c01c.2). Stops at the first sighting.
+        for _look in range(_STARTUP_VERIFY_LOOKS):
+            time.sleep(0.35)
+            screen = panes.capture(session, history=200)
+            if marker in screen:
+                break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
     if (marker not in screen or input_stranded(screen)
-            or (anchor and session_anchor.BANNER not in screen)):
+            or (anchor and job is None and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
               f"pointer(s) remain open.", file=sys.stderr)
@@ -4137,7 +4557,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
 
     if not ids:
         print(f"  startup anchor: verified context for {card.name}.")
-        return
+        return True
     try:
         marked = box.mark_read(card.name, ids=ids)
     except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
@@ -4153,6 +4573,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     held_note = f"; {len(held)} held for the next launch" if held else ""
     print(f"  startup inbox: delivered and closed {len(marked)} verified "
           f"pointer(s) for {card.name}{held_note}.")
+    return True
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
@@ -6596,6 +7017,10 @@ def _cmd_anchor(a) -> int:
     from . import feed_hold
     if feed_note := feed_hold.reason(a.root, me):
         print(f"  {me}: {feed_note}")
+    if p.me.role == "administrator":
+        from . import ephemeral as _eph
+        for line in _eph.render(_eph.live(a.root), time.time()):
+            print(f"  ephemeral: {line}")
     from . import context_hint
     if context_label := context_hint.crew_label(a.root, registry.get(me)):
         print(f"  {me}: {context_label}")
@@ -7507,7 +7932,10 @@ def _cmd_crew(a) -> int:
         if work.endswith("sh"):
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
-            free.append(ag.name)
+            # An idle ephemeral agent is between turns of ITS job, not free
+            # for board work (aegis-c01c.2); it is listed on its own line.
+            if not ag.name.startswith("eph-"):
+                free.append(ag.name)
         elif work == "stalled":
             stalled.append(ag.name)
         elif work.startswith(triage_mod.BUSY):
@@ -7654,6 +8082,11 @@ def _cmd_crew(a) -> int:
         names = [n for n, _ in deliberate]
         print(f"    `st agent new <agent>` brings one back. "
               f"{tend_fate(launches, names[0] if len(names) == 1 else '<agent>')}")
+    from . import ephemeral as _eph
+    if eph_line := _eph.summary_line(a.root):
+        # Visible here and on the administrator's anchor (aegis-c01c.2): an
+        # ephemeral agent nobody can see is the polecat failure again.
+        print(f"  {eph_line}")
     if codex_blocked:
         print(f"  ⚠ {len(codex_blocked)} codex-daemon-wedged launch blocker(s):")
         for name, why in codex_blocked:
@@ -13095,6 +13528,13 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 def _tend_once(a, quiet: bool = False) -> int:
     from . import account_state
+    # REAP FIRST, before every early return (a maintenance window, a hold, an
+    # unreadable registry): an expired ephemeral job must not outlive its
+    # deadline for as long as some unrelated hold lasts (aegis-c01c.2).
+    try:
+        _spawn_reap(a, dry_run=getattr(a, "dry_run", False), quiet=True)
+    except Exception as exc:  # noqa: BLE001 — a reap fault must not stop supervision
+        print(f"  ⚠ ephemeral reap failed ({type(exc).__name__}: {exc})", file=sys.stderr)
     if (rc := _window_launch_gate(a)) is not None:
         return rc
     # Best-effort sweeps shed by the pass budget (aegis-qwadc). Declared HERE
@@ -13416,7 +13856,13 @@ def _tend_once(a, quiet: bool = False) -> int:
         except fg.AdmissionUnavailable as exc:
             print('  held: administrator launch serialization: ' + str(exc), file=sys.stderr)
             return CANNOT_TELL
-    workers = [card for card in agents if card not in administrators]
+    # EPHEMERAL CARDS ARE NEVER RESPAWNED (aegis-c01c.2). A dead or expired
+    # ephemeral agent is REAPED instead: its result is reported to the
+    # administrator and it is torn down. Respawning one is exactly how a spawned
+    # worker escapes supervision, which is why Gas Town's polecats were retired.
+    from . import ephemeral as _eph
+    workers = [card for card in agents if card not in administrators
+               and not _eph.is_ephemeral_name(card.name)]
     tend_admission = None
     try:
         with _held_admission(a, fg.admission_lock(

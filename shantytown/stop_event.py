@@ -340,6 +340,14 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     if root is not None:
         from .stop_failure import clear_recovered
         clear_recovered(root, me)
+    from .ephemeral import is_ephemeral_name
+    if is_ephemeral_name(me):
+        # AN EPHEMERAL AGENT'S TURN BOUNDARY IS NOT A CREW STOP (aegis-c01c.2).
+        # Its one report to the administrator is the job RESULT; a per-turn
+        # stop event rendered as "STOPPED — re-dispatch". Only its bounds run here.
+        if root is not None:
+            _ephemeral_bounds(root, me, _my_context_k(reg, panes, me))
+        return 0
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -427,6 +435,49 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           + "".join(f" [PLATE INCOMPLETE: {n}]" for n in plate_notes),
           file=sys.stderr)
     return 0
+
+
+def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
+                      end=None) -> str | None:
+    """Enforce an ephemeral agent's bounds at its own turn boundary (aegis-c01c.2).
+
+    EVENT-DRIVEN, not polled: every Stop counts a turn and checks the deadline,
+    turn and context budgets. The FIRST time a bound is hit the agent is told,
+    once, to report now (so the administrator gets a real summary, not just
+    "timeout"). The NEXT stop past a bound ends the job here, from the hook:
+    result, administrator event, item comment, detached teardown. `st fleet tend`
+    is the backstop for an agent that never stops again.
+    """
+    from . import ephemeral as eph
+    if not eph.is_ephemeral_name(me):
+        return None
+    try:
+        now = time.time() if now is None else now
+        cause = eph.on_stop(root, me, context_k, now)
+        if not cause:
+            return None
+        rec = eph.read(root, me)
+        if not rec.get("bound_warned"):
+            rec["bound_warned"] = cause
+            eph.write(root, rec)
+            reason = (f"EPHEMERAL BOUND REACHED ({cause}). Stop working now and report "
+                      f"exactly once: `st agent spawn --report --verdict <blocked|done|...> "
+                      f"--summary-file -` with what you found. Your next stop ends this "
+                      f"job either way.")
+            print(json.dumps({"decision": "block", "reason": reason}))
+            return "warned"
+        if end is None:
+            from . import cli
+            a = cli._parse_args(["--root", str(root), "agent", "spawn", "--list"])
+            a.root, a.registry = Path(root), None
+            end = lambda name, verdict, summary, why: cli._spawn_end(
+                a, name, verdict, summary, why, detached=True)
+        end(me, "failed", f"ended by its own bounds ({cause}) without reporting", cause)
+        return "ended"
+    except Exception as exc:  # noqa: BLE001 — tend's reaper remains the backstop
+        print(f"stop_event: ephemeral bounds UNKNOWN for {me}: {type(exc).__name__}",
+              file=sys.stderr)
+        return None
 
 
 # --- the HAUL advance (the sequenced-worker self-feed) -----------------------
@@ -931,13 +982,20 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     events = [e for e in events if e.reason != 'delivery-stalled']
     delivery_lines = ['⚠ Unconfirmed message delivery — inspect retained inbox/input:'] if stalled else []
     delivery_lines += [f'  - {e.frm} ({_age(e.ts, now)}): {e.detail}' for e in stalled]
+    results = [e for e in events if e.reason == "ephemeral-result"]
+    events = [e for e in events if e.reason != "ephemeral-result"]
+    result_lines = (["Ephemeral job results — FINISHED jobs (verdict + item), not crew "
+                     "to re-dispatch; the agents are already torn down:"]
+                    if results else [])
+    result_lines += [f"  - {e.item or '?'} ({_age(e.ts, now)}): {e.detail}"
+                     for e in sorted(results, key=lambda e: (e.ts, e.id))]
     failures = [e for e in events if e.reason == "job-failed"]
     events = [e for e in events if e.reason != "job-failed"]
     failure_lines = ["⚠ Scheduled job failures — inspect the named history; "
                      "these are alerts, not agent stops:"] if failures else []
     failure_lines += [f"  - {e.frm} ({_age(e.ts, now)}): {e.detail}"
                       for e in sorted(failures, key=lambda e: (e.ts, e.id))]
-    failure_lines = delivery_lines + failure_lines
+    failure_lines = result_lines + delivery_lines + failure_lines
     if not events:
         return "\n".join(failure_lines)
     latest: dict[str, StopEvent] = {}

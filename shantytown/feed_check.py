@@ -169,6 +169,7 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
     # level to match this function's other deferred imports and to keep
     # feed_check free of a top-level dependency on the supervisor.
     from .tend import is_retired
+    from .ephemeral import is_ephemeral_name
 
     dark = dark_agents()
     stamped = st_launched_agents(root) if root is not None else None
@@ -182,6 +183,9 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
         # tri-state (None = not expressed), and every consumer tests truthiness.
         if is_retired(ag):
             continue                     # deliberately stopped -> not a target
+        if is_ephemeral_name(ag.name):
+            continue                     # one job, then torn down: never board
+                                         # capacity (aegis-c01c.2)
         if haul_hold_reason(root, ag.name):
             continue
         if ag.name in dark:
