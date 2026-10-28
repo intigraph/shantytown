@@ -109,7 +109,7 @@ def test_a_changed_plate_or_capacity_re_arms_the_block():
     grown = _inp(p0_plate=[_p0(1), _p0(2)], capacity=SELF, p0_last=last)
     assert sp.decide(grown).block
     freed = _inp(p0_plate=[_p0(1)], p0_last=last,
-                 capacity=sp.Capacity(self_slots=1, free_crew=("lex",)))
+                 capacity=sp.Capacity(self_slots=2))
     assert sp.decide(freed).block
 
 
@@ -372,3 +372,117 @@ def test_config_refuses_a_bad_self_slot_count(tmp_path):
     (tmp_path / "shantytown.toml").write_text("[fleet]\nadmin_self_slots = -1\n")
     _cfg, err = config.load_or_default(tmp_path)
     assert err and "admin_self_slots" in str(err)
+
+
+# --- review follow-ups: host, supervised jobs, one snapshot -------------------
+
+def _host_config(root):
+    (root / "shantytown.toml").write_text(
+        '[host]\nname = "local"\n'
+        '[host.peers.remote]\nssh = "remote"\nroot = "/crew"\n')
+
+
+def test_peer_label_does_not_block_here_but_unlabelled_work_does(tmp_path, monkeypatch):
+    _gate(monkeypatch)
+    _host_config(tmp_path)
+    for labels, expected in [(["remote"], False), ([], True), (["unrelated"], True),
+                             (["local"], True)]:
+        inp = sp.gather(tmp_path, "hammond", reg=_Reg(), panes=object(),
+                        runtime=object(), events=_Events(),
+                        p0_reader=lambda: ([_row(1, owner="hammond", labels=labels)], []))
+        assert sp.decide(inp).block is expected
+
+
+def test_offhost_assignee_card_is_not_startable(tmp_path, monkeypatch):
+    from shantytown.protocols import Agent
+    _gate(monkeypatch)
+    _host_config(tmp_path)
+
+    class Reg(_Reg):
+        def get(self, name):
+            return Agent(name=name, role="administrator", pane="p", host="remote")
+
+    inp = sp.gather(tmp_path, "hammond", reg=Reg(), panes=object(),
+                    runtime=object(), events=_Events(),
+                    p0_reader=lambda: ([_row(1, owner="crew/hammond")], []))
+    assert inp.p0_plate == [] and not sp.decide(inp).block
+
+
+def test_live_job_holds_item_until_teardown_including_retry(tmp_path, monkeypatch):
+    from shantytown import ephemeral
+    _gate(monkeypatch)
+    (tmp_path / "shantytown.toml").write_text('[ephemeral]\nmax_agents = 3\n')
+    name = "eph-task-abcdef"
+    for state in (ephemeral.LAUNCHING, ephemeral.LIVE, ephemeral.ENDING, ephemeral.DONE):
+        ephemeral.write(tmp_path, {"name": name, "state": state, "item": "aegis-1"})
+        inp = sp.gather(tmp_path, "hammond", reg=_Reg(), panes=object(),
+                        runtime=object(), events=_Events(),
+                        p0_reader=lambda: ([_row(1), _row(2)], []))
+        assert [i.id for i in inp.p0_plate] == (
+            ["aegis-1", "aegis-2"] if state == ephemeral.DONE else ["aegis-2"])
+    ephemeral.write(tmp_path, {"name": "eph-task-fedcba", "state": ephemeral.LIVE,
+                               "item": "aegis-1"})
+    inp = sp.gather(tmp_path, "hammond", reg=_Reg(), panes=object(),
+                    runtime=object(), events=_Events(),
+                    p0_reader=lambda: ([_row(1)], []))
+    assert inp.p0_plate == [] and not sp.decide(inp).block
+
+
+def test_own_only_plate_ignores_crew_and_ephemeral_capacity_churn():
+    inp = _inp(p0_plate=[_p0(1)], capacity=SELF)
+    inp.p0_last = sp.p0_state(inp)
+    inp.capacity = sp.Capacity(self_slots=1, free_crew=("lex",), ephemeral_slots=3)
+    assert sp.decide(inp).by == sp.BY_P0_UNCHANGED
+
+
+def test_unassigned_only_plate_ignores_self_capacity_churn():
+    inp = _inp(p0_plate=[_p0(1, owner="")], capacity=EPH)
+    inp.p0_last = sp.p0_state(inp)
+    inp.capacity = sp.Capacity(self_slots=4, ephemeral_slots=2)
+    assert sp.decide(inp).by == sp.BY_P0_UNCHANGED
+
+
+def test_held_message_counts_each_item_once():
+    inp = _inp(free_feedable=["lex"], throttled=2, p0_held=2,
+               throttled_ids={"shared", "ordinary"}, p0_held_ids={"shared", "p0"})
+    verdict = sp.decide(inp)
+    assert verdict.by == sp.BY_THROTTLED and "3 ready item(s)" in verdict.reason
+
+
+def test_rule_zero_and_plate_share_one_scoped_board_read(tmp_path, monkeypatch):
+    from shantytown import feed_check
+    # Use the real gate: only pane/usage measurements are synthetic.
+    monkeypatch.setattr(sp, "_load_per_core", lambda: 0.0)
+    monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: ["lex"])
+    monkeypatch.setattr(feed_check, "worker_governor_admissions",
+                        lambda *a: {"lex": lambda item: "floor"})
+    monkeypatch.setattr(feed_check, "governor_admits", lambda root: lambda item: "floor")
+    reads = []
+
+    def read(root, reg, *, owners):
+        reads.append(owners)
+        assert len(reads) == 1, "second board read"
+        return [_row(1), _row(2, owner="hammond")], []
+
+    monkeypatch.setattr(feed_check, "queue_state", read)
+    inp = sp.gather(tmp_path, "hammond", reg=_Reg(), panes=object(),
+                    runtime=object(), events=_Events())
+    assert reads == [["hammond", "lex"]]
+    assert [i.id for i in inp.p0_plate] == ["aegis-2"]
+    assert inp.throttled_ids == inp.p0_held_ids == {"aegis-1"}
+
+
+
+def test_local_assignee_card_stays_startable(tmp_path, monkeypatch):
+    from shantytown.protocols import Agent
+    _gate(monkeypatch)
+    _host_config(tmp_path)
+
+    class Reg(_Reg):
+        def get(self, name):
+            return Agent(name=name, role="administrator", pane="p", host="local")
+
+    inp = sp.gather(tmp_path, "hammond", reg=Reg(), panes=object(),
+                    runtime=object(), events=_Events(),
+                    p0_reader=lambda: ([_row(1, owner="hammond")], []))
+    assert sp.decide(inp).block

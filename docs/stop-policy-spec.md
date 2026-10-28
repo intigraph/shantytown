@@ -116,7 +116,13 @@ into the future, owned by nobody or by the administrator, and passing
 message, ASK, decision-gated, unfeedable). Ordered by Seeds priority, then
 rank (`protocols.rank_order`), then id; the block names the top three.
 Unassigned items the governor's floor refuses are HELD, not plate — rank 5
-names them, exactly as for Rule Zero.
+names them, exactly as for Rule Zero; overlapping held IDs count only once.
+Items labelled with a configured peer host name, or assigned to a crew card
+whose declared host differs from this host, cannot start here. Ordinary labels
+and unlabelled, unassigned work stay eligible. Items held by launching, live or
+ending ephemeral job records are already being worked, even if the board still
+shows them as unassigned. They become eligible again after teardown, unless a
+retry job holds the same item.
 
 **Capacity** is one value with three sources, so new sources plug in as a
 number rather than as a new rank:
@@ -135,7 +141,9 @@ starts only its own items.
 `<root>/stop-policy/<agent>.p0.json` after the block. A later stop over the
 **same** state falls through to ranks 3–6 (so hibernate and event delivery
 behave as if the plate were empty) and the final allow names the plate as
-`p0-plate-unchanged`. Any change to the plate or to capacity re-arms it. The
+`p0-plate-unchanged`. Only relevant capacity changes re-arm it: free crew and
+ephemeral slots for unassigned work, self slots for the administrator's own
+work. Crew churn cannot re-arm an own-only plate. The
 ledger is untouched when a rank above 2a decided (2a never looked), kept while
 the plate is unchanged, and cleared when nothing is startable — a plate that
 empties and refills is a new state. A missing or unreadable ledger reads as
@@ -144,7 +152,9 @@ empties and refills is a new state. A missing or unreadable ledger reads as
 **Fail-open.** A failed board read leaves the plate empty and says
 `P0-plate read FAILED` on stderr; a failed ephemeral read counts 0 slots. When
 no capacity is possible (no free crew, no ephemeral slots, `admin_self_slots =
-0`) the board is not read at all.
+0`) the board is not read at all. When Rule Zero reads the board, it includes
+the administrator's scope and rank 2a reuses those rows, avoiding a second read
+and a second board snapshot.
 
 ### Inputs, gathered ONCE
 

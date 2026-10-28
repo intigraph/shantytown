@@ -670,7 +670,33 @@ def admitted_haul(beads, card, verdict, log, *, root=None):
     return admitted
 
 
-def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
+def startable_here(root, reg, rows):
+    """Exclude peer-host work and items already held by supervised jobs.
+
+    Host names are deployment identities, never inferred from the OS hostname.
+    Ordinary labels do not constrain execution; only known peer names do.
+    """
+    from . import config, ephemeral
+    cfg, err = config.load_or_default(root)
+    if err:
+        raise RuntimeError(err)
+    held = {job["item"] for job in ephemeral.live(root) if job.get("item")}
+    peers = set(cfg.host_peers)
+    out = []
+    for row in rows:
+        if row.get("id") in held or peers.intersection(row.get("labels") or []):
+            continue
+        owner = str(row.get("assignee") or "").rsplit("/", 1)[-1]
+        if owner:
+            card = reg.get(owner)
+            if card.host and card.host != cfg.host_name:
+                continue
+        out.append(row)
+    return out
+
+
+def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None,
+                *, queue_reader=None):
     """(free feedable workers, dispatchable ready beads, HELD-BY-GOVERNOR beads).
 
     The third value is the aegis-diasw fix and it is not decoration: with a tier
@@ -694,7 +720,9 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads, active = queue_state(root, reg, owners=free)
+    ready_beads, active = (queue_reader(owners=free) if queue_reader is not None
+                           else queue_state(root, reg, owners=free))
+    ready_beads = startable_here(root, reg, ready_beads)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
