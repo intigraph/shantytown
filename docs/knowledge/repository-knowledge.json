@@ -1,6 +1,6 @@
 {
-  "source_revision": "419ba16b6989044c8621ee5c93fc6e2b349448d5",
-  "reviewed_at": "2026-10-27T21:28:52.694807+00:00",
+  "source_revision": "facd890595315965675cbe267c5e53e912c84525",
+  "reviewed_at": "2026-10-28T04:11:17.755763+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN.",
-      "source_sha256": "8685a346ac80a792b7195e8562a3ee534ce494fda6ae414a51f95e4d160baf2c",
+      "source_sha256": "4b1f531fb6544ab60bd92f3351bea6fd8cd34608a199ecc3fbe9de0d9e6f491c",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -35,7 +35,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "080b6fde9ea2401b4df6c430c55c22c69cd859fc4c82decebfa2a4fa20543a37",
+      "source_sha256": "53228255f10de7cf9307a1129223b05faae5e6d9e3a475a6145d11331201f84d",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
