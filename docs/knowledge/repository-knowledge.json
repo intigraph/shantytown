@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "fc38795622aaf112bbac117802d36ae335babad6fea1b3eed757eb3685274e9c",
+      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
       "type": "Concept"
     },
     {
@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN.",
-      "source_sha256": "7aeb246e7b086097c8a21bfae16e16e3b0d4ba2d6c824b58bc8d562d3fb61de6",
+      "source_sha256": "a70bc04597bb543ec900925c72f19a1971fa008a3c5c4a172fb8abd7ac01c797",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "fc38795622aaf112bbac117802d36ae335babad6fea1b3eed757eb3685274e9c",
+      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"

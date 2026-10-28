@@ -86,6 +86,8 @@ or a single assignment writer. No force or hold override grants a cap exception.
 ## The whole surface
 
 ```
+st prime [agent] [--brief|--section NAME] [--static] [--json]
+                              tool primer plus bounded, read-only crew and anchor summary
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
@@ -367,7 +369,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-seven. Seven verbs at the top level and forty grouped commands under five groups
+Forty-eight. Eight verbs at the top level and forty grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -560,6 +562,16 @@ Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corp
 to exercise both directions: unshaped canaries are removed from results while
 ordinary dialogue controls survive, and a contaminated current derivative
 makes the scrub fail.
+
+## `st prime` — stack orientation
+
+`st prime [agent]` prints the shared tool primer, then a bounded read-only crew,
+anchor and lead summary. `--brief`, `--static`, `--section <prefix>` and `--json`
+follow the stack contract. It reuses anchor's read resolver; it does not publish
+plate state or run session hooks. The deadline returns unknown counters rather
+than invented empty values. See [prime output and generated primer](prime.md).
+This stack-wide orientation directive earns the forty-eighth command; `anchor`
+remains the normal startup context surface.
 
 ## `st anchor` — the anchor
 
