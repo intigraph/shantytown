@@ -1680,9 +1680,15 @@ resent. An explicit inbox acknowledgment is distinct from terminal delivery.
 Legacy inbox rows without custody may trigger an alert but never authorize
 editing somebody's composer.
 
-After 300 seconds unresolved, the next successful tend observation persists
+Accepted Codex queued input remains pending while a turn is busy; it is not a
+failed submission, and pointers stay retained. The backlog timer starts after
+tend observes idle input and resets on a busy or unreadable/no-box observation.
+After 300 seconds unresolved while observed idle, the next tend observation persists
 one `delivery-stalled` event to the configured lead/admin and attempts one
-normal coordinator wake. It includes the input classification and busy state,
+normal coordinator wake. An absolute one-hour ceiling from the first unresolved
+observation also alarms regardless of pane state, including a perpetually busy
+pane or an absent/unknown composer. Those composer states cannot establish idle
+or busy. The event includes the elapsed backlog age, input classification and busy state,
 not the message body. A continuing backlog does not generate another event,
 even after its first event was drained. An empty backlog rearms detection.
 For legacy rows, age starts at the first observation; it is not a guessed row

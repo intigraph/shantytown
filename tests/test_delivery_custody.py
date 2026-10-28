@@ -9,6 +9,8 @@ from shantytown.events import FilesEvents
 from shantytown.inbox import FilesInbox, Message
 from test_codex_submission import transport, keys, READY, OWNED, BUSY, QUEUED, BODY
 
+IDLE_QUEUE = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
+
 
 def local(monkeypatch, tmp_path, frames):
     panes, calls = transport(monkeypatch, frames)
@@ -128,11 +130,11 @@ def test_queue_retains_one_pointer_and_escalates_once_via_normal_event_drain(tmp
     observe(tmp_path, f, QUEUED, 1299)
     events = FilesEvents(tmp_path / 'events')
     assert events.pending('lead') == []
-    observe(tmp_path, f, QUEUED, 1300)
-    observe(tmp_path, f, QUEUED, 1600)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1600)
     [event] = events.drain('lead')
     assert event.reason == 'delivery-stalled'
-    assert 'busy=True' in event.detail
+    assert 'busy=False' in event.detail
     assert 'box=' in event.detail
     assert 'WORKING UNTRACKED' not in _compose_governance([event], 1600)
     assert 'Unconfirmed message delivery' in _compose_governance([event], 1600)
@@ -208,8 +210,8 @@ def test_failed_redelivery_is_not_retried_on_next_tend(tmp_path, monkeypatch):
 def test_inbox_outage_still_reaches_independent_admin_event(tmp_path, monkeypatch):
     f = fixtures(tmp_path, monkeypatch)
     monkeypatch.setattr(f[-1], 'unread', lambda _: (_ for _ in ()).throw(TimeoutError()))
-    observe(tmp_path, f, QUEUED, 1000)
-    observe(tmp_path, f, QUEUED, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
     [event] = FilesEvents(tmp_path / 'events').pending('lead')
     assert 'unread=UNKNOWN' in event.detail
     assert records(tmp_path)[0]['state'] == 'queued'
@@ -262,9 +264,9 @@ def test_one_coordinator_wake_is_backed_by_a_retained_event(tmp_path, monkeypatc
         wakes.append(worker)
         raise tmux.PaneSubmissionUnverified('coordinator queued')
     monkeypatch.setattr(notify, 'wake_recipient', wake)
-    observe(tmp_path, f, QUEUED, 1000)
-    observe(tmp_path, f, QUEUED, 1300)
-    observe(tmp_path, f, QUEUED, 1600)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1600)
     assert wakes == ['worker']
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
 
@@ -434,7 +436,7 @@ def test_repeated_undelivered_sends_page_once_and_rearm_after_a_delivery(tmp_pat
     for n in range(delivery.FAILED_SENDS - 1):
         with delivery.Custody(tmp_path, 'worker') as custody:
             custody.begin(f'notice {n}', 17.0)
-            custody.finish('queued')
+            custody.finish('unknown')
     t = time.time()  # after the sends: age is measured from the first of them
     observe(tmp_path, f, BUSY, t + delivery.STRANDED_SECONDS)
     assert stranded_events(tmp_path) == []        # four is below the threshold
@@ -468,3 +470,60 @@ def test_capture_error_while_clearing_keeps_a_superseded_body_terminal(tmp_path,
             custody.clear_previous(panes, OWNED)
     assert {r['text']: r['state'] for r in records(tmp_path)} == {BODY: 'superseded'}
     assert keys(calls) == []
+
+
+@pytest.mark.parametrize('screen', [QUEUED, BUSY])
+def test_busy_codex_queue_is_pending_and_idle_time_starts_after_busy(tmp_path, monkeypatch, screen):
+    f, wakes = stranded(tmp_path, monkeypatch)
+    for n in range(delivery.FAILED_SENDS):
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(f'queued {n}', 17.0)
+            custody.finish('queued')
+    t = max(r['created'] for r in records(tmp_path)) + 1
+    for offset in (0, 300, 900, 1800):
+        observe(tmp_path, f, screen, t + offset)
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    assert wakes == [] and keys(f[1]) == []
+    assert all(r['state'] == 'queued' for r in records(tmp_path))
+    pointers = len(f[-1].unread('worker'))
+    # A queue preview remains, but the runtime is no longer in flight.
+    idle_queue = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
+    observe(tmp_path, f, idle_queue, t + 1801)
+    observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS - 1)
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS)
+    [event] = FilesEvents(tmp_path / 'events').pending('lead')
+    assert event.reason == 'delivery-stalled' and 'busy=False' in event.detail
+    assert len(wakes) == 1 and len(f[-1].unread('worker')) == pointers
+    assert keys(f[1]) == []
+
+
+def test_busy_observation_resets_idle_grace_and_unknown_screen_is_not_idle(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state=None, messages=['pending'])
+    for screen, now in [(READY, 1000), (BUSY, 1299), ('unreadable', 3000),
+                        (READY, 4000), (READY, 4299)]:
+        observe(tmp_path, f, screen, now)
+        assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, READY, 4300)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+
+
+@pytest.mark.parametrize('screen', [BUSY, QUEUED, 'shell or dialog', '❯ unknown draft'])
+def test_absolute_backlog_ceiling_alarms_in_every_pane_state(tmp_path, monkeypatch, screen):
+    f, wakes = stranded(tmp_path, monkeypatch, state=None)
+    f[-1].deliver('worker', 'pending', frm='sender')
+    start = 1000
+    for offset in (0, 300, delivery.MAX_PENDING_SECONDS - 1):
+        observe(tmp_path, f, screen, start + offset)
+        assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, screen, start + delivery.MAX_PENDING_SECONDS)
+    [event] = FilesEvents(tmp_path / 'events').pending('lead')
+    assert 'absolute pending ceiling' in event.detail
+    assert 'box=' in event.detail and 'busy=' in event.detail
+    if screen in ('shell or dialog', '❯ unknown draft'):
+        assert 'observation=cannot-tell' in event.detail
+    assert len(wakes) == 1 and keys(f[1]) == []
+    assert len(f[-1].unread('worker')) == 1
+    observe(tmp_path, f, screen, start + 89000)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+    assert len(wakes) == 1
