@@ -304,3 +304,27 @@ def test_prime_disables_seeds_read_cache_writes(tmp_path, monkeypatch):
     result = prime.live_snapshot(argparse.Namespace(root=store, registry="files", backend="files",
                                                     repo=None, me="worker"))
     assert result["status"] == "ok" and not touched
+
+
+@pytest.mark.parametrize('error', [PermissionError, ProcessLookupError])
+def test_completed_worker_cleanup_error_keeps_successful_cli_result(tmp_path, monkeypatch, capsys, error):
+    actual = subprocess.Popen
+    children = []
+
+    def launched(*args, **kwargs):
+        child = actual(*args, **kwargs)
+        children.append(child)
+        return child
+
+    def already_exited(group, sig):
+        assert group == children[0].pid
+        assert children[0].wait(timeout=1) == 0
+        # macOS reports EPERM for an exited/zombie-only group; Linux ESRCH.
+        raise error("worker group is already gone")
+
+    monkeypatch.setattr(prime.subprocess, 'Popen', launched)
+    monkeypatch.setattr(prime.os, 'killpg', already_exited)
+    assert cli.main(['--root', str(tmp_path / 'absent'), 'prime', '--json']) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['live']['status'] == 'absent'
+    assert children[0].poll() == 0

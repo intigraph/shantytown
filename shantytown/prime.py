@@ -174,7 +174,8 @@ def probe(a) -> dict:
             # group so timing out cannot leave those local readers behind.
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
+                # macOS can report EPERM for a group whose worker already exited.
                 pass
             proc.wait()
         if reader is not None:
