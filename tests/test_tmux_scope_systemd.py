@@ -17,8 +17,15 @@ import pytest
 
 @pytest.mark.skipif(os.environ.get('SHANTY_TEST_SYSTEMD_TMUX') != '1',
                     reason='explicit isolated Linux user-manager acceptance only')
-def test_fresh_server_survives_launcher_service_cleanup(tmp_path):
+def test_fresh_server_survives_launcher_service_cleanup(tmp_path, monkeypatch):
     assert sys.platform == 'linux'
+    # This explicit opt-in needs the real user manager. The autouse fixture
+    # otherwise substitutes an empty runtime dir to isolate crew-state tests.
+    # HOME, test sockets and evidence remain private to this test.
+    runtime = Path('/run/user') / str(os.getuid())
+    assert (runtime / 'bus').is_socket(), 'opt-in requires the real user bus'
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(runtime))
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS', f'unix:path={runtime}/bus')
     for name in ['tmux', 'systemd-run', 'systemctl']:
         assert shutil.which(name), f'{name} required for the opted-in control'
     subprocess.run(['systemctl', '--user', 'is-active', 'default.target'],
