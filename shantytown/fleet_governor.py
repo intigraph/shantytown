@@ -21,6 +21,8 @@ from . import governor_balance as balance_mod
 from .governor import GovernorError, Reading
 
 VERSION = 1
+# The same host-clock allowance applies in either direction and to cached evidence.
+CLOCK_SKEW_SECONDS = 60
 # A remembered census older than this is advisory: reported, never counted and
 # never a source of borrowed policy, so it cannot hold this host's launches.
 # `[host] peer_census_max_age` (seconds) overrides it.
@@ -334,7 +336,7 @@ def validate(value, host, *, now=None):
             or not isinstance(value.get('governors'), dict)):
         raise ValueError('incompatible or incomplete governor snapshot')
     _number(value.get('observed_at'))
-    if not -30 <= clock - value['observed_at'] <= 60:
+    if not -CLOCK_SKEW_SECONDS <= clock - value['observed_at'] <= CLOCK_SKEW_SECONDS:
         raise ValueError('stale or future governor census')
     names = set()
     for row in value['agents']:
@@ -363,7 +365,7 @@ def validate(value, host, *, now=None):
             if (type(reading.ok) is not bool or not isinstance(reading.error, str)
                     or not isinstance(reading.source, str)
                     or reading.pct is not None and not 0 <= reading.pct <= 100
-                    or reading.at is not None and reading.at > clock + 30):
+                    or reading.at is not None and reading.at > clock + CLOCK_SKEW_SECONDS):
                 raise ValueError('invalid usage observation')
         state = entry.get('state')
         if not isinstance(state, dict) or not isinstance(state.get('by_window'), dict):
@@ -524,12 +526,12 @@ class FleetGovernor:
                     short = 'no usable census'
                 else:
                     age = clock - prior['observed_at']
-                    advisory = age > max_age or age < -30
+                    advisory = age > max_age or age < -CLOCK_SKEW_SECONDS
                     if age > max_age:
                         detail = (f'cached census age {age:.0f}s exceeds '
                                   f'{max_age:.0f}s; advisory only, counted 0')
                         short = f'census {_age_text(age)} old, advisory'
-                    elif age < -30:
+                    elif age < -CLOCK_SKEW_SECONDS:
                         detail = 'cached census stamped in the future; advisory only, counted 0'
                         short = 'census future-stamped, advisory'
                     else:
