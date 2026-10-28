@@ -486,3 +486,42 @@ def test_local_assignee_card_stays_startable(tmp_path, monkeypatch):
                     runtime=object(), events=_Events(),
                     p0_reader=lambda: ([_row(1, owner="hammond")], []))
     assert sp.decide(inp).block
+
+
+def test_unknown_assignee_does_not_disable_rule_zero_or_p0_plate(tmp_path, monkeypatch):
+    from shantytown import feed_check
+
+    class Reg(_Reg):
+        def get(self, name):
+            if name == "external":
+                raise LookupError("no local card")
+            return super().get(name)
+
+    rows = [_row(1, owner="org/external"), _row(2), _row(3, owner="hammond")]
+    assert feed_check.startable_here(tmp_path, Reg(), rows) == rows
+    monkeypatch.setattr(sp, "_load_per_core", lambda: 0.0)
+    monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: ["lex"])
+    monkeypatch.setattr(feed_check, "queue_state", lambda *a, **k: (rows, []))
+    monkeypatch.setattr(feed_check, "worker_governor_admissions",
+                        lambda *a: {"lex": lambda item: ""})
+    monkeypatch.setattr(feed_check, "governor_admits", lambda root: None)
+    inp = sp.gather(tmp_path, "hammond", reg=Reg(), panes=object(),
+                    runtime=object(), events=_Events())
+    assert inp.dispatchable == [("aegis-2", "t2")]
+    assert [i.id for i in inp.p0_plate] == ["aegis-2", "aegis-3"]
+    assert sp.decide(inp).by == sp.BY_RULE_ZERO
+
+
+def test_unset_local_host_does_not_hide_own_hosted_card(tmp_path, monkeypatch):
+    from shantytown.protocols import Agent
+    _gate(monkeypatch)
+
+    class Reg(_Reg):
+        def get(self, name):
+            return Agent(name=name, role="administrator", pane="p", host="declared")
+
+    inp = sp.gather(tmp_path, "hammond", reg=Reg(), panes=object(),
+                    runtime=object(), events=_Events(),
+                    p0_reader=lambda: ([_row(1, owner="hammond")], []))
+    assert [i.id for i in inp.p0_plate] == ["aegis-1"]
+    assert sp.decide(inp).by == sp.BY_P0_PLATE

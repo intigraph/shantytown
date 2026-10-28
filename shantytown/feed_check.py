@@ -688,8 +688,11 @@ def startable_here(root, reg, rows):
             continue
         owner = str(row.get("assignee") or "").rsplit("/", 1)[-1]
         if owner:
-            card = reg.get(owner)
-            if card.host and card.host != cfg.host_name:
+            try:
+                card = reg.get(owner)
+            except LookupError:
+                card = None  # Unscoped board rows may belong to a non-local owner.
+            if cfg.host_name and card and card.host and card.host != cfg.host_name:
                 continue
         out.append(row)
     return out
