@@ -116,6 +116,14 @@ def live(root) -> list[dict]:
     return [r for r in records(root) if r.get("state") in (LAUNCHING, LIVE, ENDING)]
 
 
+def free_slots(root) -> int:
+    """Ephemeral slots free on this host: the cap minus live jobs. The plug
+    stop_policy.ephemeral_free_slots reads (aegis-c01c.1, Rule Zero)."""
+    from . import config
+    cfg, _err = config.load_or_default(root)
+    return max(0, cfg.ephemeral.max_agents - len(live(root)))
+
+
 def is_ephemeral(root, name: str | None) -> bool:
     return is_ephemeral_name(name) and (root is None or read(root, name) is not None)
 
