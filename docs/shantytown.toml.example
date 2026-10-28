@@ -145,6 +145,23 @@ max_load_per_core = 4.0
 admin_self_slots = 1
 
 # ---------------------------------------------------------------------------
+# [ephemeral] — bounds on `st agent spawn --ephemeral` (docs/ephemeral-agents.md).
+# Every number is a SUPERVISION bound: a host-wide cap (0 turns spawning off),
+# a hard deadline, and a per-job turn and context budget. Refused over cap,
+# never queued. Defaults shown; reviews default to codex.
+# ---------------------------------------------------------------------------
+# [ephemeral]
+# max_agents = 2
+# lifetime_minutes = 60
+# max_turns = 40
+# max_context_k = 300
+# merge_spacing_minutes = 10
+# unattended = true          # omitted: inherit the administrator card's posture
+#
+# [ephemeral.harness_by_job]
+# review = "codex"
+
+# ---------------------------------------------------------------------------
 # [env] — this deployment's PLUMBING: where the tracker is, which backend, the
 # address of a graph server, a guard script path. Values that are also settable as
 # environment variables, because that is what a launcher can carry into a pane.

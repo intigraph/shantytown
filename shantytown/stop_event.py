@@ -417,6 +417,8 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
             # block delivery nor echo the pane text in an exception message.
             print(f"stop samples unavailable: {type(exc).__name__}", file=sys.stderr)
     _offhost_durable(reg, root, routing.to, me, item, ev.id)
+    if root is not None:
+        _ephemeral_bounds(root, me, context_k)
     over = context_k is not None and context_k >= CYCLE_THRESHOLD_K
     # Silent on stdout (a non-blocking Stop hook's stdout is discarded anyway);
     # a terse stderr line is useful when a human runs it by hand.
@@ -427,6 +429,49 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           + "".join(f" [PLATE INCOMPLETE: {n}]" for n in plate_notes),
           file=sys.stderr)
     return 0
+
+
+def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
+                      end=None) -> str | None:
+    """Enforce an ephemeral agent's bounds at its own turn boundary (aegis-c01c.2).
+
+    EVENT-DRIVEN, not polled: every Stop counts a turn and checks the deadline,
+    turn and context budgets. The FIRST time a bound is hit the agent is told,
+    once, to report now (so the administrator gets a real summary, not just
+    "timeout"). The NEXT stop past a bound ends the job here, from the hook:
+    result, administrator event, item comment, detached teardown. `st fleet tend`
+    is the backstop for an agent that never stops again.
+    """
+    from . import ephemeral as eph
+    if not eph.is_ephemeral_name(me):
+        return None
+    try:
+        now = time.time() if now is None else now
+        cause = eph.on_stop(root, me, context_k, now)
+        if not cause:
+            return None
+        rec = eph.read(root, me)
+        if not rec.get("bound_warned"):
+            rec["bound_warned"] = cause
+            eph.write(root, rec)
+            reason = (f"EPHEMERAL BOUND REACHED ({cause}). Stop working now and report "
+                      f"exactly once: `st agent spawn --report --verdict <blocked|done|...> "
+                      f"--summary-file -` with what you found. Your next stop ends this "
+                      f"job either way.")
+            print(json.dumps({"decision": "block", "reason": reason}))
+            return "warned"
+        if end is None:
+            from . import cli
+            a = cli._parse_args(["--root", str(root), "agent", "spawn", "--list"])
+            a.root, a.registry = Path(root), None
+            end = lambda name, verdict, summary, why: cli._spawn_end(
+                a, name, verdict, summary, why, detached=True)
+        end(me, "failed", f"ended by its own bounds ({cause}) without reporting", cause)
+        return "ended"
+    except Exception as exc:  # noqa: BLE001 — tend's reaper remains the backstop
+        print(f"stop_event: ephemeral bounds UNKNOWN for {me}: {type(exc).__name__}",
+              file=sys.stderr)
+        return None
 
 
 # --- the HAUL advance (the sequenced-worker self-feed) -----------------------

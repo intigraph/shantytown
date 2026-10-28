@@ -118,6 +118,12 @@ st work                       the item and the board
                               evaluated by `st fleet tend`; see docs/jobs.md
 st agent                      one agent
   new <agent>                 create an agent from a card
+  spawn --ephemeral --job <review|merge|triage|task> --item <id> [--harness] [--repo R --pr N]
+                              an EPHEMERAL agent for one job, managed by the administrator:
+                              own worktree, deadline + turn/context budget, counted in the cap
+                              and the governor, reports its verdict to the administrator and the
+                              item, then is torn down. --list · --stop NAME · --retry NAME ·
+                              --report (by the agent) · --reap (tend). docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]
                               convert one agent to another harness: writes the card (with a
@@ -361,7 +367,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-six. Seven verbs at the top level and thirty-nine grouped commands under five groups
+Forty-seven. Seven verbs at the top level and forty grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
