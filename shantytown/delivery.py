@@ -178,6 +178,7 @@ def supersede(root, is_stale, *, keep):
 
 
 STALL_SECONDS = 300
+MAX_PENDING_SECONDS = 3600
 # aegis-185l. The backlog watch below re-arms only on an EMPTY backlog, which a
 # busy agent never reaches, so it fired once on 10-20 and then stayed silent
 # while panes were stranded for 3h and 10h. These two conditions are episodic
@@ -305,16 +306,29 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
             return
         first = min([now] + [r['created'] for r in pending])
         watch = json.loads(path.read_text()) if path.exists() else dict(id=name, since=first)
+        state = triage.input_state(screen)
+        busy = triage.mid_flight(screen)
+        # ABSENT/UNKNOWN cannot establish idle or busy. Keep the idle grace
+        # separate from an absolute ceiling so any unresolved backlog alarms.
+        idle = not busy and state in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER,
+                                      triage.INPUT_QUEUED)
+        if idle:
+            watch.setdefault('idle_since', now)
+        else:
+            watch.pop('idle_since', None)
         custody.save(watch)
-        if watch.get('alerted') or now - watch['since'] < STALL_SECONDS or reg is None:
+        absolute = now - watch['since'] >= MAX_PENDING_SECONDS
+        idle_expired = idle and now - watch['idle_since'] >= STALL_SECONDS
+        if watch.get('alerted') or not (absolute or idle_expired) or reg is None:
             return
         catalog = deployment_catalog(root)
         recipient = route_stop(reg, card.name, catalog=catalog).to
-        state = triage.input_state(screen)
-        busy = triage.mid_flight(screen)
-        detail = (f'{card.name}: undelivered inbox/custody observed for at least '
-                  f'{int(now - watch["since"])}s; box={state}; '
-                  f'busy={busy}; retained={len(pending)}; '
+        observation = ('cannot-tell' if state in (triage.INPUT_ABSENT, triage.INPUT_UNKNOWN)
+                       else 'busy' if busy else 'idle' if idle else 'occupied')
+        reason = ('absolute pending ceiling' if absolute else 'idle grace expired')
+        detail = (f'{card.name}: undelivered inbox/custody: {reason}; '
+                  f'observed unresolved for {int(now - watch["since"])}s; box={state}; '
+                  f'busy={busy}; observation={observation}; retained={len(pending)}; '
                   f'unread={len(messages) if readable else "UNKNOWN"}. '
                   f'Inspect `st agent input {card.name} --show` and `st inbox {card.name}`. '
                   'No foreign draft was cleared; queued input is not delivery.')
@@ -352,8 +366,10 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
                       and _codex_owned_input(screen, r['text'])), None)
     last_ok = max((i for i, r in enumerate(records)
                    if r['state'] in ('delivered', 'acknowledged')), default=-1)
+    # Queued input has been accepted for a later turn. Its idle backlog is
+    # watched above; it is not evidence of consecutive failed submissions.
     failing = [r for r in records[last_ok + 1:]
-               if r['state'] not in ('delivered', 'acknowledged')]
+               if r['state'] not in ('delivered', 'acknowledged', 'queued')]
     with Custody(root, card.pane, socket) as custody:
         name = 'strand-' + hashlib.sha256(card.name.encode()).hexdigest()
         path = custody.root / (name + '.json')
@@ -387,8 +403,8 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
                     and now - failing[0]['created'] >= STRANDED_SECONDS):
                 alerts.append((f'delivery-failing:{card.name}:{episode}',
                                f'{card.name}: {len(failing)} consecutive sends not delivered '
-                               f'over {int(now - failing[0]["created"])}s (queued, unknown or '
-                               'superseded)'))
+                               f'over {int(now - failing[0]["created"])}s (unconfirmed submissions; '
+                               'accepted queues remain pending)'))
                 sends['alerted'] = True
         if watch.keys() == {'id'}:
             path.unlink(missing_ok=True)
