@@ -68,8 +68,11 @@ def test_untrusted_peer_role_claim_cannot_spend_reserved_capacity(tmp_path, monk
 
 
 def test_admin_exempts_unknown_while_worker_despite_hold_does_not(tmp_path, monkeypatch):
-    args, registry, worker, admin, rows = setup(tmp_path, monkeypatch)
-    monkeypatch.setattr(fg, 'collect', lambda peers: [(None, 'peer unavailable')])
+    # A reachable peer whose valid census disagrees still holds growth (an
+    # invalid or stale census is only advisory since aegis-lfeg).
+    disagreeing = sample(agents=[agent('desktop', 'remote')])
+    disagreeing['admission_owner'] = 'laptop'
+    args, registry, worker, admin, rows = setup(tmp_path, monkeypatch, peer=disagreeing)
     assert cli._account_launch_refusal(args, admin) == ''
     assert 'UNKNOWN' in cli._account_launch_refusal(args, worker)
 

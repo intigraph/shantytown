@@ -158,15 +158,19 @@ def test_unreachable_remains_visible_and_nonzero(tmp_path, monkeypatch, capsys, 
                         [dict(host='laptop', agents=[], error='deadline')])
     monkeypatch.setattr(fleet_governor, 'collect', lambda peers:
                         [(None, 'laptop UNREACHABLE (deadline)')])
-    assert cli._cmd_crew(args) == cli.CANNOT_TELL
+    out_code = cli._cmd_crew(args)
     out = capsys.readouterr().out
     assert 'laptop UNREACHABLE' in out
+    if mode == 'governor':
+        # aegis-lfeg: a peer's missing census is advisory for the account
+        # governor; it is reported, never a hold or a lost signal.
+        assert out_code == cli.OK and not out.startswith('lost ')
+        return
+    assert out_code == cli.CANNOT_TELL
     if mode == 'json':
         assert json.loads(out)['complete'] is False
     if mode == 'count':
         assert out.startswith('unknown ')
-    if mode == 'governor':
-        assert out.startswith('lost ')
 
 
 def test_local_switch_preserves_old_table(tmp_path, monkeypatch, capsys):
