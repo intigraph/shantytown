@@ -251,3 +251,19 @@ It must return the registered job principal. A username or successful UID
 switch alone does not establish readiness. These staged paths have only been
 qualified with private source fixtures; no privileged helper was installed or
 executed as part of that qualification.
+
+Operator preparation must include a root-owned `slots.json` next to the job
+manifests. Version 1 has exactly `version`, `uid_min`, `uid_max`, and `slots`.
+The range must start at 10000 or higher; `slots` maps each exact job principal
+to its reserved `uid` and manifest `sha256`. Its entry count is the explicit
+host capacity, bounded to 1024 by the source parser. There is no default host
+range or automatic account growth. The actual count/range belongs in the
+reviewed per-host rollout packet.
+
+The protected manifest set must exactly equal this plan. Missing, extra,
+changed, duplicate-UID or shared-account entries refuse, including when the
+helper is invoked directly. Consumed manifests and UID receipts remain as
+non-reuse records after cleanup or rollback. Adding capacity or changing a
+reservation requires a separate operator-reviewed plan update; exhaustion
+never falls back to another UID. This implements the selected per-job slot
+architecture, while unattended readiness remains false pending native proof.

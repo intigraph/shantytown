@@ -111,16 +111,43 @@ def request_fields(req):
 def inventory():
     """Validate the whole bounded plan, including direct helper admission."""
     protected(BASE, directory=True)
+    plan_path = BASE / 'slots.json'
+    protected(plan_path)
+    fd = os.open(plan_path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0))
+    with os.fdopen(fd, 'rb') as stream:
+        meta = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != OWNER
+                or meta.st_mode & 0o022 or meta.st_size > 1024 * 1024):
+            raise IdentityError('invalid protected host slot plan')
+        plan = json.load(stream)
+    if (not isinstance(plan, dict) or set(plan) != {'version', 'uid_min', 'uid_max', 'slots'}
+            or type(plan['version']) is not int or plan['version'] != 1
+            or type(plan['uid_min']) is not int or type(plan['uid_max']) is not int
+            or not 10000 <= plan['uid_min'] <= plan['uid_max']
+            or not isinstance(plan['slots'], dict) or not 1 <= len(plan['slots']) <= 1024):
+        raise IdentityError('host needs an explicit bounded protected slot plan')
+    for name, slot in plan['slots'].items():
+        if (not _NAME.fullmatch(name) or not isinstance(slot, dict)
+                or set(slot) != {'uid', 'sha256'} or type(slot['uid']) is not int
+                or not plan['uid_min'] <= slot['uid'] <= plan['uid_max']
+                or not isinstance(slot['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', slot['sha256'])):
+            raise IdentityError('invalid protected host slot reservation')
     paths = sorted(BASE.glob('eph-*.json'))
-    if len(paths) > 1024:
-        raise IdentityError('job capability inventory exceeds its bound')
+    if {path.stem for path in paths} != set(plan['slots']):
+        raise IdentityError('job manifests differ from the explicit host slot plan')
     seen_uids = set()
+    seen_users = set()
     entries = []
     for path in paths:
         spec, digest = load(path.stem)
+        if plan['slots'][path.stem] != {'uid': spec['uid'], 'sha256': digest}:
+            raise IdentityError('job manifest changed from its host slot reservation')
         if spec['uid'] in seen_uids:
             raise IdentityError('a job UID cannot be shared or reused by another principal')
+        if spec['username'] in seen_users:
+            raise IdentityError('a job account cannot be shared between slots')
         seen_uids.add(spec['uid'])
+        seen_users.add(spec['username'])
         entries.append((spec, digest))
     if any(spec['controller_uid'] in seen_uids for spec, _ in entries):
         raise IdentityError('a job UID cannot control another job')

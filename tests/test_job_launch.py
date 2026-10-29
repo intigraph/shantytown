@@ -46,6 +46,11 @@ def capability(tmp_path, monkeypatch):
         path.write_text(json.dumps(value))
         path.chmod(0o600)
     save()
+    import hashlib
+    plan = {'version': 1, 'uid_min': 51001, 'uid_max': 51016,
+            'slots': {principal: {'uid': spec['uid'], 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}}}
+    (base / 'slots.json').write_text(json.dumps(plan))
+    (base / 'slots.json').chmod(0o600)
     return spec, save, path
 
 
@@ -142,9 +147,15 @@ def test_direct_helper_checks_inventory_before_native_probe(capability, monkeypa
             other.update(uid=spec['uid'], gid=spec['gid'])
         else:
             other['controller_uid'] = spec['uid']
+            other['username'] = '_stjobs_000001'
         path = jobs.BASE / 'eph-task-000001.json'
         path.write_text(json.dumps(other))
         path.chmod(0o600)
+        import hashlib
+        plan_path = jobs.BASE / 'slots.json'
+        plan = json.loads(plan_path.read_text())
+        plan['slots'][other['principal']] = {'uid': other['uid'], 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        plan_path.write_text(json.dumps(plan))
     # Simulate only the separately admitted root entrypoint, never elevate the
     # test process. Keep real manifest decoding/inventory validation intact.
     monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
@@ -309,3 +320,35 @@ def test_job_key_attestation_occurs_after_uid_drop_without_controller_environmen
     else:
         with pytest.raises(IdentityError, match='job key'):
             jobs.attest_job(spec)
+
+
+@pytest.mark.parametrize('fault', ['none', 'missing-plan', 'empty', 'below-minimum', 'wrong-range',
+                                   'undeclared', 'missing-manifest', 'changed-digest', 'writable-plan'])
+def test_host_plan_pins_exact_slots_range_and_manifest_bytes(capability, fault):
+    spec, _, path = capability
+    plan_path = jobs.BASE / 'slots.json'
+    plan = json.loads(plan_path.read_text())
+    if fault == 'missing-plan':
+        plan_path.unlink()
+    elif fault == 'empty':
+        plan['slots'] = {}
+    elif fault == 'below-minimum':
+        plan['uid_min'] = 9999
+    elif fault == 'wrong-range':
+        plan['uid_max'] = 51000
+    elif fault == 'undeclared':
+        plan['slots'] = {'eph-task-000002': plan['slots'][spec['principal']]}
+    elif fault == 'missing-manifest':
+        path.unlink()
+    elif fault == 'changed-digest':
+        # Even an innocuous manifest edit requires a reviewed host-plan update.
+        path.write_text(path.read_text() + '\n')
+    if fault not in ('missing-plan',):
+        plan_path.write_text(json.dumps(plan))
+    if fault == 'writable-plan':
+        plan_path.chmod(0o666)
+    if fault == 'none':
+        assert jobs.inventory() == [(spec, jobs.load(spec['principal'])[1])]
+    else:
+        with pytest.raises((IdentityError, OSError)):
+            jobs.inventory()
