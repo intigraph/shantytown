@@ -108,19 +108,29 @@ def request_fields(req):
     return {key: getattr(req, key) for key in ('job', 'item', 'repo', 'pr', 'checkout', 'head', 'request_id')}
 
 
-def select(req, *, root, harness, used, native_probe=True):
-    """Read-only selection. An absent/partial plan never falls back to caller UID."""
+def inventory():
+    """Validate the whole bounded plan, including direct helper admission."""
     protected(BASE, directory=True)
     paths = sorted(BASE.glob('eph-*.json'))
     if len(paths) > 1024:
         raise IdentityError('job capability inventory exceeds its bound')
     seen_uids = set()
-    candidates = []
+    entries = []
     for path in paths:
         spec, digest = load(path.stem)
         if spec['uid'] in seen_uids:
             raise IdentityError('a job UID cannot be shared or reused by another principal')
         seen_uids.add(spec['uid'])
+        entries.append((spec, digest))
+    if any(spec['controller_uid'] in seen_uids for spec, _ in entries):
+        raise IdentityError('a job UID cannot control another job')
+    return entries
+
+
+def select(req, *, root, harness, used, native_probe=True):
+    """Read-only selection. An absent/partial plan never falls back to caller UID."""
+    candidates = []
+    for spec, digest in inventory():
         if (spec['request'] == request_fields(req) and spec['root'] == str(Path(root).resolve())
                 and spec['harness'] == harness and spec['controller_uid'] == os.geteuid()
                 and spec['principal'] not in used):
@@ -216,6 +226,10 @@ def main(argv=None):
         spec, digest = load(argv[1])
         if argv[2] != digest:
             raise IdentityError('job capability digest changed')
+        # Do not trust the caller to have used select(): sudo invokes this
+        # fixed helper directly, so it must enforce the entire inventory too.
+        if (spec, digest) not in inventory():
+            raise IdentityError('job capability is absent from the protected inventory')
         # sudo supplies this only AFTER its kernel privilege boundary. An
         # unprivileged caller spoofing environment is refused above; root is
         # already trusted. The reviewed sudoers entry names only this helper,

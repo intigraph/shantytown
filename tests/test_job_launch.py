@@ -132,6 +132,34 @@ def test_same_uid_is_never_recycled_even_after_failed_launch(capability):
         jobs.consume(other, digest)
 
 
+@pytest.mark.parametrize('fault', ['none', 'duplicate-uid', 'job-controller'])
+def test_direct_helper_checks_inventory_before_native_probe(capability, monkeypatch, fault):
+    spec, _, _ = capability
+    digest = jobs.load(spec['principal'])[1]
+    if fault != 'none':
+        other = dict(spec, principal='eph-task-000001', uid=51002, gid=51002)
+        if fault == 'duplicate-uid':
+            other.update(uid=spec['uid'], gid=spec['gid'])
+        else:
+            other['controller_uid'] = spec['uid']
+        path = jobs.BASE / 'eph-task-000001.json'
+        path.write_text(json.dumps(other))
+        path.chmod(0o600)
+    # Simulate only the separately admitted root entrypoint, never elevate the
+    # test process. Keep real manifest decoding/inventory validation intact.
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
+    monkeypatch.setenv('SUDO_UID', str(spec['controller_uid']))
+    protected = jobs.protected
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if Path(path) == Path(jobs.__file__).absolute()
+                        else protected(path, **kw))
+    calls = []
+    monkeypatch.setattr(jobs, 'check_native', lambda value: calls.append('native'))
+    monkeypatch.setattr(jobs, 'probe', lambda value: calls.append('probe'))
+    assert jobs.main(['check', spec['principal'], digest]) == (0 if fault == 'none' else 1)
+    assert calls == (['native', 'probe'] if fault == 'none' else [])
+
+
 @pytest.mark.parametrize('fault', ['missing', 'wrong-hash', 'wrong-uid', 'wrong-root', 'wrong-workspace', 'wrong-harness'])
 def test_runtime_cannot_replace_its_admitted_binding(capability, monkeypatch, fault):
     spec, _, _ = capability
