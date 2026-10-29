@@ -4474,13 +4474,6 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     guard, the equipped-or-not-created refusal and the hooks verification are each
     load-bearing, and a second launcher would have to re-earn all four.
     """
-    from . import job_launch
-    from .actor_identity import IdentityError
-    try:
-        uid_launch = job_launch.for_card(a.root, card)
-    except (IdentityError, OSError, ValueError):
-        print('  refused: protected job launch binding unavailable', file=sys.stderr)
-        return REFUSED
     administrator = _administrator_launch(a, card)
     if administrator:
         print(f"  administrator {card.name}: routine governor launch restrictions "
@@ -4496,6 +4489,13 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
               f"{hold_name} hold ({gaming.state}) — the hold stays in force for "
               "dispatch, respawns and every other launch.", file=sys.stderr)
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        uid_launch = job_launch.for_card(a.root, card)
+    except (IdentityError, OSError, ValueError):
+        print('  refused: protected job launch binding unavailable', file=sys.stderr)
+        return REFUSED
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):

@@ -184,10 +184,10 @@ def test_exact_registered_capability_and_no_controller_environment_forwarded(cap
 
 @pytest.mark.parametrize('change', [
     {'uid': 501}, {'gid': 0}, {'gid': 51002}, {'controller_uid': 51001}, {'username': 'root'},
-    {'home': '/home/controller'}, {'workspace': '/home/controller/worktree'},
-    {'settings': '/home/controller/config.toml'},
-    {'root': '/home/controller'}, {'controller_root': '/var/lib/shantytown'}, {'environment': {'SSH_AUTH_SOCK': 'fixture'}},
-    {'environment': {'CODEX_HOME': '/home/controller/.codex'}}, {'argv': ['relative-command']},
+    {'home': '/synthetic-controller'}, {'workspace': '/synthetic-controller/worktree'},
+    {'settings': '/synthetic-controller/config.toml'},
+    {'root': '/synthetic-controller'}, {'controller_root': '/var/lib/shantytown'}, {'environment': {'SSH_AUTH_SOCK': 'fixture'}},
+    {'environment': {'CODEX_HOME': '/synthetic-controller/.codex'}}, {'argv': ['relative-command']},
     {'principal': 'boss'}, {'harness': 'unknown'}, {'request': {'job': 'task'}},
 ])
 def test_unbound_shared_or_partial_capability_refuses(capability, change):
