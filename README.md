@@ -30,6 +30,12 @@ Pinned releases, alternatives, configuration and removal are in the
 
 ## First success in three commands
 
+![Animated terminal: Preview one coordinator, then a two-agent crew without writing cards or starting sessions](docs/demos/terminal/demo.svg)
+
+Both commands are non-writing previews; no crew is launched.
+[Read the transcript](docs/demos/terminal/transcript.txt) or
+[reproduce the recording](docs/demos/terminal.md).
+
 Preview a two-agent crew in an empty directory. This writes nothing and launches no session:
 
 ```sh
