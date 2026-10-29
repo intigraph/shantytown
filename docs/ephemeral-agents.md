@@ -230,11 +230,11 @@ Attended compatibility behavior remains separate.
 This source staging is **not installed acceptance**. Keep both readiness and
 verified-identity activation at their existing deployment values until the
 reviewed provisioning and native acceptance packet is complete. Cross-UID
-reporting, turn accounting and controller reaping require a mediated own-job
-path: do not make the shared ledger writable or expose controller signing
-keys to work around a permission failure. Tambo/macOS and Goldblum/Linux source
-provisioning, that mediated lifecycle, native file/signal/identity denial proofs
-and rollout authority remain required before enabling unattended jobs.
+reporting and turn accounting use a staged mediated mailbox described below:
+do not make the shared ledger writable or expose controller signing keys.
+Tambo/macOS and Goldblum/Linux source provisioning, isolated metadata/config,
+own-key review signing, native file/signal/identity denial proofs and rollout
+authority remain required before enabling unattended jobs.
 
 The staged protected helper also has a fixed `stop <principal> <digest>`
 operation for the admitted controller. It verifies the exact consumed UID
@@ -267,3 +267,49 @@ non-reuse records after cleanup or rollback. Adding capacity or changing a
 reservation requires a separate operator-reviewed plan update; exhaustion
 never falls back to another UID. This implements the selected per-job slot
 architecture, while unattended readiness remains false pending native proof.
+
+The fixed helper's `submit` operation admits only the manifest's job UID;
+`poll` admits only its controller UID. Both require the exact protected binding
+and consumed UID receipt. Jobs submit a bounded JSON result or turn token on
+stdin, with a five-second input deadline. They cannot select a ledger path,
+another principal, a command, or a signing key. A root-private mailbox retains
+the first result, deduplicates turn tokens, and refuses conflicting retries,
+corruption, exhaustion or interrupted writes. Jobs never open the controller
+ledger through this path.
+
+The source report handler queues the message before reading controller config.
+The turn hook queues a turn; the controller's existing reaper drains messages,
+applies monotonically increasing turn counts and performs ordinary notification
+and verified UID teardown. A queue acknowledgement means the message is saved;
+delivery and teardown are still pending. Job reports confer no signing or
+merge authority. Until the job's own review signer is qualified, an unsigned
+review message becomes a blocked result; no controller key substitutes for it.
+These paths are staged source with private fixture coverage, not native
+cross-UID acceptance or an installed deployment.
+
+A launch manifest has separate `controller_root` and `root` paths. The former
+identifies the controller's private store; launch qualification requires its
+path to belong only to root/the controller and its directory mode to exclude
+other users. The latter must be the job's own root-owned metadata store at
+`/var/lib/shantytown/job-stores/<principal>`. Only that job root is passed in
+`SHANTY_ROOT`; the controller root is not forwarded to the job environment.
+The two stores cannot contain one another. The provisioning packet must build
+the minimal public job metadata there without controller secrets. Lifecycle
+stop/drain authorization uses immutable identity and the consumed receipt,
+so changing job-owned settings cannot prevent the controller from stopping it.
+
+The separate helper bootstrap uses a fixed private Python with `-IS`: isolated
+imports, no environment/cwd/user-site paths, and no site or `.pth` execution.
+Before importing application code it validates its interpreter/import paths
+and the entire bounded package at `/opt/shantytown-job-launcher/app/shantytown`
+as root-owned and non-writable, refusing symlinks. The reviewed installation
+must provide regular immutable interpreter/application paths; an editable
+checkout or ordinary user-owned virtualenv is not a supported helper install.
+The bootstrap keeps only sudo's kernel-derived caller UID and fixed PATH/locale
+for application imports. Native installation qualification remains outstanding.
+
+The capability path validator accepts macOS's fixed root-owned `/var` alias
+only when it resolves to `/private/var`, whose immutable ownership is checked
+as well. This permits the existing protected-home convention on macOS without
+accepting job-controlled symlinks or arbitrary aliases. Native macOS acceptance
+is still required; the source fixtures simulate both accepted and refused paths.

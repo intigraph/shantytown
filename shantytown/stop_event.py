@@ -453,6 +453,18 @@ def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
         return None
     try:
         now = time.time() if now is None else now
+        from . import job_launch
+        bound = job_launch.local_job()
+        if bound:
+            spec, digest = bound
+            if spec['principal'] != me or spec['root'] != str(Path(root).resolve()):
+                raise eph.Refused('turn differs from protected job binding')
+            import hashlib
+            import secrets
+            token = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+            job_launch.mailbox_call(spec, digest, 'submit',
+                {'kind': 'turn', 'token': token, 'context_k': context_k})
+            return 'queued'
         cause = eph.on_stop(root, me, context_k, now)
         if not cause:
             return None

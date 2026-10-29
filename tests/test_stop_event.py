@@ -784,3 +784,18 @@ def test_seeds_drain_incomplete_owner_read_is_unknown(tmp_path, monkeypatch):
     assert 'PLATE UNKNOWN' in text
     assert 'assign work' not in text
     assert 'empty plate' not in text
+
+
+def test_bound_job_turn_queues_without_controller_ledger_access(tmp_path, monkeypatch):
+    from shantytown import job_launch, ephemeral
+    from shantytown.stop_event import _ephemeral_bounds
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    messages = []
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: messages.append(a))
+    monkeypatch.setattr(ephemeral, 'on_stop', lambda *a: (_ for _ in ()).throw(AssertionError('ledger write')))
+    assert _ephemeral_bounds(tmp_path, spec['principal'], 32, now=1) == 'queued'
+    assert len(messages) == 1
+    assert messages[0][:3] == (spec, 'a' * 64, 'submit')
+    message = messages[0][3]
+    assert message['kind'] == 'turn' and message['context_k'] == 32 and len(message['token']) == 64

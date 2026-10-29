@@ -1011,3 +1011,82 @@ def test_uid_merge_lane_requires_authoritative_completed_teardown(tmp_path, monk
     answer = cli._spawn_lane_release(SimpleNamespace(root=tmp_path), stale, run=run)
     assert calls == ([['fixed-release']] if state == eph.DONE else [])
     assert bool(answer) == (state != eph.DONE)
+
+
+def test_mailbox_application_counts_once_and_keeps_results_as_data(tmp_path):
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64,
+             'turns': {'b' * 64: 10}, 'result': {'kind': 'report', 'verdict': 'done', 'summary': 'own'}}
+    result, cause = eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert result == state['result'] and not cause
+    assert eph.read(tmp_path, rec['name'])['turns'] == 1
+    eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert eph.read(tmp_path, rec['name'])['turns'] == 1
+    assert eph.read(tmp_path, rec['name'])['result'] is None  # drain decides lifecycle
+    with pytest.raises(eph.Refused, match='regressed'):
+        eph.apply_mailbox(tmp_path, rec['name'], dict(state, turns={}), NOW)
+
+
+@pytest.mark.parametrize('fault', ['uid', 'sha256'])
+def test_foreign_mailbox_cannot_change_controller_ledger(tmp_path, fault):
+    from shantytown.actor_identity import IdentityError
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64, 'turns': {}, 'result': None}
+    state[fault] = 51002 if fault == 'uid' else 'b' * 64
+    before = eph.read(tmp_path, rec['name'])
+    with pytest.raises(IdentityError):
+        eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert eph.read(tmp_path, rec['name']) == before
+
+
+def test_bound_job_report_queues_without_reading_controller_config(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch
+    from types import SimpleNamespace
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    calls = []
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: calls.append(a))
+    monkeypatch.setattr(config, 'load_or_default', lambda *a: pytest.fail('job read controller config'))
+    args = SimpleNamespace(report=True, root=tmp_path, verdict='done', dry_run=False,
+                           summary='own result', summary_file=None)
+    assert cli._cmd_spawn(args) == cli.OK
+    assert calls == [(spec, 'a' * 64, 'submit', {'kind': 'report', 'verdict': 'done', 'summary': 'own result'})]
+    assert 'controller delivery and teardown pending' in capsys.readouterr().out
+
+
+def test_reaper_does_not_claim_teardown_when_uid_termination_is_unproven(tmp_path):
+    rec = _rec(tmp_path)
+    eph.mark_live(tmp_path, rec['name'])
+    lines = eph.reap(tmp_path, pane_alive=lambda _: False, end=lambda *a: False, now=NOW)
+    assert any('termination unproven' in line for line in lines)
+    assert all('torn down' not in line for line in lines)
+    assert eph.read(tmp_path, rec['name'])['state'] != eph.DONE
+
+
+@pytest.mark.parametrize('mode', ['report', 'budget', 'unsigned-review'])
+def test_controller_reaper_drains_only_bound_mailbox_and_never_signs_for_job(tmp_path, monkeypatch, mode):
+    from shantytown import job_launch
+    from types import SimpleNamespace
+    rec = _rec(tmp_path, job='review' if mode == 'unsigned-review' else 'task',
+               repo='owner/repo' if mode == 'unsigned-review' else None,
+               pr=1 if mode == 'unsigned-review' else None,
+               uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64, 'turns': {},
+             'result': {'kind': 'report', 'verdict': 'approve' if mode == 'unsigned-review' else 'done',
+                        'summary': 'job declaration'}}
+    if mode == 'budget':
+        rec['max_turns'] = 1
+        eph.write(tmp_path, rec)
+        state.update(result=None, turns={'b' * 64: 1})
+    monkeypatch.setattr(job_launch, 'poll', lambda *a: state)
+    monkeypatch.setattr(cli, '_panes', lambda _: SimpleNamespace(exists=lambda _: True))
+    monkeypatch.setattr(cli.time, 'time', lambda: NOW)
+    monkeypatch.setattr(cli, '_spawn_write_verdict', lambda *a, **kw: pytest.fail('controller signing for job'))
+    ended = []
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **kw: ended.append((a, kw)))
+    assert cli._spawn_reap(SimpleNamespace(root=tmp_path), quiet=True) == cli.OK
+    assert len(ended) == 1
+    args, kwargs = ended[0]
+    assert args[1] == rec['name'] and kwargs == {'detached': False}
+    assert args[2] == {'report': 'done', 'budget': 'failed', 'unsigned-review': 'blocked'}[mode]
+    assert args[-1] == ('turn budget' if mode == 'budget' else 'report')

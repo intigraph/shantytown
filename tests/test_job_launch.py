@@ -37,7 +37,8 @@ def capability(tmp_path, monkeypatch):
     home = '/var/lib/shantytown/agents/crew-' + principal
     spec = dict(version=1, principal=principal, controller_uid=os.geteuid(),
                 uid=51001, gid=51001, username='_stjobs', home=home,
-                root=str(tmp_path / 'root'), workspace=home + '/worktree',
+                root='/var/lib/shantytown/job-stores/' + principal,
+                controller_root=str(tmp_path / 'root'), workspace=home + '/worktree',
                 settings=home + '/codex/config.toml', harness='codex',
                 request=jobs.request_fields(Request('task', 'item-1', harness='codex')),
                 argv=['/usr/bin/true'], environment={'PATH': '/usr/bin:/bin', 'CODEX_HOME': home + '/codex'})
@@ -67,7 +68,7 @@ def test_exact_registered_capability_and_no_controller_environment_forwarded(cap
         assert kwargs['timeout'] == 30
         return SimpleNamespace(returncode=0, stdout='READY ' + digest)
     monkeypatch.setattr(jobs.subprocess, 'run', run)
-    assert jobs.select(Request('task', 'item-1', harness='codex'), root=spec['root'],
+    assert jobs.select(Request('task', 'item-1', harness='codex'), root=spec['controller_root'],
                        harness='codex', used=set()) == (spec, digest)
     assert len(seen) == 1
     assert 'launch' in jobs.command(spec, digest)
@@ -77,7 +78,8 @@ def test_exact_registered_capability_and_no_controller_environment_forwarded(cap
 @pytest.mark.parametrize('change', [
     {'uid': 501}, {'gid': 0}, {'gid': 51002}, {'controller_uid': 51001}, {'username': 'root'},
     {'home': '/home/controller'}, {'workspace': '/home/controller/worktree'},
-    {'settings': '/home/controller/config.toml'}, {'environment': {'SSH_AUTH_SOCK': 'fixture'}},
+    {'settings': '/home/controller/config.toml'},
+    {'root': '/home/controller'}, {'controller_root': '/var/lib/shantytown'}, {'environment': {'SSH_AUTH_SOCK': 'fixture'}},
     {'environment': {'CODEX_HOME': '/home/controller/.codex'}}, {'argv': ['relative-command']},
     {'principal': 'boss'}, {'harness': 'unknown'}, {'request': {'job': 'task'}},
 ])
@@ -110,7 +112,7 @@ def test_no_fallback_or_privileged_attempt_for_bad_selection(capability, monkeyp
     elif fault == 'missing-helper':
         jobs.HELPER.unlink()
     with pytest.raises((IdentityError, OSError)):
-        jobs.select(Request('task', 'item-1', harness='codex'), root=spec['root'], harness='codex', used=used)
+        jobs.select(Request('task', 'item-1', harness='codex'), root=spec['controller_root'], harness='codex', used=used)
     assert len(seen) == (1 if fault == 'failed-switch' else 0)
 
 
@@ -181,7 +183,7 @@ def test_runtime_cannot_replace_its_admitted_binding(capability, monkeypatch, fa
     elif fault == 'wrong-hash': binding['sha256'] = '0' * 64
     elif fault == 'wrong-uid': binding['uid'] += 1
     card = SimpleNamespace(name=spec['principal'], dangerous=True, workspace=spec['workspace'], harness=spec['harness'])
-    root = spec['root']
+    root = spec['controller_root']
     if fault == 'wrong-root': root += '-wrong'
     elif fault == 'wrong-workspace': card.workspace += '-wrong'
     elif fault == 'wrong-harness': card.harness = 'claude'
@@ -226,10 +228,13 @@ def test_irreversible_drop_order_and_failure_never_execs(monkeypatch, platform, 
         assert current == {'uid': 51001, 'gid': 51001, 'groups': []}
         assert 'PRIVATE_CONTROLLER_CREDENTIAL' not in environment
         assert environment['HOME'] == '/private/job'
+        assert environment['SHANTY_ROOT'] == '/private/job-store'
+        assert '/private/control' not in environment.values()
         events.append('exec')
     monkeypatch.setattr(jobs.os, 'execve', execute)
     spec = dict(uid=51001, gid=51001, home='/private/job', username='_stjobs',
-                principal='eph-task-123abc', root='/private/control', workspace='/private/job/work',
+                principal='eph-task-123abc', root='/private/job-store', controller_root='/private/control',
+                workspace='/private/job/work',
                 argv=['/usr/bin/true'], environment={})
     if fails:
         with pytest.raises(PermissionError): jobs.execute(spec)
@@ -242,7 +247,7 @@ def test_irreversible_drop_order_and_failure_never_execs(monkeypatch, platform, 
 def test_preview_never_executes_a_privileged_probe(capability, monkeypatch):
     spec, _, _ = capability
     monkeypatch.setattr(jobs.subprocess, 'run', lambda *a, **k: pytest.fail('preview executed a helper'))
-    selected, digest = jobs.select(Request('task', 'item-1', harness='codex'), root=spec['root'],
+    selected, digest = jobs.select(Request('task', 'item-1', harness='codex'), root=spec['controller_root'],
                                    harness='codex', used=set(), native_probe=False)
     assert selected == spec and len(digest) == 64
 
@@ -352,3 +357,93 @@ def test_host_plan_pins_exact_slots_range_and_manifest_bytes(capability, fault):
     else:
         with pytest.raises((IdentityError, OSError)):
             jobs.inventory()
+
+
+@pytest.mark.parametrize('operation,caller,accepted', [
+    ('submit', 'job', True), ('submit', 'controller', False), ('submit', 'other', False),
+    ('poll', 'controller', True), ('poll', 'job', False), ('poll', 'other', False),
+    ('stop', 'job', False), ('launch', 'job', False), ('check', 'job', False),
+])
+def test_helper_mailbox_roles_use_protected_uid_not_claims(capability, monkeypatch, operation, caller, accepted):
+    import io
+    from shantytown import job_mailbox
+    spec, _, _ = capability
+    digest = jobs.load(spec['principal'])[1]
+    caller_uid = {'job': spec['uid'], 'controller': spec['controller_uid'], 'other': 51009}[caller]
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
+    monkeypatch.setenv('SUDO_UID', str(caller_uid))
+    monkeypatch.setenv('SHANTY_AGENT', spec['principal'])
+    protected = jobs.protected
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if Path(path) == Path(jobs.__file__).absolute()
+                        else protected(path, **kw))
+    calls = []
+    monkeypatch.setattr(jobs, 'check_native', lambda *a, **kw: calls.append('binding'))
+    monkeypatch.setattr(jobs.sys, 'stdin', io.TextIOWrapper(io.BytesIO(
+        b'{"kind":"report","verdict":"done","summary":"own"}')))
+    monkeypatch.setattr(job_mailbox, 'submit', lambda *a, **kw: calls.append('submit'))
+    monkeypatch.setattr(job_mailbox, 'read', lambda *a, **kw: calls.append('poll') or {})
+    assert jobs.main([operation, spec['principal'], digest]) == (0 if accepted else 1)
+    assert calls == (['binding', operation] if accepted else [])
+
+
+@pytest.mark.parametrize('fault', ['none', 'uid', 'home', 'principal'])
+def test_local_job_uses_protected_uid_and_attestation_even_without_markers(capability, monkeypatch, fault):
+    from shantytown import actor_identity
+    spec, _, _ = capability
+    row = {'principal': spec['principal'], 'home': spec['home']}
+    monkeypatch.setattr(actor_identity, '_policy', lambda *a, **kw: row)
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: spec['uid'] + (1 if fault == 'uid' else 0))
+    if fault == 'home':
+        row['home'] = '/synthetic/controller'
+    calls = []
+    monkeypatch.setattr(actor_identity, 'authenticated_actor',
+                        lambda: calls.append('key') or ('boss' if fault == 'principal' else spec['principal']))
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    if fault == 'none':
+        assert jobs.local_job() == (spec, jobs.load(spec['principal'])[1])
+        assert calls == ['key']
+    else:
+        with pytest.raises(IdentityError):
+            jobs.local_job()
+
+
+def test_lifecycle_authorization_does_not_depend_on_job_owned_settings(capability, monkeypatch):
+    from shantytown import actor_identity
+    spec, _, _ = capability
+    digest = jobs.load(spec['principal'])[1]
+    jobs.consume(spec, digest)
+    row = {'uid': spec['uid'], 'home': spec['home'], 'sd': '/synthetic/immutable/sd'}
+    monkeypatch.setattr(actor_identity, '_policy', lambda *a, **kw: row)
+    monkeypatch.setattr(jobs.pwd, 'getpwnam', lambda _: SimpleNamespace(
+        pw_uid=spec['uid'], pw_gid=spec['gid'], pw_dir=spec['home'], pw_shell='/usr/bin/false'))
+    original = jobs.protected
+    fixed = {row['sd'], spec['argv'][0], spec['root']}
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if str(path) in fixed else original(path, **kw))
+    # None of this synthetic job's mutable directories/settings exists. Stop
+    # remains authorized by immutable policy/account/receipt, never their mode.
+    assert jobs.check_native(spec, consumed_digest=digest, lifecycle=True) == row
+    with pytest.raises((OSError, IdentityError)):
+        jobs.check_native(spec, consumed_digest=digest)
+
+
+@pytest.mark.parametrize('fault', ['none', 'foreign-owner', 'wrong-target', 'custom-link', 'linux'])
+def test_only_canonical_root_owned_macos_var_alias_is_accepted(monkeypatch, fault):
+    import stat
+    path = Path('/var/lib/shantytown/fixture.json')
+    monkeypatch.setattr(jobs.sys, 'platform', 'linux' if fault == 'linux' else 'darwin')
+    def metadata(entry):
+        if entry == Path('/var'):
+            return SimpleNamespace(st_uid=51001 if fault == 'foreign-owner' else 0,
+                                   st_mode=stat.S_IFLNK | 0o777)
+        if fault == 'custom-link' and entry == Path('/var/lib'):
+            return SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777)
+        return SimpleNamespace(st_uid=0, st_mode=(stat.S_IFREG | 0o644) if entry == path else (stat.S_IFDIR | 0o755))
+    monkeypatch.setattr(Path, 'lstat', metadata)
+    monkeypatch.setattr(jobs.os, 'readlink', lambda _: '/wrong/target' if fault == 'wrong-target' else 'private/var')
+    if fault == 'none':
+        jobs.protected(path)
+    else:
+        with pytest.raises(IdentityError):
+            jobs.protected(path)

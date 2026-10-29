@@ -641,6 +641,32 @@ def on_stop(root, name: str, context_k: float | None, now: float) -> str:
 
 # --- ending: result -> report -> teardown -------------------------------------
 
+def apply_mailbox(root, name, state, now):
+    """Controller-only drain; monotonic counts, no job writes to this ledger."""
+    from . import job_mailbox
+    with lock(root):
+        rec = read(root, name)
+        binding = (rec or {}).get('uid_binding')
+        if not isinstance(binding, dict) or set(binding) != {'uid', 'sha256'}:
+            raise Refused('job mailbox has no controller admission binding')
+        state = job_mailbox.validate(state, binding, binding['sha256'])
+        if rec['state'] not in (LAUNCHING, LIVE):
+            return None, ''
+        count = len(state['turns'])
+        prior = rec.get('uid_mailbox_turns', 0)
+        if type(prior) is not int or prior < 0 or count < prior:
+            raise Refused('job mailbox turn counter regressed')
+        rec['turns'] = int(rec.get('turns', 0)) + count - prior
+        rec['uid_mailbox_turns'] = count
+        contexts = [value for value in state['turns'].values() if value is not None]
+        context = max(contexts, default=0)
+        write(root, rec)
+        cause = ('timeout' if now >= rec['deadline'] else
+                 'turn budget' if rec['turns'] >= rec['max_turns'] else
+                 'context budget' if context >= rec['max_context_k'] else '')
+        return state['result'], cause
+
+
 def mark_live(root, name: str) -> None:
     with lock(root):
         rec = read(root, name)
@@ -830,7 +856,8 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False) -> list[st
         if rec["state"] == ENDING:
             out.append(f"{name}: finishing interrupted teardown")
             if not dry_run:
-                end(name, None, None)
+                if end(name, None, None) is False:
+                    out.append(f'{name}: termination unproven; retained')
             continue
         launching = (rec["state"] == LAUNCHING
                      and now - rec.get("spawned_at", 0) < LAUNCH_GRACE_S)
@@ -838,9 +865,11 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False) -> list[st
                  else "" if launching or pane_alive(f"st-{name}") else "died")
         if not cause:
             continue
-        out.append(f"{name}: {cause} -> reported to {rec['administrator']}, torn down")
         if not dry_run:
-            end(name, "failed", cause)
+            if end(name, "failed", cause) is False:
+                out.append(f'{name}: termination unproven; retained')
+                continue
+        out.append(f"{name}: {cause} -> reported to {rec['administrator']}, torn down")
     return out
 
 

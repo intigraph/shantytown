@@ -26,7 +26,7 @@ HELPER = Path('/usr/local/libexec/st-job-launcher')
 OWNER = 0
 _NAME = re.compile(r'eph-(review|merge|triage|task)-[0-9a-f]{6}')
 FIELDS = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username',
-          'home', 'root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment'}
+          'home', 'root', 'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment'}
 ENVIRONMENT = {'PATH', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 
 
@@ -37,6 +37,13 @@ def protected(path, *, directory=False):
         raise IdentityError('job capability path must be absolute')
     for parent in [*reversed(path.parents), path]:
         meta = parent.lstat()
+        if (sys.platform == 'darwin' and parent == Path('/var')
+                and stat.S_ISLNK(meta.st_mode) and meta.st_uid == OWNER
+                and os.readlink(parent) in ('private/var', '/private/var')):
+            # macOS's fixed root-owned OS alias is not a job-controlled link.
+            # Validate its canonical target too; all other symlinks still fail.
+            protected(Path('/private/var'), directory=True)
+            continue
         if (stat.S_ISLNK(meta.st_mode) or meta.st_uid != OWNER or meta.st_mode & 0o022
                 or (parent != path or directory) and not stat.S_ISDIR(meta.st_mode)):
             raise IdentityError('job capability/code path must be root-owned and non-writable')
@@ -78,7 +85,7 @@ def load(name):
     expected = {'job', 'item', 'repo', 'pr', 'checkout', 'head', 'request_id'}
     if set(spec['request']) != expected or not name.startswith('eph-' + str(spec['request']['job']) + '-'):
         raise IdentityError('job principal/request mismatch')
-    for key in ('home', 'root', 'workspace', 'settings'):
+    for key in ('home', 'root', 'controller_root', 'workspace', 'settings'):
         value = spec[key]
         if (not isinstance(value, str) or not Path(value).is_absolute()
                 or any(c in value for c in '\r\n\0') or '..' in Path(value).parts):
@@ -86,6 +93,11 @@ def load(name):
     home = Path(spec['home'])
     if str(home) != '/var/lib/shantytown/agents/crew-' + name:
         raise IdentityError('job home must use the protected identity home convention')
+    if spec['root'] != '/var/lib/shantytown/job-stores/' + name:
+        raise IdentityError('job metadata root must be its own protected store')
+    if (Path(spec['controller_root']).is_relative_to(Path(spec['root']))
+            or Path(spec['root']).is_relative_to(Path(spec['controller_root']))):
+        raise IdentityError('job metadata root and controller store must be separate')
     for key in ('workspace', 'settings'):
         if not Path(spec[key]).is_relative_to(home) or Path(spec[key]) == home:
             raise IdentityError('job state/settings must be private to its own home')
@@ -158,7 +170,7 @@ def select(req, *, root, harness, used, native_probe=True):
     """Read-only selection. An absent/partial plan never falls back to caller UID."""
     candidates = []
     for spec, digest in inventory():
-        if (spec['request'] == request_fields(req) and spec['root'] == str(Path(root).resolve())
+        if (spec['request'] == request_fields(req) and spec['controller_root'] == str(Path(root).resolve())
                 and spec['harness'] == harness and spec['controller_uid'] == os.geteuid()
                 and spec['principal'] not in used):
             candidates.append((spec, digest))
@@ -188,7 +200,7 @@ def for_card(root, card):
         raise IdentityError('unattended job has no protected launch binding')
     spec, digest = load(card.name)
     if (digest != binding['sha256'] or spec['uid'] != binding['uid']
-            or spec['workspace'] != card.workspace or spec['root'] != str(Path(root).resolve())
+            or spec['workspace'] != card.workspace or spec['controller_root'] != str(Path(root).resolve())
             or spec['harness'] != card.harness):
         raise IdentityError('job launch capability changed since admission')
     return spec, digest
@@ -199,7 +211,7 @@ def command(spec, digest):
     return shlex.join(['/usr/bin/sudo', '-n', '--', str(HELPER), 'launch', spec['principal'], digest])
 
 
-def check_native(spec, *, consumed_digest=None):
+def check_native(spec, *, consumed_digest=None, lifecycle=False):
     """Called only by the separate privileged, immutable launcher."""
     from . import actor_identity
     if sys.platform != 'darwin' and not sys.platform.startswith('linux'):
@@ -212,15 +224,25 @@ def check_native(spec, *, consumed_digest=None):
     if (account.pw_uid != spec['uid'] or account.pw_gid != spec['gid']
             or account.pw_dir != spec['home'] or account.pw_shell not in ('/usr/bin/false', '/bin/false', '/usr/sbin/nologin')):
         raise IdentityError('job account is absent or only partially provisioned')
-    for key in ('home', 'workspace'):
-        path = Path(spec[key])
-        meta = path.lstat()
-        if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != spec['uid'] or meta.st_mode & 0o077:
-            raise IdentityError('job home/workspace is not private to its UID')
-    protected(Path(spec['home']).parent.resolve(), directory=True)
-    settings = Path(spec['settings']).lstat()
-    if not stat.S_ISREG(settings.st_mode) or settings.st_uid != spec['uid'] or settings.st_mode & 0o077:
-        raise IdentityError('job settings must be a private job-owned regular file')
+    if not lifecycle:
+        protected(Path(spec['root']), directory=True)
+        controller_root = Path(spec['controller_root'])
+        for parent in [*reversed(controller_root.parents), controller_root]:
+            meta = parent.lstat()
+            if (not stat.S_ISDIR(meta.st_mode) or meta.st_uid not in (OWNER, spec['controller_uid'])
+                    or meta.st_mode & 0o022):
+                raise IdentityError('controller store has a mutable or foreign path component')
+        if controller_root.lstat().st_mode & 0o077:
+            raise IdentityError('controller store must be private to its controller UID')
+        for key in ('home', 'workspace'):
+            path = Path(spec[key])
+            meta = path.lstat()
+            if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != spec['uid'] or meta.st_mode & 0o077:
+                raise IdentityError('job home/workspace is not private to its UID')
+        protected(Path(spec['home']).parent.resolve(), directory=True)
+        settings = Path(spec['settings']).lstat()
+        if not stat.S_ISREG(settings.st_mode) or settings.st_uid != spec['uid'] or settings.st_mode & 0o077:
+            raise IdentityError('job settings must be a private job-owned regular file')
     protected(spec['argv'][0])
     receipts = BASE / 'used'
     protected(receipts, directory=True)
@@ -254,7 +276,7 @@ def check_native(spec, *, consumed_digest=None):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(argv) != 3 or argv[0] not in ('check', 'launch', 'stop') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
+        if len(argv) != 3 or argv[0] not in ('check', 'launch', 'stop', 'submit', 'poll') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
             raise IdentityError('expected fixed operation, job principal and manifest digest')
         if os.geteuid() != 0:
             raise IdentityError('job launcher requires its separately admitted privileged service')
@@ -269,12 +291,35 @@ def main(argv=None):
         # sudo supplies this only AFTER its kernel privilege boundary. An
         # unprivileged caller spoofing environment is refused above; root is
         # already trusted. The reviewed sudoers entry names only this helper,
-        # is restricted to controller UIDs, and must never admit a job account.
+        # grants controller operations only to controller UIDs; a job's narrow
+        # rule may grant only submit with its exact principal and digest.
         caller = os.environ.get('SUDO_UID', '')
-        if not caller.isdecimal() or int(caller) != spec['controller_uid']:
+        expected_uid = spec['uid'] if argv[0] == 'submit' else spec['controller_uid']
+        if not caller.isdecimal() or int(caller) != expected_uid:
             raise IdentityError('job launcher lacks an admitted controller UID')
+        if argv[0] in ('submit', 'poll'):
+            from . import job_mailbox
+            check_native(spec, consumed_digest=digest, lifecycle=True)
+            if argv[0] == 'submit':
+                import signal
+                def input_timeout(_signal, _frame):
+                    raise IdentityError('job message input timed out')
+                prior_handler = signal.signal(signal.SIGALRM, input_timeout)
+                signal.alarm(5)
+                try:
+                    raw = sys.stdin.buffer.read(16385)
+                finally:
+                    signal.alarm(0)
+                    signal.signal(signal.SIGALRM, prior_handler)
+                if len(raw) > 16384:
+                    raise IdentityError('job message exceeds input bound')
+                job_mailbox.submit(BASE, spec, digest, json.loads(raw), trust=protected)
+                print('QUEUED ' + digest)
+            else:
+                print(json.dumps(job_mailbox.read(BASE, spec, digest, trust=protected)))
+            return 0
         if argv[0] == 'stop':
-            check_native(spec, consumed_digest=digest)
+            check_native(spec, consumed_digest=digest, lifecycle=True)
             stop_native(spec)
             print('STOPPED ' + digest)
             return 0
@@ -475,13 +520,55 @@ def stop(root, rec):
     binding = rec.get('uid_binding')
     spec, digest = load(rec['name'])
     if (binding != {'uid': spec['uid'], 'sha256': digest}
-            or spec['root'] != str(Path(root).resolve())):
+            or spec['controller_root'] != str(Path(root).resolve())):
         raise IdentityError('job stop binding changed')
     protected(HELPER)
     answer = subprocess.run(['/usr/bin/sudo', '-n', '--', str(HELPER), 'stop', spec['principal'], digest],
                             capture_output=True, text=True, timeout=35, env={'PATH': '/usr/bin:/bin'})
     if answer.returncode != 0 or answer.stdout.strip() != 'STOPPED ' + digest:
         raise IdentityError('job UID termination was not verified')
+
+
+def mailbox_call(spec, digest, operation, value=None):
+    """Fixed protocol only; no caller-selected commands, UID or environment."""
+    if operation not in ('submit', 'poll'):
+        raise IdentityError('invalid job mailbox operation')
+    from . import job_mailbox
+    protected(HELPER)
+    raw = None if operation == 'poll' else json.dumps(job_mailbox.payload(value))
+    if raw is not None and len(raw.encode()) > 16384:
+        raise IdentityError('job message exceeds input bound')
+    answer = subprocess.run(['/usr/bin/sudo', '-n', '--', str(HELPER), operation, spec['principal'], digest],
+                            input=raw, capture_output=True, text=True, timeout=10,
+                            env={'PATH': '/usr/bin:/bin'})
+    if answer.returncode != 0 or len(answer.stdout.encode()) > job_mailbox.MAX_BYTES:
+        raise IdentityError('job mailbox operation unproved')
+    if operation == 'submit':
+        if answer.stdout.strip() != 'QUEUED ' + digest:
+            raise IdentityError('job message was not acknowledged')
+        return None
+    return job_mailbox.validate(json.loads(answer.stdout), spec, digest)
+
+
+def poll(root, rec):
+    spec, digest = load(rec['name'])
+    if (rec.get('uid_binding') != {'uid': spec['uid'], 'sha256': digest}
+            or spec['controller_root'] != str(Path(root).resolve())):
+        raise IdentityError('job mailbox binding changed')
+    return mailbox_call(spec, digest, 'poll')
+
+
+def local_job():
+    """Select the caller by protected kernel UID; environment is no selector."""
+    from . import actor_identity, ephemeral
+    row = actor_identity._policy(actor_identity.POLICY_PATH)
+    if row is None or not ephemeral.is_ephemeral_name(row['principal']):
+        return None
+    spec, digest = load(row['principal'])
+    if (spec['uid'] != os.geteuid() or row['home'] != spec['home']
+            or actor_identity.authenticated_actor() != spec['principal']):
+        raise IdentityError('caller is not the protected job principal')
+    return spec, digest
 
 
 if __name__ == '__main__':

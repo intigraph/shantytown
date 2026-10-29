@@ -3643,6 +3643,27 @@ def _cmd_spawn(a) -> int:
     import subprocess
     from . import ephemeral as eph
     from .protocols import Agent
+    if a.report:
+        from . import job_launch
+        from .actor_identity import IdentityError
+        try:
+            bound = job_launch.local_job()
+            if bound:
+                spec, digest = bound
+                if spec['root'] != str(Path(a.root).resolve()):
+                    raise IdentityError('report root differs from protected job binding')
+                if not a.verdict:
+                    raise IdentityError('job report requires a verdict')
+                if a.dry_run:
+                    print(f"would queue report for {spec['principal']}")
+                    return OK
+                job_launch.mailbox_call(spec, digest, 'submit',
+                    {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)})
+                print(f"queued result for {spec['principal']}; controller delivery and teardown pending")
+                return OK
+        except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f'  refused: protected job report unproved ({type(error).__name__})', file=sys.stderr)
+            return REFUSED
     cfg, err = config.load_or_default(Path(a.root))
     if err:
         print(f"  refused: {err}", file=sys.stderr)
@@ -3853,18 +3874,49 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
     """End dead or expired ephemeral jobs. Code-side: st fleet tend calls this
     every pass, so no agent ever polls for it (DIRECTIVE 10/9)."""
     from . import ephemeral as eph
+    from . import job_launch
+    from .actor_identity import IdentityError
+    import subprocess
     panes = _panes(a)
+    problems = []
+
+    if not dry_run:
+        for rec in eph.live(a.root):
+            if 'uid_binding' not in rec or rec['state'] == eph.ENDING:
+                continue
+            try:
+                state = job_launch.poll(a.root, rec)
+                result, cause = eph.apply_mailbox(a.root, rec['name'], state, time.time())
+                if result:
+                    verdict, summary = result['verdict'], result['summary']
+                    if rec['job'] == 'review' and verdict in ('approve', 'request-changes'):
+                        # A message is not a signed review. Until the own-key
+                        # signer is qualified, never substitute a controller key.
+                        verdict = 'blocked'
+                        summary = 'Unsigned review result; own-key verdict proof required. ' + summary
+                    _spawn_end(a, rec['name'], verdict, summary, 'report', detached=False)
+                elif cause:
+                    _spawn_end(a, rec['name'], 'failed', 'job budget reached: ' + cause,
+                               cause, detached=False)
+            except (IdentityError, eph.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+                problems.append(f"{rec['name']}: mailbox/lifecycle unproved ({type(error).__name__})")
 
     def end(name, verdict, cause):
-        _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
-                   detached=False)
+        try:
+            _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
+                       detached=False)
+        except eph.Refused as error:
+            problems.append(f'{name}: termination unproven; lane retained ({type(error).__name__})')
+            return False
     lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
                      dry_run=dry_run)
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
+    for problem in problems:
+        print(f"  ephemeral: {problem}", file=sys.stderr)
     if not lines and not quiet:
         print("  ephemeral: nothing to reap")
-    return OK
+    return CANNOT_TELL if problems else OK
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
