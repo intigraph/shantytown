@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
+      "source_sha256": "8f9670be240eaf785c36e1edb18654df4c291f9e3dc911dfc36df5b2c5e01ab1",
       "type": "Concept"
     },
     {
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
+      "source_sha256": "8f9670be240eaf785c36e1edb18654df4c291f9e3dc911dfc36df5b2c5e01ab1",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"

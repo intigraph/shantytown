@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/thread-workshop/shantytown.png" width="704" alt="shantytown: Four workshop houses share a courtyard. Original pixel art in the Thread Workshop style."/></p>
+
 <p align="center"><img src="assets/logo.svg" alt="shantytown" width="200"/></p>
 <h1 align="center">shantytown</h1>
 <p align="center"><em>🏭 Ship software and organize everyday work with a crew of AI agents.</em></p>
