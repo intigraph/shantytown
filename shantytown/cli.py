@@ -3478,6 +3478,12 @@ def _spawn_lane_release(a, rec, *, run=None) -> str:
     result = rec.get("result") or {}
     if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
         return ""
+    if 'uid_binding' in rec:
+        from . import ephemeral as eph
+        current = eph.read(a.root, rec['name'])
+        if (not current or current.get('uid_binding') != rec['uid_binding']
+                or current.get('state') != eph.DONE):
+            return 'merge lane retained: job UID termination is not verified'
     policy, _cfg = _spawn_verdict_policy(a)
     if not policy.lane_release:
         return ""
@@ -3611,7 +3617,9 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
         raise eph.Refused(f"no ephemeral job named {name}")
     if verdict is None:                   # an interrupted teardown: finish it only
         schedule(name)
-        return rec, []
+        current = eph.read(a.root, name) or rec
+        lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
+        return current, [lane] if lane else []
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
@@ -3632,8 +3640,34 @@ def _cmd_spawn(a) -> int:
     """`st agent spawn` — ephemeral, administrator-managed agents. Rules and the
     lifecycle are in ephemeral.py and docs/ephemeral-agents.md; this wires them
     to the real launcher, panes, tracker and event store."""
+    import subprocess
     from . import ephemeral as eph
     from .protocols import Agent
+    if a.report:
+        from . import job_launch
+        from .actor_identity import IdentityError
+        from .gate_verdict import VerdictError
+        try:
+            bound = job_launch.local_job()
+            if bound:
+                spec, digest = bound
+                if spec['root'] != str(Path(a.root).resolve()):
+                    raise IdentityError('report root differs from protected job binding')
+                if not a.verdict:
+                    raise IdentityError('job report requires a verdict')
+                if a.dry_run:
+                    print(f"would queue report for {spec['principal']}")
+                    return OK
+                message = {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)}
+                if spec.get('request', {}).get('job') == 'review' and a.verdict in ('approve', 'request-changes'):
+                    from . import job_review
+                    message['review'] = job_review.write(spec, a.verdict, a.head, a.evidence)
+                job_launch.mailbox_call(spec, digest, 'submit', message)
+                print(f"queued result for {spec['principal']}; controller delivery and teardown pending")
+                return OK
+        except (IdentityError, VerdictError, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f'  refused: protected job report unproved ({type(error).__name__})', file=sys.stderr)
+            return REFUSED
     cfg, err = config.load_or_default(Path(a.root))
     if err:
         print(f"  refused: {err}", file=sys.stderr)
@@ -3748,13 +3782,34 @@ def _cmd_spawn(a) -> int:
             raise eph.Refused("unattended ephemeral launches are gated: "
                               "ephemeral.unattended_uid_ready is false; "
                               "a distinct protected job UID must be established first")
+        uid_launch = None
+        if unattended:
+            if not policy.require_verified_identity:
+                raise eph.Refused("unattended jobs require verified protected UID identity")
+            from . import job_launch
+            from .actor_identity import IdentityError
+            try:
+                uid_launch = job_launch.select(req, root=a.root,
+                    harness=eph.harness_for(req, policy),
+                    used={r['name'] for r in eph.records(a.root)}, native_probe=not a.dry_run)
+            except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
+                raise eph.Refused("protected job UID admission failed: " + type(error).__name__) from None
+        if unattended and a.retry and old.get('state') != eph.DONE:
+            # The separate UID process must not cost the original its lane if
+            # an exec-time switch later fails. Until an atomic cross-UID handoff
+            # is qualified, live replacement refuses; completed retries can use
+            # a fresh protected slot. Attended compatibility behavior is intact.
+            raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
                        "retried", detached=False)
         with eph.lock(a.root):
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),
-                           role_of=role_of, attempt=attempt, retry_of=retry_of)
+                           role_of=role_of, attempt=attempt, retry_of=retry_of,
+                           name=uid_launch[0]['principal'] if uid_launch else None)
+            if uid_launch:
+                rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
             known = {h.name for h in harness_mod.all_harnesses()}
             if rec["harness"] not in known:
                 raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "
@@ -3771,7 +3826,12 @@ def _cmd_spawn(a) -> int:
                       f"reports to {rec['administrator']})")
                 print(eph.prompt(rec))
                 return OK
-            if shared is not None:
+            if uid_launch:
+                # Staged by the operator under the target UID. Never copy the
+                # controller's credentials or equip it with the crew's MCP kit.
+                rec['workspace'] = uid_launch[0]['workspace']
+                rec['worktree_of'] = str(shared) if shared else None
+            elif shared is not None:
                 from .workspace import ensure_worktree
                 rec["workspace"] = ensure_worktree(shared, rec["name"])
                 rec["worktree_of"] = str(shared)
@@ -3818,18 +3878,58 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
     """End dead or expired ephemeral jobs. Code-side: st fleet tend calls this
     every pass, so no agent ever polls for it (DIRECTIVE 10/9)."""
     from . import ephemeral as eph
+    from . import job_launch
+    from .actor_identity import IdentityError
+    import subprocess
     panes = _panes(a)
+    problems = []
+
+    if not dry_run:
+        for rec in eph.live(a.root):
+            if 'uid_binding' not in rec or rec['state'] == eph.ENDING:
+                continue
+            try:
+                state = job_launch.poll(a.root, rec)
+                result, cause = eph.apply_mailbox(a.root, rec['name'], state, time.time())
+                if result:
+                    verdict, summary = result['verdict'], result['summary']
+                    if rec['job'] == 'review' and verdict in ('approve', 'request-changes'):
+                        from . import job_review
+                        from .gate_verdict import VerdictError
+                        verified = False
+                        if 'review' in result:
+                            try:
+                                spec, digest = job_launch.load(rec['name'])
+                                if rec['uid_binding'] == {'uid': spec['uid'], 'sha256': digest}:
+                                    verified = job_review.confirmed(spec, result)
+                            except (IdentityError, VerdictError, OSError, ValueError):
+                                pass
+                        if not verified:
+                            verdict = 'blocked'
+                            summary = 'Review signature/scope unproved; no controller signing fallback. ' + summary
+                    _spawn_end(a, rec['name'], verdict, summary, 'report', detached=False)
+                elif cause:
+                    _spawn_end(a, rec['name'], 'failed', 'job budget reached: ' + cause,
+                               cause, detached=False)
+            except (IdentityError, eph.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+                problems.append(f"{rec['name']}: mailbox/lifecycle unproved ({type(error).__name__})")
 
     def end(name, verdict, cause):
-        _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
-                   detached=False)
+        try:
+            _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
+                       detached=False)
+        except eph.Refused as error:
+            problems.append(f'{name}: termination unproven; lane retained ({type(error).__name__})')
+            return False
     lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
                      dry_run=dry_run)
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
+    for problem in problems:
+        print(f"  ephemeral: {problem}", file=sys.stderr)
     if not lines and not quiet:
         print("  ephemeral: nothing to reap")
-    return OK
+    return CANNOT_TELL if problems else OK
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
@@ -4389,6 +4489,13 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
               f"{hold_name} hold ({gaming.state}) — the hold stays in force for "
               "dispatch, respawns and every other launch.", file=sys.stderr)
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        uid_launch = job_launch.for_card(a.root, card)
+    except (IdentityError, OSError, ValueError):
+        print('  refused: protected job launch binding unavailable', file=sys.stderr)
+        return REFUSED
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
@@ -4397,7 +4504,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
-    if harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
+    if not uid_launch and harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
         from . import codex_daemon
         fixed = codex_daemon.repair(card.name)
         if fixed.blocked:
@@ -4415,73 +4522,74 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             runtime.prepare_account_settings(card)
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
-            harness_mod.Unsupported, ValueError, OSError) as e:
+            harness_mod.Unsupported, IdentityError, ValueError, OSError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
-    # WORKSPACE: the launch string `cd`s into card.workspace, so the
-    # directory has to BE there. Ensure it (clone if absent, leave alone if
-    # present) or REFUSE — before any tmux mutation, so a refusal still creates
-    # nothing. Deliberately AFTER dry-run: dry-run must not clone.
-    try:
-        ensure_workspace(card)
-    except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
-    # current tree — launch is the other safe pull moment (nothing is running
-    # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
-    # and never blocks the launch (stale-but-working beats no agent).
-    if card.workspace:
-        if err := _refresh_clone(card.workspace):
-            # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
-            # forge outage right after fixing the first one. "ff-only pull
-            # refused" for a `Connection refused` blames the TREE for a dead
-            # REMOTE here exactly as it did on the dispatch path — and a guard
-            # fixed at one call site while an identical message stands at
-            # another is the uncovered-surface class this repo keeps paying for.
-            if _pull_failed_on_the_REMOTE(err):
-                print(f"  ⚠ workspace not brought current — THE REMOTE IS "
-                      f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
-                      f"reconcile locally. Launching on the existing tree, "
-                      f"which MAY BE STALE.", file=sys.stderr)
-            else:
-                print(f"  ⚠ workspace not brought current (ff-only pull refused: "
-                      f"{err.splitlines()[0]}) — launching on the existing tree.",
-                      file=sys.stderr)
-    # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
-    # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
-    # token), so an agent launched from one has no code search, no graph and no
-    # ops tools, and looks identical to a healthy one on every surface. Five
-    # agents worked P1 beads for a night that way. Refuse instead.
-    try:
-        selected_settings = (runtime.settings_path(card)
-                             if hasattr(runtime, "settings_path") else None)
-        servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
-    except ProvisionError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    if servers:
-        # Say what it CAN reach, parsed back out of the file we wrote — "the file
-        # is there" was true for every broken render.
-        print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
-    elif card.workspace:
-        # No template = this store defines no kit. Say it, every time: silence
-        # here is indistinguishable from the bug (an agent that launches with no
-        # tools and looks fine), and a deleted template would restore it.
-        print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
-              f" — launching {card.name} with NO MCP kit. "
-              "This store has not configured MCP provisioning; "
-              "add a template there if these tools are needed.")
-    if card.workspace:
-        # Skills, same claim shape as the servers: names read back out of the
-        # links we just made, not "the directory is there". A crew that shipped
-        # 22 correct skills to a runtime loading none had every other signal green.
-        linked = prov_mod.skills_linked(card.workspace)
-        if linked:
-            print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
+    if not uid_launch:
+        # WORKSPACE: the launch string `cd`s into card.workspace, so the
+        # directory has to BE there. Ensure it (clone if absent, leave alone if
+        # present) or REFUSE — before any tmux mutation, so a refusal still creates
+        # nothing. Deliberately AFTER dry-run: dry-run must not clone.
+        try:
+            ensure_workspace(card)
+        except WorkspaceError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
+        # current tree — launch is the other safe pull moment (nothing is running
+        # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
+        # and never blocks the launch (stale-but-working beats no agent).
+        if card.workspace:
+            if err := _refresh_clone(card.workspace):
+                # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
+                # forge outage right after fixing the first one. "ff-only pull
+                # refused" for a `Connection refused` blames the TREE for a dead
+                # REMOTE here exactly as it did on the dispatch path — and a guard
+                # fixed at one call site while an identical message stands at
+                # another is the uncovered-surface class this repo keeps paying for.
+                if _pull_failed_on_the_REMOTE(err):
+                    print(f"  ⚠ workspace not brought current — THE REMOTE IS "
+                          f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
+                          f"reconcile locally. Launching on the existing tree, "
+                          f"which MAY BE STALE.", file=sys.stderr)
+                else:
+                    print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                          f"{err.splitlines()[0]}) — launching on the existing tree.",
+                          file=sys.stderr)
+        # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
+        # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
+        # token), so an agent launched from one has no code search, no graph and no
+        # ops tools, and looks identical to a healthy one on every surface. Five
+        # agents worked P1 beads for a night that way. Refuse instead.
+        try:
+            selected_settings = (runtime.settings_path(card)
+                                 if hasattr(runtime, "settings_path") else None)
+            servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
+        except ProvisionError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        if servers:
+            # Say what it CAN reach, parsed back out of the file we wrote — "the file
+            # is there" was true for every broken render.
+            print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
+        elif card.workspace:
+            # No template = this store defines no kit. Say it, every time: silence
+            # here is indistinguishable from the bug (an agent that launches with no
+            # tools and looks fine), and a deleted template would restore it.
+            print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
+                  f" — launching {card.name} with NO MCP kit. "
+                  "This store has not configured MCP provisioning; "
+                  "add a template there if these tools are needed.")
+        if card.workspace:
+            # Skills, same claim shape as the servers: names read back out of the
+            # links we just made, not "the directory is there". A crew that shipped
+            # 22 correct skills to a runtime loading none had every other signal green.
+            linked = prov_mod.skills_linked(card.workspace)
+            if linked:
+                print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     # cwd=card.workspace so the SESSION starts in the agent's own directory, not
     # the launcher's (GitHub #18) — the launch string also cd's, but a pane whose
@@ -4524,7 +4632,8 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A bounded manifest must never launch before its private parent is ready.
     from . import mcp_limits
     try:
-        mcp_limits.prepare_launch(a.root, card.name, panes, session)
+        if not uid_launch:
+            mcp_limits.prepare_launch(a.root, card.name, panes, session)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"  could not tell: pane created but MCP containment preparation failed: {exc}",
               file=sys.stderr)

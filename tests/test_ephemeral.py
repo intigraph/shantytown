@@ -823,15 +823,15 @@ def test_unattended_gate_also_covers_inherited_dangerous_posture(store, capsys):
     assert not launched and not eph.records(root)
 
 
-def test_uid_readiness_must_be_boolean_and_only_enables_a_preview(store, capsys):
+def test_uid_readiness_must_be_boolean_and_cannot_replace_verified_identity(store, capsys):
     root, _, launched = store
     path = root / 'shantytown.toml'
     path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = "yes"\n')
     with pytest.raises(config.ConfigError, match='unattended_uid_ready'):
         config.load(root)
     path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = true\n')
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.OK
-    assert 'would spawn' in capsys.readouterr().out
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.REFUSED
+    assert 'verified protected UID' in capsys.readouterr().err
     assert not launched and not eph.records(root)
 
 
@@ -895,7 +895,7 @@ def test_verified_identity_setting_rejects_non_boolean(store):
         config.load(root)
 
 
-def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
+def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path, monkeypatch):
     """#411 review: the #406 guard covered only Claude's StopFailure refresh.
     provision() re-rendered the SHARED codex worker config.toml with the
     spawning st's interpreter, so a spawn from a checkout repointed every
@@ -907,6 +907,11 @@ def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
     config = root / "settings" / "codex" / "worker" / "config.toml"
     config.parent.mkdir(parents=True)
     import sys
+    from shantytown import runtime
+    # The fixture changes the emitting interpreter deliberately. A source-only
+    # runner may correctly choose the installed hook interpreter instead of its
+    # own; pin this input rather than depending on that host installation.
+    monkeypatch.setattr(runtime, '_hook_interpreter', lambda: sys.executable)
     stale = codex.render(codex.settings_for_role("worker", root=root)).replace(
         sys.executable, "/crew/venv/bin/python")
     assert "/crew/venv/bin/python" in stale
@@ -919,3 +924,169 @@ def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
     provision(Agent(name="franklin", role="worker", harness="codex",
                     workspace=str(ws)), root)
     assert config.read_text() != stale      # control: crew launches still refresh it
+
+
+@pytest.mark.parametrize('reason', ['missing account', 'unbound', 'partial provisioning', 'failed switch', 'readiness mismatch'])
+def test_uid_admission_failure_precedes_retry_lane_release_and_all_launch_effects(store, monkeypatch, reason):
+    from shantytown import job_launch
+    from shantytown.actor_identity import IdentityError
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 2\nunattended = true\n'
+                                         'unattended_uid_ready = true\nrequire_verified_identity = true\n')
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    def refuse(*args, **kwargs): raise IdentityError(reason)
+    monkeypatch.setattr(job_launch, 'select', refuse)
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **k: pytest.fail('old lane released before UID admission'))
+    assert _st(root, '--retry', rec['name']) == cli.REFUSED
+    after = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert after == before
+    assert not launched and eph.read(root, rec['name'])['state'] == eph.LIVE
+
+
+def test_successful_uid_probe_still_cannot_release_a_live_isolated_retry_lane(store, monkeypatch):
+    from shantytown import job_launch
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 2\nunattended = true\n'
+                                         'unattended_uid_ready = true\nrequire_verified_identity = true\n')
+    checked = []
+    monkeypatch.setattr(job_launch, 'select', lambda *a, **k: checked.append(True) or ({}, '0' * 64))
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **k: pytest.fail('live lane released'))
+    assert _st(root, '--retry', rec['name']) == cli.REFUSED
+    assert checked == [True]
+    assert not launched and eph.read(root, rec['name'])['state'] == eph.LIVE
+
+
+@pytest.mark.parametrize('verified', [False, True])
+def test_bound_uid_teardown_requires_stop_proof_before_releasing_lane(tmp_path, monkeypatch, verified):
+    from shantytown import job_launch
+    from shantytown.actor_identity import IdentityError
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    eph.record_result(tmp_path, rec['name'], 'failed', 'test', 'timeout', NOW)
+    scratch = eph.ledger_dir(tmp_path) / 'scratch' / rec['name']
+    scratch.mkdir(parents=True)
+    rec = eph.read(tmp_path, rec['name'])
+    rec['workspace'] = str(scratch)
+    eph.write(tmp_path, rec)
+    card = tmp_path / 'crew' / (rec['name'] + '.json')
+    card.parent.mkdir()
+    card.write_text('{}')
+    actions = []
+    def stop(root, record):
+        assert card.exists() and scratch.exists()
+        actions.append('uid-stop')
+        if not verified:
+            raise IdentityError('unproven')
+    monkeypatch.setattr(job_launch, 'stop', stop)
+    if verified:
+        done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: actions.append('pane'))
+        assert done['state'] == eph.DONE and actions == ['uid-stop', 'pane']
+    else:
+        with pytest.raises(eph.Refused, match='lane retained'):
+            eph.teardown(tmp_path, rec['name'], kill_session=lambda _: actions.append('pane'))
+        assert eph.read(tmp_path, rec['name']) == rec
+        assert card.exists() and scratch.exists() and actions == ['uid-stop']
+        assert rec['state'] == eph.ENDING
+
+
+@pytest.mark.parametrize('state', [eph.ENDING, eph.DONE])
+def test_uid_merge_lane_requires_authoritative_completed_teardown(tmp_path, monkeypatch, state):
+    from types import SimpleNamespace
+    rec = _rec(tmp_path, job='merge', request_id='b' * 64,
+               uid_binding={'uid': 51001, 'sha256': 'a' * 64}, repo='owner/repo', pr=1)
+    eph.record_result(tmp_path, rec['name'], 'failed', 'test', 'timeout', NOW)
+    current = eph.read(tmp_path, rec['name'])
+    current['state'] = state
+    eph.write(tmp_path, current)
+    # A stale/invented DONE supplied to the release function is not evidence.
+    stale = dict(current, state=eph.DONE)
+    calls = []
+    monkeypatch.setattr(cli, '_spawn_verdict_policy', lambda _: (
+        SimpleNamespace(lane_release=('lane',)), None))
+    monkeypatch.setattr('shantytown.gate_verdict.lane_release_argv', lambda *a: ['fixed-release'])
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+    answer = cli._spawn_lane_release(SimpleNamespace(root=tmp_path), stale, run=run)
+    assert calls == ([['fixed-release']] if state == eph.DONE else [])
+    assert bool(answer) == (state != eph.DONE)
+
+
+def test_mailbox_application_counts_once_and_keeps_results_as_data(tmp_path):
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64,
+             'turns': {'b' * 64: 10}, 'result': {'kind': 'report', 'verdict': 'done', 'summary': 'own'}}
+    result, cause = eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert result == state['result'] and not cause
+    assert eph.read(tmp_path, rec['name'])['turns'] == 1
+    eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert eph.read(tmp_path, rec['name'])['turns'] == 1
+    assert eph.read(tmp_path, rec['name'])['result'] is None  # drain decides lifecycle
+    with pytest.raises(eph.Refused, match='regressed'):
+        eph.apply_mailbox(tmp_path, rec['name'], dict(state, turns={}), NOW)
+
+
+@pytest.mark.parametrize('fault', ['uid', 'sha256'])
+def test_foreign_mailbox_cannot_change_controller_ledger(tmp_path, fault):
+    from shantytown.actor_identity import IdentityError
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64, 'turns': {}, 'result': None}
+    state[fault] = 51002 if fault == 'uid' else 'b' * 64
+    before = eph.read(tmp_path, rec['name'])
+    with pytest.raises(IdentityError):
+        eph.apply_mailbox(tmp_path, rec['name'], state, NOW)
+    assert eph.read(tmp_path, rec['name']) == before
+
+
+def test_bound_job_report_queues_without_reading_controller_config(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch
+    from types import SimpleNamespace
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    calls = []
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: calls.append(a))
+    monkeypatch.setattr(config, 'load_or_default', lambda *a: pytest.fail('job read controller config'))
+    args = SimpleNamespace(report=True, root=tmp_path, verdict='done', dry_run=False,
+                           summary='own result', summary_file=None)
+    assert cli._cmd_spawn(args) == cli.OK
+    assert calls == [(spec, 'a' * 64, 'submit', {'kind': 'report', 'verdict': 'done', 'summary': 'own result'})]
+    assert 'controller delivery and teardown pending' in capsys.readouterr().out
+
+
+def test_reaper_does_not_claim_teardown_when_uid_termination_is_unproven(tmp_path):
+    rec = _rec(tmp_path)
+    eph.mark_live(tmp_path, rec['name'])
+    lines = eph.reap(tmp_path, pane_alive=lambda _: False, end=lambda *a: False, now=NOW)
+    assert any('termination unproven' in line for line in lines)
+    assert all('torn down' not in line for line in lines)
+    assert eph.read(tmp_path, rec['name'])['state'] != eph.DONE
+
+
+@pytest.mark.parametrize('mode', ['report', 'budget', 'unsigned-review'])
+def test_controller_reaper_drains_only_bound_mailbox_and_never_signs_for_job(tmp_path, monkeypatch, mode):
+    from shantytown import job_launch
+    from types import SimpleNamespace
+    rec = _rec(tmp_path, job='review' if mode == 'unsigned-review' else 'task',
+               repo='owner/repo' if mode == 'unsigned-review' else None,
+               pr=1 if mode == 'unsigned-review' else None,
+               uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    state = {'version': 1, 'uid': 51001, 'sha256': 'a' * 64, 'turns': {},
+             'result': {'kind': 'report', 'verdict': 'approve' if mode == 'unsigned-review' else 'done',
+                        'summary': 'job declaration'}}
+    if mode == 'budget':
+        rec['max_turns'] = 1
+        eph.write(tmp_path, rec)
+        state.update(result=None, turns={'b' * 64: 1})
+    monkeypatch.setattr(job_launch, 'poll', lambda *a: state)
+    monkeypatch.setattr(cli, '_panes', lambda _: SimpleNamespace(exists=lambda _: True))
+    monkeypatch.setattr(cli.time, 'time', lambda: NOW)
+    monkeypatch.setattr(cli, '_spawn_write_verdict', lambda *a, **kw: pytest.fail('controller signing for job'))
+    ended = []
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **kw: ended.append((a, kw)))
+    assert cli._spawn_reap(SimpleNamespace(root=tmp_path), quiet=True) == cli.OK
+    assert len(ended) == 1
+    args, kwargs = ended[0]
+    assert args[1] == rec['name'] and kwargs == {'detached': False}
+    assert args[2] == {'report': 'done', 'budget': 'failed', 'unsigned-review': 'blocked'}[mode]
+    assert args[-1] == ('turn budget' if mode == 'budget' else 'report')

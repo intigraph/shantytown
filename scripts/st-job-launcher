@@ -1,0 +1,67 @@
+#!/opt/shantytown-job-launcher/bin/python3 -BIS
+"""Validate the immutable application before importing any of its code.
+
+-I ignores environment/cwd/user paths; -S prevents site/.pth execution; -B
+keeps startup and application imports from changing the pinned runtime tree.
+The separate root-owned interpreter and app are installed by the reviewed lane,
+never an editable crew checkout or user-controlled virtualenv.
+"""
+import os
+from pathlib import Path
+import stat
+import sys
+
+APP = Path('/opt/shantytown-job-launcher/app')
+OWNER = 0
+
+
+def protected(path):
+    path = Path(path)
+    if not path.is_absolute():
+        raise RuntimeError('relative installation path')
+    for entry in [*reversed(path.parents), path]:
+        meta = entry.lstat()
+        if (meta.st_uid != OWNER or meta.st_mode & 0o022
+                or not (stat.S_ISDIR(meta.st_mode) or stat.S_ISREG(meta.st_mode))):
+            raise RuntimeError('mutable installation path')
+
+
+def bootstrap():
+    if (os.geteuid() != 0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.dont_write_bytecode):
+        raise RuntimeError('privileged isolated interpreter required')
+    if Path(sys.prefix) != APP.parent:
+        raise RuntimeError('private runtime prefix required')
+    protected(Path(__file__).absolute())
+    protected(Path(sys.executable).absolute())
+    for value in sys.path:
+        if not value:
+            raise RuntimeError('ambient interpreter import path')
+        path = Path(value)
+        # CPython includes a not-yet-existing standard-library zip path. Its
+        # immutable parent prevents a job from creating one after this check.
+        protected(path if path.exists() else path.parent)
+    protected(APP)
+    package = APP / 'shantytown'
+    protected(package)
+    entries = list(package.rglob('*'))
+    if not entries or len(entries) > 4096:
+        raise RuntimeError('invalid application inventory')
+    for entry in entries:
+        protected(entry)
+    # Sudo's caller UID is read only after the kernel/root gate above; no other
+    # caller environment is needed by the fixed operations or their imports.
+    caller = os.environ.get('SUDO_UID', '')
+    os.environ.clear()
+    os.environ.update(SUDO_UID=caller, PATH='/usr/bin:/bin', LC_ALL='C')
+    sys.path.insert(0, str(APP))
+    from shantytown.job_launch import main
+    return main()
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(bootstrap())
+    except (RuntimeError, OSError):
+        print('refused: invalid protected launcher installation', file=sys.stderr)
+        raise SystemExit(1)
