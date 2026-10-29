@@ -14,6 +14,7 @@ import stat
 from pathlib import Path
 
 from .actor_identity import IdentityError
+from .gate_verdict import AEGIS
 
 MAX_BYTES = 512 * 1024
 MAX_TURNS = 4096
@@ -33,7 +34,7 @@ def payload(value):
             if (not isinstance(proof, dict) or set(proof) != {'record', 'head', 'signer'}
                     or any(not isinstance(v, str) or len(v) > 256 for v in proof.values())
                     or not re.fullmatch(r'[0-9a-f]{40}', proof['head'])
-                    or not re.fullmatch(r'http://aegis\.gastown\.local/ontology/gate_approval\.[0-9a-f]{32}', proof['record'])
+                    or not re.fullmatch(re.escape(AEGIS) + r'gate_approval\.[0-9a-f]{32}', proof['record'])
                     or not re.fullmatch(r'st-job-verifier\.eph-review-[0-9a-f]{6}', proof['signer'])):
                 raise IdentityError('invalid job review proof reference')
     else:

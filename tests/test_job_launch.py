@@ -15,6 +15,113 @@ from shantytown.ephemeral import Request
 
 
 @pytest.fixture
+def metadata(capability, tmp_path, monkeypatch):
+    from shantytown import job_metadata
+    spec, _, _ = capability
+    digest = jobs.load(spec['principal'])[1]
+    spec = dict(spec, root=str(tmp_path / 'stores' / spec['principal']))
+    monkeypatch.setattr(job_metadata, 'BASE', tmp_path / 'stores')
+    monkeypatch.setattr(jobs, 'load', lambda _: (spec, digest))
+    monkeypatch.setattr(jobs, 'inventory', lambda: [(spec, digest)])
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
+    return job_metadata, spec, digest
+
+
+def test_metadata_contains_only_own_card_and_disabled_policy(metadata):
+    from shantytown import config
+    from shantytown.files import FilesRegistry
+    module, spec, digest = metadata
+    assert module.prepare(spec['principal'], digest) == 'CREATED'
+    root = Path(spec['root'])
+    cards = FilesRegistry(root / 'crew').all().exact()
+    assert [card.name for card in cards] == [spec['principal']]
+    assert cards[0].reports_to is None and cards[0].pane is None
+    policy = config.load(root).ephemeral
+    assert policy.require_verified_identity and not policy.unattended_uid_ready
+    assert policy.unattended is False and policy.max_agents == 0
+    rendered = b''.join(module.contents(spec).values())
+    assert spec['controller_root'].encode() not in rendered
+    assert b'key' not in rendered and b'endpoint' not in rendered
+    assert module.prepare(spec['principal'], digest) == 'UNCHANGED'
+
+
+@pytest.mark.parametrize('fault', ['extra', 'changed', 'symlink'])
+def test_metadata_does_not_adopt_foreign_or_modified_store(metadata, fault):
+    module, spec, digest = metadata
+    module.prepare(spec['principal'], digest)
+    root = Path(spec['root'])
+    path = root / 'shantytown.toml'
+    if fault == 'extra':
+        (root / 'controller-credential.json').write_text('synthetic-not-a-key')
+    elif fault == 'changed':
+        path.write_text('[ephemeral]\nunattended_uid_ready=true\n')
+    else:
+        path.unlink()
+        path.symlink_to(root / 'absent')
+    with pytest.raises(IdentityError):
+        module.prepare(spec['principal'], digest)
+
+
+def test_metadata_preserves_interrupted_staging_and_rejects_changed_digest(metadata):
+    module, spec, digest = metadata
+    module.BASE.mkdir(mode=0o755)
+    staging = module.BASE / ('.' + spec['principal'] + '.pending')
+    staging.mkdir(mode=0o700)
+    marker = staging / 'interrupted'
+    marker.write_text('retain')
+    with pytest.raises(IdentityError):
+        module.prepare(spec['principal'], 'b' * 64)
+    with pytest.raises(FileExistsError):
+        module.prepare(spec['principal'], digest)
+    assert marker.read_text() == 'retain' and not Path(spec['root']).exists()
+
+
+def test_metadata_nonroot_refuses_before_manifest_read(metadata, monkeypatch):
+    module, spec, digest = metadata
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(jobs, 'load', lambda *a: (_ for _ in ()).throw(AssertionError('manifest read')))
+    with pytest.raises(IdentityError, match='root execution'):
+        module.prepare(spec['principal'], digest)
+
+
+@pytest.mark.parametrize('caller', ['controller', 'job', 'foreign'])
+def test_metadata_fixed_helper_operation_requires_its_controller(metadata, monkeypatch, caller):
+    module, spec, digest = metadata
+    original = jobs.protected
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if Path(path) == Path(jobs.__file__).absolute() else original(path, **kw))
+    uid = {'controller': spec['controller_uid'], 'job': spec['uid'], 'foreign': spec['uid'] + 1}[caller]
+    monkeypatch.setenv('SUDO_UID', str(uid))
+    monkeypatch.setattr(jobs, 'check_native', lambda *a, **kw:
+                        (_ for _ in ()).throw(AssertionError('launch attempted')))
+    assert jobs.main(['prepare', spec['principal'], digest]) == (0 if caller == 'controller' else 1)
+    assert Path(spec['root']).exists() == (caller == 'controller')
+
+
+def test_launch_rechecks_own_key_before_consuming_or_executing(capability, monkeypatch):
+    spec, _, _ = capability
+    digest = jobs.load(spec['principal'])[1]
+    original = jobs.protected
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if Path(path) == Path(jobs.__file__).absolute() else original(path, **kw))
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
+    monkeypatch.setenv('SUDO_UID', str(spec['controller_uid']))
+    calls = []
+    monkeypatch.setattr(jobs, 'check_native', lambda *a, **kw: calls.append('native'))
+    def failed_key(*a):
+        calls.append('own-key')
+        raise IdentityError('attestation changed after admission')
+    monkeypatch.setattr(jobs, 'probe', failed_key)
+    monkeypatch.setattr(jobs, 'consume', lambda *a:
+                        (_ for _ in ()).throw(AssertionError('UID consumed')))
+    monkeypatch.setattr(jobs, 'execute', lambda *a:
+                        (_ for _ in ()).throw(AssertionError('harness executed')))
+    assert jobs.main(['launch', spec['principal'], digest]) == 1
+    assert calls == ['native', 'own-key']
+    assert list((jobs.BASE / 'used').iterdir()) == []
+
+
+@pytest.fixture
 def capability(tmp_path, monkeypatch):
     base = tmp_path / 'plans'
     base.mkdir(mode=0o700)

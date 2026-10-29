@@ -298,6 +298,23 @@ the minimal public job metadata there without controller secrets. Lifecycle
 stop/drain authorization uses immutable identity and the consumed receipt,
 so changing job-owned settings cannot prevent the controller from stopping it.
 
+The staged helper's fixed `prepare <principal> <digest>` operation builds that
+minimal store only for its admitted controller UID and exact protected slot
+manifest. It creates one public own-job card and a configuration with verified
+identity required, zero spawn capacity, unattended admission disabled and UID
+readiness false. No controller config, pane, credential, endpoint or signing key
+is copied. Existing stores must match exactly; extra or changed files refuse.
+Interrupted staging is retained for explicit recovery. Preparation does not
+consume a launch slot, create an account or launch a job. Provisioning must grant
+this exact operation separately; a job's submit-only rule never grants prepare.
+
+Protected job stop hooks authenticate their UID before consulting environment
+identity or controller pane/hold state. They submit a bounded own-turn receipt;
+context depth is unknown when no own measurement is available. Failed identity
+or receipt acknowledgement blocks further work. The controller remains the
+budget and teardown authority. Launch rechecks the job's own attestation after
+admission and before consuming its UID reservation.
+
 The separate helper bootstrap uses a fixed private Python with `-IS`: isolated
 imports, no environment/cwd/user-site paths, and no site or `.pth` execution.
 Before importing application code it validates its interpreter/import paths

@@ -246,6 +246,8 @@ def check_native(spec, *, consumed_digest=None, lifecycle=False):
         raise IdentityError('job UID/primary group is shared with another native principal')
     if not lifecycle:
         protected(Path(spec['root']), directory=True)
+        from . import job_metadata
+        job_metadata.verify(spec)
         controller_root = Path(spec['controller_root'])
         for parent in [*reversed(controller_root.parents), controller_root]:
             meta = parent.lstat()
@@ -296,7 +298,7 @@ def check_native(spec, *, consumed_digest=None, lifecycle=False):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(argv) != 3 or argv[0] not in ('check', 'launch', 'stop', 'submit', 'poll') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
+        if len(argv) != 3 or argv[0] not in ('prepare', 'check', 'launch', 'stop', 'submit', 'poll') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
             raise IdentityError('expected fixed operation, job principal and manifest digest')
         if os.geteuid() != 0:
             raise IdentityError('job launcher requires its separately admitted privileged service')
@@ -317,6 +319,11 @@ def main(argv=None):
         expected_uid = spec['uid'] if argv[0] == 'submit' else spec['controller_uid']
         if not caller.isdecimal() or int(caller) != expected_uid:
             raise IdentityError('job launcher lacks an admitted controller UID')
+        if argv[0] == 'prepare':
+            from . import job_metadata
+            job_metadata.prepare(spec['principal'], digest)
+            print('PREPARED ' + digest)
+            return 0
         if argv[0] in ('submit', 'poll'):
             from . import job_mailbox
             check_native(spec, consumed_digest=digest, lifecycle=True)
@@ -344,8 +351,10 @@ def main(argv=None):
             print('STOPPED ' + digest)
             return 0
         check_native(spec)
+        # Admission's earlier check is not a credential lease. Re-attest under
+        # the job UID at launch before reserving a UID or executing its harness.
+        probe(spec)
         if argv[0] == 'check':
-            probe(spec)
             print('READY ' + digest)
             return 0
         import fcntl
