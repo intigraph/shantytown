@@ -538,6 +538,11 @@ def stop_native(spec):
         if pid:
             if os.waitstatus_to_exitcode(status) != 0:
                 raise IdentityError('native job UID termination failed')
+            # A same-UID adversary may interfere with the dropped worker. Its
+            # exit status is no authority for quiescence; verify from the
+            # privileged parent without granting root a PID-signalling API.
+            if running_uid(spec['uid']):
+                raise IdentityError('job UID remains active after termination worker')
             return
         time.sleep(0.02)
     # Do not signal an unverified PID from root even on timeout. A hung child

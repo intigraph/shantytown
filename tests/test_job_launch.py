@@ -414,6 +414,30 @@ def test_native_uid_snapshot_never_treats_unknown_as_empty(monkeypatch, output, 
         assert jobs.running_uid(51001) == expected
 
 
+@pytest.mark.parametrize('snapshot', ['empty', 'survivor', 'unknown'])
+def test_successful_dropped_worker_cannot_certify_uid_quiescence(capability, monkeypatch, snapshot):
+    spec, _, _ = capability
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(jobs.os, 'fork', lambda: 901)
+    monkeypatch.setattr(jobs.os, 'waitpid', lambda *a: (901, 0))
+    monkeypatch.setattr(jobs.os, 'kill', lambda *a:
+                        (_ for _ in ()).throw(AssertionError('root signalled a PID')))
+    reads = []
+    def authoritative(uid):
+        assert jobs.os.geteuid() == 0 and uid == spec['uid']
+        reads.append(uid)
+        if snapshot == 'unknown':
+            raise IdentityError('process state unknown')
+        return [] if snapshot == 'empty' else [902]
+    monkeypatch.setattr(jobs, 'running_uid', authoritative)
+    if snapshot == 'empty':
+        jobs.stop_native(spec)
+    else:
+        with pytest.raises(IdentityError):
+            jobs.stop_native(spec)
+    assert reads == [spec['uid']]
+
+
 @pytest.mark.parametrize('actor', ['own', 'controller', None])
 def test_job_key_attestation_occurs_after_uid_drop_without_controller_environment(capability, monkeypatch, actor):
     from shantytown import actor_identity
