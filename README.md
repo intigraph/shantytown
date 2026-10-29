@@ -86,7 +86,7 @@ Follow [Getting started](https://scbrown.github.io/shantytown/getting-started.ht
 |---|---|
 | Plan a crew for a project | The `fleet init --dry-run` example above |
 | Choose repository and tracker adapters | [Adapter guide](docs/adapters.md) |
-| Inspect available commands | `st help` |
+| Inspect available commands | `st --help` |
 
 [CLI reference](https://intigraph.github.io/shantytown/cli.html) covers lifecycle and work commands.
 
