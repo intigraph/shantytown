@@ -422,10 +422,13 @@ class Tmux:
         with its own environment and inheriting it here would let the checker's
         own CODEX_HOME answer a question about somebody else's agent.
         """
-        r = subprocess.run(
-            self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
-            capture_output=True, text=True,
-        )
+        try:
+            r = subprocess.run(
+                self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
         if r.returncode != 0:
             return None
         pids = [ln.split()[0] for ln in r.stdout.splitlines()
@@ -433,15 +436,33 @@ class Tmux:
         if not pids:
             return None
         root = pids[0]
-        # etimes (seconds elapsed) is monotone in age and trivially sortable —
-        # unlike lstart, which is a fixed-width 24-char date field. pid is here
-        # so the environment can be read back for the process it belongs to.
-        ps = subprocess.run(
-            # Hook environments can set COLUMNS; truncated argv can hide the
-            # settings pointer and falsely classify a wired lead as hookless.
-            ["ps", "-ww", "-o", "etimes=,pid=,args=", "-p", root, "--ppid", root],
-            capture_output=True, text=True,
-        )
+        if not root.isdecimal():
+            return None
+        # Darwin has neither GNU etimes nor --ppid. Enumerate only this
+        # pane's immediate children, then ask ps for those explicit PIDs; never
+        # collect the fleet's argv (which can contain private tool arguments).
+        darwin = sys.platform == "darwin"
+        try:
+            if darwin:
+                # BSD pgrep excludes its caller's ancestors by default. The
+                # agent being inspected is our ancestor during its tool call.
+                children = subprocess.run(
+                    ["pgrep", "-a", "-P", root], capture_output=True, text=True, timeout=2,
+                )
+                if children.returncode not in (0, 1):
+                    return None
+                child_pids = children.stdout.split()
+                if len(child_pids) > 256 or any(not p.isdecimal() for p in child_pids):
+                    return None
+                command = ["ps", "-ww", "-o", "etime=,pid=,args=", "-p",
+                           ",".join([root, *child_pids])]
+            else:
+                # Keep Linux's scoped query and untruncated argv contract.
+                command = ["ps", "-ww", "-o", "etimes=,pid=,args=",
+                           "-p", root, "--ppid", root]
+            ps = subprocess.run(command, capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
         if ps.returncode != 0:
             return None
         best, best_age, fallback = None, -1, None
@@ -454,11 +475,22 @@ class Tmux:
                 continue
             age_s, pid, args = parts
             try:
-                age = int(age_s)
+                if darwin:
+                    days, sep, clock = age_s.partition("-")
+                    fields = (clock if sep else days).split(":")
+                    if len(fields) not in (2, 3) or any(not f.isdecimal() for f in fields):
+                        continue
+                    age = 0
+                    for field in fields:
+                        age = age * 60 + int(field)
+                    if sep:
+                        age += int(days) * 86400
+                else:
+                    age = int(age_s)
             except ValueError:
                 continue
             args = args.strip()
-            if args == "-bash":
+            if args in ("-bash", "-zsh", "bash", "zsh"):
                 continue
             line = self._launch_line(pid, args)
             if fallback is None:

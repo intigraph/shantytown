@@ -43,7 +43,7 @@ def test_a_live_pane_with_no_bypass_line_is_manual():
     string for 'manual mode on' would be a marker never observed passing, and this
     repo has already paid for two of those. Absence of bypass is the signal, and
     it stays correct for every other mode the runtime may grow."""
-    assert launchable.observed_posture(MANUAL_FOOTER, ui_up=True) == launchable.MANUAL
+    assert launchable.observed_posture(MANUAL_FOOTER, ui_up=True, cmdline="claude") == launchable.MANUAL
 
 
 def test_codex_bypass_is_read_from_the_live_process_not_absent_footer():
@@ -75,7 +75,7 @@ def test_an_agent_talking_about_bypass_is_not_in_bypass():
     where an agent DISCUSSED the mode must not read as being in it."""
     screen = ("I set bypass permissions on for ellie and relaunched her\n"
               + "\n" * 12 + MANUAL_FOOTER)
-    assert launchable.observed_posture(screen, ui_up=True) == launchable.MANUAL
+    assert launchable.observed_posture(screen, ui_up=True, cmdline="claude") == launchable.MANUAL
 
 
 # --- the card read ----------------------------------------------------------
@@ -257,6 +257,9 @@ class _Panes(NullPanes):
     def capture(self, pane: str, history: int = 0, attrs: bool = False) -> str:
         return self._screens.get(pane, "")
 
+    def cmdline(self, pane):
+        return "claude" if pane in self._screens else None
+
 
 class _CrewArgs:
     def __init__(self, root):
@@ -336,3 +339,8 @@ def test_a_down_agent_gets_no_posture_verdict(tmp_path, monkeypatch, capsys):
     row = next(l for l in out.splitlines() if l.strip().startswith("ian"))
     assert "MANUAL" not in row
     assert "0 agent(s) in MANUAL MODE" not in out    # no manual block at all
+
+
+def test_unreadable_process_does_not_invent_manual_posture():
+    for line in (None, ""):
+        assert launchable.observed_posture(MANUAL_FOOTER, True, line) == launchable.UNKNOWN

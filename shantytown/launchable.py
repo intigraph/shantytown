@@ -133,10 +133,10 @@ def observed_posture(plain: str, ui_up: bool, cmdline: str | None = None) -> str
     DERIVED NEGATIVELY, on purpose. Only the bypass line has been measured here;
     the manual-mode footer has not, and a marker never observed passing is not a
     marker (the rule that already cost this repo two bad READY_MARKERS). So:
-    a live ready pane that does not say bypass has permission prompts ON. That
-    holds for every non-bypass mode Claude Code can be in — default, plan,
-    accept-edits — without pinning a string for any of them, and it cannot rot
-    when the runtime renames one.
+    a live ready pane with a readable launch and no bypass evidence is manual.
+    Without process evidence, an absent footer is UNKNOWN: Codex does not
+    render approval posture in its footer. A missing launch must not be
+    mistaken for a readable launch with its bypass flag absent.
 
     `ui_up` is required rather than inferred: a pane sitting on a trust dialog, a
     consent screen or a blocking picker has no mode line at all, and calling that
@@ -153,4 +153,4 @@ def observed_posture(plain: str, ui_up: bool, cmdline: str | None = None) -> str
     # This is process truth, not the card's requested intent.
     if cmdline and "--dangerously-bypass-approvals-and-sandbox" in cmdline.split():
         return BYPASS
-    return MANUAL
+    return MANUAL if cmdline else UNKNOWN
