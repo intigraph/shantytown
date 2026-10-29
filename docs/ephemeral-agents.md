@@ -193,3 +193,45 @@ GitHub ingress (aegis-c01c.3), the chaski routing rules that decide *when* to
 spawn (aegis-c01c.4), the stop-policy change that counts the administrator's
 in-flight ephemeral work (aegis-c01c.1), and the tambo install/verify step
 (aegis-c01c.5).
+
+## Protected job launch capabilities (source staging)
+
+The distinct-UID launcher uses an operator-owned capability per job principal,
+not a username supplied by a model. `/etc/shantytown/jobs` on Linux, or
+`/Library/Application Support/Shantytown/jobs` on macOS, holds reviewed manifests.
+Each binds the exact request, harness, controller UID, dedicated job UID/GID,
+private home/workspace/settings and pinned argv. Controller environment and
+arbitrary command arguments are never forwarded. The installed helper must be
+root-owned, run an isolated interpreter from a private immutable installation,
+and be the only executable named in its narrowly scoped sudoers rule.
+
+The first account may be named `_stjobs`; additional principals require unique
+accounts and UIDs. A shared or recycled UID cannot preserve distinct job
+identities. Existing protected identity bindings require UID/GID >=10000; macOS
+account hiding must use the explicit hidden-account attribute rather than
+weakening that floor. Each job needs its own enrolled credentials. There is no
+controller credential copy or automatic key registration.
+
+A readiness boolean alone does not admit a launch. Verified identity and an
+unused matching capability are required before retry side effects. A native
+helper check validates the protected actor binding and actual account, checks
+private state, and probes privilege dropping in a short disposable child. The
+real launch rechecks its immutable manifest, reserves the UID in a locked,
+fsynced receipt, clears supplementary groups and inherited file descriptors,
+drops root credentials, and executes only the prepared argv with an allowlisted
+environment. A failed drop never falls back to the controller UID. Receipts and
+job homes survive failures and rollback; a UID is not reused for another job.
+
+A live unattended retry currently refuses and preserves its old lane, even
+following a successful probe. Completed retries require a fresh capability.
+This avoids claiming an atomic cross-UID handoff from a preflight observation.
+Attended compatibility behavior remains separate.
+
+This source staging is **not installed acceptance**. Keep both readiness and
+verified-identity activation at their existing deployment values until the
+reviewed provisioning and native acceptance packet is complete. Cross-UID
+reporting, turn accounting and controller reaping require a mediated own-job
+path: do not make the shared ledger writable or expose controller signing
+keys to work around a permission failure. Tambo/macOS and Goldblum/Linux source
+provisioning, that mediated lifecycle, native file/signal/identity denial proofs
+and rollout authority remain required before enabling unattended jobs.

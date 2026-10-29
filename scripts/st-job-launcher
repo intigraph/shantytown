@@ -1,0 +1,5 @@
+#!/opt/shantytown-job-launcher/bin/python3 -I
+# Installed root-owned with its immutable, non-editable private Python package.
+# A sudoers entry may name ONLY this executable, for operator/controller UIDs.
+from shantytown.job_launch import main
+raise SystemExit(main())

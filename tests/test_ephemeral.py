@@ -823,15 +823,15 @@ def test_unattended_gate_also_covers_inherited_dangerous_posture(store, capsys):
     assert not launched and not eph.records(root)
 
 
-def test_uid_readiness_must_be_boolean_and_only_enables_a_preview(store, capsys):
+def test_uid_readiness_must_be_boolean_and_cannot_replace_verified_identity(store, capsys):
     root, _, launched = store
     path = root / 'shantytown.toml'
     path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = "yes"\n')
     with pytest.raises(config.ConfigError, match='unattended_uid_ready'):
         config.load(root)
     path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = true\n')
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.OK
-    assert 'would spawn' in capsys.readouterr().out
+    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.REFUSED
+    assert 'verified protected UID' in capsys.readouterr().err
     assert not launched and not eph.records(root)
 
 
@@ -895,7 +895,7 @@ def test_verified_identity_setting_rejects_non_boolean(store):
         config.load(root)
 
 
-def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
+def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path, monkeypatch):
     """#411 review: the #406 guard covered only Claude's StopFailure refresh.
     provision() re-rendered the SHARED codex worker config.toml with the
     spawning st's interpreter, so a spawn from a checkout repointed every
@@ -907,6 +907,11 @@ def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
     config = root / "settings" / "codex" / "worker" / "config.toml"
     config.parent.mkdir(parents=True)
     import sys
+    from shantytown import runtime
+    # The fixture changes the emitting interpreter deliberately. A source-only
+    # runner may correctly choose the installed hook interpreter instead of its
+    # own; pin this input rather than depending on that host installation.
+    monkeypatch.setattr(runtime, '_hook_interpreter', lambda: sys.executable)
     stale = codex.render(codex.settings_for_role("worker", root=root)).replace(
         sys.executable, "/crew/venv/bin/python")
     assert "/crew/venv/bin/python" in stale
@@ -919,3 +924,35 @@ def test_a_codex_spawn_never_rewrites_the_shared_codex_role_config(tmp_path):
     provision(Agent(name="franklin", role="worker", harness="codex",
                     workspace=str(ws)), root)
     assert config.read_text() != stale      # control: crew launches still refresh it
+
+
+@pytest.mark.parametrize('reason', ['missing account', 'unbound', 'partial provisioning', 'failed switch', 'readiness mismatch'])
+def test_uid_admission_failure_precedes_retry_lane_release_and_all_launch_effects(store, monkeypatch, reason):
+    from shantytown import job_launch
+    from shantytown.actor_identity import IdentityError
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 2\nunattended = true\n'
+                                         'unattended_uid_ready = true\nrequire_verified_identity = true\n')
+    before = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    def refuse(*args, **kwargs): raise IdentityError(reason)
+    monkeypatch.setattr(job_launch, 'select', refuse)
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **k: pytest.fail('old lane released before UID admission'))
+    assert _st(root, '--retry', rec['name']) == cli.REFUSED
+    after = {str(p.relative_to(root)): p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert after == before
+    assert not launched and eph.read(root, rec['name'])['state'] == eph.LIVE
+
+
+def test_successful_uid_probe_still_cannot_release_a_live_isolated_retry_lane(store, monkeypatch):
+    from shantytown import job_launch
+    root, panes, launched = store
+    rec = _rec(root, job='merge', repo='o/n', pr=1, state=eph.LIVE)
+    (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 2\nunattended = true\n'
+                                         'unattended_uid_ready = true\nrequire_verified_identity = true\n')
+    checked = []
+    monkeypatch.setattr(job_launch, 'select', lambda *a, **k: checked.append(True) or ({}, '0' * 64))
+    monkeypatch.setattr(cli, '_spawn_end', lambda *a, **k: pytest.fail('live lane released'))
+    assert _st(root, '--retry', rec['name']) == cli.REFUSED
+    assert checked == [True]
+    assert not launched and eph.read(root, rec['name'])['state'] == eph.LIVE
