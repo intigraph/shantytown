@@ -313,3 +313,29 @@ only when it resolves to `/private/var`, whose immutable ownership is checked
 as well. This permits the existing protected-home convention on macOS without
 accepting job-controlled symlinks or arbitrary aliases. Native macOS acceptance
 is still required; the source fixtures simulate both accepted and refused paths.
+
+Protected review slots can declare an explicit `review` policy in their pinned
+manifest; other slots use `review: null`. The policy names the exact repository,
+PR number, GitHub node, reviewed head, author, graph, verifier ID, public key,
+and the job's private key path. The verifier ID is
+`st-job-verifier.<job-principal>`, with a distinct key per slot. The key must
+already exist, be private to the job UID, and match the protected public key.
+No controller key, environment-selected key, automatic key generation or
+registration is used by this path.
+
+Operator pin-file version 2 supports these scoped entries alongside legacy
+host keys. A scoped entry has `public_key`, `principal`, `repo`, `pr`, `pr_node`,
+`head`, and `author_agent`. Its signature counts only for that exact reviewer
+and PR/head, with independently readable matching authorship. A bare job-key
+pin or a key duplicated under another signer refuses. Version 1 retains the
+legacy host behavior. Both the operator pin and Quipu's recorded trusted
+signature are required; self-registration cannot widen local trust.
+
+Before its single write, a job saves a private, fsynced prepared review record.
+If the reply is lost, a retry reads back that same signed record; an unproved
+effect is retained without automatic resend. The job queues only the record
+reference, head and signer. The controller independently verifies that record
+and scope before accepting an approval/change result, then performs ordinary
+notification and UID teardown. A missing or unproved signature still becomes
+blocked. No real signing identity or registration was created during source
+qualification; per-job enrollment and native isolation remain rollout work.

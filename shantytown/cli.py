@@ -3646,6 +3646,7 @@ def _cmd_spawn(a) -> int:
     if a.report:
         from . import job_launch
         from .actor_identity import IdentityError
+        from .gate_verdict import VerdictError
         try:
             bound = job_launch.local_job()
             if bound:
@@ -3657,11 +3658,14 @@ def _cmd_spawn(a) -> int:
                 if a.dry_run:
                     print(f"would queue report for {spec['principal']}")
                     return OK
-                job_launch.mailbox_call(spec, digest, 'submit',
-                    {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)})
+                message = {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)}
+                if spec.get('request', {}).get('job') == 'review' and a.verdict in ('approve', 'request-changes'):
+                    from . import job_review
+                    message['review'] = job_review.write(spec, a.verdict, a.head, a.evidence)
+                job_launch.mailbox_call(spec, digest, 'submit', message)
                 print(f"queued result for {spec['principal']}; controller delivery and teardown pending")
                 return OK
-        except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
+        except (IdentityError, VerdictError, OSError, ValueError, subprocess.SubprocessError) as error:
             print(f'  refused: protected job report unproved ({type(error).__name__})', file=sys.stderr)
             return REFUSED
     cfg, err = config.load_or_default(Path(a.root))
@@ -3890,10 +3894,19 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
                 if result:
                     verdict, summary = result['verdict'], result['summary']
                     if rec['job'] == 'review' and verdict in ('approve', 'request-changes'):
-                        # A message is not a signed review. Until the own-key
-                        # signer is qualified, never substitute a controller key.
-                        verdict = 'blocked'
-                        summary = 'Unsigned review result; own-key verdict proof required. ' + summary
+                        from . import job_review
+                        from .gate_verdict import VerdictError
+                        verified = False
+                        if 'review' in result:
+                            try:
+                                spec, digest = job_launch.load(rec['name'])
+                                if rec['uid_binding'] == {'uid': spec['uid'], 'sha256': digest}:
+                                    verified = job_review.confirmed(spec, result)
+                            except (IdentityError, VerdictError, OSError, ValueError):
+                                pass
+                        if not verified:
+                            verdict = 'blocked'
+                            summary = 'Review signature/scope unproved; no controller signing fallback. ' + summary
                     _spawn_end(a, rec['name'], verdict, summary, 'report', detached=False)
                 elif cause:
                     _spawn_end(a, rec['name'], 'failed', 'job budget reached: ' + cause,

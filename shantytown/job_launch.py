@@ -8,6 +8,7 @@ Installation and native isolation acceptance remain separate operator steps.
 from __future__ import annotations
 
 import hashlib
+import grp
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ HELPER = Path('/usr/local/libexec/st-job-launcher')
 OWNER = 0
 _NAME = re.compile(r'eph-(review|merge|triage|task)-[0-9a-f]{6}')
 FIELDS = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username',
-          'home', 'root', 'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment'}
+          'home', 'root', 'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment', 'review'}
 ENVIRONMENT = {'PATH', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 
 
@@ -113,6 +114,9 @@ def load(name):
     for key in ('CODEX_HOME', 'CLAUDE_CONFIG_DIR'):
         if key in env and not Path(env[key]).is_relative_to(home):
             raise IdentityError('harness configuration must belong to the job')
+    if spec['review'] is not None:
+        from . import job_review
+        job_review.policy(spec)
     return spec, hashlib.sha256(raw).hexdigest()
 
 
@@ -149,6 +153,7 @@ def inventory():
         raise IdentityError('job manifests differ from the explicit host slot plan')
     seen_uids = set()
     seen_users = set()
+    seen_keys = set()
     entries = []
     for path in paths:
         spec, digest = load(path.stem)
@@ -160,6 +165,11 @@ def inventory():
             raise IdentityError('a job account cannot be shared between slots')
         seen_uids.add(spec['uid'])
         seen_users.add(spec['username'])
+        if spec['review'] is not None:
+            public = spec['review']['public_key']
+            if public in seen_keys:
+                raise IdentityError('a review signing key cannot be shared between jobs')
+            seen_keys.add(public)
         entries.append((spec, digest))
     if any(spec['controller_uid'] in seen_uids for spec, _ in entries):
         raise IdentityError('a job UID cannot control another job')
@@ -224,6 +234,16 @@ def check_native(spec, *, consumed_digest=None, lifecycle=False):
     if (account.pw_uid != spec['uid'] or account.pw_gid != spec['gid']
             or account.pw_dir != spec['home'] or account.pw_shell not in ('/usr/bin/false', '/bin/false', '/usr/sbin/nologin')):
         raise IdentityError('job account is absent or only partially provisioned')
+    users, groups = pwd.getpwall(), grp.getgrall()
+    if len(users) > 16384 or len(groups) > 16384:
+        raise IdentityError('native account inventory exceeds its bound')
+    same_uid = [row for row in users if row.pw_uid == spec['uid']]
+    same_gid = [row for row in groups if row.gr_gid == spec['gid']]
+    if (len(same_uid) != 1 or same_uid[0].pw_name != spec['username']
+            or len(same_gid) != 1 or same_gid[0].gr_name != spec['username']
+            or any(name != spec['username'] for name in same_gid[0].gr_mem)
+            or any(row.pw_gid == spec['gid'] and row.pw_name != spec['username'] for row in users)):
+        raise IdentityError('job UID/primary group is shared with another native principal')
     if not lifecycle:
         protected(Path(spec['root']), directory=True)
         controller_root = Path(spec['controller_root'])

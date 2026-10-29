@@ -41,12 +41,12 @@ verdict's IRI. Quipu alone is not enough: today any agent can write an
 are read from ONE configured graph, never any named graph. An unsigned, forged
 or self-enrolled record is simply not an approval.
 
-KEY CUSTODY is quipu's v1 posture: a host file (PKCS#8, 0600), created on first
-use and untrusted until a human registers its public key. The signer is st on
-the host (it signs only for a process proven to BE the review job), not the
-agent: ephemeral agents are named per spawn, so no human could register theirs.
-The agent runs as the same Unix user and could read the file; that residual gap
-is the same one its gh credentials already are (docs/ephemeral-agents.md).
+Legacy attended jobs retain the host PKCS#8 signer, created on first use and
+untrusted until an operator registers its public key. Protected per-job UID
+slots instead use their own pre-enrolled key and a version-2 operator pin for
+one principal and exact PR/head/author. They never select or generate the host
+key. The local scope check and Quipu's recorded signature verification both
+apply (docs/ephemeral-agents.md).
 """
 from __future__ import annotations
 
@@ -435,22 +435,53 @@ TRUSTED_SIGNERS_OWNER = 0
 _HEX_KEY = re.compile(r"[0-9a-f]{64}")
 
 
-def trusted_signers(path: Path | None = None, owner: int | None = None) -> dict[str, str]:
-    """{verifier id: public key hex} from the root-owned pin file, or {} (fail
-    closed) when it is absent or not root-owned, private-to-root-writes and
-    well-formed. Shape: {"version": 1, "signers": {"st-review.vati": "<64 hex>"}}."""
+def trusted_signers(path: Path | None = None, owner: int | None = None) -> dict:
+    """Operator pins or {} on invalid/untrusted input. V1 retains legacy host
+    public keys; V2 also permits scoped per-job pins validated below. A job key
+    may not alias another signer in a V2 file. No registration is performed."""
     from .advise_signing import _read
     path = TRUSTED_SIGNERS_PATH if path is None else Path(path)
     owner = TRUSTED_SIGNERS_OWNER if owner is None else owner
     try:
-        doc = json.loads(_read(path, owner, 65536))
+        doc = json.loads(_read(path, owner, 1024 * 1024))
     except (OSError, ValueError):
         return {}
-    signers = doc.get("signers") if isinstance(doc, dict) and doc.get("version") == 1 else None
-    if not isinstance(signers, dict):
+    signers = doc.get("signers") if isinstance(doc, dict) and doc.get("version") in (1, 2) else None
+    if not isinstance(signers, dict) or len(signers) > 2048:
         return {}
-    return {k: v for k, v in signers.items()
-            if isinstance(k, str) and k and isinstance(v, str) and _HEX_KEY.fullmatch(v)}
+    if doc['version'] == 1:
+        return {k: v for k, v in signers.items()
+                if isinstance(k, str) and k and isinstance(v, str) and _HEX_KEY.fullmatch(v)}
+    checked = {}
+    keys = set()
+    for name, pin in signers.items():
+        if not isinstance(name, str) or not name:
+            return {}
+        if isinstance(pin, str) and _HEX_KEY.fullmatch(pin) and not name.startswith('st-job-verifier.'):
+            public = pin
+        elif valid_job_pin(name, pin):
+            public = pin['public_key']
+        else:
+            return {}
+        if public in keys:
+            return {}  # a job key must not acquire another signer's authority
+        keys.add(public)
+        checked[name] = pin
+    return checked
+
+
+def valid_job_pin(name, pin):
+    """A registered per-job key is authority for one reviewer and PR head only."""
+    return (isinstance(pin, dict) and set(pin) == {'public_key', 'principal', 'repo', 'pr', 'pr_node', 'head', 'author_agent'}
+            and isinstance(pin['principal'], str) and re.fullmatch(r'eph-review-[0-9a-f]{6}', pin['principal'])
+            and name == 'st-job-verifier.' + pin['principal']
+            and isinstance(pin['public_key'], str) and _HEX_KEY.fullmatch(pin['public_key'])
+            and isinstance(pin['repo'], str) and _REPO.fullmatch(pin['repo'])
+            and type(pin['pr']) is int and pin['pr'] > 0
+            and isinstance(pin['pr_node'], str) and _NODE.fullmatch(pin['pr_node'])
+            and isinstance(pin['head'], str) and _SHA.fullmatch(pin['head'])
+            and isinstance(pin['author_agent'], str) and _AGENT.fullmatch(pin['author_agent'])
+            and pin['author_agent'].lower() != pin['principal'].lower())
 
 
 # --- reading: the merge gate's approval source ----------------------------------
@@ -510,7 +541,7 @@ def author_agent(quipu, node_id: str, *, graph: str) -> str | None:
 
 
 def approval(quipu, *, repo: str, pr: int, node_id: str, head: str, graph: str,
-             signers: dict[str, str]) -> dict:
+             signers: dict) -> dict:
     """The verified agent-verdict approval state of exactly `head`.
 
     The rules are chaski #49's (`github_routes.approval`), plus the signature:
@@ -561,7 +592,20 @@ def approval(quipu, *, repo: str, pr: int, node_id: str, head: str, graph: str,
                 why_not = "the signer id is an agent of this PR"
                 continue
             try:
-                ok = verify(bytes.fromhex(pinned), record.message(verifier), bytes.fromhex(sig))
+                if isinstance(pinned, dict):
+                    if (not valid_job_pin(verifier, pinned) or declared != pinned['author_agent'].lower()
+                            or any(pinned[key] != getattr(record, field) for key, field in
+                                   (('principal', 'by'), ('repo', 'repo'), ('pr', 'pr'),
+                                    ('pr_node', 'pr_node'), ('head', 'head'), ('author_agent', 'author_agent')))):
+                        why_not = 'job signer is outside its pinned reviewer/PR/head scope'
+                        continue
+                    public = pinned['public_key']
+                elif verifier.startswith('st-job-verifier.'):
+                    why_not = 'job signer requires an explicit scoped pin'
+                    continue
+                else:
+                    public = pinned
+                ok = verify(bytes.fromhex(public), record.message(verifier), bytes.fromhex(sig))
             except ValueError:
                 ok = False
             if not ok:

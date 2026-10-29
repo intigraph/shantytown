@@ -39,7 +39,7 @@ def capability(tmp_path, monkeypatch):
                 uid=51001, gid=51001, username='_stjobs', home=home,
                 root='/var/lib/shantytown/job-stores/' + principal,
                 controller_root=str(tmp_path / 'root'), workspace=home + '/worktree',
-                settings=home + '/codex/config.toml', harness='codex',
+                settings=home + '/codex/config.toml', harness='codex', review=None,
                 request=jobs.request_fields(Request('task', 'item-1', harness='codex')),
                 argv=['/usr/bin/true'], environment={'PATH': '/usr/bin:/bin', 'CODEX_HOME': home + '/codex'})
     path = base / (principal + '.json')
@@ -415,8 +415,12 @@ def test_lifecycle_authorization_does_not_depend_on_job_owned_settings(capabilit
     jobs.consume(spec, digest)
     row = {'uid': spec['uid'], 'home': spec['home'], 'sd': '/synthetic/immutable/sd'}
     monkeypatch.setattr(actor_identity, '_policy', lambda *a, **kw: row)
-    monkeypatch.setattr(jobs.pwd, 'getpwnam', lambda _: SimpleNamespace(
-        pw_uid=spec['uid'], pw_gid=spec['gid'], pw_dir=spec['home'], pw_shell='/usr/bin/false'))
+    account = SimpleNamespace(pw_name=spec['username'], pw_uid=spec['uid'], pw_gid=spec['gid'],
+                              pw_dir=spec['home'], pw_shell='/usr/bin/false')
+    monkeypatch.setattr(jobs.pwd, 'getpwnam', lambda _: account)
+    monkeypatch.setattr(jobs.pwd, 'getpwall', lambda: [account])
+    monkeypatch.setattr(jobs.grp, 'getgrall', lambda: [SimpleNamespace(
+        gr_name=spec['username'], gr_gid=spec['gid'], gr_mem=[])])
     original = jobs.protected
     fixed = {row['sd'], spec['argv'][0], spec['root']}
     monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
@@ -447,3 +451,32 @@ def test_only_canonical_root_owned_macos_var_alias_is_accepted(monkeypatch, faul
     else:
         with pytest.raises(IdentityError):
             jobs.protected(path)
+
+
+@pytest.mark.parametrize('fault', ['shared-uid', 'shared-gid', 'foreign-member', 'foreign-primary'])
+def test_native_uid_or_group_sharing_refuses_even_with_valid_protected_policy(capability, monkeypatch, fault):
+    from shantytown import actor_identity
+    spec, _, _ = capability
+    row = {'uid': spec['uid'], 'home': spec['home'], 'sd': '/synthetic/sd'}
+    monkeypatch.setattr(actor_identity, '_policy', lambda *a, **kw: row)
+    account = SimpleNamespace(pw_name=spec['username'], pw_uid=spec['uid'], pw_gid=spec['gid'],
+                              pw_dir=spec['home'], pw_shell='/usr/bin/false')
+    users = [account]
+    group = SimpleNamespace(gr_name=spec['username'], gr_gid=spec['gid'], gr_mem=[])
+    groups = [group]
+    if fault == 'shared-uid':
+        users.append(SimpleNamespace(pw_name='other', pw_uid=spec['uid'], pw_gid=51002))
+    elif fault == 'shared-gid':
+        groups.append(SimpleNamespace(gr_name='other', gr_gid=spec['gid'], gr_mem=[]))
+    elif fault == 'foreign-member':
+        group.gr_mem = ['other']
+    else:
+        users.append(SimpleNamespace(pw_name='other', pw_uid=51002, pw_gid=spec['gid']))
+    monkeypatch.setattr(jobs.pwd, 'getpwnam', lambda _: account)
+    monkeypatch.setattr(jobs.pwd, 'getpwall', lambda: users)
+    monkeypatch.setattr(jobs.grp, 'getgrall', lambda: groups)
+    original = jobs.protected
+    monkeypatch.setattr(jobs, 'protected', lambda path, **kw:
+                        None if str(path) == row['sd'] else original(path, **kw))
+    with pytest.raises(IdentityError, match='shared'):
+        jobs.check_native(spec, lifecycle=True)

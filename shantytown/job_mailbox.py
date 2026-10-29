@@ -23,11 +23,19 @@ def payload(value):
     if not isinstance(value, dict) or value.get('kind') not in ('report', 'turn'):
         raise IdentityError('invalid job message')
     if value['kind'] == 'report':
-        if (set(value) != {'kind', 'verdict', 'summary'}
+        if (set(value) not in ({'kind', 'verdict', 'summary'}, {'kind', 'verdict', 'summary', 'review'})
                 or value['verdict'] not in ('approve', 'request-changes', 'merged', 'blocked', 'done', 'failed')
                 or not isinstance(value['summary'], str) or len(value['summary']) > 1500
                 or '\0' in value['summary']):
             raise IdentityError('invalid job result')
+        if 'review' in value:
+            proof = value['review']
+            if (not isinstance(proof, dict) or set(proof) != {'record', 'head', 'signer'}
+                    or any(not isinstance(v, str) or len(v) > 256 for v in proof.values())
+                    or not re.fullmatch(r'[0-9a-f]{40}', proof['head'])
+                    or not re.fullmatch(r'http://aegis\.gastown\.local/ontology/gate_approval\.[0-9a-f]{32}', proof['record'])
+                    or not re.fullmatch(r'st-job-verifier\.eph-review-[0-9a-f]{6}', proof['signer'])):
+                raise IdentityError('invalid job review proof reference')
     else:
         if (set(value) != {'kind', 'token', 'context_k'}
                 or not isinstance(value['token'], str) or not re.fullmatch(r'[0-9a-f]{64}', value['token'])
