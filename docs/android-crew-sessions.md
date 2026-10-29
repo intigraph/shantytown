@@ -42,6 +42,36 @@ means the deployment did not declare a local host identity; do not guess one.
 or delivery to a conversation. Discovery can exit successfully with individual
 rows unavailable or unknown: inspect the rows, not just the exit code.
 
+`local_label` is the stable configured host/card label used by Shantytown. It
+does **not** rename the server advertised to the phone. `duplicate_server_name`
+reports repeated advertised names among the observed rows in this listing;
+false does not certify uniqueness across unobserved hosts. `phone_visibility`
+remains `unverified`, including when the relay is connected. Neither status nor
+a pairing code proves that the intended phone can reach an existing session.
+
+The selected launch prerequisites are separate observations:
+
+| Field | Meaning |
+| --- | --- |
+| `remote_configured` | Effective deployment preference; null means unreadable or unresolved. False never triggers an enable or start. |
+| `managed_payload` | Selected standalone executable is `present`, `missing`, `settings_missing` or `unknown`. Present is not runtime readiness. |
+| `local_label` | Configured host/card selection; null when the host is unresolved. |
+| `server_name` | Actual provider response, without substituting the local label. |
+
+Discovery reads the same per-card/role and account selection as launch, without
+repairing package pointers, installing packages, creating runtime homes or
+requesting pairing. A missing managed payload needs a reviewed installation
+before a natural owner-approved launch. Changing an opt-out or restarting a
+live worker is not a discovery repair. On a platform without the native process
+and peer identity proof used here, an existing recorded daemon is unsupported,
+not declared dead because `/proc` is absent.
+
+The checked Codex 0.163.0 contract supplies the OS hostname as the advertised
+name and exposes no naming setter through its generated control protocol or
+CLI. Do not add an invented config key, spoof the host identity or edit the
+provider's state database to make a local label look like an advertised fix.
+Unique phone-side server names need an actual supported vendor capability.
+
 Dry-run reads status and prints `action: "would_pair"` without requesting a
 pairing code. It is not a preview of the Android UI and does not prove that
 enrollment would succeed. Neither discovery nor dry-run starts a stopped card.
@@ -60,8 +90,12 @@ QR generator; `--json` is secret-bearing too. Do not publish even an expired
 code as evidence. The command has no QR output mode or documented app-link
 payload; do not manufacture either from the manual code.
 
-The official [Working on your phone][phone] guide describes desktop QR setup
-and general Remote use. It does not establish the manual-entry labels for this
+The official [Remote connections][phone] guide supports iOS and Android, subject
+to rollout and account/workspace availability. Its supported mobile setup starts
+in the ChatGPT desktop app: Settings > Connections > Control this Mac or PC >
+Set up or Add, then scan its QR code and complete the account verification on
+the phone. It explicitly does not provide mobile setup from the CLI or IDE.
+This desktop-host flow does not establish the manual-entry labels for this
 per-card Linux/Android path. If the Android build offers a manual-code path,
 record its actual labels and version during authorized acceptance. If it does
 not, mark that case unsupported or unavailable and stop rather than borrowing
@@ -126,4 +160,4 @@ and conversation selection; prompt and approval outcomes; and each lifecycle
 case as PASS, FAIL or UNKNOWN with its observable evidence. Keep credentials
 and private conversation content out of the record.
 
-[phone]: https://developers.openai.com/training/walkthroughs/working-on-your-phone
+[phone]: https://learn.chatgpt.com/docs/remote-connections
