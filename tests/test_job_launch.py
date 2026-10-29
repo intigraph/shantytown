@@ -59,7 +59,7 @@ def test_exact_registered_capability_and_no_controller_environment_forwarded(cap
         seen.append(argv)
         assert argv == ['/usr/bin/sudo', '-n', '--', str(jobs.HELPER), 'check', spec['principal'], digest]
         assert kwargs['env'] == {'PATH': '/usr/bin:/bin'}
-        assert kwargs['timeout'] == 10
+        assert kwargs['timeout'] == 30
         return SimpleNamespace(returncode=0, stdout='READY ' + digest)
     monkeypatch.setattr(jobs.subprocess, 'run', run)
     assert jobs.select(Request('task', 'item-1', harness='codex'), root=spec['root'],
@@ -234,3 +234,78 @@ def test_preview_never_executes_a_privileged_probe(capability, monkeypatch):
     selected, digest = jobs.select(Request('task', 'item-1', harness='codex'), root=spec['root'],
                                    harness='codex', used=set(), native_probe=False)
     assert selected == spec and len(digest) == 64
+
+
+@pytest.mark.parametrize('fault', ['none', 'permission', 'persistent', 'unknown'])
+def test_uid_stop_drops_before_signalling_and_refuses_unknown(capability, monkeypatch, fault):
+    spec, _, _ = capability
+    actions = []
+    monkeypatch.setattr(jobs, 'drop_identity', lambda _: actions.append('drop'))
+    snapshots = iter([[912], []])
+    def snapshot(uid):
+        assert actions[0] == 'drop' and uid == spec['uid']
+        if fault == 'unknown':
+            raise IdentityError('unreadable ps')
+        return [912] if fault == 'persistent' else next(snapshots)
+    def kill(pid, sig):
+        assert actions[0] == 'drop'
+        actions.append(('kill', pid))
+        if fault == 'permission':
+            raise PermissionError('recycled into another UID')
+    monkeypatch.setattr(jobs, 'running_uid', snapshot)
+    monkeypatch.setattr(jobs.os, 'kill', kill)
+    import time
+    monkeypatch.setattr(time, 'sleep', lambda _: None)
+    if fault == 'none':
+        jobs.stop_uid(spec)
+        assert actions == ['drop', ('kill', 912)]
+    else:
+        with pytest.raises((IdentityError, PermissionError)):
+            jobs.stop_uid(spec)
+        assert actions[0] == 'drop'
+        if fault == 'unknown':
+            assert actions == ['drop']
+
+
+@pytest.mark.parametrize('output,code,expected', [
+    ('51001 912 S\n501 913 S\n51001 914 Z\n', 0, [912]),
+    ('', 0, None), ('51001 nonsense S\n', 0, None),
+    ('51001 912 S\n', 1, None), ('51001 1 S\n', 0, None),
+])
+def test_native_uid_snapshot_never_treats_unknown_as_empty(monkeypatch, output, code, expected):
+    class Process:
+        pid = 999
+        returncode = code
+        def communicate(self, timeout=None):
+            return output, ''
+    def popen(argv, **kwargs):
+        assert argv == ['/bin/ps', '-axo', 'uid=,pid=,stat=']
+        assert kwargs['env'] == {'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
+        return Process()
+    monkeypatch.setattr(jobs.subprocess, 'Popen', popen)
+    if expected is None:
+        with pytest.raises(IdentityError):
+            jobs.running_uid(51001)
+    else:
+        assert jobs.running_uid(51001) == expected
+
+
+@pytest.mark.parametrize('actor', ['own', 'controller', None])
+def test_job_key_attestation_occurs_after_uid_drop_without_controller_environment(capability, monkeypatch, actor):
+    from shantytown import actor_identity
+    spec, _, _ = capability
+    actions = []
+    monkeypatch.setattr(jobs, 'drop_identity', lambda _: actions.append('drop'))
+    # Replace the environment object, not the real test process environment.
+    monkeypatch.setattr(jobs.os, 'environ', {'SSH_AUTH_SOCK': 'controller', 'QUIPU_AUTH_TOKEN': 'fixture'})
+    monkeypatch.setattr(jobs.os, 'chdir', lambda home: actions.append(('cwd', home)))
+    def authenticate():
+        assert actions == ['drop', ('cwd', spec['home'])]
+        assert jobs.os.environ == {'HOME': spec['home'], 'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'}
+        return spec['principal'] if actor == 'own' else actor
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', authenticate)
+    if actor == 'own':
+        jobs.attest_job(spec)
+    else:
+        with pytest.raises(IdentityError, match='job key'):
+            jobs.attest_job(spec)

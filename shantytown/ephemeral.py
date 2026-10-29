@@ -761,6 +761,14 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
     rec = read(root, name)
     if rec is None:
         raise Refused(f"no ledger entry for {name}")
+    if 'uid_binding' in rec:
+        from . import job_launch
+        # No pane/tree observation can establish termination of a separate UID.
+        # Preserve card, lane/cap, workspace and ENDING state on any uncertainty.
+        try:
+            job_launch.stop(root, rec)
+        except (job_launch.IdentityError, OSError, subprocess.SubprocessError) as error:
+            raise Refused('job UID termination unproven; lane retained: ' + type(error).__name__) from None
     card = Path(root) / "crew" / f"{name}.json"
     try:
         card.unlink()

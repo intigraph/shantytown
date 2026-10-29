@@ -3478,6 +3478,12 @@ def _spawn_lane_release(a, rec, *, run=None) -> str:
     result = rec.get("result") or {}
     if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
         return ""
+    if 'uid_binding' in rec:
+        from . import ephemeral as eph
+        current = eph.read(a.root, rec['name'])
+        if (not current or current.get('uid_binding') != rec['uid_binding']
+                or current.get('state') != eph.DONE):
+            return 'merge lane retained: job UID termination is not verified'
     policy, _cfg = _spawn_verdict_policy(a)
     if not policy.lane_release:
         return ""
@@ -3611,7 +3617,9 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
         raise eph.Refused(f"no ephemeral job named {name}")
     if verdict is None:                   # an interrupted teardown: finish it only
         schedule(name)
-        return rec, []
+        current = eph.read(a.root, name) or rec
+        lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
+        return current, [lane] if lane else []
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),

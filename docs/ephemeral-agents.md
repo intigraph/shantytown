@@ -235,3 +235,19 @@ path: do not make the shared ledger writable or expose controller signing
 keys to work around a permission failure. Tambo/macOS and Goldblum/Linux source
 provisioning, that mediated lifecycle, native file/signal/identity denial proofs
 and rollout authority remain required before enabling unattended jobs.
+
+The staged protected helper also has a fixed `stop <principal> <digest>`
+operation for the admitted controller. It verifies the exact consumed UID
+receipt, forks, drops to that UID, and signals remaining processes by UID,
+including processes outside the original session. Signals never run as root.
+An unreadable process table, failed drop, permission failure or timeout leaves
+termination unproven. Teardown then retains the card, workspace and occupied
+lane; a supplied DONE record cannot override the controller ledger. Native
+macOS/Linux qualification of this operation is still required.
+
+The read-only launch probe now also performs the existing pinned identity
+attestation from the job's own home after UID drop and environment clearing.
+It must return the registered job principal. A username or successful UID
+switch alone does not establish readiness. These staged paths have only been
+qualified with private source fixtures; no privileged helper was installed or
+executed as part of that qualification.

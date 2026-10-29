@@ -956,3 +956,58 @@ def test_successful_uid_probe_still_cannot_release_a_live_isolated_retry_lane(st
     assert _st(root, '--retry', rec['name']) == cli.REFUSED
     assert checked == [True]
     assert not launched and eph.read(root, rec['name'])['state'] == eph.LIVE
+
+
+@pytest.mark.parametrize('verified', [False, True])
+def test_bound_uid_teardown_requires_stop_proof_before_releasing_lane(tmp_path, monkeypatch, verified):
+    from shantytown import job_launch
+    from shantytown.actor_identity import IdentityError
+    rec = _rec(tmp_path, uid_binding={'uid': 51001, 'sha256': 'a' * 64})
+    eph.record_result(tmp_path, rec['name'], 'failed', 'test', 'timeout', NOW)
+    scratch = eph.ledger_dir(tmp_path) / 'scratch' / rec['name']
+    scratch.mkdir(parents=True)
+    rec = eph.read(tmp_path, rec['name'])
+    rec['workspace'] = str(scratch)
+    eph.write(tmp_path, rec)
+    card = tmp_path / 'crew' / (rec['name'] + '.json')
+    card.parent.mkdir()
+    card.write_text('{}')
+    actions = []
+    def stop(root, record):
+        assert card.exists() and scratch.exists()
+        actions.append('uid-stop')
+        if not verified:
+            raise IdentityError('unproven')
+    monkeypatch.setattr(job_launch, 'stop', stop)
+    if verified:
+        done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: actions.append('pane'))
+        assert done['state'] == eph.DONE and actions == ['uid-stop', 'pane']
+    else:
+        with pytest.raises(eph.Refused, match='lane retained'):
+            eph.teardown(tmp_path, rec['name'], kill_session=lambda _: actions.append('pane'))
+        assert eph.read(tmp_path, rec['name']) == rec
+        assert card.exists() and scratch.exists() and actions == ['uid-stop']
+        assert rec['state'] == eph.ENDING
+
+
+@pytest.mark.parametrize('state', [eph.ENDING, eph.DONE])
+def test_uid_merge_lane_requires_authoritative_completed_teardown(tmp_path, monkeypatch, state):
+    from types import SimpleNamespace
+    rec = _rec(tmp_path, job='merge', request_id='b' * 64,
+               uid_binding={'uid': 51001, 'sha256': 'a' * 64}, repo='owner/repo', pr=1)
+    eph.record_result(tmp_path, rec['name'], 'failed', 'test', 'timeout', NOW)
+    current = eph.read(tmp_path, rec['name'])
+    current['state'] = state
+    eph.write(tmp_path, current)
+    # A stale/invented DONE supplied to the release function is not evidence.
+    stale = dict(current, state=eph.DONE)
+    calls = []
+    monkeypatch.setattr(cli, '_spawn_verdict_policy', lambda _: (
+        SimpleNamespace(lane_release=('lane',)), None))
+    monkeypatch.setattr('shantytown.gate_verdict.lane_release_argv', lambda *a: ['fixed-release'])
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+    answer = cli._spawn_lane_release(SimpleNamespace(root=tmp_path), stale, run=run)
+    assert calls == ([['fixed-release']] if state == eph.DONE else [])
+    assert bool(answer) == (state != eph.DONE)

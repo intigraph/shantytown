@@ -142,7 +142,7 @@ def select(req, *, root, harness, used, native_probe=True):
     if not native_probe:
         return spec, digest  # preview only; no UID proof and no ledger mutation
     answer = subprocess.run(['/usr/bin/sudo', '-n', '--', str(HELPER), 'check', spec['principal'], digest],
-                            capture_output=True, text=True, timeout=10,
+                            capture_output=True, text=True, timeout=30,
                             env={'PATH': '/usr/bin:/bin'})
     # The helper is installed with a narrow privilege mechanism by the operator;
     # a normal unprivileged executable must refuse, not pretend to switch UID.
@@ -172,7 +172,7 @@ def command(spec, digest):
     return shlex.join(['/usr/bin/sudo', '-n', '--', str(HELPER), 'launch', spec['principal'], digest])
 
 
-def check_native(spec):
+def check_native(spec, *, consumed_digest=None):
     """Called only by the separate privileged, immutable launcher."""
     from . import actor_identity
     if sys.platform != 'darwin' and not sys.platform.startswith('linux'):
@@ -180,6 +180,7 @@ def check_native(spec):
     row = actor_identity._policy(actor_identity.POLICY_PATH, for_principal=spec['principal'])
     if row is None or row['uid'] != spec['uid'] or row['home'] != spec['home']:
         raise IdentityError('missing or mismatching protected actor binding')
+    protected(row['sd'])
     account = pwd.getpwnam(spec['username'])
     if (account.pw_uid != spec['uid'] or account.pw_gid != spec['gid']
             or account.pw_dir != spec['home'] or account.pw_shell not in ('/usr/bin/false', '/bin/false', '/usr/sbin/nologin')):
@@ -199,6 +200,7 @@ def check_native(spec):
     used = list(receipts.glob('*.json'))
     if len(used) > 1024:
         raise IdentityError('too many retained UID receipts')
+    matched = False
     for path in used:
         protected(path)
         try:
@@ -208,7 +210,14 @@ def check_native(spec):
         if not isinstance(old, dict) or type(old.get('uid')) is not int:
             raise IdentityError('unknown prior UID receipt')
         if old['uid'] == spec['uid']:
-            raise IdentityError('job UID already used; retain its receipt')
+            if consumed_digest is None or old != {
+                    'uid': spec['uid'], 'principal': spec['principal'], 'sha256': consumed_digest}:
+                raise IdentityError('job UID already used; retain its receipt')
+            if matched:
+                raise IdentityError('duplicate consumed job UID receipt')
+            matched = True
+    if consumed_digest is not None and not matched:
+        raise IdentityError('cannot stop an unreserved job UID')
 
     # Existing UID bindings remain authoritative. No username-exists readiness
     # and no credentials from the controller's home or environment.
@@ -218,7 +227,7 @@ def check_native(spec):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(argv) != 3 or argv[0] not in ('check', 'launch') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
+        if len(argv) != 3 or argv[0] not in ('check', 'launch', 'stop') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
             raise IdentityError('expected fixed operation, job principal and manifest digest')
         if os.geteuid() != 0:
             raise IdentityError('job launcher requires its separately admitted privileged service')
@@ -237,6 +246,11 @@ def main(argv=None):
         caller = os.environ.get('SUDO_UID', '')
         if not caller.isdecimal() or int(caller) != spec['controller_uid']:
             raise IdentityError('job launcher lacks an admitted controller UID')
+        if argv[0] == 'stop':
+            check_native(spec, consumed_digest=digest)
+            stop_native(spec)
+            print('STOPPED ' + digest)
+            return 0
         check_native(spec)
         if argv[0] == 'check':
             probe(spec)
@@ -307,18 +321,19 @@ def probe(spec):
     """A short disposable child proves the native switch before retry teardown.
 
     This is privileged *runtime* qualification, never called by source tests on
-    the actual host. It runs no job, shell, login or network operation.
+    the actual host. It runs no job, shell or login; it does perform the
+    existing pinned identity-attestation protocol using the job's own key.
     """
     import time
     import signal
     child = os.fork()
     if child == 0:
         try:
-            drop_identity(spec)
+            attest_job(spec)
         except BaseException:
             os._exit(1)
         os._exit(0)
-    deadline = time.monotonic() + 5
+    deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
         pid, status = os.waitpid(child, os.WNOHANG)
         if pid:
@@ -329,6 +344,17 @@ def probe(spec):
     os.kill(child, signal.SIGKILL)
     os.waitpid(child, 0)
     raise IdentityError('native disposable UID switch timed out')
+
+
+def attest_job(spec):
+    """Attest the job's own key only after dropping all controller identity."""
+    from . import actor_identity
+    drop_identity(spec)
+    os.environ.clear()
+    os.environ.update(HOME=spec['home'], PATH='/usr/bin:/bin', LC_ALL='C')
+    os.chdir(spec['home'])
+    if actor_identity.authenticated_actor() != spec['principal']:
+        raise IdentityError('job key does not attest the protected job principal')
 
 
 def execute(spec):
@@ -345,6 +371,90 @@ def execute(spec):
     os.chdir(spec['workspace'])
     os.closerange(3, maximum)
     os.execve(spec['argv'][0], spec['argv'], env)
+
+
+def running_uid(uid):
+    """Portable ps snapshot; unknown/malformed output is never an empty UID."""
+    proc = subprocess.Popen(['/bin/ps', '-axo', 'uid=,pid=,stat='],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+    try:
+        output, _ = proc.communicate(timeout=2)
+    except BaseException:
+        proc.kill()
+        proc.communicate()
+        raise
+    if proc.returncode != 0 or len(output) > 4 * 1024 * 1024 or not output.strip():
+        raise IdentityError('cannot establish native UID process state')
+    result = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or not fields[0].isdecimal() or not fields[1].isdecimal():
+            raise IdentityError('malformed native UID process state')
+        pid = int(fields[1])
+        if int(fields[0]) == uid and pid not in (os.getpid(), proc.pid) and not fields[2].startswith('Z'):
+            if pid <= 1:
+                raise IdentityError('unsafe job process identity')
+            result.append(pid)
+    return result
+
+
+def stop_uid(spec):
+    """Run only after irreversible UID drop: kernel permission bounds signals.
+
+    Session/ancestry/cwd do not matter. A PID recycled to another UID cannot be
+    signalled by this child. UID slots must never be reused between principals.
+    """
+    import signal
+    import time
+    drop_identity(spec)
+    for _ in range(10):
+        pids = running_uid(spec['uid'])
+        if not pids:
+            return
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.05)
+    raise IdentityError('job UID termination remains unproven')
+
+
+def stop_native(spec):
+    """Root waits; only the dropped child can signal. No root PID kill API."""
+    import time
+    child = os.fork()
+    if child == 0:
+        try:
+            stop_uid(spec)
+        except BaseException:
+            os._exit(1)
+        os._exit(0)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        pid, status = os.waitpid(child, os.WNOHANG)
+        if pid:
+            if os.waitstatus_to_exitcode(status) != 0:
+                raise IdentityError('native job UID termination failed')
+            return
+        time.sleep(0.02)
+    # Do not signal an unverified PID from root even on timeout. A hung child
+    # leaves teardown/cap ENDING; the caller must retain that unknown result.
+    raise IdentityError('native job UID termination timed out')
+
+
+def stop(root, rec):
+    binding = rec.get('uid_binding')
+    spec, digest = load(rec['name'])
+    if (binding != {'uid': spec['uid'], 'sha256': digest}
+            or spec['root'] != str(Path(root).resolve())):
+        raise IdentityError('job stop binding changed')
+    protected(HELPER)
+    answer = subprocess.run(['/usr/bin/sudo', '-n', '--', str(HELPER), 'stop', spec['principal'], digest],
+                            capture_output=True, text=True, timeout=35, env={'PATH': '/usr/bin:/bin'})
+    if answer.returncode != 0 or answer.stdout.strip() != 'STOPPED ' + digest:
+        raise IdentityError('job UID termination was not verified')
 
 
 if __name__ == '__main__':
