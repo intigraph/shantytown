@@ -372,3 +372,20 @@ survives. Set `SHANTY_TEST_SYSTEMD_TMUX=1` and run
 working user manager. It never addresses the fleet socket. Remove any temporary
 service-cleanup mitigation only after this control and the normal deployed source
 have been verified by the incident owner.
+
+### Seeds push projection reads
+
+`ST_SEEDS_PUSH_READS=1` opts Seeds plate projections into the SDK's
+`read-stream-query` transport. This requires a compatible `sd` and its admitted
+user-level `quipu.read_stream_config`. The SDK owns the private socket, source
+binding, signed freshness proof and query-scope validation. Shantytown does not
+open another applier or replace the configured primary URL.
+
+When enabled, plate queries skip the watermark cache entirely. A missing SDK,
+projection refusal, malformed reply or incomplete result remains UNKNOWN; it
+never falls back to HTTP polling. Explicit `seeds_read_cache.direct_reads()`
+admission scopes keep their original query-only transport. Primary profiling is
+refused on the projection path rather than presenting local timing as primary
+performance. The default `0` retains existing reads. Invalid setting values
+refuse. Live activation and measured acceptance require the upstream admission
+packet and normal deployment; enabling this flag alone cannot establish either.
