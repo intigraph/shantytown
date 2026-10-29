@@ -1269,6 +1269,25 @@ def _main(argv: list[str] | None = None) -> int:
         print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
+    # A protected job has no controller tmux socket or shared hold ledger.
+    # Resolve the kernel-bound principal before any environment/card fallback.
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        bound = job_launch.local_job()
+        if bound:
+            spec, _digest = bound
+            root = Path(spec['root'])
+            if '--root' in argv and _root(argv).resolve() != root:
+                raise IdentityError('stop root differs from protected job binding')
+            if mode != 'send':
+                return 0  # jobs neither drain crew messages nor advance a haul
+            return 1 if _ephemeral_bounds(root, spec['principal'], None) == 'unproved' else 0
+    except (IdentityError, OSError, ValueError) as error:
+        print(f'stop_event: protected job identity UNKNOWN: {type(error).__name__}', file=sys.stderr)
+        print(json.dumps({'decision': 'block', 'reason':
+              'Protected job turn identity is unproved. Stop work for controller recovery.'}))
+        return 1
     me_env = os.environ.get("SHANTY_AGENT")
     if not me_env:
         print("stop_event: $SHANTY_AGENT is unset — cannot resolve identity",
