@@ -337,17 +337,18 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           root: Path | None = None, *, payload: dict | None = None) -> int:
-    if root is not None:
-        from .stop_failure import clear_recovered
-        clear_recovered(root, me)
     from .ephemeral import is_ephemeral_name
     if is_ephemeral_name(me):
         # AN EPHEMERAL AGENT'S TURN BOUNDARY IS NOT A CREW STOP (aegis-c01c.2).
         # Its one report to the administrator is the job RESULT; a per-turn
         # stop event rendered as "STOPPED — re-dispatch". Only its bounds run here.
         if root is not None:
-            _ephemeral_bounds(root, me, _my_context_k(reg, panes, me))
+            if _ephemeral_bounds(root, me, _my_context_k(reg, panes, me)) == 'unproved':
+                return 1
         return 0
+    if root is not None:
+        from .stop_failure import clear_recovered
+        clear_recovered(root, me)
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -486,10 +487,12 @@ def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
                 a, name, verdict, summary, why, detached=True)
         end(me, "failed", f"ended by its own bounds ({cause}) without reporting", cause)
         return "ended"
-    except Exception as exc:  # noqa: BLE001 — tend's reaper remains the backstop
+    except Exception as exc:  # noqa: BLE001 — unknown bounds must stop further work
         print(f"stop_event: ephemeral bounds UNKNOWN for {me}: {type(exc).__name__}",
               file=sys.stderr)
-        return None
+        print(json.dumps({'decision': 'block', 'reason':
+              'Ephemeral turn accounting is unproved. Stop work; retain this job for controller recovery.'}))
+        return 'unproved'
 
 
 # --- the HAUL advance (the sequenced-worker self-feed) -----------------------

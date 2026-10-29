@@ -799,3 +799,30 @@ def test_bound_job_turn_queues_without_controller_ledger_access(tmp_path, monkey
     assert messages[0][:3] == (spec, 'a' * 64, 'submit')
     message = messages[0][3]
     assert message['kind'] == 'turn' and message['context_k'] == 32 and len(message['token']) == 64
+
+
+def test_bound_turn_skips_shared_recovery_and_blocks_unacknowledged_receipt(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch, stop_failure
+    name = 'eph-task-123abc'
+    spec = {'principal': name, 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    monkeypatch.setattr(stop_event, '_my_context_k', lambda *a: None)
+    monkeypatch.setattr(stop_failure, 'clear_recovered',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('shared recovery write')))
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: None)
+    assert stop_event._send(None, None, None, name, tmp_path) == 0
+    monkeypatch.setattr(job_launch, 'mailbox_call',
+                        lambda *a: (_ for _ in ()).throw(OSError('no acknowledgement')))
+    assert stop_event._send(None, None, None, name, tmp_path) == 1
+    assert json.loads(capsys.readouterr().out)['decision'] == 'block'
+
+
+def test_protected_identity_failure_blocks_turn_before_ledger_fallback(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch, ephemeral
+    from shantytown.actor_identity import IdentityError
+    monkeypatch.setattr(job_launch, 'local_job',
+                        lambda: (_ for _ in ()).throw(IdentityError('binding unknown')))
+    monkeypatch.setattr(ephemeral, 'on_stop',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('ledger fallback')))
+    assert stop_event._ephemeral_bounds(tmp_path, 'eph-task-123abc', None) == 'unproved'
+    assert json.loads(capsys.readouterr().out)['decision'] == 'block'
