@@ -73,7 +73,7 @@ def load(name):
             or spec['principal'] != name):
         raise IdentityError('invalid job manifest schema')
     for key in ('uid', 'gid', 'controller_uid'):
-        if type(spec[key]) is not int or spec[key] < (10000 if key != 'controller_uid' else 1):
+        if type(spec[key]) is not int or spec[key] < 10000:
             raise IdentityError('job needs a dedicated protected UID/GID')
     if spec['gid'] != spec['uid']:
         raise IdentityError('job requires its own primary group')
@@ -321,8 +321,8 @@ def main(argv=None):
             raise IdentityError('job launcher lacks an admitted controller UID')
         if argv[0] == 'prepare':
             from . import job_metadata
-            job_metadata.prepare(spec['principal'], digest)
-            print('PREPARED ' + digest)
+            state = job_metadata.prepare(spec['principal'], digest)
+            print('PREPARED ' + digest + ' ' + state)
             return 0
         if argv[0] in ('submit', 'poll'):
             from . import job_mailbox

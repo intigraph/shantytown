@@ -142,7 +142,8 @@ def capability(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, 'protected', fixture_protected)
     principal = 'eph-task-123abc'
     home = '/var/lib/shantytown/agents/crew-' + principal
-    spec = dict(version=1, principal=principal, controller_uid=os.geteuid(),
+    monkeypatch.setattr(jobs.os, 'geteuid', lambda: 51000)
+    spec = dict(version=1, principal=principal, controller_uid=51000,
                 uid=51001, gid=51001, username='_stjobs', home=home,
                 root='/var/lib/shantytown/job-stores/' + principal,
                 controller_root=str(tmp_path / 'root'), workspace=home + '/worktree',
@@ -183,7 +184,7 @@ def test_exact_registered_capability_and_no_controller_environment_forwarded(cap
 
 
 @pytest.mark.parametrize('change', [
-    {'uid': 501}, {'gid': 0}, {'gid': 51002}, {'controller_uid': 51001}, {'username': 'root'},
+    {'uid': 501}, {'gid': 0}, {'gid': 51002}, {'controller_uid': 501}, {'controller_uid': 9999}, {'controller_uid': 51001}, {'username': 'root'},
     {'home': '/synthetic-controller'}, {'workspace': '/synthetic-controller/worktree'},
     {'settings': '/synthetic-controller/config.toml'},
     {'root': '/synthetic-controller'}, {'controller_root': '/var/lib/shantytown'}, {'environment': {'SSH_AUTH_SOCK': 'fixture'}},

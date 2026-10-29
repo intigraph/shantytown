@@ -1,7 +1,8 @@
-#!/opt/shantytown-job-launcher/bin/python3 -IS
+#!/opt/shantytown-job-launcher/bin/python3 -BIS
 """Validate the immutable application before importing any of its code.
 
--I ignores Python environment/cwd/user paths; -S prevents site/.pth execution.
+-I ignores environment/cwd/user paths; -S prevents site/.pth execution; -B
+keeps startup and application imports from changing the pinned runtime tree.
 The separate root-owned interpreter and app are installed by the reviewed lane,
 never an editable crew checkout or user-controlled virtualenv.
 """
@@ -26,8 +27,11 @@ def protected(path):
 
 
 def bootstrap():
-    if os.geteuid() != 0 or not sys.flags.isolated or not sys.flags.no_site:
+    if (os.geteuid() != 0 or not sys.flags.isolated or not sys.flags.no_site
+            or not sys.dont_write_bytecode):
         raise RuntimeError('privileged isolated interpreter required')
+    if Path(sys.prefix) != APP.parent:
+        raise RuntimeError('private runtime prefix required')
     protected(Path(__file__).absolute())
     protected(Path(sys.executable).absolute())
     for value in sys.path:
