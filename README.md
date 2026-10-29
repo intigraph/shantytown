@@ -15,6 +15,14 @@ check and deliver changes, or for personal operations such as research and
 follow-up work. You supply the goals, tools and access; the same work items,
 ownership and controls organize both. Quipu integration is optional.
 
+## Why you would want it
+
+- **Keep ownership visible:** give each agent a role and ranked work.
+- **Review a crew before launching it:** preview cards, hooks and approval settings.
+- **Resume durable work:** retain the queue and coordination state between sessions.
+
+[The Shantytown book](https://intigraph.github.io/shantytown/) explains crew setup and operation.
+
 ## Install
 
 ```sh
@@ -72,7 +80,43 @@ st --root .shanty --backend files fleet init -y --admin coordinator --crew "" --
 The preview shows the crew, hooks and approval mode before you commit to running it.
 Follow [Getting started](https://scbrown.github.io/shantytown/getting-started.html) to create and launch the crew.
 
-## Next steps
+## On your own code
+
+| You want to | Entry point |
+|---|---|
+| Plan a crew for a project | The `fleet init --dry-run` example above |
+| Choose repository and tracker adapters | [Adapter guide](docs/adapters.md) |
+| Inspect available commands | `st help` |
+
+[CLI reference](https://intigraph.github.io/shantytown/cli.html) covers lifecycle and work commands.
+
+## Wire it into your agent
+
+
+Run `st prime` for the tool primer and a bounded crew/anchor summary, or
+`st prime --static` offline. [Prime contract and generated primer](docs/prime.md)
+and the [Shantytown skill](skills/shantytown/SKILL.md) share the runtime source.
+`st anchor` remains the normal session startup command.
+
+
+Choose roles, tools and approval settings before launching agents. The dry run
+creates no sessions; follow the [setup guide](https://intigraph.github.io/shantytown/getting-started.html)
+for an actual crew.
+
+## Before you start
+
+Python 3.11+, venv/pip, curl and Linux or macOS are required by the installer.
+A running crew also needs the chosen agent harness, tracker and repository access.
+Quipu integration is optional. Installation does not grant agents credentials
+or change their approval settings.
+
+## What's next
+
+- [The Shantytown book](https://intigraph.github.io/shantytown/): crew concepts and operation.
+- [Getting started](https://intigraph.github.io/shantytown/getting-started.html): create your first crew.
+- [CLI reference](https://intigraph.github.io/shantytown/cli.html): lifecycle and work commands.
+
+### Related tools and repository knowledge
 
 - [Tambo](https://github.com/scbrown/tambo): guided stack installation and verification.
 - [Camayoc](https://github.com/scbrown/camayoc): governed memory and vocabulary.
@@ -81,7 +125,7 @@ Follow [Getting started](https://scbrown.github.io/shantytown/getting-started.ht
 
 **Load this repository’s graph:** public repository-pendant assets have not yet been verified. When a release supplies the archive, checksum and provenance, follow the [verified import workflow](https://scbrown.github.io/quipu/sharing/index.html): extract the share directory and use `quipu import SHARE_DIR --db repository.db`. Import stages knowledge; ROOT stays unchanged.
 
-## The stack
+## 🧺 The stack
 
 <!-- stack-table:start -->
 
@@ -106,13 +150,6 @@ when.
 | [shuttle](https://github.com/scbrown/shuttle) | runs signed agent workflows and keeps their records in Quipu |
 
 <!-- stack-table:end -->
-
-## Agent orientation
-
-Run `st prime` for the tool primer and a bounded crew/anchor summary, or
-`st prime --static` offline. [Prime contract and generated primer](docs/prime.md)
-and the [Shantytown skill](skills/shantytown/SKILL.md) share the runtime source.
-`st anchor` remains the normal session startup command.
 
 ## Contributing
 
