@@ -936,9 +936,9 @@ So `st crew` grows a **posture** column, on the same principle as the settings c
 
 | | means |
 |---|---|
-| `bypass` | the pane shows `⏵⏵ bypass permissions on` — prompts are off, the agent can act |
-| `MANUAL` | live, ready UI up, **no** bypass line — a human must approve every call |
-| `?` | no ready UI (trust dialog, consent screen, blocking picker). Not rounded to either |
+| `bypass` | the pane shows `⏵⏵ bypass permissions on`, or the observed launch carries Codex’s `--dangerously-bypass-approvals-and-sandbox` flag |
+| `MANUAL` | live, ready UI up, readable launch, and no bypass evidence |
+| `?` | no ready UI or unreadable process observation. Not rounded to either |
 | `—` | not live. A down pane has no posture; what its *card* lacks is a different block |
 
 Two things it deliberately does **not** do.
@@ -948,10 +948,11 @@ Two things it deliberately does **not** do.
   landed while the agent is still stopped dead. This bead's own fix was verified by the footer
   flipping, and that is the only reason we know it took. Same launch-time rule the `STALE` column
   exists for, one field over.
-- **It derives `MANUAL` negatively.** Only the bypass footer has been measured; pinning a string for
-  the manual-mode line would be a marker never observed passing, which this repo has already paid
-  for twice in `READY_MARKERS`. Absence of bypass on a live ready pane is the signal, and it stays
-  correct for every other mode the runtime may grow or rename.
+- **Missing evidence stays unknown.** Codex has no approval footer, so an unreadable
+  process cannot establish manual mode. On macOS the process reader uses native
+  elapsed-time fields and PID-scoped child discovery; on Linux it retains the GNU
+  probe. This does not establish settings freshness: that remains a separate check.
+
 
 ### The dormant half: the arming moment now asks about *both* faults
 
