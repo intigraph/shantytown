@@ -25,7 +25,7 @@ def important_work_class(item) -> tuple[bool, str]:
 
 
 # Retain the historical internal name for callers inspecting class metadata.
-# Important/design labels stay truthful; they no longer select a Claude worker.
+# Classification alone is not task-scoped authorization for a Claude worker.
 claude_work_class = important_work_class
 
 
@@ -35,12 +35,16 @@ def exempt(card, policy) -> bool:
 
 
 def lane_refusal(item, actual, agent=None) -> str:
-    _, reason = important_work_class(item)
-    # The current rule (2026-10-25) routes every author and reviewer to
-    # Codex. The former important/design preference caused real dispatch
-    # refusals after that rule changed; do not infer a harness from the class.
+    important, reason = important_work_class(item)
+    # Keep Codex as the default. A governed task label records the operator's
+    # explicit exception; a class, title or caller's ready row cannot grant it.
     if actual == "codex":
         return ""
+    if important and actual == "claude":
+        labels = item.labels
+        if "work:review" not in labels and "work:claude-authorized" in labels:
+            return ""
+        reason += "; Claude authoring needs work:claude-authorized and must not be work:review"
     return (f"work class requires codex for authoring and review, but explicit "
             f"target {agent} uses {actual}: {reason} (aegis-x1q); "
             "target and harness unchanged")
@@ -68,4 +72,3 @@ def read_item(root, item):
     except Exception:
         return SimpleNamespace(id=item.id, priority=getattr(item, "priority", None),
                                labels=None)
-

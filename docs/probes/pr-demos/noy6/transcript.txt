@@ -1,0 +1,15 @@
+Private normal go --dry-run; no installed CLI or live dispatch
+Base: 2300f4d594b4c711f59433a8de2246a1cd6b1cf2
+Candidate module SHA256: c12c43907d6b90b120f4837f86ec660512a934b48726897ef29913b612de490d
+BEFORE: ['work:design', 'work:claude-authorized'] -> writer: REFUSED; tracker unchanged; zero pane sends
+BEFORE: ['work:important-quipu-code', 'work:claude-authorized'] -> writer: REFUSED; tracker unchanged; zero pane sends
+BEFORE: ['work:design'] -> writer: REFUSED; tracker unchanged; zero pane sends
+BEFORE: ['work:docs', 'work:claude-authorized'] -> writer: REFUSED; tracker unchanged; zero pane sends
+BEFORE: ['work:design', 'work:claude-authorized', 'work:review'] -> writer: REFUSED; tracker unchanged; zero pane sends
+BEFORE: [] -> coder: ADMITTED; tracker unchanged; zero pane sends
+AFTER: ['work:design', 'work:claude-authorized'] -> writer: ADMITTED; tracker unchanged; zero pane sends
+AFTER: ['work:important-quipu-code', 'work:claude-authorized'] -> writer: ADMITTED; tracker unchanged; zero pane sends
+AFTER: ['work:design'] -> writer: REFUSED; tracker unchanged; zero pane sends
+AFTER: ['work:docs', 'work:claude-authorized'] -> writer: REFUSED; tracker unchanged; zero pane sends
+AFTER: ['work:design', 'work:claude-authorized', 'work:review'] -> writer: REFUSED; tracker unchanged; zero pane sends
+AFTER: [] -> coder: ADMITTED; tracker unchanged; zero pane sends
