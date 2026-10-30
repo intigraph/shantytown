@@ -1,0 +1,7 @@
+Script started on 2026-10-29 19:32:40-04:00 [COMMAND="python3 docs/demos/seeds-push-cache/probe.py baseline-cache.py" <not executed on terminal>]
+base: 12 identical reads -> queries=1, watermarks=13
+base: after window expiry + write -> tx=2 (positive invalidation control)
+candidate: 12 identical reads -> queries=1, watermarks=2
+candidate: after window expiry + write -> tx=2 (positive invalidation control)
+
+Script done on 2026-10-29 19:32:40-04:00 [COMMAND_EXIT_CODE="0"]

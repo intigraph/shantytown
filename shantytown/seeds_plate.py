@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 
 from .answer import Answer
 from .query_identity import read_headers, declared_read_operation
-from . import seeds_read_cache
+from . import seeds_read_cache, seeds_push_read
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
@@ -50,6 +50,11 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    if not seeds_read_cache.primary_reads_required() and seeds_push_read.enabled():
+        if verbose:
+            raise ValueError("push read cannot provide primary profiling evidence")
+        return _validate_query(seeds_push_read.read(proof, query, timeout), query)
+
     def fetch():
         return _query_wire(proof, query, timeout, verbose=verbose)
 
