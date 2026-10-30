@@ -1,8 +1,8 @@
-Script started on 2026-10-30 15:00:00-04:00 [COMMAND="/usr/bin/python3 docs/probes/input-observation/demo.py" <not executed on terminal>]
+Script started on 2026-10-30 15:02:05-04:00 [COMMAND="stty -onlcr && /usr/bin/python3 docs/probes/input-observation/demo.py" <not executed on terminal>]
 Same offline ambiguous capture; existing classifier versus metadata wrapper.
 Before: {"state": "?"}
 After: {"state": "?", "reason": "ambiguous-attributes", "observed_at": 1000, "elapsed_seconds": 0}
 Timeout: {"state": "?", "reason": "capture-timeout", "observed_at": 1000}
 UNKNOWN retained; no screen/exception text, submit, clear, or live-pane action.
 
-Script done on 2026-10-30 15:00:00-04:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-10-30 15:02:05-04:00 [COMMAND_EXIT_CODE="0"]
