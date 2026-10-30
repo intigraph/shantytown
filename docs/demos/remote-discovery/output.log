@@ -1,0 +1,40 @@
+Script started on 2026-10-30 10:26:17-04:00 [COMMAND="python docs/demos/remote-discovery/reproduce.py" <not executed on terminal>]
+Synthetic status-only provider; no real daemon, pairing or phone calls.
+Base 0ed92183c61e3dfad8f94e8b3da5abbc8dd82c4a; candidate source d26d0a277c8cb990a87c8533ba8646510c545282
+BEFORE: repeated provider name without local disambiguation
+[
+  {
+    "agent": "alice",
+    "server_name": "same-host",
+    "local_label": null,
+    "duplicate_server_name": null,
+    "phone_visibility": null
+  },
+  {
+    "agent": "bob",
+    "server_name": "same-host",
+    "local_label": null,
+    "duplicate_server_name": null,
+    "phone_visibility": null
+  }
+]
+AFTER: local labels and explicit collision/visibility limits
+[
+  {
+    "agent": "alice",
+    "server_name": "same-host",
+    "local_label": "fixture-host/alice",
+    "duplicate_server_name": true,
+    "phone_visibility": "unverified"
+  },
+  {
+    "agent": "bob",
+    "server_name": "same-host",
+    "local_label": "fixture-host/bob",
+    "duplicate_server_name": true,
+    "phone_visibility": "unverified"
+  }
+]
+Provider names stay unchanged; phone visibility remains unverified.
+
+Script done on 2026-10-30 10:26:17-04:00 [COMMAND_EXIT_CODE="0"]
