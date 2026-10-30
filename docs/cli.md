@@ -447,6 +447,12 @@ one item's producer:
 
 - `resume_when: release:<owner>/<repo>@<tag>` is met once that GitHub release is
   published. A draft or a missing release is not met yet.
+- `resume_when: release:forgejo:<host>/<owner>/<repo>@<tag>` reads one exact
+  release from `SHANTY_FORGEJO_URL`, whose origin must match the recorded host.
+  Redirects, absent or malformed metadata, and failed reads (including ambiguous
+  404s) remain UNKNOWN. Only a non-draft release with matching repository URL, tag
+  and an aware publication timestamp satisfies it. This observes publication; it
+  grants no publication authority and does not register a per-item event binding.
 - `resume_when: installed:<tool><op><version>` is met once the tool's own
   `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
   tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run

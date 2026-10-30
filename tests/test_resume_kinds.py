@@ -158,3 +158,105 @@ def test_defer_refuses_a_malformed_version_condition_without_writing(world):
     with pytest.raises(DeferRefused, match="installed:<tool>"):
         d.defer("item-1", "external", "resume_when: installed:rm@1.0")
     assert tracker._path("item-1").read_bytes() == before
+
+# Forge identity is pinned in the condition, never selected as an arbitrary URL.
+FORGE_ARG = 'forgejo:forge.example/team/project@v1.2.3'
+FORGE_ENV = {'SHANTY_FORGEJO_URL': 'https://forge.example'}
+
+
+def forge_read(data, env=None, url=None):
+    from io import BytesIO
+    class Reply(BytesIO):
+        def geturl(self):
+            return url or 'https://forge.example/api/v1/repos/team/project/releases/tags/v1.2.3'
+    class Reader:
+        def open(self, request, timeout):
+            assert request.full_url == 'https://forge.example/api/v1/repos/team/project/releases/tags/v1.2.3'
+            assert timeout == resume_kinds.TIMEOUT
+            return Reply(json.dumps(data).encode())
+    return resume_kinds.forgejo_release(FORGE_ARG, env=FORGE_ENV if env is None else env, opener=Reader())
+
+
+def publication():
+    return {'tag_name': 'v1.2.3', 'draft': False,
+            'html_url': 'https://forge.example/team/project/releases/tag/v1.2.3',
+            'published_at': '2026-10-29T12:00:00Z'}
+
+
+def test_forgejo_published_and_draft_are_distinct():
+    assert forge_read(publication())[0] is True
+    body = publication(); body['draft'] = True
+    assert forge_read(body)[0] is False
+
+
+@pytest.mark.parametrize('field,value', [
+    ('tag_name', 'v9'), ('draft', None), ('draft', 'false'),
+    ('html_url', 'https://other.example/team/project/releases/tag/v1.2.3'),
+    ('html_url', 'https://forge.example/other/project/releases/tag/v1.2.3'),
+    ('published_at', None), ('published_at', 'yesterday'),
+    ('published_at', '2026-10-29T12:00:00'),
+])
+def test_forgejo_partial_or_wrong_scope_keeps_hold(field, value):
+    body = publication(); body[field] = value
+    assert forge_read(body)[0] is None
+
+
+@pytest.mark.parametrize('base', ['', 'https://other.example', 'https://user:secret@forge.example',
+                                 'https://forge.example/path', 'https://forge.example?x=1',
+                                 'https://forge.example:0'])
+def test_forgejo_wrong_config_never_reads(base):
+    assert forge_read(publication(), {'SHANTY_FORGEJO_URL': base})[0] is None
+
+
+def test_forgejo_redirect_response_cannot_satisfy():
+    assert forge_read(publication(), url='https://other.example/')[0] is None
+
+
+def test_forgejo_condition_is_accepted_by_normal_writer(world):
+    d, tracker = world
+    d.defer('item-1', 'external', 'resume_when: release:' + FORGE_ARG)
+    assert ('resume_when: release:' + FORGE_ARG) in tracker.get('item-1').notes
+
+
+@pytest.mark.parametrize('arg', ['forgejo:https://forge.example/a/b@v1',
+                                'forgejo:forge.example/../b@v1',
+                                'forgejo:forge.example/a/b@$(x)'])
+def test_forgejo_malformed_condition_refuses(arg):
+    with pytest.raises(ValueError):
+        resume_kinds.validate('release', arg)
+
+
+@pytest.mark.parametrize('failure', [OSError('offline'), ValueError('invalid JSON')])
+def test_forgejo_read_failures_remain_unknown(failure):
+    class Reader:
+        def open(self, request, timeout):
+            raise failure
+    assert resume_kinds.forgejo_release(FORGE_ARG, env=FORGE_ENV, opener=Reader())[0] is None
+
+
+def test_forgejo_real_transport_refuses_redirect_and_bounds_body(monkeypatch):
+    from io import BytesIO
+    captured = []
+    class Reply(BytesIO):
+        def geturl(self):
+            return 'https://forge.example/api/v1/repos/team/project/releases/tags/v1.2.3'
+    class Reader:
+        def open(self, request, timeout):
+            assert request.get_header('Authorization') == 'token fixture-token'
+            return Reply(b'x' * 262145)
+    def build(handler):
+        assert handler.redirect_request(None, None, None, None, None, None) is None
+        captured.append(True)
+        return Reader()
+    monkeypatch.setattr(resume_kinds.urllib.request, 'build_opener', build)
+    monkeypatch.setenv('SHANTY_FORGEJO_URL', 'https://forge.example')
+    monkeypatch.setenv('SHANTY_FORGEJO_TOKEN', 'fixture-token')
+    assert resume_kinds.evaluate('release', FORGE_ARG)[0] is None
+    assert captured == [True]
+
+
+def test_forgejo_sweeper_uses_fact_condition_and_retains_unknown(monkeypatch):
+    monkeypatch.setattr(resume_kinds, 'forgejo_release', lambda arg: (None, 'scope UNKNOWN'))
+    finding = deferrals.evaluate([row('release:' + FORGE_ARG)], now=NOW)[0]
+    assert not finding.met and finding.untestable
+    assert not deferrals.can_release(row('release:' + FORGE_ARG), finding, NOW)
