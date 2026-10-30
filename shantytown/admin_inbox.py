@@ -115,7 +115,15 @@ def sweep(root, agents, panes, box_for, *, now=None, log=lambda message: None):
             if not card.pane or not panes.exists(card.pane):
                 continue
             box = box_for(backend)
-            unread = {msg.id: msg for msg in box.unread(name)}
+            try:
+                unread = {msg.id: msg for msg in box.unread(name)}
+            except Exception as error:
+                # A capped or failed unread read cannot prove which pointers are
+                # still deliverable. Retain this recipient's rows; one unreadable
+                # inbox must not stop every other recipient's batch.
+                log(f'routine inbox: {name} unread read UNKNOWN ({type(error).__name__}); '
+                    f'{len(entries)} pointer(s) retained')
+                continue
             ready = []
             # Bound the batch by deliverable pointers, not by queue rows: rows
             # already read elsewhere stay queued and must not starve newer ones.
