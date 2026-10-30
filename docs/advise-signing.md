@@ -2,7 +2,7 @@
 
 The Seeds tracker can select a reviewed per-agent signing profile for mutation
 children. Default operation is unchanged when `/etc/shantytown/advise-signing.json`
-is absent. This mode creates no keys, enrolls no trust, changes no Unix users and
+(`/Library/Application Support/Shantytown/advise-signing.json` on macOS) is absent. This mode creates no keys, enrolls no trust, changes no Unix users and
 enforces no identity. An operator installs the policy only after introducing the
 keys, qualifying the normal writer and recording a rollback.
 
