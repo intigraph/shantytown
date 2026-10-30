@@ -1,0 +1,16 @@
+Script started on 2026-10-29 22:28:40-04:00 [COMMAND="sh /var/tmp/lex-bao-demo.sh" <not executed on terminal>]
+Offline source fixture. Base 2300f4d; candidate 95c797f4. No live HTTP.
+
+$ python probe.py BASE/shantytown/resume_kinds.py
+condition: release:forgejo:forge.example/team/project@v1.2.3
+write refused: release:<owner>/<repo>@<tag> needs a GitHub repository and a tag
+
+$ python probe.py CANDIDATE/shantytown/resume_kinds.py
+condition: release:forgejo:forge.example/team/project@v1.2.3
+fixture read: https://forge.example/api/v1/repos/team/project/releases/tags/v1.2.3
+published: (True, 'forge.example/team/project v1.2.3 published 2026-10-29T12:00:00Z')
+fixture read: https://forge.example/api/v1/repos/team/project/releases/tags/v1.2.3
+draft control: (False, 'forge.example/team/project v1.2.3 remains a draft')
+wrong-host control: (None, 'Forgejo configured origin missing or mismatched')
+
+Script done on 2026-10-29 22:28:40-04:00 [COMMAND_EXIT_CODE="0"]
