@@ -1,7 +1,7 @@
 # Restored author lanes, Codex reviews
 
 Run the same read-only admission probe on base
-`7420239f03924fa166531e3cc5a8ca1232345041` and the candidate source.
+`7420239f03924fa166531e3cc5a8ca1232345041` and candidate source `314f3b7553c380c83cba8ee3e02b9844135e9cb6`.
 With `admit_class=true`, ordinary, routine, design and important-code authoring
 changes from Claude-refused to both harnesses admitted. A legacy-authorized
 author stays admitted. Review remains Codex-only even with legacy authorization,
