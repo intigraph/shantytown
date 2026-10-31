@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="620" viewBox="0 0 1000 620" role="img" aria-labelledby="title desc">
+<title id="title">Shantytown: preview the crew before launching</title>
+<desc id="desc">Real st fleet init dry-runs in an isolated fixture; no cards, settings, sessions or fleet state are created. The animation repeats. The adjacent transcript provides a static alternative.</desc>
+<rect width="100%" height="100%" rx="16" fill="#101827"/>
+<path d="M0 54H1000" stroke="#334155"/>
+<circle cx="28" cy="27" r="7" fill="#fb7185"/>
+<circle cx="52" cy="27" r="7" fill="#fbbf24"/>
+<circle cx="76" cy="27" r="7" fill="#34d399"/>
+<text x="110" y="34" fill="#e2e8f0" font-family="monospace" font-size="20">Shantytown: preview the crew before launching</text>
+<g id="frame0" visibility="hidden" font-family="DejaVu Sans Mono, Menlo, monospace" font-size="24">
+<animate attributeName="visibility" calcMode="discrete" values="visible;hidden;hidden" keyTimes="0.000000;0.250000;1.000000" dur="24.000s" repeatCount="indefinite"/>
+<text x="28" y="94" fill="#6ee7b7" xml:space="preserve">$ st --root .shanty --backend files fleet init -y --admin </text>
+<text x="28" y="126" fill="#f1f5f9" xml:space="preserve">coordinator --crew &#x27;&#x27; --dry-run</text>
+<text x="28" y="158" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="190" fill="#f1f5f9" xml:space="preserve">  store    .shanty</text>
+<text x="28" y="222" fill="#f1f5f9" xml:space="preserve">  dir      crew/</text>
+<text x="28" y="254" fill="#f1f5f9" xml:space="preserve">  dir      settings/</text>
+<text x="28" y="286" fill="#f1f5f9" xml:space="preserve">  dir      events/</text>
+<text x="28" y="318" fill="#f1f5f9" xml:space="preserve">  dir      launched/</text>
+<text x="28" y="350" fill="#f1f5f9" xml:space="preserve">  card     coordinator  administrator  pane st-coordinator</text>
+<text x="28" y="382" fill="#f1f5f9" xml:space="preserve">  hooks    settings/administrator.settings.json</text>
+<text x="28" y="414" fill="#f1f5f9" xml:space="preserve">  permissions for NEW cards: MANUAL (approval prompts enabled)</text>
+<text x="28" y="446" fill="#f1f5f9" xml:space="preserve">  config   .shanty/shantytown.toml</text>
+<text x="28" y="478" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="510" fill="#f1f5f9" xml:space="preserve">  1 agent(s) · startup mode &#x27;lite&#x27; · hibernate off</text>
+</g>
+<g id="frame1" visibility="hidden" font-family="DejaVu Sans Mono, Menlo, monospace" font-size="24">
+<animate attributeName="visibility" calcMode="discrete" values="hidden;visible;hidden;hidden" keyTimes="0.000000;0.250000;0.500000;1.000000" dur="24.000s" repeatCount="indefinite"/>
+<text x="28" y="94" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="126" fill="#f1f5f9" xml:space="preserve">  --dry-run: nothing written.</text>
+</g>
+<g id="frame2" visibility="hidden" font-family="DejaVu Sans Mono, Menlo, monospace" font-size="24">
+<animate attributeName="visibility" calcMode="discrete" values="hidden;visible;hidden;hidden" keyTimes="0.000000;0.500000;0.750000;1.000000" dur="24.000s" repeatCount="indefinite"/>
+<text x="28" y="94" fill="#6ee7b7" xml:space="preserve">$ st --root .shanty --backend files fleet init -y --admin </text>
+<text x="28" y="126" fill="#f1f5f9" xml:space="preserve">coordinator --crew builder --dry-run</text>
+<text x="28" y="158" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="190" fill="#f1f5f9" xml:space="preserve">  store    .shanty</text>
+<text x="28" y="222" fill="#f1f5f9" xml:space="preserve">  dir      crew/</text>
+<text x="28" y="254" fill="#f1f5f9" xml:space="preserve">  dir      settings/</text>
+<text x="28" y="286" fill="#f1f5f9" xml:space="preserve">  dir      events/</text>
+<text x="28" y="318" fill="#f1f5f9" xml:space="preserve">  dir      launched/</text>
+<text x="28" y="350" fill="#f1f5f9" xml:space="preserve">  card     coordinator  administrator  pane st-coordinator</text>
+<text x="28" y="382" fill="#f1f5f9" xml:space="preserve">  card     builder      worker         pane st-builder</text>
+<text x="28" y="414" fill="#f1f5f9" xml:space="preserve">  hooks    settings/administrator.settings.json</text>
+<text x="28" y="446" fill="#f1f5f9" xml:space="preserve">  hooks    settings/worker.settings.json</text>
+<text x="28" y="478" fill="#f1f5f9" xml:space="preserve">  permissions for NEW cards: MANUAL (approval prompts enabled)</text>
+<text x="28" y="510" fill="#f1f5f9" xml:space="preserve">  config   .shanty/shantytown.toml</text>
+</g>
+<g id="frame3" visibility="visible" font-family="DejaVu Sans Mono, Menlo, monospace" font-size="24">
+<animate attributeName="visibility" calcMode="discrete" values="hidden;visible;visible" keyTimes="0.000000;0.750000;1.000000" dur="24.000s" repeatCount="indefinite"/>
+<text x="28" y="94" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="126" fill="#f1f5f9" xml:space="preserve">  2 agent(s) · startup mode &#x27;lite&#x27; · hibernate off</text>
+<text x="28" y="158" fill="#f1f5f9" xml:space="preserve"></text>
+<text x="28" y="190" fill="#f1f5f9" xml:space="preserve">  --dry-run: nothing written.</text>
+</g>
+</svg>

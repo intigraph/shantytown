@@ -1,0 +1,34 @@
+$ st --root .shanty --backend files fleet init -y --admin coordinator --crew '' --dry-run
+
+  store    .shanty
+  dir      crew/
+  dir      settings/
+  dir      events/
+  dir      launched/
+  card     coordinator  administrator  pane st-coordinator
+  hooks    settings/administrator.settings.json
+  permissions for NEW cards: MANUAL (approval prompts enabled)
+  config   .shanty/shantytown.toml
+
+  1 agent(s) · startup mode 'lite' · hibernate off
+
+  --dry-run: nothing written.
+[exit 0]
+$ st --root .shanty --backend files fleet init -y --admin coordinator --crew builder --dry-run
+
+  store    .shanty
+  dir      crew/
+  dir      settings/
+  dir      events/
+  dir      launched/
+  card     coordinator  administrator  pane st-coordinator
+  card     builder      worker         pane st-builder
+  hooks    settings/administrator.settings.json
+  hooks    settings/worker.settings.json
+  permissions for NEW cards: MANUAL (approval prompts enabled)
+  config   .shanty/shantytown.toml
+
+  2 agent(s) · startup mode 'lite' · hibernate off
+
+  --dry-run: nothing written.
+[exit 0]
