@@ -2888,6 +2888,14 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
 
+Candidate source must be committed and published. Untracked files may remain
+only inside top-level `.work/` and `.task-notes/` directories. The preflight
+checks the directory roots without following symlinks or reading private file
+contents; these files do not enter the PR file list or metadata. A file or
+symlink replacing either root refuses, as do unrelated untracked paths and every
+tracked, staged, deleted, renamed or conflicted change, including under those
+roots. No ignore/configuration change or force option is needed.
+
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
