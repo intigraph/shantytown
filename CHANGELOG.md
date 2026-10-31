@@ -1,5 +1,73 @@
 # Changelog
 
+## [0.9.0](https://github.com/intigraph/shantytown/compare/v0.8.0...v0.9.0) (2026-10-31)
+
+
+### Features
+
+* **agent:** signed Quipu verdicts replace GitHub approvals for the guarded merge (aegis-c01c.7) ([#408](https://github.com/intigraph/shantytown/issues/408)) ([3fa8886](https://github.com/intigraph/shantytown/commit/3fa8886f637971b430d7c953bd0de01e307cad3c))
+* **agent:** st agent spawn --ephemeral — supervised one-job agents (aegis-c01c.2) ([#406](https://github.com/intigraph/shantytown/issues/406)) ([6ae820e](https://github.com/intigraph/shantytown/commit/6ae820ee7e41627e6bb304a31613e4a6331d2085))
+* **cli:** st prime per the stack prime contract (aegis-km3g.4) ([#409](https://github.com/intigraph/shantytown/issues/409)) ([214223a](https://github.com/intigraph/shantytown/commit/214223a4875e5ee45939da4904335496f19b3979))
+* **jobs:** stage protected per-job UID launch and lifecycle ([#421](https://github.com/intigraph/shantytown/issues/421)) ([e7fcee4](https://github.com/intigraph/shantytown/commit/e7fcee4ec1ee500df29126eb0660979541922111))
+* **stop-policy:** ruling-without-record stop check, off by default (aegis-gshu.3) ([#414](https://github.com/intigraph/shantytown/issues/414)) ([64851f2](https://github.com/intigraph/shantytown/commit/64851f2ff51f50182901e155457fef94eae3e79c))
+* **stop:** block the administrator on a startable P0 plate (rank 2a) ([#405](https://github.com/intigraph/shantytown/issues/405)) ([d877948](https://github.com/intigraph/shantytown/commit/d87794882722287475636b3447fbc68309bb9417))
+* **work:** hold automatic feeds while keeping an agent live ([#279](https://github.com/intigraph/shantytown/issues/279)) ([34e071d](https://github.com/intigraph/shantytown/commit/34e071d461c9fdc041db9d49c1d0f3cfe650e2da))
+
+
+### Bug Fixes
+
+* **admin-inbox:** retain one recipient's rows when its unread read fails ([#426](https://github.com/intigraph/shantytown/issues/426)) ([7510e04](https://github.com/intigraph/shantytown/commit/7510e04d678235a4b3b56bdf7faa907cf49feb1c))
+* **admin-inbox:** retain one recipient's rows when its unread read fails (aegis-rwhc) ([7510e04](https://github.com/intigraph/shantytown/commit/7510e04d678235a4b3b56bdf7faa907cf49feb1c))
+* **advise-signing:** read the optional policy from the macOS operator directory ([#424](https://github.com/intigraph/shantytown/issues/424)) ([f423871](https://github.com/intigraph/shantytown/commit/f4238717cfce0da0a3384b9976a13b2b928f9656))
+* **advise-signing:** read the optional policy from the macOS operator directory (aegis-enb) ([f423871](https://github.com/intigraph/shantytown/commit/f4238717cfce0da0a3384b9976a13b2b928f9656))
+* **capacity:** apply the ten-item limit to urgent work ([#428](https://github.com/intigraph/shantytown/issues/428)) ([38120f2](https://github.com/intigraph/shantytown/commit/38120f2dc27f7d949546ff9e48a5baae99dc00c6))
+* **cycle:** explain agent-owned background task holds ([#402](https://github.com/intigraph/shantytown/issues/402)) ([f0e082d](https://github.com/intigraph/shantytown/commit/f0e082d8d1bf9f6fb9601cff9c17dd6b3891f1e5))
+* **dispatch:** admit task-authorized Claude authors ([#425](https://github.com/intigraph/shantytown/issues/425)) ([7420239](https://github.com/intigraph/shantytown/commit/7420239f03924fa166531e3cc5a8ca1232345041))
+* **dispatch:** align work-class admission with Codex policy ([#392](https://github.com/intigraph/shantytown/issues/392)) ([f508f72](https://github.com/intigraph/shantytown/commit/f508f72f2d98cd3ffdba7b6b6c6f8da0d17aa6bf))
+* **dispatch:** restore Claude and Codex authoring with Codex reviews ([#429](https://github.com/intigraph/shantytown/issues/429)) ([4e6500e](https://github.com/intigraph/shantytown/commit/4e6500e808c49422987311f221d00cc54339f9e8))
+* **ephemeral:** deliver the job prompt in checked steps; crash-to-shell is launch failed; spawns never rewrite shared role settings (aegis-g9w) ([c1f97f3](https://github.com/intigraph/shantytown/commit/c1f97f364a6059df8c79dcdb9c0736bd1ee92afb))
+* **ephemeral:** guarded actions need a verified identity; unattended launches gated (aegis-1dge) ([#415](https://github.com/intigraph/shantytown/issues/415)) ([45c4dbe](https://github.com/intigraph/shantytown/commit/45c4dbeb5dbd88e639ebbf5e454c9864580e6fe3))
+* **ephemeral:** guarded actions verify identity (strict opt-in); unattended launches gated (aegis-1dge) ([45c4dbe](https://github.com/intigraph/shantytown/commit/45c4dbeb5dbd88e639ebbf5e454c9864580e6fe3))
+* **ephemeral:** teardown removes worktrees the job created (aegis-au83) ([#413](https://github.com/intigraph/shantytown/issues/413)) ([c704c25](https://github.com/intigraph/shantytown/commit/c704c251a44d663ade09322757fc35c0e982838d))
+* **ephemeral:** teardown removes worktrees the job created itself; keeps real work (aegis-au83) ([c704c25](https://github.com/intigraph/shantytown/commit/c704c251a44d663ade09322757fc35c0e982838d))
+* **governor:** admit launches on any host when peers are down ([#396](https://github.com/intigraph/shantytown/issues/396)) ([7e6ea1b](https://github.com/intigraph/shantytown/commit/7e6ea1b06ab401f05c3cc6360d8455f1319e6d02))
+* **governor:** never mistake a busy admission owner for an unreachable one ([#398](https://github.com/intigraph/shantytown/issues/398)) ([b56f091](https://github.com/intigraph/shantytown/commit/b56f0910d07545d88286bf7fdcd75411ccec9501))
+* **governor:** publish advice knownness for blind lanes ([0ed9218](https://github.com/intigraph/shantytown/commit/0ed92183c61e3dfad8f94e8b3da5abbc8dd82c4a))
+* **governor:** publish knownness=0 for blind lanes so dashboards see them (aegis-5zw7) ([#418](https://github.com/intigraph/shantytown/issues/418)) ([0ed9218](https://github.com/intigraph/shantytown/commit/0ed92183c61e3dfad8f94e8b3da5abbc8dd82c4a))
+* **governor:** stale or invalid peer census is advisory, one-line notice ([#404](https://github.com/intigraph/shantytown/issues/404)) ([e2381de](https://github.com/intigraph/shantytown/commit/e2381dedc72d1cd7bac662eaeff51f086c4b4d34))
+* **governor:** symmetric ±60s clock-skew tolerance for peer census (aegis-61r) ([#412](https://github.com/intigraph/shantytown/issues/412)) ([28ce620](https://github.com/intigraph/shantytown/commit/28ce62002190a6c3d95bd1e3ff4ca79d59db7500))
+* harden ASK dispatch and undated inbox ordering ([#403](https://github.com/intigraph/shantytown/issues/403)) ([d62a096](https://github.com/intigraph/shantytown/commit/d62a0966c6f873adcf79702c44bc6a4d0ea24901))
+* **haul:** keep human decisions off worker hooks ([#400](https://github.com/intigraph/shantytown/issues/400)) ([d277a53](https://github.com/intigraph/shantytown/commit/d277a53e97a395f9572917917d354932a85b6c06))
+* **inbox:** bound metadata reads and count membership separately ([#401](https://github.com/intigraph/shantytown/issues/401)) ([942e491](https://github.com/intigraph/shantytown/commit/942e4913e180c0be1ec95b624174b8aa2f08e076))
+* **item:** read back a comment whose write timed out before calling it unproven ([#395](https://github.com/intigraph/shantytown/issues/395)) ([2c739a7](https://github.com/intigraph/shantytown/commit/2c739a7a553b46ba6c0a429ed08a4fa09d34d6a0))
+* **item:** say when a comment write landed nothing, and print every cause ([#360](https://github.com/intigraph/shantytown/issues/360)) ([4c3d91b](https://github.com/intigraph/shantytown/commit/4c3d91b9941153c079c461f08590917c542b22e2))
+* **jobs:** decode verbose typed Quipu literal cells ([45e47aa](https://github.com/intigraph/shantytown/commit/45e47aafed3d33c61fa0a91cd887b009d6046e63))
+* **jobs:** decode verbose typed Quipu literal cells in the job catalogue reader (aegis-6vf.2) ([#416](https://github.com/intigraph/shantytown/issues/416)) ([45e47aa](https://github.com/intigraph/shantytown/commit/45e47aafed3d33c61fa0a91cd887b009d6046e63))
+* keep human decisions out of dispatch and sort undated inboxes last ([d62a096](https://github.com/intigraph/shantytown/commit/d62a0966c6f873adcf79702c44bc6a4d0ea24901))
+* **shares:** carry the reviewed empty alignment member ([#394](https://github.com/intigraph/shantytown/issues/394)) ([0ae8dbf](https://github.com/intigraph/shantytown/commit/0ae8dbf20d923cc92d9d3a2f681ffc9ee15ce2b8))
+* **spawn:** an ephemeral job is delivered when its turn starts (aegis-g9w) ([#411](https://github.com/intigraph/shantytown/issues/411)) ([c1f97f3](https://github.com/intigraph/shantytown/commit/c1f97f364a6059df8c79dcdb9c0736bd1ee92afb))
+* **stop-policy:** rank 2a ignores host-bound and live-ephemeral items (aegis-x90l) ([#407](https://github.com/intigraph/shantytown/issues/407)) ([07a5057](https://github.com/intigraph/shantytown/commit/07a50570a8f12a5c10e4a92d863e3b51f02a6d3a))
+* **tend:** busy agent's queued sends are pending, not delivery-stalled (aegis-f7h) ([#410](https://github.com/intigraph/shantytown/issues/410)) ([1de7c92](https://github.com/intigraph/shantytown/commit/1de7c922b2b39bcebb4815b45d288761db7a3a89))
+* **tmux:** observe Darwin launch posture with native process probes ([36451f8](https://github.com/intigraph/shantytown/commit/36451f89735912fa9ecd78cf06242df355da513d))
+* **tmux:** read macOS launch posture without GNU ps options ([#420](https://github.com/intigraph/shantytown/issues/420)) ([36451f8](https://github.com/intigraph/shantytown/commit/36451f89735912fa9ecd78cf06242df355da513d))
+* **tmux:** start the fleet tmux server in its own user scope when launched from a user service (aegis-gl5c) ([#417](https://github.com/intigraph/shantytown/issues/417)) ([b2e5d9f](https://github.com/intigraph/shantytown/commit/b2e5d9ff7a675b5b7941c6511d6627cd6f4ffe08))
+* **work item:** keep may-still-land on a failed comment read-back; match author ([#399](https://github.com/intigraph/shantytown/issues/399)) ([a3ea4fd](https://github.com/intigraph/shantytown/commit/a3ea4fdabd4b75bad30e1851cbdd8bcbf1af68bf))
+
+
+### Performance Improvements
+
+* **seeds:** share watermark windows and support push projection reads ([#422](https://github.com/intigraph/shantytown/issues/422)) ([2300f4d](https://github.com/intigraph/shantytown/commit/2300f4d594b4c711f59433a8de2246a1cd6b1cf2))
+
+
+### Documentation
+
+* **design:** messages in their own windowed graph and lifecycle (aegis-snq) ([#430](https://github.com/intigraph/shantytown/issues/430)) ([861ca94](https://github.com/intigraph/shantytown/commit/861ca945ff1569cfad7c398fa9a80c08ae09c661))
+
+
+### Tests
+
+* **staleness:** keep origin/main frozen under git 2.56 push-to-URL ([#397](https://github.com/intigraph/shantytown/issues/397)) ([3191e2a](https://github.com/intigraph/shantytown/commit/3191e2a6afd3e373e859f97ef34320efbf2d4ba3))
+
 ## [0.8.0](https://github.com/intigraph/shantytown/compare/v0.7.1...v0.8.0) (2026-10-25)
 
 
