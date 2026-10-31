@@ -2339,7 +2339,11 @@ class Verdict:
         return self._class_refusal(item, agent)
 
     def _class_refusal(self, item, agent):
-        if not self.admit_class or agent in self.class_exempt:
+        if not self.admit_class:
+            return ADMITTED
+        # A configured administrator allowance cannot turn a Claude review
+        # into authoring. Both supported harnesses already admit all authors.
+        if agent in self.class_exempt and self.work_harness not in {"claude", "codex"}:
             return ADMITTED
         from .work_class import lane_refusal
         return lane_refusal(item, self.work_harness, agent)
