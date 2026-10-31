@@ -1,0 +1,6 @@
+{"version": 2, "width": 100, "height": 14, "timestamp": 1793463217, "title": "Ten real work items: priority does not add a slot"}
+[0.048314, "o", "Synthetic fixture: complete owner plate; same P0 request on base and candidate.\r\n"]
+[0.058134, "o", "BASE 7510e04d: held=9/10 new=P0 -> ADMITTED\r\n"]
+[0.058182, "o", "BASE 7510e04d: held=10/10 new=P0 -> ADMITTED\r\n"]
+[0.058243, "o", "CANDIDATE hard-ten: held=9/10 new=P0 -> ADMITTED\r\n"]
+[0.058276, "o", "CANDIDATE hard-ten: held=10/10 new=P0 -> REFUSED\r\nNo backend write, dispatch, or installed-behavior claim.\r\n"]
