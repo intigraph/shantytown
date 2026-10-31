@@ -43,5 +43,6 @@
 - [Cross-harness handoff envelope](handoff-envelope.md)
 - [Cycle advice: keep or cycle at a handoff](cycle-advice.md)
 - [Durable browser handoffs](inbox-bridge.md)
+- [Messages in their own graph (design)](message-graph.md)
 - [MCP containment](mcp-containment.md)
 - [Private-key checks](private-key-checks.md)
