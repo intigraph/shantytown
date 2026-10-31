@@ -1,5 +1,6 @@
 """Private/inert strict launcher controls; no provider or network access."""
 import hashlib
+import fcntl
 import json
 import os
 import stat
@@ -143,9 +144,10 @@ def test_next_deselected_command_uses_native_defaults_not_inherited_identity(cho
                  runner=runner, fetch=lambda *a: pytest.fail("deselected fetch")).returncode == 0
 
 
-def test_unsupported_descriptor_platform_never_fetches(chosen, monkeypatch):
+@pytest.mark.parametrize("capability", ["memfd_create", "F_ADD_SEALS"])
+def test_unsupported_descriptor_platform_never_fetches(chosen, monkeypatch, capability):
     root, _, _, _ = chosen
-    monkeypatch.delattr(os, "memfd_create")
+    monkeypatch.delattr(os if capability == "memfd_create" else fcntl, capability)
     with pytest.raises(C.Unavailable):
         S.run(["show", "fixture"], root=root, agent="alice",
               runner=lambda *a, **k: pytest.fail("unsupported platform executed"),
