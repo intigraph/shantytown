@@ -1993,6 +1993,12 @@ The stats capture hook fails open on runtime errors and malformed arguments
 (including a missing `--root`): it prints diagnostics to stderr and exits zero
 so a configuration mistake cannot block a tool call. Argument errors skip capture.
 
+Lifecycle publication from stats capture carries the native hook payload's
+`session_id` into its HTTP provenance, even if no session variable was exported
+or the environment retained an older session. This context lasts only for that
+publication and is restored after success or failure. Missing identity remains
+missing; the hook does not invent a session or change the process environment.
+
 ### Gaming hold
 
 `st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`

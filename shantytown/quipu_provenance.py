@@ -3,6 +3,26 @@ from __future__ import annotations
 
 import os
 import socket
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+
+_hook_session = ContextVar('quipu_hook_session', default=None)
+
+
+@contextmanager
+def hook_session(session):
+    """Carry the native hook identity through synchronous publication only.
+
+    Hooks receive their session in JSON even when the harness exports no session
+    environment. Do not mutate process environment or retain a previous hook's ID.
+    """
+    value = session if isinstance(session, str) and session.strip() else None
+    token = _hook_session.set(value)
+    try:
+        yield
+    finally:
+        _hook_session.reset(token)
 
 
 def headers() -> dict[str, str]:
@@ -19,7 +39,7 @@ def headers() -> dict[str, str]:
     if not harness:
         harness = 'claude' if get('CLAUDECODE') == '1' else 'codex' if get('CODEX_HOME') else 'cli'
     in_session = get('CLAUDECODE') == '1' or bool(get('CODEX_HOME'))
-    session = get('QUIPU_SESSION')
+    session = _hook_session.get() or get('QUIPU_SESSION')
     if not session and harness == 'codex':
         session = get('CODEX_SESSION_ID') or get('CODEX_THREAD_ID')
     elif not session and harness == 'claude':
