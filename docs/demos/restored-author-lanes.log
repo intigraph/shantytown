@@ -1,0 +1,22 @@
+Script started on 2026-10-31 12:43:34-04:00 [COMMAND="python3 docs/demos/restored-author-lanes.py" <not executed on terminal>]
+Isolated library predicates, admit_class=true; no assignments or live writes.
+Source: 7420239f03924fa166531e3cc5a8ca1232345041
+base:
+  ordinary: claude=REFUSE, codex=ADMIT
+  routine: claude=REFUSE, codex=ADMIT
+  design: claude=REFUSE, codex=ADMIT
+  important code: claude=REFUSE, codex=ADMIT
+  legacy authorized: claude=ADMIT, codex=ADMIT
+  review with authorization: claude=REFUSE, codex=ADMIT
+  frozen control: REFUSE for both harnesses; no target harness changes
+Source: current checkout
+candidate:
+  ordinary: claude=ADMIT, codex=ADMIT
+  routine: claude=ADMIT, codex=ADMIT
+  design: claude=ADMIT, codex=ADMIT
+  important code: claude=ADMIT, codex=ADMIT
+  legacy authorized: claude=ADMIT, codex=ADMIT
+  review with authorization: claude=REFUSE, codex=ADMIT
+  frozen control: REFUSE for both harnesses; no target harness changes
+
+Script done on 2026-10-31 12:43:34-04:00 [COMMAND_EXIT_CODE="0"]

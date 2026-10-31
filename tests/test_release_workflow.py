@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 import subprocess
-import shutil
+import shlex
 import sys
 
 import pytest
@@ -57,7 +57,11 @@ def test_automated_publication_requires_confirmed_draft(tmp_path, draft, expecte
 def test_tag_and_trigger_identity_gate(tmp_path, tag, sha, ok):
     fixture = tmp_path / "bin"
     fixture.mkdir()
-    shutil.copy2(sys.executable, fixture / "python")
+    # Keep the selected interpreter's stdlib binding; copying its binary alone
+    # can make a standalone Python installation unable to import encodings.
+    python = fixture / "python"
+    python.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    python.chmod(0o755)
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     (tmp_path / "pyproject.toml").write_text('[project]\nversion = "0.4.1"\n')
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)

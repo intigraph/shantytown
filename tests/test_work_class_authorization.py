@@ -1,4 +1,4 @@
-"""Task-scoped exceptions use exact tracker labels, never caller snapshots."""
+"""Authoring needs no exception; exact review labels still constrain admission."""
 from dataclasses import replace
 from types import SimpleNamespace as NS
 
@@ -11,15 +11,15 @@ from test_work_class import put, world
 @pytest.mark.parametrize("labels,allowed", [
     (["work:design", "work:claude-authorized"], True),
     (["work:important-quipu-code", "work:claude-authorized"], True),
-    (["work:design"], False),
-    (["work:claude-authorized"], False),
-    (["work:docs", "work:claude-authorized"], False),
-    (["work:important-code", "work:claude-authorized"], False),
+    (["work:design"], True),
+    (["work:claude-authorized"], True),
+    (["work:docs", "work:claude-authorized"], True),
+    (["work:important-code", "work:claude-authorized"], True),
     (["work:design", "work:claude-authorized", "work:review"], False),
     (None, False), ("work:design", False),
     ([None, "work:design", "work:claude-authorized"], False),
 ])
-def test_scoped_authorization_requires_readable_class_and_authoring(labels, allowed):
+def test_authoring_needs_readable_class_but_no_authorization_label(labels, allowed):
     item = NS(id="task", labels=labels)
     assert (not work_class.lane_refusal(item, "claude", "author")) is allowed
     assert not work_class.lane_refusal(item, "codex", "coder")
@@ -27,7 +27,7 @@ def test_scoped_authorization_requires_readable_class_and_authoring(labels, allo
 
 
 @pytest.mark.parametrize("kind", ["work:design", "work:important-quipu-code"])
-def test_authorized_p0_normal_dispatch_and_revocation(tmp_path, monkeypatch, kind):
+def test_normal_dispatch_removes_legacy_authorization_without_revoking_authoring(tmp_path, monkeypatch, kind):
     _, tracker, panes = world(tmp_path, monkeypatch)
     put(tracker, [kind, "work:claude-authorized"])
     tracker.update("job", priority=0)
@@ -36,7 +36,7 @@ def test_authorized_p0_normal_dispatch_and_revocation(tmp_path, monkeypatch, kin
     assert cli.main(args) == 0
     assert tracker._path("job").read_bytes() == before
     tracker.update("job", labels=[kind])
-    assert cli.main(args) == cli.REFUSED
+    assert cli.main(args) == 0
     assert not panes.sent
 
 
@@ -54,13 +54,13 @@ def test_authorized_private_dispatch_assigns_only_explicit_target(tmp_path, monk
 def test_feed_and_haul_reread_authorization_instead_of_ready_snapshot(tmp_path, monkeypatch):
     reg, tracker, panes = world(tmp_path, monkeypatch)
     forged = NS(id="job", priority=0, labels=["work:design", "work:claude-authorized"])
-    put(tracker, ["work:design"])
+    put(tracker, ["work:review", "work:design"])
     checks = feed_check.worker_governor_admissions(tmp_path, reg, ["writer", "coder"])
     assert checks["writer"](forged)
     tracker.update("job", labels=["work:design", "work:claude-authorized"])
     checks = feed_check.worker_governor_admissions(tmp_path, reg, ["writer", "coder"])
     assert not checks["writer"](forged)
-    tracker.update("job", labels=["work:design"])
+    tracker.update("job", labels=["work:review", "work:design"])
     checks = feed_check.worker_governor_admissions(tmp_path, reg, ["writer", "coder"])
     assert checks["writer"](forged)
     assert checks["writer"](NS(id="missing", priority=0, labels=forged.labels))
