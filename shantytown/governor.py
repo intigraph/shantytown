@@ -2341,11 +2341,11 @@ class Verdict:
     def _class_refusal(self, item, agent):
         if not self.admit_class:
             return ADMITTED
-        # A configured administrator allowance cannot turn a Claude review
-        # into authoring. Both supported harnesses already admit all authors.
-        if agent in self.class_exempt and self.work_harness not in {"claude", "codex"}:
+        from .work_class import authoring_class, lane_refusal
+        # A configured administrator allowance is authoring-only. It cannot
+        # turn any review into an assignment for a non-Codex harness.
+        if agent in self.class_exempt and authoring_class(item):
             return ADMITTED
-        from .work_class import lane_refusal
         return lane_refusal(item, self.work_harness, agent)
 
     def excludes(self, agent, catalog=None) -> str:

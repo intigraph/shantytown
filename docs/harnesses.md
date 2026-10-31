@@ -603,7 +603,7 @@ Explicit targets keep their configured harness, and an ineligible target is
 refused before dispatch writes. See [work-class routing](work-class-routing.md).
 
 A name in `class_exempt` receives an exemption only when the actual crew
-card has the `administrator` role; it never authorizes Claude review. A lead,
+card has the `administrator` role and the exact item is readable authoring; it never authorizes non-Codex review. A lead,
 keeper or worker cannot obtain an exemption from the name alone. This filter never waives usage floors, freezes,
 drains, holds, plate limits or busy-pane checks. Review identity and review
 eligibility retain their separate normal admission checks.

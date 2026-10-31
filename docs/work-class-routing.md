@@ -28,7 +28,7 @@ notifies the executive, without assigning a worker. A later `st go` follows the
 same class rule as any other dispatch.
 
 `class_exempt = ["administrator-name"]` can exempt explicitly named actual
-administrator cards from this filter only; it never waives the Claude review refusal. Listing a worker, lead or keeper does not exempt it. Usage freezes,
+administrator cards from this filter for readable authoring only; it never waives review restrictions. Listing a worker, lead or keeper does not exempt it. Usage freezes,
 drains, priority floors, maintenance and other dispatch holds remain in force.
 The existing `exempt` priority-floor setting does not waive work-class admission.
 

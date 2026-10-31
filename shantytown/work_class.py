@@ -34,18 +34,25 @@ def exempt(card, policy) -> bool:
     return card.role == "administrator" and card.name in policy.class_exempt
 
 
-def lane_refusal(item, actual, agent=None) -> str:
-    if actual == "codex":
-        return ""
+def authoring_class(item) -> bool:
+    """An exemption needs readable authoring metadata, never an unknown review."""
     labels = getattr(item, "labels", None)
     readable = isinstance(labels, (tuple, list, set, frozenset)) and all(
         isinstance(label, str) for label in labels)
+    return readable and "work:review" not in labels
+
+
+def lane_refusal(item, actual, agent=None) -> str:
+    if actual == "codex":
+        return ""
     # Both harnesses author any class. An unreadable exact item cannot prove
     # that a Claude assignment is authoring rather than a Codex-only review.
     if actual == "claude":
-        if readable and "work:review" not in labels:
+        if authoring_class(item):
             return ""
-        reason = "reviews require codex" if readable else "work-class labels are missing or unreadable"
+        labels = getattr(item, "labels", None)
+        reason = ("reviews require codex" if isinstance(labels, (tuple, list, set, frozenset))
+                  and "work:review" in labels else "work-class labels are missing or unreadable")
     else:
         reason = "authoring requires claude or codex; reviews require codex"
     return (f"work class refuses explicit "

@@ -50,10 +50,10 @@ def test_feed_and_haul_use_exact_review_class(tmp_path, monkeypatch, review, aut
     ['work:review', 'work:design', 'work:claude-authorized']])
 def test_review_cannot_use_claude_administrator_exception(labels):
     policy = gov.Policy(admit_class=True, class_exempt=('chief',))
-    for lane in ['claude', 'codex']:
+    for lane in ['claude', 'codex', 'unknown']:
         verdict = work_class.for_card(gov.Verdict(reading=gov.Reading(source='none')),
             policy, Agent('chief', role='administrator', harness=lane))
-        assert bool(verdict.admits(NS(id='review', priority=0, labels=labels), 'chief')) is (lane == 'claude')
+        assert bool(verdict.admits(NS(id='review', priority=0, labels=labels), 'chief')) is (lane != 'codex')
 
 
 @pytest.mark.parametrize('lane', ['claude', 'codex'])
