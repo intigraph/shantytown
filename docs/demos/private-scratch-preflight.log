@@ -1,0 +1,9 @@
+Script started on 2026-10-31 17:07:53-04:00 [COMMAND="stty -onlcr && python3 docs/demos/private-scratch-preflight.py" <not executed on terminal>]
+Offline real Git/API fixtures; no network or live PR creation.
+Baseline: 4e6500e808c49422987311f221d00cc54339f9e8
+work notes: baseline=REFUSE candidate=ADMIT; private state preserved
+task notes: baseline=REFUSE candidate=ADMIT; private state preserved
+tracked dirty: baseline=REFUSE candidate=REFUSE; private state preserved
+symlink root: baseline=REFUSE candidate=REFUSE; private state preserved
+
+Script done on 2026-10-31 17:07:54-04:00 [COMMAND_EXIT_CODE="0"]
