@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from shantytown import input_observation as observation, triage
+from shantytown import input_observation as observation, tmux, triage
 from test_codex_0161_composer import frame
 
 
@@ -23,7 +23,7 @@ def test_actual_framed_states_are_not_changed(body, state, reason):
     assert (result["state"], result["reason"]) == (state, reason)
     assert result["state"] == triage.input_state(screen)
     assert result["observed_at"] == 1000
-    assert calls == [{"attrs": True, "timeout": 5}]
+    assert calls == [{"attrs": True, "timeout": 5, "check": True}]
     assert "fixture" not in json.dumps(result)
 
 
@@ -61,3 +61,53 @@ def test_incomplete_capture_is_not_empty(screen, reason):
     result = observation.capture(SimpleNamespace(capture=lambda *a, **kw: screen), "fixture")
     assert result["state"] == triage.INPUT_UNKNOWN
     assert result["reason"] == reason
+
+
+@pytest.mark.parametrize("returncode,screen,state,reason,busy", [
+    (0, "", triage.INPUT_ABSENT, "no-composer-frame", False),
+    (0, "ordinary output", triage.INPUT_ABSENT, "no-composer-frame", False),
+    (1, "", triage.INPUT_UNKNOWN, "capture-failed", None),
+    (1, frame("private stale input"), triage.INPUT_UNKNOWN, "capture-failed", None),
+])
+def test_native_adapter_preserves_capture_outcome(monkeypatch, returncode, screen,
+                                                 state, reason, busy):
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, returncode, stdout=screen,
+                                           stderr="private adapter detail")
+
+    monkeypatch.setattr(tmux.subprocess, "run", run)
+    result = observation.capture(tmux.Tmux(socket="offline-fixture"), "offline-pane")
+    assert (result["state"], result["reason"], result["busy"]) == (state, reason, busy)
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert "capture-pane" in cmd and "-e" in cmd
+    assert "send-keys" not in cmd
+    assert kwargs == {"capture_output": True, "text": True, "timeout": 5}
+    assert "private" not in json.dumps(result) and "offline-pane" not in json.dumps(result)
+
+
+def test_native_timeout_and_default_capture_contract(monkeypatch):
+    panes = tmux.Tmux(socket="offline-fixture")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tmux.subprocess, "run", lambda cmd, **kw:
+                      subprocess.CompletedProcess(cmd, 1, stdout="", stderr="private"))
+        assert panes.capture("offline-pane") == ""
+        with pytest.raises(subprocess.CalledProcessError):
+            panes.capture("offline-pane", check=True)
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("private adapter detail", 5)
+
+    monkeypatch.setattr(tmux.subprocess, "run", timeout)
+    result = observation.capture(panes, "offline-pane")
+    assert (result["state"], result["reason"], result["busy"]) == (
+        triage.INPUT_UNKNOWN, "capture-timeout", None)
+    assert "private" not in json.dumps(result)
+
+
+def test_offline_panes_support_checked_capture():
+    result = observation.capture(tmux.NullPanes(screen="ordinary output"), "offline-pane")
+    assert (result["state"], result["reason"]) == (triage.INPUT_ABSENT, "no-composer-frame")

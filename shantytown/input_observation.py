@@ -43,7 +43,7 @@ def capture(panes, pane, *, wall_clock=time.time, monotonic=time.monotonic):
     """Capture once with attributes and a deadline; failures stay UNKNOWN."""
     started, tick = wall_clock(), monotonic()
     try:
-        screen = panes.capture(pane, attrs=True, timeout=5)
+        screen = panes.capture(pane, attrs=True, timeout=5, check=True)
         if not isinstance(screen, str):
             reason = "invalid-capture"
         elif len(screen) > 131072:
