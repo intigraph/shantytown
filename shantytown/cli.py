@@ -2342,6 +2342,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="cycle even though a tree holds uncommitted or unpushed "
                          "work. Named separately from any --force ON PURPOSE, so "
                          "reaching past another refusal cannot disarm this one")
+    cy.add_argument("--bundle-custody-item", action="append", default=[], metavar="ID",
+                    help="item with root-accepted, independently verified exact-ref "
+                         "Git bundle custody (repeatable); never covers dirty work")
     # `--dry-run` is on every command that writes, from commit one — and this one
     # kills a live session, so it is not optional here. It also has to run the
     # GUARD before printing "would", or the preview an operator reads to authorise
@@ -10428,6 +10431,32 @@ def _durable_checkpoint_gate(a, agent_name: str):
     return cycle_mod.durable_gate(agent_name, bead, since, got)
 
 
+def _cycle_bundle_custody(a, agent):
+    """Read item authors through the existing tracker and roles through cards.
+
+    Unknown reads refuse this optional custody route; they are never approvals.
+    The cycle still re-verifies the exact ref and bundle before changing state.
+    """
+    items = getattr(a, 'bundle_custody_item', None) or []
+    if not items:
+        return None
+    from . import cycle_custody
+    from .br import comments
+    if _backend(a, 'files') not in BR_LIKE:
+        raise ValueError('bundle custody requires item comments on the configured backend')
+    receipts = []
+    registry = _registry(a)
+    for item in dict.fromkeys(items):
+        try:
+            receipts.extend(cycle_custody.accepted_receipts(
+                comments(_tracker(a), item), registry.get, agent, item))
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError('bundle custody item/card read unavailable') from error
+    return lambda tree: cycle_custody.verify_tree(tree, agent, receipts)
+
+
 def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
     """Optional Jev advice uses only the handoff, never the conversation."""
     from . import checkpoint_quality
@@ -10782,7 +10811,8 @@ def _cmd_cycle(a) -> int:
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
                                            quipu_nodes, no_in_place=no_in_place,
-                                           allow_loss=bool(getattr(a, "allow_loss", False)))
+                                           allow_loss=bool(getattr(a, "allow_loss", False)),
+                                           bundle_custody_items=getattr(a, 'bundle_custody_item', None))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -10844,6 +10874,7 @@ def _cmd_cycle(a) -> int:
     import subprocess
     try:
         cfg = config.load(a.root)
+        custody = _cycle_bundle_custody(a, agent_name)
         verdict = cycle_mod.assess(
             agent_name, trees, a.reason,
             # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
@@ -10854,7 +10885,7 @@ def _cmd_cycle(a) -> int:
                 t, fetch=True, untracked_all=True, tracked_only=True,
                 cycle_per_install=True,
                 fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
-            allow_loss=a.allow_loss)
+            allow_loss=a.allow_loss, custody=custody)
     except subprocess.TimeoutExpired as e:
         command = e.cmd if isinstance(e.cmd, (list, tuple)) else []
         operation = "fetch" if "fetch" in command else "Git preflight"
@@ -10863,6 +10894,9 @@ def _cmd_cycle(a) -> int:
         return REFUSED
     except (config.ConfigError, OSError) as e:
         print(f"  refused: cycle preflight: {str(e).splitlines()[0]}", file=sys.stderr)
+        return REFUSED
+    except ValueError as e:
+        print(f"  refused: cycle custody/preflight: {e}", file=sys.stderr)
         return REFUSED
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
@@ -10988,6 +11022,7 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
         "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "bundle_custody_item": list(request.get("bundle_custody_items") or []),
         "dry_run": False}))
 
 
