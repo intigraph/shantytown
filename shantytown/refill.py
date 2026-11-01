@@ -15,13 +15,6 @@ from .files import write_json_atomic
 from .priority_advisory import priority, workable
 from .protocols import rank_order
 
-# How long a worker remembers that an item was ineligible for it. Within that
-# window each tick resumes past already-judged candidates, so slow readable
-# previews of an ineligible prefix cannot exhaust every tick's budget before a
-# later eligible item is reached (review az0, PR434). The age bound keeps a
-# changed item (blocker cleared, governor eased) from staying skipped for long.
-LAP_TTL = 3600
-
 
 def ordered(rows):
     """The ready projection selects candidates; dispatch re-reads each item."""
@@ -101,16 +94,25 @@ class Refiller:
             waiting[worker] = {'item': item, 'since': since}
             observations[worker] = {'at': self.clock(), 'item': item,
                                     'state': 'own-queue', 'idle_seconds': self.clock() - since}
-        # Per-worker lap memory: items already judged ineligible for that
-        # worker in the current pass. Scans stay in priority order, so new or
-        # higher-ranked work is still seen first; only judged items are skipped.
-        # Bounded by the live candidate set, the free workers and LAP_TTL.
+        # Per-worker lap memory (review az0, PR434): items already judged
+        # ineligible for that worker in the current pass through the candidate
+        # list. Each tick resumes past them, so slow readable previews of an
+        # ineligible prefix cannot exhaust every tick's budget before a later
+        # eligible item is reached. Scans stay in priority order, so new or
+        # higher-ranked work is still seen first.
+        #
+        # A lap ends only when every candidate has been judged or on a dispatch
+        # attempt; there is deliberately NO per-entry age limit. Each tick
+        # previews at least one unjudged item, so a lap always completes, and a
+        # judged item is re-read at the next lap. An age limit shorter than the
+        # lap would re-expire the head before the tail is reached and starve it
+        # again (review az0 R1: 26-item prefix, 24 s previews, 300 s ticks).
+        # Bounded by the live candidate set and the free workers.
         current = {row['id'] for row in rows}
         laps = {}
         for worker, seen in state.get('lap', {}).items():
             if worker in free:
-                kept = {item: at for item, at in seen.items()
-                        if item in current and 0 <= self.clock() - at < LAP_TTL}
+                kept = {item: at for item, at in seen.items() if item in current}
                 if kept:
                     laps[worker] = kept
         for worker in free:

@@ -239,19 +239,33 @@ def test_lap_memory_keeps_priority_order_for_new_work_and_resets_after_a_full_la
     assert not calls
 
 
-def test_lap_memory_is_bounded_by_age_and_cleared_by_a_dispatch_attempt(tmp_path, monkeypatch):
-    from shantytown import refill
+def test_long_ineligible_prefix_at_tend_cadence_still_reaches_the_tail(tmp_path, monkeypatch):
+    # Review az0 R1: with a per-entry age limit, a 26+ item prefix re-expired its
+    # head before the scan reached the tail, and the tail starved again.
     now = [0]
     preview, visits = _slow_reviews(monkeypatch, now)
+    rows = [row(f'r{i:02}') for i in range(1, 41)] + [row('z-author')]
     clock = [1000]
-    f, calls = feeder(tmp_path, monkeypatch, [row('r1'), row('r2'), row('z-author')],
-                      free=['claude'], preview=preview)
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=['claude'], preview=preview)
     f.clock = lambda: clock[0]
+    for tick in range(60):
+        clock[0] = 1000 + tick * 300
+        if f.sweep():
+            break
+    assert calls == [('z-author', 'claude')]
+    assert tick == 20                           # 2 previews per 45 s tick, 41 candidates
+    assert len(visits) == len(set(visits)) == 41  # no candidate re-read within the lap
+
+
+def test_lap_memory_is_cleared_by_a_dispatch_attempt_and_pruned_to_live_candidates(tmp_path, monkeypatch):
+    now = [0]
+    preview, visits = _slow_reviews(monkeypatch, now)
+    rows = [row('r1'), row('r2'), row('z-author')]
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=['claude'], preview=preview)
     f.sweep()
-    clock[0] += refill.LAP_TTL + 1              # stale judgements are re-read
-    f.sweep()
-    assert visits == ['r1', 'r2', 'r1', 'r2']
-    clock[0] += 1
+    state = json.loads((tmp_path / 'refill/state.json').read_text())
+    assert sorted(state['lap']['claude']) == ['r1', 'r2']
+    rows.remove(rows[0])                        # r1 left the ready projection
     f.sweep()
     assert calls == [('z-author', 'claude')]
     state = json.loads((tmp_path / 'refill/state.json').read_text())
