@@ -1,0 +1,11 @@
+Script started on 2026-11-01 12:57:40-05:00 [COMMAND=".venv/bin/python docs/probes/pr-demos/auto-refill/demo.py a5275a8" <not executed on terminal>]
+Fixture: identical owned-notice frame, with warning replacing shortcuts
+Before: a5275a8 no-box
+After: candidate queued
+Fixture: one idle author, one unassigned ready task
+Before tick: open owner=<none>
+auto-refill author: delivered ready-task
+After tick: in_progress owner=author normal-dispatch messages=1
+PASS: source fixture only; installed and 24-hour acceptance remain separate
+
+Script done on 2026-11-01 12:57:40-05:00 [COMMAND_EXIT_CODE="0"]

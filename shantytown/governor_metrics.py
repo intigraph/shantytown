@@ -752,6 +752,8 @@ def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
                 events[key].extend(rows)
         totals = Ledger(root).bump(**events)
         body = render(lanes, agents=agents, now=now, totals=totals)
+        from .refill import metrics as refill_metrics
+        body += refill_metrics(root, now)
         if not body.strip():
             status = NOTHING_TO_SAY
     except Exception as exc:                     # noqa: BLE001 — see docstring

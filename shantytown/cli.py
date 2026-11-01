@@ -14320,6 +14320,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                              generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
+        from .refill import from_cli as refill_from_cli
+        _fleet_sweep("auto-refill", lambda: refill_from_cli(a, reg, panes, runtime, cfg, log=_log))
+
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
@@ -14337,7 +14340,19 @@ def _tend_once(a, quiet: bool = False) -> int:
                 rows = [json.loads(path.read_text()) | {"id": path.stem}
                         for path in trk.root.glob("*.json")]
                 return ready, rows
-            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log)
+            def label_item(ident):
+                from .work_class import preferred_labels
+                tracker = _tracker(a)
+                current = tracker.get(ident)
+                if current.id != ident or current.status != 'open':
+                    return
+                for label in preferred_labels(current.labels):
+                    tracker.update(ident, add_label=label)
+                    current = tracker.get(ident)
+                    if current.id != ident or label not in current.labels:
+                        raise CouldNotLook('ranker preference label did not read back')
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log,
+                                       label_item=label_item)
         _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
@@ -14991,7 +15006,8 @@ def _tend_retire(a) -> int:
     name = a.retire or a.unretire
     reg = _registry(a)
     try:
-        card = reg.get(name)
+        reader = getattr(reg, 'get_for_lifecycle', reg.get) if a.unretire else reg.get
+        card = reader(name)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -15102,8 +15118,16 @@ def _tend_retire(a) -> int:
     # job is to say what was recorded. Same family as the rest of this bead: a
     # tool describing an operation it did not perform. So the write stays and
     # the wording is direction-specific.
-    reg.set(replace(card, retired=want, retired_by=_actor(),
-                    retired_at=_now_iso()))
+    updated = replace(card, retired=want, retired_by=_actor(), retired_at=_now_iso())
+    try:
+        if callable(writer := getattr(reg, 'set_retirement', None)):
+            writer(updated, want)
+        else:
+            reg.set(updated)
+    except (CouldNotLook, QuipuWriteRejected) as exc:
+        print(f'  could not tell: lifecycle write unverified ({type(exc).__name__}); '
+              'read the registry before retrying', file=sys.stderr)
+        return CANNOT_TELL
     if want:
         print(f"  {name} is RETIRED. `st fleet tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")
