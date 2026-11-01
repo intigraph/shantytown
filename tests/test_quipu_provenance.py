@@ -94,3 +94,16 @@ def test_missing_credential_still_refuses_before_write(monkeypatch):
     monkeypatch.setattr(quipu_auth, 'token', lambda: '')
     with pytest.raises(quipu_auth.CredentialRefused):
         quipu_auth.write_headers('https://fixture.invalid')
+
+
+def test_hook_session_is_local_to_its_thread_and_nested_scope(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from shantytown.quipu_provenance import hook_session
+    context(monkeypatch, CODEX_HOME='/fixture/codex')
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with hook_session('outer-native-session'):
+            assert 'X-Quipu-Session' not in pool.submit(request_headers).result()
+            with hook_session('inner-native-session'):
+                assert request_headers()['X-Quipu-Session'] == 'inner-native-session'
+            assert request_headers()['X-Quipu-Session'] == 'outer-native-session'
+    assert 'X-Quipu-Session' not in request_headers()
