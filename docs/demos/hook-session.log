@@ -1,0 +1,9 @@
+Script started on 2026-10-31 12:13:13-04:00 [COMMAND="python3 docs/demos/hook-session.py" <not executed on terminal>]
+Target: isolated library hook; publisher intercepted, HTTP disabled.
+Input: {"session_id": "native-fixture-session", "hook_event_name": "PreToolUse"} ; environment session: absent
+base 7510e04d678235a4b3b56bdf7faa907cf49feb1c: publication session = None
+  outside publication session = None
+candidate stats.py: publication session = 'native-fixture-session'
+  outside publication session = None
+
+Script done on 2026-10-31 12:13:13-04:00 [COMMAND_EXIT_CODE="0"]
