@@ -408,8 +408,10 @@ class Panes(Protocol):
     # input, both of which render as `❯ <text>`, and plain capture strips exactly
     # that bit. An adapter that cannot supply attributes returns plain text and
     # triage answers UNKNOWN — which is a refusal, not a guess.
+    # check=True propagates a failed native read as CalledProcessError instead
+    # of an ambiguous empty string; default callers keep their existing result.
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str: ...
+                *, timeout: float | None = None, check: bool = False) -> str: ...
     # The launch command line of the process in the pane, or None if it cannot be
     # read. A READ of the session surface, exactly like exists/capture — it adds
     # no launch or handoff verb, so the #5 invariant (Panes cannot express a

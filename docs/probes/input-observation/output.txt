@@ -1,0 +1,13 @@
+Script started on 2026-10-31 19:54:15-04:00 [COMMAND="stty -onlcr && /usr/bin/python3 docs/probes/input-observation/demo.py --baseline-dir "$HOME/before"" <not executed on terminal>]
+BEFORE: reviewed 816a8ae native adapter, same subprocess result probe.
+Native capture rc=0: {"state": "no-box", "reason": "no-composer-frame", "busy": false}
+Native capture rc=1: {"state": "no-box", "reason": "no-composer-frame", "busy": false}
+Timeout: {"state": "?", "reason": "capture-timeout", "busy": null}
+FAIL: native capture exit was lost; failure is not a successful no-frame observation.
+AFTER: checked capture opts in; no live terminal, sends, clears or lifecycle action.
+Native capture rc=0: {"state": "no-box", "reason": "no-composer-frame", "busy": false}
+Native capture rc=1: {"state": "?", "reason": "capture-failed", "busy": null}
+Timeout: {"state": "?", "reason": "capture-timeout", "busy": null}
+PASS: native failure stays UNKNOWN; successful no-frame and timeout remain distinct.
+
+Script done on 2026-10-31 19:54:15-04:00 [COMMAND_EXIT_CODE="0"]
