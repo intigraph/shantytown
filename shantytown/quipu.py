@@ -23,6 +23,7 @@ import os
 import urllib.error
 import urllib.request
 import warnings
+from dataclasses import replace
 
 # Shared ancestor for every "I could not look" (see shantytown/answer.py).
 from shantytown.answer import Answer, CouldNotLook
@@ -476,7 +477,7 @@ def derive_catalog(rows: list[dict], precedence_rows: list[dict] | None = None):
 
 def all_query(onto: str = None, crew_class: str = None,
               reports: str = None, status: str = None,
-              host: str = None) -> str:
+              host: str = None, *, include_inactive: bool = False) -> str:
     """The roster SPARQL, over a configurable vocabulary (GitHub #10).
 
     Carries the member's HOST as an OPTIONAL third column (aegis-5du1bz): a graph
@@ -485,8 +486,10 @@ def all_query(onto: str = None, crew_class: str = None,
     """
     return (
         f"PREFIX a: <{onto or ONTO}> "
-        f"SELECT ?s ?rt ?h WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
-        f"OPTIONAL {{ ?s a:{status or STATUS_PRED} ?cs }} FILTER(!bound(?cs)) "
+        f"SELECT ?s ?rt ?h{' ?cs' if include_inactive else ''} WHERE {{ ?s a a:{crew_class or CREW_CLASS} . "
+        f"OPTIONAL {{ ?s a:{status or STATUS_PRED} ?cs }} "
+        + ('' if include_inactive else 'FILTER(!bound(?cs)) ')
+        +
         f"OPTIONAL {{ ?s a:{reports or REPORTS_PRED} ?rt }} "
         f"OPTIONAL {{ ?s a:{host or HOST_PRED} ?h }} }}")
 
@@ -529,6 +532,7 @@ class QuipuRegistry:
         # entry or a re-exec'd hook fell back to the stock port, which on this host
         # another service owns. "Fell back" meant "queried a stranger".
         self.server = resolve_server(server, root).rstrip("/")
+        self.root = root
         self.timeout = timeout
         self.client_label = client_label
         # The NAMESPACE comes from the deployment too. A wrong one cannot be caught
@@ -737,6 +741,62 @@ class QuipuRegistry:
             if a.name == name:
                 return a
         raise LookupError(f"no such agent in quipu: {name}")
+
+    def get_for_lifecycle(self, name: str) -> Agent:
+        """Explicit lifecycle lookup only; normal dispatch still excludes retirees."""
+        try:
+            return self.get(name)
+        except LookupError:
+            rows = self._query_answer(all_query(onto=self.onto, include_inactive=True)).exact()
+            matching = [r for r in rows if _local(r['s']) == name]
+            statuses = {r.get('cs') for r in matching}
+            if not matching or statuses != {'retired'}:
+                raise LookupError(f'{name}: no uniquely retired crew identity to restore')
+            members = derive_agents(rows, self.role_sets().exact())
+            member = next(a for a in members if a.name == name)
+            if self.root is None:
+                raise ValueError('lifecycle restoration requires the declared local root')
+            from pathlib import Path
+            from .files import FilesRegistry
+            local = FilesRegistry(Path(self.root) / 'crew').get(name)
+            # Placement remains graph-owned; only launch configuration comes
+            # from the existing local card, as in role creation.
+            return replace(local, role=member.role, reports_to=member.reports_to,
+                           host=member.host, roles=member.roles, retired=True)
+
+    def set_retirement(self, card: Agent, retired: bool) -> None:
+        """Change only crewStatus, with exact receipt and registry read-back."""
+        from . import quipu_auth
+        headers = quipu_auth.write_headers(self.server)
+        payload = dict(entity=self.onto + card.name, predicate=self.onto + STATUS_PRED,
+                       value='retired')
+        route = '/set' if retired else '/retract'
+        request = urllib.request.Request(self.server + route,
+            data=json.dumps(payload).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                result = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise QuipuWriteRejected(str(quipu_auth.refuse(self.server, 'rejected (HTTP 401)'))) from None
+            raise QuipuWriteRejected(f'crew lifecycle HTTP {exc.code}') from None
+        except (OSError, ValueError) as exc:
+            raise QuipuUnreachable(f'crew lifecycle outcome UNKNOWN ({type(exc).__name__})') from None
+        if (not isinstance(result, dict) or result.get('error')
+                or type(result.get('tx_id')) is not int
+                or result['tx_id'] <= 0 or result.get('conforms') is False
+                or (not retired and result.get('retracted') != 1)):
+            raise QuipuWriteRejected('crew lifecycle receipt unverified; read before retry')
+        if retired:
+            rows = self._query_answer(all_query(onto=self.onto, include_inactive=True)).exact()
+            observed = {r.get('cs') for r in rows if _local(r['s']) == card.name}
+            if observed != {'retired'}:
+                raise QuipuUnreachable('retirement did not read back exactly')
+        else:
+            observed = self.get(card.name)
+            if (observed.role, observed.reports_to, observed.host) != (
+                    card.role, card.reports_to, card.host):
+                raise QuipuUnreachable('restored identity placement changed on read-back')
 
     def set(self, agent: Agent) -> None:
         """Write the identity to the graph — the source of truth. Refuses an

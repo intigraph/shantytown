@@ -11,12 +11,45 @@ from . import triage
 
 def sweep(agents, panes, box, *, root=None, reg=None, log=lambda message: None):
     recovered = []
+    agents = list(agents)
+    if root is not None:
+        # Clear obsolete locally owned notices BEFORE slow tracker reads. A
+        # single 30s inbox timeout otherwise consumes the whole 25s budget and
+        # the dispatcher near the end of the roster is never examined.
+        from .delivery import clear_stalled_owned
+        for card in agents:
+            if getattr(card, 'retired', False) or not card.pane:
+                continue
+            try:
+                if (panes.exists(card.pane)
+                        and panes._confirmed_codex(card.pane, panes.foreground(card.pane))
+                        and clear_stalled_owned(root, card, panes)):
+                    log(f'inbox recovery: {card.name} cleared stalled owned text; custody retained, not submitted')
+            except Exception as exc:
+                log(f'inbox recovery: {card.name} local custody UNKNOWN ({type(exc).__name__})')
+        # Rotate the expensive observations across ticks. A slow first member
+        # must not starve every later member indefinitely.
+        from pathlib import Path
+        from .files import write_json_atomic
+        cursor = Path(root) / 'notify' / 'inbox_recovery_cursor.json'
+        import json
+        try:
+            previous = json.loads(cursor.read_text()).get('next', '')
+        except (OSError, ValueError):
+            previous = ''
+        names = [card.name for card in agents]
+        start = names.index(previous) if previous in names else 0
+        agents = agents[start:] + agents[:start]
     # One observation budget for the whole fleet, not 25 seconds per strand.
     deadline = time.monotonic() + 25
     for card in agents:
         if time.monotonic() >= deadline:
             log('inbox recovery: observation budget exhausted; remaining pointers retained')
             break
+        if root is not None and agents:
+            next_card = agents[(agents.index(card) + 1) % len(agents)]
+            cursor.parent.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(cursor, {'next': next_card.name})
         if getattr(card, 'retired', False) or not card.pane:
             continue
         try:
