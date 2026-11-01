@@ -8,10 +8,12 @@ import sys
 
 TYPES = ('feat', 'fix', 'perf', 'refactor', 'docs', 'test', 'chore', 'ci', 'build')
 TITLE = re.compile(r'(' + '|'.join(TYPES) + r')(\([^()\s][^()\r\n]*\))?!?: [^\s].*')
+TRACKER_ID = re.compile(r'(?<![\w-])(?:aegis|hq|gassy|qp)-[a-z0-9]{3,}(?:\.[0-9]+)*(?![\w-])')
 
 
 def valid(title):
-    return isinstance(title, str) and '\n' not in title and '\r' not in title and TITLE.fullmatch(title) is not None
+    return (isinstance(title, str) and '\n' not in title and '\r' not in title
+            and TITLE.fullmatch(title) is not None and not TRACKER_ID.search(title))
 
 
 def main():
@@ -24,7 +26,8 @@ def main():
         print('PR title check: cannot read pull_request.title', file=sys.stderr)
         return 1
     if not valid(title):
-        print('PR title must use type(scope): summary or type: summary; types: ' + ', '.join(TYPES), file=sys.stderr)
+        print('PR title must use type(scope): summary or type: summary without tracker IDs; '
+              'retitle visibly; types: ' + ', '.join(TYPES), file=sys.stderr)
         return 1
     print('PR title check: conventional subject accepted')
     return 0

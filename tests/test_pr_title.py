@@ -31,9 +31,22 @@ def test_refuses_unparseable_titles(title):
     assert not policy.valid(title)
 
 
+@pytest.mark.parametrize('title', [
+    'fix: a change (aegis-abc123)', 'feat!: a change [hq-abc123.2.10]',
+    'docs: qp-abcdefghij', 'fix(scope): gassy-abc123',
+])
+def test_tracker_titles_are_refused_without_rewrite(title):
+    assert not policy.valid(title)
+
+
+def test_public_refs_and_near_matches_are_preserved():
+    assert policy.valid('fix: keep #42 and model-v2 and not-aegis-abc123')
+
+
 @pytest.mark.parametrize('payload,accepted', [
     ({'pull_request': {'title': 'fix: a change'}}, True),
     ({'pull_request': {'title': 'Unparseable title'}}, False),
+    ({'pull_request': {'title': 'fix: a change [aegis-abc123]'}}, False),
     ({'pull_request': {}}, False), ({}, False), ([], False),
 ])
 def test_actual_event_cli(tmp_path, monkeypatch, payload, accepted):
