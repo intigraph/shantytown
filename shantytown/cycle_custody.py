@@ -144,4 +144,11 @@ def verify_tree(tree, agent, receipts):
             raise ValueError('bundle custody changed during verification')
     except OSError as error:
         raise ValueError('bundle custody file unavailable') from error
+    # Hashing and Git verification can take time. The receipt must still name
+    # this tree's current branch and commit after all of those reads, including
+    # the final digest; the earlier identity check is not a lease on HEAD.
+    if (_git(tree, 'symbolic-ref', '-q', 'HEAD') != r['ref']
+            or _git(tree, 'rev-parse', '--verify', r['ref']) != r['head']
+            or _git(tree, 'rev-parse', '--verify', 'HEAD') != r['head']):
+        raise ValueError('bundle custody ref or head moved during verification')
     return f"{tree}: bundle custody on {r['item']} for {r['ref']} at {r['head']} (root {r['accepted_by']}); preserve bundle and source ref"

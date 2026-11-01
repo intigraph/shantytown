@@ -176,3 +176,30 @@ def test_native_parser_and_item_reader_bind_comment_authors(saved, monkeypatch):
     monkeypatch.setattr(br, 'comments', read)
     assert cli._cycle_bundle_custody(args, 'worker')(tree)
     assert seen == ['item-123']
+
+
+@pytest.mark.parametrize('digest_number', [1, 2])
+@pytest.mark.parametrize('movement', ['head', 'symbolic-ref'])
+def test_source_identity_moved_during_digest_refuses(saved, monkeypatch, digest_number, movement):
+    tree, _, receipt, _ = saved
+    old = receipt['head']
+    next_head = git(tree, 'commit-tree', old + '^{tree}', '-p', old, '-m', 'race fixture')
+    git(tree, 'branch', 'other', old)
+    original_digest = custody._digest
+    calls = 0
+
+    def moving_digest(path):
+        nonlocal calls
+        value = original_digest(path)
+        calls += 1
+        if calls == digest_number:
+            if movement == 'head':
+                git(tree, 'update-ref', 'refs/heads/topic', next_head)
+            else:
+                # Same commit, different symbolic branch: OID alone is insufficient.
+                git(tree, 'symbolic-ref', 'HEAD', 'refs/heads/other')
+        return value
+
+    monkeypatch.setattr(custody, '_digest', moving_digest)
+    with pytest.raises(ValueError, match='ref or head moved'):
+        verify(saved)
