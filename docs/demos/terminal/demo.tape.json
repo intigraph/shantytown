@@ -1,0 +1,56 @@
+{
+  "title": "Shantytown: preview the crew before launching",
+  "description": "Real st fleet init dry-runs in an isolated fixture; no cards, settings, sessions or fleet state are created.",
+  "width": 1000,
+  "height": 620,
+  "font_size": 24,
+  "line_height": 32,
+  "inputs": [],
+  "steps": [
+    {
+      "tool": "st",
+      "args": [
+        "--root",
+        ".shanty",
+        "--backend",
+        "files",
+        "fleet",
+        "init",
+        "-y",
+        "--admin",
+        "coordinator",
+        "--crew",
+        "",
+        "--dry-run"
+      ],
+      "hold": 12,
+      "requires": [
+        "--dry-run: nothing written.",
+        "coordinator"
+      ]
+    },
+    {
+      "tool": "st",
+      "args": [
+        "--root",
+        ".shanty",
+        "--backend",
+        "files",
+        "fleet",
+        "init",
+        "-y",
+        "--admin",
+        "coordinator",
+        "--crew",
+        "builder",
+        "--dry-run"
+      ],
+      "hold": 12,
+      "requires": [
+        "--dry-run: nothing written.",
+        "coordinator",
+        "builder"
+      ]
+    }
+  ]
+}

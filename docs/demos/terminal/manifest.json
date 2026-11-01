@@ -1,0 +1,70 @@
+{
+  "theme": "stack-terminal-24",
+  "versions": {
+    "st": "st 0.8.0 (0ed9218-dirty)"
+  },
+  "binary_sha256": {
+    "st": "7385abdcac3972b7ba63a42c6621ae7f5321e5957504c5f6b18d93f97aa2519b"
+  },
+  "version_args": {
+    "st": [
+      "--version"
+    ]
+  },
+  "inputs_sha256": {
+    "render.py": "bebbe000565314f18a58731f2a1a4690577db127b3673fa10a45ce74eef0f23c",
+    "tape": "e151c5c7d5179920d050014ca44c88b99b96d897296aa98fe4a463e1d187d09f"
+  },
+  "duration_seconds": 24.0,
+  "timeline": "deliberate reading holds; execution times recorded separately",
+  "frames_checked": 4,
+  "commands": [
+    {
+      "tool": "st",
+      "args": [
+        "--root",
+        ".shanty",
+        "--backend",
+        "files",
+        "fleet",
+        "init",
+        "-y",
+        "--admin",
+        "coordinator",
+        "--crew",
+        "",
+        "--dry-run"
+      ],
+      "exit": 0,
+      "seconds": 0.195799,
+      "stdout": "\n  store    .shanty\n  dir      crew/\n  dir      settings/\n  dir      events/\n  dir      launched/\n  card     coordinator  administrator  pane st-coordinator\n  hooks    settings/administrator.settings.json\n  permissions for NEW cards: MANUAL (approval prompts enabled)\n  config   .shanty/shantytown.toml\n\n  1 agent(s) \u00b7 startup mode 'lite' \u00b7 hibernate off\n\n  --dry-run: nothing written.\n\n",
+      "stderr": ""
+    },
+    {
+      "tool": "st",
+      "args": [
+        "--root",
+        ".shanty",
+        "--backend",
+        "files",
+        "fleet",
+        "init",
+        "-y",
+        "--admin",
+        "coordinator",
+        "--crew",
+        "builder",
+        "--dry-run"
+      ],
+      "exit": 0,
+      "seconds": 0.12784,
+      "stdout": "\n  store    .shanty\n  dir      crew/\n  dir      settings/\n  dir      events/\n  dir      launched/\n  card     coordinator  administrator  pane st-coordinator\n  card     builder      worker         pane st-builder\n  hooks    settings/administrator.settings.json\n  hooks    settings/worker.settings.json\n  permissions for NEW cards: MANUAL (approval prompts enabled)\n  config   .shanty/shantytown.toml\n\n  2 agent(s) \u00b7 startup mode 'lite' \u00b7 hibernate off\n\n  --dry-run: nothing written.\n\n",
+      "stderr": ""
+    }
+  ],
+  "sha256": {
+    "demo.svg": "e8fb57beb08ee1478d2822cc7be9043bc9d4c60f8f325f3241acb0aa481ae743",
+    "transcript.txt": "0d6798bf24e671e5131b4cd02d9d9cd492b9848a645016fa0cf60b3717302e92",
+    "demo.cast": "9322da662a1eb015148265e7ec8892c73a86c55c2e2986d0c4a7ec3734b33e2b"
+  }
+}
