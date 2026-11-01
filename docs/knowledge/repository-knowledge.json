@@ -1,5 +1,5 @@
 {
-  "source_revision": "419ba16b6989044c8621ee5c93fc6e2b349448d5",
+  "source_revision": "456ed29f98309ad4cb1a053f7b29ba8919abe48a",
   "reviewed_at": "2026-10-27T21:28:52.694807+00:00",
   "max_age_seconds": 2592000,
   "records": [
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope.",
-      "source_sha256": "11a19f77feb4be7272b8e95350598206401001f3c627ed656279250c3ddf96a6",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated.",
+      "source_sha256": "7ca2d6189a6a303a08d763990bea996bbd8d64ed48fb78ef427d5f9fbf79c5fb",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
