@@ -276,6 +276,10 @@ def policy_wire(policy):
                 # the parser reads a present `curve` key as a declared envelope.
                 pace=[{k: v for k, v in asdict(p).items()
                        if not (k == 'curve' and not v)} for p in policy.paces])
+    # aegis-hnv7: carried ONLY when declared, so a fleet whose configs do not use
+    # it keeps a byte-identical wire that an older peer's strict check accepts.
+    if policy.optional_windows:
+        data['optional_windows'] = list(policy.optional_windows)
 
     def clean(value):
         if isinstance(value, dict):
@@ -302,9 +306,15 @@ def observations(governor):
     except Exception:
         readings = {w: Reading(ok=False, error='local usage reader failed')
                     for w in governor.policy.windows()}
-    return {w: asdict(replace(r, source='host-observation',
+    def wire(r):
+        data = asdict(replace(r, source='host-observation',
                               error='local usage reader failed' if r.error else ''))
-            for w, r in readings.items()}
+        # aegis-hnv7: `offered` travels only when False (the server's stated
+        # absence), so ordinary readings stay byte-identical for older peers.
+        if data.get('offered', True) is True:
+            data.pop('offered', None)
+        return data
+    return {w: wire(r) for w, r in readings.items()}
 
 
 def snapshot(host, governors, agents, *, now=None, hosts=None, admission_owner=None):
@@ -350,7 +360,7 @@ def validate(value, host, *, now=None):
         if not isinstance(name, str) or not isinstance(entry, dict):
             raise ValueError('invalid governor lane')
         policy = entry.get('policy')
-        if not isinstance(policy, dict) or set(policy) - set(POLICY_FIELDS) - {'tier', 'burndown', 'pace'}:
+        if not isinstance(policy, dict) or set(policy) - set(POLICY_FIELDS) - {'tier', 'burndown', 'pace', 'optional_windows'}:
             raise ValueError('invalid portable policy')
         gov.parse(policy)
         readings = entry.get('readings')
@@ -362,7 +372,8 @@ def validate(value, host, *, now=None):
             reading = Reading(**raw)
             for key in ('pct', 'at', 'cache_age', 'reset_at', 'probe_http_status'):
                 _number(getattr(reading, key), optional=True)
-            if (type(reading.ok) is not bool or not isinstance(reading.error, str)
+            if (type(reading.ok) is not bool or type(reading.offered) is not bool
+                    or not isinstance(reading.error, str)
                     or not isinstance(reading.source, str)
                     or reading.pct is not None and not 0 <= reading.pct <= 100
                     or reading.at is not None and reading.at > clock + CLOCK_SKEW_SECONDS):
