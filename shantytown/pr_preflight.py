@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from urllib.parse import quote
@@ -158,14 +159,56 @@ def verify_origin(checkout, repo, api):
         raise Refused(fix) from error
 
 
+def require_clean_source(checkout):
+    """Permit only untracked private scratch directories; never print their names."""
+    refusal = "commit candidate changes before PR preflight"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(checkout), "status", "--porcelain=v1", "-z",
+             "--untracked-files=all", "--ignore-submodules=none"],
+            capture_output=True, timeout=30)
+        raw = result.stdout
+        if result.returncode or result.stderr or not isinstance(raw, bytes):
+            raise Refused(refusal)
+        if not raw:
+            return
+        if not raw.endswith(b"\0"):
+            raise Refused(refusal)
+        # Porcelain paths are repository-relative, even for a subdirectory
+        # checkout. --show-cdup contains only parent hops, never private names.
+        checkout_root = Path(checkout) / git(checkout, "rev-parse", "--show-cdup")
+        checked = set()
+        for record in raw[:-1].split(b"\0"):
+            # Every tracked/index status (including renames and conflicts),
+            # unknown status and malformed record refuses regardless of path.
+            if not record.startswith(b"?? "):
+                raise Refused(refusal)
+            path = record[3:]
+            parts = path.split(b"/")
+            if parts[-1] == b"":  # Git keeps nested repositories as directories.
+                parts.pop()
+            if (b"/" not in path or parts[0] not in {b".work", b".task-notes"}
+                    or any(part in {b"", b".", b".."} for part in parts)):
+                raise Refused(refusal)
+            root = parts[0]
+            if root not in checked:
+                # lstat inspects the root itself; no private content or link
+                # target is opened, even when a root has been replaced.
+                mode = (checkout_root / root.decode("ascii")).lstat().st_mode
+                if not stat.S_ISDIR(mode):
+                    raise Refused(refusal)
+                checked.add(root)
+    except (OSError, subprocess.SubprocessError):
+        raise Refused(refusal) from None
+
+
 def candidate(checkout, repo, base, api):
     verify_origin(checkout, repo, api)
     head_ref = git(checkout, "symbolic-ref", "--short", "HEAD")
     git(checkout, "check-ref-format", "--branch", base)
     if base == head_ref:
         raise Refused("candidate cannot be the base branch")
-    if git(checkout, "status", "--porcelain"):
-        raise Refused("commit candidate changes before PR preflight")
+    require_clean_source(checkout)
     head = git(checkout, "rev-parse", "HEAD")
     remote_head = api(f"repos/{repo}/commits/{quote(head_ref, safe='')}").get("sha")
     base_sha = api(f"repos/{repo}/commits/{quote(base, safe='')}").get("sha")
