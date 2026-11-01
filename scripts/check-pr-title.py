@@ -8,7 +8,7 @@ import sys
 
 TYPES = ('feat', 'fix', 'perf', 'refactor', 'docs', 'test', 'chore', 'ci', 'build')
 TITLE = re.compile(r'(' + '|'.join(TYPES) + r')(\([^()\s][^()\r\n]*\))?!?: [^\s].*')
-TRACKER_ID = re.compile(r'(?<![\w-])(?:aegis|hq|gassy|qp)-[a-z0-9]{3,}(?:\.[0-9]+)*(?![\w-])')
+TRACKER_ID = re.compile(r'(?<![\w-])(?:aegis|hq|gassy|qp)-[a-z0-9]{3,}(?:\.[0-9]+)*(?![\w-]|\.[A-Za-z0-9])')
 
 
 def valid(title):

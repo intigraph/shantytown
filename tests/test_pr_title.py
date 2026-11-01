@@ -41,6 +41,7 @@ def test_tracker_titles_are_refused_without_rewrite(title):
 
 def test_public_refs_and_near_matches_are_preserved():
     assert policy.valid('fix: keep #42 and model-v2 and not-aegis-abc123')
+    assert policy.valid('fix: keep aegis-abc123.2suffix and aegis-abc123.label')
 
 
 @pytest.mark.parametrize('payload,accepted', [
