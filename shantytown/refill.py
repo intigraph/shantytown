@@ -15,6 +15,13 @@ from .files import write_json_atomic
 from .priority_advisory import priority, workable
 from .protocols import rank_order
 
+# How long a worker remembers that an item was ineligible for it. Within that
+# window each tick resumes past already-judged candidates, so slow readable
+# previews of an ineligible prefix cannot exhaust every tick's budget before a
+# later eligible item is reached (review az0, PR434). The age bound keeps a
+# changed item (blocker cleared, governor eased) from staying skipped for long.
+LAP_TTL = 3600
+
 
 def ordered(rows):
     """The ready projection selects candidates; dispatch re-reads each item."""
@@ -94,6 +101,18 @@ class Refiller:
             waiting[worker] = {'item': item, 'since': since}
             observations[worker] = {'at': self.clock(), 'item': item,
                                     'state': 'own-queue', 'idle_seconds': self.clock() - since}
+        # Per-worker lap memory: items already judged ineligible for that
+        # worker in the current pass. Scans stay in priority order, so new or
+        # higher-ranked work is still seen first; only judged items are skipped.
+        # Bounded by the live candidate set, the free workers and LAP_TTL.
+        current = {row['id'] for row in rows}
+        laps = {}
+        for worker, seen in state.get('lap', {}).items():
+            if worker in free:
+                kept = {item: at for item, at in seen.items()
+                        if item in current and 0 <= self.clock() - at < LAP_TTL}
+                if kept:
+                    laps[worker] = kept
         for worker in free:
             if time.monotonic() - started >= self.budget:
                 observations[worker] = {'at': self.clock(), 'state': 'budget-exhausted'}
@@ -101,12 +120,13 @@ class Refiller:
             # Rotate after an attempted member, including an UNKNOWN preview;
             # otherwise a slow first member starves the rest on every tick.
             state['last_worker'] = worker
+            seen = laps.setdefault(worker, {})
             for row in rows:
                 if time.monotonic() - started >= self.budget:
                     observations[worker] = {'at': self.clock(), 'state': 'budget-exhausted'}
                     break
                 item = row['id']
-                if item in reserved:
+                if item in reserved or item in seen:
                     continue
                 if feed_check.haul_hold_reason(self.root, worker):
                     observations[worker] = {'at': self.clock(), 'state': 'held'}
@@ -118,9 +138,13 @@ class Refiller:
                                             'detail': type(exc).__name__}
                     break
                 if not allowed:
+                    seen[item] = self.clock()
                     continue
                 # Persist before sending: timeout/exit 2 can follow a delivered
                 # pane message. Never give that item or worker a competing send.
+                # Any dispatch attempt changes the worker's state: start a new lap.
+                seen.clear()
+                state['lap'] = {w: v for w, v in laps.items() if v}
                 pending[worker] = {'item': item, 'at': self.clock()}
                 state['last_worker'] = worker
                 write_json_atomic(path, state)
@@ -139,8 +163,12 @@ class Refiller:
                 # A refused real dispatch can mean the pane just became busy.
                 # Do not try another item on this worker in the same pass.
                 break
+            else:
+                # The whole candidate list was judged: the next tick starts a new lap.
+                seen.clear()
             observations.setdefault(worker, {'at': self.clock(), 'state': 'no-eligible-item'})
         state['observed_at'] = self.clock()
+        state['lap'] = {w: v for w, v in laps.items() if v}
         state['observations'] = observations
         state['waiting'] = waiting
         write_json_atomic(path, state)

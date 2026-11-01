@@ -200,3 +200,59 @@ def test_held_owned_queue_is_not_reported_as_a_late_idle_queue(tmp_path, monkeyp
     state = json.loads((tmp_path / 'refill/state.json').read_text())
     assert state['waiting'] == {} and state['observations']['a']['state'] == 'held'
     assert not calls
+
+
+def _slow_reviews(monkeypatch, now, seconds=24):
+    from shantytown import refill
+    monkeypatch.setattr(refill.time, 'monotonic', lambda: now[0])
+    visits = []
+    def preview(item, worker):
+        visits.append(item)
+        now[0] += seconds
+        return item.startswith('z-author')
+    return preview, visits
+
+
+def test_slow_ineligible_prefix_cannot_starve_a_later_eligible_candidate(tmp_path, monkeypatch):
+    # Review az0 on PR434: two readable 24s previews of Codex-only reviews used
+    # the whole 45s budget on every tick, so the authoring task was never seen.
+    now = [0]
+    preview, visits = _slow_reviews(monkeypatch, now)
+    f, calls = feeder(tmp_path, monkeypatch, [row('r1'), row('r2'), row('z-author')],
+                      free=['claude'], preview=preview)
+    assert f.sweep() == [] and visits == ['r1', 'r2'] and not calls
+    assert f.sweep() == ['claude'] and calls == [('z-author', 'claude')]
+    assert visits == ['r1', 'r2', 'z-author']
+
+
+def test_lap_memory_keeps_priority_order_for_new_work_and_resets_after_a_full_lap(tmp_path, monkeypatch):
+    now = [0]
+    preview, visits = _slow_reviews(monkeypatch, now)
+    rows = [row('r1'), row('r2'), row('r3')]
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=['claude'], preview=preview)
+    f.sweep()                                   # r1, r2 judged; budget spent
+    rows.insert(0, row('urgent', priority=0))   # new higher-priority work arrives
+    f.sweep()                                   # urgent first, then r3: lap complete
+    assert visits == ['r1', 'r2', 'urgent', 'r3']
+    f.sweep()                                   # a new lap starts from the top
+    assert visits[4:] == ['urgent', 'r1']
+    assert not calls
+
+
+def test_lap_memory_is_bounded_by_age_and_cleared_by_a_dispatch_attempt(tmp_path, monkeypatch):
+    from shantytown import refill
+    now = [0]
+    preview, visits = _slow_reviews(monkeypatch, now)
+    clock = [1000]
+    f, calls = feeder(tmp_path, monkeypatch, [row('r1'), row('r2'), row('z-author')],
+                      free=['claude'], preview=preview)
+    f.clock = lambda: clock[0]
+    f.sweep()
+    clock[0] += refill.LAP_TTL + 1              # stale judgements are re-read
+    f.sweep()
+    assert visits == ['r1', 'r2', 'r1', 'r2']
+    clock[0] += 1
+    f.sweep()
+    assert calls == [('z-author', 'claude')]
+    state = json.loads((tmp_path / 'refill/state.json').read_text())
+    assert state['lap'] == {}
