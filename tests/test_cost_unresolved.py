@@ -87,3 +87,35 @@ def test_sync_proceeds_past_a_missing_item(monkeypatch):
         assert cost._run_selected(SimpleNamespace(root=Path('/synthetic'), sync=True, bead=None,
                                                   json=False), {}, Path('/synthetic/state')) == 0
     assert published and published[0]['unresolved_items'] == [item]
+
+
+def test_only_items_bound_to_measured_sessions_are_read(tmp_path, monkeypatch):
+    """A binding for a session absent from the sources can never match a request,
+    so its item is not read from the tracker (2149 reads -> 11 on 2026-11-02)."""
+    import sqlite3
+    from shantytown import task_order
+    conn = sqlite3.connect(tmp_path / 'stats.sqlite')
+    conn.executescript(task_order._SCHEMA)
+    rows = [(10, 'worker', 'live', 'p-live'), (5, 'worker', 'gone', 'p-old'),
+            (6, 'other', 'gone2', 'p-other')]
+    for stamp, agent, session, task in rows:
+        conn.execute('INSERT INTO task_contexts(ts,agent,session,task,paired_start) VALUES (?,?,?,?,1)',
+                     (stamp, agent, session, task))
+    conn.commit(); conn.close()
+    calls = tmp_path / 'calls.jsonl'
+    script = tmp_path / 'fake_retrieve.py'
+    script.write_text(
+        'import json, sys\n'
+        f'open({str(calls)!r}, "a").write(open(sys.argv[1]).read() + "\\n")\n'
+        'print(json.dumps({"status": "retrieved", "result": {"groups": [], "errors": [],\n'
+        '    "records": [{"agent": "worker", "session": "live"}]}}))\n')
+    read = []
+    monkeypatch.setattr(cost, 'show', lambda _c, bead: read.append(bead) or {'id': bead, 'status': 'open'})
+    config = {'rig': 'project', 'retrieve_script': str(script),
+              'sources': [{'agent': 'worker', 'harness': 'claude', 'path': '/x'},
+                          {'agent': 'other', 'harness': 'claude', 'path': '/y'}]}
+    result, records, method = cost.retrieve(tmp_path, config)
+    assert read == ['p-live'] and list(records) == ['p-live']
+    assert [b['bead'] for b in method['params']['bindings']] == ['p-live']
+    passes = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert [len(p['params']['bindings']) for p in passes] == [0, 1]

@@ -180,10 +180,24 @@ def retrieve(root, config):
     if sources is None:
         sources = discover_sources(root, config.get('since_hours', 24))
     agents = {source['agent'] for source in sources}
-    provisional = bindings(root, config['rig'], {}, agents)
+    # Camayoc attributes a request only to a binding with the same agent and
+    # session, so a binding for a session absent from these sources can never
+    # match. Without this filter every historical declaration of every agent
+    # was read from the tracker one by one: 2149 items for 18 sources on
+    # 2026-11-02, against 11 that could match (aegis-59jx).
+    seen = _sessions(config, sources)
+    provisional = [b for b in bindings(root, config['rig'], {}, agents)
+                   if (b['agent'], b['session']) in seen]
     records, unresolved = read_records(config, sorted({b['bead'] for b in provisional}))
     method = {'system': 'session_usage', 'query': 'work_cost', 'params': {
-        'bindings': bindings(root, config['rig'], records, agents), 'sources': sources}}
+        'bindings': [b for b in bindings(root, config['rig'], records, agents)
+                     if (b['agent'], b['session']) in seen],
+        'sources': sources}}
+    payload = _camayoc(config, method)
+    return {**payload['result'], 'unresolved_items': unresolved}, records, method
+
+
+def _camayoc(config, method):
     # The method file contains source paths and bindings, never transcript bodies.
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as handle:
         json.dump(method, handle); handle.flush()
@@ -194,7 +208,18 @@ def retrieve(root, config):
     payload = json.loads(response.stdout)
     if payload.get('status') != 'retrieved':
         raise ValueError('Camayoc could not retrieve costs')
-    return {**payload['result'], 'unresolved_items': unresolved}, records, method
+    return payload
+
+
+def _sessions(config, sources):
+    """(agent, session) pairs with measured requests in these sources.
+
+    One Camayoc pass with no bindings: the same reader, so the sessions are
+    exactly those the attribution pass can match.
+    """
+    payload = _camayoc(config, {'system': 'session_usage', 'query': 'work_cost',
+                                'params': {'bindings': [], 'sources': sources}})
+    return {(r['agent'], r['session']) for r in payload['result'].get('records', [])}
 
 
 def receipt(result, bead):
