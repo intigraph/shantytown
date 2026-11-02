@@ -366,7 +366,10 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         break
 
     if reg is not None:
-        _stranded_watch(root, reg, card, panes, socket, screen, observed, now)
+        # An unreadable inbox is not an empty one: let a blocked composer page.
+        backlog = bool(pending) or bool(messages) or not readable
+        _stranded_watch(root, reg, card, panes, socket, screen, observed, now,
+                        backlog=backlog)
 
     # Age means observed unresolved, not an invented creation timestamp for a
     # legacy inbox row. A continuous backlog retains its first observation even
@@ -422,13 +425,24 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         pass
 
 
-def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
+def _stranded_watch(root, reg, card, panes, socket, screen, records, now, *, backlog=False):
     """Page the lead when st's own text is stuck in an idle composer for 15 min,
-    or FAILED_SENDS consecutive sends to the pane were never delivered.
+    when ANY text has held an idle composer for 15 min while mail waits, or
+    when FAILED_SENDS consecutive sends to the pane were never delivered.
 
-    Each condition is its own episode. The composer episode re-arms when the
-    composer stops holding that body; the send episode re-arms after a delivery.
-    No body text enters the alert, and nothing here types into the pane.
+    Each condition is its own episode. The composer episodes re-arm when the
+    composer stops holding that text or the pane is seen busy; the send
+    episode re-arms after a delivery. No body text enters the alert, and
+    nothing here types into the pane.
+
+    THE OCCUPIED EPISODE (aegis-fu2). On 11-01/02 franklin, wu and dearing sat
+    idle for hours behind composer text that matched no single custody body
+    (INFERRED: Codex handed several queued st bodies back to the composer
+    together at turn end). The owned episode needs an exact match, so it never
+    armed; the backlog watch had latched in October and never re-armed; and
+    every later send was refused occupied-composer. A composer holding text in
+    an idle pane while mail waits blocks all delivery whoever wrote it, so it
+    pages. It still never clears or submits: unmatched text authorizes no key.
     """
     from . import triage
     from .events import FilesEvents
@@ -436,9 +450,12 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
     from .tmux import _codex_owned_input
     records = sorted(records, key=lambda r: r['created'])
     owned = None
-    if not triage.mid_flight(screen):
+    busy = triage.mid_flight(screen)
+    if not busy:
         owned = next((r for r in records if r['state'] not in ('delivered', 'acknowledged')
                       and _codex_owned_input(screen, r['text'])), None)
+    occupied = (owned is None and not busy and backlog
+                and triage.input_state(screen) == triage.INPUT_QUEUED)
     last_ok = max((i for i, r in enumerate(records)
                    if r['state'] in ('delivered', 'acknowledged')), default=-1)
     # Queued input has been accepted for a later turn. Its idle backlog is
@@ -466,6 +483,18 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
                                f'for {int(now - composer["since"])}s; every later send is '
                                'refused until it clears'))
                 composer['alerted'] = True
+        held = watch.get('occupied') or {}
+        if not occupied:
+            watch.pop('occupied', None)
+        else:
+            held = held or dict(since=now, alerted=False)
+            watch['occupied'] = held
+            if not held['alerted'] and now - held['since'] >= STRANDED_SECONDS:
+                alerts.append((f'composer-occupied:{card.name}:{held["since"]}',
+                               f'{card.name}: idle composer has held text matching no single '
+                               f'st body for {int(now - held["since"])}s while mail waits; '
+                               'st cannot clear or submit it, and every later send is refused'))
+                held['alerted'] = True
         episode = failing[0]['id'] if len(failing) >= FAILED_SENDS else None
         sends = watch.get('sends') or {}
         if episode is None:
