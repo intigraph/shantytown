@@ -211,3 +211,29 @@ def test_batch_bound_still_applies_to_eligible_pointers(tmp_path, monkeypatch):
         ai.enqueue(tmp_path, card, box.deliver(card.name, f'p{n}'), 'files', 10, now=100 + n)
     assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=200)) == 20
     assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=201)) == 1
+
+
+def test_unreadable_inbox_retains_its_rows_and_others_still_deliver(tmp_path, monkeypatch):
+    from shantytown.answer import PartialAnswer
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    other = NS(name='other-admin', role='administrator', pane='other-pane', retired=False)
+    ai.enqueue(tmp_path, card, box.deliver(card.name, 'capped'), 'files', 10, now=100)
+    ai.enqueue(tmp_path, other, box.deliver(other.name, 'readable'), 'files', 10, now=100)
+    real = box.unread
+    capped = FilesInbox(tmp_path / 'inbox')
+    def unread(name):
+        if name == card.name:
+            raise PartialAnswer('private capped inbox read')
+        return real(name)
+    capped.unread = unread
+    logs = []
+    delivered = ai.sweep(tmp_path, [card, other], panes, lambda _: capped, now=110,
+                         log=logs.append)
+    assert [name for name, _ in delivered] == ['other-admin'] and sent == ['readable']
+    assert len(box.unread(card.name)) == 1
+    assert any('admin unread read UNKNOWN (PartialAnswer); 1 pointer(s) retained' in m
+               for m in logs)
+    # The retained row is still pending and delivers once the read recovers.
+    assert [name for name, _ in ai.sweep(tmp_path, [card, other], panes,
+                                         lambda _: box, now=111)] == ['admin']
+    assert sent == ['readable', 'capped'] and box.unread(card.name) == []

@@ -282,12 +282,14 @@ class Verdict:
     unverified: list = field(default_factory=list)
     per_install: list = field(default_factory=list)
     landed: list = field(default_factory=list)
+    custody: list = field(default_factory=list)
 
     def notice_lines(self) -> list:
         """The non-blocking reports (untracked, stranded-by-outage, unverified
         currency), or []."""
         lines = []
         lines.extend(self.landed)
+        lines.extend(self.custody)
         for u in self.untracked:
             lines += u.render()
         for st_ in self.stranded:
@@ -310,7 +312,7 @@ class Verdict:
 
 
 def assess(agent: str, trees, checkpoint: str, staleness,
-           allow_loss: bool = False, reachable=None) -> Verdict:
+           allow_loss: bool = False, reachable=None, custody=None) -> Verdict:
     """Decide whether `agent` may be cycled now.
 
     `trees` are the paths this agent could hold work in — its crew clone and every
@@ -365,6 +367,7 @@ def assess(agent: str, trees, checkpoint: str, staleness,
     unverified: list[TreeUnverified] = []
     per_install: list[TreePerInstall] = []
     landed = []
+    custody_notices = []
     # One cache across every tree: a fleet's worktrees mostly share one forge, so
     # the honest answer for the second tree is the answer measured for the first.
     reach_cache: dict = {}
@@ -407,6 +410,16 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             # trade and not a loosening. `dirty` is never downgraded, and a
             # could-not-tell (None) keeps gating.
             if s.unpushed and not s.dirty:
+                if custody is not None:
+                    try:
+                        receipt = custody(tree)
+                    except ValueError as error:
+                        risks.append(TreeRisk(str(tree), unpushed=s.unpushed,
+                                              note=str(error)))
+                        continue
+                    if receipt:
+                        custody_notices.append(receipt)
+                        continue
                 from .workspace import push_authority_refusal
                 refusal = push_authority_refusal(tree)
                 if refusal:
@@ -434,11 +447,13 @@ def assess(agent: str, trees, checkpoint: str, staleness,
             "NOT a general --force: this override is named on its own so that "
             "reaching past some other refusal cannot disarm it).",
             risks=risks, checkpoint=checkpoint, untracked=notices,
-            stranded=stranded, unverified=unverified, per_install=per_install, landed=landed)
+            stranded=stranded, unverified=unverified, per_install=per_install,
+            landed=landed, custody=custody_notices)
 
     return Verdict(agent, True, risks=risks, checkpoint=checkpoint,
                    untracked=notices, stranded=stranded,
-                   unverified=unverified, per_install=per_install, landed=landed)
+                   unverified=unverified, per_install=per_install,
+                   landed=landed, custody=custody_notices)
 
 
 def _parse_ts(value):
@@ -622,7 +637,7 @@ class Requests:
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
                 no_in_place: bool = False, auto: bool = False,
-                allow_loss: bool = False) -> None:
+                allow_loss: bool = False, bundle_custody_items=None) -> None:
         with self._locked():
             data = self._load()
             data[agent] = {"checkpoint": checkpoint,
@@ -654,6 +669,8 @@ class Requests:
             # Ordinary and automatic requests retain the safe default.
             if allow_loss and not auto:
                 data[agent]["allow_loss"] = True
+            if bundle_custody_items:
+                data[agent]["bundle_custody_items"] = list(bundle_custody_items)
             self._save(data)
 
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:

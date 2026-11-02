@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 import subprocess
+from pathlib import Path
+import sys
 
 import pytest
 
@@ -192,3 +194,13 @@ def test_real_seeds_adapter_selects_only_write_child(profile, monkeypatch):
     assert len(seen) == 3
     event = json.loads((profile[0] / 'writes.jsonl').read_text())
     assert event['actor'] == 'operator' and event['principal'] == 'worker' and not event['match']
+
+
+def test_policy_path_follows_the_identity_policy_directory_per_platform():
+    from shantytown import actor_identity
+    mac = signing._policy_path('darwin')
+    assert mac == Path('/Library/Application Support/Shantytown/advise-signing.json')
+    assert mac.parent == Path('/Library/Application Support/Shantytown')
+    assert signing._policy_path('linux') == Path('/etc/shantytown/advise-signing.json')
+    assert signing.POLICY_PATH == signing._policy_path(sys.platform)
+    assert signing.POLICY_PATH.parent == actor_identity.POLICY_PATH.parent

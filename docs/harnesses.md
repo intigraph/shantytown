@@ -593,15 +593,18 @@ calling the Linux migration helper there directly refuses.
 
 ## Work-class admission
 
-When `[governor] admit_class = true`, authoring and review use Codex for every
-work class. The authoritative `work:design` and `work:important-quipu-code`
-labels remain intact; neither selects a Claude worker. Missing or unreadable
-labels confer no extra permission. Explicit targets keep their configured
-harness, and an ineligible target is refused before dispatch writes.
+When `[governor] admit_class = true`, Claude and Codex may author any work,
+including unlabelled and routine items. Prefer Claude for designs and important
+Quipu code; that preference does not exclude either authoring harness.
+`work:review` requires Codex, even alongside `work:claude-authorized` or important
+class labels. Missing or unreadable exact labels cannot establish that a Claude
+assignment is authoring rather than review, so remain refused for Claude.
+Explicit targets keep their configured harness, and an ineligible target is
+refused before dispatch writes. See [work-class routing](work-class-routing.md).
 
-A name in `class_exempt` retains its Claude allowance only when the actual crew
-card has the `administrator` role. A lead, keeper or worker cannot obtain that
-allowance from the name alone. This filter never waives usage floors, freezes,
+A name in `class_exempt` receives an exemption only when the actual crew
+card has the `administrator` role and the exact item is readable authoring; it never authorizes non-Codex review. A lead,
+keeper or worker cannot obtain an exemption from the name alone. This filter never waives usage floors, freezes,
 drains, holds, plate limits or busy-pane checks. Review identity and review
 eligibility retain their separate normal admission checks.
 

@@ -540,7 +540,9 @@ def capture(root: Path, payload: dict) -> None:
             from .owned_work import OwnedWork
             OwnedWork(root).heartbeat(agent, now=now)
             from .owned_work_graph import publish
-            publish(root, agents={agent})
+            from .quipu_provenance import hook_session
+            with hook_session(session):
+                publish(root, agents={agent})
         except Exception:
             print("liveness heartbeat UNKNOWN", file=sys.stderr)
     conn = _db(root)

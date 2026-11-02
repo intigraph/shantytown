@@ -65,17 +65,10 @@ The exact-ID work update path applies the same gate to assignment and
 reactivation. Haul/feed may resume an already-owned active item at ten because
 that does not add a slot; existing overfull plates are not silently repooled.
 
-A proven priority-zero item may acquire an owner above the cap. A technical
-blocker uses the existing `st work defer ... bead --dependency-reason ...`
-priority-inheritance path to become P0; a `blocks-p0` label alone is insufficient.
-The count must still be complete and current, and all other ownership,
-dispatch, governor and operator guards remain in force. Before a mutating
-attempt, the local owner lock protects a durable `overflow_admission` record in
-`~/.local/state/shantytown/plate-capacity/overflow.jsonl`, with the item, owner,
-count and counted IDs. A create records the requested title and an unknown item
-ID. This records admission, **not** backend commit or delivery: a timeout may
-follow a committed write, so never retry it from this journal. A journal write
-failure refuses before mutation. Pure plans and dry runs write no record.
+The ten-item limit applies to every priority, including P0 and inherited P0
+blockers. Urgency changes queue order; it does not grant another work slot.
+Rebalance existing work before assigning another item. Historical overflow
+journals are retained unchanged; new assignments do not append to them.
 
 Cooperating assignment commands on one host serialize admission and mutation.
 The configured owner reader must cover all selected stores; partial reads
@@ -1993,6 +1986,12 @@ The stats capture hook fails open on runtime errors and malformed arguments
 (including a missing `--root`): it prints diagnostics to stderr and exits zero
 so a configuration mistake cannot block a tool call. Argument errors skip capture.
 
+Lifecycle publication from stats capture carries the native hook payload's
+`session_id` into its HTTP provenance, even if no session variable was exported
+or the environment retained an older session. This context lasts only for that
+publication and is restored after success or failure. Missing identity remains
+missing; the hook does not invent a session or change the process environment.
+
 ### Gaming hold
 
 `st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`
@@ -2894,6 +2893,14 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 `origin`, with the mapped owner-move exception below. It does not push, merge,
 close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
+
+Candidate source must be committed and published. Untracked files may remain
+only inside top-level `.work/` and `.task-notes/` directories. The preflight
+checks the directory roots without following symlinks or reading private file
+contents; these files do not enter the PR file list or metadata. A file or
+symlink replacing either root refuses, as do unrelated untracked paths and every
+tracked, staged, deleted, renamed or conflicted change, including under those
+roots. No ignore/configuration change or force option is needed.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
