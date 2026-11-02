@@ -1610,9 +1610,12 @@ class PrometheusReader:
         """(samples, error_reading) — exactly one is not None."""
         from urllib.parse import quote
         import re as _re
+        # WINDOW_OFFERED_METRIC rides the same query (aegis-hnv7): without it the
+        # Prometheus source could never see the server's stated absence.
         names = (self.metric, self.account_metric, PROBE_OK_METRIC,
                  PROBE_HTTP_STATUS_METRIC,
-                 PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC)
+                 PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC,
+                 WINDOW_OFFERED_METRIC)
         query = '{__name__=~"' + "|".join(_re.escape(n) for n in names) + '"}'
         url = f"{self.url}/api/v1/query?query={quote(query)}"
         try:
@@ -2657,10 +2660,12 @@ class Governor:
                 source=pol.source,
                 error=f"no usage series for window {w!r}")
             # NOT APPLICABLE, NOT BLIND (aegis-hnv7): only an optional window the
-            # server explicitly does not offer, judged by a probe that passes every
-            # freshness check `lost()` applies (ok, aged, not in the future). The
-            # placeholder pct only lets `lost()` check the PROBE; it is never read.
-            if (w in pol.optional_windows and r.offered is False
+            # server explicitly does not offer, judged by a probe that SUCCEEDED
+            # (ok is True — no rotation grace, no stale-but-usable cache: those
+            # tolerate a FAILED probe's old numbers, and a failed probe can never
+            # vouch for absence) and that passes every freshness check `lost()`
+            # applies. The placeholder pct only lets `lost()` check the PROBE.
+            if (w in pol.optional_windows and r.offered is False and r.ok is True
                     and not replace(r, pct=0.0).lost(now, pol.max_age_seconds)):
                 not_offered.append(w)
                 continue

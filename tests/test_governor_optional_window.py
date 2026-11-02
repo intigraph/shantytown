@@ -192,3 +192,55 @@ def test_wire_is_unchanged_unless_used(tmp_path):
     wire = fleet.observations(G())
     assert "offered" not in wire["seven_day"]
     assert wire["five_hour"]["offered"] is False
+
+
+# --- Kelly review (PR #437): the Prometheus source and failed-probe grace ------
+
+def _vector(*, ok="1", status="200", offered="0", cache_age="0"):
+    import json
+    m = lambda name, value, **labels: {"metric": {"__name__": name, "account": "acct-a", **labels},
+                                       "value": [NOW, value]}
+    return json.dumps({"status": "success", "data": {"result": [
+        m("claude_usage_utilization_pct", "54", window="seven_day"),
+        m("claude_usage_window_offered", offered, window="five_hour"),
+        m("claude_usage_window_offered", "1", window="seven_day"),
+        m("claude_usage_probe_success", ok),
+        m("claude_usage_probe_http_status", status),
+        m("claude_usage_probe_timestamp_seconds", f"{NOW:.0f}"),
+        m("claude_usage_cache_age_seconds", cache_age),
+    ]}})
+
+
+def _prom_verdict(tmp_path, body, *, optional=OPTIONAL):
+    (tmp_path / "shantytown.toml").write_text(
+        POLICY.format(path=tmp_path / "unused", optional=optional).replace(
+            'source = "textfile"', 'source = "prometheus"\nurl = "http://p.example"'))
+    policy = config.load(tmp_path).governor
+    seen = []
+    reader = gov.PrometheusReader("http://p.example", fetch=lambda url: (seen.append(url), body)[1])
+    g = gov.Governor(policy, reader, None, now=lambda: NOW)
+    return g.evaluate(persist=False), seen
+
+
+def test_the_prometheus_query_asks_for_the_offered_marker(tmp_path):
+    """Finding 1: the live source is Prometheus; its query must carry the marker."""
+    v, seen = _prom_verdict(tmp_path, _vector())
+    assert seen and "claude_usage_window_offered" in __import__("urllib.parse").parse.unquote(seen[0])
+    assert v.alarm == "" and "not offered by this plan: five_hour" in v.why
+
+
+def test_control_prometheus_without_opt_in_still_alarms(tmp_path):
+    v, _ = _prom_verdict(tmp_path, _vector(), optional="")
+    assert "USAGE SIGNAL PARTIALLY LOST" in v.alarm and "five_hour" in v.alarm
+
+
+@pytest.mark.parametrize("status, cache_age", [
+    ("200", "60"),     # a FAILED probe whose cached numbers lost() would still accept
+    ("0", "60"),       # transport failure with a recent cache
+    ("401", "60"),     # OAuth rotation grace: lost() tolerates it for usage numbers
+])
+def test_a_failed_probe_never_vouches_for_absence(tmp_path, status, cache_age):
+    """Finding 2: ok=0 must never authorize skipping, whatever grace lost() grants."""
+    v, _ = _prom_verdict(tmp_path, _vector(ok="0", status=status, cache_age=cache_age))
+    assert "not offered" not in v.why
+    assert "five_hour" in (v.alarm or "") or v.signal_lost
