@@ -137,12 +137,34 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
 
 - `st provision` projects the same server set that claude and codex get (quipu,
   bobbin, yupana).
-  - The `agy` format is written per agent with `agy mcp add`, under
-    `HOME`-scoped config: the CLI is the supported writer, and st does not
-    hand-edit `agy`'s state files.
-  - If `agy mcp add` turns out to be user-global only (Phase 0), the servers are
-    rendered into a per-workspace plugin under `.agents/plugins/st/`, which also
-    gives `mcp_config.json` per agent.
+- Measured with zero model requests, in an empty scratch `HOME` (1.4.12):
+  - `agy mcp add` has no scope flag. It writes only the `HOME`-global
+    `~/.gemini/config/mcp_config.json`, never the workspace.
+  - `agy mcp list` and `agy plugin list` show only `HOME`-global entries. A
+    workspace `.agents/mcp_config.json` is not listed. A workspace
+    `.agents/plugins/st/` plugin with `mcp_config.json` passes
+    `agy plugin validate` ("mcpServers 1"), but is not listed as installed.
+  - Whether a running session loads workspace `.agents/` customizations (MCP,
+    hooks, skills) is NOT measured. It needs a live, authenticated session, so
+    it moves to Phase 0.
+- Two placements, chosen by that Phase 0 measurement:
+  - **Workspace plugin.** This applies if sessions load workspace `.agents/`.
+    st renders `.agents/plugins/st/` (with `mcp_config.json` and `hooks.json`)
+    in each agent's workspace. Per-agent configuration needs no per-agent
+    `HOME`.
+  - **Per-agent `agy` HOME.** This applies if they do not. Each `agy` crew
+    agent runs with its own `HOME` for `agy` data. That `HOME` holds only:
+    - a copied 0600 auth token, following the same ruling as headless jobs;
+    - st-rendered `~/.gemini/config/mcp_config.json` and `hooks.json`.
+
+    `agy`'s "global" root is then per agent by construction. `launch()`
+    exports that `HOME` for the `agy` process only. st and the guard commands
+    the hooks call keep the agent's normal environment, passed explicitly in
+    the hook command.
+
+    The same layout serves the hooks in section 2, so the workspace-hooks
+    assumption there carries the same condition.
+- st never edits the operator's own `agy` config.
 - Skills: the provisioned skill dirs are linked into
   `<workspace>/.agents/skills/`, the same pattern codex uses for
   `.agents/skills`.
