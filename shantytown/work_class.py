@@ -29,6 +29,28 @@ def important_work_class(item) -> tuple[bool, str]:
 claude_work_class = important_work_class
 
 
+def preferred_labels(labels):
+    """Ranker preference metadata, never a condition for Claude authoring.
+
+    Use declared repository/design labels, not a guessed title or review role.
+    Append only; a ranking pass never replaces the item's other labels.
+    """
+    if not isinstance(labels, (list, tuple, set, frozenset)) or not all(
+            isinstance(label, str) for label in labels):
+        return ()
+    labels = set(labels)
+    if 'work:review' in labels:
+        return ()
+    if labels & {'work:design', 'design'}:
+        wanted = {'work:design', 'work:claude-authorized'}
+    elif ('work:important-quipu-code' in labels or
+          (labels & {'quipu', 'repo:quipu'} and not labels & {'docs', 'documentation'})):
+        wanted = {'work:important-quipu-code', 'work:claude-authorized'}
+    else:
+        return ()
+    return tuple(sorted(wanted - labels))
+
+
 def exempt(card, policy) -> bool:
     """Only a configured actual administrator receives a class exemption."""
     return card.role == "administrator" and card.name in policy.class_exempt
