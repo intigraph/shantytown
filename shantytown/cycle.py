@@ -36,7 +36,9 @@ import fnmatch
 import fcntl
 from contextlib import contextmanager
 import json
+import os
 import posixpath
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,18 +47,26 @@ from pathlib import Path
 # The stop reason prefix that marks a deliberate cycle, so a drain can tell one
 # from a crash or a retirement. `st fleet tend` matches on it.
 CYCLE_REASON = "cycle-requested"
+_lifecycle_held = threading.local()
 
 
 @contextmanager
 def lifecycle_lock(root, agent):
-    """Order stop against cycle mutation, without locking slow Git preflight."""
+    """Order stop, launch and release; nested cycle-to-launch is reentrant."""
     path = Path(root) / "lifecycle-locks" / f"{agent}.lock"
+    key = (os.getpid(), str(path.resolve()))
+    held = getattr(_lifecycle_held, 'keys', set())
+    if key in held:
+        yield
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        _lifecycle_held.keys = held | {key}
         try:
             yield
         finally:
+            _lifecycle_held.keys = held
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 

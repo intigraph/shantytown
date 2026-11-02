@@ -141,6 +141,37 @@ class OwnedWork:
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def confirmed_down(self, agent, *, now):
+        """Refresh checked process absence for the existing held-work reader.
+
+        Separate from stop intent and expired leases. It creates no legacy
+        notice, and only a checked subsequent live observation clears it.
+        """
+        agent, now = _agent(agent), _time(now)
+        with self.locked() as data:
+            old = data.get(agent, {})
+            if old.get('state') in {'stopped', 'ceiling'} and not old.get('process_observation'):
+                # Operator intent and its existing outbox retain their semantics.
+                old.update(graph_observed_at=now, graph_revision=self._graph_revision(data))
+                return
+            data[agent] = dict(old, generation=old.get('generation', 'no-launch-record'),
+                state='stopped', observed_at=old.get('observed_at', now),
+                expires_at=now, graph_observed_at=now,
+                graph_revision=self._graph_revision(data),
+                reason='confirmed process absence; stranded work',
+                notice='delivered', process_observation=True)
+
+    def confirmed_live(self, agent, *, now):
+        # Do not turn a process observation into authority to undo operator intent.
+        old = self.snapshot().get(agent, {})
+        if old.get('process_observation'):
+            with self.locked() as data:
+                current = data.get(agent)
+                if current == old:
+                    data[agent] = dict(generation=uuid.uuid4().hex, state='live',
+                        observed_at=now, expires_at=now + LEASE, launched_at=None,
+                        graph_observed_at=now, graph_revision=self._graph_revision(data))
+
     def pending(self, *, now=None):
         """Fair local scheduling order; no remote reads or liveness inference."""
         now = _time(time.time() if now is None else now)

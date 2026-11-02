@@ -66,6 +66,42 @@ class SdTracker(BrTracker):
 
     _tool = "sd"
 
+    def stranded_read(self, item_id):
+        """Exact SDK revision, never the revision-less plate projection."""
+        result = self._bd_for(item_id, 'show', item_id, '--json')
+        if result.returncode != 0:
+            raise RuntimeError('stranded item read refused')
+        rows = json.loads(result.stdout)
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ValueError('stranded item read incomplete')
+        row = rows[0]
+        if (row.get('id') != item_id or type(row.get('revision')) is not int
+                or row['revision'] < 1):
+            raise ValueError('stranded item revision unproven')
+        return row
+
+    def release_stranded(self, row, comment):
+        """One CAS transaction includes its preservation comment; no fallback."""
+        from .stranded_work import eligible
+        if not eligible(row) or type(row.get('revision')) is not int or row['revision'] < 1:
+            raise ValueError('stranded release requires eligible revision-bound row')
+        result = self._bd_for(row['id'], 'update', row['id'], '--status=open',
+            '--assignee=', f'--if-revision={row["revision"]}',
+            '--transition-comment=' + comment, '--json')
+        if result.returncode == 4:
+            return 'conflict'  # SDK guarantees nothing was committed.
+        if result.returncode != 0:
+            raise RuntimeError('stranded release outcome UNKNOWN; reconcile before retry')
+        # A successful process exit alone does not prove the committed fields.
+        current = self.stranded_read(row['id'])
+        comments = current.get('comments')
+        if (current.get('status') != 'open' or current.get('assignee')
+                or current['revision'] <= row['revision']
+                or not isinstance(comments, list)
+                or not any(c.get('text') == comment for c in comments if isinstance(c, dict))):
+            raise RuntimeError('stranded release read-back UNKNOWN')
+        return 'released'
+
     def __init__(self, repo: "str | None" = None, timeout: int = 30, *,
                  store: "str | None" = None, quipu: "str | None" = None,
                  prefix: "str | None" = None):

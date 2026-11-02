@@ -1,0 +1,276 @@
+"""Offline real policy/outbox/CAS controls; no fleet process or board access."""
+from contextlib import nullcontext
+import copy
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from shantytown.owned_work import OwnedWork
+from shantytown.stranded_work import StrandedWork, T1, T2, eligible
+
+
+@pytest.fixture
+def world(tmp_path):
+    service = StrandedWork(tmp_path)
+    row = dict(id='work-1', assignee='worker', status='in_progress', priority=1,
+               title='work', labels=[], revision=7, notes='checkpoint must survive')
+    observation = dict(state='down', generation='first', resume_at=None)
+    notices, writes = [], []
+    def release(current, comment):
+        writes.append((copy.deepcopy(current), json.loads(comment)))
+        if current['revision'] != row['revision']:
+            return 'conflict'
+        row.update(assignee='', status='open', revision=row['revision'] + 1)
+        return 'released'
+    args = dict(observe=lambda *_: dict(observation),
+                recipient=lambda *_: 'lead',
+                notify=lambda *args: notices.append(args),
+                read=lambda _: copy.deepcopy(row), release=release,
+                checkpoint=lambda *_: dict(worktree='/work/retained', branch='feature/held',
+                                            checkpoint='work-1 original comment'),
+                fence=lambda _: nullcontext(), release_admitted=True)
+    def tick(at, **overrides):
+        return service.tick([copy.deepcopy(row)], {'worker': object()}, now=at,
+                            **(args | overrides))
+    return SimpleNamespace(service=service, row=row, observation=observation,
+                           notices=notices, writes=writes, args=args, tick=tick)
+
+
+def test_old_lifecycle_service_does_not_discover_unrecorded_owner(tmp_path):
+    def forbidden(*args):
+        pytest.fail('old service unexpectedly discovered an owner without state')
+    assert OwnedWork(tmp_path).tick(None, forbidden, None, now=0) == []
+
+
+def test_t1_persistent_error_then_t2_atomic_release_and_preservation(world):
+    assert world.tick(0) == []
+    assert world.tick(T1 - 1) == []
+    assert world.tick(T1) == [('work-1', 'needs attention')]
+    assert len(world.notices) == 1 and world.notices[0][1].startswith('ERROR ')
+    world.tick(T1 + 1)
+    assert len(world.notices) == 1
+    assert world.service.snapshot()['work-1']['attention'] is True
+    world.tick(T2)
+    assert len(world.writes) == 1
+    before, comment = world.writes[0]
+    assert before['revision'] == 7
+    assert comment['original_owner'] == 'worker' and comment['down_since'] == 0
+    assert comment['worktree'] == '/work/retained' and comment['branch'] == 'feature/held'
+    assert comment['checkpoint'] == 'work-1 original comment'
+    assert world.row['assignee'] == '' and world.row['status'] == 'open'
+    assert world.row['notes'] == 'checkpoint must survive'
+    world.tick(T2 + 1)
+    assert len(world.writes) == 1 and not world.service.snapshot()['work-1']['active']
+
+
+def test_p0_immediate_and_observation_mode_never_releases(world):
+    world.row['priority'] = 0
+    world.tick(0, release_admitted=False)
+    assert len(world.notices) == 1 and world.writes == []
+    world.tick(1)
+    assert len(world.writes) == 1
+
+
+@pytest.mark.parametrize('change', [dict(defer_until='1970-01-01T00:00:01Z'),
+    dict(status='deferred'), dict(labels=['blocked:human']), dict(blocker_kind='external'),
+    dict(labels=['needs-stiwi']), dict(title='ASK operator: keep parked'),
+    dict(labels='malformed'), dict(priority=None), dict(title='inbox: message')])
+def test_parked_and_unproven_items_never_observed_or_mutated(world, change):
+    world.row.update(change)
+    world.tick(T2)
+    assert world.notices == world.writes == []
+
+
+@pytest.mark.parametrize('state', ['live', 'unknown'])
+def test_live_or_unknown_owner_never_alerted_or_released(world, state):
+    world.row['priority'] = 0
+    world.observation['state'] = state
+    world.tick(0)
+    world.tick(T2)
+    assert world.notices == world.writes == []
+
+
+def test_unknown_gap_and_restart_reset_down_clock(world):
+    world.tick(0)
+    world.observation['state'] = 'unknown'
+    world.tick(T2)
+    world.observation['state'] = 'down'
+    world.tick(T2 + 1)
+    assert world.writes == [] and world.notices == []
+    world.observation['generation'] = 'new-launch'
+    world.tick(T2 * 2)
+    assert world.writes == []
+
+
+@pytest.mark.parametrize('resume', ['2999-01-01T00:00:00Z', 'invalid', '2027-01-01'])
+def test_intentional_resume_or_unknown_intent_exempt(world, resume):
+    world.row['priority'] = 0
+    world.observation['resume_at'] = resume
+    world.tick(0)
+    assert world.notices == world.writes == []
+
+
+def test_missing_card_attention_immediate_release_at_t2(world):
+    world.observation['state'] = 'missing'
+    world.tick(0)
+    assert len(world.notices) == 1 and not world.writes
+    world.tick(T2)
+    assert len(world.writes) == 1
+
+
+def test_live_race_after_checkpoint_prevents_release(world):
+    world.row['priority'] = 0
+    def checkpoint(*args):
+        world.observation['state'] = 'live'
+        return dict(worktree='preserved', branch='kept', checkpoint='kept')
+    world.tick(0, checkpoint=checkpoint)
+    assert not world.writes
+
+
+def test_owner_parking_race_prevents_release(world):
+    world.row['priority'] = 0
+    def read(_):
+        world.row['labels'] = ['blocked:human']
+        return dict(world.row)
+    world.tick(0, read=read)
+    assert not world.writes
+
+
+def test_unknown_checkpoint_keeps_ownership(world):
+    world.row['priority'] = 0
+    world.tick(0, checkpoint=lambda *_: None)
+    assert not world.writes and world.row['assignee'] == 'worker'
+
+
+@pytest.mark.parametrize('boundary', ['release', 'notify'])
+def test_indeterminate_release_and_delivery_are_not_retried(world, boundary):
+    world.row['priority'] = 0
+    attempted = []
+    def unknown(*args):
+        attempted.append(args)
+        raise TimeoutError('possibly committed')
+    world.tick(0, **{boundary: unknown})
+    world.tick(1, **{boundary: unknown})
+    assert len(attempted) == 1
+    state = world.service.snapshot()['work-1']
+    assert state['release' if boundary == 'release' else 'notice'] == 'unknown'
+    if boundary == 'notify':
+        assert not world.writes
+
+
+def test_checked_live_clears_only_process_observation_not_operator_intent(tmp_path):
+    service = OwnedWork(tmp_path)
+    service.confirmed_down('worker', now=10)
+    assert service.snapshot()['worker']['process_observation']
+    service.confirmed_live('worker', now=20)
+    assert service.snapshot()['worker']['state'] == 'live'
+    service.stop('worker', at=30, reason='operator')
+    service.confirmed_down('worker', now=40)
+    service.confirmed_live('worker', now=50)
+    assert service.snapshot()['worker']['state'] == 'stopped'
+    assert service.snapshot()['worker']['reason'] == 'operator'
+
+
+def test_default_adapter_does_not_touch_backend_or_panes(tmp_path):
+    from shantytown.stranded_adapter import sweep
+    assert sweep(tmp_path, None, None, None, None) == []
+
+
+def test_partial_card_census_refuses_without_observations(tmp_path, monkeypatch):
+    from shantytown.answer import Answer, PartialAnswer
+    from shantytown.stranded_adapter import sweep
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'observe')
+    monkeypatch.setattr('shantytown.deployment.local_host', lambda _: 'test-host')
+    registry = SimpleNamespace(all=lambda: Answer.capped([], how='fixture', caveat='partial'))
+    with pytest.raises(PartialAnswer):
+        sweep(tmp_path, registry, None, None, None)
+
+
+@pytest.mark.parametrize('rc,stdout,expected', [(1, '', 'unknown'),
+    (0, '%1\tother\tcodex\n', 'down'), (0, '%1\tworker\tbash\n', 'down'),
+    (0, '%1\tworker\tcodex\n', 'live'), (0, 'malformed\n', 'unknown'),
+    (0, '%1\tworker\tpython\n', 'unknown')])
+def test_tmux_checked_failure_is_not_absence(monkeypatch, rc, stdout, expected):
+    from shantytown.tmux import Tmux
+    monkeypatch.setattr('shantytown.tmux.subprocess.run',
+        lambda *a, **kw: SimpleNamespace(returncode=rc, stdout=stdout))
+    assert Tmux().owner_state('worker') == expected
+
+
+def test_sdk_release_has_revision_and_atomic_comment_and_exact_readback(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='in_progress', assignee='worker', priority=1,
+               title='work', labels=[], revision=7)
+    calls = []
+    def sdk(identity, *args):
+        calls.append(args)
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(status='open', assignee='', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    assert tracker.release_stranded(row, 'audit') == 'released'
+    assert '--if-revision=7' in calls[0] and '--transition-comment=audit' in calls[0]
+    assert '--assignee=' in calls[0] and '--status=open' in calls[0]
+    assert calls[1] == ('show', 'work-1', '--json')
+
+
+@pytest.mark.parametrize('rc,expected', [(4, 'conflict'), (1, None)])
+def test_sdk_conflict_or_failure_never_falls_back_to_generic_update(monkeypatch, rc, expected):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    calls = []
+    def sdk(*args):
+        calls.append(args)
+        return SimpleNamespace(returncode=rc, stdout='')
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    row = dict(id='work-1', status='open', assignee='worker', priority=0, title='work', revision=7)
+    if expected:
+        assert tracker.release_stranded(row, 'audit') == expected
+    else:
+        with pytest.raises(RuntimeError, match='UNKNOWN'):
+            tracker.release_stranded(row, 'audit')
+    assert len(calls) == 1
+
+
+def test_attention_not_cleared_by_unreadable_metadata(world):
+    world.row['priority'] = 0
+    world.tick(0, release_admitted=False)
+    world.row['priority'] = None
+    world.tick(1)
+    state = world.service.snapshot()['work-1']
+    assert state['active'] and state['attention'] and state['evidence'] == 'UNKNOWN'
+
+
+def test_remote_intents_are_bounded_and_attention_retained(world):
+    rows = [dict(world.row, id=f'work-{i}', priority=0) for i in range(8)]
+    world.service.tick(rows, {}, now=0, **(world.args | dict(release_admitted=False)))
+    assert len(world.notices) == 4
+    assert sum(entry['attention'] for entry in world.service.snapshot().values()) == 8
+    world.service.tick(rows, {}, now=1, **(world.args | dict(release_admitted=False)))
+    assert len(world.notices) == 8
+
+
+def test_elapsed_budget_keeps_unmeasured_evidence_untouched(world):
+    stamps = iter([0, 6])
+    result = world.tick(0, clock=lambda: next(stamps))
+    assert 'budget exhausted' in result[0][1]
+    assert not world.notices and not world.writes
+
+
+def test_unknown_release_remains_a_launch_hold_across_unknown_observation(world):
+    world.row['priority'] = 0
+    attempts = []
+    def unknown(*args):
+        attempts.append(args)
+        raise TimeoutError('possibly committed')
+    world.tick(0, release=unknown)
+    assert world.service.unresolved_release('worker')
+    world.observation['state'] = 'unknown'
+    world.tick(1)
+    world.observation['state'] = 'down'
+    world.tick(2, release=unknown)
+    assert world.service.unresolved_release('worker')
+    assert len(attempts) == 1

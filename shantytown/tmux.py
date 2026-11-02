@@ -365,6 +365,28 @@ class Tmux:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
 
+    def owner_state(self, pane: str) -> str:
+        """Checked process census for release policy; exists() hides read errors."""
+        if not pane:
+            return 'unknown'
+        result = subprocess.run(self._cmd('list-panes', '-a', '-F',
+            '#{pane_id}\t#{session_name}\t#{pane_current_command}'),
+            capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return 'unknown'
+        rows = [line.split('\t') for line in result.stdout.splitlines()]
+        if any(len(row) != 3 or not all(row) for row in rows):
+            return 'unknown'
+        matches = [row for row in rows if pane in row[:2]]
+        if not matches:
+            return 'down'
+        commands = {row[2] for row in matches}
+        if commands <= SHELL_COMMANDS:
+            return 'down'
+        if commands & {'claude', 'codex', 'node'}:
+            return 'live'
+        return 'unknown'
+
     def session_name(self, pane: str) -> str | None:
         """Resolve a tmux pane id (for example ``$TMUX_PANE``) to its session.
 
