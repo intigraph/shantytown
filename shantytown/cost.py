@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+from subprocess import SubprocessError
 import sys
 import tempfile
 import time
@@ -151,6 +152,28 @@ def discover_sources(root, since_h=24):
     return sources
 
 
+MISSING_MARKERS = ('no seed with id',)
+
+
+def read_records(config, beads):
+    """Read each bound item; one bad item never aborts the others (aegis-59jx).
+
+    An item the tracker says does not exist is "missing": a definitive answer,
+    so its bindings simply get no close clipping. Any other failure (a read
+    timeout, a malformed answer) is "unreadable": its close state is unknown.
+    """
+    records, unresolved = {}, []
+    for bead in beads:
+        try:
+            records[bead] = show(config, bead)
+        except (RuntimeError, ValueError, OSError, SubprocessError) as exc:
+            text = str(exc)
+            missing = any(marker in text.lower() for marker in MISSING_MARKERS)
+            unresolved.append({'bead': bead, 'reason': 'missing' if missing else 'unreadable',
+                               'detail': text[:200]})
+    return records, unresolved
+
+
 def retrieve(root, config):
     # Read the metadata first to discover only the tracker IDs actually needed.
     sources = config.get('sources')
@@ -158,7 +181,7 @@ def retrieve(root, config):
         sources = discover_sources(root, config.get('since_hours', 24))
     agents = {source['agent'] for source in sources}
     provisional = bindings(root, config['rig'], {}, agents)
-    records = {bead: show(config, bead) for bead in sorted({b['bead'] for b in provisional})}
+    records, unresolved = read_records(config, sorted({b['bead'] for b in provisional}))
     method = {'system': 'session_usage', 'query': 'work_cost', 'params': {
         'bindings': bindings(root, config['rig'], records, agents), 'sources': sources}}
     # The method file contains source paths and bindings, never transcript bodies.
@@ -171,7 +194,7 @@ def retrieve(root, config):
     payload = json.loads(response.stdout)
     if payload.get('status') != 'retrieved':
         raise ValueError('Camayoc could not retrieve costs')
-    return payload['result'], records, method
+    return {**payload['result'], 'unresolved_items': unresolved}, records, method
 
 
 def receipt(result, bead):
@@ -394,10 +417,15 @@ def _run_selected(args, config, graph_state):
     result, records, method = retrieve(args.root, config)
     from . import cost_coverage
     result = {**result, 'cost_coverage': cost_coverage.completed(records, args.bead)}
+    unreadable = [u['bead'] for u in result.get('unresolved_items', []) if u['reason'] == 'unreadable']
     if args.sync:
         # Do not publish a clean-looking replacement on a failed source.
         if result['errors']:
             raise RuntimeError('Camayoc source coverage UNKNOWN: ' + '; '.join(result['errors']))
+        # A missing item is a definitive answer; an unreadable one is not. Sync
+        # publishes receipts and metrics, so it still refuses, naming the item.
+        if unreadable:
+            raise RuntimeError('tracker read UNKNOWN for ' + ', '.join(unreadable))
         if config.get('daily_output'):
             from . import cost_daily
             cost_daily.update(config['daily_output'], result, now=time.time())
@@ -419,6 +447,8 @@ def _run_selected(args, config, graph_state):
         else:
             print(value[1] if value else 'cost: UNKNOWN (no attributable requests)')
             print(cost_coverage.describe(result['cost_coverage']))
+            for item in result.get('unresolved_items', []):
+                print(f"cost: item {item['bead']} {item['reason']}: {item['detail']}")
     else:
         print(json.dumps(result, indent=2))
     return 0
