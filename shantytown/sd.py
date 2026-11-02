@@ -625,10 +625,11 @@ class SdTracker(BrTracker):
         """Complete lean active/deferred metadata and proven unowned READY rows."""
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows, unblocked_ids
+        from .seeds_plate import ranking_rows, unblocked_ids
         from .priority_advisory import workable
-        rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
-                          include_deferred=True, include_messages=False).exact()
+        # aegis-bzc: the dedicated bounded cohort reader. owner_rows(None,
+        # include_deferred=True) is refused before any query by design.
+        rows = ranking_rows(self.prove_store(), timeout=self.timeout).exact()
         candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
         ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [r for r in candidates if r["id"] in ready], rows
