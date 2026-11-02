@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import hashlib
 from pathlib import Path
 import subprocess
 
@@ -19,11 +21,7 @@ def mode():
 
 
 def recipient(name, cards):
-    """Follow the actual crew card; unreachable leads rise to administrator."""
-    card = cards.get(name)
-    lead = cards.get(card.reports_to) if card else None
-    if lead is not None and lead.name != name:
-        return lead.name
+    """Resolve the host administrator; in-progress work needs an operator decision."""
     administrators = [c.name for c in cards.values() if c.role == 'administrator']
     if len(administrators) != 1 or administrators[0] == name:
         raise ValueError('stranded owner routing UNKNOWN')
@@ -77,8 +75,36 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
         current = service.snapshot().get(name, {})
         stop = stop_store.all().exact().get(name)
         state = ('missing' if card is None else panes.owner_state(card.pane))
-        return dict(state=state, generation=current.get('generation', 'no-launch-record'),
-                    resume_at=stop.resume_at if stop else None)
+        generation = current.get('generation', 'no-launch-record')
+        # A refused cycle is a separate positive fact, not inferred from age or
+        # a busy pane. Re-read at the CAS fence; changed/refused metadata resets
+        # the measured interval. Malformed/unreadable input cannot prove absence.
+        from .cycle import Requests, refusal_summary
+        path = Requests(root).path
+        try:
+            if path.exists():
+                with path.open('rb') as handle:
+                    raw = handle.read(1024 * 1024 + 1)
+                if len(raw) > 1024 * 1024:
+                    raise ValueError('cycle ledger exceeds bound')
+                requests = json.loads(raw)
+                if not isinstance(requests, dict):
+                    raise ValueError('cycle ledger malformed')
+                record = requests.get(name)
+                if record is not None and not isinstance(record, dict):
+                    raise ValueError('cycle record malformed')
+                _, reason = refusal_summary(record)
+                if reason:
+                    if not isinstance(reason, str):
+                        raise ValueError('cycle refusal malformed')
+                    state = 'cycle-blocked'
+                    generation += ':' + hashlib.sha256(json.dumps(
+                        [record.get('requested_at'), reason], sort_keys=True).encode()).hexdigest()
+        except (OSError, ValueError, TypeError, AttributeError):
+            state = 'unknown'
+        return dict(state=state, generation=generation,
+                    resume_at=stop.resume_at if stop else None,
+                    intentional_stop=stop is not None and stop.resume_at is None)
     def destination(name, current_cards):
         local_cards = {n: c for n, c in current_cards.items() if c.host == host}
         target = recipient(name, local_cards)
@@ -120,6 +146,8 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
             service.confirmed_live(name, now=measured)
         elif any(entry.get('active') and entry.get('attention') and entry['owner'] == name
                  for entry in findings.values()):
-            if evidence['state'] in {'down', 'missing'} and not resume_exempt(evidence['resume_at'], measured):
-                service.confirmed_down(name, now=measured)
+            if evidence['state'] in {'down', 'missing', 'cycle-blocked'} and not evidence.get('intentional_stop') and not resume_exempt(evidence['resume_at'], measured):
+                service.confirmed_down(name, now=measured,
+                    reason=('confirmed cycle refusal; stranded work' if evidence['state'] == 'cycle-blocked'
+                            else 'confirmed process absence; stranded work'))
     return result

@@ -4440,6 +4440,13 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False, reuse_session: bool = False) -> int:
+    # Preserve the early quiet-time refusal even for callers without a card.
+    # No identity-dependent lifecycle work may precede that refusal.
+    gaming = quiet_time_mod.read(Path(a.root))
+    if gaming.held and not _administrator_launch(a, card) and not _despite_hold(a):
+        return _refuse_gaming(a, gaming)
+    if card is None:
+        return REFUSED
     if dry_run:
         return _launch_locked(a, card, panes, runtime, dry_run=True,
             window_restore=window_restore, reuse_session=reuse_session)

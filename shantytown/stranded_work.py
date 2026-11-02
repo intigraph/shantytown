@@ -20,8 +20,7 @@ from .files import write_json_atomic
 from .inbox import is_message
 from .owned_work import _agent, _time
 
-T1 = 2 * 3600
-T2 = 24 * 3600
+T1 = T2 = 3600  # One measured hour, identical for every priority.
 
 
 def owner(row):
@@ -120,12 +119,13 @@ class StrandedWork:
                     observations[name] = observe(name, cards.get(name))
                 observation = observations[name]
                 state = observation.get('state')
-                if state not in {'live', 'down', 'missing', 'unknown'}:
+                if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown'}:
                     raise ValueError('invalid owner observation')
                 previous = data.get(identity, {})
                 if previous and previous.get('owner') != name:
                     previous.update(active=False, resolved_at=now)
-                if (state == 'live' or resume_exempt(observation.get('resume_at'), now)):
+                if (state == 'live' or observation.get('intentional_stop') is True
+                        or resume_exempt(observation.get('resume_at'), now)):
                     if previous:
                         previous.update(active=False, resolved_at=now)
                     continue
@@ -151,9 +151,8 @@ class StrandedWork:
                     data[identity] = previous
                 previous.update(checked_at=now, evidence=state)
                 age = now - previous['down_since']
-                urgent = row['priority'] == 0
-                previous['attention'] = urgent or state == 'missing' or age >= t1
-                previous['release_due'] = urgent or age >= t2
+                previous['attention'] = age > t1
+                previous['release_due'] = row['status'] == 'open' and age > t2
                 if not previous['attention']:
                     continue
                 key = hashlib.sha256(json.dumps([identity, name, generation,
@@ -207,7 +206,8 @@ class StrandedWork:
                     current = read(identity)
                     fresh = observe(name, cards.get(name))
                     if (fresh != observation or not eligible(current)
-                            or owner(current) != name or current['priority'] != row['priority']):
+                            or current['status'] != 'open' or owner(current) != name
+                            or current['priority'] != row['priority']):
                         result.append((identity, 'changed evidence; no release'))
                         continue
                     comment = json.dumps(dict(marker=marker, original_owner=current['assignee'],

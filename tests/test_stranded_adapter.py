@@ -42,17 +42,19 @@ def run(world, now=0):
 
 def test_error_routes_past_down_lead_and_persistent_held_reader_fact(setup):
     run(setup)
+    assert not setup.inbox.unread('admin')
+    run(setup, 3601)
     messages = setup.inbox.unread('admin')
     assert len(messages) == 1 and 'work-1' in messages[0].body
     state = OwnedWork(setup.root).snapshot()['worker']
-    assert state['state'] == 'stopped' and state['graph_observed_at'] == 0
+    assert state['state'] == 'stopped' and state['graph_observed_at'] == 3601
     from shantytown.owned_work_graph import fact
     _, payload, _ = fact('worker', state, 'https://example.test/ontology/', 'test-source')
     assert json.loads(payload)['state'] == 'stopped'
-    run(setup, 10)
+    run(setup, 3610)
     assert len(setup.inbox.unread('admin')) == 1
     setup.states['worker'] = 'live'
-    run(setup, 20)
+    run(setup, 3620)
     assert OwnedWork(setup.root).snapshot()['worker']['state'] == 'live'
 
 
@@ -142,3 +144,39 @@ def test_every_real_launch_takes_lifecycle_lock_before_admission(monkeypatch, tm
     events.clear()
     assert cli._launch(SimpleNamespace(root=tmp_path), setup_card, None, None, dry_run=True) == 0
     assert events == ['admission']
+
+
+def test_undated_operator_stop_is_exempt(setup):
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    assert run(setup) == []
+    assert run(setup, 100000) == []
+    assert not setup.inbox.unread('admin')
+    assert OwnedWork(setup.root).snapshot() == {}
+
+
+def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
+    from shantytown.cycle import Requests
+    path = Requests(setup.root).path
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'worker': {'requested_at': 0,
+        'refused': {'reason': 'fixture dirty tree', 'paths': ['fixture']}}}))
+    setup.states['worker'] = 'live'
+    run(setup)
+    run(setup, 3600)
+    assert not setup.inbox.unread('admin')
+    run(setup, 3601)
+    assert len(setup.inbox.unread('admin')) == 1
+    assert 'cycle refusal' in OwnedWork(setup.root).snapshot()['worker']['reason']
+    path.write_text('{}')
+    run(setup, 3610)
+    assert OwnedWork(setup.root).snapshot()['worker']['state'] == 'live'
+
+
+def test_malformed_cycle_ledger_is_unknown(setup):
+    from shantytown.cycle import Requests
+    path = Requests(setup.root).path
+    path.parent.mkdir(parents=True)
+    path.write_text('{malformed')
+    assert run(setup) == [('work-1', 'owner liveness UNKNOWN')]
+    assert run(setup, 9000) == [('work-1', 'owner liveness UNKNOWN')]
+    assert not setup.inbox.unread('admin')

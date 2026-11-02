@@ -13,7 +13,7 @@ from shantytown.stranded_work import StrandedWork, T1, T2, eligible
 @pytest.fixture
 def world(tmp_path):
     service = StrandedWork(tmp_path)
-    row = dict(id='work-1', assignee='worker', status='in_progress', priority=1,
+    row = dict(id='work-1', assignee='worker', status='open', priority=1,
                title='work', labels=[], revision=7, notes='checkpoint must survive')
     observation = dict(state='down', generation='first', resume_at=None)
     notices, writes = [], []
@@ -43,16 +43,11 @@ def test_old_lifecycle_service_does_not_discover_unrecorded_owner(tmp_path):
     assert OwnedWork(tmp_path).tick(None, forbidden, None, now=0) == []
 
 
-def test_t1_persistent_error_then_t2_atomic_release_and_preservation(world):
+def test_one_hour_open_release_preserves_checkpoint(world):
     assert world.tick(0) == []
-    assert world.tick(T1 - 1) == []
-    assert world.tick(T1) == [('work-1', 'needs attention')]
-    assert len(world.notices) == 1 and world.notices[0][1].startswith('ERROR ')
+    assert world.tick(T1) == []
     world.tick(T1 + 1)
-    assert len(world.notices) == 1
-    assert world.service.snapshot()['work-1']['attention'] is True
-    world.tick(T2)
-    assert len(world.writes) == 1
+    assert len(world.notices) == len(world.writes) == 1
     before, comment = world.writes[0]
     assert before['revision'] == 7
     assert comment['original_owner'] == 'worker' and comment['down_since'] == 0
@@ -60,16 +55,31 @@ def test_t1_persistent_error_then_t2_atomic_release_and_preservation(world):
     assert comment['checkpoint'] == 'work-1 original comment'
     assert world.row['assignee'] == '' and world.row['status'] == 'open'
     assert world.row['notes'] == 'checkpoint must survive'
-    world.tick(T2 + 1)
-    assert len(world.writes) == 1 and not world.service.snapshot()['work-1']['active']
-
-
-def test_p0_immediate_and_observation_mode_never_releases(world):
-    world.row['priority'] = 0
-    world.tick(0, release_admitted=False)
-    assert len(world.notices) == 1 and world.writes == []
-    world.tick(1)
+    world.tick(T1 + 2)
     assert len(world.writes) == 1
+
+
+@pytest.mark.parametrize('priority', range(5))
+@pytest.mark.parametrize('status', ['open', 'in_progress'])
+def test_uniform_threshold_open_only_and_persistent_attention(world, priority, status):
+    world.row.update(priority=priority, status=status)
+    world.tick(0)
+    world.tick(T1)
+    assert not world.notices and not world.writes
+    world.tick(T1 + 1)
+    assert len(world.notices) == 1
+    assert len(world.writes) == (status == 'open')
+    if status == 'in_progress':
+        world.tick(T1 + 2)
+        assert len(world.notices) == 1
+        assert world.row['assignee'] == 'worker'
+        assert world.service.snapshot()['work-1']['attention']
+
+
+def test_observation_mode_never_releases(world):
+    world.tick(0, release_admitted=False)
+    world.tick(T1 + 1, release_admitted=False)
+    assert len(world.notices) == 1 and not world.writes
 
 
 @pytest.mark.parametrize('change', [dict(defer_until='1970-01-01T00:00:01Z'),
@@ -111,12 +121,12 @@ def test_intentional_resume_or_unknown_intent_exempt(world, resume):
     assert world.notices == world.writes == []
 
 
-def test_missing_card_attention_immediate_release_at_t2(world):
+def test_missing_card_has_same_measured_hour(world):
     world.observation['state'] = 'missing'
     world.tick(0)
-    assert len(world.notices) == 1 and not world.writes
-    world.tick(T2)
-    assert len(world.writes) == 1
+    assert not world.notices and not world.writes
+    world.tick(T2 + 1)
+    assert len(world.notices) == len(world.writes) == 1
 
 
 def test_live_race_after_checkpoint_prevents_release(world):
@@ -124,7 +134,8 @@ def test_live_race_after_checkpoint_prevents_release(world):
     def checkpoint(*args):
         world.observation['state'] = 'live'
         return dict(worktree='preserved', branch='kept', checkpoint='kept')
-    world.tick(0, checkpoint=checkpoint)
+    world.tick(0)
+    world.tick(T1 + 1, checkpoint=checkpoint)
     assert not world.writes
 
 
@@ -133,13 +144,15 @@ def test_owner_parking_race_prevents_release(world):
     def read(_):
         world.row['labels'] = ['blocked:human']
         return dict(world.row)
-    world.tick(0, read=read)
+    world.tick(0)
+    world.tick(T1 + 1, read=read)
     assert not world.writes
 
 
 def test_unknown_checkpoint_keeps_ownership(world):
     world.row['priority'] = 0
-    world.tick(0, checkpoint=lambda *_: None)
+    world.tick(0)
+    world.tick(T1 + 1, checkpoint=lambda *_: None)
     assert not world.writes and world.row['assignee'] == 'worker'
 
 
@@ -150,8 +163,9 @@ def test_indeterminate_release_and_delivery_are_not_retried(world, boundary):
     def unknown(*args):
         attempted.append(args)
         raise TimeoutError('possibly committed')
-    world.tick(0, **{boundary: unknown})
-    world.tick(1, **{boundary: unknown})
+    world.tick(0)
+    world.tick(T1 + 1, **{boundary: unknown})
+    world.tick(T1 + 2, **{boundary: unknown})
     assert len(attempted) == 1
     state = world.service.snapshot()['work-1']
     assert state['release' if boundary == 'release' else 'notice'] == 'unknown'
@@ -201,7 +215,7 @@ def test_tmux_checked_failure_is_not_absence(monkeypatch, rc, stdout, expected):
 def test_sdk_release_has_revision_and_atomic_comment_and_exact_readback(monkeypatch):
     from shantytown.sd import SdTracker
     tracker = SdTracker(store='/synthetic/store', prefix='work')
-    row = dict(id='work-1', status='in_progress', assignee='worker', priority=1,
+    row = dict(id='work-1', status='open', assignee='worker', priority=1,
                title='work', labels=[], revision=7)
     calls = []
     def sdk(identity, *args):
@@ -237,9 +251,10 @@ def test_sdk_conflict_or_failure_never_falls_back_to_generic_update(monkeypatch,
 
 def test_attention_not_cleared_by_unreadable_metadata(world):
     world.row['priority'] = 0
-    world.tick(0, release_admitted=False)
+    world.tick(0)
+    world.tick(T1 + 1, release_admitted=False)
     world.row['priority'] = None
-    world.tick(1)
+    world.tick(T1 + 2)
     state = world.service.snapshot()['work-1']
     assert state['active'] and state['attention'] and state['evidence'] == 'UNKNOWN'
 
@@ -247,9 +262,11 @@ def test_attention_not_cleared_by_unreadable_metadata(world):
 def test_remote_intents_are_bounded_and_attention_retained(world):
     rows = [dict(world.row, id=f'work-{i}', priority=0) for i in range(8)]
     world.service.tick(rows, {}, now=0, **(world.args | dict(release_admitted=False)))
+    assert not world.notices
+    world.service.tick(rows, {}, now=T1 + 1, **(world.args | dict(release_admitted=False)))
     assert len(world.notices) == 4
     assert sum(entry['attention'] for entry in world.service.snapshot().values()) == 8
-    world.service.tick(rows, {}, now=1, **(world.args | dict(release_admitted=False)))
+    world.service.tick(rows, {}, now=T1 + 2, **(world.args | dict(release_admitted=False)))
     assert len(world.notices) == 8
 
 
@@ -266,11 +283,31 @@ def test_unknown_release_remains_a_launch_hold_across_unknown_observation(world)
     def unknown(*args):
         attempts.append(args)
         raise TimeoutError('possibly committed')
-    world.tick(0, release=unknown)
+    world.tick(0)
+    world.tick(T1 + 1, release=unknown)
     assert world.service.unresolved_release('worker')
     world.observation['state'] = 'unknown'
-    world.tick(1)
+    world.tick(T1 + 2)
     world.observation['state'] = 'down'
-    world.tick(2, release=unknown)
+    world.tick(T1 + 3, release=unknown)
     assert world.service.unresolved_release('worker')
     assert len(attempts) == 1
+
+
+def test_adapter_refuses_in_progress_even_when_called_directly(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    monkeypatch.setattr(tracker, '_bd_for', lambda *a: pytest.fail('must not write'))
+    with pytest.raises(ValueError, match='eligible revision-bound'):
+        tracker.release_stranded(dict(id='work-1', status='in_progress', assignee='worker',
+            priority=0, title='work', labels=[], revision=7), 'audit')
+
+
+def test_open_to_in_progress_race_never_releases(world):
+    world.tick(0)
+    def read(_):
+        world.row['status'] = 'in_progress'
+        return dict(world.row)
+    world.tick(T1 + 1, read=read)
+    assert not world.writes
+    assert world.row['assignee'] == 'worker'

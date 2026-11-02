@@ -83,7 +83,8 @@ class SdTracker(BrTracker):
     def release_stranded(self, row, comment):
         """One CAS transaction includes its preservation comment; no fallback."""
         from .stranded_work import eligible
-        if not eligible(row) or type(row.get('revision')) is not int or row['revision'] < 1:
+        if (not eligible(row) or row.get('status') != 'open'
+                or type(row.get('revision')) is not int or row['revision'] < 1):
             raise ValueError('stranded release requires eligible revision-bound row')
         result = self._bd_for(row['id'], 'update', row['id'], '--status=open',
             '--assignee=', f'--if-revision={row["revision"]}',

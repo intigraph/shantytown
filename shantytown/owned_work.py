@@ -141,7 +141,7 @@ class OwnedWork:
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
-    def confirmed_down(self, agent, *, now):
+    def confirmed_down(self, agent, *, now, reason='confirmed process absence; stranded work'):
         """Refresh checked process absence for the existing held-work reader.
 
         Separate from stop intent and expired leases. It creates no legacy
@@ -158,7 +158,7 @@ class OwnedWork:
                 state='stopped', observed_at=old.get('observed_at', now),
                 expires_at=now, graph_observed_at=now,
                 graph_revision=self._graph_revision(data),
-                reason='confirmed process absence; stranded work',
+                reason=reason,
                 notice='delivered', process_observation=True)
 
     def confirmed_live(self, agent, *, now):
