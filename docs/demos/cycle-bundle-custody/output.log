@@ -1,0 +1,8 @@
+Script started on 2026-11-01 16:15:11-05:00 [COMMAND="stty -onlcr && PYTHONPATH=. python3 docs/demos/cycle-bundle-custody/demo.py" <not executed on terminal>]
+target: synthetic local Git bundle + item/card fixture; no live cycle
+base 09c1c6a70d298dbe8cf254777e9063040e489211: REFUSED (clean unpushed work, no publication route)
+candidate: ACCEPTED (same work, exact independently verified/root-accepted bundle)
+wrong SHA256: REFUSED
+dirty tracked work: REFUSED
+
+Script done on 2026-11-01 16:15:11-05:00 [COMMAND_EXIT_CODE="0"]
