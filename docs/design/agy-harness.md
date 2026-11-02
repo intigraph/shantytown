@@ -184,18 +184,41 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
     `print_timeout`;
   - `status` ERROR with stderr "print timeout … returning partial output".
 - Quota failure:
-  - A fast (under 5 s) `RESOURCE_EXHAUSTED` 429 stops the whole batch. `agy`
-    marks it `"retryable": true`, but the reset is days away.
+  - The quota error is detected by its type: `AGY_ERROR` with
+    `status` `RESOURCE_EXHAUSTED` or `error_code` 429. Elapsed time is not used.
+  - The first one stops the whole batch. `agy` marks it `"retryable": true`,
+    but the reset is days away.
   - The "Resets in <duration>" text goes to the governor (see 6).
   - There is no automatic retry of any job.
+- Concurrency: jobs that share one `agy` account (one token) run one at a
+  time, under a per-account lock in the st state dir. The quota is per account,
+  so parallel jobs would only reach the cap sooner and make the 429 ambiguous.
 - Untrusted input: the PR body and diff are data. The model runs sandboxed and
   tool-less in an empty dir, and the rubric says so.
 - Posting:
   - Posting is a separate step after the verdict.
   - It refuses if the PR head moved since the review, or if the PR is not open.
   - It scrubs internal identifiers before any public post.
-  - A review verdict is recorded through the normal review-record path. It does
-    not bypass review gates.
+  - A review verdict does not bypass review gates; see "Review identity"
+    below.
+- Review identity (open decision):
+  - The native review gate (`pr-risk review`) takes the crew caller as the
+    reviewer.
+  - An `agy` job has no crew identity of its own, so its verdict cannot be
+    recorded as a native review by itself. Two options:
+    - **A. Advisory plus crew review (works today).** The `agy` verdict is
+      posted as advisory feedback. A non-author crew reviewer validates it
+      against the source and records the native review under their own
+      identity. Blocking `agy` findings must still be resolved or answered.
+    - **B. Operator-bound `agy` identity.** A named reviewer identity such as
+      `agy@<operator>` is admitted to the review policy, so the job's verdict
+      records natively. Changing who may sign reviews is a deliberate
+      administrator action recorded on the decision desk. It also needs the
+      attribution rules: never the author, never the dispatching author's own
+      account.
+  - Recommendation: ship Phase 1 with A, and take B to the administrator as a
+    separate decision. A is what the gate admits now, and B changes review
+    authority, which this design must not do on its own.
 - Unattended (protected-UID) jobs stay refused while
   `ephemeral.unattended_uid_ready` is false. The headless job runs attended,
   under the dispatching operator's identity, and `job_launch`'s allowlist gains
@@ -203,9 +226,13 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
 
 ### 6. Governor and cost
 
-- The quota is per individual account and roughly weekly. 32 one-request
-  reviews used it up, and it reset after about 6.6 days. The planning figure of
-  100 per day was wrong.
+- The quota is per individual account. In the one observed exhaustion, 32
+  one-request reviews used it up and the 429 reported a reset about 6.6 days
+  away. The planning figure of 100 per day was wrong.
+- The window's shape is NOT measured: fixed weekly, rolling, or something else.
+  The source records every 429's reported reset time, so the shape can be
+  learned from data. Until then the rolling 7-day count is a heuristic, not the
+  quota's real definition.
 - `agy` exposes no remaining-quota figure in headless output.
 - New governor source `agy_events`. It reads the job result files and pane
   session records:
@@ -251,7 +278,7 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
 | Phase | Work | Exit gate |
 |---|---|---|
 | 0 Measure | One attended `agy` pane in a scratch workspace with a minimal `hooks.json`. Record: which instruction files load; the tool names for edits; the `Stop` and `SessionStart` payloads; the TUI markers; whether `agy mcp add` is global or per workspace; where session usage is recorded. No crew card changes. | A recorded table of the measurements. |
-| 1 Headless job | `st job agy-review` with the result contract, the scratch-HOME token copy, quota stop and posting guards. Port the pilot's tests as fixtures. | One real review job posts a verdict on a PR. A forced 429 fixture stops the batch. |
+| 1 Headless job | `st job agy-review` with the result contract, the scratch-HOME token copy, the per-account lock, quota stop and posting guards. Port the pilot's tests as fixtures. Review identity option A. | One real review job posts an advisory verdict on a PR, and a crew reviewer records the native review. A forced 429 fixture stops the batch. |
 | 2 Pane harness | `AgyHarness`, the hooks adapter, the SessionStart receipt, provisioning and doctor. `blocking_stop` turns True only after the live Stop drain is proven. | One worker card on `agy` completes item → PR → stop drained. The doctor row is green. |
 | 3 Governor | The `agy_events` source, 429 exhaustion and the soft weekly cap. | The governor shows `agy` usage, and refuses dispatch while exhausted. |
 
@@ -263,8 +290,8 @@ the result records from 1 and the session records from Phase 0.
 - A per-user global config leaking between agents: st writes only
   per-workspace `.agents/` files and never the global root.
 - Quota exhaustion mid-batch: there are about 30 requests a week, so a careless
-  batch burns the week. The batch stops on the first 429. The governor soft cap
-  advises before that.
+  batch burns the week. Jobs on one account are serialized, the batch stops on
+  the first 429, and the governor soft cap advises before that.
 - A `Stop` hook looping: `continue` is returned only for the normal-completion
   reason with `fullyIdle`. `agy` also caps forced continuations
   (`MAX_FORCED_INVOCATIONS`).
