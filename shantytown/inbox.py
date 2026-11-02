@@ -751,6 +751,104 @@ class TrackerInbox:
         return marked
 
 
+class MessageGraphInbox:
+    """`[inbox] store = "message-graph"` (aegis-snq): NEW mail goes through
+    `sd msg` into the per-week message windows, never into the board graph.
+
+    Reading unions the legacy inbox seeds (still closed by mark_read, exactly as
+    before) with window messages (marked read by an append-only `sd msg read`;
+    nothing is closed or deleted). Message ids tell the two apart: windows use
+    `msg-…`, seeds use the board prefix. Rollback is the config flip back to
+    "seed"; window messages stay readable with `sd msg list`.
+    """
+
+    def __init__(self, legacy: "TrackerInbox", tracker):
+        self._legacy = legacy
+        self._tracker = tracker
+
+    @staticmethod
+    def _is_window(msg_id: str) -> bool:
+        return msg_id.startswith("msg-")
+
+    def _as_message(self, me: str, v: dict) -> Message:
+        return Message(id=v["id"], to=v.get("to") or me, body=v.get("text", ""),
+                       frm=v.get("from"), read=v.get("read_at") is not None)
+
+    def _window_unread(self, me: str) -> list[Message]:
+        name = me.split("/")[-1]
+        return [self._as_message(name, v)
+                for v in self._tracker.list_messages(name, unread=True)
+                if v.get("to") in (me, name)]
+
+    def deliver(self, to: str, body: str, frm: str | None = None,
+                *, slug: str | None = None) -> Message:
+        return self._send(to, body, frm, uuid.uuid4().hex)
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        return self._send(to, body, frm, key)
+
+    def _send(self, to, body, frm, key):
+        v = self._tracker.send_message(to, body, key=key, frm=frm)
+        return Message(id=v["id"], to=to, body=body, frm=frm, read=v.get("read_at") is not None)
+
+    def find_delivery(self, me: str, marker: str) -> Message | None:
+        name = me.split("/")[-1]
+        matches = [self._as_message(name, v)
+                   for v in self._tracker.list_messages(name, unread=False)
+                   if str(v.get("text", "")).startswith(marker + " ")]
+        if len(matches) > 1:
+            raise RuntimeError("ambiguous durable delivery: multiple receipts")
+        if matches:
+            return matches[0]
+        return self._legacy.find_delivery(me, marker)
+
+    def unread(self, me: str) -> list[Message]:
+        return self._legacy.unread(me) + self._window_unread(me)
+
+    def unread_count(self, me: str) -> int:
+        return self._legacy.unread_count(me) + len(self._window_unread(me))
+
+    def unread_view(self, me: str, *, limit=100, oldest_first=False):
+        total, legacy = self._legacy.unread_view(me, limit=limit, oldest_first=oldest_first)
+        window = self._window_unread(me)
+        if not oldest_first:
+            window = list(reversed(window))
+        merged = (legacy + window) if oldest_first else (window + legacy)
+        return total + len(window), merged[:limit]
+
+    def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
+        legacy_ids = [i for i in ids if not self._is_window(i)]
+        wanted = {i for i in ids if self._is_window(i)}
+        found = self._legacy.unread_selected(me, legacy_ids) if legacy_ids else []
+        if wanted:
+            found += [m for m in self._window_unread(me) if m.id in wanted]
+        return found
+
+    def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
+        if ids is None:
+            window = self._window_unread(me)
+            marked = self._legacy.mark_read(me, None)
+        else:
+            legacy_ids = [i for i in ids if not self._is_window(i)]
+            wanted = [i for i in dict.fromkeys(ids) if self._is_window(i)]
+            window = []
+            if wanted:
+                mine = {m.id: m for m in self._window_unread(me)}
+                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False)}
+                for i in wanted:
+                    if i in mine:
+                        window.append(mine[i])
+                    elif i not in read_ids:
+                        raise RuntimeError(f"refused inbox acknowledgment of {i}: "
+                                           "no such message to this recipient")
+            marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
+        if window:
+            self._tracker.read_messages([m.id for m in window])
+            marked += [Message(id=m.id, to=m.to, body=m.body, frm=m.frm, read=True) for m in window]
+        return marked
+
+
 def validate_delivery_key(key):
     """An explicit caller operation identity, never a guessed retry of a write."""
     import re

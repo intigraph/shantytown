@@ -186,8 +186,18 @@ def main():
         lead = registry.get(owner).reports_to
         if not lead:
             raise ValueError('owner has no lead')
-        result = execute(['create', f'inbox: capacity: {item_id} retained in pool; {owner} full',
-                          '--assignee', lead, '--labels', 'inbox', '--json'])
+        body = f'capacity: {item_id} retained in pool; {owner} full'
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(os.environ['SHANTY_ROOT']))
+        if cfg.inbox_store == "message-graph":
+            # aegis-snq: a message window, never a seed; one note per item/owner/day.
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            result = execute(['msg', 'send', '--to', lead, '--from', 'st',
+                              '--key', f'capacity:{item_id}:{owner}:{day}', '-m', body, '--json'])
+        else:
+            result = execute(['create', f'inbox: {body}',
+                              '--assignee', lead, '--labels', 'inbox', '--json'])
         if result.returncode:
             raise ValueError('lead delivery unproven')
     result = run(arguments, tracker, execute, notify)
