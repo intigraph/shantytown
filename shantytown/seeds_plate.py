@@ -639,6 +639,15 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
     return grouped
 
 
+# Subjects per deferral field read (aegis-6c4). Each subject costs one branch
+# per graph per field: measured on Quipu 0.16.x, 25 subjects cost 6004 against
+# the server's structural limit of 4096 (~240 each), so EVERY first attempt at
+# 25 was refused and halved: 25 wasted ~300KB requests per read, each a 400 in
+# the server log. 16 subjects cost ~3843. The halving below stays as the
+# fallback if the limit drops or fields are added.
+DEFERRED_FIELD_BATCH = 16
+
+
 def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
     """Split only the server's explicit structural-cost request refusal.
 
@@ -772,15 +781,16 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                              "defer_until": None} for subject in selected}
         pairs = list(selected.items())
         total = 0
-        for offset in range(0, len(pairs), 25):
-            # The server may refuse this batch's structural cost. Halve only
-            # that explicit refusal; retain both graphs and every field.
-            wire = _deferred_field_rows(proof, pairs[offset:offset + 25],
-                                        graphs, fields, timeout)
+        for offset in range(0, len(pairs), DEFERRED_FIELD_BATCH):
+            batch = pairs[offset:offset + DEFERRED_FIELD_BATCH]
+            # The server may still refuse this batch's structural cost (a lower
+            # limit, more fields). Halve only that explicit refusal; retain
+            # both graphs and every field.
+            wire = _deferred_field_rows(proof, batch, graphs, fields, timeout)
             total += len(wire)
             if len(wire) >= 10000 or total >= 100000:
                 raise ValueError("deferral field budget reached")
-            expected = dict(pairs[offset:offset + 25])
+            expected = dict(batch)
             seen = set()
             for field in wire:
                 subject, graph, predicate, value = (
