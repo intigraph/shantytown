@@ -139,7 +139,10 @@ def test_record_does_not_use_decision_or_workflow_state_fields(world):
     service.stop('worker', at=200, ceiling=True)
     _, payload, turtle = graph.fact('worker', service.snapshot()['worker'], registry.onto, 'urn:fixture')
     assert json.loads(payload)['state'] == 'ceiling'
-    assert 'OperationalFact' in turtle and 'reviewAfter' in turtle
+    assert 'OperationalFact' in turtle and 'observedAt' in turtle
+    # Each observation is an immutable revision with its own IRI, so it can never be
+    # re-verified; a review deadline on it goes due forever.
+    assert 'reviewAfter' not in turtle
     assert 'expiresAt' not in turtle and 'currentState' not in turtle and 'forTarget' not in turtle
 
 
