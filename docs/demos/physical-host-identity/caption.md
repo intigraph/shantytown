@@ -27,6 +27,6 @@ behavior head; the demonstrated behavior is unchanged.
 
 The 337-test focused qualification includes retained-head/receipt continuity,
 foreign-host refusal, malformed-pin refusal, local/off-host inbox and governor
-census behavior. All passed, with one existing platform skip, under the HOME
+census behavior. All passed, with one existing skip, under the HOME
 escape guard. This is source qualification, not namespace permission, actual
 Remote Control advertised naming, retained pairing, or phone acceptance.
