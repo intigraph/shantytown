@@ -23,8 +23,10 @@ for status,priority in [('open',1),('deferred',0),('open',2)]:
     r=result['proposals'][0]
     print(json.dumps(dict(case='owner',priority=priority,status=status,needs_owner=r.get('needs_owner','UNAVAILABLE'),
                           reowner_down_only=r['reowner'],changes_applied=result['changes_applied']),sort_keys=True))
-for label, deps, explicit in [('blocked:external', [], None), ('blocked:human', [], []), ('blocked:external', ['unreadable'], None)]:
-    r=row(); r.update(status='deferred',labels=[label],blocked_by=deps,due_at=(now+timedelta(days=2)).isoformat())
+for label, deps, explicit, priority in [('blocked:external', [], None, 1), ('blocked:human', [], [], 1),
+        ('blocked:external', ['unreadable'], None, 1), ('blocked:bead', [], [], 0),
+        ('parked:by-design', [], [], 0), ('parked:by-design', ['real'], ['real'], 1)]:
+    r=row(priority=priority); r.update(status='deferred',labels=[label],blocked_by=deps,due_at=(now+timedelta(days=2)).isoformat())
     if explicit is not None:r['open_blockers']=explicit
     output=rank.propose([r],policies,{},now=now); value=output['proposals'][0]
     print(json.dumps(dict(case='band',label=label,band=value['band'],stale_gate=value.get('stale_gate','UNAVAILABLE'),

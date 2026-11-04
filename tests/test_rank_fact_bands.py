@@ -24,7 +24,7 @@ def test_stale_external_label_does_not_decide_band_or_release_hold():
     assert r['status']=='deferred' and result['undefer_proposed'] is False and result['changes_applied'] is False
 
 
-@pytest.mark.parametrize('label',['blocked:human','desk','needs-stiwi','parked:by-design'])
+@pytest.mark.parametrize('label',['blocked:human','blocked:needs-stiwi','desk','needs-stiwi'])
 def test_explicit_gate_stays_blocked_with_zero_edges(label):
     assert proposal(row(labels=[label],open_blockers=[]))['band']=='blocked'
 
@@ -87,3 +87,26 @@ def test_malformed_blocker_count_never_becomes_zero(value):
 def test_stale_label_and_zero_count_are_visible_in_table():
     out=rank.propose([row(labels=['blocked:external'])],POLICIES,{},now=NOW)
     assert 'blocked:external (open blockers=0)' in rank.table(out)
+
+
+@pytest.mark.parametrize('status',['open','deferred'])
+def test_p0_behind_proven_stale_gate_is_immediate(status):
+    p=proposal(row(priority=0,status=status,labels=['blocked:bead'],open_blockers=[]))
+    assert p['band']=='immediate' and p['stale_gate'] is True
+
+
+def test_stale_p0_never_overrides_real_human_or_open_dependency_gate():
+    assert proposal(row(priority=0,labels=['blocked:external','needs-stiwi'],open_blockers=[]))['band']=='blocked'
+    assert proposal(row(priority=0,labels=['blocked:bead'],open_blockers=['real']))['band']=='blocked'
+
+
+def test_parked_is_later_only_with_proven_zero_blockers():
+    assert proposal(row(priority=0,labels=['parked:by-design'],open_blockers=[]))['band']=='later'
+    assert proposal(row(labels=['parked:by-design'],open_blockers=['real']))['band']=='blocked'
+    assert proposal(row(labels=['parked:by-design'],blocked_by=['unreadable']))['band']=='unknown'
+
+
+def test_stale_p0_rule_also_covers_future_due_without_item_exceptions():
+    p=proposal(row(priority=0,status='deferred',labels=['blocked:bead'],open_blockers=[],
+                   due_at=(NOW+timedelta(days=3)).isoformat()))
+    assert p['band']=='immediate'

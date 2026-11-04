@@ -131,21 +131,26 @@ def _fact_band(row, item, rows, proposals, by_id, now):
     count = _open_blocker_count(row, by_id)
     item['open_blocker_count'] = count
     stale = sorted(label for label in labels
-                   if label.startswith('blocked:') and label != 'blocked:human') if count == 0 else []
+                   if label.startswith('blocked:') and label not in {'blocked:human', 'blocked:needs-stiwi'}) if count == 0 else []
     item['stale_gate'] = bool(stale)
     item['stale_gate_labels'] = stale
     if stale:
         item['citations'].append(dict(rule='stale-gate',
             fact='labels ' + ', '.join(stale) + '; measured zero open blockers; no hold released'))
-    human = labels.intersection({'blocked:human', 'desk', 'needs-stiwi'})
+    human = labels.intersection({'blocked:human', 'blocked:needs-stiwi', 'desk', 'needs-stiwi'})
     due = timestamp(row.get('due_at'))
-    if human or 'parked:by-design' in labels:
-        band, basis = 'blocked', 'explicit human/desk/parked gate'
+    if human:
+        band, basis = 'blocked', 'explicit human/desk gate'
     elif count is None:
         band, basis = 'unknown', 'open blocker evidence UNKNOWN'
         item['unknown'].append(basis)
     elif count > 0:
         band, basis = 'blocked', 'positive open blocker observation'
+    elif 'parked:by-design' in labels:
+        band, basis = 'later', 'deliberately parked with proven zero open blockers'
+    elif (item['proposed_priority'] == 0 and stale
+          and row['status'] in {'open', 'deferred'}):
+        band, basis = 'immediate', 'open/deferred P0 behind a proven stale gate'
     else:
         blocks_p0 = any(proposals[r['id']]['proposed_priority'] == 0
                         and item['item'] in r.get('open_blockers', r.get('blocked_by', []))

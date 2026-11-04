@@ -3421,9 +3421,11 @@ not false. The separate semantic report schema cannot authorize a live rank arm.
 
 Deterministic bands use proven open blockers, not a stored blocked/deferred
 status or a `blocked:*` claim. Positive open blockers, explicit
-`blocked:human`/`desk`/`needs-stiwi`, and `parked:by-design` keep a blocked band.
+`blocked:human`/`desk`/`needs-stiwi`, keep a blocked band. Parked-by-design work with proven zero blockers is later;
+with positive blockers it stays blocked.
 With proven zero blockers, other blocked labels produce a visible stale-gate
-flag. P0 overdue work or a proven prerequisite of P0 work is immediate; work
+flag. An open or deferred P0 behind a proven stale gate is immediate.
+P0 overdue work or a proven prerequisite of P0 work is immediate; work
 due within seven days (including overdue work) is due; other P0–P2 work is
 normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
 a zero count. Native snapshots use bounded candidate-edge and exact endpoint
