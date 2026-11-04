@@ -6,7 +6,7 @@
 ### Bug Fixes
 
 * **deferrals:** start field reads below the structural limit ([#444](https://github.com/intigraph/shantytown/issues/444)) ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
-* **deferrals:** start field reads below the structural limit (aegis-6c4) ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
+* **deferrals:** start field reads below the structural limit ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
 * **owned-work:** stop putting a review deadline on immutable lifecycle observations ([#448](https://github.com/intigraph/shantytown/issues/448)) ([3f29f25](https://github.com/intigraph/shantytown/commit/3f29f2577beedd802ef69f7ef55161f2a1c012ac))
 
 ## [0.9.0](https://github.com/intigraph/shantytown/compare/v0.8.0...v0.9.0) (2026-11-02)
