@@ -1,6 +1,6 @@
 # Owner need and semantic-only evaluation
 
-Compare known base `023868ba` with functional source `2ed8195` using the
+Compare known base `023868ba` with functional source `336d9ce` using the
 [same fixture reproducer](rank-semantic-only.py). An unassigned open P1 now
 has a cited `needs_owner` flag, while a deferred P0 and open P2 stay outside
 that rule. `reowner` still requires a positively observed down owner.
@@ -27,3 +27,8 @@ blocked to due with a visible stale-gate flag. A human gate remains blocked;
 an unresolved prerequisite becomes UNKNOWN rather than a zero-blocker claim.
 Every fixture keeps lifecycle changes disabled. Full-suite results are
 reported separately; this recording proves only source behavior.
+
+The adjudicated fixtures also cover an open/deferred P0 behind a proven
+stale gate (immediate) and deliberately parked work with proven zero blockers
+(later). A parked item with real blockers stays blocked. The rule applies
+generically, including future-due P0 work; it is not fitted to individual IDs.
