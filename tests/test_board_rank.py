@@ -214,3 +214,26 @@ def test_known_active_prerequisite_ranks_before_its_open_dependent():
     out=rank.propose([parent,child],POLICIES,{},now=NOW)
     assert [p['item'] for p in out['proposals']]==['zzz-prerequisite','aaa-parent']
     assert out['proposals'][1]['band']=='blocked'
+
+
+def test_live_model_requires_frozen_report_exact_digest_and_explicit_bounds():
+    report=dict(schema='st-rank-benchmark/v1',count=30,rules_digest=rank.digest(POLICIES),
+                models=['test-model'],target_model_calls=12,agreement=.9,false_reowner_rate=0)
+    admission=dict(benchmark_digest=rank.digest(report),accepted_by='administrator',ruling='urn:ruling:1',
+                   valid_until='2026-11-05T00:00:00Z',minimum_model_cases=10,
+                   minimum_agreement=.85,maximum_false_reowner_rate=0)
+    assert rank.admitted_model(report,admission,POLICIES,NOW)=='test-model'
+    report['agreement']=.8
+    with pytest.raises(rank.TriageError,match='acceptance'):
+        rank.admitted_model(report,admission,POLICIES,NOW)
+    admission['benchmark_digest']=rank.digest(report)
+    with pytest.raises(rank.TriageError,match='bound unmet'):
+        rank.admitted_model(report,admission,POLICIES,NOW)
+
+
+def test_changed_model_is_quarantined_but_never_used_after_admission():
+    client=Client();stored=[]
+    with pytest.raises(rank.TriageError,match='model changed'):
+        rank.propose([row()],POLICIES,{},now=NOW,client=client,accepted_model='prior-model',
+                     inference_sink=lambda value:stored.append(value) or dict(verified=True))
+    assert len(stored)==1

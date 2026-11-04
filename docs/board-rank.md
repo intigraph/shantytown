@@ -88,7 +88,17 @@ resend, ROOT fallback, promotion or automatic undefer. Retain uncertain journals
 for explicit reconciliation. The record is the model's answer artifact, not an
 accepted decision or asserted truth about the item.
 
-Live Jev ranking over the board remains disabled pending independent benchmark
-results and an administrator's acceptance ruling. Deterministic previews and
-benchmark preparation are available meanwhile. The tool does not supply its own
-labels, set a trust threshold from its test fixtures or declare acceptance.
+Live Jev ranking over the board requires `--rank-benchmark-report report.json`
+and `--rank-admission admission.json`, plus the same explicit quarantine graph
+and journal options. Admission contains the exact canonical `benchmark_digest`,
+`accepted_by`, ruling IRI, `valid_until`, `minimum_model_cases`,
+`minimum_agreement` and `maximum_false_reowner_rate`. These are explicit human
+review declarations, not authenticated identities or automatic policy promotion.
+The tool supplies no default thresholds and accepts no changed report, rule
+version or model. A changed model's answer is quarantined and then refused.
+Normal live proposals have a 500-call budget; the benchmark's budget is 100.
+
+Without an independently measured report and administrator ruling, deterministic
+previews and benchmark preparation remain available; live Jev ranking refuses.
+The tool does not supply its own labels, set a trust threshold from its test
+fixtures or declare acceptance.

@@ -109,7 +109,8 @@ def _existing_rank(row):
     return (1, Decimal(0))
 
 
-def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, call_budget=None):
+def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, call_budget=None,
+            model_targets=None, accepted_model=None):
     """Exact labels/dependencies decide first; model answers never become facts."""
     validate_rows(rows)
     if client is not None and inference_sink is None:
@@ -189,7 +190,8 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
         row = by_id[item['item']]
         # Only unresolved rank bands reach Jev. Facts (due/blocked/merge) and
         # existing exact ranks already decide the other bands; do not spend a call.
-        if client is not None and item['band'] == 'normal' and _existing_rank(row)[0]:
+        if (client is not None and item['band'] == 'normal' and _existing_rank(row)[0]
+                and (model_targets is None or item['item'] in model_targets)):
             state = json.dumps(dict(item={k: row.get(k) for k in ('id','title','description','labels','due_at','created_at')},
                 rules=[dict(iri=p['iri'], text=p.get('text', ''), scope_ack=p.get('scope_ack', ''))
                        for p in policies.values()]), sort_keys=True)
@@ -213,6 +215,8 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
             if not isinstance(receipt, dict) or receipt.get('verified') is not True:
                 raise TriageError('Jev inference quarantine readback UNKNOWN; stop without retry')
             item['inferences'].append(dict(inference, receipt=receipt))
+            if accepted_model is not None and result['model'] != accepted_model:
+                raise TriageError('model changed after benchmark admission; answer quarantined but not used')
             if choice != 'none-of-these':
                 item['band'] = choice
                 item['band_basis'] = 'untrusted Jev proposal; benchmark and administrator acceptance required'
@@ -223,7 +227,7 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
         item['proposed_rank'] = str(rank)
         item['status'] = 'PROPOSED'
     return dict(schema='st-rank-proposal/v1', observed_at=now.isoformat(),
-                snapshot_digest=digest(rows), rules_digest=digest(policies),
+                snapshot_digest=digest(rows), rules_digest=digest(policies), rules=policies,
                 count=len(ordered), proposals=ordered,
                 changes_applied=False, undefer_proposed=False,
                 unranked=sum(_existing_rank(r)[0] for r in rows),
@@ -271,7 +275,7 @@ def benchmark(cases, policies, *, client=None, inference_sink=None):
             raise TriageError('benchmark historical context UNKNOWN')
         result = propose([case['before'], *context], policies, case['owner_states'],
                          now=timestamp(case['observed_at']), client=client,
-                         inference_sink=inference_sink, call_budget=call_budget)
+                         inference_sink=inference_sink, call_budget=call_budget, model_targets={case['before']['id']})
         actual = next(p for p in result['proposals'] if p['item'] == case['before']['id'])
         baseline_result = propose([case['before'], *context], policies, case['owner_states'],
                                   now=timestamp(case['observed_at']))
@@ -307,6 +311,7 @@ def benchmark(cases, policies, *, client=None, inference_sink=None):
                 abstentions=abstained, target_model_calls=target_calls, total_model_calls=100-call_budget[0],
                 abstain_rate=abstained/target_calls if target_calls else None,
                 confidence_agree=confidence_agree, confidence_disagree=confidence_disagree, results=results,
+                models=sorted({i['verdict']['model'] for r in results for i in r['proposal']['inferences']}),
                 false_reowners=false_reowners, reowner_negatives=reowner_negatives,
                 false_reowner_rate=false_reowners/reowner_negatives if reowner_negatives else None,
                 acceptance='administrator decision required; no automatic trust')
@@ -426,6 +431,38 @@ def table(result):
     return '\n'.join(lines)
 
 
+def admitted_model(report, admission, policies, now):
+    """An explicit administrator declaration bound to one measured report.
+
+    This is not authentication or a promotion into policy. The source/ruling
+    remains visible, and the caller still only produces proposals. No default
+    success threshold or guessed accepting identity is supplied by the tool.
+    """
+    if (not isinstance(report, dict) or not isinstance(admission, dict)
+            or report.get('schema') != 'st-rank-benchmark/v1'
+            or type(report.get('count')) is not int or report['count'] < 30
+            or report.get('rules_digest') != digest(policies)
+            or admission.get('benchmark_digest') != digest(report)
+            or not isinstance(admission.get('accepted_by'), str) or not admission['accepted_by'].strip()
+            or not isinstance(admission.get('ruling'), str) or not IRI.fullmatch(admission['ruling'])
+            or timestamp(admission.get('valid_until')) is None
+            or timestamp(admission['valid_until']) <= now
+            or not isinstance(report.get('models'), list) or len(report['models']) != 1
+            or not isinstance(report['models'][0], str) or not report['models'][0]
+            or type(admission.get('minimum_model_cases')) is not int or admission['minimum_model_cases'] < 1
+            or type(report.get('target_model_calls')) is not int
+            or report['target_model_calls'] < admission['minimum_model_cases']):
+        raise TriageError('rank model acceptance, report identity or freshness UNKNOWN')
+    for key, comparator in [('minimum_agreement', lambda actual, bound: actual >= bound),
+                            ('maximum_false_reowner_rate', lambda actual, bound: actual <= bound)]:
+        bound = admission.get(key)
+        actual = report.get('agreement' if key == 'minimum_agreement' else 'false_reowner_rate')
+        if (type(bound) not in (int,float) or not 0 <= bound <= 1
+                or type(actual) not in (int,float) or not 0 <= actual <= 1 or not comparator(actual,bound)):
+            raise TriageError('rank model measured acceptance bound unmet or UNKNOWN')
+    return report['models'][0]
+
+
 def run(args, tracker, registry, panes, *, host, peers, crew_registry=None):
     from pathlib import Path
     from .board_triage import JevMCP
@@ -448,8 +485,13 @@ def run(args, tracker, registry, panes, *, host, peers, crew_registry=None):
     # No live model answer is trusted from this new arm before independent labels.
     # The benchmark may invoke it; normal proposals remain deterministic until the
     # administrator has reviewed the measured report and authorized that arm.
+    accepted = None
     if args.jev_command and not args.dry_run and cases is None:
-        raise TriageError('live ranking Jev arm awaits the labelled benchmark and administrator acceptance')
+        if not args.rank_benchmark_report or not args.rank_admission:
+            raise TriageError('live ranking Jev arm awaits the labelled benchmark and administrator acceptance')
+        report = json.loads(Path(args.rank_benchmark_report).read_text())
+        admission = json.loads(Path(args.rank_admission).read_text())
+        accepted = admitted_model(report, admission, policies, now)
     sink = None
     if args.jev_command and not args.dry_run:
         from .rank_quarantine import Quarantine
@@ -461,4 +503,8 @@ def run(args, tracker, registry, panes, *, host, peers, crew_registry=None):
         if cases is not None:
             return benchmark(cases, policies, client=client, inference_sink=sink)
         liveness = owner_states(crew_registry or registry, panes, host=host, peers=peers)
-        return propose(rows, policies, liveness, now=now, client=client)
+        result = propose(rows, policies, liveness, now=now, client=client, inference_sink=sink,
+                         accepted_model=accepted, call_budget=[500])
+        if accepted is not None:
+            result['model_admission'] = dict(admission, authentication='declared; not authenticated by this tool')
+        return result

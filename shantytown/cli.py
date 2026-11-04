@@ -2052,6 +2052,8 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
     bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
     bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
+    bt.add_argument("--rank-benchmark-report", help="measured frozen benchmark JSON for an accepted live Jev arm")
+    bt.add_argument("--rank-admission", help="administrator declaration bound to that exact report; never applies board changes")
     bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
@@ -2850,7 +2852,8 @@ def _run_command(a) -> int:
                     print(board_rank.table(result))
                 return OK
             if (getattr(a, "rank_rules", None) or getattr(a, "rank_json", False)
-                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)):
+                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
+                    or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
                 raise ValueError("rank options require --rank-proposals")
             result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
             print(json.dumps(result, ensure_ascii=False))
