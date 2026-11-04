@@ -265,3 +265,47 @@ def test_cycle_hint_names_owned_background_task_cleanup(tmp_path, monkeypatch, c
     assert 'stop or await only your own running background tasks' in message
     assert 'Claude: TaskStop' in message and 'Codex: /ps' in message
     assert 'Before ending your turn' in message
+
+
+@pytest.mark.parametrize("role", ["worker", "lead", "administrator"])
+def test_pending_self_cycle_allows_actual_stop_without_context_rewake(
+        tmp_path, monkeypatch, capsys, role):
+    from shantytown.cycle import Requests
+    card, payload = world(tmp_path, role)
+    turn(payload["transcript_path"], 990)
+    requests = Requests(tmp_path)
+    requests.request(card.name, "saved checkpoint")
+    before = requests.path.read_bytes()
+    class Reg:
+        def get(self, _):
+            return card
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pending self-cycle must not gather or self-feed")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(stop_policy, "gather", forbidden)
+    monkeypatch.setattr(stop_event, "_bd_json", forbidden)
+    for _ in range(2):
+        if role == "administrator":
+            assert stop_policy.run(tmp_path, card.name, reg=Reg()) == 0
+        else:
+            assert stop_event._haul(Reg(), None, card.name, tmp_path) == 0
+        assert capsys.readouterr().out == ""
+    assert requests.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["refused", "stale", "automatic", "other-agent"])
+def test_nonserving_cycle_does_not_silence_hard_context_hint(
+        tmp_path, monkeypatch, capsys, kind):
+    from shantytown import cycle
+    card, payload = world(tmp_path)
+    turn(payload["transcript_path"], 990)
+    requests = cycle.Requests(tmp_path)
+    requests.request("someone-else" if kind == "other-agent" else card.name,
+                     "checkpoint", auto=kind == "automatic")
+    if kind == "refused":
+        requests.mark_refused(card.name, "tracked changes")
+    if kind == "stale":
+        monkeypatch.setattr(cycle.Requests, "age", lambda *_: cycle.stuck_after() + 1)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert stop_policy.stop_advice(tmp_path, card)
+    assert "HARD HANDOFF" in json.loads(capsys.readouterr().out)["reason"]
