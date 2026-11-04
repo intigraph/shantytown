@@ -1,18 +1,20 @@
-Script started on 2026-11-04 13:09:58-05:00 [COMMAND="bash run-demo.sh" <not executed on terminal>]
+Script started on 2026-11-04 13:15:01-05:00 [COMMAND="bash run-demo.sh" <not executed on terminal>]
 BASE 00aeb887d5ec2f8575283bd1c8eca5bbf09aa795 (source fixture)
 fixture: kernel hostname=ada; original physical hostname=Host-A.example
 lifecycle producer preserved: False
 Quipu read host: ada
 Quipu write host: ada
 governor telemetry instances: ["ada", "ada"]
+actual fake-tool child QUIPU_HOST: UNSET
 rollback producer preserved: True
 
-CANDIDATE acc934df (source fixture)
+CANDIDATE 3493d7c2b547127d9dde03e60c02341712f3229d (source fixture)
 fixture: kernel hostname=ada; original physical hostname=Host-A.example
 lifecycle producer preserved: True
 Quipu read host: host-a.example
 Quipu write host: Host-A.example
 governor telemetry instances: ["Host-A", "Host-A"]
+actual fake-tool child QUIPU_HOST: Host-A.example
 rollback producer preserved: True
 
-Script done on 2026-11-04 13:09:58-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-04 13:15:02-05:00 [COMMAND_EXIT_CODE="0"]
