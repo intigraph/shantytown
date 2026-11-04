@@ -25,6 +25,25 @@ def _write(root, text: str):
     return root
 
 
+def test_job_scheduler_defaults_local_and_accepts_explicit_delegation(tmp_path):
+    assert config.load(tmp_path).jobs_scheduler == "local"
+    _write(tmp_path, '[jobs]\nscheduler = "chaski"\n')
+    assert config.load(tmp_path).jobs_scheduler == "chaski"
+
+
+@pytest.mark.parametrize("value", ['"misspelled"', 'true', '[]'])
+def test_invalid_job_scheduler_is_not_a_local_fallback(tmp_path, value):
+    _write(tmp_path, '[jobs]\nscheduler = ' + value + '\n')
+    with pytest.raises(config.ConfigError, match="jobs.scheduler"):
+        config.load(tmp_path)
+
+
+def test_job_scheduler_refuses_unknown_keys(tmp_path):
+    _write(tmp_path, '[jobs]\nscheduler = "chaski"\nenabeld = true\n')
+    with pytest.raises(config.ConfigError, match="unknown key"):
+        config.load(tmp_path)
+
+
 # --- the file is optional, and the defaults are the CHEAP ones ---------------
 
 def test_no_file_means_builtin_defaults_and_says_so(tmp_path):
