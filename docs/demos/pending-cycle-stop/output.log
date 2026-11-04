@@ -1,0 +1,8 @@
+Script started on 2026-11-04 15:24:42-05:00 [COMMAND="python3 docs/demos/pending-cycle-stop/demo.py 00aeb88 4ca282c" <not executed on terminal>]
+00aeb88: saved self-cycle + hard context -> block
+00aeb88: control, no cycle request -> block
+4ca282c: saved self-cycle + hard context -> ALLOW (no model feedback)
+4ca282c: control, no cycle request -> block
+Source fixtures only; no live cycle or lifecycle guard bypass.
+
+Script done on 2026-11-04 15:24:42-05:00 [COMMAND_EXIT_CODE="0"]
