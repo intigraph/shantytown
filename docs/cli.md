@@ -2523,6 +2523,11 @@ requires a stats event within the last hour and matching transcript metadata.
 
 ### Board triage (Jev)
 
+For read-only governed P0/P1 priority/rank proposals, use
+`st work triage --rank-proposals --rank-rules reviewed-rules.json --dry-run`.
+See [governed rank proposals](board-rank.md) for policy bindings, UNKNOWN
+liveness, the frozen benchmark and quarantine-only answer artifacts.
+
 `st work triage [item ...] --jev-command 'python3 /path/to/camayoc/scripts/jev_mcp.py'`
 previews routing, duplicate and escalation severity suggestions. This earns a
 separate work command because it produces advice across the board, unlike
