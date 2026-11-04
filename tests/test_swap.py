@@ -44,20 +44,41 @@ def test_dispatch_imports_no_tracker():
         assert bad not in imported, f"dispatch imports {bad!r} — the abstraction is decorative"
 
 
-def test_dispatch_calls_only_protocol_methods():
-    """It may only call get/update/send/exists. Anything else is a tracker leak."""
+def _outside_dispatch_protocol(source):
+    """Check each injected dependency; adviser methods never widen Tracker."""
     import ast
-    from pathlib import Path
 
-    tree = ast.parse(Path(dispatch.__file__).read_text())
-    allowed = {"get", "update", "send", "exists", "capture", "render", "join", "items", "split"}
-    for node in ast.walk(tree):
+    allowed = {
+        "registry": {"get"},
+        "tracker": {"get", "update"},
+        "panes": {"send", "exists", "capture"},
+        "handoff": {"preview", "record"},
+        "updates": {"items"},  # staged field dictionary, not a backend
+    }
+    invalid = []
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
             v = node.func.value
             if isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id == "self":
-                assert node.func.attr in allowed, (
-                    f"dispatch calls self.{v.attr}.{node.func.attr}() — outside the protocol"
-                )
+                if node.func.attr not in allowed.get(v.attr, set()):
+                    invalid.append(f"self.{v.attr}.{node.func.attr}")
+    return invalid
+
+
+def test_dispatch_calls_only_protocol_methods():
+    """Tracker remains get/update; advisory uses its separate injected boundary."""
+    from pathlib import Path
+
+    assert _outside_dispatch_protocol(Path(dispatch.__file__).read_text()) == []
+
+
+def test_dispatch_protocol_guard_rejects_tracker_advisory_and_backend_leaks():
+    for call in ("self.tracker.preview()", "self.tracker.record()",
+                 "self.tracker.query()", "self.handoff.update()",
+                 "self.unknown.get()"):
+        assert _outside_dispatch_protocol(call), call
+    assert _outside_dispatch_protocol("self.handoff.preview(item, agent)") == []
+    assert _outside_dispatch_protocol("self.handoff.record(agent, preview)") == []
 
 
 def test_tracker_interface_is_three_functions():
