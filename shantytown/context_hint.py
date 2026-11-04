@@ -60,7 +60,7 @@ def _save(path, data):
     os.replace(tmp, path)
 
 
-def _reading(payload, limits, error=None):
+def _reading(payload, limits, error=None, *, max_bytes=None):
     if error:
         return cs.ContextReading(cs.UNKNOWN, detail=error)
     if not payload.get("session_id"):
@@ -68,7 +68,8 @@ def _reading(payload, limits, error=None):
     path = payload.get("transcript_path")
     if not isinstance(path, str) or not path:
         return cs.ContextReading(cs.UNKNOWN, detail="Stop payload has no transcript_path")
-    return cs.read(path, limits.window)
+    return (cs.read(path, limits.window) if max_bytes is None else
+            cs.read(path, limits.window, max_bytes=max_bytes))
 
 
 def _category(reading, limits):
@@ -308,7 +309,7 @@ def tool_feedback(root, agent, payload):
         limits, error = policy(root, card)
         if limits is None or error:
             return False
-        reading = _reading(payload, limits)
+        reading = _reading(payload, limits, max_bytes=2 * 1024 * 1024)
         if reading.state != cs.MEASURED:
             return False
         path = _path(root, card)

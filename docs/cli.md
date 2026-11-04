@@ -246,6 +246,8 @@ Stop also emits early preparation advice and repeats ordinary handoff hints at
 the configured interval. Tool reminders never call Jev, suppress Stop decisions,
 extend a bounded exception or schedule a cycle. Jev exceptions still expire after
 ten minutes or five percentage points; the hard limit still has no override.
+Tool feedback scans at most the latest 2 MiB of transcript, never a partial first
+record. Usage outside that bound stays UNKNOWN until a fresh record arrives.
 Live acceptance requires both the installed capture hook and a fresh usage event;
 source tests alone do not prove delivery to a running administrator.
 The [compact checkpoint template](guides/context-cycle.md) gives one request command;
