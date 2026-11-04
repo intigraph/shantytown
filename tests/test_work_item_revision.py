@@ -72,7 +72,8 @@ def test_other_backend_cannot_silently_drop_guard(tmp_path):
         work_item.command(operation(tmp_path, if_revision=1), Other())
 
 
-@pytest.mark.parametrize('revision,expected', [(7, 7), (None, None), (True, None), ('7', None)])
+@pytest.mark.parametrize('revision,expected', [(7, 7), (None, None), (True, None), ('7', None), (0, None),
+    (-1, None), (18446744073709551616, None)])
 def test_show_keeps_exact_numeric_revision_without_another_read(revision, expected):
     from shantytown.sd import SdTracker
     tracker = object.__new__(SdTracker)

@@ -3012,7 +3012,9 @@ it deliberately, read back the item, preserve its evidence and use
 explicit update and does not weaken ordinary tracker or deferral writes.
 
 On Seeds, `st work item show ITEM` includes its `revision` (unknown backends
-report null). Carry that token into the edit:
+report null). The native exact-item display reads the typed version in its
+existing bounded observation, without a second request. Malformed or contradictory
+native tokens refuse; missing tokens remain unknown. Carry the token into the edit:
 `st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
 The token is passed unchanged through any admission reread. A stale edit refuses
 and retains Seeds' structured conflict metadata; it never refreshes the token or
