@@ -354,7 +354,7 @@ def config_path(root) -> Path:
 
 def load(root, *, refresh_source=False) -> Config:
     """Read <root>/shantytown.toml. Absent -> the built-in defaults. Malformed or
-    unrecognised -> ConfigError.
+    unrecognised or unreadable -> ConfigError.
 
     UNKNOWN KEYS ARE REFUSED, not ignored. A silently-dropped key is the config
     failure mode this repo has already paid for elsewhere (a hook file that was
@@ -366,12 +366,18 @@ def load(root, *, refresh_source=False) -> Config:
     path = config_path(root)
     try:
         raw = path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
         # Preserve the historical no-file behavior for deployments that did not
         # opt into graph configuration; in particular, do not newly read env.json.
         if not os.environ.get("SHANTY_CONFIG_ENTITY"):
             return Config()
         raw = b""
+    except OSError as exc:
+        # An unreadable declaration is UNKNOWN, never an absent declaration.
+        # Defaulting here can reactivate local jobs after a Chaski cutover;
+        # execution boundaries rely on this strict read even when supervision
+        # uses load_or_default to keep its other sweeps alive.
+        raise ConfigError(f"{path}: could not read config ({exc})") from exc
     try:
         data = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
