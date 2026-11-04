@@ -7,7 +7,7 @@ from shantytown import cli, cycle, br, handoff_text
 from tests.test_self_cycle_performs import admin, _args
 
 
-def test_file_posts_once_and_quality_uses_supplied_text(admin, monkeypatch):
+def test_file_posts_once_and_quality_uses_supplied_text(admin, monkeypatch, capsys):
     root, plate = admin
     plate['bead'] = 'task'
     notes = root / 'notes'; notes.write_text('task: next\nLanded: A\nLocal: B\nDecisions: none')
@@ -23,6 +23,7 @@ def test_file_posts_once_and_quality_uses_supplied_text(admin, monkeypatch):
     assert posted == [('task', notes.read_text())]
     assert judged == [(notes.read_text(), '2023-11-14T22:13:20+00:00')]
     assert cycle.Requests(root).pending()['hammond']['checkpoint_bead'] == 'task'
+    assert 'Do not poll or reissue this accepted request' in capsys.readouterr().out
 
 
 def test_reason_only_keeps_existing_durable_lookup(admin, monkeypatch):

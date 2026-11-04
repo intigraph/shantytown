@@ -10844,10 +10844,11 @@ def _cmd_cycle(a) -> int:
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
-                  f"End your turn now; nothing is lost if it never fires.")
+                  f"End your turn now; do not poll or reissue this accepted request.")
         else:
             print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
-                  "then end your turn; the request stays pending if it never fires.")
+                  "then end your turn. Do not poll or reissue this accepted request; "
+                  "it stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
