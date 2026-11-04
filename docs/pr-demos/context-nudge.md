@@ -2,7 +2,7 @@
 
 With a declared 1,000,000-token window and a 70% handoff hint, replay the same
 synthetic administrator usage against base 42700874c0ef2207b54caaea619ff9bd5e8f7096
-and source 74d6a077b25f69cfb6384d9d5e20746c8c35b4c0.
+and source d40e5a71a21cd7a4ec131cc7b70385b39bc2a5ea.
 
 Before: 55% produces no feedback; 70% emits once and remains silent at +120s.
 After: 55% emits preparation feedback through PostToolUse and Stop; 70% repeats
