@@ -60,6 +60,17 @@ class WorkspaceError(RuntimeError):
     """
 
 
+class WorktreeDamage(WorkspaceError):
+    """A removal FAILED PART-WAY: files are already gone. Never report as refused.
+
+    aegis-5ox: `git worktree remove` on a relocated (symlinked) worktree deleted
+    every file THROUGH the link and only then failed on the link itself. The CLI
+    printed "refused:", so the agent and two reviewers read it as "nothing ran"
+    while 284 MB had been deleted. A refusal means the state is unchanged; this
+    exception exists so a partial delete can never be worded as one.
+    """
+
+
 # Cloning is INJECTED so the whole contract is testable without a network, a
 # remote, or git itself. The default is the real thing.
 Cloner = Callable[[str, Path], None]
@@ -432,6 +443,15 @@ def git_worktree_remove(shared: Path, dest: Path) -> None:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
+        # git can fail AFTER deleting files (aegis-5ox: the contents went, the
+        # symlinked path did not). If the worktree's .git pointer is gone, the
+        # tree was damaged: say so, never "refused".
+        if Path(dest).exists() and not (Path(dest) / ".git").exists():
+            raise WorktreeDamage(
+                f"git worktree remove {dest} FAILED PART-WAY (exit {r.returncode}) "
+                f"and its files are already deleted; the tree is NOT intact. "
+                f"git said: {(r.stderr or r.stdout).strip()}"
+            )
         raise WorkspaceError(
             f"git worktree remove {dest} failed (exit {r.returncode}): "
             f"{(r.stderr or r.stdout).strip()}"
@@ -1737,6 +1757,18 @@ def cleanup_worktree(repo: Path | str, agent: str, base: str = "origin/main",
     dest = worktree_for(repo, agent)
     if not dest.is_dir():
         return False                     # nothing to clean — idempotent
+    # A RELOCATED worktree (root relief moved it and left a symlink) cannot be
+    # removed by `git worktree remove`: git deletes the contents THROUGH the link,
+    # then fails on the link, leaving an empty target and a dangling registry
+    # (aegis-5ox, 2026-11-04). Refuse before ANY git call; the state is unchanged.
+    if dest.is_symlink():
+        raise WorkspaceError(
+            f"{dest} is a relocated worktree (symlink to {dest.resolve()}); "
+            f"--gc refuses BEFORE removing anything, because `git worktree remove` "
+            f"would delete its contents through the link (aegis-5ox). Nothing was "
+            f"changed. Retire it deliberately: remove the target with its owner, "
+            f"then `git worktree prune` and the link."
+        )
     if holds_work(dest, base):
         return False                     # holds work — keep it, never discard
     remove(_shared_repo(repo), dest)
