@@ -147,7 +147,8 @@ def test_new_store_at_same_transaction_cannot_reuse_old_rows(service, monkeypatc
 def test_write_during_fetch_does_not_publish_a_mislabeled_result(service):
     proof, state = service
     state["mutate"] = True
-    assert read(proof)["rows"][0]["value"] == "before"
+    with pytest.raises(ValueError, match="watermark moved"):
+        read(proof)
     assert entries() == []
     assert read(proof)["rows"][0]["value"] == "after"
     assert state["queries"] == 2
@@ -230,7 +231,7 @@ def test_cache_storage_failure_preserves_original_reader(service, monkeypatch):
     assert state["queries"] == 1
 
 
-def test_simultaneous_processes_share_one_query(service):
+def test_simultaneous_processes_do_not_hold_cache_lock_across_http(service):
     proof, state = service
     state["delay"] = .1
     code = ("from types import SimpleNamespace; from shantytown import seeds_plate; "
@@ -242,7 +243,7 @@ def test_simultaneous_processes_share_one_query(service):
     with ThreadPoolExecutor(max_workers=6) as workers:
         results = list(workers.map(child, range(6)))
     assert all(r.returncode == 0 for r in results), [r.stderr for r in results]
-    assert state["queries"] == 1
+    assert 1 <= state["queries"] <= 6
 
 
 def test_private_bounded_cache(service, monkeypatch):
@@ -298,3 +299,40 @@ def test_corrupt_watermark_window_does_not_authorize_cached_success(service):
     next(seeds_read_cache._directory().glob("mark-*.json")).write_text("{}")
     state.update(tx=11, value="changed")
     assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_http_fetch_and_watermarks_never_hold_the_local_lock(service, monkeypatch):
+    import fcntl
+    proof, state = service
+    original = seeds_read_cache._watermark
+    def assert_unlocked():
+        for path in seeds_read_cache._directory().glob("lock-*"):
+            with path.open("rb") as file:
+                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+    def watermark(*args):
+        assert_unlocked()
+        return original(*args)
+    monkeypatch.setattr(seeds_read_cache, "_watermark", watermark)
+    query = "SELECT unlocked"
+    def fetch():
+        assert_unlocked()
+        return seeds_plate._query_wire(proof, query, 5)
+    result = seeds_read_cache.read(proof.quipu_url, query, 5,
+                                  opener=seeds_plate.urlopen, fetch=fetch,
+                                  validate=lambda result: seeds_plate._validate_query(result, query))
+    assert result["count"] == 1
+    assert state["queries"] == 1 and state["watermarks"] == 2
+
+
+def test_projection_refuses_change_between_individually_stable_queries(service, monkeypatch):
+    proof, state = service
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    with seeds_read_cache.consistent_reads():
+        assert read(proof, "SELECT candidates")["count"] == 1
+        state.update(tx=11, value="after")
+        with pytest.raises(ValueError, match="across projection"):
+            read(proof, "SELECT fields")
+    # The scope must restore; a new projection may use the new snapshot.
+    with seeds_read_cache.consistent_reads():
+        assert read(proof, "SELECT fields")["rows"][0]["value"] == "after"

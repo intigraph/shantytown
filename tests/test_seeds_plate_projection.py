@@ -65,6 +65,9 @@ def test_held_positive_and_empty_control(monkeypatch):
 
 
 def test_owner_scope_and_lean_fields_on_actual_request(monkeypatch):
+    # Wire-only fixture: every projection read observes one stable store.
+    monkeypatch.setattr(seeds_plate.seeds_read_cache, "_watermark",
+                        lambda *args: ("wire-fixture", 1))
     observed = []
 
     class Response:
@@ -382,6 +385,9 @@ def test_readiness_preserves_wire_and_values_budgets(monkeypatch):
 
 
 def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):
+    # Wire-only fixture: every projection read observes one stable store.
+    monkeypatch.setattr(seeds_plate.seeds_read_cache, "_watermark",
+                        lambda *args: ("wire-fixture", 1))
     # This positive control declares a harness instead of inheriting the
     # operator shell's context. A stale SHANTY_AGENT alone stays UNKNOWN.
     for key in ("QUIPU_AGENT", "QUIPU_SESSION", "SEEDS_AGENT_NAME"):
@@ -798,3 +804,41 @@ def test_unassigned_counts_exclude_decisions_in_both_graphs(monkeypatch):
         return answer([{"n": int(row[0])} for row in data.query(text)])
     monkeypatch.setattr(seeds_plate, "_query", query)
     assert seeds_plate.unassigned_counts(PROOF) == (4, 2)
+
+
+def test_feed_rows_real_graph_keeps_worker_plate_and_unassigned_dream(monkeypatch):
+    """Exercise selection, field projection and readiness, not a mocked feed."""
+    from rdflib import Dataset, URIRef, Literal, RDF
+    data = Dataset()
+    for ident, owner, status, graph in [
+        ("test-owned", "worker", "in_progress", G),
+        ("test-ready", "crew/worker", "open", G),
+        ("test-dream", None, "open", G + "#seeds-ephemeral"),
+        ("test-other", "other", "open", G),
+    ]:
+        subject = URIRef(seeds_plate.SEEDS + "item/" + ident)
+        target = data.graph(URIRef(graph))
+        target.add((subject, RDF.type, URIRef(seeds_plate.SCHEMA + "Action")))
+        for predicate, value in [
+            (seeds_plate.SCHEMA + "identifier", ident),
+            (seeds_plate.SCHEMA + "name", "actual work"),
+            (seeds_plate.SEEDS + "ontology/status", status),
+            (seeds_plate.SEEDS + "ontology/priority", 1),
+            (seeds_plate.SEEDS + "ontology/issueType", "task"),
+        ]:
+            target.add((subject, URIRef(predicate), Literal(value)))
+        if owner is not None:
+            target.add((subject, URIRef(seeds_plate.SCHEMA + "agent"), Literal(owner)))
+    def query(_proof, text, timeout):
+        return answer([{str(k): v.toPython() if isinstance(v, Literal) else str(v)
+                        for k, v in row.asdict().items()} for row in data.query(text)])
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
+    monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
+    monkeypatch.setattr(tracker, "_bd", lambda *a: pytest.fail("SDK hydration"))
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    try:
+        ready, active = tracker.feed_rows(["worker"])
+        assert {row["id"] for row in ready} == {"test-ready", "test-dream"}
+        assert {row["id"] for row in active} == {"test-owned"}
+    finally:
+        data.close()

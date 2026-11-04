@@ -231,7 +231,7 @@ def _unsupported_owner_branches(proof, agent):
         for clause in clauses:
             # Restrict the candidate relation before joining owners and types.
             # Missing status and unknown-only status retain the original refusal.
-            for candidate, type_clause in (
+            for candidate, _type_clause in (
                 (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
                  f"?s a <{SCHEMA}Action> . "),
@@ -243,8 +243,13 @@ def _unsupported_owner_branches(proof, agent):
                  f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
                  f"?s a <{SCHEMA}Action> . "),
             ):
-                branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
-                                f"{clause} {type_clause} }} }}")
+                # Keep the bound owner and status test in one relation. A
+                # type BGP or nested candidate group may materialize the whole
+                # Action class before applying that owner restriction.
+                candidate = candidate.replace(f"?s a <{SCHEMA}Action> . ", "")
+                branches.append(f"{{ GRAPH {_iri(graph)} {{ {clause} "
+                                f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                                f"{candidate} }} }}")
     return branches
 
 
@@ -269,6 +274,7 @@ class RenderShapeReads:
 
 
 @declared_read_operation("owner-rows")
+@seeds_read_cache.consistent_reads()
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
@@ -366,24 +372,13 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 owner_clause = (_feed_owner_clause(feed_owners)
                                 if feed_owners is not None
                                 else (f"?s <{SCHEMA}agent> {term} . " if term else ""))
-                # Keep owner terms constant for indexed selection. Collapse only
-                # this exact-owner path; roster/feed projections retain their
-                # separately validated query shapes.
-                combine_statuses = agent is not None and feed_owners is None
-                status_terms = (
-                    ("?wanted_status",) if combine_statuses
-                    else tuple(json.dumps(status) for status in statuses)
-                )
-                status_filter = (
-                    "FILTER(?wanted_status IN ("
-                    + ", ".join(json.dumps(status) for status in statuses)
-                    + ")) " if combine_statuses else ""
-                )
+                # Fixed status leaves and an owner-driven type EXISTS keep
+                # the broad Action class out of the candidate join.
+                status_terms = tuple(json.dumps(status) for status in statuses)
                 for status_term in status_terms:
                     branches.append(
-                        f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
-                        f"<{SEEDS}ontology/status> {status_term} . "
-                        + status_filter
+                        f"{{ GRAPH {_iri(g)} {{ ?s <{SEEDS}ontology/status> {status_term} . "
+                        f"{owner_clause}FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
                         + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
                         + (f"?s <{SCHEMA}name> ?title . "
                            f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "

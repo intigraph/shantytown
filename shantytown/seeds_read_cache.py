@@ -2,8 +2,9 @@
 
 Hits share a one-second observation of (store_id, watermark_tx). Results are
 published only when that pair stayed unchanged across a successful fetch.
-Striped file locks make identical concurrent readers share one fetch without
-serializing all owners. Cache/metadata failures fall back to the original read.
+Striped file locks protect local publication only; no HTTP runs under a lock.
+A watermark change during a miss refuses the answer. Metadata failure before
+a fetch retains the original reader; post-fetch proof failure is refused.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ _MAX_AGE = 60
 _WATERMARK_MAX_AGE = 1
 _CACHE_ERRORS = (OSError, ValueError, TypeError, AttributeError, KeyError)
 _DIRECT_READS = ContextVar("seeds_direct_reads", default=False)
+_READ_SNAPSHOT = ContextVar("seeds_read_snapshot", default=(False, None))
 
 
 @contextmanager
@@ -43,6 +45,24 @@ def direct_reads():
         yield
     finally:
         _DIRECT_READS.reset(token)
+
+
+@contextmanager
+def consistent_reads():
+    """Fence a multi-query projection to one observed store/watermark pair."""
+    token = _READ_SNAPSHOT.set((True, None))
+    try:
+        yield
+    finally:
+        _READ_SNAPSHOT.reset(token)
+
+
+def _observe(mark):
+    active, expected = _READ_SNAPSHOT.get()
+    if active:
+        if mark is None or (expected is not None and mark != expected):
+            raise ValueError("seeds watermark changed across projection; refusing mixed snapshot")
+        _READ_SNAPSHOT.set((True, mark))
 
 
 def primary_reads_required() -> bool:
@@ -154,38 +174,45 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     key = hashlib.sha256(json.dumps([server, query]).encode()).hexdigest()
     try:
         directory = _directory()
-        lock = _locked(directory, key)
-        lock.__enter__()
-    except _CACHE_ERRORS:
-        return fetch()
-    try:
-        try:
-            mark_key = hashlib.sha256(json.dumps([server, "watermark-v1"]).encode()).hexdigest()
-            mark_path = directory / ("mark-" + mark_key + ".json")
-            def valid_mark(value):
-                if (not isinstance(value, list) or len(value) != 2
-                        or not isinstance(value[0], str) or not value[0]
-                        or len(value[0]) > 256 or type(value[1]) is not int or value[1] < 0):
-                    raise ValueError("invalid cached watermark")
-                return tuple(value)
+        mark_key = hashlib.sha256(json.dumps([server, "watermark-v1"]).encode()).hexdigest()
+        mark_path = directory / ("mark-" + mark_key + ".json")
+        path = directory / ("read-" + key + ".json")
+
+        def valid_mark(value):
+            if (not isinstance(value, list) or len(value) != 2
+                    or not isinstance(value[0], str) or not value[0]
+                    or len(value[0]) > 256 or type(value[1]) is not int or value[1] < 0):
+                raise ValueError("invalid cached watermark")
+            return tuple(value)
+
+        # The lock protects local files only. A slow reader must not hold a
+        # cache stripe across HTTP and force unrelated readers to wait a second.
+        with _locked(directory, key):
             before = _cached(mark_path, None, valid_mark, max_age=_WATERMARK_MAX_AGE)
-            if before is None:
-                before = _watermark(server, timeout, opener)
+            hit = _cached(path, before, validate) if before is not None else None
+        if before is None:
+            before = _watermark(server, timeout, opener)
+            with _locked(directory, key):
                 _publish(directory, mark_path, None, before)
-            path = directory / ("read-" + key + ".json")
-            hit = _cached(path, before, validate)
-        except _CACHE_ERRORS:
-            return fetch()
-        if hit is not None:
-            return hit
-        result = fetch()  # Deliberately outside the cache-error handler.
-        try:
-            after = _watermark(server, timeout, opener)
+                hit = _cached(path, before, validate)
+    except _CACHE_ERRORS:
+        _observe(None)
+        return fetch()
+    _observe(before)
+    if hit is not None:
+        return hit
+
+    result = fetch()  # Never swallow a wire or completeness refusal.
+    # A changed watermark cannot certify this answer, even without caching:
+    # callers combine projections, so returning it could serve a mixed view.
+    after = _watermark(server, timeout, opener)
+    try:
+        with _locked(directory, key):
             _publish(directory, mark_path, None, after)
             if after == before:
                 _publish(directory, path, after, result)
-        except _CACHE_ERRORS:
-            pass
-        return result
-    finally:
-        lock.__exit__(None, None, None)
+    except _CACHE_ERRORS:
+        pass  # A certified wire answer does not depend on writable cache files.
+    if after != before:
+        raise ValueError("seeds watermark moved during read; refusing mixed snapshot")
+    return result

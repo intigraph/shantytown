@@ -389,3 +389,19 @@ refused on the projection path rather than presenting local timing as primary
 performance. The default `0` retains existing reads. Invalid setting values
 refuse. Live activation and measured acceptance require the upstream admission
 packet and normal deployment; enabling this flag alone cannot establish either.
+
+### Owner-read cache consistency
+
+The optional Seeds read cache holds its file locks only while checking or
+publishing local entries. HTTP watermark and query requests run outside those
+locks. Concurrent misses may execute independently. A miss whose store identity
+or watermark changes is refused, rather than published or returned. The owner
+projection also fences its candidate and field queries to the same observed
+pair; a change between them refuses the projection. Query-only admission keeps
+its existing direct transport and read budget. Cache hits retain the bounded
+one-second watermark observation; this is not an immutable server snapshot.
+
+Exact-owner candidate selection uses fixed status leaves and a correlated type
+check. Feed selection still includes the named workers' plates and unassigned
+open work, and excludes other owners. Unsupported or absent owner statuses still
+refuse the projection.
