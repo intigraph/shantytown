@@ -284,7 +284,7 @@ class Config:
     # table only prices a signal something outside st chose to send.
     cycle_advice: CycleAdvicePolicy = field(default_factory=CycleAdvicePolicy)
     ephemeral: Ephemeral = field(default_factory=Ephemeral)
-    # [inbox] store (aegis-snq): where NEW durable messages go. "seed" keeps
+    # [inbox] store: where NEW durable messages go. "seed" keeps
     # today's inbox seeds; "message-graph" sends through `sd msg` into the
     # per-week message windows, and readers union the legacy seeds with them.
     # Rollback is setting it back to "seed"; window messages stay readable.

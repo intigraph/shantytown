@@ -752,7 +752,7 @@ class TrackerInbox:
 
 
 class MessageGraphInbox:
-    """`[inbox] store = "message-graph"` (aegis-snq): NEW mail goes through
+    """`[inbox] store = "message-graph"`: NEW mail goes through
     `sd msg` into the per-week message windows, never into the board graph.
 
     Reading unions the legacy inbox seeds (still closed by mark_read, exactly as
@@ -777,7 +777,7 @@ class MessageGraphInbox:
     def _window_unread(self, me: str) -> list[Message]:
         name = me.split("/")[-1]
         return [self._as_message(name, v)
-                for v in self._tracker.list_messages(name, unread=True)
+                for v in self._tracker.list_messages(name, unread=True).exact()
                 if v.get("to") in (me, name)]
 
     def deliver(self, to: str, body: str, frm: str | None = None,
@@ -789,13 +789,13 @@ class MessageGraphInbox:
         return self._send(to, body, frm, key)
 
     def _send(self, to, body, frm, key):
-        v = self._tracker.send_message(to, body, key=key, frm=frm)
+        v = self._tracker.send_message(to, body, key=key, frm=frm).exact()
         return Message(id=v["id"], to=to, body=body, frm=frm, read=v.get("read_at") is not None)
 
     def find_delivery(self, me: str, marker: str) -> Message | None:
         name = me.split("/")[-1]
         matches = [self._as_message(name, v)
-                   for v in self._tracker.list_messages(name, unread=False)
+                   for v in self._tracker.list_messages(name, unread=False).exact()
                    if str(v.get("text", "")).startswith(marker + " ")]
         if len(matches) > 1:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
@@ -835,7 +835,7 @@ class MessageGraphInbox:
             window = []
             if wanted:
                 mine = {m.id: m for m in self._window_unread(me)}
-                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False)}
+                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False).exact()}
                 for i in wanted:
                     if i in mine:
                         window.append(mine[i])
@@ -844,7 +844,7 @@ class MessageGraphInbox:
                                            "no such message to this recipient")
             marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
         if window:
-            self._tracker.read_messages([m.id for m in window])
+            self._tracker.read_messages([m.id for m in window]).exact()
             marked += [Message(id=m.id, to=m.to, body=m.body, frm=m.frm, read=True) for m in window]
         return marked
 

@@ -363,7 +363,7 @@ def _tracker(a, default="files"):
         from .config import load_or_default
         cfg, _ = load_or_default(Path(a.root))
         if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
-            # aegis-snq: a message window, never a seed; one note per item/owner/day.
+            # message graph: a message window, never a seed; one note per item/owner/day.
             from datetime import datetime, timezone
             day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
@@ -504,7 +504,7 @@ def _inbox(a, default="files"):
         legacy = TrackerInbox(trk, lambda: br_items(trk),
                               lambda: br_items(trk, include_closed=True),
                               items_for=getattr(trk, "inbox_items", None))
-        # [inbox] store (aegis-snq): "message-graph" sends NEW mail through
+        # [inbox] store: "message-graph" sends NEW mail through
         # `sd msg` into the message windows and reads legacy seeds + windows.
         # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
         from .config import load_or_default

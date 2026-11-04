@@ -1,9 +1,10 @@
-"""[inbox] store = "message-graph" (aegis-snq): new mail goes to message windows
+"""[inbox] store = "message-graph": new mail goes to message windows
 through `sd msg`, never to a board seed; readers union legacy seeds + windows."""
 from pathlib import Path
 
 import pytest
 
+from shantytown.answer import Answer, PartialAnswer
 from shantytown.config import ConfigError, load_or_default
 from shantytown.inbox import Message, MessageGraphInbox
 
@@ -26,18 +27,18 @@ class FakeMsgTracker:
         mid = "msg-" + str(abs(hash(key)))[:10]
         if not any(m["id"] == mid for m in self.msgs):
             self.msgs.append({"id": mid, "to": to, "from": frm, "text": body, "read_at": None})
-        return {"id": mid, "written": True}
+        return Answer.complete_read({"id": mid, "written": True}, how="fixture delivery")
 
     def list_messages(self, to, *, unread=True, weeks=2):
-        return [dict(m) for m in self.msgs
-                if m["to"] == to and (not unread or m["read_at"] is None)]
+        return Answer.complete_read([dict(m) for m in self.msgs
+                if m["to"] == to and (not unread or m["read_at"] is None)], how="fixture messages")
 
     def read_messages(self, ids, *, weeks=2):
         self.read_calls.append(list(ids))
         for m in self.msgs:
             if m["id"] in ids and m["read_at"] is None:
                 m["read_at"] = "2026-11-02T05:00:00Z"
-        return [{"id": i, "marked": True} for i in ids]
+        return Answer.complete_read([{"id": i, "marked": True} for i in ids], how="fixture read receipts")
 
 
 class FakeLegacy:
@@ -88,24 +89,24 @@ def test_delivery_goes_to_a_message_window_never_a_seed():
 
 
 def test_unread_unions_legacy_seeds_and_window_messages():
-    legacy = [Message(id="aegis-w1", to="wu", body="old seed mail")]
+    legacy = [Message(id="sd-w1", to="wu", body="old seed mail")]
     box, _ = _box(legacy)
     box.deliver("wu", "new window mail", frm="grant")
     box.deliver("tim", "not for wu", frm="grant")
     ids = [m.id for m in box.unread("wu")]
-    assert ids[0] == "aegis-w1" and len(ids) == 2 and ids[1].startswith("msg-")
+    assert ids[0] == "sd-w1" and len(ids) == 2 and ids[1].startswith("msg-")
     assert box.unread_count("wu") == 2
     total, view = box.unread_view("wu", limit=1, oldest_first=True)
-    assert total == 2 and [m.id for m in view] == ["aegis-w1"]
+    assert total == 2 and [m.id for m in view] == ["sd-w1"]
 
 
 def test_mark_read_closes_legacy_seeds_and_marks_window_messages():
-    legacy = [Message(id="aegis-w1", to="wu", body="old")]
+    legacy = [Message(id="sd-w1", to="wu", body="old")]
     box, trk = _box(legacy)
     new = box.deliver("wu", "new", frm="grant")
-    marked = box.mark_read("wu", ["aegis-w1", new.id])
-    assert {m.id for m in marked} == {"aegis-w1", new.id}
-    assert box._legacy.marked == ["aegis-w1"]
+    marked = box.mark_read("wu", ["sd-w1", new.id])
+    assert {m.id for m in marked} == {"sd-w1", new.id}
+    assert box._legacy.marked == ["sd-w1"]
     assert trk.read_calls == [[new.id]]
     assert box.unread("wu") == []
     # Marking an already-read window message again is a quiet no-op.
@@ -117,7 +118,7 @@ def test_mark_read_closes_legacy_seeds_and_marks_window_messages():
 
 
 def test_mark_all_read_covers_both_stores():
-    box, trk = _box([Message(id="aegis-w1", to="wu", body="old")])
+    box, trk = _box([Message(id="sd-w1", to="wu", body="old")])
     box.deliver("wu", "new", frm="grant")
     assert len(box.mark_read("wu")) == 2
     assert box.unread_count("wu") == 0
@@ -147,3 +148,45 @@ def test_inbox_store_refuses_unknown_values_and_keys(tmp_path):
     assert err and "inbox.store" in err
     _, err = _cfg(tmp_path, '[inbox]\nttl = 3\n')
     assert err
+
+
+def test_partial_message_listing_cannot_become_an_empty_inbox(monkeypatch):
+    box, trk = _box()
+    monkeypatch.setattr(trk, "list_messages", lambda *a, **k: Answer.capped(
+        [], how="truncated fixture", caveat="server row cap"))
+    with pytest.raises(PartialAnswer):
+        box.unread_count("wu")
+    with pytest.raises(PartialAnswer):
+        box.find_delivery("wu", "marker")
+
+
+def test_partial_read_receipt_cannot_be_reported_as_marked(monkeypatch):
+    box, trk = _box()
+    message = box.deliver("wu", "hello")
+    monkeypatch.setattr(trk, "read_messages", lambda *a, **k: Answer.capped(
+        [], how="missing receipt", caveat="incomplete read"))
+    with pytest.raises(PartialAnswer):
+        box.mark_read("wu", [message.id])
+
+
+@pytest.mark.parametrize("receipt", [[], [{"id": "msg-one", "marked": True}],
+    [{"id": "msg-one", "marked": True}, {"id": "msg-one", "marked": True}],
+    [{"id": "msg-one", "marked": True}, {"id": "msg-two", "marked": "yes"}]])
+def test_sd_read_requires_a_typed_receipt_for_every_requested_id(receipt):
+    import json
+    from types import SimpleNamespace
+    from shantytown.sd import SdTracker
+    tracker = object.__new__(SdTracker)
+    tracker._bd = lambda *args: SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
+    with pytest.raises(RuntimeError, match="receipts incomplete or unreadable"):
+        tracker.read_messages(["msg-one", "msg-two"])
+
+
+def test_sd_read_accepts_complete_receipts_including_already_read():
+    import json
+    from types import SimpleNamespace
+    from shantytown.sd import SdTracker
+    receipt = [{"id": "msg-one", "marked": True}, {"id": "msg-two", "marked": False}]
+    tracker = object.__new__(SdTracker)
+    tracker._bd = lambda *args: SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
+    assert tracker.read_messages(["msg-one", "msg-two"]).exact() == receipt

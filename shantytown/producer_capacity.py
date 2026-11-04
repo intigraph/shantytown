@@ -190,7 +190,7 @@ def main():
         from .config import load_or_default
         cfg, _ = load_or_default(Path(os.environ['SHANTY_ROOT']))
         if cfg.inbox_store == "message-graph":
-            # aegis-snq: a message window, never a seed; one note per item/owner/day.
+            # message graph: a message window, never a seed; one note per item/owner/day.
             from datetime import datetime, timezone
             day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             result = execute(['msg', 'send', '--to', lead, '--from', 'st',

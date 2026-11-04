@@ -79,13 +79,13 @@ class SdTracker(BrTracker):
         self._native_projection: bool | None = None
         self._decision_candidates: dict[str, Answer[list[dict]]] = {}
 
-    # --- message windows (aegis-snq): mail that is not a seed -------------------
+    # --- message windows: mail that is not a seed -------------------
     # `sd msg` writes schema:Message records into per-week window graphs that no
     # board read sees. Exit 8 (indeterminate) is never retried blindly: a keyed
     # resend is safe, but the caller decides.
 
     def send_message(self, to: str, body: str, *, key: str, frm: str | None = None,
-                     kind: str = "note") -> dict:
+                     kind: str = "note") -> Answer[dict]:
         from .inbox import validate_delivery_key
         validate_delivery_key(key)
         args = ["msg", "send", "--to", to, "--key", key, "--kind", kind, "-m", body, "--json"]
@@ -100,9 +100,9 @@ class SdTracker(BrTracker):
                 raise ValueError("missing message id")
         except (ValueError, TypeError) as error:
             raise RuntimeError("sd msg send receipt identity UNKNOWN") from error
-        return value
+        return Answer.complete_read(value, how="sd msg send: validated delivery receipt")
 
-    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2) -> list[dict]:
+    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2) -> Answer[list[dict]]:
         args = ["msg", "list", "--to", to, "--weeks", str(weeks), "--json"]
         if unread:
             args.append("--unread")
@@ -112,13 +112,20 @@ class SdTracker(BrTracker):
         value = json.loads(result.stdout)
         if not isinstance(value, list) or not all(isinstance(v, dict) and v.get("id") for v in value):
             raise RuntimeError("sd msg list answer unreadable")
-        return value
+        return Answer.complete_read(value, how=f"sd msg list: complete requested {weeks}-week recipient window")
 
-    def read_messages(self, ids: list[str], *, weeks: int = 2) -> list[dict]:
+    def read_messages(self, ids: list[str], *, weeks: int = 2) -> Answer[list[dict]]:
         result = self._bd("msg", "read", *ids, "--weeks", str(weeks), "--json")
         if result.returncode:
             raise RuntimeError(f"sd msg read failed: {_failure_reason(result)}")
-        return json.loads(result.stdout)
+        value = json.loads(result.stdout)
+        if (not isinstance(value, list)
+                or not all(isinstance(v, dict) and isinstance(v.get("id"), str)
+                           and isinstance(v.get("marked"), bool) for v in value)
+                or len(value) != len(set(ids))
+                or {v["id"] for v in value} != set(ids)):
+            raise RuntimeError("sd msg read receipts incomplete or unreadable")
+        return Answer.complete_read(value, how="sd msg read: receipts cover every requested ID")
 
     def create_inbox_message(self, title: str, *, delivery_key: str, **fields) -> WorkItem:
         """Retry only CAS conflicts, using the SDK's existing keyed create.

@@ -164,7 +164,7 @@ sends new mail there, including the two capacity notices that used to create
 seeds directly. Reads are a separate append-only `schema:dateRead` mark.
 Ack, expiry, escalation and alert dedupe are still to come. Existing inbox
 seeds are not migrated: a bulk move was rehearsed on a store copy and
-measured not worth its cost (aegis-snq), so they stay readable through the
+measured not worth its cost, so they stay readable through the
 dual read.
 
 ## Rollout

@@ -604,7 +604,7 @@ min_sync_version = 1
 mode = "off"
 agents = []
 
-# [inbox] — where NEW durable messages go (aegis-snq, docs/message-graph.md).
+# [inbox] — where NEW durable messages go (docs/message-graph.md).
 #   "seed"          (default) today's behaviour: an `inbox:` seed on the board.
 #   "message-graph" `sd msg send` into the per-week message windows; no board
 #                   seed is written. Readers (st inbox, unread counts, mark-read)
