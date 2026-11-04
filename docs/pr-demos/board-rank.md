@@ -7,7 +7,7 @@ prerequisite, ranks the prerequisite ahead of its dependent, and flags only the
 confirmed down owner. Title words do not promote an item; UNKNOWN liveness does
 not become a down-owner finding. No tracker, graph or model calls occur.
 
-Demonstrated source: `d00d6757c84124a0574ecdc0e0f68cebe0ebbd0e`, based on
+Demonstrated source: `2b0924f3cb3b29586526c19fc0335cbba457a869`, based on
 `2981a4ebc808356d5aef9ff600c606ac7bdbcc71`. The base has no governed rank-proposal
 arm; "before" in the recording is the fixture's actual declared priority/rank
 input. This is a source fixture demonstration, not installed or model-quality

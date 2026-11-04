@@ -1,4 +1,4 @@
-Script started on 2026-11-04 03:44:32-05:00 [COMMAND="PYTHONPATH=. python3 docs/pr-demos/board-rank.py" <not executed on terminal>]
+Script started on 2026-11-04 03:56:11-05:00 [COMMAND="PYTHONPATH=. python3 docs/pr-demos/board-rank.py" <not executed on terminal>]
 BEFORE: declared priorities; no existing ranks
 urgent P0 rank=None
 prerequisite P1 rank=None
@@ -16,4 +16,4 @@ PROPOSED ONLY — administrator accepts or edits; no changes applied
 
 CONTROLS: title words did not promote; UNKNOWN did not become down; zero mutations/model calls
 
-Script done on 2026-11-04 03:44:32-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-04 03:56:12-05:00 [COMMAND_EXIT_CODE="0"]
