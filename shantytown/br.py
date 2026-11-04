@@ -551,6 +551,19 @@ class NothingWritten(RuntimeError):
 SD_CONFLICT_EXIT = 4
 
 
+def _comment_failure_reason(result) -> str:
+    """Keep the terminal error after SDK warnings, with the actual exit code.
+
+    Observe-only identity warnings precede the error on stderr. Keeping only
+    its first 160 characters hid the error and made a warning look like a
+    policy refusal. Redact the full text before bounding its tail.
+    """
+    reason = redact_cause(result.stderr.strip()) if result.stderr.strip() else _failure_reason(result)
+    if len(reason) > 300:
+        reason = "…" + reason[-299:]
+    return f"exit {result.returncode}: {reason}"
+
+
 def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
     """Append a comment through br's file-safe comments subcommand."""
     path = None
@@ -568,10 +581,10 @@ def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
                                "--file", "/dev/stdin", stdin=body)
         if r.returncode == SD_CONFLICT_EXIT and getattr(tracker, "_tool", "br") == "sd":
             raise NothingWritten(
-                f"sd comments add {bead_id} wrote nothing: {_failure_reason(r)[:300]}")
+                f"sd comments add {bead_id} wrote nothing: {_comment_failure_reason(r)}")
         if r.returncode != 0:
             raise RuntimeError(
-                f"br comments add {bead_id} failed: {redact_cause(r.stderr.strip())[:160]}")
+                f"br comments add {bead_id} failed: {_comment_failure_reason(r)}")
     finally:
         if path:
             try:
