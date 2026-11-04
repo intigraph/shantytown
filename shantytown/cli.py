@@ -13250,11 +13250,18 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     policy = cfg.dream
     state = dream_mod.State(a.root)
     tracker = _tracker(a)
-    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
+    cards = {card.name: card for card in agents}
+    # Only a live worker can receive a cycle, so read only their plates plus
+    # unassigned work (where a queued cycle waits). An unscoped read is a
+    # whole-board plate read and exceeds the field budget (aegis-2idcev).
+    owners = sorted(name for name, card in cards.items()
+                    if card.role == "worker" and card.pane
+                    and panes.exists(card.pane))
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker,
+                                           owners=owners)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
-    cards = {card.name: card for card in agents}
     candidates = []
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
