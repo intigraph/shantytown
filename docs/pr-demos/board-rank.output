@@ -1,0 +1,19 @@
+Script started on 2026-11-04 03:44:32-05:00 [COMMAND="PYTHONPATH=. python3 docs/pr-demos/board-rank.py" <not executed on terminal>]
+BEFORE: declared priorities; no existing ranks
+urgent P0 rank=None
+prerequisite P1 rank=None
+automation P1 rank=None
+title-only P1 rank=None
+
+AFTER: deterministic proposals
+PROPOSED ONLY — administrator accepts or edits; no changes applied
+| Item | Priority | Rank | Owner state | Re-owner | Basis |
+| --- | --- | --- | --- | --- | --- |
+| automation | P1 → P0 | 1 | down | YES | urn:reviewed-rule:automation, owner-liveness |
+| prerequisite | P1 → P0 | 2 | up | no | urn:reviewed-rule:dependency |
+| urgent | P0 → P0 | 3 | up | no | blocked state |
+| title-only | P1 → P1 | 4 | unknown | no | existing rank, then creation/id |
+
+CONTROLS: title words did not promote; UNKNOWN did not become down; zero mutations/model calls
+
+Script done on 2026-11-04 03:44:32-05:00 [COMMAND_EXIT_CODE="0"]
