@@ -1,11 +1,11 @@
-Script started on 2026-11-04 10:04:36-05:00 [COMMAND="python3 docs/pr-demos/work-item-revision.py" <not executed on terminal>]
+Script started on 2026-11-04 10:15:24-05:00 [COMMAND="python3 docs/pr-demos/work-item-revision.py" <not executed on terminal>]
 Installed CLI exposes --if-revision: False
 Candidate API exact read revision: 1
 $ work_item.command(update, if_revision=1)
-{"error": {"code": "CONFLICT", "details": {"comparison": "requested-fields-against-current", "current_revision": 2, "expected_revision": 1, "field_differences": [{"current": {"characters": 10, "text": "author-one", "truncated": false}, "field": "notes", "requested": {"characters": 16, "text": "stale author-two", "truncated": false}}], "item_id": "demo-o2k", "schema": "seed-update-conflict/v1"}, "message": "demo-o2k: expected revision 1, current revision 2; nothing written; reread and rebase"}}
+{"error": {"code": "CONFLICT", "details": {"comparison": "requested-fields-against-current", "current_revision": 2, "expected_revision": 1, "field_differences": [{"current": {"characters": 10, "text": "author-one", "truncated": false}, "field": "notes", "requested": {"characters": 16, "text": "stale author-two", "truncated": false}}], "item_id": "demo-jl7", "schema": "seed-update-conflict/v1"}, "message": "demo-jl7: expected revision 1, current revision 2; nothing written; reread and rebase"}}
 First writer preserved; no automatic retry.
 $ work_item.command(update, if_revision=2)
-{"fields": {"notes": "author-one; explicitly rebased author-two"}, "id": "demo-o2k", "result": "verified"}
+{"fields": {"notes": "author-one; explicitly rebased author-two"}, "id": "demo-jl7", "result": "verified"}
 Final revision: 3
 
-Script done on 2026-11-04 10:04:37-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-04 10:15:25-05:00 [COMMAND_EXIT_CODE="0"]

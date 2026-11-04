@@ -87,3 +87,25 @@ def test_show_keeps_exact_numeric_revision_without_another_read(revision, expect
     tracker._bd_for = read
     assert work_item.command(type('Args', (), {'item': 'known-id', 'item_action': 'show'})(), tracker)['revision'] == expected
     assert len(calls) == 1
+
+
+def test_indeterminate_operation_identity_is_retained_without_retry(tmp_path):
+    from shantytown.br import UpdateIndeterminate
+
+    class Unknown(RevisionGuarded):
+        def _bd_for(self, item_id, *argv):
+            self.calls.append(argv)
+            return CompletedProcess(argv, 8, json.dumps({'error': {
+                'code': 'INDETERMINATE', 'message': 'outcome UNKNOWN; do not simply retry',
+                'details': {'schema': 'seed-write-outcome/v1',
+                            'operation_id': 'urn:seeds:write:fixture-operation',
+                            'provenance_graph': 'https://example.org/project/provenance',
+                            'item_ids': [item_id], 'outcome': 'UNKNOWN'}}}), '')
+    tracker = Unknown()
+    with pytest.raises(UpdateIndeterminate) as failure:
+        work_item.command(operation(tmp_path, if_revision=2), tracker)
+    assert failure.value.code == 'INDETERMINATE'
+    assert failure.value.details['operation_id'] == 'urn:seeds:write:fixture-operation'
+    assert failure.value.details['outcome'] == 'UNKNOWN'
+    assert len(tracker.calls) == 1
+    assert tracker.revision == 2

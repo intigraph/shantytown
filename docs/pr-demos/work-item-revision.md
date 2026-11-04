@@ -8,6 +8,8 @@ An explicit reread/rebase succeeds once and reaches revision 3.
 
 Source base: `8ee0f7eaa1bd453838e2a4df69a5eea83673449e`.
 Demonstrated candidate: `6eea9cf` (adapter implementation `865d2ed`).
+The conflict/rebase scenario remains unchanged by the subsequent retention of
+indeterminate-operation metadata; that branch has a separate fault control.
 The candidate uses an isolated local Seeds fixture and the Python work-item API;
 it is not an installed-service demonstration. The native remote display's typed
 revision read is covered separately by its same-observation positive/refusal

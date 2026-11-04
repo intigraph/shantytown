@@ -3018,7 +3018,9 @@ native tokens refuse; missing tokens remain unknown. Carry the token into the ed
 `st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
 The token is passed unchanged through any admission reread. A stale edit refuses
 and retains Seeds' structured conflict metadata; it never refreshes the token or
-retries the write. Independent fields still share one item revision: explicitly
+retries the write. An indeterminate Seeds outcome also retains its operation
+identity and readback metadata, rather than truncating it into a generic error.
+Independent fields still share one item revision: explicitly
 reread and rebase even when another writer changed a different field. Other
 backends refuse `--if-revision` rather than silently dropping the guard.
 

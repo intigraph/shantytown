@@ -16,13 +16,22 @@ from .protocols import BLOCKER_KIND_LABELS, WorkItem
 from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
 
-class UpdateConflict(RuntimeError):
-    """The transport's complete structured conflict; never retry automatically."""
+class TrackerUpdateError(RuntimeError):
+    """Complete structured write diagnostics; never retry automatically."""
 
     def __init__(self, error):
         self.error = error
         self.details = error.get("details")
+        self.code = error.get("code")
         super().__init__(json.dumps({"error": error}, ensure_ascii=False, sort_keys=True))
+
+
+class UpdateConflict(TrackerUpdateError):
+    """The guarded update refused without mutation."""
+
+
+class UpdateIndeterminate(TrackerUpdateError):
+    """The write may have landed; retain its operation identity for readback."""
 
 
 class BrTracker(BeadsTracker):
@@ -131,13 +140,15 @@ class BrTracker(BeadsTracker):
             args.append("--json")
         r = self._bd_for(item_id, *args)
         if r.returncode != 0:
-            if "if_revision" in fields and r.returncode == 4:
+            if "if_revision" in fields and r.returncode in (4, 8):
                 try:
                     error = json.loads(r.stdout)["error"]
                 except (ValueError, KeyError, TypeError):
                     error = None
-                if isinstance(error, dict) and error.get("code") == "CONFLICT":
-                    raise UpdateConflict(error)
+                expected = {4: "CONFLICT", 8: "INDETERMINATE"}[r.returncode]
+                if isinstance(error, dict) and error.get("code") == expected:
+                    exception = UpdateConflict if r.returncode == 4 else UpdateIndeterminate
+                    raise exception(error)
             raise RuntimeError(
                 f"br update {item_id} failed: {r.stderr.strip()[:120]}")
 
