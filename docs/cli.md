@@ -3418,3 +3418,14 @@ before any model call; the shared budget is at most 100 nouls. Dry-run makes no
 model calls. Real calls still require the explicit verified quarantine graph,
 private request journal and exact readback. Missing observations stay missing,
 not false. The separate semantic report schema cannot authorize a live rank arm.
+
+Deterministic bands use proven open blockers, not a stored blocked/deferred
+status or a `blocked:*` claim. Positive open blockers, explicit
+`blocked:human`/`desk`/`needs-stiwi`, and `parked:by-design` keep a blocked band.
+With proven zero blockers, other blocked labels produce a visible stale-gate
+flag. P0 overdue work or a proven prerequisite of P0 work is immediate; work
+due within seven days (including overdue work) is due; other P0–P2 work is
+normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
+a zero count. Native snapshots use bounded candidate-edge and exact endpoint
+status projections; missing or shadowed endpoints refuse the run. These bands
+and flags do not change lifecycle status, clear a hold, or authorize dispatch.

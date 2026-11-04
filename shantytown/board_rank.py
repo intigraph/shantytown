@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
@@ -17,7 +17,7 @@ from .priority_advisory import priority
 KINDS = frozenset({'merge-pr', 'automation', 'personal-need', 'dependency', 'visible-hold'})
 FACT_LABELS = {'merge-pr': 'work:merge-pr', 'automation': 'work:automation',
                'personal-need': 'work:personal'}
-BANDS = {'immediate': 0, 'due': 1, 'normal': 2, 'later': 3, 'blocked': 4}
+BANDS = {'immediate': 0, 'due': 1, 'normal': 2, 'later': 3, 'blocked': 4, 'unknown': 5}
 ACTIVE = frozenset({'open', 'hooked', 'in_progress', 'blocked', 'deferred'})
 IRI = re.compile(r'[A-Za-z][A-Za-z0-9+.-]*:[^<>\s"{}|^`\\]+')
 
@@ -109,6 +109,61 @@ def _existing_rank(row):
     return (1, Decimal(0))
 
 
+def _open_blocker_count(row, by_id):
+    """A positive count can block; zero needs complete dependency evidence."""
+    if 'open_blockers' in row:
+        value = row['open_blockers']
+        if type(value) is int and value >= 0:
+            return value
+        if isinstance(value, list) and all(isinstance(v, str) and v for v in value):
+            return len(set(value))
+        return None
+    deps = row.get('blocked_by')
+    if not isinstance(deps, list) or any(not isinstance(d, str) for d in deps):
+        return None
+    known = sum(dep in by_id and by_id[dep]['status'] in ACTIVE for dep in set(deps))
+    # An unresolved endpoint can hide a blocker, but cannot erase a proven one.
+    return known if known or all(dep in by_id for dep in deps) else None
+
+
+def _fact_band(row, item, rows, proposals, by_id, now):
+    labels = set(row['labels'])
+    count = _open_blocker_count(row, by_id)
+    item['open_blocker_count'] = count
+    stale = sorted(label for label in labels
+                   if label.startswith('blocked:') and label != 'blocked:human') if count == 0 else []
+    item['stale_gate'] = bool(stale)
+    item['stale_gate_labels'] = stale
+    if stale:
+        item['citations'].append(dict(rule='stale-gate',
+            fact='labels ' + ', '.join(stale) + '; measured zero open blockers; no hold released'))
+    human = labels.intersection({'blocked:human', 'desk', 'needs-stiwi'})
+    due = timestamp(row.get('due_at'))
+    if human or 'parked:by-design' in labels:
+        band, basis = 'blocked', 'explicit human/desk/parked gate'
+    elif count is None:
+        band, basis = 'unknown', 'open blocker evidence UNKNOWN'
+        item['unknown'].append(basis)
+    elif count > 0:
+        band, basis = 'blocked', 'positive open blocker observation'
+    else:
+        blocks_p0 = any(proposals[r['id']]['proposed_priority'] == 0
+                        and item['item'] in r.get('open_blockers', r.get('blocked_by', []))
+                        for r in rows
+                        if isinstance(r.get('open_blockers', r.get('blocked_by')), list))
+        if item['proposed_priority'] == 0 and (due is not None and due <= now or blocks_p0):
+            band, basis = 'immediate', 'P0 overdue or proven prerequisite of P0 work'
+        elif due is not None and due <= now + timedelta(days=7):
+            band, basis = 'due', 'due within seven days or overdue'
+        elif item['proposed_priority'] <= 2:
+            band, basis = 'normal', 'P0-P2 without an immediate/due fact'
+        else:
+            band, basis = 'later', 'P3/P4 without an immediate/due fact'
+    item['band'], item['band_basis'] = band, basis
+    item['citations'].append(dict(rule='band-facts', fact=basis,
+                                  open_blockers=count, explicit_gate=sorted(human), due_at=row.get('due_at')))
+
+
 def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, call_budget=None,
             model_targets=None, accepted_model=None, enabled_flags=None, semantic_only=False):
     """Exact labels/dependencies decide first; model answers never become facts."""
@@ -132,20 +187,11 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
         due = timestamp(row.get('due_at'))
         if row.get('due_at') and due is None:
             item['unknown'].append('due date malformed or lacks timezone')
-        active_dependencies = isinstance(row.get('blocked_by'), list) and any(
-            dep in by_id for dep in row['blocked_by'])
-        blocked = active_dependencies or row.get('status') in {'blocked','deferred'} or any(
-            label.startswith(('blocked:', 'parked:')) for label in labels)
-        item['band'] = 'blocked' if blocked else 'due' if due and due <= now else 'normal'
-        item['band_basis'] = 'blocked state' if blocked else 'due date' if due and due <= now else 'existing rank, then creation/id'
         # Labels are explicit metadata; a matching phrase in a title is not a fact.
         for kind in ('merge-pr', 'automation'):
             if kind in policies and labels.intersection(policies[kind].get('fact_labels', [FACT_LABELS[kind]])):
                 item['proposed_priority'] = 0
                 item['citations'].append(dict(rule=policies[kind]['iri'], fact='exact labels: ' + ', '.join(sorted(labels.intersection(policies[kind].get('fact_labels', [FACT_LABELS[kind]]))))))
-                if not blocked:
-                    item['band'] = 'immediate'
-                    item['band_basis'] = kind
         if FACT_LABELS['personal-need'] in labels and 'personal-need' in policies:
             if due and due.astimezone(now.tzinfo).date() <= now.date():
                 item['proposed_priority'] = 0
@@ -209,6 +255,8 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
     for item in proposals.values():
         item['unknown'] = sorted(set(item['unknown']))
         row = by_id[item['item']]
+        _fact_band(row, item, rows, proposals, by_id, now)
+        item['unknown'] = sorted(set(item['unknown']))
         # Assignment need is distinct from a positive observation of a down
         # owner. Never turn a missing/held owner observation into re-ownership.
         unassigned = (not item['owner'] and item['proposed_priority'] <= 1
@@ -248,7 +296,8 @@ def propose(rows, policies, liveness, *, now, client=None, inference_sink=None, 
                     rule=policies[kind]['iri'], accepted=False))
         # Only unresolved rank bands reach the choice arm. Exact ranks, due
         # dates, known dependencies and holds already decide their bands.
-        if not semantic_only and item['band'] == 'normal' and _existing_rank(row)[0]:
+        if (not semantic_only and item['proposed_priority'] != 0
+                and item['band'] == 'normal' and _existing_rank(row)[0]):
             result = infer('jev_choice', dict(state=state,
                 criteria={'immediate':'needs a same-day administrator ruling',
                           'normal':'ordinary actionable work', 'later':'low urgency within its declared tier'},
@@ -369,7 +418,7 @@ def benchmark(cases, policies, *, client=None, inference_sink=None):
         expected = case['expected']
         if (not {'priority','band','reowner'} <= set(expected) or set(expected) - {'priority','band','reowner','flags'} or type(expected['priority']) is not int
                 or expected['priority'] not in range(5) or not isinstance(expected['band'], str)
-                or expected['band'] not in BANDS or type(expected['reowner']) is not bool):
+                or expected['band'] not in BANDS or expected['band'] == 'unknown' or type(expected['reowner']) is not bool):
             raise TriageError('benchmark labels must be exact priority/band/reowner judgments')
         if not isinstance(case.get('context', []), list):
             raise TriageError('benchmark historical context UNKNOWN')
@@ -389,7 +438,7 @@ def benchmark(cases, policies, *, client=None, inference_sink=None):
     for case in cases:
         expected = case['expected']
         if (not {'priority','band','reowner'} <= set(expected) or set(expected) - {'priority','band','reowner','flags'} or type(expected['priority']) is not int
-                or expected['priority'] not in range(5) or expected['band'] not in BANDS
+                or expected['priority'] not in range(5) or expected['band'] not in BANDS or expected['band'] == 'unknown'
                 or type(expected['reowner']) is not bool):
             raise TriageError('benchmark labels must be exact priority/band/reowner judgments')
         # Context contains prerequisites from the same historical snapshot, not
@@ -510,7 +559,33 @@ def dependencies(tracker, rows):
             output[row['id']].add(identifier)
     if set(seen) != {row['id'] for row in rows} or any(len(g) != 1 for g in seen.values()):
         raise TriageError('dependency coverage absent or shadowed; no empty-list assumption')
-    return [dict(row, blocked_by=sorted(output[row['id']])) for row in rows]
+    states = {row['id']: row['status'] for row in rows}
+    external = set().union(*output.values()) - set(states) if output else set()
+    if external:
+        endpoints = {_iri(SEEDS + 'item/' + quote(i, safe='')): i for i in external}
+        values = ' '.join(endpoints)
+        branches = [f'{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {values} }} '
+                    f'?s a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id ; '
+                    f'<{SEEDS}ontology/status> ?status }} BIND({json.dumps(graph)} AS ?graph) }}'
+                    for graph in (proof.graph, proof.graph + '#seeds-ephemeral')]
+        wire = _query(proof, 'SELECT ?s ?id ?status ?graph WHERE { '
+                      + ' UNION '.join(branches) + ' } LIMIT 5001', tracker.timeout)['rows']
+        if len(wire) >= 5001:
+            raise TriageError('dependency endpoint status coverage bound reached')
+        observed = defaultdict(set)
+        for record in wire:
+            ident = endpoints.get('<' + str(record.get('s', '')) + '>')
+            if (ident is None or record.get('id') != ident
+                    or record.get('status') not in ACTIVE | {'closed'}
+                    or record.get('graph') not in (proof.graph, proof.graph + '#seeds-ephemeral')):
+                raise TriageError('dependency endpoint identity/status UNKNOWN')
+            observed[ident].add((record['status'], record['graph']))
+        if set(observed) != external or any(len(v) != 1 for v in observed.values()):
+            raise TriageError('dependency endpoint coverage absent or shadowed; no zero-blocker assumption')
+        states.update({ident: next(iter(value))[0] for ident, value in observed.items()})
+    return [dict(row, blocked_by=sorted(output[row['id']]),
+                 open_blockers=sorted(dep for dep in output[row['id']] if states[dep] in ACTIVE))
+            for row in rows]
 
 
 def snapshot(tracker):
@@ -566,8 +641,8 @@ def owner_states(registry, panes, *, host, peers):
 def table(result):
     """A proposed table for the administrator; the JSON preserves full evidence."""
     lines = ['PROPOSED ONLY — administrator accepts or edits; no changes applied',
-             '| Item | Priority | Rank | Owner state | Re-owner | Needs owner | Basis |',
-             '| --- | --- | --- | --- | --- | --- | --- |']
+             '| Item | Priority | Rank | Owner state | Re-owner | Needs owner | Stale gate | Basis |',
+             '| --- | --- | --- | --- | --- | --- | --- | --- |']
     for row in result['proposals']:
         refs = ', '.join(c['rule'] for c in row['citations']) or row['band_basis']
         pending_flags = [f"untrusted {kind} p={value['probability']:.3f}"
@@ -575,7 +650,8 @@ def table(result):
         if pending_flags:
             refs += '; ' + ', '.join(pending_flags)
         fields = [row['item'], f"P{row['declared_priority']} → P{row['proposed_priority']}",
-                  row['proposed_rank'], row['owner_state'], 'YES' if row['reowner'] else 'no', 'YES' if row['needs_owner'] else 'no', refs]
+                  row['proposed_rank'], row['owner_state'], 'YES' if row['reowner'] else 'no', 'YES' if row['needs_owner'] else 'no',
+                  ', '.join(row['stale_gate_labels']) + ' (open blockers=0)' if row['stale_gate'] else 'no', refs]
         lines.append('| ' + ' | '.join(str(v).replace('|', '\\|').replace('\n',' ') for v in fields) + ' |')
     return '\n'.join(lines)
 

@@ -124,3 +124,12 @@ def test_semantic_only_model_change_preserves_both_verdicts_then_stops():
         rank.semantic_benchmark(cases(),POLICIES,client=client,
             inference_sink=lambda value: stored.append(value) or {'verified':True})
     assert len(client.calls)==2 and len(stored)==2
+
+
+def test_unknown_rank_band_cannot_be_a_scored_gold_label():
+    data=cases()
+    for c in data: c['expected'].update(priority=1,band='unknown',reowner=False)
+    client=NoulsOnly()
+    with pytest.raises(rank.TriageError,match='labels must be exact'):
+        rank.benchmark(data,POLICIES,client=client,inference_sink=lambda _:{'verified':True})
+    assert client.calls==[]

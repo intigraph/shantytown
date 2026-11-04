@@ -1,6 +1,6 @@
 """Offline source demonstration. Model and quarantine are strict fixtures."""
 import argparse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
 import sys
@@ -23,6 +23,12 @@ for status,priority in [('open',1),('deferred',0),('open',2)]:
     r=result['proposals'][0]
     print(json.dumps(dict(case='owner',priority=priority,status=status,needs_owner=r.get('needs_owner','UNAVAILABLE'),
                           reowner_down_only=r['reowner'],changes_applied=result['changes_applied']),sort_keys=True))
+for label, deps, explicit in [('blocked:external', [], None), ('blocked:human', [], []), ('blocked:external', ['unreadable'], None)]:
+    r=row(); r.update(status='deferred',labels=[label],blocked_by=deps,due_at=(now+timedelta(days=2)).isoformat())
+    if explicit is not None:r['open_blockers']=explicit
+    output=rank.propose([r],policies,{},now=now); value=output['proposals'][0]
+    print(json.dumps(dict(case='band',label=label,band=value['band'],stale_gate=value.get('stale_gate','UNAVAILABLE'),
+                          changes_applied=False,undefer_proposed=output['undefer_proposed']),sort_keys=True))
 client=Client();sink=lambda _:{'verified':True}
 if hasattr(rank,'semantic_benchmark'):
     cases=[dict(before=row('case'+str(i),priority=i%4),source='urn:fixture-label',rules=['urn:fixture-rule'],
