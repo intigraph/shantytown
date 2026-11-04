@@ -83,7 +83,7 @@ class Custody:
             self.record['state'] = state
             self.save(self.record)
 
-    def failed(self, panes):
+    def failed(self, panes, *, multiline=False):
         if self.record is None:
             return
         from . import triage
@@ -96,8 +96,11 @@ class Custody:
             return
         # Unknown session identity, busy state, multiline buffers and changed
         # text authorize no edits. Leave the body in custody and escalate.
-        if (record['session'] is None or '\n' in record['text']
-                or triage.mid_flight(screen)):
+        if record['session'] is None or triage.mid_flight(screen):
+            return
+        if '\n' in record['text']:
+            if multiline:
+                self._clear_multiline(panes, screen)
             return
         for key in ('C-e', 'C-u'):
             screen = panes.capture(self.pane, attrs=True, timeout=2)
@@ -112,7 +115,56 @@ class Custody:
         if triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER):
             self.finish('cleared')
 
-    def clear_previous(self, panes, screen):
+    def _clear_multiline(self, panes, screen):
+        """Bounded local recovery; fence every key against session and owned text."""
+        from . import input_box, triage
+        from .tmux import _codex_owned_input
+        record = self.record
+        if not _codex_owned_input(screen, record['text']):
+            return
+        expected = input_box._codex_box(screen)[2]
+        for _ in range(81):
+            before_length = len(expected)
+            for key in ('C-e', 'C-u', 'BSpace'):
+                screen = panes.capture(self.pane, attrs=True, timeout=2)
+                framed = input_box._codex_box(screen)
+                if (framed is None or triage.mid_flight(screen)
+                        or input_box._codex_busy(screen)
+                        or panes.session_created(self.pane) != record['session']
+                        or not panes._confirmed_codex(self.pane, panes.foreground(self.pane))):
+                    return
+                state, raw, current = framed
+                if state in (input_box.EMPTY, input_box.GHOST):
+                    self.finish('cleared')
+                    return
+                if current != expected or not _codex_owned_input(screen, expected):
+                    return
+                panes.control(self.pane, key)
+                if key == 'C-e':
+                    continue
+                if key == 'C-u':
+                    screen, changed = input_box._settle(panes, self.pane, raw)
+                else:
+                    # Removing a preceding newline is invisible after trim;
+                    # _settle's cursor nudge would move to the wrong line.
+                    time.sleep(0.15)
+                    screen = panes.capture(self.pane, attrs=True, timeout=2)
+                after = input_box._codex_box(screen)
+                if after is None:
+                    return
+                if after[0] in (input_box.EMPTY, input_box.GHOST):
+                    self.finish('cleared')
+                    return
+                # Deletion may only retain an unchanged buffer or its prefix.
+                # A foreign suffix/race stops before any further editing key.
+                remaining = after[2]
+                if not expected.startswith(remaining):
+                    return
+                expected = remaining
+            if len(expected) >= before_length:
+                return
+
+    def clear_previous(self, panes, screen, *, multiline=False):
         """A later sender may unblock only an earlier owned, failed send.
 
         `queued` counts as failed once Codex has moved that exact body back into
@@ -131,7 +183,7 @@ class Custody:
         self.record = matches[0]
         original = self.record['state']
         try:
-            self.failed(panes)
+            self.failed(panes, multiline=multiline)
             return self.record['state'] == 'cleared'
         finally:
             # failed() persists `unknown` before it captures the pane. On every
@@ -185,6 +237,29 @@ MAX_PENDING_SECONDS = 3600
 # on their own evidence, whatever the backlog holds.
 STRANDED_SECONDS = 900
 FAILED_SENDS = 5
+
+
+def clear_stalled_owned(root, card, panes, *, states=('superseded', 'queued', 'unknown')):
+    """Retire obsolete owned composer text without a board read or submission.
+
+    A superseded notice is excluded from supervise's pending queue. Waiting for
+    a later successful send to clear it deadlocks when that occupied composer
+    is precisely what prevents the next send. Session and exact-body custody
+    remain mandatory; foreign drafts and busy panes are never edited.
+    """
+    from .tmux import _codex_owned_input
+    socket = getattr(panes, 'socket', None)
+    screen = panes.capture(card.pane, attrs=True, timeout=2)
+    with Custody(root, card.pane, socket) as custody:
+        matches = [r for r in custody.records()
+                   if r['state'] in states and r['session'] is not None
+                   and r['session'] == panes.session_created(card.pane)
+                   and _codex_owned_input(screen, r['text'])]
+        return len(matches) == 1 and custody.clear_previous(panes, screen, multiline=True)
+
+
+def clear_superseded(root, card, panes):
+    return clear_stalled_owned(root, card, panes, states=('superseded',))
 
 
 def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
@@ -291,7 +366,10 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         break
 
     if reg is not None:
-        _stranded_watch(root, reg, card, panes, socket, screen, observed, now)
+        # An unreadable inbox is not an empty one: let a blocked composer page.
+        backlog = bool(pending) or bool(messages) or not readable
+        _stranded_watch(root, reg, card, panes, socket, screen, observed, now,
+                        backlog=backlog)
 
     # Age means observed unresolved, not an invented creation timestamp for a
     # legacy inbox row. A continuous backlog retains its first observation even
@@ -347,13 +425,24 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         pass
 
 
-def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
+def _stranded_watch(root, reg, card, panes, socket, screen, records, now, *, backlog=False):
     """Page the lead when st's own text is stuck in an idle composer for 15 min,
-    or FAILED_SENDS consecutive sends to the pane were never delivered.
+    when ANY text has held an idle composer for 15 min while mail waits, or
+    when FAILED_SENDS consecutive sends to the pane were never delivered.
 
-    Each condition is its own episode. The composer episode re-arms when the
-    composer stops holding that body; the send episode re-arms after a delivery.
-    No body text enters the alert, and nothing here types into the pane.
+    Each condition is its own episode. The composer episodes re-arm when the
+    composer stops holding that text or the pane is seen busy; the send
+    episode re-arms after a delivery. No body text enters the alert, and
+    nothing here types into the pane.
+
+    THE OCCUPIED EPISODE (aegis-fu2). On 11-01/02 franklin, wu and dearing sat
+    idle for hours behind composer text that matched no single custody body
+    (INFERRED: Codex handed several queued st bodies back to the composer
+    together at turn end). The owned episode needs an exact match, so it never
+    armed; the backlog watch had latched in October and never re-armed; and
+    every later send was refused occupied-composer. A composer holding text in
+    an idle pane while mail waits blocks all delivery whoever wrote it, so it
+    pages. It still never clears or submits: unmatched text authorizes no key.
     """
     from . import triage
     from .events import FilesEvents
@@ -361,9 +450,12 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
     from .tmux import _codex_owned_input
     records = sorted(records, key=lambda r: r['created'])
     owned = None
-    if not triage.mid_flight(screen):
+    busy = triage.mid_flight(screen)
+    if not busy:
         owned = next((r for r in records if r['state'] not in ('delivered', 'acknowledged')
                       and _codex_owned_input(screen, r['text'])), None)
+    occupied = (owned is None and not busy and backlog
+                and triage.input_state(screen) == triage.INPUT_QUEUED)
     last_ok = max((i for i, r in enumerate(records)
                    if r['state'] in ('delivered', 'acknowledged')), default=-1)
     # Queued input has been accepted for a later turn. Its idle backlog is
@@ -391,6 +483,18 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now):
                                f'for {int(now - composer["since"])}s; every later send is '
                                'refused until it clears'))
                 composer['alerted'] = True
+        held = watch.get('occupied') or {}
+        if not occupied:
+            watch.pop('occupied', None)
+        else:
+            held = held or dict(since=now, alerted=False)
+            watch['occupied'] = held
+            if not held['alerted'] and now - held['since'] >= STRANDED_SECONDS:
+                alerts.append((f'composer-occupied:{card.name}:{held["since"]}',
+                               f'{card.name}: idle composer has held text matching no single '
+                               f'st body for {int(now - held["since"])}s while mail waits; '
+                               'st cannot clear or submit it, and every later send is refused'))
+                held['alerted'] = True
         episode = failing[0]['id'] if len(failing) >= FAILED_SENDS else None
         sends = watch.get('sends') or {}
         if episode is None:

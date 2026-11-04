@@ -536,7 +536,7 @@ class Tmux:
         return f"{prefix} {args}" if prefix else args
 
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str:
+                *, timeout: float | None = None, check: bool = False) -> str:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps
         # the VISIBLE-only behaviour triage depends on (see the Panes protocol).
         # -e keeps the SGR sequences. Off by default because every plain-text
@@ -550,6 +550,10 @@ class Tmux:
             args += ["-S", f"-{int(history)}"]
         bounded = {"timeout": timeout} if timeout is not None else {}
         r = subprocess.run(self._cmd(*args), capture_output=True, text=True, **bounded)
+        # Observation provenance must distinguish a failed read from a real
+        # empty frame. Existing delivery/lifecycle callers retain their default.
+        if check:
+            r.check_returncode()
         return r.stdout if r.returncode == 0 else ""
 
     def foreground(self, pane: str) -> str | None:
@@ -1282,7 +1286,7 @@ class NullPanes:
         return self._exists
 
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str:
+                *, timeout: float | None = None, check: bool = False) -> str:
         # The double has no scrollback/visible split — one screen answers both.
         # attrs is accepted and ignored: whatever the caller seeded IS the
         # screen, escapes and all. Seed a screen with \x1b[2m in it to model a

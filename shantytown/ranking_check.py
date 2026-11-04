@@ -78,7 +78,10 @@ def digest(ready, rows, cards, live, *, counts):
     lines += mismatches or ["no proven live-agent priority mismatch"]
     lines.append("unowned P0: " + (", ".join(p0) if p0 else "none in complete active snapshot"))
     lines.append(counts)
-    return "\n".join(lines), bool(mismatches or p0)
+    # Only an unowned P0 interrupts the administrator (Stiwi 2026-11-04: the
+    # per-worker mismatch digest was "way too verbose"). Mismatches stay in the
+    # tend log as an advisory; they are not a page.
+    return "\n".join(lines), bool(p0)
 
 
 def report(root, ready, rows, reg, panes, *, counts_reader=None):
@@ -92,10 +95,27 @@ def report(root, ready, rows, reg, panes, *, counts_reader=None):
     return text, hashlib.sha256(text.encode()).hexdigest(), actionable or "UNKNOWN" in counts
 
 
-def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None):
+def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None,
+          label_item=None):
     """Reuse the existing administrator notifier and changed-digest ledger."""
     try:
         ready, rows = snapshot()
+        if label_item is not None:
+            from .work_class import preferred_labels
+            import time
+            deadline, labelled = time.monotonic() + 20, 0
+            # Candidate metadata only selects exact IDs. The callback reads
+            # current labels, appends individually, and verifies each write.
+            for row in ready:
+                if labelled >= 3 or time.monotonic() >= deadline:
+                    break
+                if workable(row) and preferred_labels(row.get('labels')):
+                    try:
+                        label_item(row['id'])
+                        labelled += 1
+                    except Exception as exc:
+                        log(f"ranking preference UNKNOWN {row['id']} ({type(exc).__name__}); no blind retry")
+                        break
         text, key, actionable = report(root, ready, rows, reg, panes, counts_reader=counts_reader)
         log(text)
         from .creel_advisory import Advice, Alerter

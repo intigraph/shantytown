@@ -527,3 +527,72 @@ def test_absolute_backlog_ceiling_alarms_in_every_pane_state(tmp_path, monkeypat
     observe(tmp_path, f, screen, start + 89000)
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
     assert len(wakes) == 1
+
+
+# aegis-fu2: Codex can hand several queued st bodies back to the composer
+# together at turn end. No single body matches, so the owned episode never arms.
+JOINED = OWNED.replace(BODY, BODY + ' [from st fleet tend] QUIET-TIME HOLD LIFTED')
+
+
+def occupied_events(tmp_path):
+    return [e for e in FilesEvents(tmp_path / 'events').pending('lead')
+            if 'matching no single st body' in e.detail]
+
+
+def test_unmatched_text_in_idle_composer_with_waiting_mail_pages_once_per_episode(
+        tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    t = time.time()
+    observe(tmp_path, f, JOINED, t)
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS - 1)
+    assert occupied_events(tmp_path) == []
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS)
+    [event] = occupied_events(tmp_path)
+    assert event.reason == 'delivery-stalled'
+    assert BODY not in event.detail and 'HOLD' not in event.detail
+    assert 'box=queued' in event.detail
+    assert len([w for w in wakes if 'matching no single' in w]) == 1
+    observe(tmp_path, f, JOINED, t + 3 * delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 1      # one page per episode
+    assert len([w for w in wakes if 'matching no single' in w]) == 1   # and one wake
+    # Seen busy, then stranded again: a new episode, paged again.
+    observe(tmp_path, f, BUSY, t + 3 * delivery.STRANDED_SECONDS + 1)
+    observe(tmp_path, f, JOINED, t + 4 * delivery.STRANDED_SECONDS)
+    observe(tmp_path, f, JOINED, t + 5 * delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 2
+    assert keys(f[1]) == []                          # unmatched text authorizes no key
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+
+
+def test_latched_october_backlog_watch_does_not_hide_an_occupied_composer(
+        tmp_path, monkeypatch):
+    """The measured fleet state: watch-* alerted since 10-20, never re-armed."""
+    import hashlib
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    (tmp_path / 'delivery' / (name + '.json')).write_text(json.dumps(
+        dict(id=name, since=1792514093.0, alerted=True)))
+    t = time.time()
+    observe(tmp_path, f, JOINED, t)
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 1
+
+
+@pytest.mark.parametrize('case', ['no-backlog', 'busy', 'owned', 'empty'])
+def test_occupied_episode_needs_idle_unmatched_text_and_waiting_mail(tmp_path, monkeypatch, case):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch,
+                        state='delivered' if case == 'no-backlog' else 'queued')
+    if case != 'no-backlog':
+        f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    screen = {'no-backlog': JOINED, 'busy': BUSY.replace(READY, JOINED),
+              'owned': OWNED, 'empty': READY}[case]
+    t = time.time()
+    for k in range(3):
+        observe(tmp_path, f, screen, t + k * delivery.STRANDED_SECONDS)
+    assert occupied_events(tmp_path) == []
+    assert keys(f[1]) == []
