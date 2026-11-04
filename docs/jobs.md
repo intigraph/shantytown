@@ -5,6 +5,35 @@ run the repo patrol*; *when someone outside the project opens a PR, create a
 triage item and hand it to an agent*. One TOML file per job lives in
 `<root>/jobs/`, and `st fleet tend` evaluates every job on each pass.
 
+## Delegate a host's scheduler to Chaski
+
+After installing a version of st that recognizes this setting and admitting
+the host's jobs to Chaski and signed execution, configure that host's
+`shantytown.toml`:
+
+```toml
+[jobs]
+scheduler = "chaski"
+```
+
+This skips tend's entire local job evaluator, before reading TOML or creating
+a local runner. Manual local `st work jobs run` and `check` also refuse, preventing a
+second execution path. Other hosts keep the default `scheduler = "local"`.
+The setting does not install, start or validate Chaski. Verify its declarations,
+signed firings and delivery, missed-deadline handling and rollback before the
+cutover. Fence and drain the old local firer, retain pending/unknown claims,
+then set this mode before enabling the replacement as sole firer. Stop the
+replacement before restoring local firing; never reset claims for a rollback.
+Reconcile completed slots across both retained ledgers before enabling local
+firing again, so a stale local cursor cannot replay a Chaski-completed slot.
+An invalid or unreadable configuration refuses local execution rather than
+using default configuration to start the old scheduler.
+
+Legacy list/history remain explicit local inspection surfaces for retained
+rollback data; they do not report Chaski runtime acceptance. Use `--graph` for
+Quipu declarations as below. The original TOML, ledgers, claims and outboxes
+are retained. This change does not change the tend supervision cadence.
+
 ## Read Quipu declarations
 
 The explicit graph read surface is available while signed execution is being
