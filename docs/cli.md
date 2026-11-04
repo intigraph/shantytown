@@ -2505,6 +2505,11 @@ requires a stats event within the last hour and matching transcript metadata.
 
 ### Board triage (Jev)
 
+For read-only governed P0/P1 priority/rank proposals, use
+`st work triage --rank-proposals --rank-rules reviewed-rules.json --dry-run`.
+See [governed rank proposals](board-rank.md) for policy bindings, UNKNOWN
+liveness, the frozen benchmark and quarantine-only answer artifacts.
+
 `st work triage [item ...] --jev-command 'python3 /path/to/camayoc/scripts/jev_mcp.py'`
 previews routing, duplicate and escalation severity suggestions. This earns a
 separate work command because it produces advice across the board, unlike
@@ -3350,8 +3355,11 @@ The graph owns the wording; this package owns only its bounded read and render.
 
 On the fleet-owner host, the existing `st fleet tend` pass includes an
 administrator ranking check. It names each live agent whose canonical plate
-is below strictly higher-priority unowned READY work, and lists all unowned P0
-items in the complete active/deferred metadata projection. Blocked work is not
+is below strictly higher-priority unowned READY work, with one count/priority
+comparison per agent. One shared list shows at most five unowned witnesses in
+priority/rank order, followed by `+N more`. It covers unowned READY work plus
+unowned P0 items in the complete active/deferred metadata projection; P0 items
+outside READY are explicitly labelled. Blocked work is not
 promoted to READY, and owned work is not relabeled unowned. No assignment,
 priority or rank changes automatically.
 
@@ -3369,8 +3377,13 @@ and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
 headers travel over private stdin rather than process arguments. Response and
 completeness caps still apply. Neither budget changes the server deadline.
 Changed actionable digests use the existing
-administrator advisory route; repeated digests are quiet. Routine healthy
-results remain in the scheduled pass log. The pass budget may defer this
+administrator advisory route only when unowned P0 work exists; lower-priority
+mismatches and unknown cohort counts do not page. Unchanged pushes remain quiet,
+and failed P0 pushes remain eligible for retry. Routine healthy results remain
+in the scheduled pass log, where unchanged digests repeat at most once an hour;
+content changes log immediately. The separate log ledger does not acknowledge
+or suppress administrator delivery. The routine advisory marker does not print
+a second copy of the shared list. The pass budget may defer this
 advisory sweep without interrupting supervision.
 
 ### Large durable inboxes

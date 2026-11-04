@@ -230,13 +230,23 @@ class SdTracker(BrTracker):
             raise ValueError("invalid blocker response")
         return value
 
-    def reconcile_blockers(self):
-        value = self._blocker_result("reconcile")
+    def reconcile_blockers(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("reconcile", *args)
         if not isinstance(value.get("changed"),list):
             raise ValueError("blocker reconciliation result UNKNOWN")
+        if identifier is not None and any(not isinstance(row,dict) or row.get("issue_id") != identifier for row in value["changed"]):
+            raise ValueError("blocker reconciliation escaped target")
 
-    def unlock_events(self):
-        value = self._blocker_result("events")
+    @staticmethod
+    def _unlock_target(identifier):
+        if not isinstance(identifier,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*",identifier):
+            raise ValueError("unlock target identity UNKNOWN")
+        return identifier
+
+    def unlock_events(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("events", *args)
         events = value.get("events")
         if not isinstance(events,list) or len(events) >= 1000 or value.get("has_more") is True or value.get("truncated") is True:
             raise ValueError("unlock event completeness UNKNOWN")
@@ -255,6 +265,8 @@ class SdTracker(BrTracker):
                     or event["event_id"] != f"seeds:unlock:{event['issue_id']}:{generation}"):
                 raise ValueError("unlock event identity/generation UNKNOWN")
             identities.add(event["event_id"])
+            if identifier is not None and event["issue_id"] != identifier:
+                raise ValueError("unlock event escaped target")
             rows.append({"kind":"unlock","id":event["issue_id"],
                          "episode":event["event_id"],"recipient":event.get("assignee")})
         return Answer.complete_read(rows,how="selected Seeds persistent pending unlock events")
