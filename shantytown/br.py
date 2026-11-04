@@ -16,6 +16,15 @@ from .protocols import BLOCKER_KIND_LABELS, WorkItem
 from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
 
+class UpdateConflict(RuntimeError):
+    """The transport's complete structured conflict; never retry automatically."""
+
+    def __init__(self, error):
+        self.error = error
+        self.details = error.get("details")
+        super().__init__(json.dumps({"error": error}, ensure_ascii=False, sort_keys=True))
+
+
 class BrTracker(BeadsTracker):
     """The three-operation Tracker protocol implemented through ``br``."""
 
@@ -118,8 +127,17 @@ class BrTracker(BeadsTracker):
                 args.append("--force")
         if len(args) == 2:
             return
+        if "if_revision" in fields:
+            args.append("--json")
         r = self._bd_for(item_id, *args)
         if r.returncode != 0:
+            if "if_revision" in fields and r.returncode == 4:
+                try:
+                    error = json.loads(r.stdout)["error"]
+                except (ValueError, KeyError, TypeError):
+                    error = None
+                if isinstance(error, dict) and error.get("code") == "CONFLICT":
+                    raise UpdateConflict(error)
             raise RuntimeError(
                 f"br update {item_id} failed: {r.stderr.strip()[:120]}")
 

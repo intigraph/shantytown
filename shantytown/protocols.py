@@ -295,6 +295,8 @@ class WorkItem:
     # Admission must distinguish detector/delivery records from existing work.
     # Carry this from the same item read; append to preserve positional callers.
     labels: tuple = ()
+    # Exact tracker CAS token; absence is UNKNOWN, never zero or a fresh read.
+    revision: int | None = None
 
 
 @runtime_checkable

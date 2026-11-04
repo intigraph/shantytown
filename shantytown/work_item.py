@@ -187,6 +187,13 @@ def command(args, tracker):
                        for row in _comments(tracker, item.id)):
                 raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
+    expected_revision = getattr(args, "if_revision", None)
+    if expected_revision is not None:
+        from .sd import SdTracker
+        if args.item_action != "update" or not isinstance(tracker, SdTracker):
+            raise ValueError("--if-revision requires update on the Seeds backend; no unguarded fallback")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("--if-revision must be a nonnegative integer")
     fields = {}
     replace_text = getattr(args, "replace_text", False)
     if replace_text and args.item_action != "update":
@@ -238,6 +245,8 @@ def command(args, tracker):
         if not args.dry_run:
             from .br import BrTracker
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
+            if expected_revision is not None:
+                options["if_revision"] = expected_revision
             from .sd import SdTracker
             if isinstance(tracker,SdTracker) and fields.get("status") == "in_progress":
                 session = getattr(args,"session",None)

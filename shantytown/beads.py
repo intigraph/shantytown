@@ -280,6 +280,8 @@ class BeadsTracker:
             d = d[0]
         return WorkItem(
             id=d.get("id", item_id),
+            revision=(d.get("revision") if type(d.get("revision")) is int
+                      and d["revision"] >= 0 else None),
             close_reason=d.get("close_reason"),
             title=d.get("title", ""),
             status=d.get("status", "open"),

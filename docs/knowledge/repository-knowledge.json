@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Work triage offers governed priority/rank proposals with quarantined model evidence; an administrator accepts changes.",
-      "source_sha256": "4906fcace31eeba477f253991824fd13a4fb2ab5baacc6a4c0ece6ab7a937196",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Work triage offers governed priority/rank proposals with quarantined model evidence; an administrator accepts changes. Explicit Seeds update revisions pass unchanged through admission and preserve structured conflicts without retry.",
+      "source_sha256": "aadad8c9c026ed5250f7857fc9863feeb51fb8e73deb2c7fa5d1d52ba2f307c6",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"

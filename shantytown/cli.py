@@ -1631,6 +1631,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--if-revision", type=int,
+                    help="Seeds only: refuse unless the item still has this revision; reread and rebase on conflict")
     wi.add_argument("--replace-text", action="store_true",
                     help="explicitly replace non-empty notes/description from the supplied file; read back first")
     wi.add_argument("--file", type=Path)

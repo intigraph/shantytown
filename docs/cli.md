@@ -3011,6 +3011,15 @@ it deliberately, read back the item, preserve its evidence and use
 `--description-file`; it is refused without a text file. It affects only the
 explicit update and does not weaken ordinary tracker or deferral writes.
 
+On Seeds, `st work item show ITEM` includes its `revision` (unknown backends
+report null). Carry that token into the edit:
+`st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
+The token is passed unchanged through any admission reread. A stale edit refuses
+and retains Seeds' structured conflict metadata; it never refreshes the token or
+retries the write. Independent fields still share one item revision: explicitly
+reread and rebase even when another writer changed a different field. Other
+backends refuse `--if-revision` rather than silently dropping the guard.
+
 The command writes once and verifies the exact new text. A timeout or failed
 read-back can follow a committed write: inspect the item before deciding on any
 retry. `--dry-run` performs no write, even with explicit replacement.
