@@ -92,7 +92,9 @@ def report(root, ready, rows, reg, panes, *, counts_reader=None):
     except Exception:
         counts = "P0 created/closed 7-day counts UNKNOWN"
     text, actionable = digest(ready, rows, cards, live, counts=counts)
-    return text, hashlib.sha256(text.encode()).hexdigest(), actionable or "UNKNOWN" in counts
+    # Unknown counts are logged, not paged: an unreadable board metric is not an
+    # unowned P0 (Stiwi 2026-11-04, ranking digest noise).
+    return text, hashlib.sha256(text.encode()).hexdigest(), actionable
 
 
 def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None,
