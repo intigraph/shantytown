@@ -64,7 +64,7 @@ def test_report_preserves_unknown_counts_instead_of_zero():
     reg=SimpleNamespace(all=lambda:Answer.complete_read(cards,how="fixture"))
     def fail(root):raise OSError("down")
     text,_,actionable=ranking.report(None,[],[],reg,SimpleNamespace(exists=lambda p:True),counts_reader=fail)
-    assert "counts UNKNOWN" in text and "created 0" not in text and actionable
+    assert "counts UNKNOWN" in text and "created 0" not in text and not actionable
 
 
 def test_actual_tend_digest_routes_once_to_administrator_and_changes_no_items(tmp_path):
