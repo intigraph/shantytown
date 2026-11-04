@@ -75,7 +75,10 @@ A Jev benchmark can add `--jev-command '<installed Jev MCP command>'`,
 `--rank-inferred-graph '<existing plane namespace>/crew/inferred'` and
 `--rank-journal-dir '<private owned directory>'`. Calls use the existing typed
 Jev client and a none-of-these option; a shared 100-call budget bounds the run.
-Only unresolved rank bands reach the model. Every valid answer is archived as
+Only unresolved rank bands and automation/personal classification flags reach
+the model. Exact facts decide first. Nouls remain probabilities and conditional
+P0 candidates marked unaccepted; they never become observed facts or an
+automatic priority, owner, dependency or lifecycle change. Every valid answer is archived as
 an inferred Artifact, with request/model/confidence and a locally derived
 request digest (not an invented external request ID). The writer checks the
 live graph registry's committed/local/knowledge/low-trust labels and served
@@ -94,9 +97,18 @@ and journal options. Admission contains the exact canonical `benchmark_digest`,
 `accepted_by`, ruling IRI, `valid_until`, `minimum_model_cases`,
 `minimum_agreement` and `maximum_false_reowner_rate`. These are explicit human
 review declarations, not authenticated identities or automatic policy promotion.
+The optional `flag_bounds` maps each accepted semantic arm (`automation`,
+`personal-need`) to explicit `minimum_cases` and `maximum_brier` bounds. Its
+benchmark labels use an optional `expected.flags` boolean map, never model
+features. Reports retain per-arm labelled MODEL counts and Brier scores; absent
+labels remain UNKNOWN. Observed label facts cannot qualify an untested model
+arm, and an accepted rank band does not implicitly admit semantic flags. No
+flag calls are made in normal mode without their own accepted calibration.
+`minimum_model_cases` counts rank-choice cases, not extra noul calls.
+
 The tool supplies no default thresholds and accepts no changed report, rule
 version or model. A changed model's answer is quarantined and then refused.
-Normal live proposals have a 500-call budget; the benchmark's budget is 100.
+Normal live proposals have a 1000-call budget; the benchmark's budget is 100.
 
 Without an independently measured report and administrator ruling, deterministic
 previews and benchmark preparation remain available; live Jev ranking refuses.

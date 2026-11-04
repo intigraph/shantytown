@@ -109,3 +109,12 @@ def test_wire_bytes_equal_journal_and_headers_are_not_recorded(tmp_path,monkeypa
     journal=next((tmp_path/'journal').glob('*.json'))
     assert journal.read_bytes()==captured[0].data
     assert b'SYNTHETIC' not in journal.read_bytes()
+
+
+def test_missing_or_latched_writer_refuses_before_graph_probe_or_model(tmp_path,monkeypatch):
+    from shantytown import quipu_auth
+    def missing(_):raise quipu_auth.CredentialRefused('fixture writer disabled')
+    monkeypatch.setattr(quipu_auth,'write_headers',missing)
+    with pytest.raises(quipu_auth.CredentialRefused):
+        Quarantine(NS(onto=ONTO,server='http://example.invalid'),GRAPH,tmp_path/'journal')
+    assert not (tmp_path/'journal').exists()

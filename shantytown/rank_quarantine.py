@@ -18,6 +18,11 @@ class Quarantine:
                 or not graph.endswith('/crew/inferred')
                 or not IRI.fullmatch(registry.onto)):
             raise TriageError('explicit crew/inferred graph and ontology are required; no ROOT fallback')
+        if call is None:
+            # Fail before a paid question when this session's writer is missing
+            # or latched off by an earlier authentication refusal.
+            from .quipu_auth import write_headers
+            write_headers(registry.server)
         self.registry, self.graph = registry, graph
         self.call = call or self._call
         self.journal = Path(journal)

@@ -87,14 +87,15 @@ class Client:
     def call(self,tool,args):
         self.calls.append((tool,args))
         return dict(request={'id':'test-request'},model='test-model',usage={},
-                    answer={'choice':'none-of-these','confidence':0.8})
+                    answer={'noul':0.02} if tool=='jev_noul' else {'choice':'none-of-these','confidence':0.8})
 
 
 def test_model_only_sees_undecided_rank_band_and_has_none_option():
     a,b,c=row('a'),row('b'),row('c');b['rank']='1';c['labels']=['work:merge-pr']
     client=Client();out=rank.propose([a,b,c],POLICIES,{},now=NOW,client=client,inference_sink=lambda _:dict(verified=True))
-    assert len(client.calls)==1
-    tool,args=client.calls[0];assert tool=='jev_choice' and args['none_text']
+    choices=[call for call in client.calls if call[0]=='jev_choice']
+    assert len(choices)==1 and sum(tool=='jev_noul' for tool,_ in client.calls)==4
+    tool,args=choices[0];assert tool=='jev_choice' and args['none_text']
     assert 'declared_priority' not in args['state'] and 'assignee' not in args['state']
     inference=next(p for p in out['proposals'] if p['item']=='a')['inferences'][0]
     assert inference['plane']=='quarantine' and inference['sourceKind']=='inferred'
@@ -237,3 +238,87 @@ def test_changed_model_is_quarantined_but_never_used_after_admission():
         rank.propose([row()],POLICIES,{},now=NOW,client=client,accepted_model='prior-model',
                      inference_sink=lambda value:stored.append(value) or dict(verified=True))
     assert len(stored)==1
+
+
+def test_semantic_nouls_are_quarantined_probabilities_not_observed_priority():
+    client=Client();stored=[]
+    out=rank.propose([row()],POLICIES,{},now=NOW,client=client,
+                     inference_sink=lambda value:stored.append(value) or dict(verified=True))
+    proposed=out['proposals'][0]
+    assert [i['arm'] for i in stored]==['automation','personal-need','rank-band']
+    assert proposed['semantic_flags']['automation']==dict(value=None,sourceKind='inferred',
+        probability=.02,rule='urn:rule:automation',accepted=False)
+    assert proposed['proposed_priority']==1 and proposed['conditional_priority'][0]['priority']==0
+    assert proposed['conditional_priority'][0]['accepted'] is False
+    assert out['changes_applied'] is False and out['undefer_proposed'] is False
+
+
+def test_fact_decided_tier_and_explicit_flags_do_not_spend_noul_calls():
+    r=row();r['labels']=['work:automation'];client=Client()
+    out=rank.propose([r],POLICIES,{},now=NOW,client=client,inference_sink=lambda _:dict(verified=True))
+    assert client.calls==[]
+    assert out['proposals'][0]['semantic_flags']['automation']['sourceKind']=='observed'
+
+
+def test_rank_admission_does_not_implicitly_admit_unbenchmarked_flag_arms():
+    assert rank.admitted_flags({}, {})==set()
+    admission=dict(flag_bounds={'automation':dict(minimum_cases=10,maximum_brier=.1)})
+    with pytest.raises(rank.TriageError,match='calibration bound'):
+        rank.admitted_flags({'flag_metrics':{'automation':dict(count=0,model_cases=0,brier_mean=None)}},admission)
+    assert rank.admitted_flags({'flag_metrics':{'automation':dict(count=12,model_cases=12,brier_mean=.04)}},admission)=={'automation'}
+    client=Client()
+    out=rank.propose([row()],POLICIES,{},now=NOW,client=client,enabled_flags=set(),
+                     inference_sink=lambda _:dict(verified=True))
+    assert [tool for tool,_ in client.calls]==['jev_choice']
+    assert out['proposals'][0]['semantic_flags']=={}
+
+
+def test_flag_calibration_is_separate_and_only_labelled_model_calls_qualify():
+    cases=[dict(before=row('task'+str(i)),source='urn:ruling:'+str(i),rules=['urn:rule:base'],
+                observed_at=NOW.isoformat(),owner_states={'worker':'up'},owner_evidence='urn:roster:before',
+                expected=dict(priority=1,band='normal',reowner=False,
+                              flags={'automation':False,'personal-need':False})) for i in range(30)]
+    out=rank.benchmark(cases,POLICIES,client=Client(),inference_sink=lambda _:dict(verified=True))
+    assert out['target_model_calls']==90 and out['target_model_cases']==out['rank_model_cases']==30
+    assert out['flag_metrics']['automation']['count']==out['flag_metrics']['automation']['model_cases']==30
+    assert out['flag_metrics']['automation']['brier_mean']==pytest.approx(.0004)
+    assert out['abstain_rate']==1 and out['incremental_agreement']==0
+    admission=dict(flag_bounds={'automation':dict(minimum_cases=30,maximum_brier=.01)})
+    assert rank.admitted_flags(out,admission)=={'automation'}
+    # A perfect fact-only sample is not evidence the Jev semantic arm works.
+    out['flag_metrics']['automation'].update(model_cases=0,brier_mean=0)
+    with pytest.raises(rank.TriageError,match='calibration bound'):
+        rank.admitted_flags(out,admission)
+
+
+def test_noul_call_count_cannot_fake_rank_arm_coverage():
+    report=dict(schema='st-rank-benchmark/v1',count=30,rules_digest=rank.digest(POLICIES),
+                models=['test-model'],target_model_calls=90,rank_model_cases=0,
+                agreement=1,false_reowner_rate=0)
+    admission=dict(benchmark_digest=rank.digest(report),accepted_by='administrator',ruling='urn:ruling:1',
+                   valid_until='2026-11-05T00:00:00Z',minimum_model_cases=10,
+                   minimum_agreement=.8,maximum_false_reowner_rate=0)
+    with pytest.raises(rank.TriageError,match='acceptance'):
+        rank.admitted_model(report,admission,POLICIES,NOW)
+
+
+def test_observed_facts_do_not_dilute_semantic_model_error():
+    cases=[]
+    for i in range(60):
+        before=row('task'+str(i));fact=i<30
+        if fact:before['labels']=['work:automation']
+        cases.append(dict(before=before,source='urn:ruling:'+str(i),rules=['urn:rule:automation'],
+                          observed_at=NOW.isoformat(),owner_states={'worker':'up'},owner_evidence='urn:roster:before',
+                          expected=dict(priority=0 if fact else 1,band='immediate' if fact else 'normal',reowner=False,
+                                        flags={'automation':fact})))
+    class Wrong(Client):
+        def call(self,tool,args):
+            value=super().call(tool,args)
+            if tool=='jev_noul':value['answer']['noul']=1.0
+            return value
+    out=rank.benchmark(cases,POLICIES,client=Wrong(),inference_sink=lambda _:dict(verified=True))
+    metric=out['flag_metrics']['automation']
+    assert metric['count']==60 and metric['observed_cases']==metric['model_cases']==30
+    assert metric['brier_mean']==1
+    with pytest.raises(rank.TriageError,match='calibration bound'):
+        rank.admitted_flags(out,dict(flag_bounds={'automation':dict(minimum_cases=30,maximum_brier=.6)}))
