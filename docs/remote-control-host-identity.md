@@ -17,7 +17,8 @@ A namespace wrapper must run after this capture. If a service manager wraps the
 entire launcher, its reviewed controller must capture and supply the original
 physical hostname before entering the namespace. Merely installing this code
 inside an already-renamed namespace cannot recover the original hostname.
-Explicit `QUIPU_HOST` declarations retain their existing precedence. Fleet
+The launcher also pins the standard `QUIPU_HOST` fallback for other inherited
+stack CLIs; explicit declarations retain their existing precedence. Fleet
 routing and governor census continue to use the declared deployment host.
 
 This prerequisite does not enable or launch a namespace. Before a one-card pilot,

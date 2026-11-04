@@ -1008,7 +1008,13 @@ class CodexHarness:
         # inherited pin when a launch is composed from an existing tool shell;
         # recapturing there would turn a display label into lifecycle identity.
         from .host_identity import ENV as physical_host_env, physical_hostname
-        physical_env = f"{physical_host_env}={shlex.quote(physical_hostname())} "
+        physical_host = physical_hostname()
+        # Other stack CLIs inherit standard Quipu attribution, not this
+        # Python module. Pin its existing fallback before UTS as well, while
+        # retaining an explicit declaration (including invalid/UNKNOWN).
+        quipu_host = os.environ.get("QUIPU_HOST", physical_host)
+        physical_env = (f"{physical_host_env}={shlex.quote(physical_host)} "
+                        f"QUIPU_HOST={shlex.quote(quipu_host)} ")
         identity_env = (
             f"{carried_env}{credential_env}{root_env}{physical_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"

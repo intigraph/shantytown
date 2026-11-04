@@ -1,6 +1,8 @@
 """Private display hostnames must not fork crew identity or lifecycle fences."""
 import hashlib
 import json
+import os
+import subprocess
 import socket
 from types import SimpleNamespace
 
@@ -125,6 +127,7 @@ def test_remote_daemon_and_attached_tui_carry_same_pin(namespace, tmp_path):
     command = harness.get('codex').launch(Agent(name='ada', role='worker'), str(config), root=tmp_path)
     assert 'codex remote-control start' in command
     assert command.count('SHANTY_PHYSICAL_HOST=Host-A.example ') >= 2
+    assert command.count('QUIPU_HOST=Host-A.example ') >= 2
     assert 'SHANTY_PHYSICAL_HOST=ada ' not in command
 
 
@@ -135,3 +138,17 @@ def test_governor_census_filters_by_declared_host_in_namespace(namespace, tmp_pa
     monkeypatch.setattr(cli, '_registry', lambda a: SimpleNamespace(all=lambda: SimpleNamespace(exact=lambda: cards)))
     rows = cli._governor_agents(SimpleNamespace(root=tmp_path))
     assert [(r['name'], r['host']) for r in rows] == [('ada', 'host-a')]
+
+
+@pytest.mark.parametrize('explicit', [None, 'declared-host'])
+def test_actual_tool_child_inherits_standard_quipu_host(namespace, tmp_path, monkeypatch, explicit):
+    if explicit is not None:
+        monkeypatch.setenv('QUIPU_HOST', explicit)
+    binary = tmp_path / 'bin/codex'
+    binary.parent.mkdir()
+    binary.write_text('#!/usr/bin/python3\nimport json,os\nprint(json.dumps({k:os.environ.get(k) for k in ["SHANTY_PHYSICAL_HOST","QUIPU_HOST"]}))\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv('PATH', str(binary.parent) + os.pathsep + os.environ['PATH'])
+    command = harness.get('codex').launch(Agent(name='ada', role='worker'), str(tmp_path / 'config.toml'))
+    result = subprocess.run(['/bin/sh', '-c', command], capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout) == {'SHANTY_PHYSICAL_HOST': namespace, 'QUIPU_HOST': explicit or namespace}
