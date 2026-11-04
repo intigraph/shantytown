@@ -78,7 +78,10 @@ def digest(ready, rows, cards, live, *, counts):
     lines += mismatches or ["no proven live-agent priority mismatch"]
     lines.append("unowned P0: " + (", ".join(p0) if p0 else "none in complete active snapshot"))
     lines.append(counts)
-    return "\n".join(lines), bool(mismatches or p0)
+    # Only an unowned P0 interrupts the administrator (Stiwi 2026-11-04: the
+    # per-worker mismatch digest was "way too verbose"). Mismatches stay in the
+    # tend log as an advisory; they are not a page.
+    return "\n".join(lines), bool(p0)
 
 
 def report(root, ready, rows, reg, panes, *, counts_reader=None):
