@@ -605,3 +605,44 @@ def test_NO_blockers_is_served_normally(tmp_path):
     p = d.go("item-1", "ellie")
     assert p is not None and panes.sent, "an item with no blockers was refused"
     assert trk.get("item-1").status == "in_progress"
+
+
+def test_handoff_notice_and_record_preserve_dispatch_budget(world,tmp_path):
+    from shantytown import cycle_advice as ca
+    d,tracker,panes=world
+    class Advisor:
+        def preview(self,item,card):
+            return ca.handoff_preview(tmp_path,item,ca.Situation(card.name,80,400,next_task=item.id),ca.Policy())
+        def record(self,agent,preview):
+            assert len(panes.sent)==1 and tracker.updates==1 and tracker.gets==2
+            ca.record_handoff(tmp_path,agent,preview)
+    d.handoff=Advisor()
+    plan=d.go('item-1','ellie')
+    assert 'cycle advice default: relatedness=UNKNOWN' in panes.sent[0][1]
+    assert ca.latest(tmp_path,'ellie').next_task=='item-1'
+    assert tracker.gets+tracker.updates==3
+    assert plan.handoff_warning==''
+
+
+def test_handoff_dry_run_and_refused_delivery_do_not_record(world,tmp_path,monkeypatch):
+    from shantytown import cycle_advice as ca
+    from shantytown.dispatch import SendUnverified
+    d,tracker,panes=world
+    class Advisor:
+        def preview(self,item,card):return {'notice':'cycle advice keep','signal':None}
+        def record(self,*args):pytest.fail('non-verified handoff recorded')
+    d.handoff=Advisor()
+    d.go('item-1','ellie',dry_run=True)
+    monkeypatch.setattr(d,'verify',lambda *a:False)
+    with pytest.raises(SendUnverified):d.go('item-1','ellie')
+    assert tracker.updates==0 and ca.latest(tmp_path,'ellie') is None
+
+
+def test_advisory_failure_is_unknown_and_does_not_break_verified_dispatch(world):
+    d,tracker,panes=world
+    class Advisor:
+        def preview(self,*args):raise OSError('sensitive detail')
+    d.handoff=Advisor()
+    p=d.go('item-1','ellie')
+    assert tracker.updates==1 and 'cycle advice UNKNOWN (OSError)' in p.text
+    assert 'sensitive detail' not in p.text

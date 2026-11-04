@@ -1,0 +1,9 @@
+Script started on 2026-11-04 05:41:09-05:00 [COMMAND="PYTHONPATH=. python3 docs/pr-demos/cache-handoff.py" <not executed on terminal>]
+BEFORE: {"last_at": null, "ttl_seconds": null}
+AFTER: {"cache_write_input_tokens": 1000, "cached_input_tokens": 11000, "last_at": 1793782860.0, "model": "gpt-6.1-sol", "provider": "codex", "ttl_seconds": 1800, "ttl_source": "assumed model policy (transcript model); eviction unmeasured"}
+COLD START: cycle advice default: relatedness=UNKNOWN, idle=UNKNOWN, TTL=UNKNOWN (legacy configured window); previous verified work facts unavailable; signal from st-handoff-overlap: carries neither a decision nor a relatedness
+NEXT: cycle advice keep: relatedness=0.50, idle=10s, TTL=1800s (assumed model policy (transcript model); eviction unmeasured); shared repository; file overlap unmeasured; st-handoff-overlap rates relatedness 0.50; cache warm (model-window estimate; eviction unmeasured); keeping is cheaper
+NEXT: cycle advice cycle: relatedness=0.50, idle=1801s, TTL=1800s (assumed model policy (transcript model); eviction unmeasured); shared repository; file overlap unmeasured; st-handoff-overlap rates relatedness 0.50; cache lapsed (model-window estimate; eviction unmeasured); cycling is cheaper
+No live dispatch, lifecycle action, tracker write or model call.
+
+Script done on 2026-11-04 05:41:10-05:00 [COMMAND_EXIT_CODE="0"]

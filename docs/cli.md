@@ -487,14 +487,12 @@ recorded roster and timer state and verify the result. A second window ID cannot
 overwrite the first. Human GO/FIRE, rollback, scope-widening and destructive decisions
 remain outside the command.
 
-The thirtieth is **advise**: keep-or-cycle at a handoff (docs/cycle-advice.md).
-Depth said whether a session CAN continue, never whether it SHOULD: a session
-about to start the next bead in the same module was cycled anyway, and one idle
-past its cache TTL carried its whole transcript into unrelated work, paying a
-full cache write to do it. It is a command and not a flag on `cycle` because it
-is the CALL-IN surface: whatever judges relatedness (Jev, the agent at its own
-checkpoint, a script) posts through it, so st names no model, needs no key, and
-with nothing posted decides nothing.
+The thirtieth is **advise**: keep-or-cycle at a handoff ([cycle advice](cycle-advice.md)).
+Normal dispatches preview repository/file/scope overlap and record a signal only
+after verified delivery and custody. Claude cache-write TTLs are observed; Codex
+usage timing and counters use labelled per-model retention assumptions. Missing
+facts stay UNKNOWN, explicit caller judgements take precedence, and the hard
+context ceilings remain authoritative. Notices include the score and cache basis.
 
 The thirty-first is **jobs**: declared scheduled and event-driven work
 (docs/jobs.md). Every recurring job used to be a sweep hard-coded into tend or

@@ -585,9 +585,9 @@ min_sync_version = 1
 # ---------------------------------------------------------------------------
 # [cycle_advice] — keep or cycle at a handoff (docs/cycle-advice.md).
 #
-# INERT UNTIL SOMETHING CALLS IN. st judges no relatedness itself: a model, the
-# agent, or a script posts it with `st agent advise <agent> --related P --by WHO`.
-# With nothing posted, this table is never consulted. Every key is optional.
+# Normal dispatch records repository/file/scope overlap after verified delivery.
+# A caller can override it with `st agent advise <agent> --related P --by WHO`.
+# Cold or incomplete evidence stays UNKNOWN. Every key is optional.
 # ---------------------------------------------------------------------------
 
 # [cycle_advice]
@@ -596,6 +596,9 @@ min_sync_version = 1
 # keep_at = 0.8
 # cycle_below = 0.3
 # expected_turns = 10
+# [cycle_advice.model_cache_ttl_seconds]
+# "gpt-6*" = 1800             # assumed advisory window, not measured eviction
+# "claude-*" = 300            # observed transcript 5m/1h TTLs override this
 
 # Optional named Claude administrator Stop cadence. OFF preserves current hooks.
 # Stage advise before enforce; ongoing turns and external prompts are NOT capped.

@@ -547,7 +547,26 @@ def _wire(a) -> Dispatcher:
     from .actor_identity import authenticated_actor
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
                       governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
-                      audit=FeedAudit(Path(a.root)))
+                      audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a))
+
+
+
+def _handoff_advisor(a):
+    """Use the dispatch's already-read item; no additional tracker query."""
+    from . import cycle_advice
+
+    class Advisor:
+        def preview(self, item, card):
+            cfg, error = config.load_or_default(Path(a.root))
+            if error:
+                raise ValueError('cycle configuration unreadable')
+            sit, _ = _advise_situation(a, card.name, cfg, next_task=item.id, card=card)
+            return cycle_advice.handoff_preview(a.root, item, sit, cfg.cycle_advice)
+
+        def record(self, agent, preview):
+            cycle_advice.record_handoff(a.root, agent, preview)
+
+    return Advisor()
 
 
 def _local_governors(a):
@@ -7938,6 +7957,10 @@ def _cmd_go(a) -> int:
                           suggestion=suggestion)
     if advice := _priority_go_note(a):
         print("  " + advice, file=sys.stderr)
+    if p.handoff_preview is not None:
+        print('  ' + p.handoff_preview['notice'])
+    if p.handoff_warning:
+        print('  ' + p.handoff_warning, file=sys.stderr)
     print(f"  {p.item_id} -> {p.agent}          in progress")
     print(f"  sent to pane {p.pane}")
     print(f"  {gctx.render()}")
@@ -10480,11 +10503,16 @@ def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
                                      command, depth, triage_mod.CYCLE_THRESHOLD_K)
 
 
-def _advise_situation(a, agent: str, cfg):
+def _advise_situation(a, agent: str, cfg, *, next_task=None, card=None):
     """The measured half of cycle_advice: depth and cache timing from the transcript
     the Stop hook last recorded (context_hint), and the next task from the plate."""
     from . import context_spend, cycle_advice, triage as triage_mod
     transcript = None
+    if card is None:
+        try:
+            card = _registry(a).get(agent)
+        except Exception:  # advisory metadata is not an authorization decision
+            card = None
     try:
         obs = json.loads((Path(a.root) / "context_budget" / f"{agent}.json").read_text())
         transcript = (obs.get("payload") or {}).get("transcript_path")
@@ -10521,11 +10549,19 @@ def _advise_situation(a, agent: str, cfg):
                 depth_k = triage_mod.context_tokens_k(panes.capture(card.pane))
         except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
             pass
+    resolved_model = getattr(card, 'model', None)
+    if card is not None and not resolved_model:
+        try:
+            from .harness import resolve_model
+            resolved_model = resolve_model(card, root=Path(a.root))
+        except Exception:  # an unknown selection cannot become a model guess
+            resolved_model = None
     return cycle_advice.Situation(
         agent=agent, depth_k=depth_k,
         cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
-        next_task=_cycle_anchor_bead(a, agent),
-        cache=cycle_advice.read_cache(transcript)), transcript
+        next_task=_cycle_anchor_bead(a, agent) if next_task is None else next_task,
+        cache=cycle_advice.read_cache(transcript, policy=getattr(cfg, 'cycle_advice', None),
+                                     model=resolved_model)), transcript
 
 
 def _cycle_advisor(a):
@@ -10596,6 +10632,7 @@ def _cmd_advise(a) -> int:
             brief=cycle_advice.brief(parts, a.brief_chars or policy.brief_chars, policy),
             next_task=sit.next_task, transcript=transcript,
             idle_seconds=sit.idle_seconds, cache_ttl_seconds=sit.cache.ttl_seconds,
+            cache=dataclasses.asdict(sit.cache),
             signal=(dataclasses.asdict(signal) if signal else None),
             advice=dataclasses.asdict(advice)), indent=1))
         return OK
@@ -10605,6 +10642,8 @@ def _cmd_advise(a) -> int:
             else "idle unknown")
     ttl = (f"TTL {sit.cache.ttl_seconds // 60}m" if sit.cache.ttl_seconds
            else "TTL unrecorded")
+    if sit.cache.ttl_source:
+        ttl += ' (' + sit.cache.ttl_source + ')'
     print(f"  {agent}: {depth}, {idle}, {ttl}, next {sit.next_task or 'none on plate'}")
     if signal:
         bits = [f"related={signal.related:.2f}" if signal.related is not None else "",

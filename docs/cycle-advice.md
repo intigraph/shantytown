@@ -1,130 +1,110 @@
-# Cycle advice — keep or cycle at a handoff
+# Cycle advice
 
-Depth answers whether a session *can* continue. It never answered whether it
-*should*: a session about to start the next bead in the same module was cycled
-anyway, and a session idle past its prompt-cache TTL carried its whole transcript
-into unrelated work, paying a full cache write to do it.
+`st agent advise <agent>` reports keep-or-cycle advice from context depth,
+work overlap and cache evidence. Normal `st go` dispatches carry the same notice
+in the delivered work and print it for the sender. Advice does not bypass pane,
+checkpoint, ownership, capacity or governor gates.
 
-`st agent advise` adds two inputs to that decision:
+## Automatic handoff evidence
 
-- **Relatedness.** How much the next task (the plate item) needs this session's
-  context. st does **not** judge this. Something outside st posts it.
-- **Cache state.** How long since the last model request, and which TTL the
-  session's cache writes used. st measures this from the transcript
-  (`usage.cache_creation.ephemeral_{5m,1h}_input_tokens`), so a session on the
-  1h TTL is never priced as if it were on 5m.
+Dispatch compares the already-loaded item's explicit repository labels,
+relative source paths and named scope labels with the previous verified
+handoff. It performs no extra tracker read and calls no model.
 
-## Unconfigured means unchanged
+- The same item or shared explicit files gives strong overlap.
+- A shared repository, named source package or scope gives partial overlap.
+- Different explicit repositories gives low overlap.
+- Missing prior facts, missing scope, or merely different files stays UNKNOWN.
 
-With no signal posted the advice is `default` and every path behaves exactly as
-before. There is no model, key or service to set up. That is the point of the
-design: st exposes the seam, and whoever wants the judgement calls in.
+These scores measure metadata overlap, not calibrated semantic probabilities.
+The notice names its basis. Generic title words and missing facts do not establish
+unrelatedness. The first handoff starts with UNKNOWN and seeds facts for later
+handoffs. A local work-facts file and signal are recorded only after a verified
+send and assignment readback. Failed or dry-run dispatches do not record them.
+Persistence failures are reported separately from the successful dispatch.
 
-## Calling in
+Signals for different agents use a serialized update, so one handoff cannot erase
+another. A completed cycle clears only its own signal. Explicit, fresh caller
+judgements for the next item override automatic overlap, including a judgement
+posted between preview and recording.
 
+## Cache evidence
+
+Claude usage records supply observed five-minute or one-hour cache-write TTLs.
+A fully cached turn can use an earlier write from the same model. A model change
+cannot borrow the old model's write TTL. This handles recorded plan/overage
+changes through actual usage, without guessing account entitlement.
+
+Codex `event_msg` / `token_count` records supply the latest request time and
+cached/write counters. The preceding `turn_context` supplies its model when
+available; otherwise the configured card model is labelled as such. Retention
+is an **assumed model-policy window** when no explicit TTL was recorded. The
+notice and JSON identify that assumption. An unsupported model or unreadable
+request time remains UNKNOWN. Scans are bounded by records and bytes.
+
+The [official OpenAI cache guide](https://developers.openai.com/api/docs/guides/prompt-caching)
+distinguishes minimum cache lifetime from eviction. Its API defaults do not prove
+Codex subscription retention. Elapsed policy windows are advisory estimates;
+`cache_lapsed` does not establish that a remote cache entry was evicted.
+
+## Explicit caller interface
+
+```sh
+st agent advise <agent> --related 0.85 --by reviewer --next ITEM
+st agent advise <agent> --decision cycle --by reviewer --reason 'different work'
+st agent advise <agent> --json
 ```
-st agent advise <agent> --related 0.85 --by jev [--next <bead>] [--reason "..."]
-st agent advise <agent> --decision cycle --by <agent> --reason "next bead is a different repo"
-st agent advise <agent> [--json]          # read: the situation and the advice
-```
 
-`--json` prints what a caller judges from: depth, cycle line, next task, idle
-seconds, cache TTL, the current signal, the advice, and two fields that keep a
-judge's input small:
+`--json` includes the full cache evidence and provenance, the signal, advice,
+`ask`, and a bounded `brief`. A checkpoint supplied with `--checkpoint-file`
+shares that brief fairly with the next task's title and notes. `--brief-chars`
+can request more up to `max_brief_chars`; no conversation is included in the brief.
+`--next-need-k` estimates fresh context needed by the next item.
 
-- **`ask`**: false past `always_cycle_above_k` or the cycle line, and when depth
-  is unreadable. A caller that sees `ask: false` does not call its judge at all:
-  that context is cleared regardless, so there is nothing to spend tokens on.
-- **`brief`**: what to judge from, never the transcript. It holds the checkpoint
-  you pass with `--checkpoint-file` as `current_session`, plus the next task's
-  id, title and notes. It is cut to `brief_chars` in total, and each part gets a
-  fair share, so a long checkpoint cannot crowd out the next task. When
-  `truncated` is true and the judge is unsure, ask again with a larger
-  `--brief-chars N`, which is capped at `max_brief_chars`. That is the
-  "ask for more" step: start small and widen only on doubt.
+## Decision rules
 
-**Predicted need.** `--next-need-k K` posts how much context the next task is
-expected to consume from a fresh session. If current depth plus K would cross
-the cycle line, keeping only postpones the cycle to the middle of the task, so
-st cycles now. Post the upper edge of the estimate, not the mean. A Jev `score`
-over bands works (under 50k / 50–120k / 120–250k / 250–400k / over 400k):
-post the top of the highest band holding meaningful probability. A vague task
-spreads its probability, so it gets a larger K and cycles sooner, which is the
-safe direction.
+| Situation | Advice |
+| --- | --- |
+| Hard cycle line or `always_cycle_above_k` reached | Cycle; no signal can extend the ceiling |
+| Missing, expired, wrong-item or UNKNOWN judgement | Default; existing depth policy applies |
+| Depth plus predicted next need reaches the cycle line | Cycle at the boundary |
+| Explicit decision | That decision, below the hard ceilings |
+| Strong overlap | Keep |
+| Low overlap | Cycle |
+| Partial overlap | Compare configured keep/rebuild cost estimates |
 
-A signal is dropped when:
-
-- it names a different next task than the plate,
-- it is older than `signal_max_age_minutes`, or
-- the cycle completes. It was about the session that just ended.
-
-## What st does with it
-
-| situation | advice |
-|---|---|
-| past the cycle line | `cycle`. No signal keeps a saturated context |
-| at or past `always_cycle_above_k` (350k) | `cycle`, and nobody is asked (`ask: false`) |
-| no signal / stale / wrong task | `default`. Depth lines decide, as before |
-| depth + posted `--next-need-k` ≥ cycle line | `cycle` at the boundary, not mid-task |
-| posted `--decision` | that decision |
-| related ≥ `keep_at` | `keep`. The reasoning in flight is worth more than the arithmetic |
-| related < `cycle_below` | `cycle`. Unrelated work |
-| otherwise | the cheaper of keep and cycle over `expected_turns` |
-
-In `st fleet tend`, advice only **escalates**: an agent between the pre-handoff
-and cycle lines whose advice is `cycle` gets the cycle prompt instead of the
-"write your handoff" nudge. `keep` never holds an agent past the cycle line.
-
-## The arithmetic
-
-In thousands of base-input-equivalent tokens, D = depth, F = `fresh_floor_k`,
-N = `expected_turns`, r = read multiplier, w = write multiplier for the
-session's TTL:
-
-- keep = (w if the cache lapsed else r)·D + r·D·(N−1)
-- cycle = w·(F+R) + r·(F+R)·(N−1), with R = related · `rebuild_fraction` · (D−F)
-
-The multipliers default to Anthropic's list prices (read 0.1×, write 1.25× for
-5m and 2× for 1h). On a subscription seat the currency is the governor's usage
-window, which st cannot see into, so every number is configurable.
+Unknown cache timing is priced warm, so missing data alone does not cause a
+cycle. Strong overlap can preserve reasoning below the hard ceiling even when
+an assumed cache window elapsed. An explicit cycle request still requests a cycle.
 
 ## Configuration
 
 ```toml
-[cycle_advice]            # every key optional
-always_cycle_above_k = 350  # at or past this: cycle, and never ask a judge
-brief_chars = 1500          # the first brief a judge gets
-max_brief_chars = 6000      # the most any --brief-chars can widen it to
+[cycle_advice]
+always_cycle_above_k = 350
+brief_chars = 1500
+max_brief_chars = 6000
 keep_at = 0.8
 cycle_below = 0.3
 signal_max_age_minutes = 120
-cache_ttl_seconds = 300   # only when the transcript records no TTL
+cache_ttl_seconds = 300 # compatibility fallback for legacy cache objects
 read_multiplier = 0.1
 write_multiplier_5m = 1.25
 write_multiplier_1h = 2.0
 fresh_floor_k = 40
 rebuild_fraction = 0.3
 expected_turns = 10
+
+[cycle_advice.model_cache_ttl_seconds]
+"gpt-6*" = 1800
+"gpt-5.6*" = 1800
+"gpt-5.5*" = 1800
+"gpt-5*" = 300
+"claude-*" = 300
 ```
 
-## Example caller: Jev
-
-Lives with the deployment, not in st. Run it after the checkpoint is written.
-`jev-noul` below stands for whatever reaches Jev in that deployment (the jev MCP
-tool, or camayoc's `scripts/jev.py`). It is not an st command:
-
-```sh
-st agent advise "$AGENT" --json --checkpoint-file handoff.md > sit.json
-[ "$(jq -r .ask sit.json)" = true ] || exit 0     # past the line: cleared anyway
-STATE=$(jq -c .brief.parts sit.json)             # bounded; never the transcript
-p=$(jev-noul --state "$STATE" --instructions "Would an agent starting next_task \
-materially benefit from keeping the working context of current_session (same \
-code, same files, same decisions in flight), rather than starting fresh from a \
-written handoff? Sharing only a broad topic or the same repo is not enough. If \
-the relationship is unclear or not stated, answer no.")
-need=$(jev-score-need --state "$STATE")          # e.g. 120 for "50-120k"
-st agent advise "$AGENT" --related "$p" --next-need-k "$need" --by jev
-```
-
-The abstain direction ("if unclear, answer no") sits inside the question, so a
-missing fact reads as *cycle*, never as a false *keep*.
+A configured table replaces the default model table. Values must be positive
+integer seconds. More specific patterns win independently of TOML key order.
+An empty table disables these estimates. Observed transcript TTLs always win;
+unknown models do not inherit the compatibility fallback. Multipliers remain
+operator-selected cost assumptions, not measured subscription charges.
