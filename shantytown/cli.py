@@ -11814,7 +11814,11 @@ def _cmd_worktree(a) -> int:
         print(path)
         return OK
     except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
+        from .workspace import WorktreeDamage
+        # A partial delete is not a refusal (aegis-5ox): "refused" reads as
+        # "nothing happened", and here something did.
+        label = "DAMAGE" if isinstance(e, WorktreeDamage) else "refused"
+        print(f"  {label}: {e}", file=sys.stderr)
         return REFUSED
 
 
