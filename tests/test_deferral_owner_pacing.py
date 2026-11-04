@@ -38,7 +38,7 @@ def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False):
     return sent, admin, result
 
 
-def test_nine_short_owner_waits_nudge_only_then_escalate_after_three_passes(tmp_path):
+def test_nine_owner_waits_stay_with_live_owner_after_three_passes(tmp_path):
     # Contract replay, not a claim these synthetic rows are historical packets.
     rows = [row(f"test-{n}") for n in range(9)]
     sent, admin, result = sweep(tmp_path, rows)
@@ -46,8 +46,8 @@ def test_nine_short_owner_waits_nudge_only_then_escalate_after_three_passes(tmp_
     assert all("OWNER-PACING" in text for _, text in sent)
     assert sweep(tmp_path, rows) == ([], [], [])
     sent, admin, result = sweep(tmp_path, rows)
-    assert not sent and len(admin) == 1 and len(result) == 9
-    assert sweep(tmp_path, rows) == ([], [], [])  # unchanged escalation dedup
+    assert not sent and not admin and not result
+    assert sweep(tmp_path, rows) == ([], [], [])
 
 
 @pytest.mark.parametrize("change", [
@@ -70,7 +70,7 @@ def test_down_stopped_or_failed_delivery_escalates(tmp_path, options):
 def test_exact_sixty_minute_boundary_and_long_control():
     item = row()
     end = item["defer_until"]
-    for minutes, expected in [(60, True), (61, False), (0, False)]:
+    for minutes, expected in [(60, True), (61, True), (24 * 60, True), (0, False)]:
         start = NOW - timedelta(minutes=minutes + 1)
         item["notes"] = provenance("worker", start.isoformat(), end)
         assert owner_window(item, NOW) is expected
@@ -114,11 +114,12 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
     tracker.update("test-ci", title="CI wait", status="open", assignee="worker")
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(minutes=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    result = dispatcher.defer("test-ci", "external", "CI wait", until=until, gate_authority="worker")
+    result = dispatcher.defer("test-ci", "external", "CI wait", until=until,
+                              gate_authority="worker", window=True)
     notes = tracker.get("test-ci").notes
     assert '"actor": "worker"' in notes and '"until":' in notes
     assert dispatcher.defer("test-ci", "external", "CI wait", until=until,
-                            gate_authority="worker").noop
+                            gate_authority="worker", window=True).noop
     assert tracker.get("test-ci").notes == notes
     assert result.reason in notes
 

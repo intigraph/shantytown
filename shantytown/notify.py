@@ -1767,10 +1767,18 @@ class DeferralAlerter:
                 continue
             if (finding.condition and finding.condition.testable()
                     and not finding.met and not finding.untestable):
-                continue  # a known unmet mechanical gate needs no ruling
+                from .deferral_pacing import owner_window
+                if not finding.lapsed_at or not owner_window(row, now):
+                    continue  # an unmet legacy gate needs no ruling
             stamp = pol.parse_stamp(row.get("defer_until"))
+            if stamp is not None and stamp > now and not finding.untestable and not finding.met:
+                continue  # neither the event nor its backstop is ready
             if stamp is not None and stamp > now and not finding.untestable:
-                continue  # the condition is met, but its separate date is not
+                # A future date still gates release. Only a proven owner-set
+                # reminder may be prompted early by a completed event.
+                from .deferral_pacing import owner_window
+                if not owner_window(row, now, event_ready=bool(finding.met)):
+                    continue
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
                 continue
@@ -1831,11 +1839,12 @@ class DeferralAlerter:
         routed = []
         for finding in reports:
             row = by_id.get(finding.bead)
-            if (row and finding.lapsed_at and not finding.read_error
+            event_ready = bool(finding.met and finding.condition
+                               and finding.condition.kind != "date")
+            if (row and (finding.lapsed_at or event_ready) and not finding.read_error
                     and not finding.untestable and not finding.prose_gate
-                    and (finding.condition is None or finding.condition.kind == "date"
-                         or (finding.met and finding.condition.kind == "event"))
-                    and pacing.route(row, now, live_owner, deliver_backstop)):
+                    and pacing.route(row, now, live_owner, deliver_backstop,
+                                     event_ready=event_ready)):
                 self._log(f"deferral-sweep: OWNER-PACING {finding.bead}; no admin ruling")
             else:
                 routed.append(finding)
