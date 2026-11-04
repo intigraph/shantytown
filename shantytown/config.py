@@ -1004,7 +1004,7 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
 # The card fields a human may DECLARE. `pane` is included but optional — omitted,
 # it is generated (tier.pane_for), which is the whole point of that change.
 _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
-              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome"}
+              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome", "harness_options"}
 
 
 def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
@@ -1049,8 +1049,14 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
                                   f"false, got {spec[flag]!r}")
+        from .harness_options import validate
+        try:
+            options = validate(spec.get("harness_options"))
+        except ValueError as error:
+            raise ConfigError(f"{path}: [crew.{name}] {error}") from error
         out[name] = Agent(
             name=name, role=role, reports_to=spec.get("reports_to"),
+            harness_options=options,
             pane=spec.get("pane") or pane_for(name),
             workspace=spec.get("workspace"),
             workspace_source=spec.get("workspace_source"),

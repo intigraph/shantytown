@@ -990,6 +990,18 @@ down; nothing is stalling) is still visible **before** someone walks into it. Ea
 short label for that column and a full sentence for the refusal: the rule is decided once, the
 length is the caller's, and the two surfaces cannot end up talking about different cards.
 
+## `st agent harness <agent> [target]` — retained launch preferences
+
+Report mode lists each harness's saved model and options. Conversion archives the
+outgoing explicit model and Claude Chrome preference under `harness_options`, then
+selects only the target's settings. A return trip restores those values. On a first
+conversion without a saved target model, use `--model <target-model>` when the
+current card has an explicit model. Unsupported options are retained with a notice
+and omitted from the target command. `--dry-run` writes nothing; a real conversion
+backs up the card and takes effect on the next relaunch unless `--now` is chosen.
+See [harness preferences](harnesses.md#and-which-model-that-program-runs) for the
+card schema and named-account behavior.
+
 ## `st fleet roles --check` — the hierarchy, verified
 
 ```
