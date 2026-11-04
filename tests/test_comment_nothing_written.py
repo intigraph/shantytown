@@ -272,3 +272,22 @@ def test_skew_allowance_stops_at_30s(tmp_path):
         [{"text": "the body", "author": "hammond", "created_at": _now(-40)}])
     with pytest.raises(RuntimeError, match="timed out.*may still land"):
         _comment(tmp_path, tracker)
+
+
+@pytest.mark.parametrize('rc,terminal', [
+    (1, 'sd: quipu 503: write outcome UNKNOWN; inspect readback before retrying'),
+    (4, 'sd: another writer changed it first; nothing was written'),
+])
+def test_comment_failure_reports_exit_and_terminal_error_after_observe_warning(rc, terminal):
+    warning = ('sd: actor/principal mismatch (observe): actor="worker" '
+               'principal="shared-writer" verb="comments add" ' + 'x' * 240 + '\n')
+    with pytest.raises(RuntimeError) as caught:
+        br_mod.append_comment(_Stub('sd', rc, warning + terminal), 'aegis-x', 'body')
+    assert terminal in str(caught.value)
+    assert f'exit {rc}' in str(caught.value)
+    assert isinstance(caught.value, br_mod.NothingWritten) == (rc == 4)
+
+
+def test_observe_warning_on_success_is_not_a_refusal():
+    br_mod.append_comment(_Stub('sd', 0, 'sd: actor/principal mismatch (observe)\n'),
+                          'aegis-x', 'body')

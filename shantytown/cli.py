@@ -2048,6 +2048,13 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--jev-command", help="quoted argv for the installed Camayoc Jev MCP server")
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
+    bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
+    bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
+    bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
+    bt.add_argument("--rank-benchmark-report", help="measured frozen benchmark JSON for an accepted live Jev arm")
+    bt.add_argument("--rank-admission", help="administrator declaration bound to that exact report; never applies board changes")
+    bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
@@ -2342,6 +2349,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="cycle even though a tree holds uncommitted or unpushed "
                          "work. Named separately from any --force ON PURPOSE, so "
                          "reaching past another refusal cannot disarm this one")
+    cy.add_argument("--bundle-custody-item", action="append", default=[], metavar="ID",
+                    help="item with root-accepted, independently verified exact-ref "
+                         "Git bundle custody (repeatable); never covers dirty work")
     # `--dry-run` is on every command that writes, from commit one — and this one
     # kills a live session, so it is not optional here. It also has to run the
     # GUARD before printing "would", or the preview an operator reads to authorise
@@ -2828,6 +2838,23 @@ def _run_command(a) -> int:
         try:
             if a.limit < 1 or a.limit > 100 or (a.publish and (a.dry_run or a.benchmark)):
                 raise ValueError("limit must be 1..100; publish cannot combine with dry-run/benchmark")
+            if getattr(a, "rank_proposals", False):
+                from . import board_rank, fleet as fleet_mod
+                from .deployment import local_host
+                cfg, err = config.load_or_default(a.root)
+                if err:
+                    raise ValueError("fleet configuration UNKNOWN")
+                result = board_rank.run(a, _tracker(a), QuipuRegistry(root=a.root), _panes(a),
+                    host=local_host(a.root), peers=fleet_mod.collect(cfg.host_peers), crew_registry=_registry(a))
+                if a.benchmark or a.rank_json:
+                    print(json.dumps(result, ensure_ascii=False))
+                else:
+                    print(board_rank.table(result))
+                return OK
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_json", False)
+                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
+                    or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
+                raise ValueError("rank options require --rank-proposals")
             result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
             print(json.dumps(result, ensure_ascii=False))
             return OK
@@ -3478,6 +3505,12 @@ def _spawn_lane_release(a, rec, *, run=None) -> str:
     result = rec.get("result") or {}
     if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
         return ""
+    if 'uid_binding' in rec:
+        from . import ephemeral as eph
+        current = eph.read(a.root, rec['name'])
+        if (not current or current.get('uid_binding') != rec['uid_binding']
+                or current.get('state') != eph.DONE):
+            return 'merge lane retained: job UID termination is not verified'
     policy, _cfg = _spawn_verdict_policy(a)
     if not policy.lane_release:
         return ""
@@ -3611,7 +3644,9 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
         raise eph.Refused(f"no ephemeral job named {name}")
     if verdict is None:                   # an interrupted teardown: finish it only
         schedule(name)
-        return rec, []
+        current = eph.read(a.root, name) or rec
+        lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
+        return current, [lane] if lane else []
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
@@ -3632,8 +3667,34 @@ def _cmd_spawn(a) -> int:
     """`st agent spawn` — ephemeral, administrator-managed agents. Rules and the
     lifecycle are in ephemeral.py and docs/ephemeral-agents.md; this wires them
     to the real launcher, panes, tracker and event store."""
+    import subprocess
     from . import ephemeral as eph
     from .protocols import Agent
+    if a.report:
+        from . import job_launch
+        from .actor_identity import IdentityError
+        from .gate_verdict import VerdictError
+        try:
+            bound = job_launch.local_job()
+            if bound:
+                spec, digest = bound
+                if spec['root'] != str(Path(a.root).resolve()):
+                    raise IdentityError('report root differs from protected job binding')
+                if not a.verdict:
+                    raise IdentityError('job report requires a verdict')
+                if a.dry_run:
+                    print(f"would queue report for {spec['principal']}")
+                    return OK
+                message = {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)}
+                if spec.get('request', {}).get('job') == 'review' and a.verdict in ('approve', 'request-changes'):
+                    from . import job_review
+                    message['review'] = job_review.write(spec, a.verdict, a.head, a.evidence)
+                job_launch.mailbox_call(spec, digest, 'submit', message)
+                print(f"queued result for {spec['principal']}; controller delivery and teardown pending")
+                return OK
+        except (IdentityError, VerdictError, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f'  refused: protected job report unproved ({type(error).__name__})', file=sys.stderr)
+            return REFUSED
     cfg, err = config.load_or_default(Path(a.root))
     if err:
         print(f"  refused: {err}", file=sys.stderr)
@@ -3748,13 +3809,34 @@ def _cmd_spawn(a) -> int:
             raise eph.Refused("unattended ephemeral launches are gated: "
                               "ephemeral.unattended_uid_ready is false; "
                               "a distinct protected job UID must be established first")
+        uid_launch = None
+        if unattended:
+            if not policy.require_verified_identity:
+                raise eph.Refused("unattended jobs require verified protected UID identity")
+            from . import job_launch
+            from .actor_identity import IdentityError
+            try:
+                uid_launch = job_launch.select(req, root=a.root,
+                    harness=eph.harness_for(req, policy),
+                    used={r['name'] for r in eph.records(a.root)}, native_probe=not a.dry_run)
+            except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
+                raise eph.Refused("protected job UID admission failed: " + type(error).__name__) from None
+        if unattended and a.retry and old.get('state') != eph.DONE:
+            # The separate UID process must not cost the original its lane if
+            # an exec-time switch later fails. Until an atomic cross-UID handoff
+            # is qualified, live replacement refuses; completed retries can use
+            # a fresh protected slot. Attended compatibility behavior is intact.
+            raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
                        "retried", detached=False)
         with eph.lock(a.root):
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),
-                           role_of=role_of, attempt=attempt, retry_of=retry_of)
+                           role_of=role_of, attempt=attempt, retry_of=retry_of,
+                           name=uid_launch[0]['principal'] if uid_launch else None)
+            if uid_launch:
+                rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
             known = {h.name for h in harness_mod.all_harnesses()}
             if rec["harness"] not in known:
                 raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "
@@ -3771,7 +3853,12 @@ def _cmd_spawn(a) -> int:
                       f"reports to {rec['administrator']})")
                 print(eph.prompt(rec))
                 return OK
-            if shared is not None:
+            if uid_launch:
+                # Staged by the operator under the target UID. Never copy the
+                # controller's credentials or equip it with the crew's MCP kit.
+                rec['workspace'] = uid_launch[0]['workspace']
+                rec['worktree_of'] = str(shared) if shared else None
+            elif shared is not None:
                 from .workspace import ensure_worktree
                 rec["workspace"] = ensure_worktree(shared, rec["name"])
                 rec["worktree_of"] = str(shared)
@@ -3818,18 +3905,58 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
     """End dead or expired ephemeral jobs. Code-side: st fleet tend calls this
     every pass, so no agent ever polls for it (DIRECTIVE 10/9)."""
     from . import ephemeral as eph
+    from . import job_launch
+    from .actor_identity import IdentityError
+    import subprocess
     panes = _panes(a)
+    problems = []
+
+    if not dry_run:
+        for rec in eph.live(a.root):
+            if 'uid_binding' not in rec or rec['state'] == eph.ENDING:
+                continue
+            try:
+                state = job_launch.poll(a.root, rec)
+                result, cause = eph.apply_mailbox(a.root, rec['name'], state, time.time())
+                if result:
+                    verdict, summary = result['verdict'], result['summary']
+                    if rec['job'] == 'review' and verdict in ('approve', 'request-changes'):
+                        from . import job_review
+                        from .gate_verdict import VerdictError
+                        verified = False
+                        if 'review' in result:
+                            try:
+                                spec, digest = job_launch.load(rec['name'])
+                                if rec['uid_binding'] == {'uid': spec['uid'], 'sha256': digest}:
+                                    verified = job_review.confirmed(spec, result)
+                            except (IdentityError, VerdictError, OSError, ValueError):
+                                pass
+                        if not verified:
+                            verdict = 'blocked'
+                            summary = 'Review signature/scope unproved; no controller signing fallback. ' + summary
+                    _spawn_end(a, rec['name'], verdict, summary, 'report', detached=False)
+                elif cause:
+                    _spawn_end(a, rec['name'], 'failed', 'job budget reached: ' + cause,
+                               cause, detached=False)
+            except (IdentityError, eph.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+                problems.append(f"{rec['name']}: mailbox/lifecycle unproved ({type(error).__name__})")
 
     def end(name, verdict, cause):
-        _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
-                   detached=False)
+        try:
+            _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
+                       detached=False)
+        except eph.Refused as error:
+            problems.append(f'{name}: termination unproven; lane retained ({type(error).__name__})')
+            return False
     lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
                      dry_run=dry_run)
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
+    for problem in problems:
+        print(f"  ephemeral: {problem}", file=sys.stderr)
     if not lines and not quiet:
         print("  ephemeral: nothing to reap")
-    return OK
+    return CANNOT_TELL if problems else OK
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
@@ -4389,6 +4516,13 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
               f"{hold_name} hold ({gaming.state}) — the hold stays in force for "
               "dispatch, respawns and every other launch.", file=sys.stderr)
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        uid_launch = job_launch.for_card(a.root, card)
+    except (IdentityError, OSError, ValueError):
+        print('  refused: protected job launch binding unavailable', file=sys.stderr)
+        return REFUSED
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
@@ -4397,7 +4531,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
-    if harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
+    if not uid_launch and harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
         from . import codex_daemon
         fixed = codex_daemon.repair(card.name)
         if fixed.blocked:
@@ -4415,73 +4549,74 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             runtime.prepare_account_settings(card)
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
-            harness_mod.Unsupported, ValueError, OSError) as e:
+            harness_mod.Unsupported, IdentityError, ValueError, OSError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
-    # WORKSPACE: the launch string `cd`s into card.workspace, so the
-    # directory has to BE there. Ensure it (clone if absent, leave alone if
-    # present) or REFUSE — before any tmux mutation, so a refusal still creates
-    # nothing. Deliberately AFTER dry-run: dry-run must not clone.
-    try:
-        ensure_workspace(card)
-    except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
-    # current tree — launch is the other safe pull moment (nothing is running
-    # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
-    # and never blocks the launch (stale-but-working beats no agent).
-    if card.workspace:
-        if err := _refresh_clone(card.workspace):
-            # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
-            # forge outage right after fixing the first one. "ff-only pull
-            # refused" for a `Connection refused` blames the TREE for a dead
-            # REMOTE here exactly as it did on the dispatch path — and a guard
-            # fixed at one call site while an identical message stands at
-            # another is the uncovered-surface class this repo keeps paying for.
-            if _pull_failed_on_the_REMOTE(err):
-                print(f"  ⚠ workspace not brought current — THE REMOTE IS "
-                      f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
-                      f"reconcile locally. Launching on the existing tree, "
-                      f"which MAY BE STALE.", file=sys.stderr)
-            else:
-                print(f"  ⚠ workspace not brought current (ff-only pull refused: "
-                      f"{err.splitlines()[0]}) — launching on the existing tree.",
-                      file=sys.stderr)
-    # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
-    # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
-    # token), so an agent launched from one has no code search, no graph and no
-    # ops tools, and looks identical to a healthy one on every surface. Five
-    # agents worked P1 beads for a night that way. Refuse instead.
-    try:
-        selected_settings = (runtime.settings_path(card)
-                             if hasattr(runtime, "settings_path") else None)
-        servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
-    except ProvisionError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    if servers:
-        # Say what it CAN reach, parsed back out of the file we wrote — "the file
-        # is there" was true for every broken render.
-        print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
-    elif card.workspace:
-        # No template = this store defines no kit. Say it, every time: silence
-        # here is indistinguishable from the bug (an agent that launches with no
-        # tools and looks fine), and a deleted template would restore it.
-        print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
-              f" — launching {card.name} with NO MCP kit. "
-              "This store has not configured MCP provisioning; "
-              "add a template there if these tools are needed.")
-    if card.workspace:
-        # Skills, same claim shape as the servers: names read back out of the
-        # links we just made, not "the directory is there". A crew that shipped
-        # 22 correct skills to a runtime loading none had every other signal green.
-        linked = prov_mod.skills_linked(card.workspace)
-        if linked:
-            print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
+    if not uid_launch:
+        # WORKSPACE: the launch string `cd`s into card.workspace, so the
+        # directory has to BE there. Ensure it (clone if absent, leave alone if
+        # present) or REFUSE — before any tmux mutation, so a refusal still creates
+        # nothing. Deliberately AFTER dry-run: dry-run must not clone.
+        try:
+            ensure_workspace(card)
+        except WorkspaceError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
+        # current tree — launch is the other safe pull moment (nothing is running
+        # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
+        # and never blocks the launch (stale-but-working beats no agent).
+        if card.workspace:
+            if err := _refresh_clone(card.workspace):
+                # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
+                # forge outage right after fixing the first one. "ff-only pull
+                # refused" for a `Connection refused` blames the TREE for a dead
+                # REMOTE here exactly as it did on the dispatch path — and a guard
+                # fixed at one call site while an identical message stands at
+                # another is the uncovered-surface class this repo keeps paying for.
+                if _pull_failed_on_the_REMOTE(err):
+                    print(f"  ⚠ workspace not brought current — THE REMOTE IS "
+                          f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
+                          f"reconcile locally. Launching on the existing tree, "
+                          f"which MAY BE STALE.", file=sys.stderr)
+                else:
+                    print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                          f"{err.splitlines()[0]}) — launching on the existing tree.",
+                          file=sys.stderr)
+        # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
+        # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
+        # token), so an agent launched from one has no code search, no graph and no
+        # ops tools, and looks identical to a healthy one on every surface. Five
+        # agents worked P1 beads for a night that way. Refuse instead.
+        try:
+            selected_settings = (runtime.settings_path(card)
+                                 if hasattr(runtime, "settings_path") else None)
+            servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
+        except ProvisionError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        if servers:
+            # Say what it CAN reach, parsed back out of the file we wrote — "the file
+            # is there" was true for every broken render.
+            print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
+        elif card.workspace:
+            # No template = this store defines no kit. Say it, every time: silence
+            # here is indistinguishable from the bug (an agent that launches with no
+            # tools and looks fine), and a deleted template would restore it.
+            print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
+                  f" — launching {card.name} with NO MCP kit. "
+                  "This store has not configured MCP provisioning; "
+                  "add a template there if these tools are needed.")
+        if card.workspace:
+            # Skills, same claim shape as the servers: names read back out of the
+            # links we just made, not "the directory is there". A crew that shipped
+            # 22 correct skills to a runtime loading none had every other signal green.
+            linked = prov_mod.skills_linked(card.workspace)
+            if linked:
+                print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     # cwd=card.workspace so the SESSION starts in the agent's own directory, not
     # the launcher's (GitHub #18) — the launch string also cd's, but a pane whose
@@ -4524,7 +4659,8 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A bounded manifest must never launch before its private parent is ready.
     from . import mcp_limits
     try:
-        mcp_limits.prepare_launch(a.root, card.name, panes, session)
+        if not uid_launch:
+            mcp_limits.prepare_launch(a.root, card.name, panes, session)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"  could not tell: pane created but MCP containment preparation failed: {exc}",
               file=sys.stderr)
@@ -10277,6 +10413,14 @@ def _cycle_anchor_bead(a, agent: str) -> str:
     return str(iid) if iid else ""
 
 
+def _cycle_session_start(root, agent_name):
+    """Exact local launch stamp shared by durable and inferred-quality checks."""
+    from datetime import datetime, timezone
+    stamp = Path(root) / "launched" / f"{agent_name}.json"
+    return (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+            .isoformat() if stamp.is_file() else "")
+
+
 def _durable_checkpoint_gate(a, agent_name: str):
     """The I/O half of cycle.durable_gate — read the held bead, its comments, and
     when this agent last launched. Policy stays in cycle.py, testable without a
@@ -10292,12 +10436,9 @@ def _durable_checkpoint_gate(a, agent_name: str):
     EVERY failure becomes could-not-tell (ok=None), never a refusal and never a
     pass: this is a gate on a saturated agent's only relief valve.
     """
-    from datetime import datetime, timezone
     from . import cycle as cycle_mod
     try:
-        stamp = Path(a.root) / "launched" / f"{agent_name}.json"
-        since = (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
-                 .isoformat() if stamp.is_file() else "")
+        since = _cycle_session_start(a.root, agent_name)
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
@@ -10317,6 +10458,32 @@ def _durable_checkpoint_gate(a, agent_name: str):
         return cycle_mod.durable_gate(agent_name, bead, since, [],
                                       error=f"comments unreadable on {bead} ({e})")
     return cycle_mod.durable_gate(agent_name, bead, since, got)
+
+
+def _cycle_bundle_custody(a, agent):
+    """Read item authors through the existing tracker and roles through cards.
+
+    Unknown reads refuse this optional custody route; they are never approvals.
+    The cycle still re-verifies the exact ref and bundle before changing state.
+    """
+    items = getattr(a, 'bundle_custody_item', None) or []
+    if not items:
+        return None
+    from . import cycle_custody
+    from .br import comments
+    if _backend(a, 'files') not in BR_LIKE:
+        raise ValueError('bundle custody requires item comments on the configured backend')
+    receipts = []
+    registry = _registry(a)
+    for item in dict.fromkeys(items):
+        try:
+            receipts.extend(cycle_custody.accepted_receipts(
+                comments(_tracker(a), item), registry.get, agent, item))
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError('bundle custody item/card read unavailable') from error
+    return lambda tree: cycle_custody.verify_tree(tree, agent, receipts)
 
 
 def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
@@ -10661,10 +10828,21 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
-        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        if ckpt_body:
+            # The file just read is the requested handoff. Re-reading plate and
+            # comments here only feeds inferred quality advice; the executor
+            # independently enforces the durable checkpoint before any cycle.
+            quality_text = ckpt_body
+            try:
+                quality_session = _cycle_session_start(a.root, agent_name)
+            except OSError:
+                quality_session = ""  # unknown launch cannot earn a rewrite veto
+        else:
+            quality_gate = _durable_checkpoint_gate(a, agent_name)
+            quality_text = quality_gate.checkpoint or a.reason.strip()
+            quality_session = quality_gate.since
         quality_ok, quality_note = _checkpoint_quality_gate(
-            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
-            quality_gate.since)
+            a, agent_name, quality_text, quality_session)
         if quality_note:
             print(f"  ⚠ {quality_note}", file=sys.stderr)
         if not quality_ok:
@@ -10673,7 +10851,8 @@ def _cmd_cycle(a) -> int:
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
                                            quipu_nodes, no_in_place=no_in_place,
-                                           allow_loss=bool(getattr(a, "allow_loss", False)))
+                                           allow_loss=bool(getattr(a, "allow_loss", False)),
+                                           bundle_custody_items=getattr(a, 'bundle_custody_item', None))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -10689,10 +10868,11 @@ def _cmd_cycle(a) -> int:
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
-                  f"End your turn now; nothing is lost if it never fires.")
+                  f"End your turn now; do not poll or reissue this accepted request.")
         else:
             print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
-                  "then end your turn; the request stays pending if it never fires.")
+                  "then end your turn. Do not poll or reissue this accepted request; "
+                  "it stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
@@ -10735,6 +10915,7 @@ def _cmd_cycle(a) -> int:
     import subprocess
     try:
         cfg = config.load(a.root)
+        custody = _cycle_bundle_custody(a, agent_name)
         verdict = cycle_mod.assess(
             agent_name, trees, a.reason,
             # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
@@ -10745,7 +10926,7 @@ def _cmd_cycle(a) -> int:
                 t, fetch=True, untracked_all=True, tracked_only=True,
                 cycle_per_install=True,
                 fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
-            allow_loss=a.allow_loss)
+            allow_loss=a.allow_loss, custody=custody)
     except subprocess.TimeoutExpired as e:
         command = e.cmd if isinstance(e.cmd, (list, tuple)) else []
         operation = "fetch" if "fetch" in command else "Git preflight"
@@ -10754,6 +10935,9 @@ def _cmd_cycle(a) -> int:
         return REFUSED
     except (config.ConfigError, OSError) as e:
         print(f"  refused: cycle preflight: {str(e).splitlines()[0]}", file=sys.stderr)
+        return REFUSED
+    except ValueError as e:
+        print(f"  refused: cycle custody/preflight: {e}", file=sys.stderr)
         return REFUSED
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
@@ -10879,6 +11063,7 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
         "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "bundle_custody_item": list(request.get("bundle_custody_items") or []),
         "dry_run": False}))
 
 
@@ -11628,7 +11813,11 @@ def _cmd_worktree(a) -> int:
         print(path)
         return OK
     except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
+        from .workspace import WorktreeDamage
+        # A partial delete is not a refusal (aegis-5ox): "refused" reads as
+        # "nothing happened", and here something did.
+        label = "DAMAGE" if isinstance(e, WorktreeDamage) else "refused"
+        print(f"  {label}: {e}", file=sys.stderr)
         return REFUSED
 
 
@@ -13290,6 +13479,10 @@ def _jobs_sweep(a) -> list[str]:
     """The tend sweep: every due job, once. Inside tend's `_sweep` like every
     other best-effort layer, and each JOB is isolated again inside Runner.sweep,
     so neither a broken file nor a crashing job can reach respawn."""
+    # Tend's governor path can fall back to defaults after a configuration
+    # error. Never let that fallback reactivate a delegated local scheduler.
+    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+        return []
     return _jobs_runner(a).sweep()
 
 
@@ -13352,6 +13545,10 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
+    if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
+        print("refused: local job evaluation and execution are delegated to Chaski; "
+              "use --graph for declaration checks and the signed scheduler lane for execution", file=sys.stderr)
+        return REFUSED
     if getattr(a, "expect_job", None) or getattr(a, "json", False):
         print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
@@ -14211,6 +14408,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                              generation=observed.get(name, {}).get("generation", ""))
             return _owned_work_tick(a)
 
+        from .refill import from_cli as refill_from_cli
+        _fleet_sweep("auto-refill", lambda: refill_from_cli(a, reg, panes, runtime, cfg, log=_log))
+
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
         _fleet_sweep("priority-advisory", _priority_report)
@@ -14228,7 +14428,19 @@ def _tend_once(a, quiet: bool = False) -> int:
                 rows = [json.loads(path.read_text()) | {"id": path.stem}
                         for path in trk.root.glob("*.json")]
                 return ready, rows
-            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log)
+            def label_item(ident):
+                from .work_class import preferred_labels
+                tracker = _tracker(a)
+                current = tracker.get(ident)
+                if current.id != ident or current.status != 'open':
+                    return
+                for label in preferred_labels(current.labels):
+                    tracker.update(ident, add_label=label)
+                    current = tracker.get(ident)
+                    if current.id != ident or label not in current.labels:
+                        raise CouldNotLook('ranker preference label did not read back')
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log,
+                                       label_item=label_item)
         _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
@@ -14374,8 +14586,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # the idle-work pushes, so declared work never pre-empts supervision's
         # own notifications; an exec job starts DETACHED, so a long one cannot
         # hold this pass open (aegis-qwadc).
-        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
-            print(f"  {line}", file=sys.stderr)
+        if cfg.jobs_scheduler == "local":
+            for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+                print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off
@@ -14882,7 +15095,8 @@ def _tend_retire(a) -> int:
     name = a.retire or a.unretire
     reg = _registry(a)
     try:
-        card = reg.get(name)
+        reader = getattr(reg, 'get_for_lifecycle', reg.get) if a.unretire else reg.get
+        card = reader(name)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -14993,8 +15207,16 @@ def _tend_retire(a) -> int:
     # job is to say what was recorded. Same family as the rest of this bead: a
     # tool describing an operation it did not perform. So the write stays and
     # the wording is direction-specific.
-    reg.set(replace(card, retired=want, retired_by=_actor(),
-                    retired_at=_now_iso()))
+    updated = replace(card, retired=want, retired_by=_actor(), retired_at=_now_iso())
+    try:
+        if callable(writer := getattr(reg, 'set_retirement', None)):
+            writer(updated, want)
+        else:
+            reg.set(updated)
+    except (CouldNotLook, QuipuWriteRejected) as exc:
+        print(f'  could not tell: lifecycle write unverified ({type(exc).__name__}); '
+              'read the registry before retrying', file=sys.stderr)
+        return CANNOT_TELL
     if want:
         print(f"  {name} is RETIRED. `st fleet tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")

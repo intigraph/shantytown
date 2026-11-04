@@ -65,17 +65,10 @@ The exact-ID work update path applies the same gate to assignment and
 reactivation. Haul/feed may resume an already-owned active item at ten because
 that does not add a slot; existing overfull plates are not silently repooled.
 
-A proven priority-zero item may acquire an owner above the cap. A technical
-blocker uses the existing `st work defer ... bead --dependency-reason ...`
-priority-inheritance path to become P0; a `blocks-p0` label alone is insufficient.
-The count must still be complete and current, and all other ownership,
-dispatch, governor and operator guards remain in force. Before a mutating
-attempt, the local owner lock protects a durable `overflow_admission` record in
-`~/.local/state/shantytown/plate-capacity/overflow.jsonl`, with the item, owner,
-count and counted IDs. A create records the requested title and an unknown item
-ID. This records admission, **not** backend commit or delivery: a timeout may
-follow a committed write, so never retry it from this journal. A journal write
-failure refuses before mutation. Pure plans and dry runs write no record.
+The ten-item limit applies to every priority, including P0 and inherited P0
+blockers. Urgency changes queue order; it does not grant another work slot.
+Rebalance existing work before assigning another item. Historical overflow
+journals are retained unchanged; new assignments do not append to them.
 
 Cooperating assignment commands on one host serialize admission and mutation.
 The configured owner reader must cover all selected stores; partial reads
@@ -239,6 +232,9 @@ context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
+The [compact checkpoint template](guides/context-cycle.md) gives one request command;
+`--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
+Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 
@@ -936,9 +932,9 @@ So `st crew` grows a **posture** column, on the same principle as the settings c
 
 | | means |
 |---|---|
-| `bypass` | the pane shows `⏵⏵ bypass permissions on` — prompts are off, the agent can act |
-| `MANUAL` | live, ready UI up, **no** bypass line — a human must approve every call |
-| `?` | no ready UI (trust dialog, consent screen, blocking picker). Not rounded to either |
+| `bypass` | the pane shows `⏵⏵ bypass permissions on`, or the observed launch carries Codex’s `--dangerously-bypass-approvals-and-sandbox` flag |
+| `MANUAL` | live, ready UI up, readable launch, and no bypass evidence |
+| `?` | no ready UI or unreadable process observation. Not rounded to either |
 | `—` | not live. A down pane has no posture; what its *card* lacks is a different block |
 
 Two things it deliberately does **not** do.
@@ -948,10 +944,11 @@ Two things it deliberately does **not** do.
   landed while the agent is still stopped dead. This bead's own fix was verified by the footer
   flipping, and that is the only reason we know it took. Same launch-time rule the `STALE` column
   exists for, one field over.
-- **It derives `MANUAL` negatively.** Only the bypass footer has been measured; pinning a string for
-  the manual-mode line would be a marker never observed passing, which this repo has already paid
-  for twice in `READY_MARKERS`. Absence of bypass on a live ready pane is the signal, and it stays
-  correct for every other mode the runtime may grow or rename.
+- **Missing evidence stays unknown.** Codex has no approval footer, so an unreadable
+  process cannot establish manual mode. On macOS the process reader uses native
+  elapsed-time fields and PID-scoped child discovery; on Linux it retains the GNU
+  probe. This does not establish settings freshness: that remains a separate check.
+
 
 ### The dormant half: the arming moment now asks about *both* faults
 
@@ -1992,6 +1989,12 @@ The stats capture hook fails open on runtime errors and malformed arguments
 (including a missing `--root`): it prints diagnostics to stderr and exits zero
 so a configuration mistake cannot block a tool call. Argument errors skip capture.
 
+Lifecycle publication from stats capture carries the native hook payload's
+`session_id` into its HTTP provenance, even if no session variable was exported
+or the environment retained an older session. This context lasts only for that
+publication and is restored after success or failure. Missing identity remains
+missing; the hook does not invent a session or change the process environment.
+
 ### Gaming hold
 
 `st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`
@@ -2502,6 +2505,11 @@ requires a stats event within the last hour and matching transcript metadata.
 
 ### Board triage (Jev)
 
+For read-only governed P0/P1 priority/rank proposals, use
+`st work triage --rank-proposals --rank-rules reviewed-rules.json --dry-run`.
+See [governed rank proposals](board-rank.md) for policy bindings, UNKNOWN
+liveness, the frozen benchmark and quarantine-only answer artifacts.
+
 `st work triage [item ...] --jev-command 'python3 /path/to/camayoc/scripts/jev_mcp.py'`
 previews routing, duplicate and escalation severity suggestions. This earns a
 separate work command because it produces advice across the board, unlike
@@ -2893,6 +2901,14 @@ pushing the candidate branch. It requires the explicit GitHub repository to matc
 `origin`, with the mapped owner-move exception below. It does not push, merge,
 close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
+
+Candidate source must be committed and published. Untracked files may remain
+only inside top-level `.work/` and `.task-notes/` directories. The preflight
+checks the directory roots without following symlinks or reading private file
+contents; these files do not enter the PR file list or metadata. A file or
+symlink replacing either root refuses, as do unrelated untracked paths and every
+tracked, staged, deleted, renamed or conflicted change, including under those
+roots. No ignore/configuration change or force option is needed.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
@@ -3339,8 +3355,11 @@ The graph owns the wording; this package owns only its bounded read and render.
 
 On the fleet-owner host, the existing `st fleet tend` pass includes an
 administrator ranking check. It names each live agent whose canonical plate
-is below strictly higher-priority unowned READY work, and lists all unowned P0
-items in the complete active/deferred metadata projection. Blocked work is not
+is below strictly higher-priority unowned READY work, with one count/priority
+comparison per agent. One shared list shows at most five unowned witnesses in
+priority/rank order, followed by `+N more`. It covers unowned READY work plus
+unowned P0 items in the complete active/deferred metadata projection; P0 items
+outside READY are explicitly labelled. Blocked work is not
 promoted to READY, and owned work is not relabeled unowned. No assignment,
 priority or rank changes automatically.
 
@@ -3358,8 +3377,13 @@ and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
 headers travel over private stdin rather than process arguments. Response and
 completeness caps still apply. Neither budget changes the server deadline.
 Changed actionable digests use the existing
-administrator advisory route; repeated digests are quiet. Routine healthy
-results remain in the scheduled pass log. The pass budget may defer this
+administrator advisory route only when unowned P0 work exists; lower-priority
+mismatches and unknown cohort counts do not page. Unchanged pushes remain quiet,
+and failed P0 pushes remain eligible for retry. Routine healthy results remain
+in the scheduled pass log, where unchanged digests repeat at most once an hour;
+content changes log immediately. The separate log ledger does not acknowledge
+or suppress administrator delivery. The routine advisory marker does not print
+a second copy of the shared list. The pass budget may defer this
 advisory sweep without interrupting supervision.
 
 ### Large durable inboxes

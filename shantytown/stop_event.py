@@ -337,17 +337,18 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           root: Path | None = None, *, payload: dict | None = None) -> int:
-    if root is not None:
-        from .stop_failure import clear_recovered
-        clear_recovered(root, me)
     from .ephemeral import is_ephemeral_name
     if is_ephemeral_name(me):
         # AN EPHEMERAL AGENT'S TURN BOUNDARY IS NOT A CREW STOP (aegis-c01c.2).
         # Its one report to the administrator is the job RESULT; a per-turn
         # stop event rendered as "STOPPED — re-dispatch". Only its bounds run here.
         if root is not None:
-            _ephemeral_bounds(root, me, _my_context_k(reg, panes, me))
+            if _ephemeral_bounds(root, me, _my_context_k(reg, panes, me)) == 'unproved':
+                return 1
         return 0
+    if root is not None:
+        from .stop_failure import clear_recovered
+        clear_recovered(root, me)
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -453,6 +454,18 @@ def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
         return None
     try:
         now = time.time() if now is None else now
+        from . import job_launch
+        bound = job_launch.local_job()
+        if bound:
+            spec, digest = bound
+            if spec['principal'] != me or spec['root'] != str(Path(root).resolve()):
+                raise eph.Refused('turn differs from protected job binding')
+            import hashlib
+            import secrets
+            token = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+            job_launch.mailbox_call(spec, digest, 'submit',
+                {'kind': 'turn', 'token': token, 'context_k': context_k})
+            return 'queued'
         cause = eph.on_stop(root, me, context_k, now)
         if not cause:
             return None
@@ -474,10 +487,12 @@ def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
                 a, name, verdict, summary, why, detached=True)
         end(me, "failed", f"ended by its own bounds ({cause}) without reporting", cause)
         return "ended"
-    except Exception as exc:  # noqa: BLE001 — tend's reaper remains the backstop
+    except Exception as exc:  # noqa: BLE001 — unknown bounds must stop further work
         print(f"stop_event: ephemeral bounds UNKNOWN for {me}: {type(exc).__name__}",
               file=sys.stderr)
-        return None
+        print(json.dumps({'decision': 'block', 'reason':
+              'Ephemeral turn accounting is unproved. Stop work; retain this job for controller recovery.'}))
+        return 'unproved'
 
 
 # --- the HAUL advance (the sequenced-worker self-feed) -----------------------
@@ -1254,6 +1269,25 @@ def _main(argv: list[str] | None = None) -> int:
         print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
+    # A protected job has no controller tmux socket or shared hold ledger.
+    # Resolve the kernel-bound principal before any environment/card fallback.
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        bound = job_launch.local_job()
+        if bound:
+            spec, _digest = bound
+            root = Path(spec['root'])
+            if '--root' in argv and _root(argv).resolve() != root:
+                raise IdentityError('stop root differs from protected job binding')
+            if mode != 'send':
+                return 0  # jobs neither drain crew messages nor advance a haul
+            return 1 if _ephemeral_bounds(root, spec['principal'], None) == 'unproved' else 0
+    except (IdentityError, OSError, ValueError) as error:
+        print(f'stop_event: protected job identity UNKNOWN: {type(error).__name__}', file=sys.stderr)
+        print(json.dumps({'decision': 'block', 'reason':
+              'Protected job turn identity is unproved. Stop work for controller recovery.'}))
+        return 1
     me_env = os.environ.get("SHANTY_AGENT")
     if not me_env:
         print("stop_event: $SHANTY_AGENT is unset — cannot resolve identity",

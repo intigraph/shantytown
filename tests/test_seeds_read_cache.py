@@ -1,4 +1,4 @@
-"""Current-watermark reads share work without hiding mutations or refusals."""
+"""Window-bounded metadata shares work; expired observations cannot hide refusals."""
 import json
 import os
 from pathlib import Path
@@ -96,7 +96,7 @@ def test_bounded_routing_reads_never_attempt_watermark_and_keep_six_read_cap(ser
     assert read(proof)["rows"][0]["value"] == "before"
     assert state["queries"] == 7 and state["watermarks"] == 2
     read(proof)
-    assert state["queries"] == 7 and state["watermarks"] == 3
+    assert state["queries"] == 7 and state["watermarks"] == 2
 
 
 def test_direct_reads_restore_after_exception_and_do_not_change_other_threads(service):
@@ -109,7 +109,7 @@ def test_direct_reads_restore_after_exception_and_do_not_change_other_threads(se
             assert state["queries"] == 2 and state["watermarks"] == 2
             raise RuntimeError("fixture")
     read(proof)
-    assert state["queries"] == 2 and state["watermarks"] == 3
+    assert state["queries"] == 2 and state["watermarks"] == 2
 
 
 def test_same_probe_before_after_and_current_positive_control(service, monkeypatch):
@@ -123,10 +123,11 @@ def test_same_probe_before_after_and_current_positive_control(service, monkeypat
     for _ in range(12):
         assert read(proof)["rows"][0]["value"] == "before"
     assert state["queries"] == 1
-    assert state["watermarks"] == 13  # fresh hit checks plus both sides of miss
+    assert state["watermarks"] == 2  # one shared window, plus the post-fetch proof
 
 
-def test_new_transaction_immediately_invalidates(service):
+def test_new_transaction_invalidates_after_watermark_window(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
     proof, state = service
     read(proof)
     state.update(tx=11, value="changed")
@@ -134,7 +135,8 @@ def test_new_transaction_immediately_invalidates(service):
     assert state["queries"] == 2
 
 
-def test_new_store_at_same_transaction_cannot_reuse_old_rows(service):
+def test_new_store_at_same_transaction_cannot_reuse_old_rows(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
     proof, state = service
     read(proof)
     state.update(store="replacement", value="different")
@@ -151,7 +153,8 @@ def test_write_during_fetch_does_not_publish_a_mislabeled_result(service):
     assert state["queries"] == 2
 
 
-def test_metadata_failure_reads_fresh_never_falls_back_to_cached_success(service):
+def test_metadata_failure_reads_fresh_never_falls_back_to_cached_success(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
     proof, state = service
     read(proof)
     state.update(fail_mark=True, value="fresh")
@@ -266,9 +269,32 @@ def test_symlink_cache_is_not_followed(service, tmp_path):
     assert state["queries"] == 2
 
 
-def test_transaction_regression_is_a_miss(service):
+def test_transaction_regression_is_a_miss(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
     proof, state = service
     read(proof)
     state.update(tx=9, value="restored")
     assert read(proof)["rows"][0]["value"] == "restored"
     assert state["queries"] == 2
+
+def test_watermark_window_is_bounded_and_shared_across_queries(service, monkeypatch):
+    proof, state = service
+    clock = [1000.]
+    monkeypatch.setattr(seeds_read_cache.time, "time", lambda: clock[0])
+    read(proof)
+    read(proof, "SELECT another-owner")
+    assert state["watermarks"] == 3  # before first + after each distinct query
+    state.update(tx=11, value="changed")
+    assert read(proof)["rows"][0]["value"] == "before"
+    assert state["watermarks"] == 3
+    clock[0] += 1
+    assert read(proof)["rows"][0]["value"] == "changed"
+    assert state["watermarks"] == 5
+
+
+def test_corrupt_watermark_window_does_not_authorize_cached_success(service):
+    proof, state = service
+    read(proof)
+    next(seeds_read_cache._directory().glob("mark-*.json")).write_text("{}")
+    state.update(tx=11, value="changed")
+    assert read(proof)["rows"][0]["value"] == "changed"

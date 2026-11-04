@@ -193,3 +193,168 @@ GitHub ingress (aegis-c01c.3), the chaski routing rules that decide *when* to
 spawn (aegis-c01c.4), the stop-policy change that counts the administrator's
 in-flight ephemeral work (aegis-c01c.1), and the tambo install/verify step
 (aegis-c01c.5).
+
+## Protected job launch capabilities (source staging)
+
+The distinct-UID launcher uses an operator-owned capability per job principal,
+not a username supplied by a model. `/etc/shantytown/jobs` on Linux, or
+`/Library/Application Support/Shantytown/jobs` on macOS, holds reviewed manifests.
+Each binds the exact request, harness, controller UID, dedicated job UID/GID,
+private home/workspace/settings and pinned argv. Controller environment and
+arbitrary command arguments are never forwarded. The installed helper must be
+root-owned, run an isolated interpreter from a private immutable installation,
+and be the only executable named in its narrowly scoped sudoers rule.
+
+The first account may be named `_stjobs`; additional principals require unique
+accounts and UIDs. A shared or recycled UID cannot preserve distinct job
+identities. Existing protected identity bindings require UID/GID >=10000; macOS
+account hiding must use the explicit hidden-account attribute rather than
+weakening that floor. Each job needs its own enrolled credentials. There is no
+controller credential copy or automatic key registration.
+
+A readiness boolean alone does not admit a launch. Verified identity and an
+unused matching capability are required before retry side effects. A native
+helper check validates the protected actor binding and actual account, checks
+private state, and probes privilege dropping in a short disposable child. The
+real launch rechecks its immutable manifest, reserves the UID in a locked,
+fsynced receipt, clears supplementary groups and inherited file descriptors,
+drops root credentials, and executes only the prepared argv with an allowlisted
+environment. A failed drop never falls back to the controller UID. Receipts and
+job homes survive failures and rollback; a UID is not reused for another job.
+
+A live unattended retry currently refuses and preserves its old lane, even
+following a successful probe. Completed retries require a fresh capability.
+This avoids claiming an atomic cross-UID handoff from a preflight observation.
+Attended compatibility behavior remains separate.
+
+This source staging is **not installed acceptance**. Keep both readiness and
+verified-identity activation at their existing deployment values until the
+reviewed provisioning and native acceptance packet is complete. Cross-UID
+reporting and turn accounting use a staged mediated mailbox described below:
+do not make the shared ledger writable or expose controller signing keys.
+Tambo/macOS and Goldblum/Linux source provisioning, isolated metadata/config,
+own-key review signing, native file/signal/identity denial proofs and rollout
+authority remain required before enabling unattended jobs.
+
+The staged protected helper also has a fixed `stop <principal> <digest>`
+operation for the admitted controller. It verifies the exact consumed UID
+receipt, forks, drops to that UID, and signals remaining processes by UID,
+including processes outside the original session. Signals never run as root.
+An unreadable process table, failed drop, permission failure or timeout leaves
+termination unproven. Teardown then retains the card, workspace and occupied
+lane; a supplied DONE record cannot override the controller ledger. Native
+macOS/Linux qualification of this operation is still required.
+
+The read-only launch probe now also performs the existing pinned identity
+attestation from the job's own home after UID drop and environment clearing.
+It must return the registered job principal. A username or successful UID
+switch alone does not establish readiness. These staged paths have only been
+qualified with private source fixtures; no privileged helper was installed or
+executed as part of that qualification.
+
+Operator preparation must include a root-owned `slots.json` next to the job
+manifests. Version 1 has exactly `version`, `uid_min`, `uid_max`, and `slots`.
+The range must start at 10000 or higher; `slots` maps each exact job principal
+to its reserved `uid` and manifest `sha256`. Its entry count is the explicit
+host capacity, bounded to 1024 by the source parser. There is no default host
+range or automatic account growth. The actual count/range belongs in the
+reviewed per-host rollout packet.
+
+The protected manifest set must exactly equal this plan. Missing, extra,
+changed, duplicate-UID or shared-account entries refuse, including when the
+helper is invoked directly. Consumed manifests and UID receipts remain as
+non-reuse records after cleanup or rollback. Adding capacity or changing a
+reservation requires a separate operator-reviewed plan update; exhaustion
+never falls back to another UID. This implements the selected per-job slot
+architecture, while unattended readiness remains false pending native proof.
+
+The fixed helper's `submit` operation admits only the manifest's job UID;
+`poll` admits only its controller UID. Both require the exact protected binding
+and consumed UID receipt. Jobs submit a bounded JSON result or turn token on
+stdin, with a five-second input deadline. They cannot select a ledger path,
+another principal, a command, or a signing key. A root-private mailbox retains
+the first result, deduplicates turn tokens, and refuses conflicting retries,
+corruption, exhaustion or interrupted writes. Jobs never open the controller
+ledger through this path.
+
+The source report handler queues the message before reading controller config.
+The turn hook queues a turn; the controller's existing reaper drains messages,
+applies monotonically increasing turn counts and performs ordinary notification
+and verified UID teardown. A queue acknowledgement means the message is saved;
+delivery and teardown are still pending. Job reports confer no signing or
+merge authority. Until the job's own review signer is qualified, an unsigned
+review message becomes a blocked result; no controller key substitutes for it.
+These paths are staged source with private fixture coverage, not native
+cross-UID acceptance or an installed deployment.
+
+A launch manifest has separate `controller_root` and `root` paths. The former
+identifies the controller's private store; launch qualification requires its
+path to belong only to root/the controller and its directory mode to exclude
+other users. The latter must be the job's own root-owned metadata store at
+`/var/lib/shantytown/job-stores/<principal>`. Only that job root is passed in
+`SHANTY_ROOT`; the controller root is not forwarded to the job environment.
+The two stores cannot contain one another. The provisioning packet must build
+the minimal public job metadata there without controller secrets. Lifecycle
+stop/drain authorization uses immutable identity and the consumed receipt,
+so changing job-owned settings cannot prevent the controller from stopping it.
+
+The staged helper's fixed `prepare <principal> <digest>` operation builds that
+minimal store only for its admitted controller UID and exact protected slot
+manifest. It creates one public own-job card and a configuration with verified
+identity required, zero spawn capacity, unattended admission disabled and UID
+readiness false. No controller config, pane, credential, endpoint or signing key
+is copied. Existing stores must match exactly; extra or changed files refuse.
+Interrupted staging is retained for explicit recovery. Preparation does not
+consume a launch slot, create an account or launch a job. Provisioning must grant
+this exact operation separately; a job's submit-only rule never grants prepare.
+
+Protected job stop hooks authenticate their UID before consulting environment
+identity or controller pane/hold state. They submit a bounded own-turn receipt;
+context depth is unknown when no own measurement is available. Failed identity
+or receipt acknowledgement blocks further work. The controller remains the
+budget and teardown authority. Launch rechecks the job's own attestation after
+admission and before consuming its UID reservation.
+
+The separate helper bootstrap uses a fixed private Python with `-BIS`: isolated
+imports, no environment/cwd/user-site paths, no site or `.pth` execution, and no
+generated bytecode that would change the pinned runtime tree. It requires the
+private interpreter prefix rather than a system-library fallback.
+Before importing application code it validates its interpreter/import paths
+and the entire bounded package at `/opt/shantytown-job-launcher/app/shantytown`
+as root-owned and non-writable, refusing symlinks. The reviewed installation
+must provide regular immutable interpreter/application paths; an editable
+checkout or ordinary user-owned virtualenv is not a supported helper install.
+The bootstrap keeps only sudo's kernel-derived caller UID and fixed PATH/locale
+for application imports. Native installation qualification remains outstanding.
+
+The capability path validator accepts macOS's fixed root-owned `/var` alias
+only when it resolves to `/private/var`, whose immutable ownership is checked
+as well. This permits the existing protected-home convention on macOS without
+accepting job-controlled symlinks or arbitrary aliases. Native macOS acceptance
+is still required; the source fixtures simulate both accepted and refused paths.
+
+Protected review slots can declare an explicit `review` policy in their pinned
+manifest; other slots use `review: null`. The policy names the exact repository,
+PR number, GitHub node, reviewed head, author, graph, verifier ID, public key,
+and the job's private key path. The verifier ID is
+`st-job-verifier.<job-principal>`, with a distinct key per slot. The key must
+already exist, be private to the job UID, and match the protected public key.
+No controller key, environment-selected key, automatic key generation or
+registration is used by this path.
+
+Operator pin-file version 2 supports these scoped entries alongside legacy
+host keys. A scoped entry has `public_key`, `principal`, `repo`, `pr`, `pr_node`,
+`head`, and `author_agent`. Its signature counts only for that exact reviewer
+and PR/head, with independently readable matching authorship. A bare job-key
+pin or a key duplicated under another signer refuses. Version 1 retains the
+legacy host behavior. Both the operator pin and Quipu's recorded trusted
+signature are required; self-registration cannot widen local trust.
+
+Before its single write, a job saves a private, fsynced prepared review record.
+If the reply is lost, a retry reads back that same signed record; an unproved
+effect is retained without automatic resend. The job queues only the record
+reference, head and signer. The controller independently verifies that record
+and scope before accepting an approval/change result, then performs ordinary
+notification and UID teardown. A missing or unproved signature still becomes
+blocked. No real signing identity or registration was created during source
+qualification; per-job enrollment and native isolation remain rollout work.

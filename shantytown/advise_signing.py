@@ -16,7 +16,15 @@ import sys
 import time
 import tomllib
 
-POLICY_PATH = Path('/etc/shantytown/advise-signing.json')
+def _policy_path(platform):
+    # The same operator-owned directory as the identity policy, so a Mac
+    # crew host can introduce profiles without a Linux-only path.
+    if platform == 'darwin':
+        return Path('/Library/Application Support/Shantytown/advise-signing.json')
+    return Path('/etc/shantytown/advise-signing.json')
+
+
+POLICY_PATH = _policy_path(sys.platform)
 POLICY_OWNER = 0
 MAX_LOG = 16 * 1024 * 1024
 

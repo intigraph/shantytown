@@ -1749,6 +1749,10 @@ class ClaudeRuntime:
         Capability still precedes settings: a lead the program cannot host refuses
         before we bother writing anything.
         """
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return job_launch.command(*prepared)
         # THE ARGV, THE SETTINGS FORMAT, AND THE CAPABILITY ARE ALL THE HARNESS'S
         # (harness.py). This method keeps only what is the RUNTIME's — the
         # settings-or-nothing invariant and the assert below — and asks the harness
@@ -1804,6 +1808,10 @@ class ClaudeRuntime:
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return prepared[0]['settings']
         from .account_auth import settings_path
         base = settings_path(card, self._resolve(card), self._root)
         prepared = self._memory_settings.get(card.name)
@@ -1816,6 +1824,9 @@ class ClaudeRuntime:
             raise SettingsError('native memory settings UNKNOWN; preserve prior artifacts') from None
 
     def prepare_account_settings(self, card: Agent) -> None:
+        from . import job_launch
+        if job_launch.for_card(self._root, card):
+            return
         from .account_auth import settings_path
         settings_path(card, self._resolve(card), self._root, prepare=True)
 
