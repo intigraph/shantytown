@@ -216,6 +216,8 @@ class Config:
     overdue_spec_changes: bool = False
     overdue_external_unlocks: bool = False
     overdue_enabled: bool = False
+    # Explicit per-host scheduler cutover; omission preserves local TOML jobs.
+    jobs_scheduler: str = "local"
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -352,7 +354,7 @@ def config_path(root) -> Path:
 
 def load(root, *, refresh_source=False) -> Config:
     """Read <root>/shantytown.toml. Absent -> the built-in defaults. Malformed or
-    unrecognised -> ConfigError.
+    unrecognised or unreadable -> ConfigError.
 
     UNKNOWN KEYS ARE REFUSED, not ignored. A silently-dropped key is the config
     failure mode this repo has already paid for elsewhere (a hook file that was
@@ -364,12 +366,18 @@ def load(root, *, refresh_source=False) -> Config:
     path = config_path(root)
     try:
         raw = path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
         # Preserve the historical no-file behavior for deployments that did not
         # opt into graph configuration; in particular, do not newly read env.json.
         if not os.environ.get("SHANTY_CONFIG_ENTITY"):
             return Config()
         raw = b""
+    except OSError as exc:
+        # An unreadable declaration is UNKNOWN, never an absent declaration.
+        # Defaulting here can reactivate local jobs after a Chaski cutover;
+        # execution boundaries rely on this strict read even when supervision
+        # uses load_or_default to keep its other sweeps alive.
+        raise ConfigError(f"{path}: could not read config ({exc})") from exc
     try:
         data = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
@@ -404,7 +412,7 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream",
+_TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream", "jobs",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
              "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory",
@@ -488,6 +496,7 @@ def _resolve(data: dict, path: Path) -> Config:
     if type(spec_changes) is not bool:
         raise ConfigError(f"{path}: overdue.spec_changes must be boolean")
     return Config(mode=mode, modes=modes, overdue_spec_changes=spec_changes, overdue_enabled=overdue_enabled,
+                  jobs_scheduler=_jobs_scheduler(path, _table(path, data, "jobs")),
                   overdue_external_unlocks=external_unlocks,
                   accounts=_accounts(path, _table(path, data, "accounts")),
                   memory=_memory(path, _table(path, data, "memory")),
@@ -522,6 +531,14 @@ def _resolve(data: dict, path: Path) -> Config:
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
                   ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
                   path=path)
+
+
+def _jobs_scheduler(path: Path, tbl: dict) -> str:
+    _refuse_unknown(path, "jobs", tbl, {"scheduler"})
+    scheduler = tbl.get("scheduler", "local")
+    if not isinstance(scheduler, str) or scheduler not in {"local", "chaski"}:
+        raise ConfigError(f"{path}: jobs.scheduler must be 'local' or 'chaski'")
+    return scheduler
 
 
 def _dream(path: Path, tbl: dict) -> DreamPolicy:

@@ -2067,6 +2067,13 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--jev-command", help="quoted argv for the installed Camayoc Jev MCP server")
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
+    bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
+    bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
+    bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
+    bt.add_argument("--rank-benchmark-report", help="measured frozen benchmark JSON for an accepted live Jev arm")
+    bt.add_argument("--rank-admission", help="administrator declaration bound to that exact report; never applies board changes")
+    bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
@@ -2850,6 +2857,23 @@ def _run_command(a) -> int:
         try:
             if a.limit < 1 or a.limit > 100 or (a.publish and (a.dry_run or a.benchmark)):
                 raise ValueError("limit must be 1..100; publish cannot combine with dry-run/benchmark")
+            if getattr(a, "rank_proposals", False):
+                from . import board_rank, fleet as fleet_mod
+                from .deployment import local_host
+                cfg, err = config.load_or_default(a.root)
+                if err:
+                    raise ValueError("fleet configuration UNKNOWN")
+                result = board_rank.run(a, _tracker(a), QuipuRegistry(root=a.root), _panes(a),
+                    host=local_host(a.root), peers=fleet_mod.collect(cfg.host_peers), crew_registry=_registry(a))
+                if a.benchmark or a.rank_json:
+                    print(json.dumps(result, ensure_ascii=False))
+                else:
+                    print(board_rank.table(result))
+                return OK
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_json", False)
+                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
+                    or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
+                raise ValueError("rank options require --rank-proposals")
             result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
             print(json.dumps(result, ensure_ascii=False))
             return OK
@@ -11828,7 +11852,11 @@ def _cmd_worktree(a) -> int:
         print(path)
         return OK
     except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
+        from .workspace import WorktreeDamage
+        # A partial delete is not a refusal (aegis-5ox): "refused" reads as
+        # "nothing happened", and here something did.
+        label = "DAMAGE" if isinstance(e, WorktreeDamage) else "refused"
+        print(f"  {label}: {e}", file=sys.stderr)
         return REFUSED
 
 
@@ -13490,6 +13518,10 @@ def _jobs_sweep(a) -> list[str]:
     """The tend sweep: every due job, once. Inside tend's `_sweep` like every
     other best-effort layer, and each JOB is isolated again inside Runner.sweep,
     so neither a broken file nor a crashing job can reach respawn."""
+    # Tend's governor path can fall back to defaults after a configuration
+    # error. Never let that fallback reactivate a delegated local scheduler.
+    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+        return []
     return _jobs_runner(a).sweep()
 
 
@@ -13552,6 +13584,10 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
+    if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
+        print("refused: local job evaluation and execution are delegated to Chaski; "
+              "use --graph for declaration checks and the signed scheduler lane for execution", file=sys.stderr)
+        return REFUSED
     if getattr(a, "expect_job", None) or getattr(a, "json", False):
         print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
@@ -14589,8 +14625,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # the idle-work pushes, so declared work never pre-empts supervision's
         # own notifications; an exec job starts DETACHED, so a long one cannot
         # hold this pass open (aegis-qwadc).
-        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
-            print(f"  {line}", file=sys.stderr)
+        if cfg.jobs_scheduler == "local":
+            for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+                print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off

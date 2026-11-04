@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Dispatch reports deterministic work overlap and measured cache usage with explicitly assumed model windows.",
-      "source_sha256": "0b3b767b1ac806f3841a62460c1f8a91770929c6d6ddfa4e1e7c4fcf11ffe8c0",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Explicit host Chaski delegation skips the local job evaluator and refuses manual local execution and eligibility checks. Work triage offers governed priority/rank proposals with quarantined model evidence; an administrator accepts changes. Dispatch reports deterministic work overlap and measured cache usage with explicitly assumed model windows.",
+      "source_sha256": "f3ab7546f877f19646fdb8cdfc28bdf650415e8a631038f2f4a9b982c09f5e3d",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -34,8 +34,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. Cycle advice accepts strict per-model cache-window estimates; observed transcript TTLs take precedence.",
-      "source_sha256": "94261b894104768e1d11a1b016be0c02e778d8cbcb90ba6a2e4a39c2234df235",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Cycle advice accepts strict per-model cache-window estimates; observed transcript TTLs take precedence.",
+      "source_sha256": "49de9db71fd2214e8f89ff72d9efbbc80a9e21f5f3d8c149e3e187cc9a581a29",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
