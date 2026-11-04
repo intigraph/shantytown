@@ -1,0 +1,13 @@
+Script started on 2026-11-04 08:42:11-05:00 [COMMAND="sh .work/5mga-semantic/demo.sh" <not executed on terminal>]
+BEFORE known base023868ba; offline fixtures
+{"case": "owner", "changes_applied": false, "needs_owner": "UNAVAILABLE", "priority": 1, "reowner_down_only": false, "status": "open"}
+{"case": "owner", "changes_applied": false, "needs_owner": "UNAVAILABLE", "priority": 0, "reowner_down_only": false, "status": "deferred"}
+{"case": "owner", "changes_applied": false, "needs_owner": "UNAVAILABLE", "priority": 2, "reowner_down_only": false, "status": "open"}
+{"case": "fixture-tools", "changes_applied": false, "live_calls": 0, "noul_calls": 44, "rank_band_calls": 30, "schema": "legacy combined path; no semantic-only entrypoint"}
+AFTER changed source; offline fixtures
+{"case": "owner", "changes_applied": false, "needs_owner": true, "priority": 1, "reowner_down_only": false, "status": "open"}
+{"case": "owner", "changes_applied": false, "needs_owner": false, "priority": 0, "reowner_down_only": false, "status": "deferred"}
+{"case": "owner", "changes_applied": false, "needs_owner": false, "priority": 2, "reowner_down_only": false, "status": "open"}
+{"case": "fixture-tools", "changes_applied": false, "live_calls": 0, "noul_calls": 60, "rank_band_calls": 0, "schema": "st-rank-semantic-benchmark/v1"}
+
+Script done on 2026-11-04 08:42:11-05:00 [COMMAND_EXIT_CODE="0"]
