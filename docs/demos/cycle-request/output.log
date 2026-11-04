@@ -1,0 +1,6 @@
+Script started on 2026-11-04 01:48:16-05:00 [COMMAND="python3 docs/demos/cycle-request/demo.py" <not executed on terminal>]
+BEFORE bccb036 {"exit": 0, "checkpoint_posts": 1, "quality_tracker_reads": 1, "quality_uses_supplied_file": false, "request_recorded": true}
+AFTER candidate {"exit": 0, "checkpoint_posts": 1, "quality_tracker_reads": 0, "quality_uses_supplied_file": true, "request_recorded": true}
+Scope: isolated request fixture, no waiter or host action; execution guards are unchanged.
+
+Script done on 2026-11-04 01:48:17-05:00 [COMMAND_EXIT_CODE="0"]

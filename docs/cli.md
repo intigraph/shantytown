@@ -232,6 +232,9 @@ context settings leaves hints disabled.
 
 Existing Stop hooks read the latest turn's input occupancy, including Claude
 cache tokens, and give one advisory per threshold crossing or session change.
+The [compact checkpoint template](guides/context-cycle.md) gives one request command;
+`--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
+Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 

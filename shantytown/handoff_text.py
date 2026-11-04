@@ -47,7 +47,7 @@ CYCLE_CMD = "st agent cycle --self"
 # difference between a pointer and a truncation.
 NO_CLEAR = "Do NOT run /clear — it drops bypass into MANUAL."
 
-HELP_POINTER = "Why/details: `st ops help handoff`."
+HELP_POINTER = "Template: docs/guides/context-cycle.md. Details: `st ops help handoff`."
 
 
 def background_tasks() -> str:
@@ -67,8 +67,8 @@ def cycle_now(depth_k: float | int | None = None,
     where = (f"{int(depth_k)}k, past the {int(threshold_k)}k cycle line"
              if depth_k and threshold_k else "past the cycle line")
     return (f"⚠ CONTEXT HIGH ({where}). CHECKPOINT, then cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-file <notes>\n"
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-file <notes> --checkpoint-bead <id> --quipu-node <existing-node>\n"
             f"{NO_CLEAR} Cycle keeps bypass/MCP/skills/hooks and re-dispatches "
             f"your plate. {background_tasks()} {HELP_POINTER}")
 
@@ -81,8 +81,8 @@ def haul_handoff(context_k: float | int, line_k: float | int) -> str:
     """
     return (f"⚠ HANDOFF: {int(context_k)}k, past the {int(line_k)}k line. Do not "
             f"start the next item. CHECKPOINT, then cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-file <notes>\n"
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-file <notes> --checkpoint-bead <id> --quipu-node <existing-node>\n"
             f"{NO_CLEAR} Your haul resumes itself afterwards. {background_tasks()} {HELP_POINTER}")
 
 
@@ -132,8 +132,8 @@ def coordinator_self_handoff(depth_k: float | int, threshold_k: float | int) -> 
     return (f"⚠ YOUR OWN CONTEXT: {int(depth_k)}k, past the {int(threshold_k)}k "
             f"line. You enforce this on the crew — same rule. CHECKPOINT, then "
             f"cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-bead <id> --checkpoint-file <notes>\n"
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-bead <id> --checkpoint-file <notes> --quipu-node <existing-node>\n"
             f"{NO_CLEAR} {HELP_POINTER}")
 
 
