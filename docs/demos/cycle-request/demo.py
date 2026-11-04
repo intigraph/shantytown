@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from shantytown import cli,br,cycle
+from shantytown import cli,br,cycle,help_topics
 source=subprocess.check_output(['git','show','bccb036:shantytown/cli.py'],text=True)
 node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='_cmd_cycle')
 ns=dict(cli.__dict__);exec(compile(ast.Module(body=[node],type_ignores=[]),'<base>','exec'),ns)
@@ -23,3 +23,12 @@ for label,fn in [('BEFORE bccb036',base),('AFTER candidate',cli._cmd_cycle)]:
   assert rc==0 and len(posts)==1
   if fn is not base:assert not reads and quality==[notes.read_text()]
 print('Scope: isolated request fixture, no waiter or host action; execution guards are unchanged.')
+
+help_ns={'__name__':'shantytown.demo_old_help','__package__':'shantytown'}
+old_help=subprocess.check_output(['git','show','bccb036:shantytown/help_topics.py'],text=True)
+exec(compile(old_help,'<base-help>','exec'),help_ns)
+for label,text in [('BEFORE help',help_ns['render']('handoff')),('AFTER help',help_topics.render('handoff'))]:
+    print(label,json.dumps(dict(tells_agent_keep_working='keep working until it fires' in text,
+                               fixed_template='CHECKPOINT TEMPLATE' in text,
+                               end_turn='END YOUR TURN' in text)))
+assert 'keep working until it fires' not in help_topics.render('handoff')

@@ -8,7 +8,8 @@ The executor still reads durable custody before performing the cycle.
 The recording compares base `bccb036` with this change in an isolated request
 fixture. Watch `quality_tracker_reads` change from 1 to 0, and
 `quality_uses_supplied_file` from false to true. Both still post once and record
-a request. The fixture stubs tracker transport, advice and the detached waiter;
+a request. The help comparison also shows the contradictory keep-working
+instruction disappearing, with a fixed template and explicit end-turn instruction. The fixture stubs tracker transport, advice and the detached waiter;
 it does not clear a pane or claim a live latency improvement.
 
 - [Output transcript](output.log)

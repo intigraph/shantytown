@@ -57,4 +57,14 @@ def test_cycle_recipe_has_one_posting_command_and_explicit_context(text):
     assert text.count('st agent cycle --self') == 1
     assert 'st work item comment' not in text
     assert '--checkpoint-file' in text and '--checkpoint-bead' in text and '--quipu-node' in text
-    assert 'context-cycle.md' in text
+    assert 'st ops help handoff' in text
+
+
+def test_builtin_help_includes_template_and_requires_idle_after_acceptance():
+    from shantytown import help_topics
+    text = help_topics.render('handoff')
+    assert handoff_text.CHECKPOINT_TEMPLATE in text
+    assert 'keep working until it fires' not in text
+    assert 'END YOUR TURN' in text and 'do not poll or reissue' in text
+    assert 'only once your pane is idle' in text
+    assert 'Do not separately' in text

@@ -47,7 +47,14 @@ CYCLE_CMD = "st agent cycle --self"
 # difference between a pointer and a truncation.
 NO_CLEAR = "Do NOT run /clear — it drops bypass into MANUAL."
 
-HELP_POINTER = "Template: docs/guides/context-cycle.md. Details: `st ops help handoff`."
+HELP_POINTER = "Template/details: `st ops help handoff`."
+
+CHECKPOINT_TEMPLATE = """    <item>: <current state and exact next action>
+    Landed: <commit/PR; distinguish installed/running>
+    Local: <worktree, branch, dirty/unpublished work and evidence>
+    Decisions: <constraints and holds; or none>
+    Next: <one exact action and its success check>
+    Rollback: <recovery; owned background tasks; pending outcomes>"""
 
 
 def background_tasks() -> str:

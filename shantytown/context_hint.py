@@ -181,7 +181,7 @@ def emit(root, card, payload=None) -> bool:
                        "a checkpoint, then request `st agent cycle --self --checkpoint-file "
                        "<notes-file> --checkpoint-bead <id> --quipu-node <existing-node>`. "
                        "This posts the checkpoint; do not post it separately. "
-                       "Template: docs/guides/context-cycle.md. No cycle has been scheduled.")
+                       "Template: `st ops help handoff`. No cycle has been scheduled.")
             if category == "hard":
                 message += (f" HARD HANDOFF at {limits.hard_pct:g}%: finish only the "
                             "operation needed to leave work safe, then hand off. "
