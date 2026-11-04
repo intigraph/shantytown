@@ -10389,6 +10389,14 @@ def _cycle_anchor_bead(a, agent: str) -> str:
     return str(iid) if iid else ""
 
 
+def _cycle_session_start(root, agent_name):
+    """Exact local launch stamp shared by durable and inferred-quality checks."""
+    from datetime import datetime, timezone
+    stamp = Path(root) / "launched" / f"{agent_name}.json"
+    return (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+            .isoformat() if stamp.is_file() else "")
+
+
 def _durable_checkpoint_gate(a, agent_name: str):
     """The I/O half of cycle.durable_gate — read the held bead, its comments, and
     when this agent last launched. Policy stays in cycle.py, testable without a
@@ -10404,12 +10412,9 @@ def _durable_checkpoint_gate(a, agent_name: str):
     EVERY failure becomes could-not-tell (ok=None), never a refusal and never a
     pass: this is a gate on a saturated agent's only relief valve.
     """
-    from datetime import datetime, timezone
     from . import cycle as cycle_mod
     try:
-        stamp = Path(a.root) / "launched" / f"{agent_name}.json"
-        since = (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
-                 .isoformat() if stamp.is_file() else "")
+        since = _cycle_session_start(a.root, agent_name)
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
@@ -10799,10 +10804,21 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
-        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        if ckpt_body:
+            # The file just read is the requested handoff. Re-reading plate and
+            # comments here only feeds inferred quality advice; the executor
+            # independently enforces the durable checkpoint before any cycle.
+            quality_text = ckpt_body
+            try:
+                quality_session = _cycle_session_start(a.root, agent_name)
+            except OSError:
+                quality_session = ""  # unknown launch cannot earn a rewrite veto
+        else:
+            quality_gate = _durable_checkpoint_gate(a, agent_name)
+            quality_text = quality_gate.checkpoint or a.reason.strip()
+            quality_session = quality_gate.since
         quality_ok, quality_note = _checkpoint_quality_gate(
-            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
-            quality_gate.since)
+            a, agent_name, quality_text, quality_session)
         if quality_note:
             print(f"  ⚠ {quality_note}", file=sys.stderr)
         if not quality_ok:
@@ -10828,10 +10844,11 @@ def _cmd_cycle(a) -> int:
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
-                  f"End your turn now; nothing is lost if it never fires.")
+                  f"End your turn now; do not poll or reissue this accepted request.")
         else:
             print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
-                  "then end your turn; the request stays pending if it never fires.")
+                  "then end your turn. Do not poll or reissue this accepted request; "
+                  "it stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
