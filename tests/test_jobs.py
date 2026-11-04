@@ -528,6 +528,48 @@ def test_the_tend_pass_runs_a_due_job(tmp_path, monkeypatch, capsys):
     assert "job nudge: ok" in capsys.readouterr().err
 
 
+def test_chaski_delegation_skips_the_entire_tend_job_evaluator(tmp_path, monkeypatch):
+    crew = tmp_path / "crew"
+    crew.mkdir()
+    (crew / "w.json").write_text(json.dumps({"role": "worker", "pane": "p-w"}))
+    from tests.test_tend import IDLE, _Panes
+    from shantytown import config
+    (tmp_path / config.CONFIG_NAME).write_text('[jobs]\nscheduler = "chaski"\n')
+    _write(tmp_path, "nudge", '[trigger]\nevery = "1h"\n[action]\ninbox = "w"\nmessage = "hi"\n')
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(screens={"p-w": IDLE}))
+    called = []
+    monkeypatch.setattr(cli, "_jobs_sweep", lambda a: called.append("evaluated") or [])
+
+    class _A:
+        root = tmp_path; dry_run = False
+        backend = "files"; repo = None; registry = "files"
+
+    cli._tend_once(_A())
+    assert called == []
+    assert not (tmp_path / "logs" / jobs.LEDGER).exists()
+
+
+def test_delegated_or_invalid_config_never_constructs_a_local_runner(tmp_path, monkeypatch):
+    from shantytown import config
+    monkeypatch.setattr(cli, "_jobs_runner", lambda *_a, **_k: pytest.fail("local runner constructed"))
+    (tmp_path / config.CONFIG_NAME).write_text('[jobs]\nscheduler = "chaski"\n')
+    assert cli._jobs_sweep(SimpleNamespace(root=tmp_path)) == []
+    # A default-config fallback in tend must not turn an invalid cutover back
+    # into local execution; the runner boundary does a strict read as well.
+    (tmp_path / config.CONFIG_NAME).write_text('[jobs]\nscheduler = "misspelled"\n')
+    with pytest.raises(config.ConfigError):
+        cli._jobs_sweep(SimpleNamespace(root=tmp_path))
+
+
+@pytest.mark.parametrize("verb", ["run", "check"])
+def test_chaski_delegation_refuses_manual_toml_execution_before_read(tmp_path, monkeypatch, capsys, verb):
+    from shantytown import config
+    (tmp_path / config.CONFIG_NAME).write_text('[jobs]\nscheduler = "chaski"\n')
+    monkeypatch.setattr(jobs, "load", lambda *_a: pytest.fail("local TOML read"))
+    assert cli._cmd_jobs(SimpleNamespace(root=tmp_path, jobs_sub=verb, name="nudge")) == cli.REFUSED
+    assert "Chaski" in capsys.readouterr().err
+
+
 # --- the actions go through the real commands ------------------------------------
 
 def test_the_inbox_action_is_the_st_inbox_handler(tmp_path, monkeypatch):
