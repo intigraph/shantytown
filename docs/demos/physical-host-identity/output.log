@@ -1,0 +1,18 @@
+Script started on 2026-11-04 13:09:58-05:00 [COMMAND="bash run-demo.sh" <not executed on terminal>]
+BASE 00aeb887d5ec2f8575283bd1c8eca5bbf09aa795 (source fixture)
+fixture: kernel hostname=ada; original physical hostname=Host-A.example
+lifecycle producer preserved: False
+Quipu read host: ada
+Quipu write host: ada
+governor telemetry instances: ["ada", "ada"]
+rollback producer preserved: True
+
+CANDIDATE acc934df (source fixture)
+fixture: kernel hostname=ada; original physical hostname=Host-A.example
+lifecycle producer preserved: True
+Quipu read host: host-a.example
+Quipu write host: Host-A.example
+governor telemetry instances: ["Host-A", "Host-A"]
+rollback producer preserved: True
+
+Script done on 2026-11-04 13:09:58-05:00 [COMMAND_EXIT_CODE="0"]

@@ -20,3 +20,6 @@ docs/demos/admin-wake-projection/output.log -text whitespace=cr-at-eol
 docs/demos/cycle-refusal/output.log -text whitespace=cr-at-eol
 # Preserve raw terminal bytes used by the cycle-request replay timing.
 docs/demos/cycle-request/output.log -text whitespace=cr-at-eol
+
+# Preserve terminal recording bytes for replay.
+docs/demos/physical-host-identity/output.log -text whitespace=cr-at-eol
