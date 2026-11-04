@@ -3020,6 +3020,9 @@ The token is passed unchanged through any admission reread. A stale edit refuses
 and retains Seeds' structured conflict metadata; it never refreshes the token or
 retries the write. An indeterminate Seeds outcome also retains its operation
 identity and readback metadata, rather than truncating it into a generic error.
+Guarded Seeds failures emit JSON on stderr with exit 4 (conflict) or 8
+(indeterminate); bearer strings remain redacted. The option refuses every
+non-update verb before it can write.
 Independent fields still share one item revision: explicitly
 reread and rebase even when another writer changed a different field. Other
 backends refuse `--if-revision` rather than silently dropping the guard.

@@ -100,6 +100,13 @@ def _writer(tracker):
 
 
 def command(args, tracker):
+    expected_revision = getattr(args, "if_revision", None)
+    if expected_revision is not None:
+        from .sd import SdTracker
+        if args.item_action != "update" or not isinstance(tracker, SdTracker):
+            raise ValueError("--if-revision requires update on the Seeds backend; no unguarded fallback")
+        if type(expected_revision) is not int or expected_revision < 0:
+            raise ValueError("--if-revision must be a nonnegative integer")
     if args.item_action in ("rescope", "ack"):
         from .sd import SdTracker
         if not isinstance(tracker, SdTracker):
@@ -187,13 +194,6 @@ def command(args, tracker):
                        for row in _comments(tracker, item.id)):
                 raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
-    expected_revision = getattr(args, "if_revision", None)
-    if expected_revision is not None:
-        from .sd import SdTracker
-        if args.item_action != "update" or not isinstance(tracker, SdTracker):
-            raise ValueError("--if-revision requires update on the Seeds backend; no unguarded fallback")
-        if type(expected_revision) is not int or expected_revision < 0:
-            raise ValueError("--if-revision must be a nonnegative integer")
     fields = {}
     replace_text = getattr(args, "replace_text", False)
     if replace_text and args.item_action != "update":

@@ -109,3 +109,37 @@ def test_indeterminate_operation_identity_is_retained_without_retry(tmp_path):
     assert failure.value.details['outcome'] == 'UNKNOWN'
     assert len(tracker.calls) == 1
     assert tracker.revision == 2
+
+
+@pytest.mark.parametrize('action', ['show', 'comment', 'close', 'rescope', 'ack'])
+def test_revision_guard_is_never_ignored_by_another_verb(tmp_path, action):
+    tracker = RevisionGuarded()
+    args = operation(tmp_path, if_revision=2)
+    args.item_action = action
+    with pytest.raises(ValueError, match='requires update'):
+        work_item.command(args, tracker)
+    assert tracker.calls == []
+
+
+@pytest.mark.parametrize('code,status', [('CONFLICT', 4), ('INDETERMINATE', 8)])
+def test_real_cli_retains_structured_diagnostics_and_redacts_bearers(tmp_path, monkeypatch, capsys, code, status):
+    from shantytown import cli
+    from shantytown.br import UpdateConflict, UpdateIndeterminate
+    monkeypatch.setattr(cli, '_tracker', lambda _: object())
+    error = {'code': code, 'message': 'long diagnostic ' * 60 + ' Bearer short-secret',
+             'details': {'schema': 'seed-write-outcome/v1',
+                         'operation_id': 'urn:seeds:write:retained-after-long-message',
+                         'outcome': 'UNKNOWN'}}
+    def fail(*_):
+        raise (UpdateConflict if status == 4 else UpdateIndeterminate)(error)
+    monkeypatch.setattr(work_item, 'command', fail)
+    result = cli.main(['--root', str(tmp_path / '.shanty'), 'work', 'item', 'update',
+                       'known-id', '--if-revision', '1', '--notes-file', str(tmp_path / 'notes.txt')])
+    captured = capsys.readouterr()
+    assert result == status
+    value = json.loads(captured.err)
+    assert value['error']['details']['operation_id'].endswith('retained-after-long-message')
+    assert value['error']['code'] == code
+    assert 'short-secret' not in captured.err and '[REDACTED]' in captured.err
+    assert 'then retry transient' not in captured.err
+    assert captured.out == ''
