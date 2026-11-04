@@ -139,8 +139,15 @@ def discover_sources(root, since_h=24):
         fmt = for_card(card, root=root).name
         if fmt == 'claude':
             paths = (Path.home() / '.claude/projects' / _claude_project_dir(card.workspace)).glob('*.jsonl')
-        elif fmt == 'codex' and settings(card):
-            paths = (Path(settings(card)).parent / 'sessions').glob('*/*/*/*.jsonl')
+        elif fmt == 'codex':
+            # Harness compose redirects runtime sessions into this durable home.
+            # A role settings file lives elsewhere and is not CODEX_HOME.
+            state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state'))
+            homes = [state / 'shantytown/codex' / card.name / 'sessions']
+            configured = settings(card)
+            if configured:
+                homes.append(Path(configured).parent / 'sessions')
+            paths = dict.fromkeys(p.resolve() for home in homes for p in home.glob('*/*/*/*.jsonl'))
         else:
             continue
         for path in paths:
@@ -291,6 +298,25 @@ def comment_closed(config, result, records, pending_path):
     return posted
 
 
+def price_description(result, bead):
+    """Display Camayoc's projection without repricing or changing receipts."""
+    costs = result.get('costs') or {}
+    groups = [g for g in costs.get('groups', []) if g.get('bead') == bead]
+    if not groups:
+        return 'API-equivalent USD: UNKNOWN (' + costs.get('reason', 'no priced request projection') + ')'
+    lines = ['API-equivalent USD; current published rates, not an invoice:']
+    for group in groups:
+        dollars = group.get('usd')
+        value = dollars if dollars is not None else 'UNKNOWN (known subtotal ' + str(group.get('known_usd', 'UNKNOWN')) + ')'
+        lines.append(f"  {group.get('model') or 'UNKNOWN'} / {group['harness']} / {group['basis']}: {value}; "
+                     f"priced tokens {group['priced_tokens']}/{group['tokens']}")
+        for reason, count in sorted(group.get('unknown_reasons', {}).items()):
+            lines.append(f'    {reason}: {count} request(s)')
+    lines.append('Price table SHA-256: ' + str(costs.get('price_table_sha256', 'UNKNOWN')))
+    lines.append('Plan share USD: UNKNOWN (' + costs.get('plan_share_reason', 'no measured allocation') + ')')
+    return '\n'.join(lines)
+
+
 def metrics(result):
     # Corrected allocations can decrease, so these absolute totals are gauges.
     lines = ['# TYPE st_bead_tokens_total gauge', '# TYPE st_bead_cost_coverage gauge',
@@ -302,6 +328,21 @@ def metrics(result):
             if count is not None:
                 lines.append(f'st_bead_tokens_total{{{label},kind="{kind}"}} {count}')
         lines.append(f'st_bead_cost_coverage{{{label}}} {int(group["coverage"] == "observed")}')
+    # Currency samples use Camayoc's exact per-request price projection. A
+    # partial known subtotal has its own name; never emit it as a complete cost.
+    costs = result.get('costs') or {}
+    for name in ('st_bead_api_equivalent_usd', 'st_bead_api_equivalent_known_usd', 'st_bead_priced_token_share'):
+        lines.append('# TYPE ' + name + ' gauge')
+    for group in costs.get('groups', []):
+        labels = {k: group.get(k) or 'UNKNOWN' for k in ('rig', 'bead', 'agent', 'harness', 'model', 'basis')}
+        labels['price_table_sha256'] = costs.get('price_table_sha256', 'UNKNOWN')
+        label = ','.join(f'{k}={json.dumps(str(v))}' for k, v in labels.items())
+        if group.get('usd') is not None:
+            lines.append(f"st_bead_api_equivalent_usd{{{label}}} {group['usd']}")
+        if group.get('priced_tokens', 0):
+            lines.append(f"st_bead_api_equivalent_known_usd{{{label}}} {group['known_usd']}")
+        if group.get('tokens', 0):
+            lines.append(f"st_bead_priced_token_share{{{label}}} {group['priced_tokens'] / group['tokens']}")
     lines.append(f'st_bead_cost_last_success_timestamp_seconds {time.time()}')
     return '\n'.join(lines) + '\n'
 
@@ -471,6 +512,7 @@ def _run_selected(args, config, graph_state):
             print(json.dumps(result, indent=2))
         else:
             print(value[1] if value else 'cost: UNKNOWN (no attributable requests)')
+            print(price_description(result, args.bead))
             print(cost_coverage.describe(result['cost_coverage']))
             for item in result.get('unresolved_items', []):
                 print(f"cost: item {item['bead']} {item['reason']}: {item['detail']}")
