@@ -9,8 +9,8 @@ import tarfile
 import tempfile
 
 REPO = Path(__file__).resolve().parents[3]
-REVISIONS = [('base', '708b0348d7ff5dbe140397b95f0b339a4c23a2b4'),
-             ('candidate', 'b6b299ed146f1b58aa3f45281aa997aaad76bce9')]
+REVISIONS = [('base', '4a16b4c1a1d1b3628cf15d007aaf11c414fedfb9'),
+             ('candidate', '60e6734f91839497888b1a9d3c04fcb7fc03069a')]
 PROBE = '''
 import json
 from pathlib import Path
