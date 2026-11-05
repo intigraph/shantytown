@@ -503,7 +503,7 @@ class ContextUnavailable(CouldNotLook):
 class RankUnavailable(CouldNotLook):
     """A ranker could not compute weights. NOT "nothing to rank" — "I could not
     look". Same shape as ContextUnavailable, and for the same reason: a down
-    ranker (Hank/Quipu unreachable) and a ranker that found nothing to weight
+    ranker (Yupana/Quipu unreachable) and a ranker that found nothing to weight
     return along different paths. The drain CATCHES this and degrades to the
     rule-based order (workflow.prioritize) — a wrong weight, or a wedged hook, is
     worse than an unweighted one. A ranker must never silently return unweighted
@@ -513,13 +513,13 @@ class RankUnavailable(CouldNotLook):
 @runtime_checkable
 class Ranker(Protocol):
     """Weight prioritization candidates by an external signal (structural blast
-    radius via Hank, governed policy via Quipu).
+    radius via Yupana, governed policy via Quipu).
 
     ONE method, like Context. It takes the candidates and returns them with
     `weight`/`why` populated; it MUST raise RankUnavailable rather than return
     them unweighted when it could not reach its backend. The default impl
     (policy.NullRanker) needs no backend and returns them unchanged — the leak
-    detector that proves the whole feature runs without Hank/Quipu.
+    detector that proves the whole feature runs without Yupana/Quipu.
 
     RETURNS AN `Answer`, NOT A BARE LIST (aegis-q0bzh). `RankUnavailable` already
     covers "I could not reach the backend at all". It does NOT cover the case that

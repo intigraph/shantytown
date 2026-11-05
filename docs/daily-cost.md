@@ -32,3 +32,29 @@ recipes and granting source reads remain separately reviewed operations.
 The [private join proof](probes/metrics-join/README.md) exercises a literal
 DuckDB query over synthetic daily projections. It does not establish live
 history, catalog admission or full day coverage.
+
+## API-equivalent prices
+
+When Camayoc supplies a `costs` projection, `st work cost ITEM` displays the
+exact model, attribution basis, priced-token coverage and price-catalogue hash.
+Missing prices remain UNKNOWN; the known subtotal is explicitly partial.
+Closure receipts continue to contain declared token evidence only.
+
+Prometheus receives `st_bead_api_equivalent_usd` only for a fully priced group,
+`st_bead_api_equivalent_known_usd` for its known subtotal when at least one
+request was priced, and `st_bead_priced_token_share` for pricing coverage.
+All three carry the catalogue SHA-256 and attribution basis. A pricing-coverage
+value of zero is not a zero-dollar observation. Install Camayoc's companion
+source-aware publisher before enabling these samples.
+
+Daily rows join Camayoc's prices by exact harness/session/agent/request ID and
+retain the catalogue hash, known subtotal and priced-request count. A missing
+price leaves the complete daily dollar total unknown while preserving tokens.
+Session correction still replaces its prior rows rather than adding them.
+These are API-equivalent estimates at published rates, not invoices. Plan share
+stays unknown until measured account-window allocation is available.
+
+Codex display discovery includes the durable session directory used by harness
+launches, matches the recorded workspace, and deduplicates symlinks. It does not
+infer ownership from the newest filename. This expands supplied-source coverage;
+it does not establish a complete historical source census.

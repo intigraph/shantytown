@@ -99,7 +99,7 @@ def _file_of(tool_input: dict) -> str | None:
 _WRAPPERS = ("env", "sudo", "command", "nice", "nohup", "time", "exec", "doas")
 # Wrappers that take operands of their own before the real command. `timeout`
 # takes a DURATION (and -k takes one too), so a fixed skip count gets
-# `timeout -k 5 30 hank …` wrong — it lands on `5`. Durations are skipped by
+# `timeout -k 5 30 yupana …` wrong — it lands on `5`. Durations are skipped by
 # SHAPE instead.
 _DURATION_WRAPPERS = ("timeout",)
 _FLAG_WRAPPERS = ("xargs", "stdbuf")
@@ -216,9 +216,9 @@ def _segment_bin(toks: list[str]) -> str | None:
 
 
 def _bash_bin(tool_input: dict) -> str | None:
-    """The executable a Bash command actually RAN, so CLI-via-Bash usage (hank,
+    """The executable a Bash command actually RAN, so CLI-via-Bash usage (yupana,
     bobbin, bd, git, curl to a service…) is attributable — 'Bash×313' cannot tell
-    you whether the crew is reaching for hank/bobbin (aegis-rcyd Phase 0).
+    you whether the crew is reaching for yupana/bobbin (aegis-rcyd Phase 0).
 
     THIS LOOKS PAST `cd X &&`, AND THAT IS THE WHOLE POINT (aegis-xxae9). The
     first version took the first token of the whole string, so every
@@ -576,7 +576,7 @@ def capture(root: Path, payload: dict) -> None:
             ti = payload.get("tool_input") or {}
             tool = payload.get("tool_name") or "?"
             # `detail` holds the invoked binary for Bash, so CLI-via-Bash usage
-            # (hank/bobbin/bd/git/…) is attributable, not just "Bash×N"
+            # (yupana/bobbin/bd/git/…) is attributable, not just "Bash×N"
             # (aegis-rcyd Phase 0). `file` stays the edited/read path — keeping
             # the file-touch metrics clean.
             conn.execute(
@@ -911,7 +911,7 @@ def stats_report(root: Path, agent: str | None = None, since_h: float = 24.0,
         if tools:
             print("  tools:  " + ", ".join(f"{t}×{n}" for t, n in tools), file=out)
         # CLI-via-Bash attribution (aegis-rcyd): which binaries the crew reached
-        # for — the leverage signal 'Bash×N' hides (hank/bobbin/bd/git/curl…).
+        # for — the leverage signal 'Bash×N' hides (yupana/bobbin/bd/git/curl…).
         cli = conn.execute(
             f"SELECT detail, COUNT(*) FROM events WHERE kind='tool'"
             f" AND tool='Bash' AND detail IS NOT NULL AND ts>? {where}"
