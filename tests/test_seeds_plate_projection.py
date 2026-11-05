@@ -842,3 +842,38 @@ def test_feed_rows_real_graph_keeps_worker_plate_and_unassigned_dream(monkeypatc
         assert {row["id"] for row in active} == {"test-owned"}
     finally:
         data.close()
+
+
+@pytest.mark.parametrize("motion", ["settles", "never", "cache-unavailable"])
+def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motion):
+    cache = seeds_plate.seeds_read_cache
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("ST_SEEDS_READ_CACHE", raising=False)
+    monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
+    observed = {"marks": 0, "queries": 0}
+    def watermark(*args):
+        observed["marks"] += 1
+        tx = (10 if observed["marks"] <= 2 else 11) if motion == "settles" else (
+            observed["marks"] if motion == "never" else 10)
+        return ("fixture-store", tx)
+    monkeypatch.setattr(cache, "_watermark", watermark)
+    if motion == "cache-unavailable":
+        def unavailable():
+            raise OSError("fixture cache unavailable")
+        monkeypatch.setattr(cache, "_directory", unavailable)
+    class Response:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, size): return json.dumps(answer(fields())).encode()
+    def send(request, timeout):
+        observed["queries"] += 1
+        return Response()
+    monkeypatch.setattr(seeds_plate, "urlopen", send)
+    result = seeds_plate.owner_rows(PROOF, "worker")
+    if motion == "never":
+        assert not result.complete
+        assert observed["queries"] == 3
+    else:
+        assert result.exact()[0]["id"] == "test-held"
+        assert observed["queries"] == (3 if motion == "settles" else 2)

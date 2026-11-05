@@ -3,8 +3,10 @@
 Hits share a one-second observation of (store_id, watermark_tx). Results are
 published only when that pair stayed unchanged across a successful fetch.
 Striped file locks protect local publication only; no HTTP runs under a lock.
-A watermark change during a miss refuses the answer. Metadata failure before
-a fetch retains the original reader; post-fetch proof failure is refused.
+A moving transaction is retried at most three times; a projection restarts
+as a whole. Cache storage failure retains an uncached reader, but an active
+projection still requires watermark proof. Missing proof or a changed store
+identity refuses the answer.
 """
 from __future__ import annotations
 
@@ -47,6 +49,10 @@ def direct_reads():
         _DIRECT_READS.reset(token)
 
 
+class WatermarkMoved(ValueError):
+    """A transient transaction change; only the entire read may be retried."""
+
+
 @contextmanager
 def consistent_reads():
     """Fence a multi-query projection to one observed store/watermark pair."""
@@ -60,8 +66,12 @@ def consistent_reads():
 def _observe(mark):
     active, expected = _READ_SNAPSHOT.get()
     if active:
-        if mark is None or (expected is not None and mark != expected):
-            raise ValueError("seeds watermark changed across projection; refusing mixed snapshot")
+        if mark is None:
+            raise ValueError("seeds watermark unavailable across projection")
+        if expected is not None and mark != expected:
+            if mark[0] != expected[0]:
+                raise ValueError("seeds store changed across projection")
+            raise WatermarkMoved("seeds watermark changed across projection; refusing mixed snapshot")
         _READ_SNAPSHOT.set((True, mark))
 
 
@@ -157,6 +167,19 @@ def _publish(directory: Path, path: Path, watermark, result):
 
 
 def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
+    # A projection owns its retry boundary: never keep its earlier fields and
+    # retry just one query against a newer snapshot.
+    attempts = 1 if _READ_SNAPSHOT.get()[0] else 3
+    for attempt in range(attempts):
+        try:
+            return _read_once(server, query, timeout, opener=opener,
+                              fetch=fetch, validate=validate)
+        except WatermarkMoved:
+            if attempt == attempts - 1:
+                raise
+
+
+def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate):
     """Return a validated current read; errors never authorize cached fallback.
 
     The cache contains only bounded successful wire projections. The complete
@@ -196,8 +219,19 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
                 _publish(directory, mark_path, None, before)
                 hit = _cached(path, before, validate)
     except _CACHE_ERRORS:
-        _observe(None)
-        return fetch()
+        if not _READ_SNAPSHOT.get()[0]:
+            return fetch()
+        # Unwritable cache files are not missing consistency evidence. Keep
+        # the direct wire reader, with the same before/after watermark fence.
+        before = _watermark(server, timeout, opener)
+        _observe(before)
+        result = fetch()
+        after = _watermark(server, timeout, opener)
+        if after[0] != before[0]:
+            raise ValueError("seeds store changed during read")
+        if after != before:
+            raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
+        return result
     _observe(before)
     if hit is not None:
         return hit
@@ -213,6 +247,8 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
                 _publish(directory, path, after, result)
     except _CACHE_ERRORS:
         pass  # A certified wire answer does not depend on writable cache files.
+    if after[0] != before[0]:
+        raise ValueError("seeds store changed during read")
     if after != before:
-        raise ValueError("seeds watermark moved during read; refusing mixed snapshot")
+        raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
     return result

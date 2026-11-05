@@ -147,10 +147,8 @@ def test_new_store_at_same_transaction_cannot_reuse_old_rows(service, monkeypatc
 def test_write_during_fetch_does_not_publish_a_mislabeled_result(service):
     proof, state = service
     state["mutate"] = True
-    with pytest.raises(ValueError, match="watermark moved"):
-        read(proof)
-    assert entries() == []
     assert read(proof)["rows"][0]["value"] == "after"
+    assert len(entries()) == 1
     assert state["queries"] == 2
 
 
@@ -336,3 +334,38 @@ def test_projection_refuses_change_between_individually_stable_queries(service, 
     # The scope must restore; a new projection may use the new snapshot.
     with seeds_read_cache.consistent_reads():
         assert read(proof, "SELECT fields")["rows"][0]["value"] == "after"
+
+
+def test_single_read_refetches_after_one_watermark_move(service):
+    proof, state = service
+    state["mutate"] = True
+    assert read(proof)["rows"][0]["value"] == "after"
+    assert state["queries"] == 2
+
+
+def test_single_read_refuses_when_watermark_never_settles(service):
+    proof, state = service
+    def moving_fetch():
+        result = seeds_plate._query_wire(proof, "SELECT moving", 5)
+        state["tx"] += 1
+        return result
+    with pytest.raises(ValueError, match="watermark moved"):
+        seeds_read_cache.read(proof.quipu_url, "SELECT moving", 5,
+                              opener=seeds_plate.urlopen, fetch=moving_fetch,
+                              validate=lambda value: value)
+    assert state["queries"] == 3
+    assert entries() == []
+
+
+def test_store_replacement_during_read_is_not_a_retryable_transaction(service):
+    proof, state = service
+    def replacement_fetch():
+        result = seeds_plate._query_wire(proof, "SELECT replacement", 5)
+        state["store"] = "replacement-store"
+        return result
+    with pytest.raises(ValueError, match="store changed"):
+        seeds_read_cache.read(proof.quipu_url, "SELECT replacement", 5,
+                              opener=seeds_plate.urlopen, fetch=replacement_fetch,
+                              validate=lambda value: value)
+    assert state["queries"] == 1
+    assert entries() == []

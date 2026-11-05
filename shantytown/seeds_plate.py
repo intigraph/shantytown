@@ -7,6 +7,7 @@ shapes are UNKNOWN; a failed projection must not trigger full-board hydration.
 from __future__ import annotations
 
 import json
+from functools import wraps
 from datetime import datetime, timezone
 import re
 import time
@@ -273,7 +274,22 @@ class RenderShapeReads:
         return result
 
 
+def _retry_owner_projection(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        for attempt in range(3):
+            try:
+                return function(*args, **kwargs)
+            except seeds_read_cache.WatermarkMoved as error:
+                if attempt == 2:
+                    return Answer.capped(
+                        [], how="Seeds owner projection; shared and ephemeral graphs",
+                        caveat=f"owner plate unreadable after 3 snapshot attempts: {error}")
+    return read
+
+
 @declared_read_operation("owner-rows")
+@_retry_owner_projection
 @seeds_read_cache.consistent_reads()
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
@@ -458,6 +474,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
         return Answer.complete_read(rows, how=how)
+    except seeds_read_cache.WatermarkMoved:
+        raise  # The outer owner projection must restart, not just this query.
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
 
