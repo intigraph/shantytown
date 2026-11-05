@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/intigraph/shantytown/compare/v0.11.0...v0.11.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **identity:** preserve physical host across private display namespaces ([#470](https://github.com/intigraph/shantytown/issues/470)) ([e184213](https://github.com/intigraph/shantytown/commit/e1842131b3198012d8f856b88aa7fb6bfef65d27))
+
 ## [0.11.0](https://github.com/intigraph/shantytown/compare/v0.10.0...v0.11.0) (2026-11-05)
 
 
