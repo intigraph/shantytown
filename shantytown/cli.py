@@ -359,8 +359,16 @@ def _tracker(a, default="files"):
             raise ValueError('owner has no lead')
         # Use the same backend and a message marker: no implementation slot and
         # no recursive capacity routing. Never recreate the original work item.
-        tracker.create(f'inbox: capacity: {item_id} retained in pool; {owner} has 10 real work items',
-                       assignee=lead, labels='inbox')
+        body = f'capacity: {item_id} retained in pool; {owner} has 10 real work items'
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
+            # message graph: a message window, never a seed; one note per item/owner/day.
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
+            return
+        tracker.create(f'inbox: {body}', assignee=lead, labels='inbox')
     return guard_producers(tracker, notify)
 
 
@@ -493,9 +501,18 @@ def _inbox(a, default="files"):
     if _backend(a, default) in BR_LIKE:
         trk = _tracker(a, default)
         from .br import items as br_items
-        return TrackerInbox(trk, lambda: br_items(trk),
-                            lambda: br_items(trk, include_closed=True),
-                            items_for=getattr(trk, "inbox_items", None))
+        legacy = TrackerInbox(trk, lambda: br_items(trk),
+                              lambda: br_items(trk, include_closed=True),
+                              items_for=getattr(trk, "inbox_items", None))
+        # [inbox] store: "message-graph" sends NEW mail through
+        # `sd msg` into the message windows and reads legacy seeds + windows.
+        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
+            from .inbox import MessageGraphInbox
+            return MessageGraphInbox(legacy, trk)
+        return legacy
     return FilesInbox(Path(a.root) / "inbox")
 
 
@@ -10211,7 +10228,7 @@ def _resolve_repo(repo: str) -> Path:
 
     A bare name normally means ``$GT_ROOT/<name>``. When that path exists but is
     a Gas Town rig rather than a checkout, and ``$GT_ROOT/<name>-src`` carries
-    its own ``.git`` marker, the source checkout wins. This is the Hank layout:
+    its own ``.git`` marker, the source checkout wins. Legacy checkout compatibility:
     ``~/gt/hank`` owns ``.beads`` and a bare ``.repo.git`` cache, while
     ``~/gt/hank-src`` is the editable scbrown/hank checkout (aegis-gbuap).
 
@@ -10230,7 +10247,7 @@ def _resolve_repo(repo: str) -> Path:
     shantytown checkout AND every shantytown worktree. `st repo push shantytown <me>`
     — the documented form — therefore failed SPECIFICALLY in the tree you are
     standing in when you push, which is the only place anyone runs it. Same for
-    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    quipu, yupana, bobbin. Measured 2026-08-04: refused with "no worktree at
     shantytown-wt/franklin" while that worktree existed; the absolute-path form
     worked.
 
@@ -10303,7 +10320,7 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     resolved = _resolve_repo(repo)
 
     # A bare name can be a compatibility alias for a differently named source
-    # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
+    # checkout (legacy compatibility: hank -> hank-src). Resolve that alias BEFORE looking
     # for an existing worktree: otherwise a stale hank-wt left by the archived
     # repository captures `st repo push hank`, even while `st repo worktree hank` correctly
     # provisions from the active hank-src checkout.
@@ -11776,7 +11793,7 @@ def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
 
-    A shared project checkout (~/gt/shantytown, quipu, hank-src, goldblum) is
+    A shared project checkout (~/gt/shantytown, quipu, yupana, goldblum) is
     multi-writer: index and HEAD belong to the working copy, so two agents
     committing there corrupt each other silently (aegis-repg/iaef). Each agent
     gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
@@ -13274,11 +13291,18 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     policy = cfg.dream
     state = dream_mod.State(a.root)
     tracker = _tracker(a)
-    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
+    cards = {card.name: card for card in agents}
+    # Only a live worker can receive a cycle, so read only their plates plus
+    # unassigned work (where a queued cycle waits). An unscoped read is a
+    # whole-board plate read and exceeds the field budget (aegis-2idcev).
+    owners = sorted(name for name, card in cards.items()
+                    if card.role == "worker" and card.pane
+                    and panes.exists(card.pane))
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker,
+                                           owners=owners)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
-    cards = {card.name: card for card in agents}
     candidates = []
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)

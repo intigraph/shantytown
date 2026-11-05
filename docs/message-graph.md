@@ -155,6 +155,18 @@ directly in the work store (an escalation reconciler, a 24 h pointer-TTL
 closer, a cron inbox reader) must move to `st inbox` verbs in the same release.
 The pointer-TTL closer is then retired; expiry replaces it.
 
+## Status (2026-11-02)
+
+The first slice is built. Seeds `sd msg send|list|count|show|read` writes
+`schema:Message` records into the windows, guarded by
+`seeds:RemoteMessageShape`. Shantytown's `[inbox] store = "message-graph"`
+sends new mail there, including the two capacity notices that used to create
+seeds directly. Reads are a separate append-only `schema:dateRead` mark.
+Ack, expiry, escalation and alert dedupe are still to come. Existing inbox
+seeds are not migrated: a bulk move was rehearsed on a store copy and
+measured not worth its cost, so they stay readable through the
+dual read.
+
 ## Rollout
 
 Each phase has its own item, its own before/after probe and its own rollback.
