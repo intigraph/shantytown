@@ -50,6 +50,7 @@ class Stop:
     at: float                    # epoch seconds of the deliberate stop request
     by: str = ""                 # who ran it, when we can tell ($SHANTY_AGENT)
     reason: str = ""             # `st agent stop --reason`, free text, may be empty
+    resume_at: str | None = None  # explicit dated ownership exemption, never prose inference
 
 
 class FilesStops:
@@ -58,7 +59,7 @@ class FilesStops:
     def __init__(self, root: Path):
         self.root = Path(root)
 
-    def record(self, agent: str, at: float, by: str = "", reason: str = "") -> None:
+    def record(self, agent: str, at: float, by: str = "", reason: str = "", *, resume_at=None) -> None:
         """Note that `agent` was stopped deliberately, just now.
 
         Best-effort, like the launch stamp: a record that cannot be written leaves
@@ -70,8 +71,11 @@ class FilesStops:
             self.root.mkdir(parents=True, exist_ok=True)
             from .files import write_json_atomic
             write_json_atomic(self.root / f"{agent}.json",
-                              {"at": float(at), "by": by, "reason": reason})
+                              {"at": float(at), "by": by, "reason": reason,
+                               **({'resume_at': resume_at} if resume_at is not None else {})})
         except OSError:
+            if resume_at is not None:
+                raise  # A dated ownership exemption must survive before stopping.
             pass
 
     def get(self, agent: str) -> Stop | None:
@@ -81,7 +85,7 @@ class FilesStops:
         try:
             d = json.loads(p.read_text())
             return Stop(at=float(d["at"]), by=d.get("by", "") or "",
-                        reason=d.get("reason", "") or "")
+                        reason=d.get("reason", "") or "", resume_at=d.get('resume_at'))
         except (OSError, ValueError, KeyError, TypeError):
             # An unreadable record is NOT an intent. Fall through to "no record",
             # which reads the agent as ordinarily down — the honest default, and
