@@ -7,6 +7,7 @@ replaying or correcting a session never adds its old allocation a second time.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
 import tempfile
@@ -21,6 +22,16 @@ def project(result, *, now):
     records = result.get('records')
     if not isinstance(records, list) or not records or len(records) > 100_000:
         raise ValueError('daily request projection absent or exceeds row budget')
+    pricing = result.get('costs')
+    prices = {}
+    if isinstance(pricing, dict):
+        for value in pricing.get('records', []):
+            key = tuple(value.get(k) for k in ('harness', 'session', 'agent', 'id'))
+            # Conflicting duplicates cannot become a price observation.
+            if key in prices and prices[key] != value:
+                prices[key] = None
+            elif key not in prices:
+                prices[key] = value
     cutoff = datetime.fromtimestamp(now, timezone.utc).date().toordinal() - 30
     requests, sessions, session_agents = {}, {}, {}
     for record in records:
@@ -63,10 +74,29 @@ def project(result, *, now):
         groups = sessions.setdefault(session, {})
         if stamp.date().toordinal() < cutoff:
             continue
-        key = (stamp.date().isoformat(), *dimensions)
+        # Inferred-held spend (aegis-59jx) keeps its own row: never merged into a
+        # declared row for the same item, and declared rows keep their shape.
+        inferred = record.get('attribution') == 'inferred held item'
+        key = (stamp.date().isoformat(), *dimensions) + (('inferred-held',) if inferred else ())
         group = groups.setdefault(key, {'counts': dict.fromkeys(KINDS, 0), 'requests': 0,
-                                       'attribution_known': True})
+                                       'attribution_known': True,
+                                       **({'basis': 'inferred-held'} if inferred else {})})
         group['requests'] += 1
+        if isinstance(pricing, dict):
+            currency = group.setdefault('api_equivalent', {'usd': '0', 'known_usd': '0',
+                'priced_requests': 0, 'price_table_sha256': pricing.get('price_table_sha256')})
+            price = prices.get(identity) or {}
+            try:
+                value = Decimal(price['usd'])
+                if not value.is_finite() or value < 0:
+                    raise ValueError('invalid price')
+            except (KeyError, TypeError, ValueError, InvalidOperation):
+                currency['usd'] = None
+            else:
+                currency['known_usd'] = str(Decimal(currency['known_usd']) + value)
+                currency['priced_requests'] += 1
+                if currency['usd'] is not None:
+                    currency['usd'] = currency['known_usd']
         group['attribution_known'] &= record.get('attribution') == 'attributed'
         for kind, value in counts.items():
             if value is None:
@@ -77,7 +107,7 @@ def project(result, *, now):
     for session, groups in sorted(sessions.items()):
         rows = []
         for key, value in sorted(groups.items(), key=lambda x: tuple(str(v) for v in x[0])):
-            rows.append(dict(zip(('day', 'rig', 'seed', 'agent', 'harness', 'model'), key)) | value)
+            rows.append(dict(zip(('day', 'rig', 'seed', 'agent', 'harness', 'model'), key[:6])) | value)
         projected.append({'source': dict(zip(('harness', 'session', 'agent'), session)),
                           'receipt': result.get('receipt'), 'captured_at': now, 'rows': rows})
     return projected

@@ -40,12 +40,42 @@ audits the whole card registry for the same policy.
 
 ### …and which MODEL that program runs
 
-When converting a card with an explicit model to another harness, supply
-`st agent harness <agent> <target> --model <target-model>`. Without a nonempty
-target model the command refuses before changing the card or restarting, even
-with `--force`. Model identifiers are provider-defined; the converter does not
-guess compatibility or a target default. Same-harness requests and cards without
-an explicit model keep their existing behavior.
+The card can retain launch preferences separately for each program:
+
+```json
+{
+  "harness": "claude",
+  "harness_options": {
+    "claude": {"chrome": true, "model": "claude-model"},
+    "codex": {"model": "codex-model"}
+  }
+}
+```
+
+`st agent harness <agent> codex --model <target-model>` saves the outgoing
+model and Claude browser preference, then selects only Codex's options. Switching
+back with `st agent harness <agent> claude` restores its saved model and Chrome
+setting. Report mode (`st agent harness <agent>`) lists the preferences carried
+for every harness. A dry run writes neither a migration nor a backup.
+
+Legacy flat `model` and `chrome` cards still work. The flat model is the active
+selection alias; a model or account switch keeps its existing precedence. A saved
+model fills an absent active override. The first real harness conversion archives
+legacy values; reads never rewrite a card. A saved JSON `model: null` selects the
+normal deployment/harness default and clears the outgoing active model. With no
+remembered target selection, converting a card with an explicit model still
+requires a nonempty `--model`; the converter never guesses provider compatibility.
+
+Claude alone applies `chrome`. Codex and OpenCode retain unsupported options and
+print a notice, without passing them as launch flags or refusing the launch.
+Other unimplemented option names are retained and reported; they are not arbitrary
+command-line arguments. Shared permission and credential fields remain governed
+by their existing launch checks. Named-account cards continue to use
+`st agent account` rather than the harness conversion command.
+
+The same nested tables are accepted under `[crew.<name>.harness_options.<program>]`
+in `shantytown.toml`. `chrome` must be boolean; `model` must be a nonempty string
+(or JSON null). Malformed tables refuse before a card write.
 
 `[model]` is the same table one axis over — harness picks the **program**, model picks what that
 program runs — with the same two levels, the same precedence, and a card still beating both:
@@ -344,17 +374,9 @@ repo said before; the evidence, and the cost of the reversal, are in
 `dangerous` (→ `--dangerously-bypass-approvals-and-sandbox`), `roles`/`domain` (carried as
 `ST_ROLES` / `ST_ROLE_DOMAIN`, opaquely).
 
-**`chrome: true` is REFUSED on codex**, not ignored — there is no browser integration to enable,
-and a card claiming a capability its process does not have is the same class of failure as
-launching the wrong program:
-
-```
-$ st agent new ellie
-  refused: card 'ellie' sets chrome=True, and harness 'codex' has no browser
-           integration to enable. …
-$ echo $?
-1
-```
+A legacy `chrome: true` preference, or `harness_options.codex.chrome`, is
+retained with an explicit unsupported-option notice. Codex receives neither
+`--chrome` nor `--no-chrome`; returning to Claude restores its own preference.
 
 ---
 
@@ -365,7 +387,7 @@ TODO with no shape — each says what would close it.
 
 | gap | what you see | why it is not guessed |
 |---|---|---|
-| **The *remaining* matcher-scoped guards** | no hank edit guard and no `SHANTY_MCP_GUARD` on a codex agent. **`SHANTY_BASH_GUARD` now IS emitted** — see below. | A matcher is a claim about the host program's **tool names**, and only the SHELL one has been measured. `probe-codex-pretooluse.sh` made codex call a shell tool and nothing else, so it says nothing about `Edit|Write|MultiEdit` or `mcp__.*`. Emitting on the strength of the Bash result would be guessing from an adjacent measurement — the same move this repo has already paid for once. Closing it is the same script with a prompt that makes codex edit a file. |
+| **The *remaining* matcher-scoped guards** | no yupana edit guard and no `SHANTY_MCP_GUARD` on a codex agent. **`SHANTY_BASH_GUARD` now IS emitted** — see below. | A matcher is a claim about the host program's **tool names**, and only the SHELL one has been measured. `probe-codex-pretooluse.sh` made codex call a shell tool and nothing else, so it says nothing about `Edit|Write|MultiEdit` or `mcp__.*`. Emitting on the strength of the Bash result would be guessing from an adjacent measurement — the same move this repo has already paid for once. Closing it is the same script with a prompt that makes codex edit a file. |
 
 ### What CLOSED, and how
 
@@ -429,7 +451,7 @@ Same ladder for the model, one axis over:
 
 | what says it | where | beats |
 |---|---|---|
-| the card | `model` on `<root>/crew/<agent>.json`, or `[crew.<name>] model` | everything |
+| the card | active `model`, then `harness_options.<selected>.model` | role/fleet defaults |
 | the role | `[model.by_role] <role> = "…"` | the fleet default |
 | the fleet | `[model] default = "…"` | saying nothing |
 | nothing | — | no `--model` flag; the harness picks |
@@ -460,7 +482,7 @@ at being the wrong thing.
 | blocking stop hooks | yes | yes |
 | per-card permission bypass | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
 | model flag | `--model` | `--model` |
-| browser | `--chrome` / `--no-chrome` | none — `chrome: true` is refused |
+| browser | `--chrome` / `--no-chrome` | none — preference retained with a notice |
 | pane-reading (is it live?) | measured | **not measured** — see the gaps above |
 | compaction hook (`PreCompact`) | **yes** — `shantytown.precompact` writes a checkpoint at the boundary | **none exists** |
 | so: handoff-before-compaction | automatic backstop + the st lines | the st lines ONLY, plus the `st agent cycle` durable gate |

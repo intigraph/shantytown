@@ -20,7 +20,8 @@ def row(identifier="test-ci", **changes):
     return value | changes
 
 
-def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False):
+def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False, log=None,
+          admin_available=True):
     sent, admin = [], []
     card = SimpleNamespace(name="worker", retired=False, pane="worker-pane")
     reg = SimpleNamespace(get=lambda name: card)
@@ -32,13 +33,46 @@ def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False):
                             cmdline=lambda pane: "claude --settings /tmp/private/settings.json")
     if stopped:
         FilesStops(tmp_path / "stopped").record("worker", NOW.timestamp())
+    def push(*args):
+        if admin_available:
+            admin.append(args[-1])
+            return "admin"
+        return None
     alerter = DeferralAlerter(tmp_path, reg, panes, read=lambda: rows,
-                             now=lambda: NOW, push=lambda *args: admin.append(args[-1]) or "admin")
+                             now=lambda: NOW, push=push, log=log)
     result = alerter.sweep()
     return sent, admin, result
 
 
-def test_nine_short_owner_waits_nudge_only_then_escalate_after_three_passes(tmp_path):
+def test_admin_digest_log_counts_only_successful_delivery_once(tmp_path):
+    logs = []
+    item = row()
+    assert sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    assert not sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    delivered = [line for line in logs if "ADMIN-DIGEST delivered" in line]
+    assert len(delivered) == 1
+    assert "count=1 digest=" in delivered[0]
+    assert len(delivered[0].split("digest=", 1)[1]) == 64
+
+
+def test_owner_and_quiet_reports_are_not_admin_digest_deliveries(tmp_path):
+    logs = []
+    assert sweep(tmp_path / "owner", [row()], log=logs.append)[0]
+    assert not sweep(tmp_path / "quiet", [row(priority=2)], live=False, log=logs.append)[1]
+    assert any("deferral log:" in line for line in logs)
+    assert not any("ADMIN-DIGEST" in line for line in logs)
+
+
+def test_failed_admin_delivery_does_not_count_or_consume_retry(tmp_path):
+    logs = []
+    item = row()
+    assert not sweep(tmp_path, [item], live=False, admin_available=False, log=logs.append)[1]
+    assert not any("ADMIN-DIGEST" in line for line in logs)
+    assert sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    assert sum("ADMIN-DIGEST delivered" in line for line in logs) == 1
+
+
+def test_nine_owner_waits_stay_with_live_owner_after_three_passes(tmp_path):
     # Contract replay, not a claim these synthetic rows are historical packets.
     rows = [row(f"test-{n}") for n in range(9)]
     sent, admin, result = sweep(tmp_path, rows)
@@ -46,8 +80,8 @@ def test_nine_short_owner_waits_nudge_only_then_escalate_after_three_passes(tmp_
     assert all("OWNER-PACING" in text for _, text in sent)
     assert sweep(tmp_path, rows) == ([], [], [])
     sent, admin, result = sweep(tmp_path, rows)
-    assert not sent and len(admin) == 1 and len(result) == 9
-    assert sweep(tmp_path, rows) == ([], [], [])  # unchanged escalation dedup
+    assert not sent and not admin and not result
+    assert sweep(tmp_path, rows) == ([], [], [])
 
 
 @pytest.mark.parametrize("change", [
@@ -70,7 +104,7 @@ def test_down_stopped_or_failed_delivery_escalates(tmp_path, options):
 def test_exact_sixty_minute_boundary_and_long_control():
     item = row()
     end = item["defer_until"]
-    for minutes, expected in [(60, True), (61, False), (0, False)]:
+    for minutes, expected in [(60, True), (61, True), (24 * 60, True), (0, False)]:
         start = NOW - timedelta(minutes=minutes + 1)
         item["notes"] = provenance("worker", start.isoformat(), end)
         assert owner_window(item, NOW) is expected
@@ -114,11 +148,12 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
     tracker.update("test-ci", title="CI wait", status="open", assignee="worker")
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(minutes=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    result = dispatcher.defer("test-ci", "external", "CI wait", until=until, gate_authority="worker")
+    result = dispatcher.defer("test-ci", "external", "CI wait", until=until,
+                              gate_authority="worker", window=True)
     notes = tracker.get("test-ci").notes
     assert '"actor": "worker"' in notes and '"until":' in notes
     assert dispatcher.defer("test-ci", "external", "CI wait", until=until,
-                            gate_authority="worker").noop
+                            gate_authority="worker", window=True).noop
     assert tracker.get("test-ci").notes == notes
     assert result.reason in notes
 

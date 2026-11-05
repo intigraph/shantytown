@@ -51,7 +51,7 @@ Valid time is supplied per fact and write enforcement is opt-in; see the
 | Yupana | Code structure and impact checks through registered hooks. |
 | Camayoc | Prepare and publish knowledge for the shared store. |
 | Desire Path | Capture repeated agent mistakes as improvement requests. |
-| Caboodle | Review and install tool versions, including its crew profile. Its reviewed pins can trail newer releases. |
+| Tambo | Review and install tool versions, including its crew profile. Its reviewed pins can trail newer releases. |
 | Chaski and Shuttle | Optional external reactions and workflows that can hand work to the crew. |
 
 ## Capability status

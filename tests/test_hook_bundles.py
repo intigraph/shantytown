@@ -210,7 +210,8 @@ def test_check_json_schema_keys(root):
 
 # --- st knows nothing about what is in a bundle ------------------------------------
 
-STACK_NAMES = re.compile(r"bobbin|quipu|yupana|desire.?path|camayoc|caboodle|\bdp\b", re.I)
+# Compatibility: detect historical installer commands in retained hook bundles too.
+STACK_NAMES = re.compile(r"bobbin|quipu|yupana|desire.?path|camayoc|tambo|caboodle|\bdp\b", re.I)
 
 
 def test_no_tool_names_in_the_bundle_code_path():

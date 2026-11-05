@@ -118,3 +118,52 @@ def test_missing_or_latched_writer_refuses_before_graph_probe_or_model(tmp_path,
     with pytest.raises(quipu_auth.CredentialRefused):
         Quarantine(NS(onto=ONTO,server='http://example.invalid'),GRAPH,tmp_path/'journal')
     assert not (tmp_path/'journal').exists()
+
+
+class RDFServer(Server):
+    """Read the sent Turtle through an RDF parser, rather than JSON decoding it."""
+    def __call__(self, path, body=None):
+        if path != '/knot':
+            return super().__call__(path, body)
+        from rdflib import Graph, URIRef
+        from rdflib.namespace import RDF
+        self.calls.append((path, body))
+        self.packet = body
+        graph = Graph().parse(data=body['turtle'], format='turtle')
+        subject = next(graph.subjects(RDF.type, URIRef(ONTO + 'Artifact')))
+        self.content = str(graph.value(subject, RDF.value))
+        self.reference = str(graph.value(subject, URIRef(ONTO + 'reference')))
+        assert len(graph) == 6
+        return dict(conforms=self.accept, tx_id=2, count=6)
+
+
+@pytest.mark.parametrize('text', [
+    'astral \U0001f680 and \U0001d11e',
+    'quotes " slash \\ tabs\t newline\n return\r backspace\b formfeed\f',
+    'controls ' + ''.join(chr(n) for n in range(32)) + '\x7f',
+    'BMP café 中文 and line separators \u2028\u2029',
+    '" . <urn:injected> <urn:predicate> "payload',
+])
+def test_rdf_literal_round_trip_preserves_exact_record(tmp_path, text):
+    server = RDFServer()
+    payload = inference()
+    payload['verdict']['answer']['explanation'] = text
+    receipt = writer(tmp_path, server)(payload)
+    assert receipt['verified'] is True
+    assert json.loads(server.content)['verdict']['answer']['explanation'] == text
+    assert server.packet['graph'] == GRAPH
+    assert [path for path, _ in server.calls].count('/knot') == 1
+    journal = next((tmp_path / 'journal').glob('*.json'))
+    assert json.loads(journal.read_bytes()) == server.packet
+
+
+@pytest.mark.parametrize('text', ['\ud800', '\udfff', '\ud83d\ude80'])
+@pytest.mark.parametrize('location', ['answer', 'request'])
+def test_surrogates_refused_before_journal_or_write(tmp_path, text, location):
+    server = RDFServer()
+    payload = inference()
+    payload['verdict'][location]['explanation'] = text
+    with pytest.raises(TriageError, match='Unicode'):
+        writer(tmp_path, server)(payload)
+    assert not any(path == '/knot' for path, _ in server.calls)
+    assert list((tmp_path / 'journal').glob('*.json')) == []
