@@ -328,7 +328,7 @@ def test_a_PUSHED_FEATURE_BRANCH_is_not_reported_as_stranded(tmp_path):
 
     `<ref>..HEAD` measures ahead-of-main, not unpushed, so every in-flight
     feature branch on the fleet reported "+N, exists only here". Measured false
-    positives: hank-wt/tim's commit was on origin/hank-1-daemon-stage3c, and
+    positives: a legacy checkout's commit was on its published daemon branch, and
     dearing's four quipu commits were all on origin — pushed, mid-review,
     nothing at risk.
 

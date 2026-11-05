@@ -305,7 +305,7 @@ emit_metrics() {
     echo "# TYPE scrub_guard_last_run_timestamp_seconds gauge"
     echo "scrub_guard_last_run_timestamp_seconds $(date +%s)"
     # COUNT per repo name, not one series per repo. Several distinct checkouts
-    # legitimately share a repo NAME (four independent hank clones, two
+    # legitimately share a repo NAME (four independent yupana clones, two
     # desire-path, two tapestry), and node_exporter DISCARDS THE WHOLE FILE on a
     # duplicate series — so the naive one-line-per-repo form would have silenced
     # every metric here at exactly the moment it had something to report.
