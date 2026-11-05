@@ -1,0 +1,7 @@
+Script started on 2026-11-05 17:26:20-05:00 [COMMAND="python3 docs/demos/cache-bounds/demo.py" <not executed on terminal>]
+Target: source library; identical relative path in different explicit repos, 8MiB final record
+BEFORE df023d8438a96f4a39f78a5ccd3a70c102281e8d {"different_repo_score": 0.9, "oversized_record_unknown": true, "physical_bytes_read": 8388609, "same_repo_control": 0.9}
+AFTER 02421b40e5459e9caf1df38a8b79939c433c4434 {"different_repo_score": 0.2, "oversized_record_unknown": true, "physical_bytes_read": 2097152, "same_repo_control": 0.9}
+PASS: different-repo collision removed; physical scan bounded; same-repo control retained
+
+Script done on 2026-11-05 17:26:20-05:00 [COMMAND_EXIT_CODE="0"]
