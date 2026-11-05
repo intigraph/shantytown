@@ -13,8 +13,8 @@ Two implementations, per the leak-detector discipline (protocols.py):
                 caller: RankUnavailable when it could not look, NEVER an unweighted
                 list pretending it ranked (mirrors bobbin.BobbinContext).
 
-The binary is `yupana`; it was named `hank` until v0.6.0. This adapter kept
-saying `hank` after the rename, and because every could-not-look outcome here
+The binary is `yupana`. This adapter retained its former executable name
+after the v0.6.0 rename, and because every could-not-look outcome here
 is an honest RankUnavailable, the breakage presented as "the ranker is
 unavailable" — indistinguishable from a legitimately absent backend. Honest
 degradation hides a stale name as effectively as it reports a missing one.
