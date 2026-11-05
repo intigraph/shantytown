@@ -226,7 +226,7 @@ class Publication(unittest.TestCase):
         (self.stage / "alignments.ttl").write_bytes(data)
         path = self.stage / "manifest.json"
         manifest = json.loads(path.read_text())
-        manifest.update(files={"alignments": "alignments.ttl"}, alignments_hash=publisher.ALIGNMENTS_SHA256)
+        manifest.update(files={"alignments": "alignments.ttl"}, alignments_hash="sha256:" + publisher.ALIGNMENTS_SHA256)
         path.write_text(json.dumps(manifest))
         return data
 
@@ -256,6 +256,19 @@ class Publication(unittest.TestCase):
         publisher.package(self.stage, other)
         self.assertEqual(self.archive.read_bytes(), other.read_bytes())
 
+    def test_native_alignment_digest_requires_its_sha256_prefix(self):
+        self.add_alignment()
+        path = self.stage / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["alignments_hash"] = publisher.ALIGNMENTS_SHA256
+        path.write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            publisher.check_share(self.stage)
+        builder = load("bare_alignment_refusal", ROOT / "build-repository-share.py")
+        with self.assertRaises(ValueError):
+            builder.export_share(lambda args: None, "fixture-quipu", ROOT.parent,
+                                 self.root / "fixture.db", "CONSTRUCT {} WHERE {}", self.stage)
+
     def test_alignment_member_manifest_and_hash_are_one_binding(self):
         data = self.add_alignment()
         path = self.stage / "manifest.json"
@@ -274,7 +287,7 @@ class Publication(unittest.TestCase):
             member.write_bytes(foreign)
             # Even a self-consistent foreign hash is not the reviewed carrier.
             manifest = json.loads(original)
-            manifest["alignments_hash"] = hashlib.sha256(foreign).hexdigest()
+            manifest["alignments_hash"] = "sha256:" + hashlib.sha256(foreign).hexdigest()
             path.write_text(json.dumps(manifest))
             with self.subTest(foreign=foreign), self.assertRaises(ValueError):
                 publisher.check_share(self.stage)
@@ -405,6 +418,12 @@ class Publication(unittest.TestCase):
             verifier.wait("v1.2.3", self.revision, attempts=2, pause=pauses.append, run=run)
         self.assertEqual(len(calls), 2)
         self.assertEqual(pauses, [30])
+
+
+def load_tests(loader, tests, pattern):
+    provider_tests = load("repository_embedding_controls", ROOT / "test-repository-share-embedding.py")
+    tests.addTests(loader.loadTestsFromModule(provider_tests))
+    return tests
 
 
 if __name__ == "__main__":
