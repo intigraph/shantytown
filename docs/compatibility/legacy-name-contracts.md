@@ -9,6 +9,7 @@ for the former structural tool name. New current-product uses are not allowed.
 | --- | --- |
 | `CHANGELOG.md` | Published release history retains original titles. |
 | `shantytown/cli.py` | Explicit legacy checkout-topology examples explain why an old rig directory must resolve to its active source checkout, including push resolution. |
+| `shantytown/guard.py` | Historical measured checkout paths retain their actual names; changing product names does not change the observed filesystem topology. |
 | `shantytown/harness.py` | Explains compatibility with the pre-rename config table; the fallback must continue to read existing configs. |
 | `tests/test_hook_bundles.py` | Detects both current and historical installer commands in hook bundles. |
 | `tests/test_resolve_repo.py` | Reproduces legacy rig/source/worktree topology to prevent pushing the archived checkout. |

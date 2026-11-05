@@ -922,7 +922,7 @@ class Staleness:
                 `<ref>..HEAD` — commits not on origin/main — and that is a
                 different and much larger set: it counts every in-flight FEATURE
                 BRANCH as stranded. Measured false positive: a legacy checkout was
-                reported "+1, exists only here" while the commit was sitting on
+                reported "+1, exists only here" while the commit was sitting
                 on its published daemon-stage branch, pushed and mid-review. Nothing
                 was at risk.
 
