@@ -13,8 +13,8 @@ from shantytown.dispatch import DispatchedButUntracked
 from shantytown.protocols import Agent, WorkItem
 
 
-def held(agent="kelly", item="aegis-z2k", why="session ceiling"):
-    return ct.Holder(agent, item, why, "4 haul items this session — the ceiling is 4")
+def held(agent="kelly", item="aegis-z2k", why="session ceiling", harness="codex"):
+    return ct.Holder(agent, item, why, "4 haul items this session — the ceiling is 4", harness=harness)
 
 
 def cand(agent, harness="claude", assigned=0, unavailable=""):
@@ -191,7 +191,11 @@ def test_sweep_refusals_move_nothing(tmp_path, case):
                           tend.Finding("wu", "up", "ok")]
     _, sent, comments, _ = (_sweep(tmp_path, **kw) if case != "target-count-unknown"
                             else _sweep_unknown(tmp_path))
-    assert sent == [] and comments == []
+    if case == 'target-ceilinged':
+        assert sent == [('item-ellie', 'wu', True)]
+        assert all(item != 'item-kelly' for item, _ in comments)
+    else:
+        assert sent == [] and comments == []
 
 
 def _sweep_unknown(tmp_path):
@@ -254,7 +258,10 @@ def test_receiver_budget_states(tmp_path, state, moves):
             "corrupt-read": (sb.Limits(), sb.Spend(signal_lost=True), None),
         }[state]
     _, sent, _, _ = _sweep(tmp_path, budget=budget)
-    assert sent == ([("item-kelly", "ellie", True)] if moves else [])
+    source_moves = [move for move in sent if move[0] == 'item-kelly']
+    assert source_moves == ([("item-kelly", "ellie", True)] if moves else [])
+    if state == 'exhausted':
+        assert sent == [('item-ellie', 'wu', True)]
 
 
 def test_receiver_budget_pure_order():
@@ -438,3 +445,51 @@ def test_advisory_started_read_failure_is_unknown_not_an_empty_population(tmp_pa
     assert len(rows) == 1 and rows[0]["phase"] == "start"
     assert rows[0]["inputs"]["inputs_observed"] is False
     assert rows[0]["adjudication"] == "ungraded"
+
+
+def test_claude_ceiling_moves_to_codex_not_another_claude(tmp_path):
+    agents = [Agent(name='kelly', harness='claude'), Agent(name='ellie', harness='claude'),
+              Agent(name='wu', harness='codex')]
+    _, sent, _, _ = _sweep(tmp_path, agents=agents)
+    assert sent == [('item-kelly', 'wu', True)]
+
+
+def test_receiver_capacity_uses_active_not_deferred_or_held_rows(tmp_path, monkeypatch):
+    # Exercise the real owner-count reader, not its injected integer shortcut.
+    rows = [dict(id=f'x-{i}', title='Work', assignee='ellie', status='deferred') for i in range(52)]
+    rows += [dict(id='held', title='Work', assignee='ellie', status='in_progress',
+                  labels=['blocked:external'])]
+    rows += [dict(id='active', title='Work', assignee='ellie', status='in_progress')]
+    tracker = SimpleNamespace(_owner_rows=lambda owner: SimpleNamespace(complete=True, exact=lambda: rows))
+    monkeypatch.setattr(cli, '_tracker', lambda a: tracker)
+    # The helper still injects no live dispatcher/board effects.
+    calls = []
+    monkeypatch.setattr(cli, '_wire', lambda a: calls.append('unexpected'))
+    a = SimpleNamespace(root=tmp_path, dry_run=True)
+    cli._ceiling_transfer_sweep(a,
+        [Agent(name='kelly', harness='codex'), Agent(name='ellie', harness='claude')],
+        SimpleNamespace(findings=[tend.Finding('kelly', 'up', 'ok'), tend.Finding('ellie', 'up', 'ok')]),
+        plate=lambda n: WorkItem(id='item-kelly', status='in_progress', assignee=n),
+        budget=lambda n: _known(n, ('kelly',)), gaming=SimpleNamespace(held=False), log=lambda m: None)
+    row = _advisory(tmp_path)[0]
+    assert row['inputs']['counts']['ellie'] == 1
+    assert row['inputs']['plan']['moves'][0]['to'] == 'ellie'
+    assert calls == []
+
+
+@pytest.mark.parametrize("source,target", [("codex", "claude"), ("claude", "codex")])
+def test_both_transfer_arms_and_same_harness_refusal(source, target):
+    holder = held(harness=source)
+    assert ct.plan([holder], [cand('same', harness=source)]).moves == []
+    p = ct.plan([holder], [cand('same', harness=source), cand('other', harness=target)])
+    assert [m.to for m in p.moves] == ['other']
+
+
+def test_unknown_source_harness_is_not_guessed():
+    p = ct.plan([held(harness='')], [cand('one'), cand('two', harness='codex')])
+    assert not p.moves and 'UNKNOWN' in p.stays[0].why
+
+
+def test_active_plate_count_unknown_is_not_zero():
+    assert ct.active_plate_count([{'id': 'x', 'assignee': 'ellie'}], 'ellie') is None
+    assert ct.active_plate_count([], 'ellie') == 0

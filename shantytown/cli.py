@@ -1702,6 +1702,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--window", action="store_true",
+                    help="explicit real scheduled window; permits a short date instead of an event backstop")
     df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
@@ -1943,6 +1945,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--after-turn", action="store_true",
                     help="hold all automatic feeds now; stop at the next Stop hook")
+    st.add_argument('--resume-at', default=None, metavar='ISO8601',
+                    help='dated stopped-owner ownership exemption (timezone required)')
     st.add_argument("--reason", default="", metavar="TEXT",
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
@@ -4318,7 +4322,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
 def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
                             owner_count=None, budget=None, gaming=None,
                             log=None):
-    """Move work held by an agent at a ceiling to a claude agent with headroom.
+    """Move ceiling-held work to another harness with active-plate headroom.
 
     Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
     claude". The decisions live in `ceiling_transfer`; this binds the reads and
@@ -4370,7 +4374,8 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             continue
         item = plate(card.name)
         if item is not None and (item.status or "") != "closed":
-            holders.append(ct.Holder(card.name, item.id, why, evidence))
+            holders.append(ct.Holder(card.name, item.id, why, evidence,
+                                     harness=harness_mod.name_for(card, root=a.root)))
     if not holders:
         capture.record("no_holders", budgets=budgets, findings=findings,
                        holders=holders, candidates_observed=False)
@@ -4386,9 +4391,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             answer = reader(name)
             if not answer.complete:
                 return None
-            return sum(1 for row in answer.exact()
-                       if (row.get("status") or "") != "closed")
+            return ct.active_plate_count(answer.exact(), name)
 
+    target_harnesses = {ct.receiver_harness(h.harness) for h in holders} - {None}
     candidates = []
     counts = {}
     for card in agents:
@@ -4402,9 +4407,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         elif agent_hold.reason(a.root, card.name):
             unavailable = "held"
         count = None
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             unavailable = ct.receiver_budget(*_budget(card.name))
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             count = owner_count(card.name)
             counts[card.name] = count
             if count is None:
@@ -4499,6 +4504,35 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False, reuse_session: bool = False) -> int:
+    # Preserve the early quiet-time refusal even for callers without a card.
+    # No identity-dependent lifecycle work may precede that refusal.
+    gaming = quiet_time_mod.read(Path(a.root))
+    if gaming.held and not _administrator_launch(a, card) and not _despite_hold(a):
+        return _refuse_gaming(a, gaming)
+    if card is None:
+        return REFUSED
+    if dry_run:
+        return _launch_locked(a, card, panes, runtime, dry_run=True,
+            window_restore=window_restore, reuse_session=reuse_session)
+    # Match cycle's lock order: lifecycle BEFORE fleet admission. Taking it
+    # only inside _launch_admitted would deadlock against a concurrent cycle.
+    with cycle_mod.lifecycle_lock(a.root, card.name):
+        return _launch_locked(a, card, panes, runtime, dry_run=False,
+            window_restore=window_restore, reuse_session=reuse_session)
+
+
+def _launch_locked(a, card, panes, runtime, *, dry_run: bool = False,
+            window_restore: bool = False, reuse_session: bool = False) -> int:
+    if not dry_run:
+        from .stranded_work import StrandedWork
+        try:
+            pending = StrandedWork(a.root).unresolved_release(card.name)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pending = True
+        if pending:
+            print('  refused: stopped-owner release outcome UNKNOWN; reconcile its '
+                  'retained revision/marker before launching this owner', file=sys.stderr)
+            return REFUSED
     from . import fleet_governor as fg
     cfg, err = config.load_or_default(Path(a.root))
     if err:
@@ -5549,6 +5583,18 @@ def _foreign_session_refusal(a, agent_name: str, session: str, panes) -> str:
 
 
 def _cmd_stop(a) -> int:
+    resume_at = getattr(a, 'resume_at', None)
+    if resume_at is not None:
+        from datetime import datetime
+        try:
+            stamp = datetime.fromisoformat(resume_at.replace('Z', '+00:00'))
+            if stamp.tzinfo is None or stamp.timestamp() <= time.time():
+                raise ValueError('resume date must be in the future with a timezone')
+            if getattr(a, 'after_turn', False):
+                raise ValueError('dated stop requires an immediate stop')
+        except ValueError as exc:
+            print(f'refusing stop: {exc}', file=sys.stderr)
+            return 2
     # The cycle fallback already owns this lock and must retain its request if
     # launch fails. This is an internal flag, never inferred from user prose.
     if a.dry_run or getattr(a, "_cycle_internal_stop", False):
@@ -5562,6 +5608,23 @@ def _cancel_cycle_for_stop(a) -> None:
         cycle_mod.Requests(a.root).clear(a.agent)
         from .account_switch import Requests
         Requests(a.root).clear(a.agent)
+
+
+def _record_dated_stop(a):
+    stamp = getattr(a, 'resume_at', None)
+    if stamp is None:
+        return True
+    try:
+        store = _stops(a)
+        store.record(a.agent, time.time(), by=_actor(),
+                     reason=getattr(a, 'reason', '') or '', resume_at=stamp)
+        record = store.get(a.agent)
+        if record is None or record.resume_at != stamp:
+            raise ValueError('dated stop read-back unproven')
+        return True
+    except (OSError, ValueError):
+        print('  refused: dated stop intent could not be persisted; no stop mutation', file=sys.stderr)
+        return False
 
 
 def _stop_locked(a) -> int:
@@ -5582,11 +5645,14 @@ def _stop_locked(a) -> int:
     session = agent.pane      # the address; None/absent = not running
     if not session or not panes.exists(session):
         if not a.dry_run:
+            if not _record_dated_stop(a):
+                return REFUSED
             # An already-down pane can still have a queued self-cycle.
             if getattr(a, "after_turn", False):
                 agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
             _launches(a).forget(a.agent)
-            _stops(a).record(a.agent, time.time(), by=_actor(),
+            if getattr(a, 'resume_at', None) is None:
+                _stops(a).record(a.agent, time.time(), by=_actor(),
                              reason="stop requested while already down: "
                              + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
@@ -5618,6 +5684,8 @@ def _stop_locked(a) -> int:
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
+    if not _record_dated_stop(a):
+        return REFUSED
     if harness_mod.name_for(agent, root=a.root) == "codex":
         from . import codex_daemon
         fixed = codex_daemon.repair(agent.name)
@@ -5646,7 +5714,8 @@ def _stop_locked(a) -> int:
     # read a deliberate shutdown and a crash identically, and the measured
     # consequence was nine agents an operator had just been told to stop coming
     # back as `re-dispatch <agent> — STOPPED`.
-    _stops(a).record(a.agent, time.time(),
+    if getattr(a, 'resume_at', None) is None:
+        _stops(a).record(a.agent, time.time(),
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
     _cancel_cycle_for_stop(a)
@@ -7557,7 +7626,7 @@ def _cmd_defer(a) -> int:
                     until=getattr(a, "until", "") or "",
                     dependency_reason=getattr(a, "dependency_reason", ""),
                     sattler_reason=getattr(a, "sattler_reason", ""),
-                    gate_authority=_me(a) or "")
+                    gate_authority=_me(a) or "", window=getattr(a, "window", False))
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -14473,6 +14542,16 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
+        def _stranded_owner_work():
+            from .stranded_adapter import mode, sweep
+            if mode() == 'off':
+                return []
+            findings = sweep(a.root, reg, _tracker(a), panes, _inbox(a))
+            for identity, finding in findings:
+                _log(f'stranded-owner {identity}: {finding}')
+            _owned_work_publish(a)
+            return []
+        _fleet_sweep('stranded-owner-work', _stranded_owner_work)
         _fleet_sweep("priority-advisory", _priority_report)
         def _role_ranking_report():
             from . import ranking_check
