@@ -67,7 +67,12 @@ def from_rows(values, owners, *, now=None, minutes=SHORT_GATE_MINUTES):
     if now.tzinfo is None or minutes <= 0:
         raise ValueError("waiting-work observation requires a UTC clock and positive window")
     owners = {owner_name(name) for name in owners}
-    waiting, immediate = set(), set()
+    # An unreadable gate makes ITS OWNER unknown, never the whole fleet
+    # (aegis-ao5s): one malformed row used to raise here, and the feed then
+    # proved no worker free anywhere. Unknown still cannot prove spare
+    # capacity, so the owner reads as occupied unless their own ready work
+    # must reach their haul.
+    waiting, immediate, unknown = set(), set(), set()
     window = timedelta(minutes=minutes)
     for row in values:
         owner = owner_name(row.get("assignee"))
@@ -83,16 +88,21 @@ def from_rows(values, owners, *, now=None, minutes=SHORT_GATE_MINUTES):
         if (status in {"closed", "tombstone"} or is_message(title)
                 or is_anchor(row.get("labels")) or is_decision(row.get("labels"))):
             continue
-        date = row.get("defer_until")
-        until = None if date in (None, "") else _instant(date)
         labels = row.get("labels") or []
         if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
             raise ValueError("waiting-work labels UNKNOWN")
+        date = row.get("defer_until")
+        try:
+            until = None if date in (None, "") else _instant(date)
+        except ValueError:
+            unknown.add(owner)
+            continue
         if "blocked:external" in {label.strip().lower() for label in labels}:
             # Extend the existing shared selector, never add another feed gate.
             if (not isinstance(date, str) or "T" not in date
                     or not date.endswith(("Z", "+00:00")) or until is None):
-                raise ValueError("external waiting-work UTC review time UNKNOWN")
+                unknown.add(owner)  # external review time UNKNOWN
+                continue
             if timedelta(0) < until - now <= timedelta(hours=EXTERNAL_GATE_HOURS):
                 waiting.add(owner)
             elif status in {"open", "hooked", "in_progress"} and until <= now:
@@ -105,7 +115,7 @@ def from_rows(values, owners, *, now=None, minutes=SHORT_GATE_MINUTES):
             immediate.add(owner)
         elif until is not None and -window <= until - now <= window:
             waiting.add(owner)
-    return waiting - immediate
+    return (waiting | unknown) - immediate
 
 
 def workers(root, reg, owners):

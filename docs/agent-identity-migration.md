@@ -47,3 +47,37 @@ checks. A failed smoke requires the staged rollback, preserving credentials and
 graph data. Removing policy, revoking keys, switching server authentication and
 physical UID migration are security changes requiring the separately scoped
 migration and rollback. Source tests do not establish installed acceptance.
+
+## Private HTTPS CA for a protected job
+
+A UID binding may additionally set `seeds_config_dir` to an absolute,
+operator-prepared configuration directory. ST selects it as `XDG_CONFIG_HOME`
+for identity checks, tracker subprocesses and both harness launch paths,
+including after the native job UID drop. Inherited controller configuration
+cannot select this directory. No runtime provisioning or credential copying
+occurs.
+
+The directory, its ancestors, `seeds/config.toml` and the CA file must be
+root-owned, non-writable by group/world and contain no symlink components.
+The Seeds user config must contain `[quipu] ca_file` (an absolute PEM path)
+and `ca_sha256` (64 lowercase hex digits for the exact PEM file bytes).
+ST verifies that digest before running the job; Seeds verifies it again before
+connecting. Configure the job's own signing key by its private path in that
+same user config. Never place a private key in the public operator directory.
+
+```toml
+[quipu]
+ca_file = "/opt/job-trust/roots.pem"
+ca_sha256 = "<reviewed SHA-256 of roots.pem>"
+signing_key_file = "/var/lib/shantytown/agents/crew-example/private-key.json"
+signing_session = "<enrolled own-key session>"
+signing_introducer = "<existing introducer>"
+```
+
+This requires a Seeds release supporting the CA settings. Its configured roots
+replace built-in roots; certificate chain and hostname verification stay on.
+Missing/changed CA files, an invalid config, a mutable path or a foreign CA
+refuse; none fall back to controller settings or system trust. Installing this
+policy and testing the native Mac identity remain separately admitted operator
+steps. Existing bindings without `seeds_config_dir` retain their current
+user-config selection.

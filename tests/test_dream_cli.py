@@ -86,13 +86,34 @@ def test_sweep_reads_ready_and_active_work_from_br(monkeypatch, tmp_path):
     tracker = BrTracker(repo=str(tmp_path))
     monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
     monkeypatch.setattr("shantytown.feed_check.queue_state",
-                        lambda root, reg, tracker=None: ([], []))
+                        lambda root, reg, tracker=None, owners=None: ([], []))
     monkeypatch.setattr("shantytown.feed_check._bd_ready",
                         lambda cwd=None: (_ for _ in ()).throw(AssertionError("bd called")))
 
     cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes,
                                               force=True, dry_run=True)
 
+    assert cycle is not None and (item_id, reason) == ("", "dry-run")
+
+
+def test_sweep_reads_only_live_worker_plates(monkeypatch, tmp_path):
+    """An unscoped read is a whole-board plate read; it exceeds the plate
+    field budget and crashed every explicit cycle (aegis-2idcev)."""
+    args, cfg, cards, panes, _tracker = _wire(monkeypatch, tmp_path, pct=10)
+    cards = cards + [Agent(name="dearing", role="lead", pane="p2", harness="claude"),
+                     Agent(name="kelly", role="worker", pane="", harness="codex")]
+    seen = []
+
+    def scoped(root, reg, tracker=None, owners=None):
+        seen.append(owners)
+        return [], []
+
+    monkeypatch.setattr("shantytown.feed_check.queue_state", scoped)
+
+    cycle, item_id, reason = cli._dream_sweep(args, cfg, cards, panes,
+                                              force=True, dry_run=True)
+
+    assert seen == [["arnold"]]
     assert cycle is not None and (item_id, reason) == ("", "dry-run")
 
 

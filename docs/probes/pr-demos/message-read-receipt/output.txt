@@ -1,0 +1,12 @@
+Script started on 2026-11-04 02:58:52-05:00 [COMMAND="bash run-demo.sh" <not executed on terminal>]
+Baseline a2b2dfc648925aac6450f25fff38c47b8c36f20a
+request: mark msg-one and msg-two read
+transport response: receipt for msg-one only
+accepted incomplete response: 1 receipt for 2 requested IDs
+
+Candidate
+request: mark msg-one and msg-two read
+transport response: receipt for msg-one only
+refused: sd msg read receipts incomplete or unreadable
+
+Script done on 2026-11-04 02:58:52-05:00 [COMMAND_EXIT_CODE="0"]

@@ -453,6 +453,7 @@ def attest_job(spec):
     drop_identity(spec)
     os.environ.clear()
     os.environ.update(HOME=spec['home'], PATH='/usr/bin:/bin', LC_ALL='C')
+    os.environ.update(actor_identity.config_environment())
     os.chdir(spec['home'])
     if actor_identity.authenticated_actor() != spec['principal']:
         raise IdentityError('job key does not attest the protected job principal')
@@ -469,6 +470,8 @@ def execute(spec):
     drop_identity(spec)
     env = dict(spec['environment'], HOME=spec['home'], USER=spec['username'],
                LOGNAME=spec['username'], SHANTY_AGENT=spec['principal'], SHANTY_ROOT=spec['root'])
+    from .actor_identity import config_environment
+    env.update(config_environment())
     os.chdir(spec['workspace'])
     os.closerange(3, maximum)
     os.execve(spec['argv'][0], spec['argv'], env)
