@@ -60,6 +60,8 @@ def test_zero_quota_refuses_before_spawning_model(tmp_path,monkeypatch):
     from shantytown.governor import Reading
     auth=tmp_path/'auth';auth.write_text('fixture-only');auth.chmod(0o600)
     monkeypatch.setattr(agy_usage.AgyUsageReader,'read_all',lambda self:{'seven_day':Reading(pct=100,ok=True)})
+    monkeypatch.setattr(agy_job.shutil,'which',lambda name:'/fixture/agy')
+    monkeypatch.setattr(agy_job.subprocess,'Popen',lambda *args,**kwargs:pytest.fail('exhausted quota spawned a model'))
     with pytest.raises(ValueError,match='exhausted'):
         agy_job.run_review('fixture','gemini-3.8-flash-low',tmp_path/'result',auth=auth,lock_root=tmp_path/'locks')
     assert not (tmp_path/'result/events.ndjson').exists()
