@@ -95,3 +95,34 @@ def test_labels_name_the_measure_never_a_bare_verdict(tmp_path):
     assert "101,002" in lab and "1,000,000" in lab, lab
     assert "%" in lab, "a bare count without the percentage makes the reader do the division"
     assert "UNKNOWN" in cs.read(tmp_path / "nope.jsonl", window=1).label()
+
+
+def test_bounded_tail_reads_never_exceed_budget_or_parse_partial_head():
+    import io
+    class Counting(io.BytesIO):
+        read_bytes = 0
+        def read(self, size=-1):
+            value = super().read(size)
+            self.read_bytes += len(value)
+            return value
+    data = b'prefix' + b'{"usage":{"input_tokens":900}}\n' + b'{}\n'
+    f = Counting(data)
+    # The boundary lands immediately before valid JSON inside a partial line.
+    rows = list(cs._reverse_lines(f, max_bytes=len(data)-6))
+    assert rows == [b'', b'{}']
+    assert f.read_bytes == len(data)-6
+    f = Counting(data * 10000)
+    list(cs._reverse_lines(f, max_bytes=65539))
+    assert f.read_bytes == 65539
+
+
+def test_bounded_usage_miss_is_unknown_and_fresh_tail_is_measured(tmp_path):
+    f = _write(tmp_path / "tail.jsonl", [_turn(100, 0)])
+    with f.open('a') as out:
+        out.write('{}\n' * 1000)
+    assert cs.read(f, 1000).state == cs.MEASURED
+    limited = cs.read(f, 1000, max_bytes=256)
+    assert limited.state == cs.UNKNOWN and limited.pct is None
+    with f.open('a') as out:
+        out.write(json.dumps(_turn(200, 0)) + '\n')
+    assert cs.read(f, 1000, max_bytes=256).consumed == 202

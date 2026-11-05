@@ -1,0 +1,15 @@
+Script started on 2026-11-04 07:48:39-05:00 [COMMAND="sh .work/elw0/demo.sh" <not executed on terminal>]
+$ python3 runtime-update.py --source BASE_42700874
+{"running": "2.1.317", "installed": "2.1.318", "depth_k": 20, "advice": "no preference", "restart_required": false}
+{"first_idle_prompt": [], "repeat_prompt": [], "replacement_flag": false}
+{"busy_prompt": []}
+{"simulated_fresh_running": "2.1.318", "advice": "no preference", "fresh_prompt": []}
+{"cycle_request_created": false}
+$ python3 runtime-update.py --source CANDIDATE
+{"running": "2.1.317", "installed": "2.1.318", "depth_k": 20, "advice": "cycle", "restart_required": true}
+{"first_idle_prompt": ["demo"], "repeat_prompt": [], "replacement_flag": true}
+{"busy_prompt": []}
+{"simulated_fresh_running": "2.1.318", "advice": "no preference", "fresh_prompt": []}
+{"cycle_request_created": false}
+
+Script done on 2026-11-04 07:48:40-05:00 [COMMAND_EXIT_CODE="0"]

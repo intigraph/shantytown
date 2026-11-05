@@ -1,5 +1,5 @@
 """policy — the Ranker adapter. NullRanker (default, no backend) and PolicyRanker
-(Hank blast radius via an injected impact fn — the _Fake pattern from
+(Yupana blast radius via an injected impact fn — the _Fake pattern from
 test_reactor). The load-bearing test is the exit-code honesty: a down backend
 RAISES, it never returns an unweighted list pretending it looked.
 """

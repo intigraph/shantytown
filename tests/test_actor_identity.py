@@ -102,3 +102,135 @@ def test_key_policy_refuses_unsigned_peer_transport_before_ssh(policy, monkeypat
                         lambda *a, **k: pytest.fail('unsigned relay must not start SSH'))
     with pytest.raises(identity.IdentityError, match='key-authenticated broker'):
         cli._peer_inbox_ssh(SimpleNamespace(), 'synthetic-other', 'fixture', 'synthetic-owner')
+
+@pytest.fixture
+def pinned_config(policy, monkeypatch):
+    import hashlib
+    from shantytown import job_launch
+    directory = policy.parent / 'operator-config'
+    (directory / 'seeds').mkdir(parents=True)
+    directory.chmod(0o755)
+    (directory / 'seeds').chmod(0o755)
+    ca = directory / 'roots.pem'
+    ca.write_bytes(b'synthetic public CA bytes')
+    config = directory / 'seeds' / 'config.toml'
+    config.write_text('[quipu]\nca_file = ' + json.dumps(str(ca)) + '\nca_sha256 = "' +
+                      hashlib.sha256(ca.read_bytes()).hexdigest() + '"\n')
+    ca.chmod(0o644)
+    config.chmod(0o644)
+    data = json.loads(policy.read_text())
+    data['users']['51001']['seeds_config_dir'] = str(directory)
+    policy.write_text(json.dumps(data))
+    # Exercise real files/digests but keep the temporary fixture's writable
+    # ancestors separate from the production immutable-chain verifier.
+    def protected(path, *, directory=False):
+        path = __import__('pathlib').Path(path)
+        if path.is_symlink() or path.stat().st_mode & 0o022:
+            raise identity.IdentityError('mutable or linked protected input')
+        assert path.is_dir() if directory else path.is_file()
+    monkeypatch.setattr(job_launch, 'protected', protected)
+    monkeypatch.setattr(identity, 'POLICY_PATH', policy)
+    return directory, ca, config
+
+
+def test_identity_forwards_only_protected_seeds_config(policy, pinned_config, monkeypatch):
+    directory, _, _ = pinned_config
+    monkeypatch.setenv('XDG_CONFIG_HOME', '/untrusted/controller-config')
+    def run(argv, **kwargs):
+        assert kwargs['env']['XDG_CONFIG_HOME'] == str(directory)
+        assert kwargs['env']['HOME'] == str(policy.parent)
+        return answer()
+    assert identity.authenticated_actor(policy_path=policy, run=run) == 'synthetic-owner'
+
+
+@pytest.mark.parametrize('fault', ['changed-ca', 'missing-ca', 'bad-config', 'relative-ca',
+                                    'missing-pin', 'writable-ca', 'linked-ca', 'writable-config'])
+def test_protected_ca_failures_refuse_before_sd(policy, pinned_config, fault):
+    directory, ca, config = pinned_config
+    if fault == 'changed-ca': ca.write_bytes(b'changed bytes')
+    elif fault == 'missing-ca': ca.unlink()
+    elif fault == 'bad-config': config.write_text('invalid = [')
+    elif fault == 'relative-ca': config.write_text('[quipu]\nca_file="relative.pem"\nca_sha256="'+'a'*64+'"\n')
+    elif fault == 'missing-pin': config.write_text('[quipu]\nca_file='+json.dumps(str(ca))+'\n')
+    elif fault == 'writable-ca': ca.chmod(0o666)
+    elif fault == 'linked-ca':
+        ca.rename(directory / 'other.pem')
+        ca.symlink_to(directory / 'other.pem')
+    elif fault == 'writable-config': config.chmod(0o666)
+    with pytest.raises(identity.IdentityError):
+        identity.authenticated_actor(policy_path=policy, run=lambda *a, **k: pytest.fail('sd must not run'))
+
+
+def test_job_exec_carries_protected_config_after_drop(policy, pinned_config, monkeypatch):
+    from shantytown import job_launch
+    import resource
+    directory, _, _ = pinned_config
+    monkeypatch.setattr(resource, 'getrlimit', lambda _: (1024, 1024))
+    events = []
+    monkeypatch.setattr(job_launch, 'drop_identity', lambda spec: events.append('drop'))
+    monkeypatch.setattr(job_launch.os, 'chdir', lambda path: None)
+    monkeypatch.setattr(job_launch.os, 'closerange', lambda *args: None)
+    def execute(path, argv, environment):
+        assert events == ['drop']
+        assert environment['XDG_CONFIG_HOME'] == str(directory)
+        assert 'QUIPU_AUTH_TOKEN' not in environment
+        events.append('exec')
+    monkeypatch.setattr(job_launch.os, 'execve', execute)
+    job_launch.execute(dict(home=str(policy.parent), username='_stjobs', principal='synthetic-owner',
+                           root='/private/job', workspace=str(policy.parent),
+                           environment={}, argv=['/usr/bin/true']))
+    assert events == ['drop', 'exec']
+
+
+def test_job_attestation_uses_protected_config_after_drop(policy, pinned_config, monkeypatch):
+    from shantytown import job_launch
+    directory, _, _ = pinned_config
+    monkeypatch.setattr(job_launch, 'drop_identity', lambda spec: None)
+    monkeypatch.setattr(job_launch.os, 'environ', {'XDG_CONFIG_HOME': '/untrusted'})
+    monkeypatch.setattr(job_launch.os, 'chdir', lambda path: None)
+    def authenticated():
+        assert job_launch.os.environ['XDG_CONFIG_HOME'] == str(directory)
+        return 'synthetic-owner'
+    monkeypatch.setattr(identity, 'authenticated_actor', authenticated)
+    job_launch.attest_job(dict(home=str(policy.parent), principal='synthetic-owner'))
+
+
+# Exercise the real adapter transport with a fully mocked subprocess runner.
+@pytest.mark.real_store
+@pytest.mark.parametrize('args', [('show', 'sd-fixture'), ('update', 'sd-fixture', '--title', 'fixture')])
+def test_tracker_pins_config_for_reads_and_writes_without_advise_override(policy, pinned_config, monkeypatch, args):
+    from shantytown import sd, advise_signing
+    directory, _, _ = pinned_config
+    tracker = sd.SdTracker(quipu='https://example.test', prefix='sd')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: None)
+    monkeypatch.setattr(identity, 'authenticated_actor', lambda: 'synthetic-owner')
+    monkeypatch.setattr(advise_signing, 'run', lambda *a, **k: pytest.fail('observe profile cannot override protected config'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', '/untrusted')
+    def run(argv, **kwargs):
+        assert kwargs['env']['XDG_CONFIG_HOME'] == str(directory)
+        return SimpleNamespace(returncode=0, stdout='{}')
+    monkeypatch.setattr(sd.subprocess, 'run', run)
+    assert tracker._bd_in(str(policy.parent), *args).returncode == 0
+
+
+def test_same_uid_harness_launch_retains_protected_config(policy, pinned_config):
+    import shlex
+    from shantytown import isolated_launch
+    directory, _, _ = pinned_config
+    argv = shlex.split(isolated_launch.wrap(SimpleNamespace(name='synthetic-owner'), 'echo fixture'))
+    assert 'XDG_CONFIG_HOME=' + str(directory) in argv
+    assert 'HOME=' + str(policy.parent) in argv
+
+
+@pytest.mark.real_store
+def test_store_proof_uses_the_same_protected_config(policy, pinned_config, monkeypatch):
+    from shantytown import sd
+    directory, _, _ = pinned_config
+    tracker = sd.SdTracker(quipu='https://example.test', prefix='sd')
+    def run(argv, **kwargs):
+        assert kwargs['env']['XDG_CONFIG_HOME'] == str(directory)
+        assert argv[-2:] == ['where', '--json']
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(
+            location_source='--quipu', quipu_url='https://example.test', prefix='sd', graph='urn:fixture')))
+    monkeypatch.setattr(sd.subprocess, 'run', run)
+    assert tracker.prove_store().graph == 'urn:fixture'
