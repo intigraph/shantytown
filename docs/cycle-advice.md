@@ -5,7 +5,7 @@ Depth answers whether a session *can* continue. It never answered whether it
 anyway, and a session idle past its prompt-cache TTL carried its whole transcript
 into unrelated work, paying a full cache write to do it.
 
-`st agent advise` adds two inputs to that decision:
+`st agent advise` adds three inputs to that decision:
 
 - **Relatedness.** How much the next task (the plate item) needs this session's
   context. st does **not** judge this. Something outside st posts it.
@@ -14,10 +14,14 @@ into unrelated work, paying a full cache write to do it.
   (`usage.cache_creation.ephemeral_{5m,1h}_input_tokens`), so a session on the
   1h TTL is never priced as if it were on 5m.
 
-## Unconfigured means unchanged
+- **CLI updates.** A known newer installed Claude Code release prefers process
+  replacement at a safe checkpoint. Running version comes from native metadata
+  for the exact current session, not from the installed binary.
 
-With no signal posted the advice is `default` and every path behaves exactly as
-before. There is no model, key or service to set up. That is the point of the
+## Without measured update evidence
+
+With no signal posted and no proven newer installed CLI, the advice is
+`default` and existing depth behavior remains. There is no model, key or service to set up. That is the point of the
 design: st exposes the seam, and whoever wants the judgement calls in.
 
 ## Calling in
@@ -33,7 +37,8 @@ seconds, cache TTL, the current signal, the advice, and two fields that keep a
 judge's input small:
 
 - **`ask`**: false past `always_cycle_above_k` or the cycle line, and when depth
-  is unreadable. A caller that sees `ask: false` does not call its judge at all:
+  is unreadable, or a measured CLI update already prefers replacement. A caller
+  that sees `ask: false` does not call its judge at all:
   that context is cleared regardless, so there is nothing to spend tokens on.
 - **`brief`**: what to judge from, never the transcript. It holds the checkpoint
   you pass with `--checkpoint-file` as `current_session`, plus the next task's
@@ -64,7 +69,8 @@ A signal is dropped when:
 |---|---|
 | past the cycle line | `cycle`. No signal keeps a saturated context |
 | at or past `always_cycle_above_k` (350k) | `cycle`, and nobody is asked (`ask: false`) |
-| no signal / stale / wrong task | `default`. Depth lines decide, as before |
+| no signal / stale / wrong task, no measured CLI update | `default`. Depth lines decide |
+| exact session running an older CLI | prefer `cycle` with `restart_required: true`; valid `keep` advice remains authoritative |
 | depth + posted `--next-need-k` ≥ cycle line | `cycle` at the boundary, not mid-task |
 | posted `--decision` | that decision |
 | related ≥ `keep_at` | `keep`. The reasoning in flight is worth more than the arithmetic |
@@ -74,6 +80,48 @@ A signal is dropped when:
 In `st fleet tend`, advice only **escalates**: an agent between the pre-handoff
 and cycle lines whose advice is `cycle` gets the cycle prompt instead of the
 "write your handoff" nudge. `keep` never holds an agent past the cycle line.
+
+## Picking up an installed Claude Code update
+
+`st agent advise --json` includes `running_version`, `installed_version`, and
+`runtime_session_id`. Advice names both versions and marks process replacement
+with `restart_required`. Missing or malformed versions, a different session, or absent launch evidence
+remain UNKNOWN. Equal or older installed binaries give no update preference. Stable numeric versions are compared numerically.
+
+The running version is read from at most the last 256 KiB of native transcript
+metadata. Tend uses the exact session last recorded in the local stats store,
+and its version record must be newer than the current launch stamp. No newest-file
+search or model-name inference is used. A missing stamp/transcript or a session
+that the stats reader can no longer bind stays UNKNOWN. A Stop hook has the live
+session payload directly and gives one reminder per session/version pair.
+
+The installed version is a local `claude --version` probe with a two-second
+limit, cached for at most five minutes and invalidated by executable identity
+changes. It does not check the network or run an updater. Current Codex launchers
+can select a role-specific standalone binary; this feature does not borrow a
+PATH Codex version for that process. Claude Code is the supported measured path.
+
+Tend can prompt even a shallow session, but only when its pane is positively
+idle, shell-free and st-wired. It checks the pane again after version lookup,
+logs both versions, and deduplicates by session/version pair. Busy, queued,
+waiting, auth-limited, foreign, shell-unknown and unreadable panes are not update
+candidates. An accepted or unreadable cycle-request ledger prevents competing
+prompts. Failed delivery remains retryable. Manual keep advice is preserved;
+context hard limits still win.
+
+At a safe handoff, checkpoint first and request replacement explicitly:
+
+```sh
+st agent cycle --self --no-in-place --checkpoint-file notes.md \
+  --checkpoint-bead <item> --quipu-node <existing-node>
+```
+
+An in-place context clear keeps the old process. `--no-in-place` is retained in
+the accepted request and uses the existing checkpoint, graph, ownership, idle,
+background-work and loss guards. Update advice itself never creates a request,
+stops a process, rewrites an accepted request, or installs a binary. After normal
+relaunch, verify the new session's native version matches the installed release.
+Source tests and an accepted request alone do not prove that result.
 
 ## The arithmetic
 
