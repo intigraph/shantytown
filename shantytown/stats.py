@@ -963,7 +963,11 @@ def main(argv=None) -> int:
             # It already printed a diagnostic (or help); do not capture anything.
             return 0
         payload = json.load(sys.stdin)
-        capture(Path(a.root), payload)
+        try:
+            capture(Path(a.root), payload)
+        finally:
+            from .context_hint import tool_feedback
+            tool_feedback(Path(a.root), _agent(), payload)
     except Exception as e:  # noqa: BLE001 — the contract IS the breadth
         print(f"stats capture (fail-open, tool call unaffected): "
               f"{type(e).__name__}: {e}", file=sys.stderr)

@@ -103,8 +103,10 @@ class FilesRegistry:
         d = json.loads(p.read_text())
         if d.get('auto_failover') is not None and type(d['auto_failover']) is not bool:
             raise ValueError('auto_failover must be an explicit boolean')
+        from .harness_options import validate
+        options = validate(d.get("harness_options"))
         return Agent(
-            name=name,
+            name=name, harness_options=options,
             role=d.get("role", "worker"),
             reports_to=d.get("reports_to"),
             pane=d.get("pane"),
@@ -146,9 +148,16 @@ class FilesRegistry:
         the card and the hooks cannot disagree. Preserves fields the tier does
         not own (pane).
         """
+        from .harness_options import validate
+        options = validate(agent.harness_options)
         self.root.mkdir(parents=True, exist_ok=True)
         p = self.root / f"{agent.name}.json"
         existing = json.loads(p.read_text()) if p.is_file() else {}
+        if options is not None:
+            existing["harness_options"] = options
+            # A switch carries the full selection, including explicit defaults.
+            existing["model"] = agent.model
+            existing["chrome"] = agent.chrome
         existing["role"] = agent.role
         existing["reports_to"] = agent.reports_to
         if agent.pane is not None:
