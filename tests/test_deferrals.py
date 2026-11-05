@@ -736,9 +736,11 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert set(a.sweep()) == {'urgent', 'unknown'}
     assert 'routine' not in sent[0]
     assert 'urgent' in sent[0] and 'unknown' in sent[0]
-    assert len(logs) == 1 and 'routine' in logs[0]
+    assert len(logs) == 2 and 'routine' in logs[0]
+    assert logs[0].startswith('deferral log:')
+    assert logs[1].startswith('deferral-sweep: ADMIN-DIGEST delivered count=2 digest=')
     assert a.sweep() == []
-    assert len(sent) == len(logs) == 1
+    assert len(sent) == 1 and len(logs) == 2
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

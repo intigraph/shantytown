@@ -3452,3 +3452,10 @@ atomic snapshot; concurrent changes can require retrying a read. Unsupported
 owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
+
+Successful administrator deferral digests emit
+`deferral-sweep: ADMIN-DIGEST delivered count=N digest=HASH` in the tend log.
+Quiet `deferral log:` reports, owner reminders, duplicate suppression and failed
+administrator delivery do not emit this marker. Measure the 24-hour acceptance
+window only after verifying the installed source and a scheduled tend pass;
+count delivered digest markers, rather than quiet report headings or item counts.

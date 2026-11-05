@@ -20,7 +20,8 @@ def row(identifier="test-ci", **changes):
     return value | changes
 
 
-def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False):
+def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False, log=None,
+          admin_available=True):
     sent, admin = [], []
     card = SimpleNamespace(name="worker", retired=False, pane="worker-pane")
     reg = SimpleNamespace(get=lambda name: card)
@@ -32,10 +33,43 @@ def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False):
                             cmdline=lambda pane: "claude --settings /tmp/private/settings.json")
     if stopped:
         FilesStops(tmp_path / "stopped").record("worker", NOW.timestamp())
+    def push(*args):
+        if admin_available:
+            admin.append(args[-1])
+            return "admin"
+        return None
     alerter = DeferralAlerter(tmp_path, reg, panes, read=lambda: rows,
-                             now=lambda: NOW, push=lambda *args: admin.append(args[-1]) or "admin")
+                             now=lambda: NOW, push=push, log=log)
     result = alerter.sweep()
     return sent, admin, result
+
+
+def test_admin_digest_log_counts_only_successful_delivery_once(tmp_path):
+    logs = []
+    item = row()
+    assert sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    assert not sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    delivered = [line for line in logs if "ADMIN-DIGEST delivered" in line]
+    assert len(delivered) == 1
+    assert "count=1 digest=" in delivered[0]
+    assert len(delivered[0].split("digest=", 1)[1]) == 64
+
+
+def test_owner_and_quiet_reports_are_not_admin_digest_deliveries(tmp_path):
+    logs = []
+    assert sweep(tmp_path / "owner", [row()], log=logs.append)[0]
+    assert not sweep(tmp_path / "quiet", [row(priority=2)], live=False, log=logs.append)[1]
+    assert any("deferral log:" in line for line in logs)
+    assert not any("ADMIN-DIGEST" in line for line in logs)
+
+
+def test_failed_admin_delivery_does_not_count_or_consume_retry(tmp_path):
+    logs = []
+    item = row()
+    assert not sweep(tmp_path, [item], live=False, admin_available=False, log=logs.append)[1]
+    assert not any("ADMIN-DIGEST" in line for line in logs)
+    assert sweep(tmp_path, [item], live=False, log=logs.append)[1]
+    assert sum("ADMIN-DIGEST delivered" in line for line in logs) == 1
 
 
 def test_nine_owner_waits_stay_with_live_owner_after_three_passes(tmp_path):

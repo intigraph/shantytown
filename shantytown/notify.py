@@ -1890,6 +1890,9 @@ class DeferralAlerter:
                     self._log("deferral-sweep: no admin pane — failures remain pending; "
                               "routine findings recorded in the log")
                     return backstop_reported
+                # Count actual administrator digests in the tend journal,
+                # separately from quiet reports and owner-only reminders.
+                self._log(f"deferral-sweep: ADMIN-DIGEST delivered count={len(loud)} digest={digest}")
                 write_json_atomic(summary_path, {"digest": digest})
         elif not any(is_loud(f) for f in findings) and not retry and not store_error:
             # Quiet findings do not prevent a positively read urgent resolution
