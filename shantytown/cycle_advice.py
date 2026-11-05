@@ -362,7 +362,7 @@ def read_cache(transcript: str | Path | None, *, policy: Policy | None = None,
 
     try:
         with Path(transcript).open('rb') as fh:
-            for line in _reverse_lines(fh):
+            for line in _reverse_lines(fh, max_bytes=2 * 1024 * 1024):
                 scanned += 1
                 byte_count += len(line)
                 if scanned > 2000 or byte_count > 2 * 1024 * 1024:
@@ -483,10 +483,12 @@ def overlap(previous, current):
         return None, 'previous verified work facts unavailable'
     if previous['item'] and previous['item'] == current['item']:
         return 1.0, 'same work item'
+    shared_repos = set(previous['repos']) & set(current['repos'])
+    if previous['repos'] and current['repos'] and not shared_repos:
+        return 0.2, 'different explicit repositories'
     shared_paths = set(previous['paths']) & set(current['paths'])
     if shared_paths:
         return 0.9, 'shared files: ' + ', '.join(sorted(shared_paths)[:3])
-    shared_repos = set(previous['repos']) & set(current['repos'])
     if shared_repos:
         return 0.5, 'shared repository; file overlap unmeasured'
     scopes = lambda facts: {v for v in facts['labels'] if v.startswith(('area:', 'b:', 'scope:'))}
@@ -495,8 +497,6 @@ def overlap(previous, current):
     roots = lambda facts: {p.split('/')[0] for p in facts['paths']} - {'src','lib','docs','tests','scripts','ansible','include'}
     if roots(previous) & roots(current):
         return 0.5, 'shared named source package; exact file overlap absent'
-    if previous['repos'] and current['repos']:
-        return 0.2, 'different explicit repositories'
     return None, 'insufficient repository/file facts; absence is not unrelatedness'
 
 

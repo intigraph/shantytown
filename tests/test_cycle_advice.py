@@ -349,3 +349,54 @@ def test_advice_uses_role_or_account_model_resolution_when_card_model_is_unset(t
     assert 'configured model' in sit.cache.ttl_source
     assert sit.next_task=='next'
     assert (sit.running_version,sit.installed_version,sit.session_id)==('2.1.317','2.1.318','exact')
+
+
+@pytest.mark.parametrize('path', ['src/main.py', 'package/main.py'])
+def test_different_explicit_repos_do_not_share_relative_work_files(tmp_path, path):
+    old = _work('old', 'repo-a', path)
+    new = _work('new', 'repo-b', path)
+    old['labels'].append('area:shared')
+    new['labels'].append('area:shared')
+    ca.record_handoff(tmp_path, 'ada', ca.handoff_preview(tmp_path, old, _sit(), ca.Policy()))
+    preview = ca.handoff_preview(tmp_path, new, _sit(), ca.Policy())
+    assert preview['signal'].related == .2
+    assert preview['advice'].decision == ca.CYCLE
+    new['labels'] = ['repo:repo-a']
+    assert ca.handoff_preview(tmp_path, new, _sit(), ca.Policy())['signal'].related == .9
+
+
+@pytest.mark.parametrize('suffix', [b'', b'\n'])
+def test_cache_reader_bounds_physical_reads_of_oversized_final_record(tmp_path, monkeypatch, suffix):
+    path = tmp_path / 'oversized.jsonl'
+    path.write_bytes(b'x' * (8 * 1024 * 1024) + suffix)
+    original_open = type(path).open
+    counts = {'bytes': 0}
+
+    class CountedFile:
+        def __init__(self, fh):
+            self.fh = fh
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.fh.close()
+        def seek(self, *args):
+            return self.fh.seek(*args)
+        def tell(self):
+            return self.fh.tell()
+        def read(self, size):
+            value = self.fh.read(size)
+            counts['bytes'] += len(value)
+            return value
+
+    def tracked_open(target, *args, **kwargs):
+        fh = original_open(target, *args, **kwargs)
+        return CountedFile(fh) if target == path else fh
+
+    monkeypatch.setattr(type(path), 'open', tracked_open)
+    assert ca.read_cache(path).last_at is None
+    assert 0 < counts['bytes'] <= 2 * 1024 * 1024
+    with original_open(path, 'ab') as fh:
+        fh.write(b'\n' + _usage('2026-11-04T09:00:00Z', h1=12).encode() + b'\n')
+    counts['bytes'] = 0
+    assert ca.read_cache(path).ttl_seconds == 3600
+    assert 0 < counts['bytes'] <= 2 * 1024 * 1024
