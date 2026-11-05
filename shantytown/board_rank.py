@@ -451,7 +451,7 @@ def owner_states(registry, panes, *, host, peers):
     states = defaultdict(list)
     for card in registry.all().exact():
         card_host = getattr(card, 'host', None)
-        if not host or card_host and card_host != host:
+        if not host or card_host != host:
             continue
         try:
             if getattr(card, 'retired', False):
