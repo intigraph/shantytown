@@ -50,6 +50,13 @@ def projection_reads(budget=None):
         _PROJECTION.reset(token)
 
 
+def store_admission_required():
+    """Consume a replacement-store admission requirement within this read."""
+    scope = _PROJECTION.get()
+    budget = scope.get("budget") if scope is not None else None
+    return bool(budget is not None and budget.pop("store_changed", False))
+
+
 def _projection_mark(mark):
     scope = _PROJECTION.get()
     if scope is None:

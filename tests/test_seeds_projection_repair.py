@@ -24,6 +24,9 @@ def changing(monkeypatch, tmp_path):
     def send(request, timeout):
         if request.get_method()=='POST':
             query=json.loads(request.data)['query']
+            if query.lstrip().startswith('ASK'):
+                state['schema_checks']=state.get('schema_checks',0)+1
+                return Response(dict(result=bool(state.get('legacy_on_replace') and state['store']=='replacement')))
             if '?predicate ?value' not in query:
                 state['candidates']+=1
                 state.setdefault('candidate_queries',[]).append(query)
@@ -170,3 +173,12 @@ def test_non_owner_large_field_budget_keeps_existing_small_batches(monkeypatch):
         return dict(rows=rows,count=len(rows),truncated=False)
     monkeypatch.setattr(plate,'_query',query)
     assert len(plate._project_fields(None,selected,(G,),30,budget=100000))==1001
+
+
+def test_store_restart_rechecks_native_schema_not_only_owner_status(changing):
+    proof,state=changing
+    state.update(mode='store',legacy_on_replace=True)
+    answer=plate.owner_rows(proof,'worker')
+    assert not answer.complete
+    assert state['candidates']==1
+    assert state['schema_checks']==1

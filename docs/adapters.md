@@ -408,7 +408,9 @@ entity's payload change re-reads only that entity's lean fields, then re-fences
 **all** selected entities; a second change during repair must also be reconciled.
 A membership-attribute change, including status or ownership, restarts candidate
 selection. A store replacement discards all retained rows and restarts the whole
-projection and invalidates render-scoped shape admission from the old store.
+projection, rechecks native-schema admission, and invalidates render-scoped
+shape admission from the old store. A replacement using a legacy revision
+ledger is UNKNOWN for this native projection.
 A regressing watermark under the same store identity is UNKNOWN, not a restart.
 Missing, malformed, truncated or changed-history proof remains
 UNKNOWN, never permission to return retained rows.

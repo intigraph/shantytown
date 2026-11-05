@@ -48,7 +48,7 @@ OWNER_MEMBERSHIP = frozenset({
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
     SCHEMA + "agent", SCHEMA + "name", SCHEMA + "scheduledTime",
     *(SEEDS + "ontology/" + name for name in (
-        "status", "priority", "rank", "issueType", "deferUntil", "specVersion", "blockedOn")),
+        "status", "priority", "rank", "issueType", "deferUntil", "specVersion", "blockedOn", "revision")),
     "https://scbrown.github.io/quechua/ns#blockedOn",
 })
 
@@ -299,6 +299,7 @@ def _retry_owner_projection(function):
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
                 if isinstance(changed, seeds_read_cache.StoreChanged):
+                    budget["store_changed"] = True
                     admission = kwargs.get("shape_reads")
                     if isinstance(admission, RenderShapeReads):
                         admission.supported.clear()
@@ -335,6 +336,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     if include_deferred:
         how = "Seeds owner-scoped waiting-work metadata; shared and ephemeral graphs"
     try:
+        if seeds_read_cache.store_admission_required():
+            if not uses_native_schema(proof, timeout=timeout):
+                raise ValueError("seeds store changed to unsupported schema")
         if (include_closed and not messages_only) or (messages_only and (
                 agent is None or feed_owners is not None or plate_owners is not None
                 or active_only or capacity or decision)):
