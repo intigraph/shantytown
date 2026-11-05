@@ -433,6 +433,9 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
                                    'submitted. Retained body: delivery/' + record['id'] +
                                    '.json under this deployment root. Inspect with '
                                    '`st agent input ' + card.name + ' --show`.', frm='st tend')
+                # A terminal custody transition below does not read its notice.
+                # Count this new unread pointer in the same pass's backlog.
+                messages.append(item)
                 record['pointer'] = item.id
                 record['receipt_marker'] = marker
                 record['pointer_state'] = 'recorded'

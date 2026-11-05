@@ -746,3 +746,21 @@ def test_orphaned_records_do_not_page_consecutive_failed_sends(tmp_path, monkeyp
     monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
     observe(tmp_path, f, BUSY, time.time() + 3 * delivery.STRANDED_SECONDS)
     assert stranded_events(tmp_path) == [] and wakes == []
+
+
+def test_new_unread_pointer_keeps_latched_watch_when_queue_drains(tmp_path, monkeypatch):
+    """Ending terminal custody must not rearm while its new notice is unread."""
+    import hashlib
+    f = fixtures(tmp_path, monkeypatch)
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    path = tmp_path / 'delivery' / (name + '.json')
+    original = dict(id=name, since=1, alerted=True)
+    path.write_text(json.dumps(original))
+    observe(tmp_path, f, READY, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'dequeued'}
+    assert len(f[-1].unread('worker')) == 1
+    assert path.exists()
+    assert json.loads(path.read_text())['alerted'] is True
+    observe(tmp_path, f, READY, 1100)
+    assert len(f[-1].unread('worker')) == 1
+    assert json.loads(path.read_text())['since'] == 1
