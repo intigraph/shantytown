@@ -1,0 +1,5 @@
+{
+  "shantytown/sd.py": "8f8fff57b8499fb1d49bac0d2169b43d0f4203072dbe002ef7edaa4efa502a34",
+  "shantytown/inbox.py": "402febf40d37fd4e58f5d3b26b415fa1eadc28bf796d1ee0f3f0c43fa273fa3e",
+  "tests/test_message_graph_inbox.py": "45c1dbae3a3ecd4ecf68cc32c4420234bc9fc838d0100ca0c3e1799c3bd87e59"
+}

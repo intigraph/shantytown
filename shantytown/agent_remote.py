@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,10 @@ class Control:
         pid = record.get("pid")
         if type(pid) is not int or pid <= 0:
             raise RemoteError("invalid recorded daemon identity")
+        if not sys.platform.startswith("linux"):
+            # No /proc on macOS is not evidence that its recorded PID is dead.
+            # Keep the peer/identity requirement instead of weakening it.
+            raise RemoteError("native control identity inspection is unsupported on this platform; nothing launched")
         try:
             (Path('/proc') / str(pid)).stat()
         except FileNotFoundError:
@@ -124,6 +129,42 @@ def pairing(control, *, now=None):
     return {"manual_pairing_code": code, "expires_at": expires}
 
 
+def prerequisites(card, cards, root):
+    """Selected launch prerequisites only; never repair pointers or run Codex."""
+    result = {"remote_configured": None, "managed_payload": "unknown",
+              "phone_visibility": "unverified"}
+    if root is None:
+        return result
+    try:
+        from .cli import _default_settings
+        from .account_auth import settings_path
+        result["remote_configured"] = harness.CodexHarness._remote_control(root)
+        selected = settings_path(card, _default_settings(root, cards)(card), root)
+        if selected is None:
+            result["managed_payload"] = "settings_missing"
+        else:
+            # The launcher owns pointer repair. Discovery must leave even a
+            # stale pointer alone, so it reports the selected path as-is.
+            binary = Path(selected).parent / "packages/standalone/current/codex"
+            result["managed_payload"] = ("present" if binary.is_file()
+                                         and os.access(binary, os.X_OK) else "missing")
+    except (OSError, ValueError, LookupError, harness.Unsupported):
+        pass  # Config/provider exceptions may contain private values.
+    return result
+
+
+def describe_names(rows):
+    """Local card labels cannot rename the provider's advertised server."""
+    counts = {}
+    for row in rows:
+        if "server_name" in row:
+            counts[row["server_name"]] = counts.get(row["server_name"], 0) + 1
+    for row in rows:
+        row["local_label"] = f"{row['host']}/{row['agent']}" if row["host"] else None
+        if "server_name" in row:
+            row["duplicate_server_name"] = counts[row["server_name"]] > 1
+
+
 def run(args, registry, *, control_factory=Control):
     """Discovery is metadata only; pair prints secrets solely on explicit stdout."""
     try:
@@ -153,6 +194,7 @@ def run(args, registry, *, control_factory=Control):
                 if args.remote_action == "pair":
                     raise RemoteError("selected card is not a Codex agent")
             else:
+                row.update(prerequisites(card, cards, getattr(args, "root", None)))
                 try:
                     with control_factory(card.name, args.timeout) as control:
                         row.update(status(control))
@@ -178,11 +220,22 @@ def run(args, registry, *, control_factory=Control):
                         raise RemoteError("control request failed; outcome unknown; no automatic retry") from None
                     row.update(availability="unknown", detail="control request failed")
             rows.append(row)
+        describe_names(rows)
         if args.json:
             print(json.dumps(rows[0] if args.remote_action == "pair" else rows))
         else:
             for row in rows:
                 print(f"{row['agent']}  {row['harness']}  {row['host']}  {row['availability']}")
+                if row["harness"] == "codex":
+                    print(f"  Local card: {row['local_label'] or 'host unresolved'}; "
+                          f"advertised server: {row.get('server_name', 'unknown')}")
+                    if row.get("duplicate_server_name"):
+                        print("  Duplicate advertised name in this listing; local labels do not rename phone entries.")
+                    print("  Phone visibility: unverified; connected is not a selected-session receipt.")
+                    if row.get("remote_configured") is False:
+                        print("  Remote Control is configured off; no enable/start attempted.")
+                    if row.get("managed_payload") == "missing":
+                        print("  Selected managed standalone payload is missing; arrange its reviewed installation before a natural launch.")
                 if "manual_pairing_code" in row:
                     print(f"Manual code: {row['manual_pairing_code']}\nExpires: {row['expires_at']} (UTC)")
                     print("Use the selected agent's manual pairing flow. Android/QR compatibility and reconnect are unverified.")

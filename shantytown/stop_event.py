@@ -1326,7 +1326,7 @@ def _main(argv: list[str] | None = None) -> int:
     # Wire the fleet-state readers + ranker so an administrator's drain is enriched
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
-    # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
+    # default) unless SHANTY_RANKER=policy asks for Yupana/Quipu weighting.
     plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,

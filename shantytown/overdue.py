@@ -75,7 +75,7 @@ def _due_read_cause(caveat):
 
 
 class OverdueAlerter:
-    def __init__(self, root, reg, *, read, deliver, events=None, receipt=None, ack=None, specs=None, spec_ack=None, spec_deliver=None, now=None, log=None):
+    def __init__(self, root, reg, *, read, deliver, events=None, receipt=None, ack=None, specs=None, spec_ack=None, spec_deliver=None, now=None, log=None, unlock_target=None):
         self.root, self.reg = Path(root), reg
         self.specs, self.spec_ack, self.spec_deliver = specs, spec_ack, spec_deliver
         self.ack = ack
@@ -85,6 +85,16 @@ class OverdueAlerter:
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.log = log or (lambda message: None)
         self.path = self.root / "notify" / "overdue.json"
+        self.unlock_target = unlock_target
+        if unlock_target is not None:
+            from .sd import SdTracker
+            SdTracker._unlock_target(unlock_target)
+            if specs is not None:
+                raise ValueError("targeted unlock cannot include spec events")
+
+    def _in_scope(self, key):
+        kind, identifier, _episode, _recipient = json.loads(key)
+        return self.unlock_target is None or (kind == "unlock" and identifier == self.unlock_target)
 
     def sweep(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +112,9 @@ class OverdueAlerter:
     def _sweep(self):
         from .tier import find_administrator
         now = self.now()
-        answer = self.read()
+        from .answer import Answer
+        answer = (self.read() if self.unlock_target is None else
+                  Answer.complete_read([],how="targeted unlock; no due-board read"))
         if getattr(answer, "complete", True) is False:
             self.log(f"overdue read cause: {_due_read_cause(getattr(answer, 'caveat', None))}; no repeat delivery")
         rows = answer.exact()
@@ -120,6 +132,8 @@ class OverdueAlerter:
                 raise ValueError("invalid unlock reminder event")
             current.append({"id":event["id"],"due_at":event["episode"],
                             "assignee":event["recipient"],"kind":"unlock"})
+            if self.unlock_target is not None and event["id"] != self.unlock_target:
+                raise ValueError("unlock event escaped reaction target")
         try:
             spec_events = self.specs().exact() if self.specs is not None else []
         except Exception as error:
@@ -191,6 +205,8 @@ class OverdueAlerter:
         # Reconcile already attempted messages byte-for-byte before new work.
         sent = []
         for recipient, packet in list(pending.items()):
+            if self.unlock_target is not None and not all(self._in_scope(key) for key in packet["keys"]):
+                continue
             # A recorded attempt can have committed despite an unknown result.
             # Even a complete absent receipt read never authorizes a resend.
             if packet.get("attempted") is not True:
@@ -261,6 +277,8 @@ class OverdueAlerter:
                 write_json_atomic(self.path, ledger)
         if self.ack is not None or self.spec_ack is not None:
             for key, evidence in entries.items():
+                if not self._in_scope(key):
+                    continue
                 kind, identifier, episode, _recipient = json.loads(key)
                 acknowledge = self.spec_ack if kind == "spec" else self.ack if kind == "unlock" else None
                 if acknowledge is None or not isinstance(evidence,dict) or evidence.get("ack") == "confirmed":
@@ -279,6 +297,6 @@ class OverdueAlerter:
                 except Exception as error:
                     self.log(f"unlock ACK UNKNOWN ({type(error).__name__}); retained receipt, no resend")
         ledger["entries"] = {key:value for key,value in entries.items()
-                             if key in live_keys or json.loads(key)[0] in ("unlock","spec")}
+                             if self.unlock_target is not None or key in live_keys or json.loads(key)[0] in ("unlock","spec")}
         write_json_atomic(self.path, ledger)
         return sent
