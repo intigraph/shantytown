@@ -4308,7 +4308,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
 def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
                             owner_count=None, budget=None, gaming=None,
                             log=None):
-    """Move work held by an agent at a ceiling to a claude agent with headroom.
+    """Move ceiling-held work to another harness with active-plate headroom.
 
     Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
     claude". The decisions live in `ceiling_transfer`; this binds the reads and
@@ -4360,7 +4360,8 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             continue
         item = plate(card.name)
         if item is not None and (item.status or "") != "closed":
-            holders.append(ct.Holder(card.name, item.id, why, evidence))
+            holders.append(ct.Holder(card.name, item.id, why, evidence,
+                                     harness=harness_mod.name_for(card, root=a.root)))
     if not holders:
         capture.record("no_holders", budgets=budgets, findings=findings,
                        holders=holders, candidates_observed=False)
@@ -4376,9 +4377,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             answer = reader(name)
             if not answer.complete:
                 return None
-            return sum(1 for row in answer.exact()
-                       if (row.get("status") or "") != "closed")
+            return ct.active_plate_count(answer.exact(), name)
 
+    target_harnesses = {ct.receiver_harness(h.harness) for h in holders} - {None}
     candidates = []
     counts = {}
     for card in agents:
@@ -4392,9 +4393,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         elif agent_hold.reason(a.root, card.name):
             unavailable = "held"
         count = None
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             unavailable = ct.receiver_budget(*_budget(card.name))
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             count = owner_count(card.name)
             counts[card.name] = count
             if count is None:
