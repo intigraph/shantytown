@@ -435,7 +435,8 @@ item is only a no-op when all requested fields are present.
 CI, review, merge and install waits require a non-date `resume_when` condition
 and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
 required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding; a new event name is not a registration.
+existing registered `event:` binding, or one of the fixed facts below; a new
+`event:` name is not a registration.
 For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
 with an exact UTC `--until` at least a day away. Short date-only polling and
 dry-run attempts refuse before writes. A real scheduled appointment may use
@@ -485,6 +486,39 @@ one item's producer:
 `st work defer` refuses a malformed argument before writing anything. A read
 that cannot answer cleanly (a network error, a tool not on PATH, a version that
 does not parse) is UNKNOWN and keeps the hold. It is never reported as met.
+
+The following facts need no per-item registry entry:
+
+- `resume_when: pr-merged:github/owner/repo#123` (or `forgejo/owner/repo#123`)
+  waits for that exact pull request's positive merge receipt. Closing a PR
+  without merging does not satisfy it.
+- `resume_when: ci-complete:github/owner/repo@<full-sha>` (or `forgejo/...`)
+  waits for the bounded, complete exact-head CI inventory to become terminal.
+  A failed or canceled run is terminal too: the owner must inspect conclusions.
+  This condition is **not** a green-CI or merge approval. Missing CI is UNKNOWN;
+  pending parent workflows hold even if their first job is already green.
+  A forge that ignores exact-head workflow filtering cannot prove completion.
+- `resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for an ordinary
+  administrator/Codex cold launch after the stated UTC instant, in this same
+  deployment root and host. The normal launcher records the receipt only after
+  observing the process live, verifying hooks and acknowledging startup inbox
+  delivery. Dry runs, cycles, window restores, hold overrides, other harnesses
+  and unverified starts cannot produce it. The sweep never starts or cycles an
+  agent to obtain evidence. This observation only resurfaces runtime acceptance;
+  it does not prove provider responses or manufacture gaming/capacity conditions.
+
+GitHub facts use a fixed read-only `gh api` argv. Forgejo facts use the existing
+`SHANTY_FORGEJO_URL`/`SHANTY_FORGEJO_TOKEN` adapter configuration; markers cannot
+choose another URL, token, command or query. Reads have byte/page/time bounds.
+Authentication errors, malformed identities and incomplete inventories remain
+UNKNOWN, without an alternate credential or transport retry.
+
+For these three fixed facts, a future backstop is a reminder: a definite event
+can release a marker-only mechanical hold before that date. Tend re-reads the
+full item and event before changing status. Other dependencies, human/access
+holds, additional prose and explicit scheduled windows retain their gates.
+Existing reviewed natural `event:` contracts, including the disabled protected
+recycle binding, are unchanged. No existing item is automatically rebound.
 
 The protected-recycle evaluator requires a complete ordered interval containing
 a natural soft defer inside the nominated window, then a successful unforced

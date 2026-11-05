@@ -947,7 +947,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> / pr-merged: / ci-complete: / cold-launch:")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -957,7 +957,7 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> or installed:<tool><op><version>")
+            raise DeferRefused("resume_when must name a testable closed:, date:, event:, release:, installed:, pr-merged:, ci-complete: or cold-launch: condition")
         if active.kind == "event":
             from .resume_events import binding_for
             try:
@@ -968,6 +968,16 @@ class Dispatcher:
             from .resume_kinds import validate as validate_kind
             try:
                 validate_kind(active.kind, active.arg)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
+        if active.kind in ("pr-merged", "ci-complete", "cold-launch"):
+            try:
+                if active.kind == "cold-launch":
+                    from .resume_launch import validate as validate_launch
+                    validate_launch(active.arg)
+                else:
+                    from .resume_forge import validate as validate_forge
+                    validate_forge(active.kind, active.arg)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
         gate_target = None

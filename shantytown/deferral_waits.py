@@ -17,5 +17,6 @@ def validate(reason, dependency_reason, condition, deadline, now, *, window=Fals
     if condition.kind == "date" or deadline is None or deadline - now < timedelta(hours=24):
         raise ValueError(
             "CI/review/merge/install waits require an event resume_when "
-            "(closed:, release:, installed: or a registered event:) and a backstop "
+            "(closed:, release:, installed:, pr-merged:, ci-complete:, cold-launch: "
+            "or a registered event:) and a backstop "
             "of at least 24 hours; use --window only for a real scheduled window")
