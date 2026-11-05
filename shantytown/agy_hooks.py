@@ -121,6 +121,8 @@ def dispatch(event, native, settings_path, *, runner=execute):
             raise ValueError('native agy hooks do not match the launch projection')
         receipt = {k: native.get(k) for k in ('conversationId', 'workspacePaths', 'modelName', 'transcriptPath')}
         pid, identity = native_process()
+        if type(pid) is not int or pid <= 0 or not isinstance(identity, str) or not identity:
+            raise ValueError('native agy process identity is unproved')
         if not pid or not identity:
             raise ValueError('native agy process ancestry unproved')
         receipt.update(pid=pid, process_identity=identity, at=time.time(), settings=str(Path(settings_path).resolve()),
@@ -141,10 +143,16 @@ def dispatch(event, native, settings_path, *, runner=execute):
             try:
                 answer = json.loads(stdout) if stdout.strip() else {}
             except ValueError:
+                if event == 'PreToolUse':
+                    raise ValueError('st tool hook returned malformed JSON') from None
                 answer = {}
                 if event == 'SessionStart' and stdout.strip():
                     notes.append(stdout.strip())
+            if not isinstance(answer, dict):
+                raise ValueError('st hook response must be an object')
             specific = answer.get('hookSpecificOutput') or {}
+            if not isinstance(specific, dict):
+                raise ValueError('st hook-specific response must be an object')
             denied = code == 2 or answer.get('decision') == 'block' or specific.get('permissionDecision') == 'deny'
             if event == 'PreToolUse' and (denied or code != 0):
                 return {'decision': 'deny', 'reason': answer.get('reason') or specific.get('permissionDecisionReason') or stderr or 'st hook refused'}

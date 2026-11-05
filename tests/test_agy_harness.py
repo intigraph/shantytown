@@ -163,3 +163,29 @@ def test_native_launch_settings_exclude_canonical_claude_keys(tmp_path):
     assert json.loads(native.read_text()) == {'useG1Credits': False}
     assert native.stat().st_mode & 0o777 == 0o600
     assert get('agy').settings_in_cmdline(f'agy --settings {native}') == str(path)
+
+
+def test_missing_native_process_cannot_mint_or_validate_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv('SHANTY_ROOT',str(tmp_path))
+    monkeypatch.setenv('SHANTY_AGENT','local')
+    monkeypatch.setattr(agy_hooks,'native_process',lambda:(None,None))
+    path=config(tmp_path,'SessionStart');ws=tmp_path/'ws';ws.mkdir();agy.project_hooks(ws,path)
+    native={'conversationId':'native','workspacePaths':[str(ws)]}
+    with pytest.raises(ValueError,match='process identity is unproved'):
+        agy_hooks.dispatch('SessionStart',native,path,runner=lambda *a:(0,'',''))
+    assert not agy.receipt_path(tmp_path,'local').exists()
+    monkeypatch.setattr(agy_hooks,'native_process',lambda:(999,'fixture-agy'))
+    agy_hooks.dispatch('SessionStart',native,path,runner=lambda *a:(0,'',''))
+    receipt=agy.receipt_path(tmp_path,'local')
+    data=json.loads(receipt.read_text());data.update(pid=None,process_identity=None)
+    receipt.write_text(json.dumps(data))
+    monkeypatch.setattr(agy,'process_identity',lambda pid:None)
+    assert not agy.receipt_matches(tmp_path,'local',path,ws)
+
+
+@pytest.mark.parametrize('response',['not JSON','[]','{"hookSpecificOutput":["deny"]}'])
+def test_malformed_tool_hook_output_is_never_an_allow(tmp_path,response):
+    with pytest.raises(ValueError):
+        agy_hooks.dispatch('PreToolUse',{'toolCall':{'name':'run_command',
+            'args':{'CommandLine':'echo fixture'}}},config(tmp_path,'PreToolUse'),
+            runner=lambda *args:(0,response,''))

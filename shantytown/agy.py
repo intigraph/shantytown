@@ -115,7 +115,9 @@ def receipt_matches(root, agent, settings_path, workspace):
     try:
         record = json.loads(receipt_path(root, agent).read_text())
         ws = Path(workspace).resolve()
-        return (record['settings'] == str(Path(settings_path).resolve())
+        return (type(record['pid']) is int and record['pid'] > 0
+                and isinstance(record['process_identity'], str) and bool(record['process_identity'])
+                and record['settings'] == str(Path(settings_path).resolve())
                 and record['settings_sha256'] == hashlib.sha256(Path(settings_path).read_bytes()).hexdigest()
                 and record['hooks_sha256'] == hashlib.sha256((ws / '.agents/hooks.json').read_bytes()).hexdigest()
                 and record['native_settings_sha256'] == hashlib.sha256(native_settings_path(settings_path).read_bytes()).hexdigest()
