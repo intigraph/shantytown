@@ -273,7 +273,7 @@ def export_share(run, binary, source, database, query, stage):
     files = manifest.get("files", {})
     if (read_alignment(member) != expected or not isinstance(files, dict)
         or files.get("alignments") != "alignments.ttl"
-        or manifest.get("alignments_hash") != hashlib.sha256(expected).hexdigest()):
+        or manifest.get("alignments_hash") != "sha256:" + hashlib.sha256(expected).hexdigest()):
         raise ValueError("native share did not bind the exact alignment carrier")
 
 
