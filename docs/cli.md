@@ -265,7 +265,10 @@ with `/ps`, then stop or await their running processes. A remaining background
 shell prevents the cycle from reaching its idle boundary. The self-cycle waiter
 logs the observed shell count when it changes and still waits safely; it never
 stops those tasks itself. After the tasks exit, the next idle poll can serve the
-existing request.
+existing request. While a fresh, unrefused self-cycle request is pending,
+Stop advice and self-feed stay silent so the pane can reach idle. Refused or
+stale requests resume normal advice; automatic requests do not silence it.
+This does not relax the waiter's busy-pane or background-task checks.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -2497,7 +2500,8 @@ Set the per-tree fetch deadline in `<root>/shantytown.toml`:
 fetch_timeout_seconds = 180
 ```
 
-The default is 180 seconds; the value must be finite and positive. Local Git
+The default is 180 seconds for each remote fetch in each tree, not a total
+budget shared across worktrees; the value must be finite and positive. Local Git
 probes retain their 60-second bound. A timeout kills the Git process group and
 returns a one-line refusal without stopping the pane or changing the card or
 pending cycle request. Retry after connectivity recovers or adjust the budget.

@@ -194,3 +194,23 @@ def test_failed_trusted_fetch_cannot_certify_stale_publication(tmp_path):
     measured = tree_staleness(clone, fetch=True, tracked_only=True)
     assert measured.unverified
     assert measured.unpushed == 1
+
+
+def test_many_trees_each_receive_the_full_fetch_budget(tmp_path, monkeypatch):
+    from shantytown import workspace
+    args, upstream, clone, _, requests, actions = world(tmp_path, monkeypatch)
+    (args.root / "shantytown.toml").write_text(
+        "[keep_current]\nfetch_timeout_seconds = 180\n")
+    trees = [clone] + [_clone(upstream, tmp_path / f"tree-{i}") for i in range(39)]
+    monkeypatch.setattr(cli, "_agent_trees", lambda *a, **kw: trees)
+    observed = []
+    original = workspace.run_with_group_timeout
+    def transport(argv, timeout, **kw):
+        if "fetch" in argv:
+            observed.append((argv[2], timeout))
+        return original(argv, timeout, **kw)
+    monkeypatch.setattr(workspace, "run_with_group_timeout", transport)
+    assert cli._cmd_cycle(args) == cli.OK
+    assert observed == [(str(tree), 180) for tree in trees]
+    assert actions == ["stop", "launch", "dispatch"]
+    assert requests.pending() == {}
