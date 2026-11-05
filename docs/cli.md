@@ -253,6 +253,9 @@ source tests alone do not prove delivery to a running administrator.
 The [compact checkpoint template](guides/context-cycle.md) gives one request command;
 `--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
 Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
+The resume hook emits the saved brief in the `SessionStart` JSON
+`hookSpecificOutput.additionalContext` field, like the anchor hook, and consumes
+it once. With no pending brief it emits nothing.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 
