@@ -85,7 +85,7 @@ def test_below_threshold_rearms_and_new_session_rearms(tmp_path, capsys):
     card, payload = world(tmp_path)
     assert ch.emit(tmp_path, card, payload)
     turn(payload["transcript_path"], 699)
-    assert not ch.emit(tmp_path, card, payload)
+    assert ch.emit(tmp_path, card, payload)  # earlier preparation band
     turn(payload["transcript_path"], 701)
     assert ch.emit(tmp_path, card, payload)
     assert not ch.emit(tmp_path, card, payload)
