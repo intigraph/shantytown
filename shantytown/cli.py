@@ -3992,7 +3992,7 @@ def _cmd_harness(a) -> int:
     session is the more dangerous default, and the operator asking for a
     conversion usually wants the next cycle rather than an interruption now.
     """
-    from . import harness_switch
+    from . import harness_switch, harness_options
     try:
         card = _registry(a).get(a.agent)
     except LookupError as e:
@@ -4008,15 +4008,22 @@ def _cmd_harness(a) -> int:
         # deployment rule rather than the card, and says which.
         source = "card" if card.harness else "deployment default"
         print(f"{a.agent}: {current} (from the {source})")
+        for name, options in sorted(harness_options.profiles(card, current).items()):
+            visible = {k: v for k, v in options.items() if k in {'model', 'chrome'}}
+            print(f"  {name}: {json.dumps(visible, sort_keys=True)}")
+            ignored = set(options) - ({'model', 'chrome'} if name == 'claude' else {'model'})
+            if ignored:
+                print(f"    unsupported, retained: {', '.join(sorted(ignored))}")
         return OK
 
+    selected_model, remembered = harness_options.target_model(card, current, a.target, a.model)
     cfg, _err = config.load_or_default(a.root)
     plan = harness_switch.plan_switch(
         agent=a.agent, current=current, target=a.target, role=card.role,
         required_by_role=cfg.harness_required_by_role,
         known=tuple(h.name for h in harness_mod.all_harnesses()),
-        model=a.model,
-        current_model=card.model,
+        model=selected_model,
+        current_model=harness_options.model(card, current), target_model_known=remembered,
         lane_held=(not _administrator_launch(a, card) and
                    _harness_lane_held(a, cfg, a.target)),
         restart_now=a.now, force=a.force)
@@ -4055,10 +4062,8 @@ def _cmd_harness(a) -> int:
         shutil.copy2(src, backup)
         print(f"  card backed up: {backup.name}", file=sys.stderr)
 
-    import dataclasses
-    updated = dataclasses.replace(
-        card, harness=plan.to_harness,
-        model=plan.model if plan.model else card.model)
+    updated = harness_options.converted(card, current, plan.to_harness, plan.model)
+    harness_options.warn_unsupported(updated, plan.to_harness)
     reg.set(updated)
     print(f"{a.agent}: {plan.from_harness} -> {plan.to_harness}"
           + (f", model {plan.model}" if plan.model else ""))
@@ -13480,6 +13485,10 @@ def _jobs_sweep(a) -> list[str]:
     """The tend sweep: every due job, once. Inside tend's `_sweep` like every
     other best-effort layer, and each JOB is isolated again inside Runner.sweep,
     so neither a broken file nor a crashing job can reach respawn."""
+    # Tend's governor path can fall back to defaults after a configuration
+    # error. Never let that fallback reactivate a delegated local scheduler.
+    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+        return []
     return _jobs_runner(a).sweep()
 
 
@@ -13542,6 +13551,10 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
+    if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
+        print("refused: local job evaluation and execution are delegated to Chaski; "
+              "use --graph for declaration checks and the signed scheduler lane for execution", file=sys.stderr)
+        return REFUSED
     if getattr(a, "expect_job", None) or getattr(a, "json", False):
         print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
@@ -14579,8 +14592,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # the idle-work pushes, so declared work never pre-empts supervision's
         # own notifications; an exec job starts DETACHED, so a long one cannot
         # hold this pass open (aegis-qwadc).
-        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
-            print(f"  {line}", file=sys.stderr)
+        if cfg.jobs_scheduler == "local":
+            for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+                print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off
