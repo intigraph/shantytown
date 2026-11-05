@@ -1,0 +1,13 @@
+Script started on 2026-11-04 07:56:15-05:00 [COMMAND="sh .work/aeg/demo.sh" <not executed on terminal>]
+$ python3 owner-host.py --source BASE_023868ba
+{"card_host": null, "owner_state": "down", "reowner_proposal": true, "local_pane_probes": ["worker-pane"], "changes_applied": false}
+{"card_host": "", "owner_state": "down", "reowner_proposal": true, "local_pane_probes": ["worker-pane"], "changes_applied": false}
+{"card_host": "here", "owner_state": "down", "reowner_proposal": true, "local_pane_probes": ["worker-pane"], "changes_applied": false}
+{"card_host": "other", "owner_state": "unknown", "reowner_proposal": false, "local_pane_probes": [], "changes_applied": false}
+$ python3 owner-host.py --source CANDIDATE
+{"card_host": null, "owner_state": "unknown", "reowner_proposal": false, "local_pane_probes": [], "changes_applied": false}
+{"card_host": "", "owner_state": "unknown", "reowner_proposal": false, "local_pane_probes": [], "changes_applied": false}
+{"card_host": "here", "owner_state": "down", "reowner_proposal": true, "local_pane_probes": ["worker-pane"], "changes_applied": false}
+{"card_host": "other", "owner_state": "unknown", "reowner_proposal": false, "local_pane_probes": [], "changes_applied": false}
+
+Script done on 2026-11-04 07:56:15-05:00 [COMMAND_EXIT_CODE="0"]

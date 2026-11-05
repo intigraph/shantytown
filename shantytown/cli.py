@@ -2049,6 +2049,7 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
     bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-semantic-only", action="store_true", help="benchmark only auto/personal nouls; rank-band calls disabled")
     bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
     bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
     bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
@@ -2851,7 +2852,7 @@ def _run_command(a) -> int:
                 else:
                     print(board_rank.table(result))
                 return OK
-            if (getattr(a, "rank_rules", None) or getattr(a, "rank_json", False)
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_semantic_only", False) or getattr(a, "rank_json", False)
                     or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
                     or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
                 raise ValueError("rank options require --rank-proposals")
