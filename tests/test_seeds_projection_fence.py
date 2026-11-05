@@ -85,7 +85,8 @@ def test_returned_entity_or_membership_change_never_becomes_exact(wire, mode):
     result = plate.owner_rows(proof, "worker")
     assert not result.complete
     assert state["feeds"]  # Exercise scoped evidence, not global-tx refusal.
-    assert state["queries"] == 6  # Three whole projections, not query-only retries.
+    assert state["queries"] == (4 if mode == "returned" else 6)
+    # Payload repairs share three passes; membership repeats all queries.
 
 
 @pytest.mark.parametrize("mode", ["truncated", "store-replaced", "malformed", "offline"])
@@ -104,7 +105,7 @@ def test_relevant_change_invalidates_older_hits_before_retry(wire):
     state.update(step=1, title="after", mode="past-returned")
     assert plate.owner_rows(proof, "worker").exact()[0]["title"] == "after"
     assert state["feeds"][0][1] == 10  # Include the older cached observation.
-    assert state["queries"] == 4  # Retry fetches; never reuse the invalid hits.
+    assert state["queries"] == 3  # One fresh field repair; no candidate restart.
 
 
 def test_full_change_pages_are_drained_before_claiming_absence(wire, monkeypatch):

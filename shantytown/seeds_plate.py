@@ -61,6 +61,7 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    timeout = seeds_read_cache.projection_timeout(timeout)
     if not seeds_read_cache.primary_reads_required() and seeds_push_read.enabled():
         if verbose:
             raise ValueError("push read cannot provide primary profiling evidence")
@@ -287,15 +288,19 @@ class RenderShapeReads:
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
-        for attempt in range(3):
+        budget = {"remaining": 3,
+                  "deadline": time.monotonic() + 3 * kwargs.get("timeout", 30)}
+        error = "projection changed"
+        while budget["remaining"]:
+            budget["remaining"] -= 1
             try:
-                with seeds_read_cache.projection_reads():
+                with seeds_read_cache.projection_reads(budget):
                     return function(*args, **kwargs)
-            except seeds_read_cache.WatermarkMoved as error:
-                if attempt == 2:
-                    return Answer.capped(
-                        [], how="Seeds owner projection; shared and ephemeral graphs",
-                        caveat=f"owner plate unreadable after 3 snapshot attempts: {error}")
+            except seeds_read_cache.WatermarkMoved as changed:
+                error = str(changed)
+        return Answer.capped(
+            [], how="Seeds owner projection; shared and ephemeral graphs",
+            caveat=f"owner plate unreadable after 3 snapshot passes: {error}")
     return read
 
 
@@ -442,6 +447,15 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
         grouped = _project_fields(proof, selected, graphs, timeout)
+        while True:
+            try:
+                seeds_read_cache.certify_projection(
+                    proof.quipu_url, graphs, set(selected), OWNER_MEMBERSHIP, timeout, urlopen)
+                break
+            except seeds_read_cache.EntityChanges as change:
+                seeds_read_cache.repair_entities(change)
+                subset = {subject: selected[subject] for subject in change.entities}
+                grouped.update(_project_fields(proof, subset, graphs, timeout))
         rows = []
         for subject, row in grouped.items():
             from .protocols import rank_order
@@ -483,8 +497,6 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise ValueError("unexpected inbox candidate")
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
-        seeds_read_cache.certify_projection(
-            proof.quipu_url, graphs, set(selected), OWNER_MEMBERSHIP, timeout, urlopen)
         return Answer.complete_read(rows, how=how)
     except seeds_read_cache.WatermarkMoved:
         raise  # The outer owner projection must restart, not just this query.

@@ -4,9 +4,10 @@ Hits share a one-second observation of (store_id, watermark_tx). Results are
 published only when that pair stayed unchanged across a successful fetch.
 Striped file locks protect local publication only; no HTTP runs under a lock.
 Single reads retry a moving transaction at most three times. Owner projections
-restart only on relevant graph-scoped changes, keeping exact answers despite
-unrelated commits. Cache storage failure retains a fenced uncached reader.
-Missing change-feed proof or a changed store identity refuses the answer.
+repair only changed entity fields and restart on membership/store changes,
+keeping exact answers despite unrelated commits. Cache storage failure retains
+a fenced uncached reader. Missing change-feed proof refuses the answer. A store
+replacement discards retained rows before starting a new complete projection.
 """
 from __future__ import annotations
 
@@ -38,9 +39,10 @@ _CHANGE_PAGES = 8
 
 
 @contextmanager
-def projection_reads():
+def projection_reads(budget=None):
     """Collect the oldest observation used by one exact owner projection."""
-    token = _PROJECTION.set({"mark": None, "paths": set()})
+    token = _PROJECTION.set({"mark": None, "paths": set(), "epoch": None,
+                              "refresh": False, "budget": budget})
     try:
         yield
     finally:
@@ -53,7 +55,7 @@ def _projection_mark(mark):
         return
     previous = scope["mark"]
     if previous is not None and previous[0] != mark[0]:
-        raise ValueError("seeds store changed across projection")
+        raise StoreChanged("seeds store changed across projection")
     scope["mark"] = mark if previous is None else (mark[0], min(previous[1], mark[1]))
 
 
@@ -68,13 +70,15 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
     if scope is None or scope["mark"] is None:
         return  # Explicit query-only admission (or an entirely injected reader).
     store, since = scope["mark"]
-    end_store, target = _watermark(server, timeout, opener)
+    end_store, target = _watermark(server, projection_timeout(timeout), opener)
     if end_store != store or target < since:
-        raise ValueError("seeds store changed across projection")
+        raise StoreChanged("seeds store changed across projection")
     if target == since:
         return
-    epoch = None
-    deadline = time.monotonic() + timeout
+    epoch = scope["epoch"]
+    changed = set()
+    membership_changed = False
+    deadline = time.monotonic() + projection_timeout(timeout)
     for graph in graphs:
         cursor = since
         for _ in range(_CHANGE_PAGES):
@@ -119,16 +123,10 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
                         or record.get("op") not in ("assert", "retract", "tombstone")):
                     raise ValueError("invalid projection change record")
                 transactions.add(record["tx"])
-                if record["tx"] <= target and (record["entity"] in entities or record["attribute"] in membership):
-                    # A retry must not consume the same older cache hits again.
-                    # Removing our exact query entries is safe under concurrent
-                    # readers; publication itself remains stripe-locked.
-                    for path in scope["paths"]:
-                        try:
-                            path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                    raise WatermarkMoved("relevant seeds change during projection; refusing mixed snapshot")
+                if record["tx"] <= target:
+                    membership_changed |= record["attribute"] in membership
+                    if record["entity"] in entities:
+                        changed.add(record["entity"])
             if (next_tx != (max(transactions) if transactions else cursor)
                     or len(transactions) > _CHANGE_TX_LIMIT):
                 raise ValueError("invalid projection change-feed cursor")
@@ -137,6 +135,49 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
             cursor = next_tx
         else:
             raise ValueError("projection change-feed page budget reached")
+
+    projection_timeout(timeout)
+    scope["epoch"] = epoch
+    if membership_changed or changed:
+        for path in scope["paths"]:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if membership_changed:
+            raise WatermarkMoved("seeds membership changed during projection")
+        raise EntityChanges(changed, (store, target))
+
+
+def projection_timeout(timeout):
+    """One allowance shared by full restarts and entity repairs.
+
+    timeout remains a per-request cap, not a one-second caller wall promise.
+    The complete projection may use at most three such time allowances.
+    """
+    scope = _PROJECTION.get()
+    budget = scope.get("budget") if scope is not None else None
+    if budget is None:
+        return timeout
+    remaining = budget["deadline"] - time.monotonic()
+    if remaining <= 0:
+        raise ValueError("owner projection total time budget reached")
+    return min(timeout, remaining)
+
+
+def repair_entities(change):
+    scope = _PROJECTION.get()
+    budget = scope["budget"]
+    if budget["remaining"] <= 0:
+        raise ValueError("owner projection three-pass budget reached")
+    projection_timeout(1)
+    budget["remaining"] -= 1
+    # Unchanged entities have been certified through this target. A repair
+    # must read fresh fields, never an older shared cache entry. Re-fencing
+    # all selected entities catches a second write during the repair itself.
+    scope["mark"] = change.mark
+    scope["refresh"] = True
+    scope["paths"].clear()
 
 
 @contextmanager
@@ -155,7 +196,20 @@ def direct_reads():
 
 
 class WatermarkMoved(ValueError):
-    """A transient transaction change; only the entire read may be retried."""
+    """A changed observation; owner membership changes require full restart."""
+
+
+class StoreChanged(WatermarkMoved):
+    """The backing store changed; no retained rows may cross the restart."""
+
+
+class EntityChanges(WatermarkMoved):
+    """Payload-only changes whose selected fields can be repaired."""
+
+    def __init__(self, entities, mark):
+        super().__init__("selected entity payload changed during projection")
+        self.entities = frozenset(entities)
+        self.mark = mark
 
 
 @contextmanager
@@ -297,6 +351,9 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
     post-fetch observation; an intervening write prevents publication.
     ST_SEEDS_READ_CACHE=0 disables acceleration for rollback/measurement.
     """
+    scope = _PROJECTION.get()
+    if scope is not None and scope["refresh"]:
+        return fetch()
     parsed = urlsplit(server)
     if (_DIRECT_READS.get() or os.environ.get("ST_SEEDS_READ_CACHE") == "0"
             or parsed.scheme not in ("http", "https") or not parsed.hostname
@@ -338,14 +395,15 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         result = fetch()
         after = _watermark(server, timeout, opener)
         if after[0] != before[0]:
-            raise ValueError("seeds store changed during read")
+            raise (StoreChanged if _PROJECTION.get() is not None else ValueError)(
+                "seeds store changed during read")
         if after != before:
             raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
         return result
     _observe(before)
     scope = _PROJECTION.get()
     if scope is not None:
-        scope["paths"].add(path)
+        scope["paths"].update((path, mark_path))
     if hit is not None:
         _projection_mark(before)
         return hit
@@ -362,7 +420,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
     except _CACHE_ERRORS:
         pass  # A certified wire answer does not depend on writable cache files.
     if after[0] != before[0]:
-        raise ValueError("seeds store changed during read")
+        raise (StoreChanged if _PROJECTION.get() is not None else ValueError)(
+                "seeds store changed during read")
     _projection_mark(after)
     if after != before and _PROJECTION.get() is None:
         raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
