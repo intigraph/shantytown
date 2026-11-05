@@ -676,6 +676,11 @@ class ClaudeHarness:
         return ""
 
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
+        try:
+            if any(Path(t).name == "agy" for t in shlex.split(cmdline)):
+                return None
+        except ValueError:
+            return None
         toks = cmdline.split()
         for i, t in enumerate(toks):
             if t == "--settings" and i + 1 < len(toks):
@@ -1529,9 +1534,11 @@ def _load_json(text: str) -> dict:
 
 
 from .opencode import make_harness as _opencode_harness
+from .agy import make_harness as _agy_harness
 
 _HARNESSES = {h.name: h for h in
-              (ClaudeHarness(), CodexHarness(), _opencode_harness(ClaudeHarness))}
+              (ClaudeHarness(), CodexHarness(), _opencode_harness(ClaudeHarness),
+               _agy_harness(ClaudeHarness))}
 
 
 def all_harnesses() -> tuple[Harness, ...]:

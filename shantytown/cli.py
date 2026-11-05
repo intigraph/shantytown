@@ -1841,7 +1841,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="convert an agent to another harness, one command")
     hz.add_argument("agent")
     hz.add_argument("target", nargs="?", default=None,
-                    help="claude | codex | opencode. Omitted: report what this card runs")
+                    help="claude | codex | opencode | agy. Omitted: report what this card runs")
     hz.add_argument("--model", default=None,
                     help="also set the model this agent runs")
     _add_despite_hold(hz)
@@ -5903,6 +5903,21 @@ def _cmd_doctor(a) -> int:
                 code = _fold_generic(code, 1)
             else:
                 print("\n  CODEX DAEMON LAUNCH DEPTH\n  ✓ no proven per-card blockers")
+            from . import agy as agy_mod
+            try:
+                agy_rows = agy_mod.doctor_rows(_registry(a).all().exact(), Path(a.root))
+            except Exception:
+                agy_rows = [{"agent": "UNKNOWN", "ready": False}]
+            if agy_rows:
+                print("\n  AGY LIFECYCLE")
+                for row in agy_rows:
+                    print(f"  {'✓' if row['ready'] else '?'} {row['agent']}: "
+                          f"auth={row.get('auth_present', 'UNKNOWN')} "
+                          f"hooks={row.get('hooks_projected', 'UNKNOWN')} "
+                          f"native-receipt={row.get('native_receipt', 'UNKNOWN')}; "
+                          "quota: configured governor group")
+                if any(not row['ready'] for row in agy_rows):
+                    code = _fold_generic(code, 2)
             from . import provision as prov_mod
             try:
                 uniform, uniform_broken = prov_mod.uniformity_report(
