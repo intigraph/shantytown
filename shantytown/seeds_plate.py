@@ -42,6 +42,16 @@ FIELDS = {
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
 }
 
+# Candidate membership and scheduling eligibility can change even on an entity
+# absent from the returned set. Payload-only changes on other entities cannot.
+OWNER_MEMBERSHIP = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    SCHEMA + "agent", SCHEMA + "name", SCHEMA + "scheduledTime",
+    *(SEEDS + "ontology/" + name for name in (
+        "status", "priority", "rank", "issueType", "deferUntil", "specVersion", "blockedOn")),
+    "https://scbrown.github.io/quechua/ns#blockedOn",
+})
+
 
 def _iri(value: str) -> str:
     parsed = urlsplit(value)
@@ -279,7 +289,8 @@ def _retry_owner_projection(function):
     def read(*args, **kwargs):
         for attempt in range(3):
             try:
-                return function(*args, **kwargs)
+                with seeds_read_cache.projection_reads():
+                    return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as error:
                 if attempt == 2:
                     return Answer.capped(
@@ -290,7 +301,6 @@ def _retry_owner_projection(function):
 
 @declared_read_operation("owner-rows")
 @_retry_owner_projection
-@seeds_read_cache.consistent_reads()
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
@@ -473,6 +483,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise ValueError("unexpected inbox candidate")
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
+        seeds_read_cache.certify_projection(
+            proof.quipu_url, graphs, set(selected), OWNER_MEMBERSHIP, timeout, urlopen)
         return Answer.complete_read(rows, how=how)
     except seeds_read_cache.WatermarkMoved:
         raise  # The outer owner projection must restart, not just this query.

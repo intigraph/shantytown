@@ -855,6 +855,7 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
         observed["marks"] += 1
         tx = (10 if observed["marks"] <= 2 else 11) if motion == "settles" else (
             observed["marks"] if motion == "never" else 10)
+        observed["tx"] = tx
         return ("fixture-store", tx)
     monkeypatch.setattr(cache, "_watermark", watermark)
     if motion == "cache-unavailable":
@@ -867,13 +868,25 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
         def __exit__(self, *args): pass
         def read(self, size): return json.dumps(answer(fields())).encode()
     def send(request, timeout):
+        if request.get_method() == "GET":
+            from urllib.parse import urlsplit, parse_qs
+            params = parse_qs(urlsplit(request.full_url).query)
+            since = int(params["since"][0])
+            data = dict(records=[dict(tx=since + 1, graph=params["graph"][0],
+                        entity=seeds_plate.SEEDS + "item/test-held",
+                        attribute=seeds_plate.SCHEMA + "name", op="assert")],
+                        since=since, next_tx=since + 1, watermark_tx=observed["tx"],
+                        capture="new_values", source=dict(store_id="fixture-store", log_epoch="epoch"))
+            response = Response()
+            response.read = lambda size: json.dumps(data).encode()
+            return response
         observed["queries"] += 1
         return Response()
     monkeypatch.setattr(seeds_plate, "urlopen", send)
     result = seeds_plate.owner_rows(PROOF, "worker")
     if motion == "never":
         assert not result.complete
-        assert observed["queries"] == 3
+        assert observed["queries"] == 6
     else:
         assert result.exact()[0]["id"] == "test-held"
-        assert observed["queries"] == (3 if motion == "settles" else 2)
+        assert observed["queries"] == (4 if motion == "settles" else 2)

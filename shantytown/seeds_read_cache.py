@@ -3,10 +3,10 @@
 Hits share a one-second observation of (store_id, watermark_tx). Results are
 published only when that pair stayed unchanged across a successful fetch.
 Striped file locks protect local publication only; no HTTP runs under a lock.
-A moving transaction is retried at most three times; a projection restarts
-as a whole. Cache storage failure retains an uncached reader, but an active
-projection still requires watermark proof. Missing proof or a changed store
-identity refuses the answer.
+Single reads retry a moving transaction at most three times. Owner projections
+restart only on relevant graph-scoped changes, keeping exact answers despite
+unrelated commits. Cache storage failure retains a fenced uncached reader.
+Missing change-feed proof or a changed store identity refuses the answer.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from pathlib import Path
 import stat
 import tempfile
 import time
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request
 
 from .query_identity import read_headers
@@ -32,6 +32,111 @@ _WATERMARK_MAX_AGE = 1
 _CACHE_ERRORS = (OSError, ValueError, TypeError, AttributeError, KeyError)
 _DIRECT_READS = ContextVar("seeds_direct_reads", default=False)
 _READ_SNAPSHOT = ContextVar("seeds_read_snapshot", default=(False, None))
+_PROJECTION = ContextVar("seeds_projection_fence", default=None)
+_CHANGE_TX_LIMIT = 100
+_CHANGE_PAGES = 8
+
+
+@contextmanager
+def projection_reads():
+    """Collect the oldest observation used by one exact owner projection."""
+    token = _PROJECTION.set({"mark": None, "paths": set()})
+    try:
+        yield
+    finally:
+        _PROJECTION.reset(token)
+
+
+def _projection_mark(mark):
+    scope = _PROJECTION.get()
+    if scope is None:
+        return
+    previous = scope["mark"]
+    if previous is not None and previous[0] != mark[0]:
+        raise ValueError("seeds store changed across projection")
+    scope["mark"] = mark if previous is None else (mark[0], min(previous[1], mark[1]))
+
+
+def certify_projection(server, graphs, entities, membership, timeout, opener):
+    """Prove no relevant scoped changes since ANY query/cache observation.
+
+    Page to a fixed post-projection watermark, not a moving live head. A full
+    page is not absence evidence. Missing, malformed or oversized proof refuses.
+    The source change log retains whole transactions, including retractions.
+    """
+    scope = _PROJECTION.get()
+    if scope is None or scope["mark"] is None:
+        return  # Explicit query-only admission (or an entirely injected reader).
+    store, since = scope["mark"]
+    end_store, target = _watermark(server, timeout, opener)
+    if end_store != store or target < since:
+        raise ValueError("seeds store changed across projection")
+    if target == since:
+        return
+    epoch = None
+    deadline = time.monotonic() + timeout
+    for graph in graphs:
+        cursor = since
+        for _ in range(_CHANGE_PAGES):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ValueError("projection change-feed time budget reached")
+            headers = {"X-Quipu-Client": "seeds", **read_headers()}
+            headers["X-Quipu-Operation"] = "cache-changes"
+            request = Request(server.rstrip("/") + "/changes?" + urlencode(
+                {"since": cursor, "graph": graph, "limit": _CHANGE_TX_LIMIT,
+                 "capture": "new_values"}), headers=headers)
+            with opener(request, timeout=remaining) as response:
+                if response.status != 200:
+                    raise ValueError("projection change feed unavailable")
+                body = response.read(_LIMIT + 1)
+                if len(body) > _LIMIT:
+                    raise ValueError("projection change-feed byte budget reached")
+                page = json.loads(body)
+            if not isinstance(page, dict) or page.get("truncated", False) is not False:
+                raise ValueError("truncated projection change feed")
+            source = page.get("source")
+            if not isinstance(source, dict) or source.get("store_id") != store:
+                raise ValueError("seeds store changed across projection")
+            this_epoch = source.get("log_epoch")
+            if not isinstance(this_epoch, str) or not this_epoch or (epoch is not None and epoch != this_epoch):
+                raise ValueError("projection change-feed history changed")
+            epoch = this_epoch
+            records, next_tx, watermark = page.get("records"), page.get("next_tx"), page.get("watermark_tx")
+            if (type(page.get("since")) is not int or page["since"] != cursor
+                    or page.get("capture") != "new_values"
+                    or not isinstance(records, list) or len(records) > 10000
+                    or type(next_tx) is not int or next_tx < cursor
+                    or type(watermark) is not int or watermark < target):
+                raise ValueError("invalid projection change-feed page")
+            transactions = set()
+            for record in records:
+                if (not isinstance(record, dict) or type(record.get("tx")) is not int
+                        or not cursor < record["tx"] <= next_tx
+                        or record.get("graph") != graph
+                        or not isinstance(record.get("entity"), str) or not record["entity"]
+                        or not isinstance(record.get("attribute"), str) or not record["attribute"]
+                        or record.get("op") not in ("assert", "retract", "tombstone")):
+                    raise ValueError("invalid projection change record")
+                transactions.add(record["tx"])
+                if record["tx"] <= target and (record["entity"] in entities or record["attribute"] in membership):
+                    # A retry must not consume the same older cache hits again.
+                    # Removing our exact query entries is safe under concurrent
+                    # readers; publication itself remains stripe-locked.
+                    for path in scope["paths"]:
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    raise WatermarkMoved("relevant seeds change during projection; refusing mixed snapshot")
+            if (next_tx != (max(transactions) if transactions else cursor)
+                    or len(transactions) > _CHANGE_TX_LIMIT):
+                raise ValueError("invalid projection change-feed cursor")
+            if next_tx >= target or len(transactions) < _CHANGE_TX_LIMIT:
+                break
+            cursor = next_tx
+        else:
+            raise ValueError("projection change-feed page budget reached")
 
 
 @contextmanager
@@ -169,7 +274,10 @@ def _publish(directory: Path, path: Path, watermark, result):
 def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     # A projection owns its retry boundary: never keep its earlier fields and
     # retry just one query against a newer snapshot.
-    attempts = 1 if _READ_SNAPSHOT.get()[0] else 3
+    scope = _PROJECTION.get()
+    if scope is not None and not _DIRECT_READS.get() and scope["mark"] is None:
+        _projection_mark(_watermark(server, timeout, opener))
+    attempts = 1 if _READ_SNAPSHOT.get()[0] or scope is not None else 3
     for attempt in range(attempts):
         try:
             return _read_once(server, query, timeout, opener=opener,
@@ -219,6 +327,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
                 _publish(directory, mark_path, None, before)
                 hit = _cached(path, before, validate)
     except _CACHE_ERRORS:
+        if _PROJECTION.get() is not None:
+            return fetch()  # The outer scope certifies this uncached query.
         if not _READ_SNAPSHOT.get()[0]:
             return fetch()
         # Unwritable cache files are not missing consistency evidence. Keep
@@ -233,7 +343,11 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
             raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
         return result
     _observe(before)
+    scope = _PROJECTION.get()
+    if scope is not None:
+        scope["paths"].add(path)
     if hit is not None:
+        _projection_mark(before)
         return hit
 
     result = fetch()  # Never swallow a wire or completeness refusal.
@@ -249,6 +363,7 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         pass  # A certified wire answer does not depend on writable cache files.
     if after[0] != before[0]:
         raise ValueError("seeds store changed during read")
-    if after != before:
+    _projection_mark(after)
+    if after != before and _PROJECTION.get() is None:
         raise WatermarkMoved("seeds watermark moved during read; refusing mixed snapshot")
     return result
