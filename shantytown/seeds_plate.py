@@ -353,12 +353,13 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         if include_deferred and scope is None:
             raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        # A single owner's guard shares the candidate observation, as inbox
-        # reads already do. Keep explicitly shared roster observations intact.
+        # Default owner/roster guards share the candidate observation. Keep
+        # explicitly shared render-scoped observations intact.
         # No cross-read cache or failed-read fallback: every invocation checks
         # the same counterexample relation before hydrating any fields.
         inline_owner_guard = messages_only or (
-            isinstance(scope, str) and shape_reads is None
+            (isinstance(scope, str) or isinstance(scope, tuple) and bool(scope))
+            and shape_reads is None
         )
         if scope is not None and not inline_owner_guard and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")

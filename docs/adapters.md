@@ -401,7 +401,9 @@ mixed result.
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded
 change feed. Query misses are published into the shared cache only after this
-whole-projection proof succeeds; duplicate per-query watermark reads are not
+whole-projection proof succeeds. Default roster status admission shares its
+candidate query; explicitly shared render observations retain their scope.
+Duplicate per-query watermark reads are not
 needed inside that fence. Field requests bind at most 1,000 subjects while
 retaining the aggregate 10,000-field ceiling. Unrelated writes do not invalidate an exact answer. A returned
 entity's payload change re-reads only that entity's lean fields, then re-fences
