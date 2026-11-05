@@ -108,6 +108,21 @@ class ProducerCoverage(unittest.TestCase):
         self.assertEqual(result["scrub_guard_persistent_repos_total"], 1)
         self.assertEqual(result["scrub_guard_ephemeral_repos_total"], 0)
 
+    def test_scratch_common_with_external_worktree_stays_persistent(self):
+        self.git("-C", self.scratch, "-c", "user.name=Test", "-c", "user.email=test@example.org",
+                 "commit", "--allow-empty", "-qm", "fixture")
+        linked = self.home / "persistent-linked"
+        self.git("-C", self.scratch, "worktree", "add", "-q", linked, "-b", "persistent")
+        # A scratch-first sweep deduplicates the common Git directory before
+        # it can discover the outside checkout. Classification must therefore
+        # inspect shared custody even when only the scratch root is swept.
+        scoped = self.sweep(root=self.root)
+        self.assertEqual(scoped["scrub_guard_persistent_repos_total"], 1)
+        self.assertEqual(scoped["scrub_guard_ephemeral_repos_total"], 0)
+        whole = self.sweep()
+        self.assertEqual(whole["scrub_guard_persistent_repos_total"], 2)
+        self.assertEqual(whole["scrub_guard_ephemeral_repos_total"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

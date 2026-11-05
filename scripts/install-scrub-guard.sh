@@ -224,6 +224,10 @@ is_ephemeral_producer_checkout() {
   [ "$(stat -c '%u:%a' -- "$root" 2>/dev/null)" = "$(id -u):700" ] || return 1
   common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
   case "$common" in "$root"/*) ;; *) return 1 ;; esac
+  # Common Git/hooks may live inside scratch while a persistent checkout
+  # outside it shares them. SEEN_COMMON can hide that checkout later in the
+  # sweep, so any linked-worktree registry (even stale/unknown) is persistent.
+  [ ! -e "$common/worktrees" ] && [ ! -L "$common/worktrees" ] || return 1
   hooks="$(git -C "$dir" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)" || return 1
   hooks="$(realpath -e -- "$hooks" 2>/dev/null)" || return 1
   [ -d "$hooks" ] || return 1
