@@ -23,6 +23,7 @@ import tempfile
 import time
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request
+from urllib.error import URLError
 
 from .query_identity import read_headers
 
@@ -190,11 +191,21 @@ def projection_timeout(timeout):
     return min(timeout, remaining)
 
 
+def projection_pause(budget):
+    """Yield between recovery attempts, inside the existing time allowance."""
+    delay = min(.1 * 2 ** budget.get("pauses", 0), .2)
+    if budget["deadline"] - time.monotonic() <= delay:
+        return False
+    time.sleep(delay)
+    budget["pauses"] = budget.get("pauses", 0) + 1
+    return True
+
+
 def repair_entities(change):
     scope = _PROJECTION.get()
     budget = scope["budget"]
     if budget["remaining"] <= 0:
-        raise ValueError("owner projection three-pass budget reached")
+        raise ValueError("owner projection retry budget reached")
     projection_timeout(1)
     budget["remaining"] -= 1
     # Unchanged entities have been certified through this target. A repair
@@ -297,6 +308,24 @@ def _locked(directory: Path, key: str):
 
 
 def _watermark(server: str, timeout: int, opener) -> tuple[str, int]:
+    while True:
+        try:
+            return _watermark_once(server, projection_timeout(timeout), opener)
+        except (TimeoutError, URLError) as error:
+            timed_out = isinstance(error, TimeoutError) or isinstance(error.reason, TimeoutError)
+            scope = _PROJECTION.get()
+            budget = scope.get("budget") if scope is not None else None
+            if not timed_out or budget is None or budget["remaining"] <= 0:
+                raise
+            # The request cap remains min(timeout, 2). Recovery consumes the
+            # same tokens as a full restart or entity repair; no inner retry
+            # loop can multiply the projection's admission/time budget.
+            budget["remaining"] -= 1
+            if not projection_pause(budget):
+                raise
+
+
+def _watermark_once(server: str, timeout: int, opener) -> tuple[str, int]:
     headers = {"X-Quipu-Client": "seeds", **read_headers()}
     headers["X-Quipu-Operation"] = "cache-watermark"
     request = Request(server.rstrip("/") + "/watermark", headers=headers)

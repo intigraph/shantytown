@@ -306,9 +306,12 @@ def _retry_owner_projection(function):
                     # store. The restarted candidate pass must prove shape
                     # on the replacement, and later owners cannot reuse it.
                     kwargs = {**kwargs, "shape_reads": None}
+                if budget["remaining"] and not seeds_read_cache.projection_pause(budget):
+                    budget["remaining"] = 0
+                    error = "owner projection total time budget reached"
         return Answer.capped(
             [], how="Seeds owner projection; shared and ephemeral graphs",
-            caveat=f"owner plate unreadable after 3 snapshot passes: {error}")
+            caveat=f"owner plate unreadable within shared retry/time budget: {error}")
     return read
 
 
@@ -454,7 +457,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if subject in selected and selected[subject] != graph:
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
-        grouped = _project_fields(proof, selected, graphs, timeout)
+        grouped = _project_fields(proof, selected, graphs, timeout, batch_size=1000)
         while True:
             try:
                 seeds_read_cache.certify_projection(
@@ -463,7 +466,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             except seeds_read_cache.EntityChanges as change:
                 seeds_read_cache.repair_entities(change)
                 subset = {subject: selected[subject] for subject in change.entities}
-                grouped.update(_project_fields(proof, subset, graphs, timeout))
+                grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
         rows = []
         for subject, row in grouped.items():
             from .protocols import rank_order
@@ -599,7 +602,7 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
-def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
@@ -608,11 +611,11 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
-    # This follows the SDK's indexed query shapes without hydration. A 1,000-
-    # subject cap avoids a second round trip on ordinary owner rosters; the
-    # unchanged aggregate field/byte limits still refuse oversized answers.
-    for offset in range(0, len(pairs), 1000):
-        chunk = pairs[offset : offset + 1000]
+    # Owner rosters explicitly use 1,000 subjects to avoid a round trip.
+    # Ranking retains 500: its larger aggregate budget admits dense answers
+    # that must still fit each individual response. No field/byte cap grows.
+    for offset in range(0, len(pairs), batch_size):
+        chunk = pairs[offset : offset + batch_size]
         # Keep graph and predicate constant in each indexed branch.
         # A variable GRAPH/predicate pattern can scan the whole store
         # before joining VALUES on deployed engines.

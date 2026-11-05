@@ -164,3 +164,13 @@ def test_same_store_watermark_regression_is_unknown_not_a_restart(wire,monkeypat
     monkeypatch.setattr(cache,"_watermark",lambda *a:next(marks))
     assert not plate.owner_rows(proof,"worker").complete
     assert state["queries"]==2
+
+
+def test_membership_restarts_back_off_inside_the_shared_budget(wire,monkeypatch):
+    proof,state=wire
+    state['mode']='membership'
+    sleeps=[]
+    monkeypatch.setattr(cache.time,'sleep',sleeps.append)
+    assert not plate.owner_rows(proof,'worker').complete
+    assert state['queries']==6
+    assert sleeps==[.1,.2]

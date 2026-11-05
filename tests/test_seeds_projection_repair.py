@@ -153,6 +153,20 @@ def test_field_projection_batches_one_thousand_subjects(monkeypatch,size,request
         rows=[dict(subject=s,graph=G,predicate=plate.SCHEMA+'identifier',value=s.rsplit('/',1)[1]) for s in selected if '<'+s+'>' in text]
         return dict(rows=rows,count=len(rows),truncated=False)
     monkeypatch.setattr(plate,'_query',query)
-    assert set(plate._project_fields(None,selected,(G,),30))==set(selected)
+    assert set(plate._project_fields(None,selected,(G,),30,batch_size=1000))==set(selected)
     assert len(queries)==requests
     assert all(sum("<"+subject+">" in text for subject in selected)<=1000 for text in queries)
+
+
+def test_non_owner_large_field_budget_keeps_existing_small_batches(monkeypatch):
+    selected={plate.SEEDS+'item/test-'+str(i):G for i in range(1001)}
+    def query(proof,text,timeout):
+        rows=[]
+        for subject in selected:
+            if '<'+subject+'>' not in text:continue
+            values=[(plate.SCHEMA+'identifier',subject.rsplit('/',1)[1]),(plate.SCHEMA+'name','work'),(plate.SEEDS+'ontology/status','open')]
+            values += [(plate.SCHEMA+'keywords','tag-'+str(i)) for i in range(9)]
+            rows.extend(dict(subject=subject,graph=G,predicate=k,value=v) for k,v in values)
+        return dict(rows=rows,count=len(rows),truncated=False)
+    monkeypatch.setattr(plate,'_query',query)
+    assert len(plate._project_fields(None,selected,(G,),30,budget=100000))==1001

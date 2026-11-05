@@ -413,8 +413,11 @@ A regressing watermark under the same store identity is UNKNOWN, not a restart.
 Missing, malformed, truncated or changed-history proof remains
 UNKNOWN, never permission to return retained rows.
 
-Initial projections, entity repairs and whole restarts share three total passes
-and one overall allowance of three times the caller's per-request timeout. The
+The initial projection, entity repairs, whole restarts and recovery from short
+watermark timeouts share three total attempts and one overall allowance of three
+times the caller's per-request timeout. Recovery backs off by 100ms, then 200ms;
+watermark requests retain their original `min(timeout, 2)` cap. Non-timeout proof
+failures and an exhausted budget remain UNKNOWN, without stale-row fallback. The
 request cap remains per request, not an end-to-end latency promise. Query-only
 admission keeps its existing direct transport and read budget. Cache hits retain
 the bounded one-second watermark observation; this is not an immutable server
