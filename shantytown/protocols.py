@@ -198,6 +198,8 @@ class Agent:
     account: str | None = None    # named subscription lane; None preserves legacy routing
     auto_failover: bool | None = None  # per-agent opt-in; None preserves projection
 
+    harness_options: dict | None = None  # saved per-program launch preferences; appended for positional compatibility
+
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.
 

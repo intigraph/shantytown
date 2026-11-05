@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Explicit host Chaski delegation skips the local job evaluator and refuses manual local execution and eligibility checks. Work triage offers governed priority/rank proposals with quarantined model evidence; an administrator accepts changes. Cycle advice can prefer checkpointed process replacement when exact native session evidence proves an older installed CLI; missing or stale version evidence remains UNKNOWN.",
-      "source_sha256": "e644501ff73d8b4b6e2f1a1c3561c5147d2d4b75d96d0df999914b98c33258bc",
+      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed role summaries; fleet-owner tend adds advisory ranking without reassignment. Failed reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed reviews require exact job and PR scope. Cycle accepts item-bound approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work stays gated. Explicit Chaski delegation skips the local evaluator and refuses local execution. Work triage offers quarantined priority/rank proposals for administrator acceptance. Harness conversion retains per-harness model and browser preferences and reports unsupported fields. Cycle advice prefers checkpointed process replacement when exact native evidence proves an older running CLI; missing or stale evidence stays UNKNOWN.",
+      "source_sha256": "1ea9dd9d8cb829b7d065559baeb471986e184fc4dd033044bf1a11db82f7c62f",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -34,8 +34,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution.",
-      "source_sha256": "fd04a61308808008f4b68e4c7d9b3b0f781fd6efd9682a228482c6197c43edf6",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands.",
+      "source_sha256": "49c730271f431d1c1dad5497b4b3b774f758e52488e1c84eca59001bacd6b5c0",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
