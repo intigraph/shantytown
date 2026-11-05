@@ -142,3 +142,17 @@ def test_store_restart_drops_render_scoped_shape_admission(changing):
     assert state['candidates']==2
     assert 'unsupported-owner-status' in state['candidate_queries'][1]
     assert not admission.supported  # No old-store positive leaks to later owners.
+
+
+@pytest.mark.parametrize("size,requests", [(668,1),(1001,2)])
+def test_field_projection_batches_one_thousand_subjects(monkeypatch,size,requests):
+    selected={plate.SEEDS+'item/test-'+str(i):G for i in range(size)}
+    queries=[]
+    def query(proof,text,timeout):
+        queries.append(text)
+        rows=[dict(subject=s,graph=G,predicate=plate.SCHEMA+'identifier',value=s.rsplit('/',1)[1]) for s in selected if '<'+s+'>' in text]
+        return dict(rows=rows,count=len(rows),truncated=False)
+    monkeypatch.setattr(plate,'_query',query)
+    assert set(plate._project_fields(None,selected,(G,),30))==set(selected)
+    assert len(queries)==requests
+    assert all(sum("<"+subject+">" in text for subject in selected)<=1000 for text in queries)

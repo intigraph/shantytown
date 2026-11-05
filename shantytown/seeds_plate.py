@@ -608,9 +608,11 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
-    # This follows the SDK's indexed query shapes without hydration.
-    for offset in range(0, len(pairs), 500):
-        chunk = pairs[offset : offset + 500]
+    # This follows the SDK's indexed query shapes without hydration. A 1,000-
+    # subject cap avoids a second round trip on ordinary owner rosters; the
+    # unchanged aggregate field/byte limits still refuse oversized answers.
+    for offset in range(0, len(pairs), 1000):
+        chunk = pairs[offset : offset + 1000]
         # Keep graph and predicate constant in each indexed branch.
         # A variable GRAPH/predicate pattern can scan the whole store
         # before joining VALUES on deployed engines.
