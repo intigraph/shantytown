@@ -1,0 +1,14 @@
+Script started on 2026-11-04 02:53:03-05:00 [COMMAND="python3 docs/demos/cost-prices/demo.py" <not executed on terminal>]
+BASE bccb036cd65183cc16f79a2c56fe24419565afbe
+Currency samples: []
+CANDIDATE display source
+API-equivalent USD; current published rates, not an invoice:
+  example-model / claude / declared: UNKNOWN (known subtotal 0.5); priced tokens 50/100
+    unknown token category: 1 request(s)
+Price table SHA-256: fixture-sha
+Plan share USD: UNKNOWN (no measured allocation)
+st_bead_api_equivalent_known_usd{rig="example",bead="task-a",agent="worker",harness="claude",model="example-model",basis="declared",price_table_sha256="fixture-sha"} 0.5
+st_bead_priced_token_share{rig="example",bead="task-a",agent="worker",harness="claude",model="example-model",basis="declared",price_table_sha256="fixture-sha"} 0.5
+PASS: partial subtotal has a separate metric; complete dollars and receipt remain absent
+
+Script done on 2026-11-04 02:53:03-05:00 [COMMAND_EXIT_CODE="0"]
