@@ -51,8 +51,9 @@
 # scrub_guard_*.prom (see emit_metrics) with ABSOLUTE counts, not a ratio: a
 # ratio would have read 32/32 = 100% while five repos were invisible, i.e. it
 # would have reproduced the bug it exists to catch. A drop in
-# scrub_guard_repos_total is itself the alertable event, because a tree going
-# invisible shows up as a smaller denominator and nothing else.
+# scrub_guard_persistent_repos_total is the shrink-alert denominator: producer
+# scratch clones remain in repos_total and are armed, but their normal cleanup
+# is reported separately instead of looking like persistent coverage loss.
 set -uo pipefail
 
 CONF="${SCRUB_PATTERNS_FILE:-$HOME/.config/aegis/scrub-patterns.conf}"
@@ -207,6 +208,28 @@ is_owned_pytest_fixture() {
   case "$hooks" in "$generation"/*) return 0 ;; *) return 1 ;; esac
 }
 
+# A producer's private per-run clone still needs arming, but its cleanup must
+# not look like losing persistent coverage. Names alone are not custody: shared
+# repositories, redirected hooks and symlink escapes stay in the persistent set.
+is_ephemeral_producer_checkout() {
+  local dir="$1" common="$2" prefix physical rest root hooks
+  prefix="$HOME/.local/state/quipu-share-producer/"
+  case "$dir" in "$prefix"*) ;; *) return 1 ;; esac
+  physical="$(realpath -e -- "$dir" 2>/dev/null)" || return 1
+  [ "$physical" = "$dir" ] || return 1
+  case "$physical" in "$prefix"*) ;; *) return 1 ;; esac
+  rest="${physical#"$prefix"}"
+  [[ "$rest" =~ ^[^/]+/source-[A-Za-z0-9_]{8}/source$ ]] || return 1
+  root="${physical%/source}"
+  [ "$(stat -c '%u:%a' -- "$root" 2>/dev/null)" = "$(id -u):700" ] || return 1
+  common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
+  case "$common" in "$root"/*) ;; *) return 1 ;; esac
+  hooks="$(git -C "$dir" rev-parse --path-format=absolute --git-path hooks 2>/dev/null)" || return 1
+  hooks="$(realpath -e -- "$hooks" 2>/dev/null)" || return 1
+  [ -d "$hooks" ] || return 1
+  case "$hooks" in "$root"/*) return 0 ;; *) return 1 ;; esac
+}
+
 repo_label() {
   # A stable, topology-free name for a metric label: the repo name from any
   # remote URL. Basenames of checkouts are agent names under a *-wt/ tree and
@@ -247,6 +270,12 @@ emit_metrics() {
     echo "# HELP scrub_guard_repos_total Distinct public-remote repos the sweep discovered."
     echo "# TYPE scrub_guard_repos_total gauge"
     echo "scrub_guard_repos_total $repos"
+    echo "# HELP scrub_guard_persistent_repos_total Public repos excluding proven private producer scratch clones. Unknown custody stays persistent."
+    echo "# TYPE scrub_guard_persistent_repos_total gauge"
+    echo "scrub_guard_persistent_repos_total $persistent_repos"
+    echo "# HELP scrub_guard_ephemeral_repos_total Public producer scratch clones, still armed and checked for missing guards."
+    echo "# TYPE scrub_guard_ephemeral_repos_total gauge"
+    echo "scrub_guard_ephemeral_repos_total $ephemeral_repos"
     echo "# HELP scrub_guard_armed_total Discovered public repos whose pre-push hook is the current guard."
     echo "# TYPE scrub_guard_armed_total gauge"
     echo "scrub_guard_armed_total $armed"
@@ -756,6 +785,7 @@ else
 fi
 
 unarmed=0 armed=0 skipped=0 repos=0 checkouts=0 excluded=0 fixture_excluded=0
+persistent_repos=0 ephemeral_repos=0
 unarmed_labels=()
 declare -A SEEN_COMMON=()
 
@@ -781,6 +811,11 @@ for ROOT in "${ROOTS[@]}"; do
       skipped=$((skipped+1)); continue
     fi
     repos=$((repos+1))
+    if is_ephemeral_producer_checkout "$dir" "$common"; then
+      ephemeral_repos=$((ephemeral_repos+1))
+    else
+      persistent_repos=$((persistent_repos+1))
+    fi
     name="${dir#$HOME/}"
     if [ "$source_current" -eq 1 ] && is_armed "$dir"; then
       printf "  armed    %s\n" "$name"; armed=$((armed+1)); continue
@@ -808,6 +843,7 @@ echo "  checkouts scanned: $checkouts   third-party excluded: $excluded (${EXCLU
 echo "  owned metric fixtures excluded: $fixture_excluded (private metric suites or pytest generations, owned physical roots, hooks contained)"
 echo "  distinct repos: $((repos + skipped))   public: $repos   internal/none: $skipped"
 echo "  public armed: $armed   unarmed: $unarmed"
+echo "  public persistent: $persistent_repos   ephemeral producer clones (still armed): $ephemeral_repos"
 # A --root run sees only its roots, so its counts are NOT the estate's coverage.
 # Publishing them to the fleet gauge reported "1 repo" for the whole host the
 # moment someone armed a single new repo (aegis-27ka8g, a false
