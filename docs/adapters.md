@@ -394,12 +394,26 @@ packet and normal deployment; enabling this flag alone cannot establish either.
 
 The optional Seeds read cache holds its file locks only while checking or
 publishing local entries. HTTP watermark and query requests run outside those
-locks. Concurrent misses may execute independently. A miss whose store identity
-or watermark changes is refused, rather than published or returned. The owner
-projection also fences its candidate and field queries to the same observed
-pair; a change between them refuses the projection. Query-only admission keeps
-its existing direct transport and read budget. Cache hits retain the bounded
-one-second watermark observation; this is not an immutable server snapshot.
+locks. Concurrent misses may execute independently. An ordinary single query
+refuses a store replacement or a moving watermark rather than returning a
+mixed result.
+
+Owner projections additionally certify their queried graphs from the oldest
+consumed query/cache observation to a fixed post-read watermark using the bounded
+change feed. Unrelated writes do not invalidate an exact answer. A returned
+entity's payload change re-reads only that entity's lean fields, then re-fences
+**all** selected entities; a second change during repair must also be reconciled.
+A membership-attribute change, including status or ownership, restarts candidate
+selection. A store replacement discards all retained rows and restarts the whole
+projection. Missing, malformed, truncated or changed-history proof remains
+UNKNOWN, never permission to return retained rows.
+
+Initial projections, entity repairs and whole restarts share three total passes
+and one overall allowance of three times the caller's per-request timeout. The
+request cap remains per request, not an end-to-end latency promise. Query-only
+admission keeps its existing direct transport and read budget. Cache hits retain
+the bounded one-second watermark observation; this is not an immutable server
+snapshot.
 
 Exact-owner candidate selection uses fixed status leaves and a correlated type
 check. Feed selection still includes the named workers' plates and unassigned
