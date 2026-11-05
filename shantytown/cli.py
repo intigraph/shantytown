@@ -359,8 +359,16 @@ def _tracker(a, default="files"):
             raise ValueError('owner has no lead')
         # Use the same backend and a message marker: no implementation slot and
         # no recursive capacity routing. Never recreate the original work item.
-        tracker.create(f'inbox: capacity: {item_id} retained in pool; {owner} has 10 real work items',
-                       assignee=lead, labels='inbox')
+        body = f'capacity: {item_id} retained in pool; {owner} has 10 real work items'
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
+            # message graph: a message window, never a seed; one note per item/owner/day.
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
+            return
+        tracker.create(f'inbox: {body}', assignee=lead, labels='inbox')
     return guard_producers(tracker, notify)
 
 
@@ -493,9 +501,18 @@ def _inbox(a, default="files"):
     if _backend(a, default) in BR_LIKE:
         trk = _tracker(a, default)
         from .br import items as br_items
-        return TrackerInbox(trk, lambda: br_items(trk),
-                            lambda: br_items(trk, include_closed=True),
-                            items_for=getattr(trk, "inbox_items", None))
+        legacy = TrackerInbox(trk, lambda: br_items(trk),
+                              lambda: br_items(trk, include_closed=True),
+                              items_for=getattr(trk, "inbox_items", None))
+        # [inbox] store: "message-graph" sends NEW mail through
+        # `sd msg` into the message windows and reads legacy seeds + windows.
+        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
+            from .inbox import MessageGraphInbox
+            return MessageGraphInbox(legacy, trk)
+        return legacy
     return FilesInbox(Path(a.root) / "inbox")
 
 
