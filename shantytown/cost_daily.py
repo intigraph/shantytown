@@ -63,9 +63,13 @@ def project(result, *, now):
         groups = sessions.setdefault(session, {})
         if stamp.date().toordinal() < cutoff:
             continue
-        key = (stamp.date().isoformat(), *dimensions)
+        # Inferred-held spend (aegis-59jx) keeps its own row: never merged into a
+        # declared row for the same item, and declared rows keep their shape.
+        inferred = record.get('attribution') == 'inferred held item'
+        key = (stamp.date().isoformat(), *dimensions) + (('inferred-held',) if inferred else ())
         group = groups.setdefault(key, {'counts': dict.fromkeys(KINDS, 0), 'requests': 0,
-                                       'attribution_known': True})
+                                       'attribution_known': True,
+                                       **({'basis': 'inferred-held'} if inferred else {})})
         group['requests'] += 1
         group['attribution_known'] &= record.get('attribution') == 'attributed'
         for kind, value in counts.items():
@@ -77,7 +81,7 @@ def project(result, *, now):
     for session, groups in sorted(sessions.items()):
         rows = []
         for key, value in sorted(groups.items(), key=lambda x: tuple(str(v) for v in x[0])):
-            rows.append(dict(zip(('day', 'rig', 'seed', 'agent', 'harness', 'model'), key)) | value)
+            rows.append(dict(zip(('day', 'rig', 'seed', 'agent', 'harness', 'model'), key[:6])) | value)
         projected.append({'source': dict(zip(('harness', 'session', 'agent'), session)),
                           'receipt': result.get('receipt'), 'captured_at': now, 'rows': rows})
     return projected
