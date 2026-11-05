@@ -16,11 +16,16 @@ from urllib.request import Request, urlopen
 
 from .answer import Answer
 from .query_identity import read_headers, declared_read_operation
+from . import seeds_read_cache, seeds_push_read
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
 MESSAGE_PATTERN = json.dumps(r"^\s*(inbox:|mail:)")
 FIELDS = {
+    **{SEEDS + "ontology/" + native: public for native, public in (
+        ("specVersion", "spec_version"), ("specPreviousVersion", "spec_previous_version"),
+        ("specChangedAt", "spec_changed_at"), ("specSummary", "spec_summary"),
+        ("specAckVersion", "spec_ack_version"), ("specAckActor", "spec_ack_actor"))},
     SCHEMA + "identifier": "id",
     SCHEMA + "name": "title",
     SCHEMA + "agent": "assignee",
@@ -29,6 +34,7 @@ FIELDS = {
     SCHEMA + "keywords": "labels",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
+    SEEDS + "ontology/rank": "rank",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -44,6 +50,24 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    if not seeds_read_cache.primary_reads_required() and seeds_push_read.enabled():
+        if verbose:
+            raise ValueError("push read cannot provide primary profiling evidence")
+        return _validate_query(seeds_push_read.read(proof, query, timeout), query)
+
+    def fetch():
+        return _query_wire(proof, query, timeout, verbose=verbose)
+
+    # Explicit profiling must observe a real execution, not cached timing.
+    if verbose:
+        return fetch()
+    return seeds_read_cache.read(
+        proof.quipu_url, query, timeout, opener=urlopen, fetch=fetch,
+        validate=lambda result: _validate_query(result, query),
+    )
+
+
+def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     headers = {"Content-Type": "application/json", "X-Quipu-Client": "seeds"}
     headers.update(read_headers())
     payload = {"query": query}
@@ -62,6 +86,10 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
         if len(body) > 8 * 1024 * 1024:
             raise ValueError("plate response byte budget reached")
         result = json.loads(body)
+    return _validate_query(result, query)
+
+
+def _validate_query(result, query: str) -> dict:
     if not isinstance(result, dict):
         raise TypeError("invalid plate response")
     if query.lstrip().startswith("ASK"):
@@ -181,6 +209,13 @@ def _feed_owner_clause(owners: tuple[str, ...]) -> str:
 
 @declared_read_operation("owner-shape-supported")
 def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int = 30) -> bool:
+    branches = _unsupported_owner_branches(proof, agent)
+    return not branches or not _query(
+        proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+
+
+def _unsupported_owner_branches(proof, agent):
+    """The same counterexample relation for standalone and inbox admission."""
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
@@ -189,7 +224,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
                    for term in (json.dumps(owner),
                                 _iri(SEEDS + "principal/" + quote(owner, safe="")))]
     if not clauses:
-        return True
+        return []
     known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
     branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
@@ -210,7 +245,7 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
             ):
                 branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
                                 f"{clause} {type_clause} }} }}")
-    return not _query(proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
+    return branches
 
 
 class RenderShapeReads:
@@ -241,7 +276,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
-               include_closed: bool = False) -> Answer[list[dict]]:
+               include_closed: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -266,7 +301,14 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         if include_deferred and scope is None:
             raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        if scope is not None and not shape_check(proof, scope, timeout=timeout):
+        # A single owner's guard shares the candidate observation, as inbox
+        # reads already do. Keep explicitly shared roster observations intact.
+        # No cross-read cache or failed-read fallback: every invocation checks
+        # the same counterexample relation before hydrating any fields.
+        inline_owner_guard = messages_only or (
+            isinstance(scope, str) and shape_reads is None
+        )
+        if scope is not None and not inline_owner_guard and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
         graph = proof.graph
         graphs = (graph, graph + "#seeds-ephemeral")
@@ -341,21 +383,31 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
                         f"<{SEEDS}ontology/status> {status_term} . "
-                        + status_filter + (f"?s <{SCHEMA}name> ?title . "
+                        + status_filter
+                        + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
+                        + (f"?s <{SCHEMA}name> ?title . "
                            f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
                            if messages_only else "" if include_messages else
                          f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
                          f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
+        if inline_owner_guard:
+            branches.append(
+                "{ { " + " UNION ".join(_unsupported_owner_branches(proof, scope))
+                + ' } BIND("unsupported-owner-status" AS ?problem) }'
+            )
         query = (
-            "SELECT (STR(?s) AS ?subject) ?graph WHERE { "
+            "SELECT (STR(?s) AS ?subject) ?graph "
+            + ("?problem " if inline_owner_guard else "") + "WHERE { "
             + " UNION ".join(branches)
-            + " } LIMIT 10000"
+            + f" }} LIMIT {501 if only_specs else 10000}"
         )
         candidates = _query(proof, query, timeout)["rows"]
-        if len(candidates) >= 10000:
+        if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
+        if inline_owner_guard and any("problem" in row for row in candidates):
+            raise ValueError("owner has an unsupported or absent status")
         selected = {}
         for candidate in candidates:
             subject, graph = candidate.get("subject"), candidate.get("graph")
@@ -368,84 +420,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if subject in selected and selected[subject] != graph:
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
-        wire = []
-        pairs = list(selected.items())
-        # Discover scoped IDs first, then bind every subject and predicate.
-        # This follows the SDK's indexed query shapes without hydration.
-        for offset in range(0, len(pairs), 500):
-            chunk = pairs[offset : offset + 500]
-            # Keep graph and predicate constant in each indexed branch.
-            # A variable GRAPH/predicate pattern can scan the whole store
-            # before joining VALUES on deployed engines.
-            branches = []
-            for g in graphs:
-                bindings = " ".join(_iri(subject) for subject, graph in chunk if graph == g)
-                if not bindings:
-                    continue
-                for predicate in FIELDS:
-                    branches.append(
-                        f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(g)} "
-                        f"{{ ?s {_iri(predicate)} ?value }} "
-                        f"BIND({json.dumps(g)} AS ?graph) "
-                        f"BIND({json.dumps(predicate)} AS ?predicate) }}"
-                    )
-            query = (
-                "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
-                + " UNION ".join(branches) + " } LIMIT 10000"
-            )
-            part = _query(proof, query, timeout)["rows"]
-            if len(part) >= 10000 or len(wire) + len(part) >= 10000:
-                raise ValueError("plate field budget reached")
-            wire.extend(part)
-        grouped = {}
-        subjects = {}
-        for field in wire:
-            subject, g, p, value = (
-                field.get(k) for k in ("subject", "graph", "predicate", "value")
-            )
-            if (
-                not isinstance(subject, str)
-                or not subject.startswith(SEEDS + "item/")
-                or g not in graphs
-                or selected.get(subject) != g
-                or p not in FIELDS
-            ):
-                raise ValueError("invalid plate field")
-            if subject in subjects and subjects[subject] != g:
-                raise ValueError("seed appears in shared and ephemeral graphs")
-            subjects[subject] = g
-            row = grouped.setdefault(subject, {"labels": []})
-            key = FIELDS[p]
-            if isinstance(value, dict):
-                if set(value) != {"datatype", "value"} or key not in (
-                    "updated_at",
-                    "created_at",
-                    "defer_until",
-                    "due_at",
-                ):
-                    raise ValueError("unsupported typed plate value")
-                value = value["value"]
-            if (
-                key == "assignee"
-                and isinstance(value, str)
-                and value.startswith(SEEDS + "principal/")
-            ):
-                from urllib.parse import unquote
-
-                value = unquote(value[len(SEEDS + "principal/") :])
-            if key == "labels":
-                if not isinstance(value, str):
-                    raise ValueError("invalid label")
-                if value not in row[key]:
-                    row[key].append(value)
-            else:
-                if key in row and row[key] != value:
-                    raise ValueError("ambiguous plate field")
-                row[key] = value
-        if set(grouped) != set(selected):
-            raise ValueError("plate candidate disappeared during projection")
+        grouped = _project_fields(proof, selected, graphs, timeout)
         rows = []
         for subject, row in grouped.items():
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
             if row.get("status") in ("closed", "tombstone") and not include_closed:
                 continue
             if (
@@ -486,6 +465,239 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         return Answer.complete_read(rows, how=how)
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
+
+
+RANKING_ACTIVE = ("open", "hooked", "in_progress")
+RANKING_WAITING = ("blocked", "deferred")
+RANKING_MAX_ROWS = 5000
+
+
+@declared_read_operation("ranking-rows")
+def ranking_rows(proof, *, timeout: int = 30,
+                 max_rows: int = RANKING_MAX_ROWS) -> Answer[list[dict]]:
+    """Every cohort the administrator ranking digest reads, and nothing else.
+
+    aegis-bzc: the digest used to ask owner_rows(None, include_deferred=True),
+    which owner_rows refuses before any query (waiting-work metadata needs an
+    owner scope), so every scheduled ranking reported PartialAnswer. That
+    refusal stays; this is the dedicated, bounded board-wide reader.
+
+    Cohorts, shared and ephemeral graphs, message titles excluded:
+      - open, hooked and in_progress, any owner or none (plates and READY);
+      - blocked and deferred, ONLY unowned P0 (the digest's unowned-P0 line).
+
+    Indexed shape (aegis-efa): every branch writes its selective constants
+    (priority, status) BEFORE the type triple, because Quipu evaluates a
+    pattern holding a type triple in written order. LIMIT is max_rows + 1, and
+    reaching it is a PartialAnswer, never a silent cap. Any unreadable, changed
+    or ambiguous candidate is UNKNOWN too.
+    """
+    how = "Seeds administrator ranking cohorts; shared and ephemeral graphs"
+    try:
+        if type(max_rows) is not int or max_rows < 1:
+            raise ValueError("invalid ranking row budget")
+        graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        no_message = (f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
+                      f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ")
+        unowned = (f"FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
+                   'FILTER(STR(?owner) != "") } ')
+        branches = []
+        for g in graphs:
+            for status in RANKING_ACTIVE:
+                branches.append(
+                    f"{{ GRAPH {_iri(g)} {{ ?s <{SEEDS}ontology/status> {json.dumps(status)} . "
+                    f"?s a <{SCHEMA}Action> . {no_message}}} "
+                    f"BIND({json.dumps(g)} AS ?graph) }}")
+            for status in RANKING_WAITING:
+                branches.append(
+                    f"{{ GRAPH {_iri(g)} {{ ?s <{SEEDS}ontology/priority> 0 . "
+                    f"?s <{SEEDS}ontology/status> {json.dumps(status)} . "
+                    f"?s a <{SCHEMA}Action> . {unowned}{no_message}}} "
+                    f"BIND({json.dumps(g)} AS ?graph) }}")
+        query = ("SELECT DISTINCT (STR(?s) AS ?subject) ?graph WHERE { "
+                 + " UNION ".join(branches) + f" }} LIMIT {max_rows + 1}")
+        candidates = _query(proof, query, timeout)["rows"]
+        if len(candidates) > max_rows:
+            raise ValueError(f"ranking candidate budget reached ({max_rows})")
+        selected = {}
+        for candidate in candidates:
+            subject, graph = candidate.get("subject"), candidate.get("graph")
+            if (not isinstance(subject, str) or not subject.startswith(SEEDS + "item/")
+                    or graph not in graphs):
+                raise ValueError("invalid ranking candidate")
+            if subject in selected and selected[subject] != graph:
+                raise ValueError("seed appears in shared and ephemeral graphs")
+            selected[subject] = graph
+        grouped = _project_fields(proof, selected, graphs, timeout,
+                                  budget=max(10000, max_rows * (len(FIELDS) + 8)))
+        rows = []
+        for subject, row in grouped.items():
+            from .protocols import rank_order
+            rank_order(row.get("rank"), row.get("due_at"), row.get("created_at"))
+            status, owner = row.get("status"), row.get("assignee")
+            if (
+                not all(isinstance(row.get(k), str) for k in ("id", "title", "status"))
+                or not row["id"].strip()
+                or subject != SEEDS + "item/" + quote(row["id"], safe="")
+                or (owner is not None and not isinstance(owner, str))
+                or type(row.get("priority")) is not int
+                or not 0 <= row["priority"] <= 4
+                # A candidate whose fields now disagree with the cohort that
+                # selected it changed during the read: UNKNOWN, not dropped.
+                or not (status in RANKING_ACTIVE or (
+                    status in RANKING_WAITING and not owner and row["priority"] == 0))
+            ):
+                raise ValueError("incomplete or changed ranking candidate")
+            rows.append(row)
+        return Answer.complete_read(rows, how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
+
+
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
+    """Bind every selected subject to the lean FIELDS; never hydrate bodies.
+
+    `selected` maps subject IRI -> the one graph that holds it. Raises on any
+    budget, identity or ambiguity problem; callers turn that into UNKNOWN.
+    """
+    wire = []
+    pairs = list(selected.items())
+    # Discover scoped IDs first, then bind every subject and predicate.
+    # This follows the SDK's indexed query shapes without hydration.
+    for offset in range(0, len(pairs), 500):
+        chunk = pairs[offset : offset + 500]
+        # Keep graph and predicate constant in each indexed branch.
+        # A variable GRAPH/predicate pattern can scan the whole store
+        # before joining VALUES on deployed engines.
+        branches = []
+        for g in graphs:
+            bindings = " ".join(_iri(subject) for subject, graph in chunk if graph == g)
+            if not bindings:
+                continue
+            for predicate in FIELDS:
+                branches.append(
+                    f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(g)} "
+                    f"{{ ?s {_iri(predicate)} ?value }} "
+                    f"BIND({json.dumps(g)} AS ?graph) "
+                    f"BIND({json.dumps(predicate)} AS ?predicate) }}"
+                )
+        query = (
+            "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
+            + " UNION ".join(branches) + " } LIMIT 10000"
+        )
+        part = _query(proof, query, timeout)["rows"]
+        if len(part) >= 10000 or len(wire) + len(part) >= budget:
+            raise ValueError("plate field budget reached")
+        wire.extend(part)
+    grouped = {}
+    subjects = {}
+    for field in wire:
+        subject, g, p, value = (
+            field.get(k) for k in ("subject", "graph", "predicate", "value")
+        )
+        if (
+            not isinstance(subject, str)
+            or not subject.startswith(SEEDS + "item/")
+            or g not in graphs
+            or selected.get(subject) != g
+            or p not in FIELDS
+        ):
+            raise ValueError("invalid plate field")
+        if subject in subjects and subjects[subject] != g:
+            raise ValueError("seed appears in shared and ephemeral graphs")
+        subjects[subject] = g
+        row = grouped.setdefault(subject, {"labels": []})
+        key = FIELDS[p]
+        if isinstance(value, dict):
+            if set(value) != {"datatype", "value"} or key not in (
+                "updated_at",
+                "created_at",
+                "defer_until",
+                "due_at",
+            ):
+                raise ValueError("unsupported typed plate value")
+            value = value["value"]
+        if (
+            key in ("assignee", "spec_ack_actor")
+            and isinstance(value, str)
+            and value.startswith(SEEDS + "principal/")
+        ):
+            from urllib.parse import unquote
+
+            value = unquote(value[len(SEEDS + "principal/") :])
+        if key == "labels":
+            if not isinstance(value, str):
+                raise ValueError("invalid label")
+            if value not in row[key]:
+                row[key].append(value)
+        else:
+            if key in row and row[key] != value:
+                raise ValueError("ambiguous plate field")
+            row[key] = value
+    if set(grouped) != set(selected):
+        raise ValueError("plate candidate disappeared during projection")
+    return grouped
+
+
+# Subjects per deferral field read (aegis-6c4). Each subject costs one branch
+# per graph per field: measured on Quipu 0.16.x, 25 subjects cost 6004 against
+# the server's structural limit of 4096 (~240 each), so EVERY first attempt at
+# 25 was refused and halved: 25 wasted ~300KB requests per read, each a 400 in
+# the server log. 16 subjects cost ~3843. The halving below stays as the
+# fallback if the limit drops or fields are added.
+DEFERRED_FIELD_BATCH = 16
+
+
+def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
+    """Split only the server's explicit structural-cost request refusal.
+
+    Keep one wall budget per original batch. No candidate is discarded: a
+    singleton refusal makes the whole observation incomplete, naming the item.
+    Other HTTP failures retain their original refusal without a retry.
+    """
+    deadline = time.monotonic() + timeout
+
+    def read(chunk):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("deferral field time budget reached")
+        branches = []
+        for subject, _ in chunk:
+            for graph in graphs:
+                for predicate in fields:
+                    branches.append(
+                        f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} '
+                        f'BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) '
+                        f'BIND({json.dumps(graph)} AS ?graph) }}'
+                    )
+        query = ("SELECT (STR(?s) AS ?subject) ?graph "
+                 "(STR(?p) AS ?predicate) ?value WHERE { "
+                 + " UNION ".join(branches) + " } LIMIT 10000")
+        try:
+            rows = _query(proof, query, remaining)["rows"]
+            if time.monotonic() >= deadline:
+                raise ValueError("deferral field time budget reached")
+            return rows
+        except HTTPError as error:
+            if error.code != 400:
+                raise
+            try:
+                message = json.loads(error.read(4096)).get("error")
+            except (ValueError, AttributeError, OSError):
+                message = None
+            if not isinstance(message, str) or not re.fullmatch(
+                r"SPARQL request is too deeply nested or too long a chain: "
+                r"structural cost \d+ exceeds the limit of \d+\. "
+                r"Split it into smaller requests\.", message
+            ):
+                raise
+            if len(chunk) == 1:
+                raise ValueError(f"deferral candidate {chunk[0][0]} UNKNOWN: "
+                                 "structural request limit at batch size 1") from error
+            middle = len(chunk) // 2
+            return read(chunk[:middle]) + read(chunk[middle:])
+
+    return read(pairs)
 
 
 @declared_read_operation("deferred-rows")
@@ -569,25 +781,16 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                              "defer_until": None} for subject in selected}
         pairs = list(selected.items())
         total = 0
-        for offset in range(0, len(pairs), 25):
-            branches = []
-            # Read both graphs for every selected subject: even a shadow with
-            # a different status must refuse, rather than hide a condition.
-            for subject, _ in pairs[offset:offset + 25]:
-                for graph in graphs:
-                    for predicate in fields:
-                        branches.append(
-                            f'{{ GRAPH {_iri(graph)} {{ {_iri(subject)} {_iri(predicate)} ?value }} '
-                            f'BIND({_iri(subject)} AS ?s) BIND({_iri(predicate)} AS ?p) '
-                            f'BIND({json.dumps(graph)} AS ?graph) }}'
-                        )
-            wire = _query(proof, "SELECT (STR(?s) AS ?subject) ?graph "
-                          "(STR(?p) AS ?predicate) ?value WHERE { "
-                          + " UNION ".join(branches) + " } LIMIT 10000", timeout)["rows"]
+        for offset in range(0, len(pairs), DEFERRED_FIELD_BATCH):
+            batch = pairs[offset:offset + DEFERRED_FIELD_BATCH]
+            # The server may still refuse this batch's structural cost (a lower
+            # limit, more fields). Halve only that explicit refusal; retain
+            # both graphs and every field.
+            wire = _deferred_field_rows(proof, batch, graphs, fields, timeout)
             total += len(wire)
             if len(wire) >= 10000 or total >= 100000:
                 raise ValueError("deferral field budget reached")
-            expected = dict(pairs[offset:offset + 25])
+            expected = dict(batch)
             seen = set()
             for field in wire:
                 subject, graph, predicate, value = (
@@ -660,7 +863,9 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
             branches.append(
                 f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/status> "open" ; '
                 f"a <{SCHEMA}Action> . FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
-                'FILTER(STR(?owner) != "") } ' + priority + "} }"
+                'FILTER(STR(?owner) != "") } '
+                f'FILTER NOT EXISTS {{ ?s <{SCHEMA}keywords> "decision-needed" }} '
+                + priority + "} }"
             )
         query = (
             "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { "
@@ -685,8 +890,12 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
     """
     result = set()
     graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
-    for offset in range(0, len(rows), 250):
-        chunk = rows[offset : offset + 250]
+    # A correlated NOT EXISTS costs seconds per batch on a real board (61gx).
+    # Return eligibility and active-blocker evidence in one observation instead.
+    # Two evidence branches share the former 250-subject VALUES budget.
+    batch_size = 250 // 2
+    for offset in range(0, len(rows), batch_size):
+        chunk = rows[offset : offset + batch_size]
         expected = {row["id"] for row in chunk}
         branches = []
         for graph in graphs:
@@ -694,20 +903,33 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
                 bindings = " ".join(
                     _iri(SEEDS + "item/" + quote(row["id"], safe=""))
                     for row in chunk if row["status"] == state)
-                branches.append(
-                    f"{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {bindings} }} "
+                candidate = (
+                    f"VALUES ?s {{ {bindings} }} "
                     f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
-                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . "
-                    f"FILTER NOT EXISTS {{ ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+                    f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . ")
+                blocker = (
+                    f"?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
                     f"?blocker <{SEEDS}ontology/status> ?bs . "
-                    'FILTER(?bs != "closed" && ?bs != "tombstone") } } }')
-        query = "SELECT DISTINCT ?id WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
+                    'FILTER(?bs != "closed" && ?bs != "tombstone") ')
+                for evidence, extra in (("eligible", ""), ("blocked", blocker)):
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ {candidate}{extra} }} "
+                        f"BIND({json.dumps(graph)} AS ?graph) "
+                        f"BIND({json.dumps(evidence)} AS ?evidence) }}")
+        query = "SELECT DISTINCT ?id ?graph ?evidence WHERE { " + " UNION ".join(branches) + " } LIMIT 1000"
         wire = _query(proof, query, timeout)["rows"]
         if len(wire) >= 1000 or any(
-            not isinstance(r.get("id"), str) or r["id"] not in expected for r in wire
+            not isinstance(r.get("id"), str) or r["id"] not in expected
+            or r.get("graph") not in graphs
+            or r.get("evidence") not in ("eligible", "blocked") for r in wire
         ):
             raise ValueError("invalid readiness response")
-        result.update(r["id"] for r in wire)
+        eligible = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "eligible"}
+        blocked = {(r["graph"], r["id"]) for r in wire if r["evidence"] == "blocked"}
+        if not blocked <= eligible:
+            raise ValueError("invalid readiness evidence")
+        # A blocker in another graph must not suppress an eligible observation.
+        result.update(identifier for _, identifier in eligible - blocked)
     return result
 
 

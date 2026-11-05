@@ -41,6 +41,10 @@ ATTRIBUTED_UPSTREAM = "attributed-upstream"  # the composer signed it already
 BARE = "bare-by-design"                      # not prose; signing it would break it
 
 INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
+    ("admin_inbox.py", "sweep"): (
+        ATTRIBUTED_UPSTREAM,
+        "Batch forwards exact persisted bodies signed by _cmd_inbox, hash-bound "
+        "at enqueue; test_admin_inbox pins sender preservation through CLI+drain."),
     ("cli.py", "_kickoff_after_cycle"): (
         ATTRIBUTED_HERE,
         "anchor/resume kickoff after a completed cycle; sender is st agent cycle."),
@@ -78,6 +82,11 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
     ("cli.py", "_inbox_durable"): (
         ATTRIBUTED_UPSTREAM,
         "the same `msg` _cmd_inbox attributed, handed in as a parameter."),
+    ("delivery.py", "supervise"): (
+        ATTRIBUTED_UPSTREAM,
+        "replays the exact retained pre-type body, preserving its original sender. "
+        "test_delivery_custody::test_recovery_preserves_original_sender checks "
+        "that recovery neither drops nor replaces the signature."),
     ("cli.py", "_deliver_startup_inbox"): (
         ATTRIBUTED_HERE,
         "offline durable messages injected by the verified launcher; sender is "

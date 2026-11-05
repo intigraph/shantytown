@@ -1,0 +1,24 @@
+Script started on 2026-10-21 19:44:30-04:00 [COMMAND="bash docs/demos/plate-capacity/record.sh" <not executed on terminal>]
+BASE 188938041424e9dff3a233580e7742ad1de2bf7a; isolated fixture
+count before inbox closes: 10
+count after seven inbox closes: 10
+ordinary refusal names all counted IDs: False
+P0 assignment: refused
+P0 owner readback: None
+overflow admission records: 0
+count after three work repools: 7
+frozen crew count: 10 / current owner count: 7
+ordinary admission after actual work repools: refused
+
+CANDIDATE; same isolated fixture and probe
+count before inbox closes: 10
+count after seven inbox closes: 10
+ordinary refusal names all counted IDs: True
+P0 assignment: admitted
+P0 owner readback: worker
+overflow admission records: 1
+count after three work repools: 8
+frozen crew count: 10 / current owner count: 7
+ordinary admission after actual work repools: admitted
+
+Script done on 2026-10-21 19:44:30-04:00 [COMMAND_EXIT_CODE="0"]

@@ -1,0 +1,12 @@
+Script started on 2026-10-24 12:22:16-04:00 [COMMAND="bash docs/demos/stopped-owner-graph/run.sh" <not executed on terminal>]
+Synthetic in-memory graph receiver; no HTTP, deployment or native expiry claim.
+BASE 71cd44705c1d41cb5ef7a10cc588143da4a0b4b0
+{"trigger": "stop after launch, clock moved backwards", "local_state": "stopped", "graph_observations": 0, "held_work_source": "unavailable"}
+CANDIDATE edc6f885ee4acb2ccdf2351bb294f33579238a83
+{"trigger": "same stop after launch, clock moved backwards", "head_revision": 2, "state": "stopped", "complete": true}
+{"trigger": "repeat same stop", "extra_graph_writes": 0}
+{"trigger": "sanctioned restart, clock still backwards", "head_revision": 3, "state": "live", "complete": true}
+{"trigger": "replay older local revision", "result": "REFUSED; newer head retained"}
+Demo completed. The temporary base archive is retained for inspection.
+
+Script done on 2026-10-24 12:22:17-04:00 [COMMAND_EXIT_CODE="0"]

@@ -777,6 +777,137 @@ def test_partial_timeout_does_not_claim_remote_rejection(two_remotes, monkeypatc
     assert "did not" not in err
 
 
+@pytest.mark.parametrize('timeout', [None, 60, 600])
+def test_selected_origin_only_leaves_other_peer_unchanged(two_remotes, timeout):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, 'selected-feature')
+    command = ['repo', 'push', str(repo), 'ellie', '--remote', 'origin',
+               '--branch', 'feature']
+    if timeout is not None:
+        command.extend(['--timeout', str(timeout)])
+    assert main(command) == OK
+    assert _sha(origin, 'feature') == _sha(wt, 'HEAD')
+    assert not _git(forge, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')
+
+
+def test_unknown_selected_remote_never_pushes(two_remotes):
+    _, wt, *_ = two_remotes
+    result = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('typo',),
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert len(result) == 1 and not result[0].ok
+    assert 'unconfigured' in result[0].reason
+
+
+@pytest.mark.parametrize('reason', ['maintenance', ''])
+def test_frozen_set_refuses_before_any_peer_and_preserves_work(two_remotes, reason):
+    repo, wt, origin, forge = two_remotes
+    _commit(wt, 'held-feature')
+    dirty = wt / 'keep.txt'; dirty.write_text('unsaved')
+    _git(wt, 'config', 'st.push-freeze.local', reason)
+    result = push_every_remote(wt, 'HEAD', 'feature',
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert len(result) == 1 and not result[0].ok
+    assert 'write-frozen' in result[0].reason
+    assert all(not _git(peer, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')
+               for peer in (origin, forge))
+    assert dirty.read_text() == 'unsaved'
+
+
+def test_freeze_checks_all_effective_push_urls_before_any_push(two_remotes):
+    _, wt, *_ = two_remotes
+    _git(wt, 'remote', 'set-url', '--push', 'origin', 'https://allowed.example/team/repo')
+    _git(wt, 'remote', 'set-url', '--add', '--push', 'origin', 'https://frozen.example/team/repo')
+    _git(wt, 'config', 'st.push-freeze.frozen.example', 'maintenance')
+    result = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('origin',),
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert not result[0].ok and 'frozen.example' in result[0].reason
+
+
+def test_freeze_checks_push_instead_of_rewrite(two_remotes):
+    _, wt, *_ = two_remotes
+    _git(wt, 'remote', 'set-url', 'origin', 'fixture:team/repo')
+    _git(wt, 'config', 'url.https://frozen.example/.pushInsteadOf', 'fixture:')
+    _git(wt, 'config', 'st.push-freeze.frozen.example', 'maintenance')
+    result = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('origin',),
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert not result[0].ok and 'frozen.example' in result[0].reason
+
+
+def test_unreadable_freeze_config_refuses(two_remotes):
+    from shantytown import workspace
+    _, wt, *_ = two_remotes
+    def run(dest, *args):
+        if args[:2] == ('config', '--get-all'):
+            return 128, ''
+        return workspace._git(dest, *args)
+    result = push_every_remote(wt, 'HEAD', 'feature', run=run,
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert not result[0].ok and 'freeze state' in result[0].reason
+
+
+def test_unselected_frozen_host_does_not_block_selected_peer(two_remotes):
+    _, wt, origin, forge = two_remotes
+    _git(wt, 'remote', 'set-url', '--push', 'forge', 'https://frozen.example/team/repo')
+    _git(wt, 'config', 'st.push-freeze.frozen.example', 'maintenance')
+    result = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('origin',))
+    assert len(result) == 1 and result[0].ok and result[0].remote == 'origin'
+    assert _sha(origin, 'feature') == _sha(wt, 'HEAD')
+    assert not _git(forge, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')
+
+
+def test_global_hold_cannot_be_erased_by_local_empty_value(two_remotes, tmp_path, monkeypatch):
+    _, wt, *_ = two_remotes
+    global_config = tmp_path / 'global.gitconfig'
+    global_config.write_text('[st "push-freeze"]\nlocal = maintenance\n')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(global_config))
+    _git(wt, 'config', 'st.push-freeze.local', '')
+    result = push_every_remote(wt, 'HEAD', 'feature',
+                              push_run=lambda *a: pytest.fail('must not push'))
+    assert not result[0].ok and 'write-frozen' in result[0].reason
+
+
+def test_new_hold_after_first_publication_stops_remaining_peer(two_remotes):
+    from shantytown import workspace
+    _, wt, origin, forge = two_remotes
+    def publish_then_hold(dest, *args):
+        result = workspace._git_push(dest, *args)
+        _git(dest, 'config', 'st.push-freeze.local', 'new freeze')
+        return result
+    outcomes = push_every_remote(wt, 'HEAD', 'feature', push_run=publish_then_hold)
+    assert outcomes[0].remote == 'forge' and outcomes[0].ok
+    assert outcomes[1].remote == 'origin' and not outcomes[1].ok
+    assert _sha(forge, 'feature') == _sha(wt, 'HEAD')
+    assert not _git(origin, 'for-each-ref', '--format=%(refname)', 'refs/heads/feature')
+
+
+def test_host_with_unrepresentable_freeze_key_refuses(two_remotes):
+    _, wt, *_ = two_remotes
+    _git(wt, 'remote', 'set-url', '--push', 'origin', 'ssh://user@[::1]/team/repo')
+    outcomes = push_every_remote(wt, 'HEAD', 'feature', selected_remotes=('origin',),
+                                push_run=lambda *a: pytest.fail('must not push'))
+    assert not outcomes[0].ok and 'cannot be checked' in outcomes[0].reason
+@pytest.mark.parametrize("source_path", ["absolute", "relative"])
+def test_explicit_worktree_caller_mismatch_gives_actionable_remedy(
+        two_remotes, monkeypatch, capsys, source_path):
+    import shlex
+    from shantytown import cli
+    repo, canonical, origin, forge = two_remotes
+    extra = canonical.parent / 'ellie topic'
+    _git(repo, 'worktree', 'add', '-b', 'ellie/topic', str(extra), 'main')
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cli, 'push_every_remote',
+                        lambda *a: pytest.fail('caller mismatch must not contact peers'))
+    source = str(extra) if source_path == 'absolute' else str(Path('..') / extra.relative_to(repo.parent))
+    assert main(['repo', 'push', source, 'ellie', '--source-branch',
+                 'ellie/topic', '--branch', 'ellie/topic']) == REFUSED
+    message = capsys.readouterr().err
+    assert 'does not override the caller-checkout guard' in message
+    assert 'cd ' + shlex.quote(str(extra)) in message
+    assert 'use that absolute source path' in message
+    assert 'or name the intended branch with --source-branch' not in message
+    assert all(_sha(peer, 'main') == _sha(canonical, 'HEAD') for peer in (origin, forge))
+
+
 @pytest.mark.parametrize("timeout", [None, 60, 600])
 def test_bare_extra_source_refusal_names_literal_path_remedy(
         two_remotes, monkeypatch, capsys, timeout):
@@ -814,3 +945,41 @@ def test_bare_extra_source_refusal_names_literal_path_remedy(
     assert all(_sha(peer, "main") == before[0] for peer in (origin, forge))
     assert (_sha(canonical, "HEAD"), _git(canonical, "status", "--porcelain"),
             (repo / ".git" / "config").read_bytes()) == before
+
+
+def test_external_helper_transport_never_executes(two_remotes, tmp_path):
+    from shantytown.workspace import push_freeze_refusal
+    _, wt, *_ = two_remotes
+    marker = tmp_path / "helper-executed"
+    helper = tmp_path / "helper"
+    helper.write_text("#!/bin/sh\ntouch " + str(marker) + "\nexit 42\n")
+    helper.chmod(0o700)
+    _git(wt, "remote", "set-url", "origin", f"ext::{helper} frozen.example %S")
+    _git(wt, "config", "protocol.ext.allow", "always")
+    _git(wt, "config", "st.push-freeze.frozen.example", "private hold")
+    assert "unsupported" in push_freeze_refusal(wt, ["origin"])
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",))
+    assert not result[0].ok and "unsupported" in result[0].reason
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("url", ["custom://frozen.example/team/repo", "foo::command",
+                                  "ext::command", "file://foreign.example/repo"])
+def test_unsupported_transport_refuses_before_push(two_remotes, url):
+    _, wt, *_ = two_remotes
+    _git(wt, "remote", "set-url", "origin", url)
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",),
+                              push_run=lambda *a: pytest.fail("must not contact"))
+    assert not result[0].ok and "unsupported" in result[0].reason
+
+
+@pytest.mark.parametrize("url", ["ssh://user@allowed.example/team/repo",
+                                  "https://allowed.example/team/repo",
+                                  "git@allowed.example:team/repo", "file:///tmp/private-repo"])
+def test_supported_unfrozen_transport_reaches_selected_push(two_remotes, url):
+    _, wt, *_ = two_remotes
+    _git(wt, "remote", "set-url", "origin", url)
+    calls = []
+    result = push_every_remote(wt, "HEAD", "feature", selected_remotes=("origin",),
+                              push_run=lambda *a: (calls.append(a) or (0, "", "")))
+    assert calls and result[0].ok

@@ -62,7 +62,7 @@ def test_timeout_at_each_write_boundary_keeps_a_resume_path(tmp_path, marker, fa
     t = PartialBr(fail_write, after_commit)
     reason = 'resume_when: closed:item-2' if marker else 'wait for the window'
     with pytest.raises(DeferUnconfirmed, match='No automatic retry'):
-        dispatcher(tmp_path, t).defer('item-1', 'human', reason,
+        dispatcher(tmp_path, t).defer('item-1', 'external', reason,
                                       until='' if marker else '2026-12-01', dependency_reason='Required tested code path')
     assert len(t.writes) == fail_write  # no blind retry after an indeterminate result
     assert t.row['status'] != 'deferred' or (
@@ -74,7 +74,7 @@ def test_timeout_at_each_write_boundary_keeps_a_resume_path(tmp_path, marker, fa
 def test_missing_preparation_never_reaches_status_write(tmp_path, drop):
     t = PartialBr(drop=drop)
     with pytest.raises(TrackerWriteLost):
-        dispatcher(tmp_path, t).defer('item-1', 'human', 'reason', until='2026-12-01')
+        dispatcher(tmp_path, t).defer('item-1', 'external', 'reason', until='2026-12-01')
     assert t.row['status'] == 'open'
     assert len(t.writes) == 1
 
@@ -83,14 +83,14 @@ def test_stale_date_does_not_satisfy_requested_condition(tmp_path):
     t = PartialBr(drop='--defer')
     t.row['defer_until'] = '2026-10-01'
     with pytest.raises(TrackerWriteLost):
-        dispatcher(tmp_path, t).defer('item-1', 'human', 'reason', until='2026-12-01')
+        dispatcher(tmp_path, t).defer('item-1', 'external', 'reason', until='2026-12-01')
     assert t.row['status'] == 'open'
 
 
 def test_already_deferred_without_condition_is_not_a_successful_noop(tmp_path):
     t = PartialBr()
-    t.row.update(status='deferred', labels=['blocked:human'])
-    r = dispatcher(tmp_path, t).defer('item-1', 'human', 'reason', until='2026-12-01')
+    t.row.update(status='deferred', labels=['blocked:external'])
+    r = dispatcher(tmp_path, t).defer('item-1', 'external', 'reason', until='2026-12-01')
     assert not r.noop
     assert t.row['defer_until'] == '2026-12-01'
 
@@ -98,7 +98,7 @@ def test_already_deferred_without_condition_is_not_a_successful_noop(tmp_path):
 def test_cli_reports_indeterminate_write_without_success(tmp_path, monkeypatch, capsys):
     t = PartialBr(2, True)
     monkeypatch.setattr(cli, '_wire', lambda a: dispatcher(tmp_path, t))
-    rc = cli.main(['defer', 'item-1', 'human', '--reason', 'reason', '--until', '2026-12-01'])
+    rc = cli.main(['defer', 'item-1', 'external', '--reason', 'reason', '--until', '2026-12-01'])
     out = capsys.readouterr()
     assert rc == cli.CANNOT_TELL
     assert 'COULD NOT CONFIRM' in out.err

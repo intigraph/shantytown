@@ -57,6 +57,7 @@ from .answer import PartialAnswer
 from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_anchor, is_decision, is_message
+from .ask_visibility import is_ask
 from .files import FilesRegistry, FilesTracker, plate as files_plate
 from .policy import NullRanker, PolicyRanker
 from .protocols import RankUnavailable
@@ -336,6 +337,18 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
 
 def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
           root: Path | None = None, *, payload: dict | None = None) -> int:
+    from .ephemeral import is_ephemeral_name
+    if is_ephemeral_name(me):
+        # AN EPHEMERAL AGENT'S TURN BOUNDARY IS NOT A CREW STOP (aegis-c01c.2).
+        # Its one report to the administrator is the job RESULT; a per-turn
+        # stop event rendered as "STOPPED — re-dispatch". Only its bounds run here.
+        if root is not None:
+            if _ephemeral_bounds(root, me, _my_context_k(reg, panes, me)) == 'unproved':
+                return 1
+        return 0
+    if root is not None:
+        from .stop_failure import clear_recovered
+        clear_recovered(root, me)
     try:
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
@@ -425,6 +438,63 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
     return 0
 
 
+def _ephemeral_bounds(root: Path, me: str, context_k, now: float | None = None,
+                      end=None) -> str | None:
+    """Enforce an ephemeral agent's bounds at its own turn boundary (aegis-c01c.2).
+
+    EVENT-DRIVEN, not polled: every Stop counts a turn and checks the deadline,
+    turn and context budgets. The FIRST time a bound is hit the agent is told,
+    once, to report now (so the administrator gets a real summary, not just
+    "timeout"). The NEXT stop past a bound ends the job here, from the hook:
+    result, administrator event, item comment, detached teardown. `st fleet tend`
+    is the backstop for an agent that never stops again.
+    """
+    from . import ephemeral as eph
+    if not eph.is_ephemeral_name(me):
+        return None
+    try:
+        now = time.time() if now is None else now
+        from . import job_launch
+        bound = job_launch.local_job()
+        if bound:
+            spec, digest = bound
+            if spec['principal'] != me or spec['root'] != str(Path(root).resolve()):
+                raise eph.Refused('turn differs from protected job binding')
+            import hashlib
+            import secrets
+            token = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
+            job_launch.mailbox_call(spec, digest, 'submit',
+                {'kind': 'turn', 'token': token, 'context_k': context_k})
+            return 'queued'
+        cause = eph.on_stop(root, me, context_k, now)
+        if not cause:
+            return None
+        rec = eph.read(root, me)
+        if not rec.get("bound_warned"):
+            rec["bound_warned"] = cause
+            eph.write(root, rec)
+            reason = (f"EPHEMERAL BOUND REACHED ({cause}). Stop working now and report "
+                      f"exactly once: `st agent spawn --report --verdict <blocked|done|...> "
+                      f"--summary-file -` with what you found. Your next stop ends this "
+                      f"job either way.")
+            print(json.dumps({"decision": "block", "reason": reason}))
+            return "warned"
+        if end is None:
+            from . import cli
+            a = cli._parse_args(["--root", str(root), "agent", "spawn", "--list"])
+            a.root, a.registry = Path(root), None
+            end = lambda name, verdict, summary, why: cli._spawn_end(
+                a, name, verdict, summary, why, detached=True)
+        end(me, "failed", f"ended by its own bounds ({cause}) without reporting", cause)
+        return "ended"
+    except Exception as exc:  # noqa: BLE001 — unknown bounds must stop further work
+        print(f"stop_event: ephemeral bounds UNKNOWN for {me}: {type(exc).__name__}",
+              file=sys.stderr)
+        print(json.dumps({'decision': 'block', 'reason':
+              'Ephemeral turn accounting is unproved. Stop work; retain this job for controller recovery.'}))
+        return 'unproved'
+
+
 # --- the HAUL advance (the sequenced-worker self-feed) -----------------------
 
 # The mid-haul HANDOFF line, in k tokens: 60% OF THE ~1M WINDOW (Stiwi's call,
@@ -508,7 +578,7 @@ def _bd_json(args: list[str], cwd: str | None, root=None, reg=None) -> list[dict
     return json.loads(r.stdout)
 
 
-def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
+def _haul_active(me: str, cwd: str | None, root=None, reg=None, *, held_asks=None) -> list[dict]:
     if root is not None:
         from .feed_check import _br_tracker
         tracker = _br_tracker(root, reg)
@@ -516,10 +586,16 @@ def _haul_active(me: str, cwd: str | None, root=None, reg=None) -> list[dict]:
         if project is not None:
             rows = project(me)
             if rows is not None:
-                return _assigned_to(me, rows.exact())
+                values = rows.exact()
+                if held_asks is not None:
+                    held_asks.extend(_owned_asks(me, values))
+                return _assigned_to(me, values)
     # Only a backend without the native projection keeps the old CLI path.
     args = ["list", "--status", "in_progress", "--limit", "0"]
-    return _assigned_to(me, _bd_json(args, cwd, root=root, reg=reg))
+    values = _bd_json(args, cwd, root=root, reg=reg)
+    if held_asks is not None:
+        held_asks.extend(_owned_asks(me, values))
+    return _assigned_to(me, values)
 
 
 def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
@@ -549,10 +625,34 @@ def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
         assignee = b.get("assignee") or ""
         if (assignee.split("/")[-1] == me
                 and not is_message(b.get("title", ""))
+                and not is_ask(b)
                 and not is_decision(b.get("labels"))
                 and not is_anchor(b.get("labels"))):
             out.append(b)
     return out
+
+
+def _owned_asks(me, rows):
+    return [row for row in rows
+            if (row.get("assignee") or "").split("/")[-1] == me and is_ask(row)]
+
+
+def _human_plate_notice(root, reg, panes, me, asks):
+    """Report to the existing durable lead stream, never wake the worker."""
+    ids = sorted({row["id"] for row in asks})
+    detail = "plate blocked on human: " + ", ".join(ids) + "; ownership and visibility retained"
+    print(f"haul: {me} {detail}", file=sys.stderr)
+    if root is None:
+        return
+    try:
+        routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
+                             catalog=deployment_catalog(root))
+        FilesEvents(root / "events").persist(
+            to=routing.to, frm=me, reason=routing.reason.value if routing.reason else None,
+            rose=routing.rose, detail=detail,
+            key="haul-human:" + me + ":" + ",".join(ids))
+    except Exception as error:
+        print(f"haul human-plate notice UNKNOWN: {type(error).__name__}", file=sys.stderr)
 
 
 def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
@@ -587,6 +687,15 @@ def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
         if note:
             print(note, file=sys.stderr)
         return False, limits, spend
+    # A ceiling prevents further work even while the pane stays visible. This
+    # records work custody only; it never kills/restarts or transfers an agent.
+    try:
+        from . import cli
+        from types import SimpleNamespace
+        cli._owned_work_tick(SimpleNamespace(root=root, reason="session ceiling"),
+                             card=FilesRegistry(root / "crew").get(me), ceiling=True)
+    except Exception:
+        print("stopped-owner ceiling evidence UNKNOWN", file=sys.stderr)
     if sb.already_reported(root, me, spend):
         return True, limits, spend       # told once — let the session end
     sb.mark_reported(root, me, spend, ceiling)
@@ -617,8 +726,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     advance must never trap a worker at its own stop."""
     try:
         card = reg.get(me)
-        from . import context_hint
-        if context_hint.emit(root, card):
+        from .stop_policy import stop_advice
+        if stop_advice(root, card):
             return 0
         from . import harness as harness_mod
         harness_name = harness_mod.name_for(card, root=root)
@@ -651,7 +760,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         cwd = bd_cwd(reg)
         # Resume only this owner's anchors: global SDK hydration made every
         # stop pay for other workers' active work (aegis-dnw).
-        active = _haul_active(me, cwd, root=root, reg=reg)
+        held_asks = []
+        active = _haul_active(me, cwd, root=root, reg=reg, held_asks=held_asks)
         resume = active[0] if (active and
                                harness_name == "codex") else None
         if active and resume is None:
@@ -694,6 +804,9 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             all_ready = _bd_json(["ready", "--limit", "0"], cwd, root=root, reg=reg)
             mine = _assigned_to(me, all_ready)
             if not mine:
+                asks = held_asks + _owned_asks(me, all_ready)
+                if asks:
+                    _human_plate_notice(root, reg, panes, me, asks)
                 return 0
             # A ready assignment is not governor admission (aegis-4kd6ux).
             # Filter before claiming, spending a session item, or requesting a
@@ -701,7 +814,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             from .feed_check import admitted_haul, haul_governor_verdict
             mine = admitted_haul(
                 mine, card, haul_governor_verdict(root, card),
-                lambda msg: print(msg, file=sys.stderr))
+                lambda msg: print(msg, file=sys.stderr), root=root)
             if not mine:
                 return 0
 
@@ -803,6 +916,9 @@ def _liveness(reg: FilesRegistry, panes, shows_ready_ui, name: str,
     # into a working agent, spent on a phantom. `st crew` had passed attrs since
     # aegis-x6xh; this path had not, so the fleet had two classifiers' worth of
     # answers from one classifier. One capture mode, one verdict.
+    from .stop_failure import pane_state
+    if pane_state(getattr(panes, "delivery_root", None), card.pane) == "safeguard-blocked":
+        return "safeguard-blocked"
     screen = panes.capture(card.pane, attrs=True)
     # awaiting_answer is optional so a caller with no runtime still gets a verdict
     # — one degraded to `?`, exactly as before, rather than a crash.
@@ -877,6 +993,26 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
     """
     if not events:
         return ""
+    stalled = [e for e in events if e.reason == 'delivery-stalled']
+    events = [e for e in events if e.reason != 'delivery-stalled']
+    delivery_lines = ['⚠ Unconfirmed message delivery — inspect retained inbox/input:'] if stalled else []
+    delivery_lines += [f'  - {e.frm} ({_age(e.ts, now)}): {e.detail}' for e in stalled]
+    results = [e for e in events if e.reason == "ephemeral-result"]
+    events = [e for e in events if e.reason != "ephemeral-result"]
+    result_lines = (["Ephemeral job results — FINISHED jobs (verdict + item), not crew "
+                     "to re-dispatch; the agents are already torn down:"]
+                    if results else [])
+    result_lines += [f"  - {e.item or '?'} ({_age(e.ts, now)}): {e.detail}"
+                     for e in sorted(results, key=lambda e: (e.ts, e.id))]
+    failures = [e for e in events if e.reason == "job-failed"]
+    events = [e for e in events if e.reason != "job-failed"]
+    failure_lines = ["⚠ Scheduled job failures — inspect the named history; "
+                     "these are alerts, not agent stops:"] if failures else []
+    failure_lines += [f"  - {e.frm} ({_age(e.ts, now)}): {e.detail}"
+                      for e in sorted(failures, key=lambda e: (e.ts, e.id))]
+    failure_lines = result_lines + delivery_lines + failure_lines
+    if not events:
+        return "\n".join(failure_lines)
     latest: dict[str, StopEvent] = {}
     for e in sorted(events, key=lambda x: (x.ts, x.id)):
         latest[e.frm] = e
@@ -892,7 +1028,7 @@ def _compose_governance(events: list[StopEvent], now: float) -> str:
         # _age already carries its own "ago" (and "age unknown" for an unstamped
         # event, which must NOT get one appended) — do not add a second.
         lines.append(f"  - {name} — empty hook as of {_age(e.ts, now)}{rose}")
-    return "\n".join(lines)
+    return "\n".join(failure_lines + lines)
 
 
 def _compose_reason(events: list[StopEvent], verdicts: dict, now: float,
@@ -1133,6 +1269,25 @@ def _main(argv: list[str] | None = None) -> int:
         print("usage: python -m shantytown.stop_event send|drain|haul [--root DIR]",
               file=sys.stderr)
         return 2
+    # A protected job has no controller tmux socket or shared hold ledger.
+    # Resolve the kernel-bound principal before any environment/card fallback.
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        bound = job_launch.local_job()
+        if bound:
+            spec, _digest = bound
+            root = Path(spec['root'])
+            if '--root' in argv and _root(argv).resolve() != root:
+                raise IdentityError('stop root differs from protected job binding')
+            if mode != 'send':
+                return 0  # jobs neither drain crew messages nor advance a haul
+            return 1 if _ephemeral_bounds(root, spec['principal'], None) == 'unproved' else 0
+    except (IdentityError, OSError, ValueError) as error:
+        print(f'stop_event: protected job identity UNKNOWN: {type(error).__name__}', file=sys.stderr)
+        print(json.dumps({'decision': 'block', 'reason':
+              'Protected job turn identity is unproved. Stop work for controller recovery.'}))
+        return 1
     me_env = os.environ.get("SHANTY_AGENT")
     if not me_env:
         print("stop_event: $SHANTY_AGENT is unset — cannot resolve identity",
@@ -1151,6 +1306,19 @@ def _main(argv: list[str] | None = None) -> int:
         agent_hold.finish_turn(root, me)
         return result
     if mode == "haul":
+        try:
+            from . import config
+            cfg, _error = config.load_or_default(root)
+            if cfg.overdue_enabled and cfg.overdue_spec_changes:
+                if _ceiling_took_the_stop(root,me)[0]:
+                    return 0
+                from .spec_boundary import at_boundary
+                notice = at_boundary(root,me,reg)
+                if notice:
+                    print(json.dumps({"decision":"block","reason":notice}))
+                    return 0
+        except Exception as error:
+            print(f"spec boundary UNKNOWN: {type(error).__name__}; no repeated wake", file=sys.stderr)
         return _haul(reg, panes, me, root)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
@@ -1158,7 +1326,7 @@ def _main(argv: list[str] | None = None) -> int:
     # Wire the fleet-state readers + ranker so an administrator's drain is enriched
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
-    # default) unless SHANTY_RANKER=policy asks for Hank/Quipu weighting.
+    # default) unless SHANTY_RANKER=policy asks for Yupana/Quipu weighting.
     plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,

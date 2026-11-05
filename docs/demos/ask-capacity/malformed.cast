@@ -1,0 +1,5 @@
+{"version": 2, "width": 100, "height": 24, "title": "Human decisions and active capacity"}
+[0.001683215145021677, "o", "BEFORE 5a000cc04d894d5ef05afe8d06558a2b2c445cc6\r\n$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/malformed-probe.py\r\n"]
+[0.04601928708143532, "o", "Ten owned rows with labels={\"desk\": false}\r\nCounted work: 0\r\nNew P1 admission: allowed\r\nTen ordinary rows; incoming candidate has labels={\"desk\": false}\r\nCounted work: 10\r\nNew P1 admission: allowed\r\n"]
+[0.046022558119148016, "o", "AFTER 71e89f4fa761c234d72a2d193afd34991a0a29dd\r\n$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/malformed-probe.py\r\n"]
+[0.08132420107722282, "o", "Ten owned rows with labels={\"desk\": false}\r\nCounted work: 10\r\nNew P1 admission: refused\r\nTen ordinary rows; incoming candidate has labels={\"desk\": false}\r\nCounted work: 10\r\nNew P1 admission: refused\r\n"]

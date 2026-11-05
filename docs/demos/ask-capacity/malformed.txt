@@ -1,0 +1,16 @@
+BEFORE 5a000cc04d894d5ef05afe8d06558a2b2c445cc6
+$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/malformed-probe.py
+Ten owned rows with labels={"desk": false}
+Counted work: 0
+New P1 admission: allowed
+Ten ordinary rows; incoming candidate has labels={"desk": false}
+Counted work: 10
+New P1 admission: allowed
+AFTER 71e89f4fa761c234d72a2d193afd34991a0a29dd
+$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/malformed-probe.py
+Ten owned rows with labels={"desk": false}
+Counted work: 10
+New P1 admission: refused
+Ten ordinary rows; incoming candidate has labels={"desk": false}
+Counted work: 10
+New P1 admission: refused

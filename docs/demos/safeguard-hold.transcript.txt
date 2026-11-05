@@ -1,0 +1,15 @@
+Script started on 2026-10-23 12:11:21-04:00 [COMMAND="venv/bin/python demo.py" <not executed on terminal>]
+Same incident prefix: before=idle; after=safeguard-blocked
+Two tend report passes: automatic actions=0; durable administrator messages=1
+Ordinary input: REFUSED; pane messages=0
+cleared tail: no safeguard finding
+old scrollback: no safeguard finding
+auth: no safeguard finding
+usage: no safeguard finding
+Claude StopFailure registration: before=False; after=True
+Two synthetic hook deliveries: persisted stop-failure events=1; durable administrator messages=1
+Primary hook hold without pane banner: safeguard-blocked
+Running-process-selected settings + launch snapshot: VERIFIED in private fixture
+Real provider safeguard error enum: UNKNOWN (no real API error triggered)
+
+Script done on 2026-10-23 12:11:23-04:00 [COMMAND_EXIT_CODE="0"]

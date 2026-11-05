@@ -1,0 +1,21 @@
+Script started on 2026-11-04 07:10:31-05:00 [COMMAND="sh .work/21m/demo.sh" <not executed on terminal>]
+$ python3 context-nudge.py --source BASE_42700874
+{"probe": "55% PostToolUse preparation", "emitted": false, "feedback": ""}
+{"probe": "55% Stop preparation", "emitted": false, "feedback": ""}
+{"probe": "70% first Stop handoff", "emitted": true, "feedback": "CONTEXT HINT: context 70% (700,000 of 1,000,000)"}
+{"probe": "70% busy observation +30s", "emitted": false, "feedback": ""}
+{"probe": "70% busy observation +60s", "emitted": false, "feedback": ""}
+{"probe": "70% busy observation +90s", "emitted": false, "feedback": ""}
+{"probe": "70% Stop handoff +120s", "emitted": false, "feedback": ""}
+{"auto_cycle_scheduled": false, "sticky_work_ceiling": false}
+$ python3 context-nudge.py --source CANDIDATE
+{"probe": "55% PostToolUse preparation", "emitted": true, "feedback": "CONTEXT NUDGE: context 55% (550,000 of 1,000,000)"}
+{"probe": "55% Stop preparation", "emitted": true, "feedback": "CONTEXT NUDGE: context 55% (550,000 of 1,000,000)"}
+{"probe": "70% first Stop handoff", "emitted": true, "feedback": "CONTEXT HINT: context 70% (700,000 of 1,000,000)"}
+{"probe": "70% busy observation +30s", "emitted": false, "feedback": ""}
+{"probe": "70% busy observation +60s", "emitted": false, "feedback": ""}
+{"probe": "70% busy observation +90s", "emitted": false, "feedback": ""}
+{"probe": "70% Stop handoff +120s", "emitted": true, "feedback": "CONTEXT HINT: context 70% (700,000 of 1,000,000)"}
+{"auto_cycle_scheduled": false, "sticky_work_ceiling": false}
+
+Script done on 2026-11-04 07:10:31-05:00 [COMMAND_EXIT_CODE="0"]

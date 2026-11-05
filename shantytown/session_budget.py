@@ -97,7 +97,14 @@ class BudgetError(ValueError):
 class ContextLimits:
     """An advisory occupancy threshold, independent of the sticky work ceiling."""
     window: int | None = None
-    threshold_pct: float = 70.0
+    threshold_pct: float = 50.0
+    hard_pct: float = 75.0
+    nudge_pct: float | None = None
+    repeat_seconds: int = 120
+
+    @property
+    def nudge_at(self):
+        return self.nudge_pct if self.nudge_pct is not None else max(self.threshold_pct / 2, self.threshold_pct - 15)
 
 
 @dataclass(frozen=True)
@@ -202,7 +209,7 @@ def parse(tbl: dict) -> Limits:
     if not tbl:
         return Limits()
     known = {"max_hours", "max_items", "max_risk", "on_signal_lost",
-             "context_window", "context_threshold_pct", "context_by_role", "context_by_agent"}
+             "context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds", "context_by_role", "context_by_agent"}
     for k in tbl:
         if k not in known:
             raise BudgetError(
@@ -228,16 +235,26 @@ def parse(tbl: dict) -> Limits:
     def context(values, inherited=None):
         window = values.get("context_window", inherited.window if inherited else None)
         pct = values.get("context_threshold_pct",
-                         inherited.threshold_pct if inherited else 70.0)
+                         inherited.threshold_pct if inherited else 50.0)
+        hard = values.get("context_hard_pct", inherited.hard_pct if inherited else 75.0)
         if window is not None and (type(window) is not int or window <= 0):
             raise BudgetError("[session_budget] context_window must be a positive integer")
         if (type(pct) not in (float, int) or not math.isfinite(pct)
                 or not 0 < pct < 100):
             raise BudgetError("[session_budget] context_threshold_pct must be finite and between 0 and 100")
-        return ContextLimits(window, float(pct))
+        if (type(hard) not in (float, int) or not math.isfinite(hard)
+                or not pct < hard <= 80):
+            raise BudgetError("[session_budget] context_hard_pct must exceed context_threshold_pct and be at most 80")
+        nudge = values.get("context_nudge_pct", inherited.nudge_pct if inherited else None)
+        repeat = values.get("context_nudge_repeat_seconds", inherited.repeat_seconds if inherited else 120)
+        if nudge is not None and (type(nudge) not in (float, int) or not math.isfinite(nudge) or not 0 < nudge < pct):
+            raise BudgetError("[session_budget] context_nudge_pct must be finite, positive and below context_threshold_pct")
+        if type(repeat) is not int or not 1 <= repeat <= 3600:
+            raise BudgetError("[session_budget] context_nudge_repeat_seconds must be an integer from 1 to 3600")
+        return ContextLimits(window, float(pct), float(hard), nudge, repeat)
 
     base = (context(tbl) if any(k in tbl for k in
-            ("context_window", "context_threshold_pct")) else None)
+            ("context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds")) else None)
     def overrides(key):
         entries = tbl.get(key, {})
         if not isinstance(entries, dict):
@@ -245,7 +262,7 @@ def parse(tbl: dict) -> Limits:
         result = {}
         for name, values in entries.items():
             if (not isinstance(values, dict) or not values
-                    or set(values) - {"context_window", "context_threshold_pct"}):
+                    or set(values) - {"context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds"}):
                 raise BudgetError(f"[session_budget.{key}.{name}] expected context_window/context_threshold_pct")
             result[name] = context(values, base)
         return result

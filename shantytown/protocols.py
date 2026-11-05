@@ -198,6 +198,8 @@ class Agent:
     account: str | None = None    # named subscription lane; None preserves legacy routing
     auto_failover: bool | None = None  # per-agent opt-in; None preserves projection
 
+    harness_options: dict | None = None  # saved per-program launch preferences; appended for positional compatibility
+
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.
 
@@ -289,6 +291,12 @@ class WorkItem:
     updated_at: str | None = None
     # Terminal evidence is data, appended to preserve positional construction.
     close_reason: str | None = None
+    rank: str | None = None
+    due_at: str | None = None
+    created_at: str | None = None
+    # Admission must distinguish detector/delivery records from existing work.
+    # Carry this from the same item read; append to preserve positional callers.
+    labels: tuple = ()
 
 
 @runtime_checkable
@@ -375,9 +383,21 @@ class Tracker(Protocol):
     def create(self, title: str, **fields) -> WorkItem: ...
 
 
+@dataclass(frozen=True)
+class SubmissionObserved:
+    """Adapter evidence for this exact body, not merely send-keys success."""
+    pane: str
+    body_sha256: str
+
+    def matches(self, pane: str, text: str) -> bool:
+        import hashlib
+        return (self.pane == pane
+                and self.body_sha256 == hashlib.sha256(text.encode()).hexdigest())
+
+
 @runtime_checkable
 class Panes(Protocol):
-    def send(self, pane: str, text: str) -> None: ...
+    def send(self, pane: str, text: str) -> SubmissionObserved | None: ...
     def exists(self, pane: str) -> bool: ...
     # history=0 (default) returns the VISIBLE pane — what triage must judge on,
     # since a marker in scrollback is an agent TALKING about a state, not being
@@ -390,8 +410,10 @@ class Panes(Protocol):
     # input, both of which render as `❯ <text>`, and plain capture strips exactly
     # that bit. An adapter that cannot supply attributes returns plain text and
     # triage answers UNKNOWN — which is a refusal, not a guess.
+    # check=True propagates a failed native read as CalledProcessError instead
+    # of an ambiguous empty string; default callers keep their existing result.
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str: ...
+                *, timeout: float | None = None, check: bool = False) -> str: ...
     # The launch command line of the process in the pane, or None if it cannot be
     # read. A READ of the session surface, exactly like exists/capture — it adds
     # no launch or handoff verb, so the #5 invariant (Panes cannot express a
@@ -481,7 +503,7 @@ class ContextUnavailable(CouldNotLook):
 class RankUnavailable(CouldNotLook):
     """A ranker could not compute weights. NOT "nothing to rank" — "I could not
     look". Same shape as ContextUnavailable, and for the same reason: a down
-    ranker (Hank/Quipu unreachable) and a ranker that found nothing to weight
+    ranker (Yupana/Quipu unreachable) and a ranker that found nothing to weight
     return along different paths. The drain CATCHES this and degrades to the
     rule-based order (workflow.prioritize) — a wrong weight, or a wedged hook, is
     worse than an unweighted one. A ranker must never silently return unweighted
@@ -491,13 +513,13 @@ class RankUnavailable(CouldNotLook):
 @runtime_checkable
 class Ranker(Protocol):
     """Weight prioritization candidates by an external signal (structural blast
-    radius via Hank, governed policy via Quipu).
+    radius via Yupana, governed policy via Quipu).
 
     ONE method, like Context. It takes the candidates and returns them with
     `weight`/`why` populated; it MUST raise RankUnavailable rather than return
     them unweighted when it could not reach its backend. The default impl
     (policy.NullRanker) needs no backend and returns them unchanged — the leak
-    detector that proves the whole feature runs without Hank/Quipu.
+    detector that proves the whole feature runs without Yupana/Quipu.
 
     RETURNS AN `Answer`, NOT A BARE LIST (aegis-q0bzh). `RankUnavailable` already
     covers "I could not reach the backend at all". It does NOT cover the case that
@@ -603,10 +625,11 @@ def is_blocked(status: str | None, ident: str, ready_ids: "set[str] | None") -> 
 
 
 def plate_key(status: str | None, priority: "int | None", ident: str,
-              ready_ids: "set[str] | None" = None) -> tuple:
+              ready_ids: "set[str] | None" = None, *, rank=None, due_at=None,
+              created_at=None) -> tuple:
     """The ONE plate ordering, shared by every backend (aegis-fxx3y).
 
-    Four keys, in this order, and each one earns its place:
+    Lifecycle/readiness precede priority, explicit work rank, due and age:
 
     1. **in-hand before not-started** — the pre-existing contract, unchanged.
     2. **unblocked before blocked**, within a rank. This is the fix. A
@@ -617,7 +640,9 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     3. **priority**, stated ones first and in order. Unstated sorts last rather
        than defaulting: `_priority` refuses to invent a 2, and an item whose
        importance nobody stated must not outrank a stated P1 by accident.
-    4. **id**, last, purely as a deterministic tiebreak.
+    4. **work rank**, exact decimals, ranked before unranked within priority.
+       Ties use due then creation time; unranked uses oldest first.
+    5. **id**, last, purely as a deterministic tiebreak.
 
     Key 4 used to be key 2, and that was the whole defect: among equal-status
     items the winner was decided ALPHABETICALLY. `aegis-8fydl` beat `aegis-rl1kg`
@@ -632,5 +657,53 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
         _PLATE_RANK.get(status, 2),
         1 if is_blocked(status, ident, ready_ids) else 0,
         (1, 0) if priority is None else (0, priority),
+        *rank_order(rank, due_at, created_at),
         ident,
     )
+
+
+def time_order(value) -> tuple:
+    """Compare aware instants exactly without changing source spelling.
+
+    datetime truncates fractional seconds past microseconds. Keep the supported
+    nine digits separately, and subtract offsets using integer seconds only.
+    Missing optional dates retain the legacy oldest-first fallback; a supplied
+    date that cannot establish an instant is uncertainty, not an empty key.
+    """
+    import re
+    from datetime import datetime
+    if value is None:
+        return (0, 0, 0)
+    matched = re.fullmatch(
+        r"(\d{4}-\d\d-\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,9}))?(Z|[+-]\d\d:\d\d)",
+        value if isinstance(value, str) else "")
+    if not matched:
+        raise ValueError("time ordering evidence malformed or lacks timezone")
+    day, hour, minute, second, fraction, zone = matched.groups()
+    # Validate calendar and clock independently of fractional precision.
+    date = datetime.fromisoformat(f"{day}T{hour}:{minute}:{second}")
+    offset = 0
+    if zone != "Z":
+        hours, minutes = int(zone[1:3]), int(zone[4:])
+        if hours > 14 or minutes > 59 or (hours == 14 and minutes):
+            raise ValueError("time ordering offset out of bounds")
+        offset = (hours * 3600 + minutes * 60) * (1 if zone[0] == "+" else -1)
+    seconds = date.toordinal() * 86400 + date.hour * 3600 + date.minute * 60 + date.second - offset
+    return (1, seconds, int((fraction or "").ljust(9, "0")))
+
+
+def rank_order(rank=None, due_at=None, created_at=None) -> tuple:
+    """Exact Seeds decimal order; unranked retains oldest-first fallback."""
+    from decimal import Decimal, InvalidOperation
+    import re
+    if rank is None:
+        return (True, Decimal(0), True, time_order(None), time_order(created_at))
+    if not isinstance(rank, str) or not re.fullmatch(r"-?[0-9]+(?:\.[0-9]{1,9})?", rank):
+        raise ValueError("rank ordering evidence malformed")
+    try:
+        number = Decimal(rank)
+    except InvalidOperation as error:
+        raise ValueError("rank ordering evidence malformed") from error
+    if not number.is_finite() or abs(number) > Decimal("9000000000000000000"):
+        raise ValueError("rank ordering evidence out of bounds")
+    return (False, number, due_at is None, time_order(due_at), time_order(created_at))

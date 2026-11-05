@@ -1,0 +1,11 @@
+Script started on 2026-10-20 11:40:25-04:00 [COMMAND="python3 docs/demos/real-work-capacity/probe.py" <not executed on terminal>]
+SOURCE fixture: baseline 1434b3df1c80c92055ad8d6a470c15b62d81b54e
+candidate module sha256 fefe4cd394bbd9297b666f555597f1884ac972b9bf40ea02b0cf83d5e53ff327
+SAME input: 17 records = 2 implementation tasks + 8 alarms + 7 messages
+BEFORE capacity count: 10
+AFTER capacity count: 2
+10 real tasks: overflow preserved in pool; one lead-notice callback
+Alarm + inbox delivery: delivered; real count remains 10
+FIXTURE ONLY: file store/temporary HOME; no live assignment or installed recovery claim
+
+Script done on 2026-10-20 11:40:25-04:00 [COMMAND_EXIT_CODE="0"]

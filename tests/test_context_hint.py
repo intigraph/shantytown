@@ -47,7 +47,7 @@ def test_actual_stop_paths_emit_once_even_with_active_work(tmp_path, monkeypatch
     assert message["systemMessage"] == message["reason"]
     assert "70%" in message["reason"]
     assert "st agent cycle --self --checkpoint-file <notes-file>" in message["reason"]
-    assert "advisory" in message["reason"]
+    assert "Handoff decision" in message["reason"]
     assert not ch.emit(tmp_path, card, payload)
     assert capsys.readouterr().out == ""
     assert not (tmp_path / "notify/cycle-requests.json").exists()
@@ -85,7 +85,7 @@ def test_below_threshold_rearms_and_new_session_rearms(tmp_path, capsys):
     card, payload = world(tmp_path)
     assert ch.emit(tmp_path, card, payload)
     turn(payload["transcript_path"], 699)
-    assert not ch.emit(tmp_path, card, payload)
+    assert ch.emit(tmp_path, card, payload)  # earlier preparation band
     turn(payload["transcript_path"], 701)
     assert ch.emit(tmp_path, card, payload)
     assert not ch.emit(tmp_path, card, payload)
@@ -140,7 +140,7 @@ def test_role_override_inherits_and_omission_stays_off():
     assert sb.parse({}).context_for("worker") is None
     limits = sb.parse({"context_window": 1000, "context_by_role": {
         "lead": {"context_threshold_pct": 60}}})
-    assert limits.context_for("worker") == sb.ContextLimits(1000, 70)
+    assert limits.context_for("worker") == sb.ContextLimits(1000, 50)
     assert limits.context_for("lead") == sb.ContextLimits(1000, 60)
     assert sb.parse({"context_threshold_pct": 70}).context.window is None
 
@@ -244,7 +244,7 @@ def test_partial_rollout_measures_native_capacity_and_exposes_missing_window(
             "model_context_window": 1000, "last_token_usage": {"input_tokens": 750}}}}))
     assert ch.emit(tmp_path, card, payload), "native capacity resolves without a stanza"
     reason = json.loads(capsys.readouterr().out)["reason"]
-    assert "75%" in reason and "70%" in reason
+    assert "75%" in reason and "50%" in reason
 
 
 def test_completely_unconfigured_deployment_stays_disabled(tmp_path, capsys):
@@ -253,3 +253,59 @@ def test_completely_unconfigured_deployment_stays_disabled(tmp_path, capsys):
     assert not ch.emit(tmp_path, card, payload)
     assert ch.crew_label(tmp_path, card) is None
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize('tokens,decision', [(700, 'handoff'), (700, 'continue'), (950, 'handoff')])
+def test_cycle_hint_names_owned_background_task_cleanup(tmp_path, monkeypatch, capsys, tokens, decision):
+    card, payload = world(tmp_path)
+    turn(payload['transcript_path'], tokens)
+    monkeypatch.setattr(ch, '_decide', lambda *a: dict(decision=decision, reason='fixture'))
+    assert ch.emit(tmp_path, card, payload)
+    message = json.loads(capsys.readouterr().out)['reason']
+    assert 'stop or await only your own running background tasks' in message
+    assert 'Claude: TaskStop' in message and 'Codex: /ps' in message
+    assert 'Before ending your turn' in message
+
+
+@pytest.mark.parametrize("role", ["worker", "lead", "administrator"])
+def test_pending_self_cycle_allows_actual_stop_without_context_rewake(
+        tmp_path, monkeypatch, capsys, role):
+    from shantytown.cycle import Requests
+    card, payload = world(tmp_path, role)
+    turn(payload["transcript_path"], 990)
+    requests = Requests(tmp_path)
+    requests.request(card.name, "saved checkpoint")
+    before = requests.path.read_bytes()
+    class Reg:
+        def get(self, _):
+            return card
+    def forbidden(*args, **kwargs):
+        raise AssertionError("pending self-cycle must not gather or self-feed")
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(stop_policy, "gather", forbidden)
+    monkeypatch.setattr(stop_event, "_bd_json", forbidden)
+    for _ in range(2):
+        if role == "administrator":
+            assert stop_policy.run(tmp_path, card.name, reg=Reg()) == 0
+        else:
+            assert stop_event._haul(Reg(), None, card.name, tmp_path) == 0
+        assert capsys.readouterr().out == ""
+    assert requests.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["refused", "stale", "automatic", "other-agent"])
+def test_nonserving_cycle_does_not_silence_hard_context_hint(
+        tmp_path, monkeypatch, capsys, kind):
+    from shantytown import cycle
+    card, payload = world(tmp_path)
+    turn(payload["transcript_path"], 990)
+    requests = cycle.Requests(tmp_path)
+    requests.request("someone-else" if kind == "other-agent" else card.name,
+                     "checkpoint", auto=kind == "automatic")
+    if kind == "refused":
+        requests.mark_refused(card.name, "tracked changes")
+    if kind == "stale":
+        monkeypatch.setattr(cycle.Requests, "age", lambda *_: cycle.stuck_after() + 1)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert stop_policy.stop_advice(tmp_path, card)
+    assert "HARD HANDOFF" in json.loads(capsys.readouterr().out)["reason"]

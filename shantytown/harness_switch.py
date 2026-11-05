@@ -94,7 +94,7 @@ class NoChange:
 
 def plan_switch(*, agent: str, current: str, target: str, role: str,
                 required_by_role: dict, known: tuple, model: str | None = None,
-                current_model: str | None = None,
+                current_model: str | None = None, target_model_known: bool = False,
                 lane_held: bool = False, restart_now: bool = False,
                 force: bool = False):
     """Decide one conversion. Returns [`Plan`], [`NoChange`] or [`Refusal`].
@@ -110,6 +110,10 @@ def plan_switch(*, agent: str, current: str, target: str, role: str,
             reason=f"{target!r} is not a harness this deployment hosts",
             remedy=f"one of: {', '.join(sorted(known))}")
 
+    if model is not None and (not isinstance(model, str) or not model.strip()):
+        return Refusal(code="target-model-required", reason="target model must be nonempty",
+                       remedy="pass --model <target model>; the card is unchanged")
+
     # Idempotence BEFORE the policy gates, deliberately. Re-running a conversion
     # that already happened must not be able to fail on a pin or a hold that
     # would forbid making the change today — the change is already made, and a
@@ -120,7 +124,7 @@ def plan_switch(*, agent: str, current: str, target: str, role: str,
     # Model IDs are provider-defined, so neither their spelling nor a guessed
     # default can establish compatibility with another program. Require the
     # operator's target selection before the CLI writes or restarts anything.
-    if current != target and current_model and not (model and model.strip()):
+    if current != target and current_model and not target_model_known and not (model and model.strip()):
         return Refusal(
             code="target-model-required",
             reason=(f"{agent} has an explicit model {current_model!r}; moving "

@@ -25,7 +25,7 @@ socket = "default"             # the fleet's tmux server, DECLARED, never inferr
 
 [host]                         # only on a multi-host fleet
 name = "rig-a"                 # which rig this is, as the graph spells it
-admission_owner = "rig-a"      # same always-on lock host on EVERY peer
+admission_owner = "rig-a"      # optional: same always-on lock host on EVERY peer
 
 [host.peers.laptop]            # how to reach the OTHER host's st
 ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there
@@ -65,6 +65,8 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 
 | variable | what it points at | default |
 |---|---|---|
+| `SHANTY_WORKTREE_ROOT` | optional storage root for NEW project worktrees; must be paired with `SHANTY_WORKTREE_MOUNT` on a separate mounted filesystem. Existing trees are reused; invalid explicit selection refuses. See [mounted worktree storage](worktree-storage.md). | adjacent `<repository>-wt/<agent>`; or `worktree-storage.json` |
+| `SHANTY_WORKTREE_MOUNT` | required mount for `SHANTY_WORKTREE_ROOT`; both environment variables take precedence over the optional schema-1 config. Keep the configured root while external trees exist for enumeration. | unset |
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
 | `SHANTY_MODEL` | Launch-generated provenance: exact resolved card/role/fleet model carried to client and tools; absent selection clears inherited metadata. Configure selection through cards or `[model]`, not this carrier. | resolved model; else unset |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
@@ -75,6 +77,7 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 | `SHANTY_PANE_MAX_GIB` | `MemoryMax` on each agent pane's own systemd scope — the KILL line. Sits above measured normal peak (an agent plus a Rust build runs 10-13 GiB) and below the runaway that caused this to exist (31.8 GiB in ten minutes, which tripped host-wide oomd and killed an unrelated agent). Lowering it toward normal peak does not make the host safer: a pane held near its limit reclaims continuously, and that reclaim is itself what raises slice pressure. | `20` |
 | `SHANTY_PANE_HIGH_GIB` | `MemoryHigh` on the same scope — the THROTTLE line, where a pane is slowed rather than killed. Defaults to the same value as `SHANTY_PANE_MAX_GIB`, i.e. no throttle band, because a band is only useful when you have measured where the workload actually sits. A value above `MAX` is clamped to it rather than refused: a throttle that can never fire before the kill is meaningless, and a misconfigured pair should still get a working ceiling. | `SHANTY_PANE_MAX_GIB` |
 | `SHANTY_PANE_SWAP_MAX` | `MemorySwapMax` on the scope. `0` — no swap — is deliberate and is a HYPOTHESIS, not a settled default: a capped scope with swap to thrash into grinds against its limit and raises pressure on the whole user slice, which is how a correctly-capped pane still got a bystander killed. With no swap it is killed promptly instead. On a host carrying resident swap use that trades a short hard failure for a long soft one, so raise it if panes start dying that used to survive. | `0` |
+| `SHANTY_REGISTRY` | default identity registry: `files` (generated cards), `quipu` (graph), or `toml` (hand-authored crew configuration). Explicit `--registry` wins; otherwise `[env]` in `<root>/shantytown.toml` takes precedence over the ambient environment. Invalid declared values refuse instead of silently selecting files. This setting does not change the tracker backend. | `files` |
 | `SHANTY_BACKEND` | the deployment's default tracker backend (`files`\|`beads`\|`br`\|`forgejo`) when `--backend` is not given. Set it ONCE (under `[env]` in `<root>/shantytown.toml`, or the env) on a fleet whose plates live in a shared tracker and every plain `st anchor`/`st crew` call — including the status-bar segment and the session picker, which by design pass no flags — resolves the real tracker instead of rendering an empty files plate. An unrecognized value refuses; it never silently means files. Explicit `--backend` always wins. | per-command (`files`; `inbox -d` → `beads`) |
 | `SHANTY_BEADS_REPO` | the bead store directory for `--backend beads` when `--repo` is not given (bd's `-C`). Same one-time deployment setting as `SHANTY_BACKEND`; explicit `--repo` wins, and unset falls back to the `.beads` walk-up. | the `.beads` walk-up |
 | `SHANTY_BR_REPO` | the SQLite+JSONL store directory for `--backend br` when `--repo` is not given. Explicit `--repo` wins; when unset, the beads repo setting and then the `.beads` walk-up remain compatible migration fallbacks. | migration fallback |
@@ -99,11 +102,18 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 | `SHANTY_CODEX_MCP_APPROVE` | MCP server names (comma- or space-separated) whose tools a **codex** worker may call without approval — rendered as `mcp_servers.<name>.default_tools_approval_mode = "approve"` in that role's `config.toml`. codex judges an MCP tool from its ANNOTATIONS (`destructive_hint`/`open_world_hint`, both defaulting to TRUE when absent), so a server that ships none has EVERY tool — read or write — judged approval-requiring, which under `approval_policy = never` is a flat refusal. A server named here but absent from the config is skipped, never created, and the key is merged into the existing table so a server definition is never replaced. Unset = nothing emitted. `writes` is deliberately not offered: without annotations it narrows nothing while looking as though it does. | — |
 | `SHANTY_PANEMEM_LOG` | file the launcher appends one line to for every pane memory-ceiling outcome, applied or refused (default `~/.local/log/panemem.log`). The stderr warning goes to whoever ran the launch, which for an interactive `st agent new <agent>` is a pane scrollback that is gone with the pane — so the reason a pane is unbounded was unrecoverable for most cases. This is the record that outlives the pane it describes. | `~/.local/log/panemem.log` |
 | `SHANTY_REMOTE_CONTROL` | whether sessions use Remote Control. Claude adds `--remote-control <agent>` for access through Anthropic's relay. Codex starts its managed standalone app-server and attaches the TUI; if the role's standalone payload is missing, it warns and launches locally until installed. Accepts `true`/`false` (and common boolean spellings); an invalid value refuses launch. See [harnesses](harnesses.md) for the Codex prerequisite and recovery. | Claude: `true`; Codex: `false` |
+| `SHANTY_CODEX_SESSIONS_ROOT` | Opt-in absolute base for managed Codex session logs only, expanded to `<base>/<agent>/sessions`. Set together with the three admission fields below. The mount is checked before stopping a daemon and checked again during setup; failure refuses launch with no local fallback. Existing session directories or links to another location are preserved and refuse setup: migrate them only through a separately verified stopped-owner cutover. Runtime sockets, config, credentials and other XDG state stay in their existing locations. Unset all four fields preserves legacy durability behavior. | unset |
+| `SHANTY_CODEX_SESSIONS_MOUNT` | Required canonical mount point containing the session root (Linux only; configured use on other platforms refuses). It must be a mounted non-root, non-RAM filesystem. Setup writes relative to its pinned directory descriptor and rejects symlinked/nested-device destination components. | unset |
+| `SHANTY_CODEX_SESSIONS_DEVICE` | Required expected decimal `major:minor` device identity for that mount. Read it from the actual deployment's mounted filesystem; do not copy another host's value. | unset |
+| `SHANTY_CODEX_SESSIONS_MIN_FREE` | Required positive minimum available bytes on the session filesystem. Existing destination components must be owned by the launching user and mode0700; setup never changes their permissions. This is launch admission, not a retention or automatic cleanup policy. | unset |
 | `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
+| `SHANTY_STOP_RULING_MEMORY` | `1` enables the explicit-ruling Stop reminder once per unchanged session state, with a Camayoc record command. Uses the existing Stop policy; unknown transcript or ledger state allows Stop. See [stop policy](stop-policy-spec.md#optional-ruling-memory-reminder). | Off |
 | `SHANTY_STOP_JEV_COMMAND` | Opt-in quoted argv for the canonical Jev MCP server. Classifies an open anchor using only bounded, masked last assistant message plus status; five-second total deadline. Unknown preserves stop routing. No command means disabled. | — |
 | `SHANTY_STOP_SAMPLES` | Absolute private evidence directory for an opt-in, local-only 30-sample stop-hook collection. Requires a daily retention sweep before enabling; see [Private stop samples](stop-samples.md). Pane text is never attached to normal events. Unset = disabled. | — |
 | `SHANTY_HIERARCHY_FILE` | the hierarchy file `st fleet roles sync` falls back to when the graph cannot be read (`.ttl`\|`.yaml`\|`.json` describing `CrewMember` + `reports_to`). Unset = look for `hierarchy.*` beside the crew root; if that is absent too, `sync` REFUSES rather than projecting an empty crew. Only the ontology-first *default* falls back — an explicit `--from quipu` that cannot reach the graph refuses instead of silently substituting this file. | `<root>/hierarchy.*` if present |
 | `SHANTY_SHARED_CHECKOUT_OK` | set to `1` to allow ONE deliberate `git commit`/`rebase`/`merge` in a SHARED project checkout, past the guard `st repo worktree` installs there. Read by the hook, not by `st` — it is the maintenance escape hatch, not a mode. Everyday work belongs in `st repo worktree <repo>`, where index and HEAD are per-agent; the guard exists because a shared checkout's index is shared, so one session's commit can carry another's staged files and its reset can drop the other's commit, with git reporting success to both. Note the guard fires at COMMIT only — `git reset` has no hook and is not guarded, so this is a seatbelt, not a cage. | unset (guard active) |
+| `SHANTY_STRANDED_WORK` | Stopped-owner sweep: `off` by default; `observe` records persistent attention after more than one measured hour; `release` additionally repools OPEN items with revision-fenced preservation comments. IN_PROGRESS stays assigned. No live rollout from source installation. See [stopped-owner work](stopped-owner-work.md). | off |
+| `SHANTY_OWNED_WORK_PUBLISH` | Opt in to authenticated lifecycle observation publication from the existing stop, launch, capture and supervisor hooks. `1` enables it; otherwise local escalation stays active without graph writes. Facts use the configured host/root writer scope and expire to UNKNOWN for the held-work reader. See [lifecycle observations](stopped-owner-graph.md). | off |
 | `SHANTY_GRAPH_CONTEXT` | how hard `st go` and `st agent cycle` insist on graph context: `advise` (default) warns and RECORDS the gap, `require` refuses a dispatch that names neither a `--quipu-node` nor a `--no-graph-context` reason. Advise is the default because this landed on a fleet whose scripts and crons already call `st go`, and a flag that refuses every existing caller the day it ships is a fleet-stopping change dressed as a measurement — so the ledger measures the habit first and the flip is one line once the callers carry it. Independent of the mode: a node the graph positively does NOT hold is refused either way (a wrong claim, not an absent one), while a graph that cannot be reached never refuses. Read the numbers with `st agent stats --graph`. | `advise` |
 | `SHANTY_ENTITY_LINK` | the graph-node SUGGESTION for work that names none (aegis-4hhqoe.12): `write` (default) suggests and records the link as an inferred, quarantined `aegis:about`; `suggest` only prints it; `off` asks nothing. When `st go` names no `--quipu-node`, and when a resume brief carries no node, st runs camayoc `scripts/entity_link.py` (quipu `/search`, then one Jev choice with none-of-these) and SHOWS the result as a suggestion. It is never added to the dispatch's nodes: citing it with `--quipu-node` is the agent's act, and `st agent stats --graph` reads that act as accepted/rejected, the live precision. Any failure (no camayoc at `CAMAYOC_SOURCE`, default `~/.local/share/camayoc-src/camayoc`, no Jev key, a timeout) is "no suggestion" and never blocks a dispatch. | `write` |
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend acts on the neglected anchor. At this threshold tend NUDGES the agent itself to close-or-release it (self-heal); the coordinator is only escalated to if that goes unanswered. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
@@ -127,6 +137,8 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_CONFIG_SERVER` | Explicit server for the configuration source; the graph cannot redirect its own bootstrap reader. | unset |
 | `SHANTY_INSTRUCTIONS_MODE` | `compare` reports byte-level migration differences; `apply` realizes the reviewed fragment body during provision. Local identity files stay untouched. | compare |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
+| `SHANTY_RULES_QUERY` | Name of the stored Quipu query that returns this deployment's crew process rules. When set, the session-start anchor tells every session to run it for its role and that a failed or empty read means the rules are UNKNOWN. Process rules then live in the graph, not in instruction files. | unset (no rules pointer) |
+| `SHANTY_BOARD_METRICS_QUERY` | Named query used by the fleet-owner ranking advisory for reconciled P0 created/closed counts across seven UTC calendar dates. Failed or incomplete coverage is UNKNOWN. | `seeds_board_metrics_v1` |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
 | `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
@@ -142,7 +154,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_SELF_CYCLE_SERVE` | `0`/`off`/`false`/`no` stops `st agent cycle --self` from starting its detached single-agent waiter (aegis-oj2z7m), leaving the request to `st fleet tend`. The waiter performs the request at the agent's next idle turn and gives up after 20 minutes. | on |
 | `SHANTY_CHECKPOINT_JEV_COMMAND` | installed Jev MCP server command for checkpoint-only handoff quality advice before cycling. Five-second judge deadline; one rewrite opportunity per launch below measured cycle depth; unknown or saturated depth proceeds. Usually set in `[env]`. | `SHANTY_CREATE_JEV_COMMAND`, otherwise UNKNOWN advice |
 | `SHANTY_ESCALATE_COMMAND` | the human-escalation command `st fleet watch` runs when a peer administrator stays down past `--escalate-after` or a repair fails (aegis-az0a40). Invoked as `<command> -s <severity> "<description>"`; its exit code is the verdict (0 paged, 1 fallback attempted, 2 nobody paged). Usually set in `[env]`. Unset = the watch alerts and repairs but says `escalation NOT CONFIGURED` and pages nobody. | — |
-| `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
+| `SHANTY_RANKER` | `policy` to weight the admin workflow by Yupana blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
@@ -245,13 +257,39 @@ establish that a real subscription or its native refresh works.
 
 ### Context reminders
 
-`[session_budget] context_threshold_pct` configures the advisory context reminder;
+`[session_budget] context_threshold_pct` configures the context handoff target
+(default 50% when context monitoring is declared);
 `context_window` supplies capacity when the transcript does not report it. Role
 and agent overrides use the existing `context_by_role` and `context_by_agent`
-tables. A threshold crossing produces one visible hook message and one model
-instruction to checkpoint and request `st agent cycle --self`. Remaining above
-the threshold does not repeatedly wake the agent; dropping below it or beginning
-a new session re-arms the reminder. It never schedules a cycle automatically.
+tables. A threshold crossing produces a visible hook instruction to checkpoint
+and request `st agent cycle --self --checkpoint-file <notes-file>`.
+`context_hard_pct` sets a separate handoff line (default 75%, configurable above
+the target and at most 80%). At that line every Stop instructs handoff before
+further work; no advisor can override it. These are turn-boundary instructions,
+not asynchronous interruption or a scheduled cycle. Leave an in-progress
+operation safe before handing off. A single long turn can cross either line
+before its next Stop, so retain the harness's pre-compaction safety hook.
+
+Between the target and hard line, the hook asks Jev through
+`SHANTY_CONTEXT_JEV_COMMAND` (falling back to `SHANTY_CREATE_JEV_COMMAND`). The
+request contains percentage, capacity, bounded active-work titles and a recent
+call-in rebuild estimate when available. Missing work or cost remains UNKNOWN.
+The existing `st agent advise` signal supplies the optional relatedness/next-need
+estimate; its reason is bounded to 500 characters. No conversation is sent.
+The judge has a five-second wall-time budget. A continue choice requires 0.75
+confidence and lasts at most ten minutes or five additional percentage points,
+then Jev is asked again. Missing, failed or uncertain advice asks for handoff.
+`context-decisions.jsonl` retains the input, decision, chosen criterion and Jev
+provenance; failed logging grants no exception. Without an exception, the soft
+hint is once per crossing. Dropping below target or beginning a new session
+re-arms it. Worker, lead and administrator Stop paths all use this policy.
+
+For example, `context_threshold_pct = 50` and `context_hard_pct = 70` leave a
+20-point exception range. Declare `context_window` for every Claude session:
+its model name does not distinguish window variants. Codex uses native capacity
+when no override is present. Check each host's effective configuration and hook
+registration; a source change does not arm a deployment or establish live
+handoff acceptance.
 
 SessionStart binds the hook's exact session and transcript before the anchor is
 rendered. Until the new transcript contains usage, occupancy is UNKNOWN, rather
@@ -263,3 +301,19 @@ A governor refusal is terminal for post-cycle redispatch. The fallback itself
 requires the existing governor to admit a lowest-priority status prompt; it
 cannot borrow a checkpoint's priority when the current plate is unreadable.
 The recovery prompt asks for verification before work, and creates no work item.
+
+## Per-crew file memory (default OFF)
+
+`[memory.<crew>]` declares one opt-in Claude plan. `enabled` is boolean and
+defaults to false; the remaining fields are `server`, `deployment`, `project`,
+`account` (optional exact named-account/`legacy` pin; empty uses the selected account), `source` (the actual existing
+native directory), `outbox` and `staging`. Enabled plans require all three
+directories to exist, not overlap and satisfy the private-directory checks.
+See [crew memory](crew-memory.md) for the identity, conflict and rollout contract.
+No memory body, bearer or account credential belongs in this table.
+
+`SHANTY_MEMORY_GENERATION` is an internal per-launch marker emitted into a
+prepared Claude settings artifact. It identifies a pending/active retained
+generation; it is not an operator override or authority to import arbitrary
+paths. SessionStart must acknowledge the matching pending selection before
+Stop can ingest it. Codex and OpenCode receive no generated-writeback adapter.

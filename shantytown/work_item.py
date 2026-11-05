@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import datetime, timedelta, timezone
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
 
 
 def exact(tracker, item_id):
@@ -53,7 +56,94 @@ def _comment_body(row):
     return values[0]
 
 
+TIMEOUT_READBACK_SKEW = timedelta(seconds=30)
+
+
+def _landed_since(rows, body, started, author=None):
+    """True when a row with exactly `body` was written at or after `started`.
+
+    Only a timed-out write uses this, so an identical OLDER comment must not
+    count: the row needs a parseable created_at no earlier than the attempt
+    start, less a small allowance for clock skew between hosts. When the
+    writer is known (`author`) and the row carries an `author` field, the two
+    must match, so a same-text comment by another writer is not this write.
+    A row WITHOUT an `author` field falls back to the body + time rule alone:
+    the tracker gave nothing to compare, and refusing it would turn every
+    landed write on such a tracker into "may still land".
+    """
+    floor = started - TIMEOUT_READBACK_SKEW
+    for row in rows:
+        if _comment_body(row) != body or not isinstance(row.get("created_at"), str):
+            continue
+        if author and "author" in row and row["author"] != author:
+            continue
+        try:
+            at = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if at.tzinfo is not None and at >= floor:
+            return True
+    return False
+
+
+def _writer(tracker):
+    """The actor st wrote the comment as, or None when st does not choose it.
+
+    Mirrors SdTracker._bd_in: the authenticated principal, else SHANTY_AGENT.
+    br picks its own author, so a br write has no known writer here.
+    """
+    from .sd import SdTracker
+    if not isinstance(tracker, SdTracker):
+        return None
+    from .actor_identity import authenticated_actor
+    return authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip() or None
+
+
 def command(args, tracker):
+    if args.item_action in ("rescope", "ack"):
+        from .sd import SdTracker
+        if not isinstance(tracker, SdTracker):
+            raise ValueError("governed rescope/ack requires the selected Seeds backend")
+        item = exact(tracker, args.item)
+        actor = os.environ.get("SHANTY_AGENT", "").strip()
+        if not actor:
+            raise ValueError("rescope/ack requires a declared acting agent")
+        if args.item_action == "ack":
+            if item.assignee != actor:
+                raise ValueError("only the current assignee can acknowledge the spec")
+            state = tracker.spec_state(args.item)
+            if getattr(args, "dry_run", False):
+                return {"id":args.item, "version":state["version"], "result":"planned"}
+            session = getattr(args,"session",None)
+            if not session and getattr(args,"root",None):
+                from .session_budget import current_session
+                session = current_session(Path(args.root),actor)
+            tracker.ack_spec(args.item, state["version"],session=session)
+            after = tracker.spec_state(args.item)
+            if after["version"] != state["version"] or after["unacked"]:
+                raise RuntimeError("spec ACK readback unproven; do not retry")
+            return {"id":args.item, "version":after["version"], "result":"verified"}
+        if getattr(args, "spec_file", None) is None:
+            raise ValueError("rescope requires --spec-file")
+        quote = getattr(args, "quote", None)
+        if quote is None:
+            raise ValueError("rescope requires --quote with the requester's verbatim words")
+        session = getattr(args, "session", None)
+        if not session:
+            from .session_budget import current_session
+            session = current_session(Path(args.root), actor)
+        if not session:
+            raise ValueError("current session UNKNOWN; supply explicit --session provenance")
+        summary = getattr(args, "summary", None) or "consolidated specification"
+        result = tracker.rescope(args.item, args.spec_file, quote=quote,
+            requester=getattr(args, "requester", None) or actor, summary=summary,
+            urgent=getattr(args, "urgent", False), session=session,
+            dry_run=getattr(args, "dry_run", False))
+        if not args.dry_run:
+            state = tracker.spec_state(args.item)
+            if state["version"] != result["version"] or not state["unacked"]:
+                raise RuntimeError("rescope readback unproven; write may have landed, do not retry")
+        return result
     if args.item_action == "show":
         from .sd import SdTracker
         if isinstance(tracker, SdTracker) and getattr(tracker, "quipu", None):
@@ -67,10 +157,35 @@ def command(args, tracker):
     if args.item_action == "comment":
         body = _body(args.file)
         if not args.dry_run:
-            _comments(tracker, item.id, body)
+            started = datetime.now(timezone.utc)
+            try:
+                _comments(tracker, item.id, body)
+            except subprocess.TimeoutExpired as timed_out:
+                # The child was killed, but its write may already have committed
+                # (aegis-epi: a contended comment landed after st's 30s limit and
+                # st printed "unproven"). Read back once; never re-send.
+                try:
+                    landed = _landed_since(_comments(tracker, item.id), body,
+                                           started, _writer(tracker))
+                except Exception as unreadable:
+                    # A failed read-back (timeout, tracker error, bad JSON) says
+                    # nothing about the write; keep the may-still-land wording
+                    # so nobody takes it as license for a blind retry.
+                    from .br import redact_cause
+                    cause = redact_cause(f"{type(unreadable).__name__}: {unreadable}")[:160]
+                    raise RuntimeError(
+                        f"comment write timed out after {timed_out.timeout:g}s and readback "
+                        f"failed ({cause}); write may still land; verify exact readback "
+                        "before retrying") from None
+                if landed:
+                    return {"id": item.id, "comment": "verified"}
+                raise RuntimeError(
+                    f"comment write timed out after {timed_out.timeout:g}s and readback "
+                    "does not show it; write may still land; verify exact readback "
+                    "before retrying") from None
             if not any(_comment_body(row) == body
                        for row in _comments(tracker, item.id)):
-                raise RuntimeError("comment readback unproven; write may have landed, do not resend")
+                raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
     fields = {}
     replace_text = getattr(args, "replace_text", False)
@@ -116,14 +231,24 @@ def command(args, tracker):
                 raise ValueError("item owner changed before admission; reread before updating")
             item = current
             prospective = asdict(item) | fields
+        from .ask_visibility import refuse_deferral
+        refuse_deferral(item, fields)
         if owner and active(prospective, owner):
-            ensure_room(tracker, owner, item)
+            ensure_room(tracker, owner, item, candidate=prospective)
         if not args.dry_run:
             from .br import BrTracker
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
+            from .sd import SdTracker
+            if isinstance(tracker,SdTracker) and fields.get("status") == "in_progress":
+                session = getattr(args,"session",None)
+                if not session and getattr(args,"root",None):
+                    from .session_budget import current_session
+                    session = current_session(Path(args.root),os.environ.get("SHANTY_AGENT", ""))
+                if session:
+                    options["session"] = session
             tracker.update(item.id, **options, **fields)
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
-                raise RuntimeError("update readback unproven; write may have landed, do not resend")
+                raise RuntimeError("update readback unproven; write may have landed; verify exact readback before retrying")
     return {"id": item.id, "fields": fields,
             "result": "planned" if args.dry_run else "verified"}

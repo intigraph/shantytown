@@ -5,6 +5,35 @@ run the repo patrol*; *when someone outside the project opens a PR, create a
 triage item and hand it to an agent*. One TOML file per job lives in
 `<root>/jobs/`, and `st fleet tend` evaluates every job on each pass.
 
+## Delegate a host's scheduler to Chaski
+
+After installing a version of st that recognizes this setting and admitting
+the host's jobs to Chaski and signed execution, configure that host's
+`shantytown.toml`:
+
+```toml
+[jobs]
+scheduler = "chaski"
+```
+
+This skips tend's entire local job evaluator, before reading TOML or creating
+a local runner. Manual local `st work jobs run` and `check` also refuse, preventing a
+second execution path. Other hosts keep the default `scheduler = "local"`.
+The setting does not install, start or validate Chaski. Verify its declarations,
+signed firings and delivery, missed-deadline handling and rollback before the
+cutover. Fence and drain the old local firer, retain pending/unknown claims,
+then set this mode before enabling the replacement as sole firer. Stop the
+replacement before restoring local firing; never reset claims for a rollback.
+Reconcile completed slots across both retained ledgers before enabling local
+firing again, so a stale local cursor cannot replay a Chaski-completed slot.
+An invalid or unreadable configuration refuses local execution rather than
+using default configuration to start the old scheduler.
+
+Legacy list/history remain explicit local inspection surfaces for retained
+rollback data; they do not report Chaski runtime acceptance. Use `--graph` for
+Quipu declarations as below. The original TOML, ledgers, claims and outboxes
+are retained. This change does not change the tend supervision cadence.
+
 ## Read Quipu declarations
 
 The explicit graph read surface is available while signed execution is being
@@ -19,8 +48,28 @@ st work jobs --graph urn:example:scheduled-jobs --expect-job urn:example:job:rev
 The graph must contain the opt-in Quechua scheduled-jobs profile: an Event links
 an Action through `schema:potentialAction` and a Schedule through
 `schema:eventSchedule`. The reader requires explicit RDF types, revision,
-owner, host, target, enabled state, timezone, anchor and a fixed interval of at
-least sixty seconds. Calendar qualifiers and ambiguous times are refused.
+owner, host, target, enabled state, timezone and anchor. It admits either a
+fixed interval of at least sixty seconds, or `P7D` with exactly one Schema.org
+weekday and `startTime HH:MM:00` in the IANA zone. Weekly anchors must match
+that local weekday/time. Gaps and overlaps refuse; other calendar syntax stays
+unsupported. The weekly JSON form has `interval_s: null`, integer `weekday`
+(Monday=0) and `local_time: HH:MM`, so no consumer can mistake it for elapsed
+604800 seconds. Fixed JSON keeps its existing fields. Each weekly occurrence
+needs a fresh UTC deadline from a compatible calendar scheduler.
+
+### Calendar admission demonstration
+
+`python3 docs/demos/calendar-catalogue.py` applies the same synthetic typed RDF
+rows to base `82c0f0394b06acbb2e3738a6bb7ec5bb7f1160cf` and the candidate.
+The base refuses the weekly form; the candidate reports a disabled weekly job
+with `interval_s: null`, while the fixed control's decoded fields are identical.
+The exact source head is supplied in the PR. This is a read-only source fixture,
+not a server query, installed reader or execution admission.
+
+Download the [recording](demos/calendar-catalogue.log) and
+[timing](demos/calendar-catalogue.timing), then use
+`scriptreplay --log-out calendar-catalogue.log --log-timing calendar-catalogue.timing`.
+Terminal playback was checked; no inline video is claimed.
 Disabled declarations stay visible. Multiple schedules per job require a future
 explicit overlap admission and are currently refused.
 
@@ -44,6 +93,18 @@ status; JSON without `--graph` refuses before reading local TOML.
 This source capability does not load the profile into a server, register a
 signing key, fire a schedule or retire an existing cron job. Calls without
 `--graph` retain the existing TOML behavior below.
+
+The opt-in [fixed inbox child](scheduled-inbox.md) supplies the result descriptor
+expected by Chaski's signed scheduled receiver. It reuses normal durable inbox
+delivery; it does not change this catalogue reader, enable a schedule or remove
+the tend sweep. Calendar recurrence and production pilot acceptance remain
+separate gates.
+
+The source-only [seed-before-assignment library](scheduled-seeds.md) supplies
+keyed creation/readback and a durable no-repeat boundary for an admitted agent
+firing. It does not select an execution backend, enable a schedule, change the
+catalogue reader or remove the existing tend sweep. Runtime integration and
+calendar semantics remain separate.
 
 ## Why it is shaped like this
 
@@ -263,3 +324,36 @@ This is a first slice. It does not yet include: `gh.release` and
 `file.changed` sources; recording runs as quipu facts; or moving dream's
 interval and the loose host crons (CI watch, repo audits, `hold gaming --probe`)
 into job files. Each of those is a separate change.
+
+
+## Store admission and terminal failure notices
+
+Scheduled commands resolve plumbing from the deployment's
+shantytown.toml [env] table before ambient environment variables.
+For a Seeds board, declare SHANTY_BACKEND="seeds", exactly one of
+SHANTY_SD_STORE or SHANTY_SD_QUIPU, and SHANTY_SD_PREFIX there.
+QUIPU_SERVER alone identifies an ontology service, not a work board.
+Shell startup files and a tmux server's global environment are insufficient
+configuration for launchd or cron jobs.
+
+The command st work jobs check [name] performs the Seeds adapter's read-only
+store identity admission for enabled local durable inbox and dispatch jobs,
+even when they are not due. A missing, unreachable or mismatched store exits 2.
+This does not send a message, prove recipient delivery or establish complete
+schedule coverage. Disabled, other-host and exec-only jobs do not trigger it.
+
+After scheduled retries are exhausted, the CLI records one job-failed event
+for the administrator through the existing local event/drain channel. This
+channel does not depend on the failed work store. The event names the job,
+history command and routing checks; raw action output stays in local history.
+Its stable firing key prevents replay from recreating a consumed notice.
+The normal administrator drain renders it as a job alert, not an agent stop or
+untracked-work report. Persistence is not proof that the administrator has
+received it: verify the administrator's normal local drain separately.
+If no administrator or event write is available, the run reports that it could
+not notify the administrator.
+
+Before installing a delivery change, coordinate an observed installed smoke,
+a test silence and a separate reader receipt. Preserve the job state, event
+files (including consumed records), scheduler ledgers and canonical config
+backup across rollback. Use an isolated tmux socket for source verification.

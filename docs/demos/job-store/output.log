@@ -1,0 +1,9 @@
+Script started on 2026-10-20 01:23:49-04:00 [COMMAND="python3 docs/demos/job-store/record.py /tmp/harding-9l1-base-2ba ." <not executed on terminal>]
+BASE: isolated tmux run-shell; minimal env; private fixture
+  nudge              would fire  every 1h (first run)
+{"check_rc": 0, "event_detail": [], "lines": ["\u26a0 job nudge: GAVE UP after 1 attempt(s) (StoreUnproven: fixture backend unreachable) \u2014 COULD NOT tell the administrator; this line is the only notice"], "missing_route": "StoreUnproven", "terminal_events": 0}
+CANDIDATE: isolated tmux run-shell; minimal env; private fixture
+  nudge              cannot tell StoreUnproven: seeds store admission failed; configure canonical [env] routing and verify the backend
+{"check_rc": 2, "event_detail": ["Job nudge exhausted retries. Inspect st work jobs history nudge; verify canonical [env] store routing and backend availability. Raw action output remains in the local job history."], "lines": ["\u26a0 job nudge: GAVE UP after 1 attempt(s) (StoreUnproven: fixture backend unreachable) \u2014 administrator notice was recorded"], "missing_route": "StoreUnproven", "terminal_events": 1}
+
+Script done on 2026-10-20 01:23:50-04:00 [COMMAND_EXIT_CODE="0"]

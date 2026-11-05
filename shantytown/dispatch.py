@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from . import stores
 from .attribution import attribute
-from .protocols import BLOCKER_KIND_LABELS, Panes, Registry, Tracker
+from .protocols import BLOCKER_KIND_LABELS, Panes, Registry, Tracker, SubmissionObserved
 from .triage import Action, Decision, triage
 
 # Verify reads SCROLLBACK and polls briefly. Measured against a real Claude Code
@@ -183,8 +183,8 @@ class SendUnverified(Exception):
     leaves the item UNTOUCHED — never marked in_progress for a send that may not
     have landed. "Send-and-assume is how you believe work was assigned when it
     wasn't" (design.md). The honest failure is "I could not confirm delivery, so
-    I recorded nothing" — a human re-dispatches, rather than a tracker full of
-    items nobody was told about.
+    I recorded nothing". Check delivery and custody before retrying: an
+    unconfirmed send may already be running.
     """
 
     def __init__(self, item_id: str, pane: str):
@@ -282,6 +282,16 @@ class Blocked(Exception):
             f"(`st work item update {item_id} --status open`), then dispatch. If it is not, "
             f"the item's own comment says what it is waiting for."
         )
+
+
+class HumanDecision(Blocked):
+    """An ASK can stay open without becoming executable crew work."""
+
+    def __init__(self, item_id: str, requested: str):
+        self.item_id, self.requested = item_id, requested
+        Exception.__init__(self,
+            f"{item_id} is gated on a human; refusing to serve it to {requested}. "
+            "Keep the ASK owned and visible; dispatch executable work instead.")
 
 
 class Closed(Exception):
@@ -572,6 +582,9 @@ class Dispatcher:
         # payload, so a refusal does no work at all.
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
+        from .ask_visibility import is_ask
+        if is_ask(item):
+            raise HumanDecision(item_id, agent_name)
         # ...AND AN UNMET BLOCKER IS THE SAME REFUSAL (internal-ref). Third
         # variant of the one hole: an item whose `blocks` dependency is open
         # cannot be advanced, and the dispatch path never asked. Only a POSITIVE
@@ -637,10 +650,8 @@ class Dispatcher:
         text = f"Work is on your hook: {item_id} — {item.title}"
         text += " — " + instruction(item_id)
         # Put measurement where work arrives, without reading the board again.
-        text += (" — Before a fix or improvement, record a BASELINE on this item"
-                 " before the first change: time, version, probe and result."
-                 " Choose the success metric now; rerun the same probe afterwards."
-                 " If measurement is impossible, record why.")
+        text += (" — For a fix, note what is broken in one line and check it after."
+                 " Skip this for new docs, features or research.")
         # NAME THE STORE (aegis-81zyb). An id and a title are not a dispatch on a
         # host with 125 bd stores — they are a riddle, and the receiving agent has
         # no signal that the question is even open. The tag rides HERE, inside
@@ -757,10 +768,15 @@ class Dispatcher:
         # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
         # write moved AFTER a confirmed send so a dropped send never marks work
         # in_progress. verify reads the pane back for the item id — the thing we
-        # just sent must now be visible on the pane. If it is not, we sent into
-        # the void: raise SendUnverified (exit 2) and write NOTHING.
-        self.panes.send(p.pane, p.text)                # 1 send
-        if not self.verify(p.pane, item_id):
+        # just sent must have positive submission or pane evidence. If neither
+        # is available, raise SendUnverified (exit 2) and write NOTHING.
+        observed = self.panes.send(p.pane, p.text)    # 1 send
+        # Codex submission already observes idle -> working with an empty,
+        # unqueued composer. Do not discard that stronger exact-body evidence
+        # merely because its echoed item ID has left the scrollback window.
+        submitted = (isinstance(observed, SubmissionObserved)
+                     and observed.matches(p.pane, p.text))
+        if not submitted and not self.verify(p.pane, item_id):
             raise SendUnverified(item_id, p.pane)
         # THE OTHER HALF OF THE WINDOW (GitHub #20). send-then-update is the right
         # order — a dropped send must never mark work in_progress — but it leaves
@@ -864,7 +880,8 @@ class Dispatcher:
 
     def defer(self, item_id: str, kind: str, reason: str,
               dry_run: bool = False, until: str = "", dependency_reason: str = "",
-              sattler_reason: str = "", gate_authority: str = "") -> Deferred:
+              sattler_reason: str = "", gate_authority: str = "",
+              window: bool = False) -> Deferred:
         """Persist and verify the resume condition before hiding an item.
 
         A backend may partially apply an update before timing out. Staging the
@@ -884,6 +901,11 @@ class Dispatcher:
         item = self.tracker.get(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
+        from .ask_visibility import refuse_deferral
+        try:
+            refuse_deferral(item, {"status": "deferred", "blocker_kind": label})
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if not getattr(self.tracker, "_structured_defer", False):
             raise DeferRefused("this tracker backend cannot record structured deferrals")
         date = until or item.defer_until or ""
@@ -925,7 +947,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -935,11 +957,17 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date> or event:<binding>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> or installed:<tool><op><version>")
         if active.kind == "event":
             from .resume_events import binding_for
             try:
                 binding_for(active.arg, item_id)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
+        if active.kind in ("release", "installed"):
+            from .resume_kinds import validate as validate_kind
+            try:
+                validate_kind(active.kind, active.arg)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
         gate_target = None
@@ -964,6 +992,8 @@ class Dispatcher:
                 reason += "\ngate_scope_flag: UNKNOWN repo/epic; Sattler verification pending natural tend"
             if sattler_reason:
                 reason += "\nsattler_gate_reason: " + sattler_reason.strip()
+        if window:
+            reason += "\ndefer_window: scheduled"
         reason = canonical_reason(reason, active.render())
 
         def missing(current, final=False):
@@ -1010,8 +1040,22 @@ class Dispatcher:
         if not missing(item, final=True):
             result.noop = True
             return result
+        from datetime import datetime, timezone
+        from .deferral_waits import validate as validate_wait
+        try:
+            validate_wait(reason, dependency_reason, active,
+                          parse_stamp(date), datetime.now(timezone.utc), window=window)
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if dry_run:
             return result
+
+        # Persist setter and deadline together with the reason. updated_at is
+        # an item touch, not evidence of who chose a short CI pacing window.
+        from .deferral_pacing import provenance
+        reason += "\n" + provenance(gate_authority,
+                                    datetime.now(timezone.utc).isoformat(), date)
+        result.reason = reason
 
         def write_verified(fields, final=False):
             # A timeout can follow commit. Read once for evidence, but do not
@@ -1057,8 +1101,8 @@ class Dispatcher:
         design.md: "verify reads the pane back. Send-and-assume is how you
         believe work was assigned when it wasn't." A false negative (the agent
         cleared it before we looked) is SAFE by construction: it maps to exit 2
-        and leaves the tracker untouched, so a human re-dispatches rather than
-        the tracker lying — never the other direction.
+        and leaves the tracker untouched. It is not permission to resend;
+        the receiver may already be working.
 
         But safe-by-construction is not an excuse for a check that can only ever
         fail. Reading the VISIBLE pane once never confirmed a real delivery to a

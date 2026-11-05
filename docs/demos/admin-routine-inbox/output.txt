@@ -1,0 +1,5 @@
+Persisted before live send: 2 unread pointers
+Before deadline: 0 submissions; 2 unread
+At deadline: 1 batch; 0 unread
+Verified sender text retained: [from fixture-worker] routine one
+After second sweep: 1 total submissions

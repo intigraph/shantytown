@@ -1,0 +1,14 @@
+● API Error: Opus 5.5's safeguards flagged this message
+  (https://www.anthropic.com/legal/aup). This sometimes happens with
+  safe, normal conversations. Claude Code can't respond to this message
+  with Opus 5.5.
+
+  Double press esc to edit your last message, or try a different model
+  with /model.
+
+  Send feedback with /feedback or learn more:
+  https://support.claude.com/en/articles/8106465
+
+
+❯ 
+? for shortcuts

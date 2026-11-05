@@ -1,4 +1,4 @@
-"""Moving ceiling-held work to a claude agent with headroom (aegis-qbl).
+"""Moving ceiling-held work to another harness with headroom (aegis-qbl).
 
 Stiwi, 2026-10-14: *"Don't wait on usage ceilings move to claude this should be
 a built in st capability"*. Measured the same morning: kelly held aegis-z2k, on
@@ -20,9 +20,9 @@ Two signals st already reads, and only those two:
 
 ## Where the work goes
 
-To a LIVE, non-retired claude agent that is not itself at a ceiling, limited,
+To a LIVE, non-retired agent on the OTHER harness that is not itself at a ceiling, limited,
 held (agent hold or gaming quiet time) or the source, and whose plate count is
-under the cap (Stiwi 2026-10-14, "Max like 10"). Among those, the one with the
+under the cap, counting active non-held work only (Stiwi 2026-10-14, "Max like 10"). Among those, the one with the
 most room, then by name, so the choice is reproducible.
 
 ## How it moves
@@ -59,6 +59,8 @@ class Holder:
     why: str
     #: The measured evidence, quoted into the item comment.
     evidence: str
+    #: Observed source harness. Unknown is not evidence for a transfer.
+    harness: str = ""
 
 
 @dataclass(frozen=True)
@@ -142,23 +144,56 @@ def receiver_budget(limits, spend, ceiling) -> str:
     return ""
 
 
+def receiver_harness(source: str) -> str | None:
+    """Only a known source harness can establish another harness."""
+    return {"codex": TARGET_HARNESS, "claude": "codex"}.get(source)
+
+
+def active_plate_count(rows, owner) -> int | None:
+    """Count a complete owner's active, non-held work; malformed data is UNKNOWN."""
+    from .ask_visibility import label_names
+    from .plate_capacity import active, owner_name
+    count = 0
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get('id'), str)
+                or not row['id'] or owner_name(row.get('assignee')) != owner_name(owner)
+                or row.get('status') not in {'open', 'hooked', 'in_progress', 'blocked',
+                                             'deferred', 'closed', 'tombstone'}
+                or not isinstance(row.get('title'), str)):
+            return None
+        labels = label_names(row.get('labels'))
+        held = (row['status'] == 'blocked' or row.get('blocker_kind')
+                or row.get('open_blockers') or labels.intersection({'hold', 'held', 'parked', 'deferred'})
+                or any(label.startswith(('blocked:', 'hold:')) for label in labels))
+        if active(row, owner) and not held:
+            count += 1
+    return count
+
+
 def plan(holders, candidates, *, cap: int = PLATE_CAP,
-         harness: str = TARGET_HARNESS) -> Plan:
-    """Decide the moves. Pure: no reads, no writes."""
+         harness: str | None = None) -> Plan:
+    """Decide moves to another harness. Pure: no reads, no writes.
+
+    An explicit harness can restrict destinations, never permit a same-harness
+    move. Shared room is consumed across holders of either harness.
+    """
     out = Plan()
     holding = {h.agent for h in holders}
-    room = {}
-    for c in candidates:
-        if (c.harness == harness and not c.unavailable and c.agent not in holding
-                and c.assigned < cap):
-            room[c.agent] = cap - c.assigned
+    available = {c.agent: c for c in candidates
+                 if (not c.unavailable and c.agent not in holding
+                     and c.harness in ('claude', 'codex')
+                     and type(c.assigned) is int and 0 <= c.assigned < cap)}
+    room = {name: cap - c.assigned for name, c in available.items()}
     for h in sorted(holders, key=lambda h: (h.agent, h.item)):
-        if not room:
-            out.stays.append(Stay(h.item, h.agent,
-                                  f"no live {harness} agent has headroom under the "
-                                  f"plate cap of {cap}"))
+        target = receiver_harness(h.harness)
+        eligible = [name for name in room if available[name].harness == target
+                    and (harness is None or harness == target)]
+        if not eligible:
+            reason = ("source harness UNKNOWN" if target is None else
+                      f"no live {target} agent has headroom under the plate cap of {cap}")
+            out.stays.append(Stay(h.item, h.agent, reason))
             continue
-        to = min(room, key=lambda name: (-room[name], name))
+        to = min(eligible, key=lambda name: (-room[name], name))
         out.moves.append(Move(h.item, h.agent, to, h.why, h.evidence))
         room[to] -= 1
         if room[to] <= 0:
@@ -190,7 +225,7 @@ def apply(moves, *, dispatch, comment, emit, log) -> list[Outcome]:
             # resend would deliver the work twice.
             detail = f"{type(exc).__name__}: {exc}"
             log(f"ceiling-transfer: {m.item} was DELIVERED to {m.to} but the tracker "
-                f"write is unproven; do not resend, repair the assignee ({detail})")
+                f"write is unproven; verify ownership before retrying, repair the assignee ({detail})")
             results.append(Outcome(m, False, detail, disposition="delivered_untracked"))
             continue
         except Exception as exc:  # noqa: BLE001 - every refusal is reported, none retried

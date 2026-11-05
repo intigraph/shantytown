@@ -29,7 +29,7 @@ from shantytown.dispatch import Dispatcher, TrackerWriteLost
 from shantytown.files import FilesRegistry
 from shantytown.tmux import NullPanes
 
-REASON = "blocked on a human; resume_when date:2026-09-23"
+REASON = "blocked on a technical window; resume_when date:2026-09-23"
 
 
 class NormalisingBr(BrTracker):
@@ -67,7 +67,7 @@ def _dispatcher(tmp_path, tracker):
 def test_a_bare_date_confirms_even_though_the_store_adds_a_time(tmp_path):
     """The regression. Before the fix this raised TrackerWriteLost."""
     tracker = NormalisingBr()
-    _dispatcher(tmp_path, tracker).defer("item-1", "human", REASON, until="2026-09-23")
+    _dispatcher(tmp_path, tracker).defer("item-1", "external", REASON, until="2026-09-23")
     assert tracker.row["defer_until"] == "2026-09-23T13:00:00Z"
     assert tracker.row["status"] == "deferred"
 
@@ -76,7 +76,7 @@ def test_a_bare_date_confirms_even_though_the_store_adds_a_time(tmp_path):
 def test_any_time_of_day_on_the_REQUESTED_day_confirms(tmp_path, hour):
     """The backend may pick any hour it likes; the promise was the DAY."""
     tracker = NormalisingBr(hour=hour)
-    _dispatcher(tmp_path, tracker).defer("item-1", "human", REASON, until="2026-09-23")
+    _dispatcher(tmp_path, tracker).defer("item-1", "external", REASON, until="2026-09-23")
     assert tracker.row["defer_until"].startswith("2026-09-23T")
 
 
@@ -95,7 +95,7 @@ def test_THE_CONTROL_a_wrong_DAY_is_still_caught(tmp_path):
 
     with pytest.raises(TrackerWriteLost):
         _dispatcher(tmp_path, WrongDay()).defer(
-            "item-1", "human", REASON, until="2026-09-23")
+            "item-1", "external", REASON, until="2026-09-23")
 
 
 def test_THE_CONTROL_a_full_timestamp_still_compares_exactly(tmp_path):
@@ -108,4 +108,4 @@ def test_THE_CONTROL_a_full_timestamp_still_compares_exactly(tmp_path):
 
     with pytest.raises(TrackerWriteLost):
         _dispatcher(tmp_path, ShiftsTheHour()).defer(
-            "item-1", "human", REASON, until="2026-09-23T13:00:00Z")
+            "item-1", "external", REASON, until="2026-09-23T13:00:00Z")

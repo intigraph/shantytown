@@ -243,3 +243,22 @@ jobs:
           path: dist
       - name: Publish to PyPI through the registered Trusted Publisher
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+
+  repository-pendant:
+    name: Verify repository pendant
+    needs: [release, release-please]
+    if: ${{ always() && needs.release.result == 'success' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - name: Verify the bounded public pointer corpus
+        run: python3 scripts/verify-repository-share.py "$RELEASE_TAG" "$(git rev-parse HEAD)"

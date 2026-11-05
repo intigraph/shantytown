@@ -1,0 +1,21 @@
+Script started on 2026-10-23 10:06:19-04:00 [COMMAND="bash run.sh" <not executed on terminal>]
+Private source-checkout writer/sweeper fixtures.
+Version producer facts are injected. No production writes or release calls.
+
+BASE 7c1d5d6434d01f04d67bc19fd2c2a85ffabed3e3
+  closed / blocker still open     deferred
+  closed / blocker closed         deferred
+  external installed / MET        deferred
+  external release / UNKNOWN      deferred
+  closed / additional prose       deferred
+  external MET / human hold       deferred
+
+HEAD 3798ec4389c4a349334bafd4a243d3957de6102b
+  closed / blocker still open     deferred
+  closed / blocker closed         open
+  external installed / MET        open
+  external release / UNKNOWN      deferred
+  closed / additional prose       deferred
+  external MET / human hold       deferred
+
+Script done on 2026-10-23 10:06:20-04:00 [COMMAND_EXIT_CODE="0"]

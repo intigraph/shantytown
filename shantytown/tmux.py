@@ -21,12 +21,15 @@ into the harness.
 """
 from __future__ import annotations
 import os
+import hashlib
 import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import time
+
+from .protocols import SubmissionObserved
 
 
 # The ONLY keys Tmux.control will send (aegis-c6hli). Cursor moves, deletions
@@ -68,7 +71,7 @@ _SEND_CHUNK_GAP_S = 0.05
 _CODEX_SETTLE_S = 0.5
 _CODEX_POLL_S = 0.15
 _CODEX_POLLS = 8
-_CODEX_ATTEMPTS = 8
+_CODEX_ATTEMPTS = 2
 _CODEX_DEADLINE_S = 25
 
 
@@ -80,8 +83,12 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     retry. Never accept the dim suggestion as typed input.
     """
     from . import triage
-    if not text or triage.input_state(screen) == triage.INPUT_PLACEHOLDER:
+    if not text or triage.input_state(screen) != triage.INPUT_QUEUED:
         return False
+    framed = triage.codex_composer(screen)
+    if framed is not None:
+        body = triage.strip_attrs(framed).lstrip()[1:]
+        return ' '.join(body.split()) == ' '.join(text.split())
     lines = triage.strip_attrs(screen).rstrip().splitlines()
     prompts = [i for i, line in enumerate(lines) if line.lstrip().startswith("›")]
     if not prompts:
@@ -286,6 +293,11 @@ class PaneInMode(PaneNotAgent):
 
 
 def _refuse_task_list(pane: str, screen: str) -> None:
+    from .triage import strip_attrs
+    from .safeguard import current
+    if current(strip_attrs(screen)):
+        raise PaneNotAgent(
+            f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
     from .harness import task_list_evidence
     if task_list_evidence(screen):
         raise PaneTaskList(
@@ -332,9 +344,10 @@ def shell_foreground(panes, pane: str) -> str | None:
 
 
 class Tmux:
-    def __init__(self, socket: str | None = None) -> None:
+    def __init__(self, socket: str | None = None, *, root=None) -> None:
         # Explicit arg wins; else the env; else bare tmux (default server).
         self.socket = socket if socket is not None else os.environ.get("SHANTY_TMUX_SOCKET") or None
+        self.delivery_root = root or os.environ.get('SHANTY_ROOT')
 
     def _cmd(self, *args: str) -> list[str]:
         # -L must precede the subcommand.
@@ -351,6 +364,28 @@ class Tmux:
         if r.returncode != 0:
             return False
         return any(pane in line.split() for line in r.stdout.splitlines())
+
+    def owner_state(self, pane: str) -> str:
+        """Checked process census for release policy; exists() hides read errors."""
+        if not pane:
+            return 'unknown'
+        result = subprocess.run(self._cmd('list-panes', '-a', '-F',
+            '#{pane_id}\t#{session_name}\t#{pane_current_command}'),
+            capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            return 'unknown'
+        rows = [line.split('\t') for line in result.stdout.splitlines()]
+        if any(len(row) != 3 or not all(row) for row in rows):
+            return 'unknown'
+        matches = [row for row in rows if pane in row[:2]]
+        if not matches:
+            return 'down'
+        commands = {row[2] for row in matches}
+        if commands <= SHELL_COMMANDS:
+            return 'down'
+        if commands & {'claude', 'codex', 'node'}:
+            return 'live'
+        return 'unknown'
 
     def session_name(self, pane: str) -> str | None:
         """Resolve a tmux pane id (for example ``$TMUX_PANE``) to its session.
@@ -409,10 +444,13 @@ class Tmux:
         with its own environment and inheriting it here would let the checker's
         own CODEX_HOME answer a question about somebody else's agent.
         """
-        r = subprocess.run(
-            self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
-            capture_output=True, text=True,
-        )
+        try:
+            r = subprocess.run(
+                self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
+                capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
         if r.returncode != 0:
             return None
         pids = [ln.split()[0] for ln in r.stdout.splitlines()
@@ -420,15 +458,33 @@ class Tmux:
         if not pids:
             return None
         root = pids[0]
-        # etimes (seconds elapsed) is monotone in age and trivially sortable —
-        # unlike lstart, which is a fixed-width 24-char date field. pid is here
-        # so the environment can be read back for the process it belongs to.
-        ps = subprocess.run(
-            # Hook environments can set COLUMNS; truncated argv can hide the
-            # settings pointer and falsely classify a wired lead as hookless.
-            ["ps", "-ww", "-o", "etimes=,pid=,args=", "-p", root, "--ppid", root],
-            capture_output=True, text=True,
-        )
+        if not root.isdecimal():
+            return None
+        # Darwin has neither GNU etimes nor --ppid. Enumerate only this
+        # pane's immediate children, then ask ps for those explicit PIDs; never
+        # collect the fleet's argv (which can contain private tool arguments).
+        darwin = sys.platform == "darwin"
+        try:
+            if darwin:
+                # BSD pgrep excludes its caller's ancestors by default. The
+                # agent being inspected is our ancestor during its tool call.
+                children = subprocess.run(
+                    ["pgrep", "-a", "-P", root], capture_output=True, text=True, timeout=2,
+                )
+                if children.returncode not in (0, 1):
+                    return None
+                child_pids = children.stdout.split()
+                if len(child_pids) > 256 or any(not p.isdecimal() for p in child_pids):
+                    return None
+                command = ["ps", "-ww", "-o", "etime=,pid=,args=", "-p",
+                           ",".join([root, *child_pids])]
+            else:
+                # Keep Linux's scoped query and untruncated argv contract.
+                command = ["ps", "-ww", "-o", "etimes=,pid=,args=",
+                           "-p", root, "--ppid", root]
+            ps = subprocess.run(command, capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
         if ps.returncode != 0:
             return None
         best, best_age, fallback = None, -1, None
@@ -441,11 +497,22 @@ class Tmux:
                 continue
             age_s, pid, args = parts
             try:
-                age = int(age_s)
+                if darwin:
+                    days, sep, clock = age_s.partition("-")
+                    fields = (clock if sep else days).split(":")
+                    if len(fields) not in (2, 3) or any(not f.isdecimal() for f in fields):
+                        continue
+                    age = 0
+                    for field in fields:
+                        age = age * 60 + int(field)
+                    if sep:
+                        age += int(days) * 86400
+                else:
+                    age = int(age_s)
             except ValueError:
                 continue
             args = args.strip()
-            if args == "-bash":
+            if args in ("-bash", "-zsh", "bash", "zsh"):
                 continue
             line = self._launch_line(pid, args)
             if fallback is None:
@@ -491,7 +558,7 @@ class Tmux:
         return f"{prefix} {args}" if prefix else args
 
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str:
+                *, timeout: float | None = None, check: bool = False) -> str:
         # -S -N extends the capture back N lines into scrollback. Default 0 keeps
         # the VISIBLE-only behaviour triage depends on (see the Panes protocol).
         # -e keeps the SGR sequences. Off by default because every plain-text
@@ -505,6 +572,10 @@ class Tmux:
             args += ["-S", f"-{int(history)}"]
         bounded = {"timeout": timeout} if timeout is not None else {}
         r = subprocess.run(self._cmd(*args), capture_output=True, text=True, **bounded)
+        # Observation provenance must distinguish a failed read from a real
+        # empty frame. Existing delivery/lifecycle callers retain their default.
+        if check:
+            r.check_returncode()
         return r.stdout if r.returncode == 0 else ""
 
     def foreground(self, pane: str) -> str | None:
@@ -550,13 +621,66 @@ class Tmux:
             raise PaneSubmissionUnverified(
                 f"pane {pane} entered a tmux mode (copy-mode) during the send: "
                 f"{sent} chunk(s) were typed before it, nothing after and no "
-                f"Enter. NOT SUBMITTED; do not blindly resend.")
+                f"Enter. NOT SUBMITTED; check delivery before retrying.")
         raise PaneInMode(
             f"pane {pane} is in a tmux mode (copy-mode scrollback): NOT DELIVERED, "
             f"nothing typed. Its mode was left alone; retry once it exits, or use "
             f"st inbox -d so the message waits.")
 
-    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
+    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> SubmissionObserved | None:
+        if allow_shell or not self.delivery_root:
+            return self._send(pane, text, allow_shell=allow_shell)
+        from .delivery import Custody
+        try:
+            with Custody(self.delivery_root, pane, self.socket) as custody:
+                try:
+                    observed = self._send(pane, text, custody=custody)
+                except Exception:
+                    # A failed observation must not discard the original failure
+                    # or its durable ownership record.
+                    try:
+                        custody.failed(self)
+                    except Exception:
+                        pass
+                    raise
+                custody.finish('delivered')
+                return observed
+        except OSError as exc:
+            raise PaneSubmissionUnverified(
+                'UNVERIFIED: local delivery custody unavailable; check delivery and custody before retrying') from exc
+
+    def type_text(self, pane: str, text: str) -> None:
+        """Type `text` into an agent pane WITHOUT submitting it (aegis-g9w).
+
+        Every guard send() has (copy-mode, shell foreground, safeguard, task
+        list, chunking, journal) and NO Enter. The caller owns the submit, and
+        submits with submit() only after it has SEEN the text in the box: a
+        Claude Code composer that absorbs a long write as `[Pasted text #1 +N
+        lines]` swallows an Enter sent in the same burst, so a send() there
+        types the job and never starts it. Not wrapped in delivery custody:
+        nothing was delivered yet, and custody is the Codex rail's record.
+        """
+        self._send(pane, text, submit=False)
+
+    def submit(self, pane: str) -> None:
+        """Press Enter ONCE in an agent pane, as its own keystroke (aegis-g9w).
+
+        Only for a caller that has just verified the box holds text it typed
+        itself (ephemeral.deliver); st never presses Enter on text it did not
+        put there. Refuses copy-mode and a shell foreground exactly like
+        send(): an Enter at a bare shell runs whatever sits on its line.
+        Journaled, because every keystroke st puts into a pane is an action.
+        """
+        self._refuse_in_mode(pane)
+        fg = self.foreground(pane)
+        if fg is not None and fg in SHELL_COMMANDS:
+            raise PaneNotAgent(
+                f"pane {pane} is running {fg!r}, not an agent runtime: Enter withheld.")
+        _journal_send(pane, "<submit>")
+        subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
+
+    def _send(self, pane: str, text: str, *, allow_shell: bool = False,
+              custody=None, submit: bool = True) -> SubmissionObserved | None:
         # REFUSE A PANE IN COPY-MODE (aegis-6jx) before anything else reads or
         # types. See PaneInMode for what each key does to a person scrolling back.
         self._refuse_in_mode(pane)
@@ -572,6 +696,10 @@ class Tmux:
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
         codex = False
+        if not allow_shell:
+            from .stop_failure import pane_state
+            if pane_state(self.delivery_root, pane) == "safeguard-blocked":
+                raise PaneNotAgent(f"pane {pane} is safeguard-blocked: administrator review required. NOT DELIVERED.")
         if not allow_shell:
             fg = self.foreground(pane)
             if fg is not None and fg in SHELL_COMMANDS:
@@ -590,10 +718,17 @@ class Tmux:
                     # append it again or commit unrelated operator input.
                     _journal_send(pane, "<retry-pending:" + text + ">")
                     self._verify_codex_submission(pane, text, before)
-                    return
+                    return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
                 if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
-                    raise PaneSubmissionUnverified(
-                        f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
+                    if custody is not None and custody.clear_previous(self, before):
+                        before = self.capture(pane, attrs=True, timeout=2)
+                    if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                        # Journal the refusal (aegis-9t4). One stranded body makes
+                        # every later send refuse here; unjournaled, a 64-minute
+                        # outage on tim read as an empty send log, not a deaf pane.
+                        _journal_send(pane, "<refused:occupied-composer:" + text + ">")
+                        raise PaneSubmissionUnverified(
+                            f"UNVERIFIED: empty composer in {pane} not confirmed; nothing added")
         # -l sends the text literally; the separate Enter is the submit.
         # This is the entire dispatch mechanism. gt nudge's own help says so:
         # "Send directly via tmux send-keys."
@@ -631,6 +766,8 @@ class Tmux:
         # — dispatch, escalations, tend prompts. The defect was found on inbox
         # and was never inbox's: it belongs to the one place st types into a pane.
         _journal_send(pane, text)
+        if codex and custody is not None:
+            custody.begin(text, self.session_created(pane))
         # `or [""]` keeps the empty-body case sending exactly one `-l ""`, which
         # is what this always did — the split of an empty string is no chunks.
         chunks = [text[i:i + _SEND_CHUNK]
@@ -660,6 +797,8 @@ class Tmux:
                 time.sleep(_SEND_CHUNK_GAP_S)
         # Before the settle, so the settle stays the last thing before Enter.
         self._refuse_in_mode(pane, sent=len(chunks))
+        if not submit:
+            return None
         if codex:
             # A key inside the terminal's paste burst can become text instead
             # of a submit. Chunking alone does not separate the final Enter.
@@ -667,6 +806,7 @@ class Tmux:
         subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
         if codex:
             self._verify_codex_submission(pane, text, before)
+            return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
 
     def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
         """Recover an existing body without ever appending or replacing input."""
@@ -697,8 +837,8 @@ class Tmux:
         def observed(screen):
             return (triage.input_state(screen) in
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
-                    ((_codex_queued(screen, text) and not _codex_queued(before, text)) or
-                     (not was_busy and triage.mid_flight(screen))))
+                    not _codex_queued(screen, text) and
+                    not was_busy and triage.mid_flight(screen))
         for attempt in range(_CODEX_ATTEMPTS):
             screen = ""
             for _ in range(_CODEX_POLLS):
@@ -714,6 +854,9 @@ class Tmux:
                 # remain typed while an older turn is still working.
                 if observed(screen):
                     return
+                if _codex_queued(screen, text):
+                    raise PaneSubmissionUnverified(
+                        f'UNVERIFIED: Codex queued input in {pane}; not delivered')
             if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
                     and _codex_owned_input(screen, text)):
                 # Submit only the exact body we own. Busy Codex queues with
@@ -740,7 +883,7 @@ class Tmux:
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
             f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
-            "body was not resent, do not blindly resend")
+            "body was not resent, check delivery before retrying")
 
     def control(self, pane: str, key: str) -> None:
         """Send ONE editing key from a fixed allowlist. Cannot submit. Ever.
@@ -845,8 +988,9 @@ class Tmux:
         # create the pane's scope, SILENTLY, which switches per-pane containment
         # off without a single error anywhere (aegis-ihl7ie). Strip it here, at
         # the one call that starts a tmux server.
-        from . import panemem
-        subprocess.run(self._cmd(*argv), check=True, env=panemem.launch_env())
+        from . import panemem, tmux_scope
+        subprocess.run(tmux_scope.launch_argv(self._cmd(*argv)),
+                       check=True, env=panemem.launch_env())
         # Provenance marker: st launched this session, so st may stop
         # it. Set immediately; if it fails, tear the session down rather than
         # leave an un-owned session st created (which its own guard could never
@@ -1164,7 +1308,7 @@ class NullPanes:
         return self._exists
 
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str:
+                *, timeout: float | None = None, check: bool = False) -> str:
         # The double has no scrollback/visible split — one screen answers both.
         # attrs is accepted and ignored: whatever the caller seeded IS the
         # screen, escapes and all. Seed a screen with \x1b[2m in it to model a
@@ -1192,6 +1336,18 @@ class NullPanes:
         # eats every message, which is not a pane. Unless drops=True.
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
+
+    def type_text(self, pane: str, text: str) -> None:
+        """Tmux.type_text's double: the text lands, no Enter is recorded."""
+        self.send(pane, text)
+
+    def submit(self, pane: str) -> None:
+        """Tmux.submit's double: one Enter, recorded apart from text and keys."""
+        if self.in_mode:
+            raise PaneInMode(f"pane {pane} is in a tmux mode: NOT DELIVERED.")
+        if self.foreground_cmd in SHELL_COMMANDS:
+            raise PaneNotAgent(f"pane {pane} is a shell: Enter withheld.")
+        self.submits = getattr(self, "submits", []) + [pane]
 
     def control(self, pane: str, key: str) -> None:
         """Records the key; enforces the SAME allowlist as Tmux.control.

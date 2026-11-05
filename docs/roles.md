@@ -234,3 +234,47 @@ The emitted timeout is 120 seconds. No hook is emitted when unset, for other
 roles, or for other harnesses. Re-emit settings and relaunch existing sessions
 after changing the deployment setting. The deployment owns the validator and
 must keep it installed at a stable execution path.
+
+## Work owned by stopped agents
+
+`st agent stop` records the stop, then reads only that owner's queue and unread
+inbox. One durable escalation goes to the named lead (the sole administrator
+for an orphan). It includes seed identifiers, priorities and due dates, or a
+pointer to the complete local report when the inbox limit would be exceeded.
+Unread message bodies remain with their original recipient. This notification
+never reassigns, repools, acknowledges mail, launches or resumes an agent.
+The lead uses normal `st go --reassign`, `st work repool`, or a hold with a reason
+and supported resume condition.
+
+P0 and already-overdue work is reported at the stop boundary. Other work waits
+five minutes. A future due date can shorten that grace period. A sanctioned
+relaunch before the deadline cancels the pending notice. Replayed stops reuse
+one event identity. The existing fleet-owner tend timer serves local deadlines;
+it does not wake an agent to inspect work. Once an empty queue is proved, it is
+quiet until a new input event. Stop records predating this feature enter through
+the same timer. Dry runs emit no event. Each supervisor pass starts at most four
+pending owner checks and stops starting checks after five seconds; an in-flight
+read or write finishes normally. Persisted attempt order rotates unserved owners
+first on the next pass. These are start bounds, not a remote-call timeout.
+
+The portable floor stores evidence below the deployment root's `owned-work/`.
+Launch and existing session/tool capture hooks maintain a 30-minute local lease.
+A missing heartbeat means **process state UNKNOWN**, not proof of a crash. A late
+hook cannot clear an explicit stop or session ceiling; a sanctioned launch can.
+Ceiling hooks record unavailable work custody without killing the pane. Incoming
+mail to a deliberately stopped agent is flagged; its durable recipient and the
+normal live-delivery safety checks remain intact.
+
+Delivery records `attempting` before the remote inbox write. On an indeterminate
+result, later passes look for that exact receipt, including closed messages, and
+never blindly resend. Missing metadata, partial reads and corrupt local state
+are reported UNKNOWN. One unavailable owner does not prevent other deadlines.
+The full report is local, so it is not a cross-host Quipu projection.
+
+Native Quipu liveness/expiry and the query-derived Brief panel are explicitly
+**Unsupported** until their governed fact, producer and event contracts are
+admitted. This local floor installs no timer, server, model polling loop or graph
+schema, and does not claim those integrations or installed acceptance. Runtime
+acceptance must use an authorized synthetic agent, never an operator-held crew
+member. Rollback is the named source inverse plus the previous released binary;
+retain `owned-work/` evidence rather than deleting notification history.

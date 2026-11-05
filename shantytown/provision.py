@@ -484,7 +484,13 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             gaps.append("skills(retired in Quipu)")
     except tooling.ToolingError:
         gaps.append("skills(receipt or retired link unreadable)")
-    if card.harness == "codex":
+    from .ephemeral import is_ephemeral_name
+    # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-g9w review of #411):
+    # the #406 guard covered only the Claude StopFailure refresh. This block
+    # re-rendered the shared codex worker config.toml with the SPAWNING st's
+    # interpreter, so a spawn from a checkout repointed every codex worker's
+    # hooks at a temporary venv. An ephemeral card reads the role file as is.
+    if card.harness == "codex" and not is_ephemeral_name(card.name):
         from . import codex as codex_mod
         config = _codex_config(card, root)
         want = _codex_servers(rendered["mcpServers"])
@@ -847,6 +853,53 @@ def _with_precompact_hook(text: str, role: str, root) -> str:
     return json.dumps(cfg, indent=2) + "\n"
 
 
+def _refresh_failure_hook(card, root, settings_path) -> None:
+    """Provision must repair the artifact launch selects, not just new templates.
+
+    Refresh only this owned hook: a full shared-role regeneration could change
+    an administrator's scoped policy or an operator's unrelated settings.
+    """
+    from .harness import name_for
+    from .runtime import stop_failure_hooks
+    import shlex
+    if card is None or settings_path is None or name_for(card, root=root) != "claude":
+        return
+    from .ephemeral import is_ephemeral_name
+    if is_ephemeral_name(card.name):
+        # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-c01c.2 review). The
+        # worker file is the crew's; a spawn run from an uninstalled checkout
+        # repointed lex's StopFailure hook at a temporary venv.
+        return
+    path = Path(settings_path)
+    try:
+        cfg = json.loads(path.read_text())
+        hooks = cfg.setdefault("hooks", {})
+        groups = hooks.get("StopFailure", [])
+        if not isinstance(hooks, dict) or not isinstance(groups, list):
+            raise ValueError("invalid hook container")
+        kept = []
+        for group in groups:
+            commands = []
+            for hook in group["hooks"]:
+                try:
+                    command = hook.get("command", "")
+                    argv = shlex.split(command) if isinstance(command, str) else []
+                except ValueError:
+                    argv = []
+                owned = (len(argv) >= 3 and argv[1:3] == ["-m", "shantytown.stop_failure"]
+                         and re.fullmatch(r"(?:python|pypy)(?:\d+(?:\.\d+)*)?", Path(argv[0]).name))
+                if not owned:
+                    commands.append(hook)
+            if commands:
+                kept.append({**group, "hooks": commands})
+        wanted = kept + stop_failure_hooks(root)
+        if groups != wanted:
+            hooks["StopFailure"] = wanted
+            write_text_atomic(path, json.dumps(cfg, indent=2) + "\n")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise ProvisionError(f"cannot refresh StopFailure settings: {exc}") from None
+
+
 def _workspace_capture(text: str, root, settings_path=None, *, card=None) -> str:
     """Fill missing role capture registrations, never count an event twice.
 
@@ -854,6 +907,7 @@ def _workspace_capture(text: str, root, settings_path=None, *, card=None) -> str
     overrides). Old settings keep their workspace fallback; freshly emitted
     settings own capture even on a host that has never configured an MCP kit.
     """
+    _refresh_failure_hook(card, root, settings_path)
     role_hooks = {}
     if settings_path is not None:
         try:
@@ -1134,7 +1188,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     # self-healing channel is the config.toml selected by the card, so refresh
     # the workspace hooks here on every launch (aegis-jlmqn).  Prefer a per-agent
     # override exactly as the launcher does, then fall back to the role artifact.
-    if card.harness == "codex":
+    from .ephemeral import is_ephemeral_name
+    # A SPAWN NEVER REWRITES SHARED ROLE SETTINGS (aegis-g9w review of #411):
+    # the #406 guard covered only the Claude StopFailure refresh. This block
+    # re-rendered the shared codex worker config.toml with the SPAWNING st's
+    # interpreter, so a spawn from a checkout repointed every codex worker's
+    # hooks at a temporary venv. An ephemeral card reads the role file as is.
+    if card.harness == "codex" and not is_ephemeral_name(card.name):
         from . import codex as codex_mod
         config = _codex_config(card, root)
         if config is not None:

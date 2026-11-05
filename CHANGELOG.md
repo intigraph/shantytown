@@ -1,5 +1,322 @@
 # Changelog
 
+## [0.11.0](https://github.com/intigraph/shantytown/compare/v0.10.0...v0.11.0) (2026-11-05)
+
+
+### Features
+
+* **cost:** attribute unattributed spend to the held item, as inferred ([#443](https://github.com/intigraph/shantytown/issues/443)) ([f25d644](https://github.com/intigraph/shantytown/commit/f25d64485e569c0d4f59baefd08908243841dbec))
+* **cost:** attribute unattributed spend to the held item, as inferred (aegis-59jx) ([f25d644](https://github.com/intigraph/shantytown/commit/f25d64485e569c0d4f59baefd08908243841dbec))
+* **cost:** display priced coverage and discover durable Codex usage ([4a16b4c](https://github.com/intigraph/shantytown/commit/4a16b4c1a1d1b3628cf15d007aaf11c414fedfb9))
+* **cost:** show dollar coverage and discover durable Codex usage ([#454](https://github.com/intigraph/shantytown/issues/454)) ([4a16b4c](https://github.com/intigraph/shantytown/commit/4a16b4c1a1d1b3628cf15d007aaf11c414fedfb9))
+* **identity:** carry protected CA config through isolated jobs ([#486](https://github.com/intigraph/shantytown/issues/486)) ([6a381cf](https://github.com/intigraph/shantytown/commit/6a381cfe8a5dd52ed9475996b87abeac81a6b604))
+* **inbox:** [inbox] store = "message-graph": new mail to message windows, not seeds ([#438](https://github.com/intigraph/shantytown/issues/438)) ([e126d6d](https://github.com/intigraph/shantytown/commit/e126d6d61415d3f8cf386caf6ff69ba37ec28d4b))
+* require mounted storage for configured Codex sessions ([#376](https://github.com/intigraph/shantytown/issues/376)) ([1a20bda](https://github.com/intigraph/shantytown/commit/1a20bdab1cf08e2b3e873bd76c96be06c103b101))
+* **work:** recover open work from measured stopped owners ([#446](https://github.com/intigraph/shantytown/issues/446)) ([fb33e64](https://github.com/intigraph/shantytown/commit/fb33e641c3ded75d8ea569d5d0413325cec6afeb))
+
+
+### Bug Fixes
+
+* **defer:** require event backstops and retain owner reminders ([#476](https://github.com/intigraph/shantytown/issues/476)) ([59274a7](https://github.com/intigraph/shantytown/commit/59274a71de00829932cd0f80e26182a2476a2376))
+* deliver routine batches using exact inbox receipts ([#487](https://github.com/intigraph/shantytown/issues/487)) ([dd11e1c](https://github.com/intigraph/shantytown/commit/dd11e1ce4a1bb63988e3df457a842cb743ea5222))
+* **delivery:** retain terminal custody evidence and unresolved notices ([#457](https://github.com/intigraph/shantytown/issues/457)) ([cd43f01](https://github.com/intigraph/shantytown/commit/cd43f01d4578cfa685d35d51d92609b0543fc345))
+* **dream:** scope the admission read to live worker plates ([#474](https://github.com/intigraph/shantytown/issues/474)) ([9697c75](https://github.com/intigraph/shantytown/commit/9697c7514e6cbab26b1743f8d79ee7d125525253))
+* **feed:** scope an unreadable gate to its owner, not the whole fleet ([#484](https://github.com/intigraph/shantytown/issues/484)) ([f160693](https://github.com/intigraph/shantytown/commit/f160693613dc2c71744ff6fa5bccfaa52c4f51d7))
+* **governor:** transfer ceiling-held work across harnesses ([#467](https://github.com/intigraph/shantytown/issues/467)) ([94d15ff](https://github.com/intigraph/shantytown/commit/94d15ffd67de4de8a93d9adb71ac4fd297360b58))
+* **guard:** separate persistent coverage from producer scratch clones ([#485](https://github.com/intigraph/shantytown/issues/485)) ([604b880](https://github.com/intigraph/shantytown/commit/604b88058719c82e72c920ec615594ae668d9012))
+* read queued routine inbox receipts without full enumeration ([dd11e1c](https://github.com/intigraph/shantytown/commit/dd11e1ce4a1bb63988e3df457a842cb743ea5222))
+* use current stack names and retain legacy compatibility ([#483](https://github.com/intigraph/shantytown/issues/483)) ([05a8a94](https://github.com/intigraph/shantytown/commit/05a8a943464da76149b2eb1d08d41ecb9c893627))
+
+
+### Documentation
+
+* **readme:** embed the hero and a non-writing crew preview ([#419](https://github.com/intigraph/shantytown/issues/419)) ([17b6798](https://github.com/intigraph/shantytown/commit/17b6798a15e0607b56f9a0de94606b6e2ddbfcc5))
+
+## [0.10.0](https://github.com/intigraph/shantytown/compare/v0.9.1...v0.10.0) (2026-11-05)
+
+
+### Features
+
+* **cycle:** prefer process replacement for installed CLI updates ([#463](https://github.com/intigraph/shantytown/issues/463)) ([551f966](https://github.com/intigraph/shantytown/commit/551f9660975df58cd50cdb972557d9d43e10feb1))
+* **input:** retain bounded composer observation evidence ([#432](https://github.com/intigraph/shantytown/issues/432)) ([108b17e](https://github.com/intigraph/shantytown/commit/108b17e0900d6e311372840e6e37cfcd1bcb7260))
+* **jobs:** delegate the local evaluator explicitly to Chaski ([#462](https://github.com/intigraph/shantytown/issues/462)) ([00aeb88](https://github.com/intigraph/shantytown/commit/00aeb887d5ec2f8575283bd1c8eca5bbf09aa795))
+* **notify:** add a finite targeted unlock reaction seam ([#471](https://github.com/intigraph/shantytown/issues/471)) ([ee7bf0a](https://github.com/intigraph/shantytown/commit/ee7bf0a2265319967c2a042b149703d8b6346706))
+* **rank:** derive bands from measured gates and isolate semantic evaluation ([#466](https://github.com/intigraph/shantytown/issues/466)) ([64176a5](https://github.com/intigraph/shantytown/commit/64176a59703efce5487285de626fa82249800e4c))
+* **rank:** governed board proposals with a quarantined Jev benchmark ([#456](https://github.com/intigraph/shantytown/issues/456)) ([023868b](https://github.com/intigraph/shantytown/commit/023868baafd9cc36ae49dfc5654110ac8b20b9d1))
+* **share:** publish pendant entities under w3id.org/intigraph names ([#450](https://github.com/intigraph/shantytown/issues/450)) ([17010a5](https://github.com/intigraph/shantytown/commit/17010a52a4aab0eebc62607a0d4f9d1931b0f94f))
+
+
+### Bug Fixes
+
+* bind repository shares to pinned providers and native seals ([#480](https://github.com/intigraph/shantytown/issues/480)) ([a93335d](https://github.com/intigraph/shantytown/commit/a93335d37caad89e8007d0a711de9166d4dd0a0a))
+* **comments:** retain terminal SDK errors after warnings ([#455](https://github.com/intigraph/shantytown/issues/455)) ([7923c5c](https://github.com/intigraph/shantytown/commit/7923c5cfc68057406a39c4aee6479f6e509954bf))
+* **context:** nudge every role before handoff and repeat advice ([#460](https://github.com/intigraph/shantytown/issues/460)) ([f7b3b34](https://github.com/intigraph/shantytown/commit/f7b3b346a2494fb43d77cf749a5f59ed1defbdf5))
+* **cost:** one missing or unreadable item no longer aborts the cost report ([#441](https://github.com/intigraph/shantytown/issues/441)) ([202c6b0](https://github.com/intigraph/shantytown/commit/202c6b0edaef10dfdfd9dd869e3738e9877c207b))
+* **cycle:** cut redundant checkpoint round trips ([#453](https://github.com/intigraph/shantytown/issues/453)) ([2981a4e](https://github.com/intigraph/shantytown/commit/2981a4ebc808356d5aef9ff600c606ac7bdbcc71))
+* **cycle:** let pending self-cycles reach idle ([#472](https://github.com/intigraph/shantytown/issues/472)) ([ca80682](https://github.com/intigraph/shantytown/commit/ca80682f096aba9a604ccaa872750339969c63e8))
+* **harness:** preserve per-harness browser preferences and model selections ([#458](https://github.com/intigraph/shantytown/issues/458)) ([b06d1ec](https://github.com/intigraph/shantytown/commit/b06d1ec51c2a4ba3c003bf9618b6386ce369d19b))
+* **hooks:** encode resume briefs as SessionStart context ([#473](https://github.com/intigraph/shantytown/issues/473)) ([577f64f](https://github.com/intigraph/shantytown/commit/577f64fb64e6da5e3a8754c5c7908839ea05d6b2))
+* **rank:** preserve Unicode scalars in quarantine Turtle ([#465](https://github.com/intigraph/shantytown/issues/465)) ([67cf0a4](https://github.com/intigraph/shantytown/commit/67cf0a4c46bf31ded4920ed39eac195c7e036a96))
+* **rank:** require explicit host placement for local owner probes ([#464](https://github.com/intigraph/shantytown/issues/464)) ([087c9f9](https://github.com/intigraph/shantytown/commit/087c9f9b153bb87defd63e95275a19b7b7c051af))
+* **remote:** report discovery limits without inventing phone identity ([#469](https://github.com/intigraph/shantytown/issues/469)) ([db4561f](https://github.com/intigraph/shantytown/commit/db4561f60a5ccbbd51673248ec64e36332f84d5f))
+* **tend:** compact ranking digest and suppress unchanged logs ([#461](https://github.com/intigraph/shantytown/issues/461)) ([8ee0f7e](https://github.com/intigraph/shantytown/commit/8ee0f7eaa1bd453838e2a4df69a5eea83673449e))
+* **tend:** ranking check pages only for an unowned P0 ([bccb036](https://github.com/intigraph/shantytown/commit/bccb036cd65183cc16f79a2c56fe24419565afbe))
+* **tend:** ranking check pages the administrator only for an unowned P0 (aegis-2inj) ([bccb036](https://github.com/intigraph/shantytown/commit/bccb036cd65183cc16f79a2c56fe24419565afbe))
+* **tend:** unknown board counts are logged, not paged ([#452](https://github.com/intigraph/shantytown/issues/452)) ([4270087](https://github.com/intigraph/shantytown/commit/42700874c0ef2207b54caaea619ff9bd5e8f7096))
+* **worktree:** refuse --gc on a relocated worktree; report partial deletes as damage ([#459](https://github.com/intigraph/shantytown/issues/459)) ([9f3d233](https://github.com/intigraph/shantytown/commit/9f3d233c874bcff072a97d426e5e05f7b9cad15f))
+
+## [0.9.1](https://github.com/intigraph/shantytown/compare/v0.9.0...v0.9.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deferrals:** start field reads below the structural limit ([#444](https://github.com/intigraph/shantytown/issues/444)) ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
+* **deferrals:** start field reads below the structural limit ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
+* **owned-work:** stop putting a review deadline on immutable lifecycle observations ([#448](https://github.com/intigraph/shantytown/issues/448)) ([3f29f25](https://github.com/intigraph/shantytown/commit/3f29f2577beedd802ef69f7ef55161f2a1c012ac))
+
+## [0.9.0](https://github.com/intigraph/shantytown/compare/v0.8.0...v0.9.0) (2026-11-02)
+
+
+### Features
+
+* **agent:** signed Quipu verdicts replace GitHub approvals for the guarded merge ([#408](https://github.com/intigraph/shantytown/issues/408)) ([3fa8886](https://github.com/intigraph/shantytown/commit/3fa8886f637971b430d7c953bd0de01e307cad3c))
+* **agent:** st agent spawn --ephemeral — supervised one-job agents ([#406](https://github.com/intigraph/shantytown/issues/406)) ([6ae820e](https://github.com/intigraph/shantytown/commit/6ae820ee7e41627e6bb304a31613e4a6331d2085))
+* **cli:** st prime per the stack prime contract ([#409](https://github.com/intigraph/shantytown/issues/409)) ([214223a](https://github.com/intigraph/shantytown/commit/214223a4875e5ee45939da4904335496f19b3979))
+* **cycle:** accept independently verified bundle custody ([#435](https://github.com/intigraph/shantytown/issues/435)) ([9c292d1](https://github.com/intigraph/shantytown/commit/9c292d10d2ba12ac6fc25d8cbf4dec8cb3e4964f))
+* **jobs:** stage protected per-job UID launch and lifecycle ([#421](https://github.com/intigraph/shantytown/issues/421)) ([e7fcee4](https://github.com/intigraph/shantytown/commit/e7fcee4ec1ee500df29126eb0660979541922111))
+* **stop-policy:** ruling-without-record stop check, off by default ([#414](https://github.com/intigraph/shantytown/issues/414)) ([64851f2](https://github.com/intigraph/shantytown/commit/64851f2ff51f50182901e155457fef94eae3e79c))
+* **stop:** block the administrator on a startable P0 plate (rank 2a) ([#405](https://github.com/intigraph/shantytown/issues/405)) ([d877948](https://github.com/intigraph/shantytown/commit/d87794882722287475636b3447fbc68309bb9417))
+* **work:** hold automatic feeds while keeping an agent live ([#279](https://github.com/intigraph/shantytown/issues/279)) ([34e071d](https://github.com/intigraph/shantytown/commit/34e071d461c9fdc041db9d49c1d0f3cfe650e2da))
+
+
+### Bug Fixes
+
+* **admin-inbox:** retain one recipient's rows when its unread read fails ([#426](https://github.com/intigraph/shantytown/issues/426)) ([7510e04](https://github.com/intigraph/shantytown/commit/7510e04d678235a4b3b56bdf7faa907cf49feb1c))
+* **admin-inbox:** retain one recipient's rows when its unread read fails ([7510e04](https://github.com/intigraph/shantytown/commit/7510e04d678235a4b3b56bdf7faa907cf49feb1c))
+* **advise-signing:** read the optional policy from the macOS operator directory ([#424](https://github.com/intigraph/shantytown/issues/424)) ([f423871](https://github.com/intigraph/shantytown/commit/f4238717cfce0da0a3384b9976a13b2b928f9656))
+* **advise-signing:** read the optional policy from the macOS operator directory ([f423871](https://github.com/intigraph/shantytown/commit/f4238717cfce0da0a3384b9976a13b2b928f9656))
+* **capacity:** apply the ten-item limit to urgent work ([#428](https://github.com/intigraph/shantytown/issues/428)) ([38120f2](https://github.com/intigraph/shantytown/commit/38120f2dc27f7d949546ff9e48a5baae99dc00c6))
+* **ci:** refuse tracker IDs in pull request titles ([#433](https://github.com/intigraph/shantytown/issues/433)) ([09c1c6a](https://github.com/intigraph/shantytown/commit/09c1c6a70d298dbe8cf254777e9063040e489211))
+* **cycle:** explain agent-owned background task holds ([#402](https://github.com/intigraph/shantytown/issues/402)) ([f0e082d](https://github.com/intigraph/shantytown/commit/f0e082d8d1bf9f6fb9601cff9c17dd6b3891f1e5))
+* **delivery:** page when an idle composer holds unmatched text while mail waits ([#439](https://github.com/intigraph/shantytown/issues/439)) ([a105d36](https://github.com/intigraph/shantytown/commit/a105d36895c07b0b9155e050fcf6cb2b4e96b05a))
+* **delivery:** page when an idle composer holds unmatched text while mail waits ([a105d36](https://github.com/intigraph/shantytown/commit/a105d36895c07b0b9155e050fcf6cb2b4e96b05a))
+* **dispatch:** admit task-authorized Claude authors ([#425](https://github.com/intigraph/shantytown/issues/425)) ([7420239](https://github.com/intigraph/shantytown/commit/7420239f03924fa166531e3cc5a8ca1232345041))
+* **dispatch:** align work-class admission with Codex policy ([#392](https://github.com/intigraph/shantytown/issues/392)) ([f508f72](https://github.com/intigraph/shantytown/commit/f508f72f2d98cd3ffdba7b6b6c6f8da0d17aa6bf))
+* **dispatch:** refill idle crew through normal admission ([#434](https://github.com/intigraph/shantytown/issues/434)) ([55bf9de](https://github.com/intigraph/shantytown/commit/55bf9deeaf8e7f99ba2c75fbb97abb8f95324a60))
+* **dispatch:** restore Claude and Codex authoring with Codex reviews ([#429](https://github.com/intigraph/shantytown/issues/429)) ([4e6500e](https://github.com/intigraph/shantytown/commit/4e6500e808c49422987311f221d00cc54339f9e8))
+* **ephemeral:** deliver the job prompt in checked steps; crash-to-shell is launch failed; spawns never rewrite shared role settings ([c1f97f3](https://github.com/intigraph/shantytown/commit/c1f97f364a6059df8c79dcdb9c0736bd1ee92afb))
+* **ephemeral:** guarded actions need a verified identity; unattended launches gated ([#415](https://github.com/intigraph/shantytown/issues/415)) ([45c4dbe](https://github.com/intigraph/shantytown/commit/45c4dbeb5dbd88e639ebbf5e454c9864580e6fe3))
+* **ephemeral:** guarded actions verify identity (strict opt-in); unattended launches gated ([45c4dbe](https://github.com/intigraph/shantytown/commit/45c4dbeb5dbd88e639ebbf5e454c9864580e6fe3))
+* **ephemeral:** teardown removes worktrees the job created ([#413](https://github.com/intigraph/shantytown/issues/413)) ([c704c25](https://github.com/intigraph/shantytown/commit/c704c251a44d663ade09322757fc35c0e982838d))
+* **ephemeral:** teardown removes worktrees the job created itself; keeps real work ([c704c25](https://github.com/intigraph/shantytown/commit/c704c251a44d663ade09322757fc35c0e982838d))
+* **governor:** admit launches on any host when peers are down ([#396](https://github.com/intigraph/shantytown/issues/396)) ([7e6ea1b](https://github.com/intigraph/shantytown/commit/7e6ea1b06ab401f05c3cc6360d8455f1319e6d02))
+* **governor:** never mistake a busy admission owner for an unreachable one ([#398](https://github.com/intigraph/shantytown/issues/398)) ([b56f091](https://github.com/intigraph/shantytown/commit/b56f0910d07545d88286bf7fdcd75411ccec9501))
+* **governor:** publish advice knownness for blind lanes ([0ed9218](https://github.com/intigraph/shantytown/commit/0ed92183c61e3dfad8f94e8b3da5abbc8dd82c4a))
+* **governor:** publish knownness=0 for blind lanes so dashboards see them ([#418](https://github.com/intigraph/shantytown/issues/418)) ([0ed9218](https://github.com/intigraph/shantytown/commit/0ed92183c61e3dfad8f94e8b3da5abbc8dd82c4a))
+* **governor:** stale or invalid peer census is advisory, one-line notice ([#404](https://github.com/intigraph/shantytown/issues/404)) ([e2381de](https://github.com/intigraph/shantytown/commit/e2381dedc72d1cd7bac662eaeff51f086c4b4d34))
+* **governor:** symmetric ±60s clock-skew tolerance for peer census ([#412](https://github.com/intigraph/shantytown/issues/412)) ([28ce620](https://github.com/intigraph/shantytown/commit/28ce62002190a6c3d95bd1e3ff4ca79d59db7500))
+* **governor:** treat a usage window the plan does not offer as not applicable ([#437](https://github.com/intigraph/shantytown/issues/437)) ([f3b7381](https://github.com/intigraph/shantytown/commit/f3b73815d1f49778515d3d819deed8eaf49d65c3))
+* harden ASK dispatch and undated inbox ordering ([#403](https://github.com/intigraph/shantytown/issues/403)) ([d62a096](https://github.com/intigraph/shantytown/commit/d62a0966c6f873adcf79702c44bc6a4d0ea24901))
+* **haul:** keep human decisions off worker hooks ([#400](https://github.com/intigraph/shantytown/issues/400)) ([d277a53](https://github.com/intigraph/shantytown/commit/d277a53e97a395f9572917917d354932a85b6c06))
+* **inbox:** bound metadata reads and count membership separately ([#401](https://github.com/intigraph/shantytown/issues/401)) ([942e491](https://github.com/intigraph/shantytown/commit/942e4913e180c0be1ec95b624174b8aa2f08e076))
+* **item:** read back a comment whose write timed out before calling it unproven ([#395](https://github.com/intigraph/shantytown/issues/395)) ([2c739a7](https://github.com/intigraph/shantytown/commit/2c739a7a553b46ba6c0a429ed08a4fa09d34d6a0))
+* **item:** say when a comment write landed nothing, and print every cause ([#360](https://github.com/intigraph/shantytown/issues/360)) ([4c3d91b](https://github.com/intigraph/shantytown/commit/4c3d91b9941153c079c461f08590917c542b22e2))
+* **jobs:** decode verbose typed Quipu literal cells ([45e47aa](https://github.com/intigraph/shantytown/commit/45e47aafed3d33c61fa0a91cd887b009d6046e63))
+* **jobs:** decode verbose typed Quipu literal cells in the job catalogue reader ([#416](https://github.com/intigraph/shantytown/issues/416)) ([45e47aa](https://github.com/intigraph/shantytown/commit/45e47aafed3d33c61fa0a91cd887b009d6046e63))
+* keep human decisions out of dispatch and sort undated inboxes last ([d62a096](https://github.com/intigraph/shantytown/commit/d62a0966c6f873adcf79702c44bc6a4d0ea24901))
+* **preflight:** preserve untracked private scratch directories ([#431](https://github.com/intigraph/shantytown/issues/431)) ([e725325](https://github.com/intigraph/shantytown/commit/e7253254d60d99d5d89ef57a8dce12fd1bf3c7b7))
+* **provenance:** retain native hook session in lifecycle writes ([#427](https://github.com/intigraph/shantytown/issues/427)) ([a5275a8](https://github.com/intigraph/shantytown/commit/a5275a8eeab21da36a30ac2e292c119890dc7878))
+* **ranking:** read the digest's cohorts with a bounded indexed reader ([#440](https://github.com/intigraph/shantytown/issues/440)) ([67e9436](https://github.com/intigraph/shantytown/commit/67e9436aefe6e0700ddaa81e20cf7dd09f529255))
+* **ranking:** read the digest's cohorts with a bounded indexed reader ([67e9436](https://github.com/intigraph/shantytown/commit/67e9436aefe6e0700ddaa81e20cf7dd09f529255))
+* **share:** admit tracked agent-file aliases and export the policy catalogue ([#436](https://github.com/intigraph/shantytown/issues/436)) ([352f83b](https://github.com/intigraph/shantytown/commit/352f83bbe48ce2339b8f5deb7f84264223a70835))
+* **shares:** carry the reviewed empty alignment member ([#394](https://github.com/intigraph/shantytown/issues/394)) ([0ae8dbf](https://github.com/intigraph/shantytown/commit/0ae8dbf20d923cc92d9d3a2f681ffc9ee15ce2b8))
+* **spawn:** an ephemeral job is delivered when its turn starts ([#411](https://github.com/intigraph/shantytown/issues/411)) ([c1f97f3](https://github.com/intigraph/shantytown/commit/c1f97f364a6059df8c79dcdb9c0736bd1ee92afb))
+* **stop-policy:** rank 2a ignores host-bound and live-ephemeral items ([#407](https://github.com/intigraph/shantytown/issues/407)) ([07a5057](https://github.com/intigraph/shantytown/commit/07a50570a8f12a5c10e4a92d863e3b51f02a6d3a))
+* **tend:** busy agent's queued sends are pending, not delivery-stalled ([#410](https://github.com/intigraph/shantytown/issues/410)) ([1de7c92](https://github.com/intigraph/shantytown/commit/1de7c922b2b39bcebb4815b45d288761db7a3a89))
+* **tmux:** observe Darwin launch posture with native process probes ([36451f8](https://github.com/intigraph/shantytown/commit/36451f89735912fa9ecd78cf06242df355da513d))
+* **tmux:** read macOS launch posture without GNU ps options ([#420](https://github.com/intigraph/shantytown/issues/420)) ([36451f8](https://github.com/intigraph/shantytown/commit/36451f89735912fa9ecd78cf06242df355da513d))
+* **tmux:** start the fleet tmux server in its own user scope when launched from a user service ([#417](https://github.com/intigraph/shantytown/issues/417)) ([b2e5d9f](https://github.com/intigraph/shantytown/commit/b2e5d9ff7a675b5b7941c6511d6627cd6f4ffe08))
+* **work item:** keep may-still-land on a failed comment read-back; match author ([#399](https://github.com/intigraph/shantytown/issues/399)) ([a3ea4fd](https://github.com/intigraph/shantytown/commit/a3ea4fdabd4b75bad30e1851cbdd8bcbf1af68bf))
+
+
+### Performance Improvements
+
+* **seeds:** share watermark windows and support push projection reads ([#422](https://github.com/intigraph/shantytown/issues/422)) ([2300f4d](https://github.com/intigraph/shantytown/commit/2300f4d594b4c711f59433a8de2246a1cd6b1cf2))
+
+
+### Documentation
+
+* **design:** agy (Antigravity CLI) as a harness ([#442](https://github.com/intigraph/shantytown/issues/442)) ([ff3980e](https://github.com/intigraph/shantytown/commit/ff3980e2f6efd66bc058edc9be59dae64454d752))
+* **design:** messages in their own windowed graph and lifecycle ([#430](https://github.com/intigraph/shantytown/issues/430)) ([861ca94](https://github.com/intigraph/shantytown/commit/861ca945ff1569cfad7c398fa9a80c08ae09c661))
+
+
+### Tests
+
+* **staleness:** keep origin/main frozen under git 2.56 push-to-URL ([#397](https://github.com/intigraph/shantytown/issues/397)) ([3191e2a](https://github.com/intigraph/shantytown/commit/3191e2a6afd3e373e859f97ef34320efbf2d4ba3))
+
+## [0.8.0](https://github.com/intigraph/shantytown/compare/v0.7.1...v0.8.0) (2026-10-25)
+
+
+### Features
+
+* add verified installer and concise stack guide ([#339](https://github.com/intigraph/shantytown/issues/339)) ([df008dd](https://github.com/intigraph/shantytown/commit/df008dd7d11e467ae864171bc1f344599294c868))
+* **anchor:** point each session at the deployment's process-rules query ([#342](https://github.com/intigraph/shantytown/issues/342)) ([a62f35d](https://github.com/intigraph/shantytown/commit/a62f35da4b8cadc4f2754de526e035d4ddc11abc))
+* **auth:** materialize crew credentials in private runtime files ([#311](https://github.com/intigraph/shantytown/issues/311)) ([1277d0a](https://github.com/intigraph/shantytown/commit/1277d0a4b9ad92c53e0abc12b769eb0694e3238c))
+* bind agent actors to enrolled keys and isolated Unix users ([#333](https://github.com/intigraph/shantytown/issues/333)) ([b61e537](https://github.com/intigraph/shantytown/commit/b61e53723f1e75e5c6484f8eca79d9e8d2ffdb5f))
+* bound routine administrator Stop wakes with an opt-in policy ([#305](https://github.com/intigraph/shantytown/issues/305)) ([ce995db](https://github.com/intigraph/shantytown/commit/ce995db60403bb1ccfd084a15cf2133f69b04ebc))
+* capture ceiling-transfer advisory evidence at the fleet sweep ([9a77bbe](https://github.com/intigraph/shantytown/commit/9a77bbed51097ef7dc58bf96c977e064593d84d0))
+* capture ceiling-transfer inputs and outcomes for independent policy assessment ([#315](https://github.com/intigraph/shantytown/issues/315)) ([9a77bbe](https://github.com/intigraph/shantytown/commit/9a77bbed51097ef7dc58bf96c977e064593d84d0))
+* **context:** judge exceptions above percentage handoff target ([#363](https://github.com/intigraph/shantytown/issues/363)) ([ff0781a](https://github.com/intigraph/shantytown/commit/ff0781acc6ba81655a3ff0b4db142693969775eb))
+* **cost:** bind sampler review transitions to exact windows ([#373](https://github.com/intigraph/shantytown/issues/373)) ([5cca3a9](https://github.com/intigraph/shantytown/commit/5cca3a98322789cd2297fa2d3bbc2b122efc8ebc))
+* **cost:** project request usage by UTC day for frozen joins ([#299](https://github.com/intigraph/shantytown/issues/299)) ([0c0820f](https://github.com/intigraph/shantytown/commit/0c0820fbc89885239c8662b6c1c4041eb32f14c5))
+* **crew:** add bounded local review-routing observations ([#357](https://github.com/intigraph/shantytown/issues/357)) ([dbabbe8](https://github.com/intigraph/shantytown/commit/dbabbe84ed8f2c3c047d5aeb5ab2d16b3b2fc1b2))
+* declare finite command sources before tracker preflight ([#302](https://github.com/intigraph/shantytown/issues/302)) ([bb9f8d2](https://github.com/intigraph/shantytown/commit/bb9f8d2a4503c0b4b9c1721185f52316e5ccfc6a))
+* **deferrals:** evaluate registered natural-event evidence ([83c8ab1](https://github.com/intigraph/shantytown/commit/83c8ab151925d81a670463da60982b3f76187f64))
+* **deferrals:** report a prose gate that is met while the field waits on a date ([#260](https://github.com/intigraph/shantytown/issues/260)) ([66284bd](https://github.com/intigraph/shantytown/commit/66284bdd8000c785d35a5bb4cc35cd26803bf62c))
+* **deferrals:** support registered natural-event resume conditions ([#295](https://github.com/intigraph/shantytown/issues/295)) ([83c8ab1](https://github.com/intigraph/shantytown/commit/83c8ab151925d81a670463da60982b3f76187f64))
+* **defer:** resume on a published release or an installed version ([#344](https://github.com/intigraph/shantytown/issues/344)) ([548ad03](https://github.com/intigraph/shantytown/commit/548ad0371f7ef1790fef0a933f5276294e4ae876))
+* discover and pair existing Codex agents ([#320](https://github.com/intigraph/shantytown/issues/320)) ([708b034](https://github.com/intigraph/shantytown/commit/708b0348d7ff5dbe140397b95f0b339a4c23a2b4))
+* **dispatch:** route authoring by authoritative work class ([#349](https://github.com/intigraph/shantytown/issues/349)) ([0f73ae6](https://github.com/intigraph/shantytown/commit/0f73ae6a66bf447741f56b54580b915cc4d43131))
+* escalate work held by stopped agents ([#330](https://github.com/intigraph/shantytown/issues/330)) ([64d71e2](https://github.com/intigraph/shantytown/commit/64d71e23e85cc3b6df540ead3adaac0948b8a24f))
+* honor deployment defaults for identity registries ([#275](https://github.com/intigraph/shantytown/issues/275)) ([b102211](https://github.com/intigraph/shantytown/commit/b10221158866a576270949b78ada63743b7a81fb))
+* **identity:** observe per-agent signing profiles for Seeds writes ([#390](https://github.com/intigraph/shantytown/issues/390)) ([1b32b5e](https://github.com/intigraph/shantytown/commit/1b32b5ef706b282b6a83fdbe5f1f40d57fe1ac7c))
+* **inbox:** batch explicit routine administrator progress ([#326](https://github.com/intigraph/shantytown/issues/326)) ([8fdc5f1](https://github.com/intigraph/shantytown/commit/8fdc5f1e22d1472f32489062d84c25da07d6f346))
+* **jobs:** create a keyed seed before scheduled agent assignment ([#324](https://github.com/intigraph/shantytown/issues/324)) ([ca672b4](https://github.com/intigraph/shantytown/commit/ca672b4c8efff2f2e1471fe5728274cfdfd4fd89))
+* **jobs:** decode weekly wall-clock catalogue declarations ([#341](https://github.com/intigraph/shantytown/issues/341)) ([f7974a5](https://github.com/intigraph/shantytown/commit/f7974a5555493e423487964b6b074548f44f95ba))
+* **jobs:** expose validated declarations as versioned JSON ([#272](https://github.com/intigraph/shantytown/issues/272)) ([592f5e2](https://github.com/intigraph/shantytown/commit/592f5e236dce12d97457ea80f7260e16a64b601e))
+* **jobs:** report durable inbox outcomes to signed schedule executor ([#323](https://github.com/intigraph/shantytown/issues/323)) ([10bd08b](https://github.com/intigraph/shantytown/commit/10bd08b97fd758ad1f597946b23df571b2e1982d))
+* **memory:** add bounded crew file sync and Claude lifecycle ([#347](https://github.com/intigraph/shantytown/issues/347)) ([f7cc909](https://github.com/intigraph/shantytown/commit/f7cc9097e0b1eff244dc4d9afef7863de93db47a))
+* project governed role responsibilities and ranking advice ([#388](https://github.com/intigraph/shantytown/issues/388)) ([a1984a3](https://github.com/intigraph/shantytown/commit/a1984a336056252b2766262493ff703e03a7d318))
+* publish versioned stopped-owner observations (aegis-xgt) ([#384](https://github.com/intigraph/shantytown/issues/384)) ([cd2e749](https://github.com/intigraph/shantytown/commit/cd2e749fd723959e40049e00c32692cd042ded33))
+* **rank:** use work ranks in anchor and fleet ordering ([#314](https://github.com/intigraph/shantytown/issues/314)) ([878f24e](https://github.com/intigraph/shantytown/commit/878f24ea0743f8e0a49e2f9f4fb98aa150a59aa0))
+* run private Seeds commands after native admission ([#316](https://github.com/intigraph/shantytown/issues/316)) ([c666ed2](https://github.com/intigraph/shantytown/commit/c666ed268a277d57b0db63cf12b789d42cbe984d))
+* share scheduled overdue and unlock reminder digests ([#255](https://github.com/intigraph/shantytown/issues/255)) ([bd203ca](https://github.com/intigraph/shantytown/commit/bd203ca0b3b9368c59a948f9713c7736a39b105d))
+* ship repository-owned pointer pendant source ([#338](https://github.com/intigraph/shantytown/issues/338)) ([a928cb3](https://github.com/intigraph/shantytown/commit/a928cb32b03784b70cddf51200b82b0c54e7bf22))
+* **skills:** adopt six crew-workflow skills from skein ([#257](https://github.com/intigraph/shantytown/issues/257)) ([29248b5](https://github.com/intigraph/shantytown/commit/29248b5d38c1d051efbed7790df137d9a251db37))
+* surface versioned scope changes and owner acknowledgement ([#262](https://github.com/intigraph/shantytown/issues/262)) ([15ddda5](https://github.com/intigraph/shantytown/commit/15ddda519e481f70277ce94c0dad826c907d17b4))
+* **tend:** name the slowest sweeps when the pass sheds its budget (aegis-qc2) ([#292](https://github.com/intigraph/shantytown/issues/292)) ([440e4bc](https://github.com/intigraph/shantytown/commit/440e4bca9a84b8b9b11bcfc7884f2cb96094a4cc))
+* **workspace:** support mounted storage for new worktrees ([#343](https://github.com/intigraph/shantytown/issues/343)) ([d2842bc](https://github.com/intigraph/shantytown/commit/d2842bcb7d4abb2211531325dbd6dde20c7d2289))
+
+
+### Bug Fixes
+
+* align dispatch guidance with current crew process ([#334](https://github.com/intigraph/shantytown/issues/334)) ([f0f15c8](https://github.com/intigraph/shantytown/commit/f0f15c8b3f9d557b5218445c88e5e42b65553891))
+* avoid repeating failed exact item reads ([#285](https://github.com/intigraph/shantytown/issues/285)) ([baf725b](https://github.com/intigraph/shantytown/commit/baf725b94621565658c6acf9e8fabd9283068079))
+* bound known-item display queries by exact subjects ([#327](https://github.com/intigraph/shantytown/issues/327)) ([b431498](https://github.com/intigraph/shantytown/commit/b431498a5663c0fe75761eeb809aff107809d55b))
+* **capacity:** count real work and bound automatic assignment ([#332](https://github.com/intigraph/shantytown/issues/332)) ([82c0f03](https://github.com/intigraph/shantytown/commit/82c0f0394b06acbb2e3738a6bb7ec5bb7f1160cf))
+* **capacity:** refresh admission counts and record P0 overflow ([#351](https://github.com/intigraph/shantytown/issues/351)) ([71522ae](https://github.com/intigraph/shantytown/commit/71522aeca34f9443b72c9bd5c5ac0254a7a3a881))
+* **codex:** queue owned busy-pane input with Tab first ([#358](https://github.com/intigraph/shantytown/issues/358)) ([a1af237](https://github.com/intigraph/shantytown/commit/a1af23766217ba10da93eba5c1c1a880a4ed4680))
+* **codex:** revert busy-input change that strands wrapped messages ([#366](https://github.com/intigraph/shantytown/issues/366)) ([8ae1e18](https://github.com/intigraph/shantytown/commit/8ae1e18f30084de07fff4f0aac3b276af086800b))
+* **cycle:** check automatic pane state before costly preflight ([#294](https://github.com/intigraph/shantytown/issues/294)) ([04b0b75](https://github.com/intigraph/shantytown/commit/04b0b75916e5f98eefa6d0aa6ec1f854cee3b08a))
+* **cycle:** make concurrent refusal receipts safe ([#382](https://github.com/intigraph/shantytown/issues/382)) ([9f299b6](https://github.com/intigraph/shantytown/commit/9f299b6b0b9436db08c486670dba78a48e07b73a))
+* **cycle:** verify landed work and retain explicit request overrides ([#389](https://github.com/intigraph/shantytown/issues/389)) ([6a7dca7](https://github.com/intigraph/shantytown/commit/6a7dca712cc5ed2633932b310d8957d45898a996))
+* **deferrals:** split explicit structural-cost refusals (aegis-tdf) ([0dd0344](https://github.com/intigraph/shantytown/commit/0dd0344e5136ead011712ce3fa799986cf7b083c))
+* **deferrals:** split structural-cost refusals within the batch budget ([#371](https://github.com/intigraph/shantytown/issues/371)) ([0dd0344](https://github.com/intigraph/shantytown/commit/0dd0344e5136ead011712ce3fa799986cf7b083c))
+* deliver the admin wake hook through scoped provisioning ([#309](https://github.com/intigraph/shantytown/issues/309)) ([2811002](https://github.com/intigraph/shantytown/commit/281100288e7a196afcf88e37ab342880ed02afea))
+* **delivery:** stale hold notices no longer strand Codex composers; page on a stranded composer ([#386](https://github.com/intigraph/shantytown/issues/386)) ([7ffe322](https://github.com/intigraph/shantytown/commit/7ffe322547bd63b5c342cb019bb5bad59e0736d7))
+* **dispatch:** honor configured keeper class exemptions ([#364](https://github.com/intigraph/shantytown/issues/364)) ([a102c44](https://github.com/intigraph/shantytown/commit/a102c448ec274d6ce50cae616181b053a7393f61))
+* exclude human decision records from work capacity ([#385](https://github.com/intigraph/shantytown/issues/385)) ([418a940](https://github.com/intigraph/shantytown/commit/418a9408317add928b8674264e24d9b95a131219))
+* exempt administrator launches from routine governor admission ([#319](https://github.com/intigraph/shantytown/issues/319)) ([51ea205](https://github.com/intigraph/shantytown/commit/51ea2057aa06e29757732a4361a1d4f3b9fa635b))
+* **governor:** reserve administrator capacity inside account caps ([#278](https://github.com/intigraph/shantytown/issues/278)) ([7f8fded](https://github.com/intigraph/shantytown/commit/7f8fded808abf8b05aa5c6a685572886bafc0a80))
+* **haul:** scope active anchor reads to their owner ([#298](https://github.com/intigraph/shantytown/issues/298)) ([03451cd](https://github.com/intigraph/shantytown/commit/03451cd227e374d9f33a63000333cbaaad36b043))
+* hold current safeguard refusals and notify the administrator ([#370](https://github.com/intigraph/shantytown/issues/370)) ([311d78d](https://github.com/intigraph/shantytown/commit/311d78d034523a3f1e21c9f38c6509987a57a6d9))
+* **hooks:** back off failed tracking reads while preserving UNKNOWN ([#287](https://github.com/intigraph/shantytown/issues/287)) ([aa4b3f5](https://github.com/intigraph/shantytown/commit/aa4b3f5662f1fc3483205fb95e3d20ab828c6f44))
+* **inbox:** combine owner status proof with candidate read ([#328](https://github.com/intigraph/shantytown/issues/328)) ([1434b3d](https://github.com/intigraph/shantytown/commit/1434b3df1c80c92055ad8d6a470c15b62d81b54e))
+* **inbox:** preserve durable receipts across concurrent sends ([#346](https://github.com/intigraph/shantytown/issues/346)) ([ef5edbd](https://github.com/intigraph/shantytown/commit/ef5edbd381dfcaeeca972bb1f3bfc6df5c00d49c))
+* **inbox:** scope metadata joins to each recipient ([#365](https://github.com/intigraph/shantytown/issues/365)) ([cfbf216](https://github.com/intigraph/shantytown/commit/cfbf216ab929cfca82098f0987996b7e64215e40))
+* **input:** classify and clear multiline Codex composers ([#367](https://github.com/intigraph/shantytown/issues/367)) ([9b7e042](https://github.com/intigraph/shantytown/commit/9b7e04244833286b1170272c495b5e9c6179f271))
+* **input:** classify wrapped Codex composers without losing color state ([#354](https://github.com/intigraph/shantytown/issues/354)) ([d5dd212](https://github.com/intigraph/shantytown/commit/d5dd2125d43da9d6e0c96a2f427b5b247c40e8ee))
+* **input:** recognize wrapped Codex composers and color attributes ([d5dd212](https://github.com/intigraph/shantytown/commit/d5dd2125d43da9d6e0c96a2f427b5b247c40e8ee))
+* **jobs:** a detached exec runner must leave the tend unit's cgroup ([#271](https://github.com/intigraph/shantytown/issues/271)) ([48c2bc4](https://github.com/intigraph/shantytown/commit/48c2bc4f6fc1e1ab7e7067c93bbbc9723974d96c))
+* **jobs:** surface store admission and terminal failures ([#325](https://github.com/intigraph/shantytown/issues/325)) ([90ff879](https://github.com/intigraph/shantytown/commit/90ff87992594efa46f58d54bb405c2f979749e22))
+* **memory:** restore bounded sync with process-exit race repair ([#383](https://github.com/intigraph/shantytown/issues/383)) ([2893e4c](https://github.com/intigraph/shantytown/commit/2893e4cb41630435d45e855ece288372f8f8ba13))
+* **overdue:** retain safe read failure diagnostics ([#281](https://github.com/intigraph/shantytown/issues/281)) ([2873839](https://github.com/intigraph/shantytown/commit/2873839be02c5b28570e144bc4172764554ae6f2))
+* preserve launchd routing and peer SSH diagnostics ([#296](https://github.com/intigraph/shantytown/issues/296)) ([f3d23bf](https://github.com/intigraph/shantytown/commit/f3d23bfdb2344d491f3fafb8da19f5e26ba922b6))
+* preserve launchd tracker routing and SSH transport causes ([f3d23bf](https://github.com/intigraph/shantytown/commit/f3d23bfdb2344d491f3fafb8da19f5e26ba922b6))
+* preserve observed dispatch submission ([#336](https://github.com/intigraph/shantytown/issues/336)) ([bf68691](https://github.com/intigraph/shantytown/commit/bf6869199bdeae416c88284c3e9106abd65a4402))
+* **provision:** repair StopFailure in existing Claude settings ([#378](https://github.com/intigraph/shantytown/issues/378)) ([6f74ff3](https://github.com/intigraph/shantytown/commit/6f74ff338c1f29002d4218e748bafe2f4c23b683))
+* **pr:** refuse renamed repository aliases before creation ([#307](https://github.com/intigraph/shantytown/issues/307)) ([ae3b001](https://github.com/intigraph/shantytown/commit/ae3b00165cd03f3fcc3b6d0519f94c108f4a4099))
+* **pr:** verify mapped legacy origins through canonical redirects ([#368](https://github.com/intigraph/shantytown/issues/368)) ([7c1d5d6](https://github.com/intigraph/shantytown/commit/7c1d5d6434d01f04d67bc19fd2c2a85ffabed3e3))
+* **push:** explain caller checkout guard for explicit sources ([#297](https://github.com/intigraph/shantytown/issues/297)) ([04293eb](https://github.com/intigraph/shantytown/commit/04293eb89ca15bb9eb526b32d1d768bd278bc451))
+* **push:** find provisioned crew worktrees from container names ([#301](https://github.com/intigraph/shantytown/issues/301)) ([b85bc31](https://github.com/intigraph/shantytown/commit/b85bc310e74c825fbe415a1a7e48ccbaeb7bc844))
+* **push:** give validation hooks a bounded 600-second default ([#313](https://github.com/intigraph/shantytown/issues/313)) ([2d4ab81](https://github.com/intigraph/shantytown/commit/2d4ab813a2266f6278c66bf0d9ee1a3fe71c62cc))
+* **push:** name literal worktree path in bare-source refusal ([#303](https://github.com/intigraph/shantytown/issues/303)) ([eb2d3c8](https://github.com/intigraph/shantytown/commit/eb2d3c8ee90d41cc9e9001f8ca9ee7246d0f7e48))
+* **push:** never push a declared mirror; mirrors never prove publication ([#269](https://github.com/intigraph/shantytown/issues/269)) ([819cde2](https://github.com/intigraph/shantytown/commit/819cde2f2246aa2ae962993a75e11e8b225f9565))
+* **push:** refuse write-frozen remote hosts before publication ([#291](https://github.com/intigraph/shantytown/issues/291)) ([69c1d0e](https://github.com/intigraph/shantytown/commit/69c1d0ef0c817424dcc5d9b85c528dcf9e0a7109))
+* **quiet-time:** deliver hold transitions and stale warnings ([#353](https://github.com/intigraph/shantytown/issues/353)) ([831a2f0](https://github.com/intigraph/shantytown/commit/831a2f0b9cda31c999c4e12d6809b184aaa2e3f4))
+* **quipu:** derive provenance on shared HTTP transports ([#391](https://github.com/intigraph/shantytown/issues/391)) ([a995b9a](https://github.com/intigraph/shantytown/commit/a995b9aa1c106d1c88daadff9850b5617806eaf1))
+* **reads:** attribute Quipu requests to the declared or local host ([85b6e5e](https://github.com/intigraph/shantytown/commit/85b6e5e34b521010cce64bf650644a6863e2ed06))
+* **reads:** include host attribution on Quipu reads ([#290](https://github.com/intigraph/shantytown/issues/290)) ([85b6e5e](https://github.com/intigraph/shantytown/commit/85b6e5e34b521010cce64bf650644a6863e2ed06))
+* recover workspace memory in Codex startup context ([#318](https://github.com/intigraph/shantytown/issues/318)) ([bf6a333](https://github.com/intigraph/shantytown/commit/bf6a333c2de1451e1d9fc18e84072645dca558ae))
+* refuse ASK classification on deferred work ([#377](https://github.com/intigraph/shantytown/issues/377)) ([80f91ea](https://github.com/intigraph/shantytown/commit/80f91eaf19cc69c03836c7bb823786075e14e7ae))
+* refuse unattended cycling with truncated shell footers ([#276](https://github.com/intigraph/shantytown/issues/276)) ([f8b788e](https://github.com/intigraph/shantytown/commit/f8b788eb5c0e2df182285c0f6a8e001004f82b66))
+* restore split deferred candidate reads ([#362](https://github.com/intigraph/shantytown/issues/362)) ([56df76b](https://github.com/intigraph/shantytown/commit/56df76b86e3730e781b3d89a53ce2232e0624e31))
+* resume satisfied machine-bound deferrals ([#369](https://github.com/intigraph/shantytown/issues/369)) ([516f3b2](https://github.com/intigraph/shantytown/commit/516f3b242d0df7b9d0efffad56691f695b4fdc52))
+* retain and recover unsubmitted Codex notices ([5efa6e3](https://github.com/intigraph/shantytown/commit/5efa6e36bb97a2cefc3e2e56994d640c1168c805))
+* retain scheduled reminder receipt after delivery ([#277](https://github.com/intigraph/shantytown/issues/277)) ([6f57356](https://github.com/intigraph/shantytown/commit/6f573562c55ff62841cb5878d8822a37825a9069))
+* retain unconfirmed Codex notices and escalate stalled delivery ([21d13b5](https://github.com/intigraph/shantytown/commit/21d13b51911f4312c6f1cf08400e75d885134311))
+* retire bundle-owned Codex notify on unregister ([#266](https://github.com/intigraph/shantytown/issues/266)) ([85fde58](https://github.com/intigraph/shantytown/commit/85fde581526af6092c423b5ec2a907891283c2e4))
+* revert memory sync after confirmed main failure ([#381](https://github.com/intigraph/shantytown/issues/381)) ([71cd447](https://github.com/intigraph/shantytown/commit/71cd44705c1d41cb5ef7a10cc588143da4a0b4b0))
+* **review-routing:** keep bounded reads off watermark cache ([#380](https://github.com/intigraph/shantytown/issues/380)) ([154577d](https://github.com/intigraph/shantytown/commit/154577de1972711e04c3a6476d9af84bbdc230ff))
+* **roles:** check parent stop eligibility against routing traits ([2322864](https://github.com/intigraph/shantytown/commit/232286406178df6478fbb803cbf2dff3e06afc07))
+* **roles:** reject parents that cannot receive stop events ([#288](https://github.com/intigraph/shantytown/issues/288)) ([2322864](https://github.com/intigraph/shantytown/commit/232286406178df6478fbb803cbf2dff3e06afc07))
+* route overdue notices for non-crew owners to administrator ([#273](https://github.com/intigraph/shantytown/issues/273)) ([c90765e](https://github.com/intigraph/shantytown/commit/c90765e89ea116f5b2aab234e3794031412ba107))
+* seed empty prepared daemon package destinations ([#312](https://github.com/intigraph/shantytown/issues/312)) ([f8581d8](https://github.com/intigraph/shantytown/commit/f8581d889769a18cb45f99981c6cb26fb6a852b0))
+* **seeds:** split deferral candidate reads within one budget ([#306](https://github.com/intigraph/shantytown/issues/306)) ([d510b68](https://github.com/intigraph/shantytown/commit/d510b6815cedd1a5641b894cf492134431447fc9))
+* stop retrying busy transfer receivers within a pass ([#263](https://github.com/intigraph/shantytown/issues/263)) ([f243b76](https://github.com/intigraph/shantytown/commit/f243b76924211f630d44308d2878f325e25df7da))
+* **stop:** exclude short deferred plates from spare capacity ([#280](https://github.com/intigraph/shantytown/issues/280)) ([99ffbec](https://github.com/intigraph/shantytown/commit/99ffbec7e503ca85c12b23bffea3c904d9db2329))
+* **stop:** retain capacity for bounded external event gates ([#308](https://github.com/intigraph/shantytown/issues/308)) ([f057406](https://github.com/intigraph/shantytown/commit/f057406faf225701fdeb61a3de920a8d733a7757))
+* **stop:** retain reports until the drain response is ready ([#317](https://github.com/intigraph/shantytown/issues/317)) ([2c88041](https://github.com/intigraph/shantytown/commit/2c880419efcdd25b91dcf49c0aa6c539c8ad631d))
+* **tend:** back off refused cycle requests and read typed due dates in deferral candidates (aegis-qc2) ([#293](https://github.com/intigraph/shantytown/issues/293)) ([be8eba5](https://github.com/intigraph/shantytown/commit/be8eba5a4c8b9a0509b2b9169165e5711efcd6fb))
+* **tend:** nudge live owners for short self-set deferrals ([#379](https://github.com/intigraph/shantytown/issues/379)) ([4cc84b1](https://github.com/intigraph/shantytown/commit/4cc84b1e0787e435834685d6ed82fcfe9d774ce9))
+* **tmux:** journal sends refused by an occupied composer ([#345](https://github.com/intigraph/shantytown/issues/345)) ([1bed619](https://github.com/intigraph/shantytown/commit/1bed6198b52a6e4495411826e292729b251aceb6))
+* **tmux:** never type into a pane in copy-mode; refuse and say so (aegis-6jx) ([#286](https://github.com/intigraph/shantytown/issues/286)) ([60987f6](https://github.com/intigraph/shantytown/commit/60987f6a2c9f24b930212846a48204491dab3061))
+* **work:** refuse deferring ASK-class items ([#359](https://github.com/intigraph/shantytown/issues/359)) ([22ff05d](https://github.com/intigraph/shantytown/commit/22ff05d77a00fc4fbb6a011936876f091a7acdb4))
+* **worktree:** collect remotely retained squash landings ([#289](https://github.com/intigraph/shantytown/issues/289)) ([22c563e](https://github.com/intigraph/shantytown/commit/22c563e64d2026389df15c043f4f55943bca91af))
+
+
+### Performance Improvements
+
+* combine owner plate status selection branches ([#284](https://github.com/intigraph/shantytown/issues/284)) ([6b0083f](https://github.com/intigraph/shantytown/commit/6b0083f69f505421bc8434056735a82265ddb962))
+* **crew:** reuse roster observation for capacity counts ([#259](https://github.com/intigraph/shantytown/issues/259)) ([31e6773](https://github.com/intigraph/shantytown/commit/31e677317458f02380e11a8aa1c5d7005c9e634a))
+* **inbox:** read message prefixes in one native projection ([#283](https://github.com/intigraph/shantytown/issues/283)) ([f00120e](https://github.com/intigraph/shantytown/commit/f00120e463995b9582567503107e0db6b2f8960e))
+* **inbox:** read receipt metadata in one fresh observation ([#361](https://github.com/intigraph/shantytown/issues/361)) ([5d5d967](https://github.com/intigraph/shantytown/commit/5d5d967e07f933672adb72ffdb228e2f43e44cc8))
+* **inbox:** select named receipts without queue enumeration ([#337](https://github.com/intigraph/shantytown/issues/337)) ([81e316f](https://github.com/intigraph/shantytown/commit/81e316f2780292a4490f47ede773b06c8033601a))
+* **readiness:** avoid correlated blocker queries ([#375](https://github.com/intigraph/shantytown/issues/375)) ([46ce5c4](https://github.com/intigraph/shantytown/commit/46ce5c4d2540503de94f097a3d0042db33a1a1eb))
+* **seeds:** share owner guard and candidate requests ([#335](https://github.com/intigraph/shantytown/issues/335)) ([d8902bc](https://github.com/intigraph/shantytown/commit/d8902bcdf3b6c5e83de01603bc84cc25873b5462))
+* **seeds:** share owner validation with candidate reads ([d8902bc](https://github.com/intigraph/shantytown/commit/d8902bcdf3b6c5e83de01603bc84cc25873b5462))
+* **seeds:** share transaction-bound projection reads ([#355](https://github.com/intigraph/shantytown/issues/355)) ([27c4a57](https://github.com/intigraph/shantytown/commit/27c4a57992a0db86913eda16b837237c9b7c6681))
+* select deferred candidates before Action joins ([#261](https://github.com/intigraph/shantytown/issues/261)) ([c43f4c0](https://github.com/intigraph/shantytown/commit/c43f4c0dce042a011012ef26cbacf3b21a2bbe6d))
+
+
+### Documentation
+
+* add Rikuy to the shared stack table ([#329](https://github.com/intigraph/shantytown/issues/329)) ([d971d14](https://github.com/intigraph/shantytown/commit/d971d14b67aa57e4bd1826c01b1fa910a37bc571))
+* clarify Bobbin and Yupana stack descriptions ([#350](https://github.com/intigraph/shantytown/issues/350)) ([1889380](https://github.com/intigraph/shantytown/commit/188938041424e9dff3a233580e7742ad1de2bf7a))
+* introduce the software factory and everyday operations crew ([#267](https://github.com/intigraph/shantytown/issues/267)) ([ff7bdc5](https://github.com/intigraph/shantytown/commit/ff7bdc59d550dbaa4de25d4e86b82066780bff30))
+* make pipx PATH and single-user preview explicit ([#300](https://github.com/intigraph/shantytown/issues/300)) ([8f1d426](https://github.com/intigraph/shantytown/commit/8f1d426bf91dd392937d00620739ff24069d634f))
+* preview everyday routines with one agent ([#304](https://github.com/intigraph/shantytown/issues/304)) ([4b48bce](https://github.com/intigraph/shantytown/commit/4b48bce25e8926ae307f29beab2fa5ccfcb9a5cc))
+* record Codex notice custody before and after ([550d4f5](https://github.com/intigraph/shantytown/commit/550d4f59829f5896d9fe1ea3fae3cc67d040bc05))
+* **remote:** add scoped phone onboarding and recovery runbook ([#322](https://github.com/intigraph/shantytown/issues/322)) ([2ba4862](https://github.com/intigraph/shantytown/commit/2ba4862f313ae153d4baf6851d09bd8422d34c57))
+* skein is archived; stop describing it as a live integration ([#270](https://github.com/intigraph/shantytown/issues/270)) ([42c4908](https://github.com/intigraph/shantytown/commit/42c4908360cd5455b29e8c79518a0e950ce7935a))
+* synchronize the canonical stack overview ([#352](https://github.com/intigraph/shantytown/issues/352)) ([37e714e](https://github.com/intigraph/shantytown/commit/37e714e6b83a3a6394262f5d8074ae298099d458))
+* synchronize the canonical stack overview ([#372](https://github.com/intigraph/shantytown/issues/372)) ([3f1a92c](https://github.com/intigraph/shantytown/commit/3f1a92cf895bc6f7557ac7efbb49ee7d35e8ba1a))
+
+
+### Tests
+
+* accept explicit delivery roots in pane fixtures ([803c332](https://github.com/intigraph/shantytown/commit/803c332bdc16f83dc894d4f53871ee02bc38d469))
+
+
+### Maintenance
+
+* relicense under Apache-2.0 ([#348](https://github.com/intigraph/shantytown/issues/348)) ([b485f80](https://github.com/intigraph/shantytown/commit/b485f80a22786466f40885cc1cc7215256933c38))
+
+
+### Continuous Integration
+
+* enforce conventional squash titles and complete release notes ([#264](https://github.com/intigraph/shantytown/issues/264)) ([08d98d2](https://github.com/intigraph/shantytown/commit/08d98d28ad5adb5448b42ac648dbbe5bfbc41c7a))
+
 ## [0.7.1](https://github.com/scbrown/shantytown/compare/v0.7.0...v0.7.1) (2026-10-15)
 
 

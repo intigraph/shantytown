@@ -1,0 +1,9 @@
+Script started on 2026-10-23 13:02:08-04:00 [COMMAND="python3 cost-demo.py" <not executed on terminal>]
+Before: unchanged source 516f3b2
+complete=False; evaluated/released=0; field-batch candidate sizes=[25]
+After: structural-refusal split
+complete=True; evaluated/released=25; field-batch candidate sizes=[25, 12, 13]
+Synthetic 25-candidate control; zero live graph or lifecycle writes.
+Production Quipu limit stays 4096; real same-query readback is separately retained.
+
+Script done on 2026-10-23 13:02:09-04:00 [COMMAND_EXIT_CODE="0"]

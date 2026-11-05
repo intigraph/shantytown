@@ -7,15 +7,57 @@
 > now pinned by a test (`tests/test_command_count.py`), so a new command either updates the docstring
 > and this doc, or fails CI.
 
+## Hold automatic feeds while staying live
+
+Use a per-agent feed hold when the pane should remain reachable but receive no
+automatic haul continuation, advance or idle-worker feed:
+
+```sh
+st work hold-feed ada --until 2027-01-01T18:00:00Z --reason-file reason.txt
+st work hold-feed ada --status
+st work hold-feed ada --clear
+```
+
+An expiry may be a UTC date/time or `closed:project-item`. A date expires on the
+next feed read; a closed-item condition uses the selected deployment's exact-ID
+reader. An unreadable condition or hold record keeps automatic feeding held.
+Expired records remain as provenance and do not block feeding. A replacement
+hold takes effect immediately; an older expiry cannot remove it.
+
+The hold is stored on the agent's declared host. An off-host or unresolved-host
+request refuses before writing; select the target deployment through the existing
+CLI execution lane. The hold is durable and appears in the human `st crew` and `st anchor` views.
+It does not stop, retire, cycle or relaunch the agent, cancel a queued cycle, or
+block explicit `st go` and inbox delivery. It does not grant dispatch permission:
+all existing busy-pane, budget, stop and ownership gates still apply.
+`st agent stop --after-turn` retains its separate stop intent.
+
+This command earns its own slot because creating feed intent is a write with
+an expiry and reason; hiding it on a crew read or using the stop command would
+change what an operator's existing command means. `--dry-run` validates the
+request and writes nothing.
+
 ## Assignment capacity
 
-A crew member may own at most ten active work items. Open, hooked,
+Ordinary assignments are capped at ten active work items per crew member. Open, hooked,
 in-progress and blocked tasks count; closed, tombstoned and deferred work,
 future-dated deferrals, messages and permanent records do not. `st crew`
 shows `plate: N/10`, and its JSON rows expose `plate_size` and `plate_cap`.
-An unreadable count is UNKNOWN (`null` in JSON), never zero.
+An unreadable count is UNKNOWN (`null` in JSON), never zero. A full refusal lists
+the exact `counted_ids`, including blocked work that is absent from the visible
+ready plate. Closing inbox messages or repooling excluded alarm records does
+not free a work slot. Admission reads fresh owner membership; it never borrows
+the frozen observation used to render a crew report.
 
-`st go` refuses a new assignment at capacity before sending or updating the
+ASK-class records waiting on Stiwi also use no work slot: the shared ASK labels,
+an `ASK Stiwi` title prefix, or a structured `blocked:human` blocker identify
+them. They stay owned and visible, and the no-deferral rule still applies.
+Ordinary external dependencies and unknown classifications still count.
+Label names come from comma-separated strings, lists of strings, or name records;
+malformed top-level maps and scalar values do not grant a capacity exemption.
+Turning an ASK record into ordinary active work requires fresh capacity.
+
+`st go` refuses a new ordinary assignment at capacity before sending or updating the
 item. `st task --assignee` at capacity still creates the requested work item,
 prints its ID, leaves it unassigned in the pool and returns refusal. An
 unknown count refuses without creating anything. Dry runs make no writes.
@@ -23,15 +65,22 @@ The exact-ID work update path applies the same gate to assignment and
 reactivation. Haul/feed may resume an already-owned active item at ten because
 that does not add a slot; existing overfull plates are not silently repooled.
 
+The ten-item limit applies to every priority, including P0 and inherited P0
+blockers. Urgency changes queue order; it does not grant another work slot.
+Rebalance existing work before assigning another item. Historical overflow
+journals are retained unchanged; new assignments do not append to them.
+
 Cooperating assignment commands on one host serialize admission and mutation.
 The configured owner reader must cover all selected stores; partial reads
 refuse. This is not an atomic cross-host backend limit: direct tracker writes
 and independent writers on another host require a backend admission contract
-or a single assignment writer. No force or hold override bypasses capacity.
+or a single assignment writer. No force or hold override grants a cap exception.
 
 ## The whole surface
 
 ```
+st prime [agent] [--brief|--section NAME] [--static] [--json]
+                              tool primer plus bounded, read-only crew and anchor summary
 st anchor [--short|--events|--harness]
                               who am I, what's on my plate         <- the anchor
 st go <item> <agent>          dispatch. this is the one that matters. the agent is required.
@@ -54,6 +103,8 @@ st work                       the item and the board
                               park work with exactly one structured blocker kind
                               (`bead|human|access|external|parked`) and a durable
                               reason naming its referent/re-test condition
+  hold-feed <agent> --until <UTC|closed:id> --reason-file <path>
+                              hold automatic feeds only; --status/--clear inspect/release
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
   triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
@@ -62,6 +113,12 @@ st work                       the item and the board
                               evaluated by `st fleet tend`; see docs/jobs.md
 st agent                      one agent
   new <agent>                 create an agent from a card
+  spawn --ephemeral --job <review|merge|triage|task> --item <id> [--harness] [--repo R --pr N]
+                              an EPHEMERAL agent for one job, managed by the administrator:
+                              own worktree, deadline + turn/context budget, counted in the cap
+                              and the governor, reports its verdict to the administrator and the
+                              item, then is torn down. --list · --stop NAME · --retry NAME ·
+                              --report (by the agent) · --reap (tend). docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]
                               convert one agent to another harness: writes the card (with a
@@ -77,12 +134,16 @@ st agent                      one agent
                               idle time, and any posted relatedness signal. --related P
                               / --decision keep|cycle --by WHO posts one. --json.
   input <agent>               what's in their input box: EMPTY | TYPED | GHOST, with the
-                              SGR evidence. --clear (typed only) --dismiss. NEVER submits.
+                              capture evidence. --clear (typed only) --dismiss. NEVER submits.
+                              Codex multiline clear verifies the empty placeholder;
+                              BUSY refuses editing, and no repaint stays UNKNOWN.
   ask <agent>                 the QUESTION they're blocked on: prompt, the command being
                               approved, and the numbered options VERBATIM. read-only.
   answer <agent> <N>          select option N. refuses on a pane that isn't on a picker,
                               echoes what it selected, and records who answered.
   log [agent]                 what happened
+  memory <agent> <capabilities|inspect|read|query|export|commit|deliver|stage|sync>
+                              explicit versioned memory transport; no native root replacement
   history <agent>             captured transcripts, and whether the source survives
   remote {list|pair <agent>}  discover existing Codex servers or request a manual pairing code
   stats [agent] [--files]     files/skills plus provider tokens and cache dimensions
@@ -150,7 +211,10 @@ Context occupancy hints are opt-in in `shantytown.toml`:
 ```toml
 [session_budget]
 context_window = 1000000
-context_threshold_pct = 70
+context_threshold_pct = 50
+context_hard_pct = 70
+context_nudge_pct = 35
+context_nudge_repeat_seconds = 120
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
@@ -164,14 +228,47 @@ variants. Role and agent overrides inherit global settings; an agent override ta
 precedence over its role. Use agent declarations for mixed-model crews. Without an explicit window, Codex uses the server-provided `model_context_window`
 from the same usage record. Claude needs a declaration; missing capacity reports
 UNKNOWN. Enabling any context setting enables coverage for the whole crew:
-otherwise undeclared agents use a 70% threshold with no assumed capacity. A
+otherwise undeclared agents use a 50% threshold with no assumed capacity. A
 role/agent-specific capacity is never borrowed by another agent. Omitting all
 context settings leaves hints disabled.
 
-Existing Stop hooks read the latest turn's input occupancy, including Claude
-cache tokens, and give one advisory per threshold crossing or session change.
+The existing PostToolUse capture hook reads the latest turn's input occupancy,
+including Claude cache tokens, and adds nonblocking preparation reminders during
+long turns for every role, including administrators. `context_nudge_pct` defaults
+to 15 percentage points below the hint (or half the hint for thresholds below 30%).
+Reminders repeat every `context_nudge_repeat_seconds` (default 120, range 1–3600),
+or after another five percentage points. Explicit nudge percentages must be below
+the hint. Session changes, compaction below the nudge and threshold crossings re-arm
+feedback; busy observations do not postpone the next reminder. Unknown or invalid
+capacity never becomes a percentage.
+
+Stop also emits early preparation advice and repeats ordinary handoff hints at
+the configured interval. Tool reminders never call Jev, suppress Stop decisions,
+extend a bounded exception or schedule a cycle. Jev exceptions still expire after
+ten minutes or five percentage points; the hard limit still has no override.
+Tool feedback scans at most the latest 2 MiB of transcript, never a partial first
+record. Usage outside that bound stays UNKNOWN until a fresh record arrives.
+Live acceptance requires both the installed capture hook and a fresh usage event;
+source tests alone do not prove delivery to a running administrator.
+The [compact checkpoint template](guides/context-cycle.md) gives one request command;
+`--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
+Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
+The resume hook emits the saved brief in the `SessionStart` JSON
+`hookSpecificOutput.additionalContext` field, like the anchor hook, and consumes
+it once. With no pending brief it emits nothing.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
+
+Before ending the turn for a cycle, stop or await only your own running background
+tasks. Claude agents use `TaskStop` for their running tasks; Codex agents inspect
+with `/ps`, then stop or await their running processes. A remaining background
+shell prevents the cycle from reaching its idle boundary. The self-cycle waiter
+logs the observed shell count when it changes and still waits safely; it never
+stops those tasks itself. After the tasks exit, the next idle poll can serve the
+existing request. While a fresh, unrefused self-cycle request is pending,
+Stop advice and self-feed stay silent so the pane can reach idle. Refused or
+stale requests resume normal advice; automatic requests do not silence it.
+This does not relax the waiter's busy-pane or background-task checks.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -292,7 +389,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-four. Seven verbs at the top level and thirty-seven grouped commands under five groups
+Forty-eight. Eight verbs at the top level and forty grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -313,6 +410,12 @@ named on purpose: this doc once
 said "eight" while the code had twelve, and a count nobody enforces is a comment — in the one repo
 whose whole pitch is the exact count, that was the bug.
 
+For a bundle's Codex `notify`, each emitted file records an ownership fingerprint
+in a comment. Unregistering the bundle removes its unchanged notify value on
+regeneration. An operator's replacement and older unmarked values survive:
+matching a command alone is not proof that st owns it. Workspace and project
+trust rewrites preserve the fingerprint while the notify remains unchanged.
+
 The twenty-sixth is **dream**: the inspect/preview/manual-run surface for bounded
 background reflection. Cycles require explicit admission; `tend` never creates
 them because an interval elapsed. Status shows the last cycle, rotation and
@@ -323,11 +426,43 @@ deferral did not require the deferrer to state whether the blocker was a bead, h
 access capability, external event, or no blocker at all. `st work defer` records that kind
 and requires a testable resume condition: `--until YYYY-MM-DD` (day) or
 `--until YYYY-MM-DDTHH:MM:SSZ` (exact UTC time), an existing
-`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
+`defer_until`, or a `resume_when: closed:<id>` / `date:<ISO date>` / `release:` / `installed:` marker. Re-deferring records exactly one active marker; a new condition replaces older markers, retaining their values and prose as inert history. A new `--until` replaces a copied date marker, and a new date marker updates an existing deadline. Without a new condition, the existing gate remains; ambiguous old markers require an explicit condition. It
 writes and verifies the reason and condition before changing status, then verifies
 status, blocker kind, reason and condition together. An interrupted write returns
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
+
+CI, review, merge and install waits require a non-date `resume_when` condition
+and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
+required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
+existing registered `event:` binding; a new event name is not a registration.
+For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
+with an exact UTC `--until` at least a day away. Short date-only polling and
+dry-run attempts refuse before writes. A real scheduled appointment may use
+`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
+This exception does not bypass human decisions, dependency checks or resume gates.
+
+A `closed:` deferral with a marker-only reason can resume automatically when
+the named item closes. The required one-line `--dependency-reason` and the
+command's exact scope flag are informational metadata; they do not turn that
+reason into a prose gate. Any additional prose, historical notes, unknown
+fields or extra resume markers still require judgement. Human, access
+and parked labels, future deadlines and other open dependencies
+continue to hold the item. The scheduled sweep reads the complete item and its
+condition again before reopening it.
+
+A `blocked:external` hold can be satisfied by an unambiguous `closed:`,
+`release:` or `installed:` condition only when its evaluator returns a definite
+MET. An unmet condition, an UNKNOWN read, additional prose or a human/access
+hold keeps the item deferred. A `date:` review never grants that permission.
+
+The sweep keeps a complete observation of all selected deferrals. If Quipu
+rejects a field batch with its explicit structural-cost HTTP 400 and asks for
+smaller requests, the reader halves that batch and retries each half within the
+original batch's time budget. It keeps both graphs and every evaluation field.
+A single candidate that still exceeds the limit is UNKNOWN; no candidate is
+skipped and no partial observation permits a release. Other HTTP failures are
+not retried by this split path. The server's structural limit stays unchanged.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -336,6 +471,20 @@ boot/generation, protected window and starting instant. Its producer contract
 must be accepted before the binding can be used. The initial protected-recycle
 binding is **disabled**: this release does not change an existing review date or
 start an evidence collector.
+
+Version conditions need no binding, because they test a public fact rather than
+one item's producer:
+
+- `resume_when: release:<owner>/<repo>@<tag>` is met once that GitHub release is
+  published. A draft or a missing release is not met yet.
+- `resume_when: installed:<tool><op><version>` is met once the tool's own
+  `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
+  tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
+  with a fixed argv.
+
+`st work defer` refuses a malformed argument before writing anything. A read
+that cannot answer cleanly (a network error, a tool not on PATH, a version that
+does not parse) is UNKNOWN and keeps the hold. It is never reported as met.
 
 The protected-recycle evaluator requires a complete ordered interval containing
 a natural soft defer inside the nominated window, then a successful unforced
@@ -443,6 +592,16 @@ Run `python3 -m pytest -q tests/test_history_archiver.py tests/test_history_corp
 to exercise both directions: unshaped canaries are removed from results while
 ordinary dialogue controls survive, and a contaminated current derivative
 makes the scrub fail.
+
+## `st prime` — stack orientation
+
+`st prime [agent]` prints the shared tool primer, then a bounded read-only crew,
+anchor and lead summary. `--brief`, `--static`, `--section <prefix>` and `--json`
+follow the stack contract. It reuses anchor's read resolver; it does not publish
+plate state or run session hooks. The deadline returns unknown counters rather
+than invented empty values. See [prime output and generated primer](prime.md).
+This stack-wide orientation directive earns the forty-eighth command; `anchor`
+remains the normal startup context surface.
 
 ## `st anchor` — the anchor
 
@@ -748,6 +907,9 @@ Two rules fall out, and they are the load-bearing part:
 
 1. **Do not "fix" a suspicious pane by pressing Enter at it.** That was the defect, not the remedy.
    `queued` is a state to *report to the agent's owner*, never one to type your way out of.
+   The automatic Codex recovery below is narrower: it requires a private record
+   proving st injected the exact body into this same session. A human draft or
+   a matching fragment of the send journal is never that proof.
 2. **When the attributes are missing, the answer is `?`.** A stripped capture with text in the box
    returns `UNKNOWN`, which degrades to `?` in `st crew` and to REFUSE in `st go` — never to `idle`.
    Refusing on doubt is cheap; dispatching into a buffer you cannot see is the incident.
@@ -804,9 +966,9 @@ So `st crew` grows a **posture** column, on the same principle as the settings c
 
 | | means |
 |---|---|
-| `bypass` | the pane shows `⏵⏵ bypass permissions on` — prompts are off, the agent can act |
-| `MANUAL` | live, ready UI up, **no** bypass line — a human must approve every call |
-| `?` | no ready UI (trust dialog, consent screen, blocking picker). Not rounded to either |
+| `bypass` | the pane shows `⏵⏵ bypass permissions on`, or the observed launch carries Codex’s `--dangerously-bypass-approvals-and-sandbox` flag |
+| `MANUAL` | live, ready UI up, readable launch, and no bypass evidence |
+| `?` | no ready UI or unreadable process observation. Not rounded to either |
 | `—` | not live. A down pane has no posture; what its *card* lacks is a different block |
 
 Two things it deliberately does **not** do.
@@ -816,10 +978,11 @@ Two things it deliberately does **not** do.
   landed while the agent is still stopped dead. This bead's own fix was verified by the footer
   flipping, and that is the only reason we know it took. Same launch-time rule the `STALE` column
   exists for, one field over.
-- **It derives `MANUAL` negatively.** Only the bypass footer has been measured; pinning a string for
-  the manual-mode line would be a marker never observed passing, which this repo has already paid
-  for twice in `READY_MARKERS`. Absence of bypass on a live ready pane is the signal, and it stays
-  correct for every other mode the runtime may grow or rename.
+- **Missing evidence stays unknown.** Codex has no approval footer, so an unreadable
+  process cannot establish manual mode. On macOS the process reader uses native
+  elapsed-time fields and PID-scoped child discovery; on Linux it retains the GNU
+  probe. This does not establish settings freshness: that remains a separate check.
+
 
 ### The dormant half: the arming moment now asks about *both* faults
 
@@ -860,6 +1023,18 @@ only the direction that *starts* something is.
 down; nothing is stalling) is still visible **before** someone walks into it. Each `Gap` carries a
 short label for that column and a full sentence for the refusal: the rule is decided once, the
 length is the caller's, and the two surfaces cannot end up talking about different cards.
+
+## `st agent harness <agent> [target]` — retained launch preferences
+
+Report mode lists each harness's saved model and options. Conversion archives the
+outgoing explicit model and Claude Chrome preference under `harness_options`, then
+selects only the target's settings. A return trip restores those values. On a first
+conversion without a saved target model, use `--model <target-model>` when the
+current card has an explicit model. Unsupported options are retained with a notice
+and omitted from the target command. `--dry-run` writes nothing; a real conversion
+backs up the card and takes effect on the next relaunch unless `--now` is chosen.
+See [harness preferences](harnesses.md#and-which-model-that-program-runs) for the
+card schema and named-account behavior.
 
 ## `st fleet roles --check` — the hierarchy, verified
 
@@ -1209,6 +1384,19 @@ queue remains feedable unless it carries `anchor`; reserve the label for records
 that have no completion state. Existing legacy coordinator title exclusions
 remain, but haul exclusion uses the explicit label.
 
+### ASK records do not enter worker hooks
+
+The haul uses the same ASK classifier as assignment capacity: ASK labels,
+a title beginning `ASK Stiwi`, or a structured `blocked:human` blocker. It skips
+these records in both ready and in-progress queues, then feeds executable work.
+`st go` also refuses an ASK for every crew role, including an administrator
+dispatching to itself, before changing the item or sending input. Ownership,
+status and visibility stay intact.
+
+When only ASKs remain, the worker is allowed to stop. The existing durable stop
+stream reports `plate blocked on human` to its lead (or normal escalation route),
+once for that unchanged set of items, rather than repeatedly resuming the ASK.
+
 ### Human-only ready work is not dispatchable
 
 The shared unfeedable predicate excludes `desk` and `needs-stiwi` labels as well
@@ -1471,6 +1659,40 @@ st inbox --read                      ACK: mark up to 15 unread messages read; re
 st inbox --read-id aegis-abc12       ACK only one absorbed message (repeatable)
 ```
 
+A keyed durable broadcast is available for a bounded, explicit recipient list:
+
+```bash
+st inbox broadcast --to alice --to bob --delivery-key rollout-notice-1 --json "see the rollout item"
+```
+
+This persists **only**: it sends no live nudge, marks no pointer read and claims
+no pane submission. Use the ordinary single-recipient command when live delivery
+is required, and retain its reported confirmation limits. Broadcast verifies all
+recipient identities first, then attempts each independently (at most 64 distinct
+names). JSON returns the operation key and a per-recipient `persisted`, `refused`
+or `UNKNOWN` result, with exact receipt IDs for confirmed persistence. It is not
+an atomic all-recipient transaction; partial results return exit 2.
+
+Keep the same explicit delivery key when resuming the same operation. A key is
+1–128 ASCII characters: an initial letter/digit followed by letters/digits or
+`_.:-`. On Seeds, the existing native
+`--workflow-run` / `--step` / `--visit` create contract derives the stable receipt;
+Shantytown does not guess its ID. Seeds reads that exact receipt back and verifies
+its title and recipient. A reused key with changed content refuses, including
+after the original pointer was acknowledged; it cannot reopen or overwrite it.
+The files backend also supports stable keys with locked, atomic publication.
+Other tracker adapters without this optional capability refuse keyed broadcasts
+rather than fall back to a different store or an unkeyed create.
+
+Ordinary Seeds durable sends also use a fresh operation key internally. Only a
+native CAS-conflict exit (4) is retried, with the same complete create arguments,
+up to 16 attempts with jitter. This handles different recipients contending on
+the same tracker. Timeouts, exit 8, malformed replies, readback failures and other
+refusals stop without an automatic resend. `UNKNOWN` can follow a committed write:
+inspect the native outcome before resuming, retain the operation key, and never
+invent a new key merely to hide uncertainty. Per-attempt SDK timeouts remain in
+force; this is not a total broadcast latency guarantee.
+
 When a durable message is successfully submitted to a live pane, `st` closes only
 that message's pointer after confirming the input is not stranded. The closed bead
 retains its content and history. If the recipient is down, the send fails, the input
@@ -1481,8 +1703,9 @@ of the exact body already stranded there. The latter retries Enter without
 retyping the body, after the older turn ends and Codex identity is confirmed.
 Clipped or ambiguous input is
 unverified before typing. It waits 500 ms between the final literal chunk and Enter, then
-checks for a new active turn with a cleared composer, or a visible queue preview
-matching the message. Existing activity alone is not confirmation. If the
+checks for a new active turn with a cleared composer. A visible queue preview
+is **not delivery**: Codex may hold it until a later tool boundary. Existing
+activity alone is not confirmation. If the
 composer still contains exactly the rendered message, the transport may retry
 Enter once after the older turn ends and a fresh foreground check positively
 identifies Codex (including Node with a live Codex launch identity). An unknown
@@ -1492,6 +1715,41 @@ reports `UNVERIFIED`. Ephemeral sends and dispatch return exit 2; dispatch does
 not record an assignment. Durable sends retain the persisted inbox pointer and
 return success for persistence while explicitly reporting unverified live
 submission. Inspect the pane or read that pointer rather than blindly resending.
+
+With a deployment root, Codex sends first retain the full body in a private
+`delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
+declared tmux socket, pane and observed session creation time. If custody cannot
+be written, nothing is typed. After the single submission retry fails, st can
+clear only its exact single-line body in an idle, positively identified Codex
+session. It rechecks ownership and session identity before each editing key.
+Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
+authorize no automatic clear. A later sender can clear the same owned failed
+notice before submitting its own message; the older body remains retained.
+Claude and explicit shell-launch sends keep their existing transport.
+
+The existing scheduled `st fleet tend` pass supervises these records. It reuses
+an existing durable inbox row, or creates one normal pointer to the retained
+body. An uncertain inbox write is never blindly repeated. A cleared notice gets
+at most one automatic redelivery in the same session; queued input is never
+resent. An explicit inbox acknowledgment is distinct from terminal delivery.
+Legacy inbox rows without custody may trigger an alert but never authorize
+editing somebody's composer.
+
+Accepted Codex queued input remains pending while a turn is busy; it is not a
+failed submission, and pointers stay retained. The backlog timer starts after
+tend observes idle input and resets on a busy or unreadable/no-box observation.
+After 300 seconds unresolved while observed idle, the next tend observation persists
+one `delivery-stalled` event to the configured lead/admin and attempts one
+normal coordinator wake. An absolute one-hour ceiling from the first unresolved
+observation also alarms regardless of pane state, including a perpetually busy
+pane or an absent/unknown composer. Those composer states cannot establish idle
+or busy. The event includes the elapsed backlog age, input classification and busy state,
+not the message body. A continuing backlog does not generate another event,
+even after its first event was drained. An empty backlog rearms detection.
+For legacy rows, age starts at the first observation; it is not a guessed row
+creation time. A working tend schedule is required: the threshold is not a
+promise to deliver an alert while supervision itself is stopped. Persistence,
+queued wake, actual receiver arrival and recovery remain separate facts.
 
 An **off-host** durable recipient is nudged through the same declared peer the
 ephemeral relay (and `st go`) uses: the peer host's own `st inbox` over SSH. A
@@ -1777,6 +2035,12 @@ The stats capture hook fails open on runtime errors and malformed arguments
 (including a missing `--root`): it prints diagnostics to stderr and exits zero
 so a configuration mistake cannot block a tool call. Argument errors skip capture.
 
+Lifecycle publication from stats capture carries the native hook payload's
+`session_id` into its HTTP provenance, even if no session variable was exported
+or the environment retained an older session. This context lasts only for that
+publication and is restored after success or failure. Missing identity remains
+missing; the hook does not invent a session or change the process environment.
+
 ### Gaming hold
 
 `st fleet hold gaming` sets a persistent local manual hold; `st fleet hold gaming --clear`
@@ -1913,6 +2177,15 @@ the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.
 
+Scheduled probes deliver operational hold/lift transitions to live crew panes,
+separately from routine budget advice. Failed pane deliveries remain pending.
+An unknown detector or failed slowdown verification warns the administrator;
+a continuous hold lasting 30 minutes warns once and never clears automatically.
+Before honouring a hold copied from notes, run `st fleet hold all --status`.
+With the default 120-second lift delay and minute probes, a continuously negative
+media signal clears within 180 seconds. A message saying one reason ended does
+not override another active reason or the budget governor.
+
 ```toml
 [[quiet_time.detector]]
 name = "gaming"
@@ -2030,6 +2303,61 @@ preserve cached cost gauges and their last-success timestamp; without a cached
 sample, only heartbeat gauges are emitted. A failed push returns UNKNOWN.
 Review must precede any new population or cap change.
 
+`st work cost --review-window --json` describes the exact paused window without
+running the parser or publisher. It shares the existing producer lock and binds
+the samples, recorded source identities, snapshot ledger, cooldown and reviewed
+budget envelope. Heartbeat timestamps do not change this identity. Missing,
+ambiguous or changed evidence refuses acceptance.
+
+After the actual resource reviewers accept that exact window, prepare a decision
+JSON containing `schema_version: 1`, `window_sha256`, `decision: "accept"`,
+`mode: "bounded-pilot"` (or explicitly reviewed `"bounded-continuous"`), `reviewer` and an `evidence_ref` to the ruling. The file
+records the decision; it is not an authentication or authority grant.
+`st work cost --accept-window SHA256 --decision-file FILE` validates and describes
+the successor without changing state. Add `--execute` only through the normal
+reviewed runtime path. A stale hash, busy lock, pending write, malformed decision,
+symlink or existing preparation refuses; never delete a preparation to retry.
+
+Execution archives the predecessor under `cost-review-generations/SHA256/`,
+preserves the original files, lifetime counters, refusals, snapshot ledger and
+cooldown, then atomically commits `cost-active-generation.json`. The successor
+starts a new bounded audit window; no history is reset and no tokens are counted
+or published by this operation. Caps and the default twenty-shape pause remain.
+Pilot mode does **not** enable continuous publication. An explicit
+`bounded-continuous` ruling instead authorizes subsequent in-envelope windows
+under that same policy: the scheduler archives each completed 20-shape window
+and advances a new generation under its existing lock. The inherited reviewer
+and evidence reference identify the original policy, not a fresh human review.
+Only the pointer-hashed manifest grants this mode; editing mutable budget history
+cannot enable it. Every predecessor remains on disk, and the live rotation keeps
+only the current window. Lifetime runs/maxima/refusals, cooldown, snapshot ledger
+and uncertain-write guards remain intact. Camayoc still enforces one snapshot,
+eight items, 1000 records and 4 MiB before networking. A completed window with an
+out-of-envelope observation stays paused for explicit review. Source installation
+alone never selects this policy or accepts a real pending window.
+
+Read the review status after a
+lost reply rather than replaying acceptance. A visible successor is evidence of
+the transition, not evidence of a subsequent successful cost publication.
+Before the first transition, source rollback can restore the previous release.
+After a generation is selected, retain a generation-aware reader: older releases
+ignore the pointer. Pause and reconcile publication through the normal operator
+path before a rollback to such a release; never discard generation evidence.
+
+Cost displays also report `cost_coverage`: completed and UNKNOWN-cost seed
+counts, their share, the whole-session limit, and the cohort's scope. This
+reuses the seed records already read for the command; it is not a board-wide
+completed-seed census and adds no tracker queries. A missing or malformed
+cohort remains UNKNOWN. A verified empty cohort has no percentage. Human
+single-seed output prints the same limit and count/share.
+
+Current policy accounts only for eligible whole sessions of at most eight
+items. Oversized sources are refused, never estimated. Observed token groups
+can still be useful partial evidence, but without an independent census across
+every session and cycle they do not establish complete cost for a closed seed.
+Partitioning is not enabled by this display change. Closure receipts and token
+arithmetic retain their existing parser-owned contracts.
+
 Active-source cost exposition carries the parser's agent, harness and session
 identity in a comment, atomically with its counts. A compatible Camayoc metrics
 publisher partitions token and coverage samples by rig/agent/harness/session,
@@ -2093,42 +2421,69 @@ holds new launches and dispatch until the policies are reconciled. The strictest
 remembered window hold survives until the ordinary relaxation rules release it.
 
 Account usage is account-scoped; an unreachable peer makes its **occupancy**
-unknown. The configured local admission owner can use that peer's cached agent
-count for up to 24 hours. If no census has ever been seen, it counts every declared,
-non-retired card on that peer as live, using each card's harness. Diagnostics name
-the unreachable peer and count age (unknown for never-seen peers); JSON includes
-`warnings` and marks estimated agent rows. Estimates count toward admission caps,
-but do not prove a live session exists to refresh session-derived usage.
+unknown, and an unreachable peer is never by itself a refusal: `st` works on any
+host without another host running `st`. A peer is unreachable when SSH fails,
+times out, or its `st` exits non-zero. A peer that answers with an invalid census
+(unparseable, version skew, or stamped more than 60 seconds old) is treated the
+same way. Any host counts such a peer as occupying exactly what its last good
+census reported while that census is younger than `[host] peer_census_max_age`
+(seconds, default 21600 = 6 hours). An older census, one stamped more than
+60 seconds in the future, a corrupt cache, or no census at all is **advisory only**:
+reported, counted as 0, never a source of policy, so it can never hold this host's launches; local capacity and
+the local governor still apply. Each command prints at most one short `peers:`
+line on stderr; `st crew --governor` lists every detail, and JSON includes
+`warnings`, marks estimated agent rows, and the degraded admission line
+marks advisory peers. Estimates count toward admission caps, but do not prove a live
+session exists to refresh session-derived usage. A lane that only an unreachable
+peer declared keeps that peer's last policy while its census is within the bound,
+so its `max_agents` still binds; its readings keep their original age and fall to
+`on_signal_lost` like any stale reading.
 
-This fallback requires usable local account readings. Cached usage readings and
-holds are never reused as fresh evidence. An expired, corrupt or incompatible
-census still holds launches and dispatch, as does a known policy, membership or
-owner disagreement, including disagreement remembered before an outage. Caches
-live under `governor/peers/` and are tied to the declared peer endpoint. The
-non-owner receives no offline fallback and still needs the owner's lock.
-Existing agents keep running. Each peer call has a 20-second deadline and peers
-are queried concurrently. A received census older than 60 seconds or more than
-30 seconds in the future is rejected; keep host clocks synchronized.
+Cached usage readings and holds are never reused as fresh evidence. A REACHABLE
+peer whose valid census disagrees on policy, membership or owner still holds launches and dispatch. A disagreement remembered only in an
+unreachable peer's cache is reported as a warning. Caches live under
+`governor/peers/` and are tied to the declared peer endpoint. Existing agents
+keep running. Each peer call has a 20-second deadline and peers are queried
+concurrently. A received census older than 60 seconds or more than 60 seconds in
+the future is rejected: the clock-skew allowance is symmetric (inclusive ±60s).
+Usage observations and the cache's future-stamp guard share that same
+60-second future allowance.
+The six-hour bound is not a minimum grace: a never-seen peer's first invalid
+census is advisory immediately, and a local clock rollback greater than 60 seconds
+can make a saved census future-stamped and advisory immediately. Neither path
+invents zero occupancy as known fact; the warning says UNKNOWN/counting 0.
+Keep host clocks synchronized.
 
-All hosts must declare the same set of uniquely named peers; differing membership
-is reported and holds admission before either host can use another authority. Every multi-host
-deployment must explicitly set `[host] admission_owner` to the same declared host.
-Choose an always-on host; names no longer elect the authority alphabetically.
-A single-host deployment needs no setting and never reaches for a peer.
-Launch admission is serialized on the chosen host using an SSH-held file lock under that
-host's governor state directory. The census is read after acquiring the lock,
-then the lock remains held through launch. `tend` recounts local agents between
-respawns, so one pass cannot reuse a slot. A busy or unavailable authority holds
-admission instead of electing another authority. The remote lock needs `python3`
-and POSIX file locking on the SSH host. No additional daemon or package is needed.
+All hosts should declare the same set of uniquely named peers; differing
+membership reported by a reachable peer holds admission. `[host] admission_owner`
+is optional. When it names a reachable host, launch admission is serialized on
+that host using an SSH-held file lock under its governor state directory, the
+census is read after acquiring the lock, and the lock remains held through
+launch. `tend` recounts local agents between respawns, so one pass cannot reuse
+a slot. A BUSY owner (another launch holds its lock) still refuses; retry.
+The owner's helper may print login noise before its ready line, and a helper
+still waiting on the owner's lock gets up to 12 more seconds to report BUSY, so
+a slow SSH connection to a busy owner is never mistaken for an unreachable one.
 
-The local governor JSON includes `admission_owner`. A missing or disagreeing peer
-value holds growth, including when a peer runs an older binary. To migrate, pause
-new admissions on every host and let in-flight launches finish, upgrade every host,
-configure the same owner everywhere, and check the local JSON on each before resuming.
-Do not switch only one host or use an unavailable authority as a reason to take a
-different local lock. The owner-only occupancy fallback above does not change
-which host owns the admission lock.
+When the owner is unreachable, or none is configured, the launching host takes
+its own lock and admits against fresh censuses of reachable peers plus the last
+census of each unreachable one. Real policy still refuses: FULL STOP, a frozen
+account, the account cap, and a gaming hold (unless `--despite-hold`). Every
+launch admitted without a fresh census of every host prints one line, for example
+`admission: rig-a unreachable; admitted locally against rig-a's last census (age
+14h, 3 live)`. While the owner is unreachable, `st fleet tend` on the launching
+host also runs the fleet-wide sweeps the owner normally runs.
+
+Degraded admission trades the single lock for availability. Two hosts admitting
+at the same moment without a common lock can each miss the other's newest launch,
+so the cap can be exceeded by at most one launch per concurrently admitting host,
+and only while the owner is unreachable or unconfigured. Every count is otherwise
+conservative: an unreachable peer is charged its last observed occupancy, never
+less. The remote lock needs `python3` and POSIX file locking on the SSH host.
+
+The local governor JSON includes `admission_owner`. A reachable peer whose value
+is missing or disagrees holds growth, including when it runs an older binary. To
+change the owner, configure the same value (or none) on every host.
 
 This coordinates the configured `st` launch paths in a connected fleet. It is not
 a distributed consensus or fencing service: out-of-band launches or loss of the SSH lock connection during a launch can defeat
@@ -2155,7 +2510,8 @@ Set the per-tree fetch deadline in `<root>/shantytown.toml`:
 fetch_timeout_seconds = 180
 ```
 
-The default is 180 seconds; the value must be finite and positive. Local Git
+The default is 180 seconds for each remote fetch in each tree, not a total
+budget shared across worktrees; the value must be finite and positive. Local Git
 probes retain their 60-second bound. A timeout kills the Git process group and
 returns a one-line refusal without stopping the pane or changing the card or
 pending cycle request. Retry after connectivity recovers or adjust the budget.
@@ -2195,6 +2551,11 @@ A live pane alone is insufficient source evidence: session discovery also
 requires a stats event within the last hour and matching transcript metadata.
 
 ### Board triage (Jev)
+
+For read-only governed P0/P1 priority/rank proposals, use
+`st work triage --rank-proposals --rank-rules reviewed-rules.json --dry-run`.
+See [governed rank proposals](board-rank.md) for policy bindings, UNKNOWN
+liveness, the frozen benchmark and quarantine-only answer artifacts.
 
 `st work triage [item ...] --jev-command 'python3 /path/to/camayoc/scripts/jev_mcp.py'`
 previews routing, duplicate and escalation severity suggestions. This earns a
@@ -2309,7 +2670,13 @@ identity source. With no agent argument it equips every local crew workspace.
 It never creates, starts, stops, or restarts an agent. Existing sessions pick up
 registration on their next start.
 
-Caboodle owns binary installation and functional proof; this command owns harness
+For Claude, provisioning also repairs the `StopFailure` handler in the selected
+role or per-agent settings file, including files emitted before that event was
+added. It refreshes only the shantytown handler, preserving other settings and
+operator hooks. An unreadable selected file refuses provisioning. Already-running
+sessions still require their natural relaunch boundary to load the repaired hook.
+
+Tambo owns binary installation and functional proof; this command owns harness
 registration. It requires existing crew workspaces and a nonempty
 `SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
 or failed configuration read-back return nonzero. No local-template fallback is
@@ -2428,8 +2795,24 @@ and indeterminate writes retry on the next pass. Three consecutive failures
 produce one UNTESTABLE finding for the administrator; continued failure stays
 silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
-mechanical conditions remain quiet even after a separate timestamp lapses;
+mechanical conditions without verified owner timer provenance remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
+
+Owner-set deferrals use an owner reminder instead of an administrator
+ruling when their recorded setter matches the assignee, the original window
+is positive, and the owner has a live runtime with no
+deliberate stop record. ASK-class items retain the administrator path. The
+normal `st work defer` writer retains `defer_provenance` (actor, set time and
+deadline) in the notes; missing or mismatched provenance does not qualify.
+An item touch is not a substitute for the defer's set time. This routing never
+releases a hold. The owner is nudged once per unchanged item and condition state;
+repeated scheduled observations do not escalate merely by count. A met event
+can prompt the owner before the backstop, while its future date and all existing
+release gates remain intact. An unmet event at the owner backstop requests an
+owner recheck, never release. A new deferral archives old setter envelopes as
+history. Down, deliberately stopped or unreadable owners, and failed owner
+delivery retain the administrator fallback. Missing or ambiguous provenance and
+ASK-class items retain their existing judgement route.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
@@ -2567,13 +2950,30 @@ selected board is not permission to retry against another board.
 `st repo pr` earns a separate slot because it creates an external review object;
 `repo context` remains a read. Use the guarded creation path after committing and
 pushing the candidate branch. It requires the explicit GitHub repository to match
-`origin`; it does not push, merge, close another PR, or activate native auto-merge.
+`origin`, with the mapped owner-move exception below. It does not push, merge,
+close another PR, or activate native auto-merge.
 Forgejo creation is not implemented by this command.
+
+Candidate source must be committed and published. Untracked files may remain
+only inside top-level `.work/` and `.task-notes/` directories. The preflight
+checks the directory roots without following symlinks or reading private file
+contents; these files do not enter the PR file list or metadata. A file or
+symlink replacing either root refuses, as do unrelated untracked paths and every
+tracked, staged, deleted, renamed or conflicted change, including under those
+roots. No ignore/configuration change or force option is needed.
 
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
-again. This command never rewrites remotes or silently migrates aliases. A
+again. A legacy-owner `origin` can remain unchanged when the deployment's
+`scripts/lib/stack_repos.py canonical` helper maps it to the requested current
+slug **and** GitHub resolves it to that slug with the same stable repository ID.
+The optional helper lives under
+`${XDG_DATA_HOME:-~/.local/share}/aegis-exec-src/`; exact origins need no helper.
+Missing, unreadable or unmapped policy, a foreign host/owner, an unproven redirect,
+or a redirect race refuses before POST and names a concrete `git remote set-url`
+fix. The requested repository must still be the forge's canonical slug.
+This command never rewrites remotes or silently migrates aliases. A
 repository identity change during preflight also refuses before POST. A lost or
 malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
 reported on stderr as well as JSON stdout. Inspect the canonical repository for
@@ -2625,7 +3025,10 @@ clients. Installing a mandatory external-client hook is a separate adoption step
 `--branch` before contacting any remote. Publish a candidate with
 `--branch <feature-branch>`; use `--source-branch <feature-branch>` when the selected
 worktree is on that topic instead of its canonical agent branch. The source must
-match the selected worktree and caller. Existing authority, pre-push hooks and
+match the selected worktree and caller. An explicit path selects the source tree;
+it does not bypass the caller-checkout guard. Run the command from that selected
+checkout, including when publishing an extra worktree. When changing directories,
+use an absolute source path in the repeated push command. Existing authority, pre-push hooks and
 non-fast-forward checks still apply to every trusted peer.
 
 `--branch main` explicitly selects a destination; it does not establish independent
@@ -2706,6 +3109,42 @@ stages remain recorded; normal eligibility resumes when the cooldown expires.
 The verdict does not release an item, rewrite priorities, or clear its gate.
 
 
+### Push freezes and selected peers
+
+`st repo push` keeps its default fan-out to all approved peer remotes. Add
+`--remote origin` to publish only that configured peer, or repeat `--remote` for
+an explicit subset. Source and destination branch checks, peer authorization,
+mirror exclusion, hooks and bounded push deadlines still apply. Selection does
+not grant authority to an unapproved upstream.
+
+Before a maintenance freeze, the operator records a reason in Git configuration
+for every effective push hostname, on each crew host that can publish:
+
+```bash
+git config --global --add st.push-freeze.forge.example 'maintenance window'
+```
+
+The key is `st.push-freeze.<host>`. Any configured value, even an empty reason,
+means HOLD. The tool reads all scopes/values; a local empty value cannot override
+a global freeze. Only the owning operator releases it by removing its values
+from the same scopes after the window passes. There is no automatic time expiry
+or push-command bypass. A chat announcement alone cannot be detected locally.
+
+Every selected peer's effective push URLs (including multiple pushurls and Git
+URL rewrites) are preflighted before any peer is contacted. A frozen host or an
+unreadable URL/config refuses the whole set. Mirrors remain uncontacted. The
+check repeats before each push; a hold appearing after an earlier publication
+stops the remaining writes and reports partial publication. It never rewrites
+an earlier remote to undo a push.
+
+Host matching uses the Git URL's hostname, not DNS or SSH alias resolution.
+Record all aliases used in push URLs. Hosts that cannot be represented by the
+freeze key (for example, a raw IPv6 literal) refuse instead of assuming unfrozen.
+This client check does not intercept raw
+`git push`, prevent other clients, or cancel a push already in flight. Operator
+freeze coordination and server-side write controls remain necessary.
+
+
 ### Request command attribution
 
 Tracker reads declare a finite command source (`st-anchor`, `st-plate`,
@@ -2743,6 +3182,13 @@ prove Android acceptance or delivery to the intended conversation. Android UI,
 QR/app-link payload and reconnect after lifecycle changes remain unverified;
 no QR is fabricated. Verify selected-agent delivery separately.
 
+Use `st agent remote pair NAME --dry-run [--json]` for status/identity inspection
+without issuing a code. The [phone access runbook](android-crew-sessions.md)
+covers explicit card selection, expiration and unknown outcomes, permissions,
+and the separate Android/reconnect acceptance checklist. Its
+[dated offline record](demos/android-crew-sessions/record.md) makes the limits
+of synthetic checks explicit.
+
 ### Administrator launch availability
 
 Ordinary lifecycle commands automatically exempt a verified local
@@ -2773,3 +3219,274 @@ transaction and continue to block relaunch; they are not routine quota holds.
 Deliberate stops, retirement, checkpoint-loss safeguards and per-agent operator
 holds remain respected during automatic recovery. Nothing here starts a second
 administrator, changes an account cap, or clears an operator hold.
+
+### Explicit routine progress for scoped administrator budgets
+
+`st inbox -d --routine <agent> <pointer>` declares batchable progress. Use it only
+when no immediate decision, blocked-work response, ownership handoff, or active
+window coordination is needed. Operator messages, urgent controls, governance
+notifications, gate/decision requests and handoffs use the unchanged immediate
+path. These are declared exemptions, not authenticated identity or urgency inferred
+from body text. Omitting `--routine` always preserves existing delivery behavior.
+
+Only an explicitly named administrator using Claude, with ENFORCE enabled and a
+fresh quota/cadence observation, can defer the routine live nudge. The durable
+message is persisted first and stays unread. The existing `fleet tend` pass
+submits one batch after the original cadence deadline (at most 900 seconds) plus
+its next actual scheduled tick. OFF, unknown evidence or clock reversal releases
+early. No new daemon/timer is installed, no off-host relay is delayed, and a dry
+run neither persists nor sends. This does not bound ongoing-turn or account spend.
+
+A live attempt is durably claimed before submission. Ambiguous submission,
+stranded input or failed acknowledgement keeps the inbox pointer and does not
+retry the live send. Read it through `st inbox`; sender success means persistence,
+not live arrival. A stopped/overloaded tend schedule, down recipient, malformed
+queue or incomplete unread coverage prevents a wall-clock delivery guarantee;
+those cases remain visible/UNKNOWN and require the normal inbox read path. The
+feature is source-only until reviewed adoption and a separately authorized scoped
+trial proves the actual scheduled path and declared-exemption coverage. Rollback:
+set the scoped policy OFF, drain/read retained pointers, then revert the source;
+do not remove unread messages or revert while routine entries remain pending.
+
+### Provider safety refusals
+
+Claude crew settings provision an asynchronous `StopFailure` command hook.
+[Claude Code runs this instead of `Stop` for API errors](https://code.claude.com/docs/en/hooks#stopfailure),
+so the failure is recorded without waiting for a normal turn-end hook or a pane
+banner. The hook persists a `stop-failure` event with the agent, plate, error,
+optional error details and rendered API message. Missing plate/request evidence
+stays `UNKNOWN`; a plate read gets a two-second budget so it cannot silence
+the error notice. The actual error enum used for a safeguard refusal remains
+unknown until a real hook payload is observed; fixtures do not establish it.
+
+A rendered API message containing `safeguards` takes priority over every other
+error category. It records a hold for that launch and durably notifies the
+canonical administrator, with request IDs extracted from the rendered message.
+The hold also prevents ordinary input and automatic cycles when the pane has no
+banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
+does not clear a safeguard hold. Rate-limit and authentication failures enter the
+existing `limited` and `auth-dead` supervision paths; a later successful Stop can
+retire these transient signals. Other errors produce a durable administrator
+inbox notice. Notification work runs asynchronously with a bounded timeout and
+never asks the model to continue. Launch verification checks the running
+process's selected settings against its recorded launch snapshot; a newly
+rewritten settings file is not proof that an old process loaded the hook.
+
+The following pane check remains the fallback for Codex and missed hooks.
+A current provider banner saying `safeguards flagged this message` or
+`safeguards stopped the response` reads as `safeguard-blocked` in pane and stop
+reports. Tend treats it as a fault and holds it for administrator review. It
+never clears context, switches models, cycles, or sends recovery input for this
+condition. Ordinary sends refuse while the banner is current.
+
+Tend persists one administrator inbox report per observed refusal, including the
+agent, request IDs when visible, and plate items (or `UNKNOWN` on a failed read).
+Old scrollback, a later response, and a cleared session do not count. Missing IDs
+remain `UNKNOWN`. Reports retain only metadata in `safeguard-reports/` under the
+crew root; long ID/plate lists are abbreviated in the inbox and retained there.
+A pending or uncertain delivery is reported loudly and never automatically
+replayed: inspect its ledger and durable inbox before any manual retry. Human
+review determines the next step. A saved primary hold is not delivery evidence:
+tend reconciles a demonstrably absent notification attempt from the saved error
+metadata, including when event persistence was interrupted and no pane banner
+exists. The shared reservation still prevents replay of pending or UNKNOWN
+attempts and keeps their uncertainty visible. Missing launch provenance cannot
+retire a saved safety hold; only positively different known launch stamps can.
+
+## Explicit file-memory transport
+
+`st agent memory` earns its own slot because commit and projection have data
+consequences; they must not be hidden in the read-only anchor. The command
+provides bounded explicit transport. An independently enabled per-crew Claude
+plan can also use the managed lifecycle described in [crew memory](crew-memory.md).
+The default installs neither native selection nor automatic synchronization. Run
+`st agent memory alpha capabilities` for the current honest adapter limits.
+
+Inspect a selected native directory without uploading its bodies:
+
+```sh
+st agent memory alpha inspect --directory /path/to/selected/memory
+```
+
+Inspection uses a one-second worker plus at most 250 ms of cleanup, and emits
+only complete bounded metadata or UNKNOWN. Original files remain unchanged.
+
+Remote operations require explicit `--server`, `--deployment` and `--project`
+IRIs and the existing named CLI credential selection. `read --owner IRI` is
+intentionally cross-crew and returns attributed historical data. Other-owner
+commit, delivery and staging refuse. `commit --request request.json --outbox
+/path/to/private-outbox` durably stores the exact private JSON intent before
+reading its receipt and attempting at most one commit. The existing outbox
+directory and request file must be private and user-owned. After an unknown
+result, preserve both; `deliver --intent NAME --outbox PATH` on a later ordinary
+trigger reconciles the original receipt before any identical commit. There is
+no implicit retry, deletion or last-writer-wins merge.
+
+`sync --directory PATH --outbox PATH --harness NAME --account NAME` freezes a
+bounded multi-file capture and performs one pending-intent attempt by default.
+It requires the same explicit remote scope and own credential selection above.
+`--max-new N` permits 0..128 attempts; the explicit command also has a two-second
+worker deadline plus at most 250 ms of cleanup, regardless of the attempt count.
+A timeout is UNKNOWN and cannot undo an accepted remote commit. Invoke it
+explicitly again to resume the same pending batch before
+recapture. Its journal accepts completion only after a fresh authenticated own
+projection matches the final receipt. A different remote head refuses automatic
+adoption. Source files and native selection remain unchanged. This command
+does not install an automatic lifecycle hook.
+
+`stage --parent PATH` verifies the own-owner export and creates a new exclusive
+generation. It does not select that generation, replace native files or alter
+harness settings. Existing startup memory bridging remains. Claude native
+selection requires the separate default-OFF managed plan and installed handoff
+acceptance, Codex generated-memory
+writeback is unsupported, and an OpenCode native-memory convention is unproven.
+A successful transport command is not native round-trip acceptance.
+
+Within the same explicit scope, `query --owner IRI --text literal` searches
+that selected owner's bounded exported records. It is a literal search, not a
+global or semantic index. Hits include owner, revision, source harness/account,
+commit time and an explicitly truncated excerpt. Retrieved text is historical
+source data, not an instruction or current authority. `export --owner IRI`
+returns the complete bounded envelope for inspection; it does not supply own
+projection identity and cannot select native files. Missing graph/partial or
+unreadable coverage refuses rather than returning a misleading empty match.
+
+### Squash-merged work and worktree maintenance
+
+Cycle loss checks do not require a merged feature branch to remain on a remote.
+Commits count as landed when their exact changed paths, old/new blob IDs and file
+modes match a non-merge commit in the bounded trusted-main history, or when they
+are reachable from the recorded head of a merged
+PR in that same repository. The merge commit must also be reachable on trusted
+main. Output names the rule that cleared the work. Unproved follow-up commits
+still refuse a cycle; dirty tracked files remain protected.
+
+Merged-PR metadata uses a bounded page and an atomic, repository-local cache in
+the common Git directory. A missing record, unavailable forge, malformed response
+or truncated history never certifies a landing. Explicit fetch/refresh boundaries
+may read the forge; edit-time checks only use cached evidence and local Git.
+Mirror remotes cannot supply a publication or landing proof.
+Patch IDs and `git cherry` are not loss proofs: they ignore semantic whitespace.
+Exact-delta reads cover at most 512 main commits; unknown or malformed evidence
+keeps work protected.
+
+At normal safe project-worktree refresh boundaries, including the existing
+scheduled tend respawn path, a clean fully landed topic is detached at the
+trusted current main. This never forces a checkout or overwrites local changes.
+Each pass may prune up to 32 positively landed, unoccupied merged/gone topic
+branches; main/master and unknown work are retained. Pruning rechecks occupancy,
+compares the expected branch tip before deletion, and retains a recovery ref at
+`refs/st/landed-retained/<old-tip>`. There is no new timer or live-agent checkout
+sweep. API cache/page and per-pass limits may leave older branches unclassified.
+
+After a merged topic is detached, create or check out a new topic before
+committing new work. Publish it with an explicit `--source-branch`. Push refuses
+an unreadable or detached source instead of silently selecting an old canonical
+branch. Fresh topics at main are not considered merged topics.
+
+Use `git config branch.<topic>.st-keep true` to retain a named recovery or parked
+branch. An untracked alias is not pruned merely because it shares a merged PR's
+head SHA; the merged PR must name that same topic, or its upstream must be gone.
+
+### Graph-owned role responsibilities
+
+When `SHANTY_RULES_QUERY` names the deployment's process-rule query, human
+`st anchor` output includes the current role's responsibility summaries.
+Session-start uses that same anchor render. `st fleet roles show` reads all role
+scopes once and lists their summaries, including additive roles such as reviewer.
+An unavailable, empty, capped or malformed read prints `UNKNOWN`; the program
+never substitutes a built-in responsibility text.
+
+The named query accepts a canonical role IRI (the namespace comes from
+`SHANTY_ONTO_NS`), and `*` for the role catalogue. It returns `topic`, `rule`,
+`summary`, `text`, and `scope`. Responsibilities have topic `responsibilities`
+and an exact role `scope`; ordinary process rules remain in the same result.
+Deployments may also accept local role names. Publish the query definition and
+role-scoped rules through the deployment's governed graph lane before adoption.
+The graph owns the wording; this package owns only its bounded read and render.
+
+On the fleet-owner host, the existing `st fleet tend` pass includes an
+administrator ranking check. It names each live agent whose canonical plate
+is below strictly higher-priority unowned READY work, with one count/priority
+comparison per agent. One shared list shows at most five unowned witnesses in
+priority/rank order, followed by `+N more`. It covers unowned READY work plus
+unowned P0 items in the complete active/deferred metadata projection; P0 items
+outside READY are explicitly labelled. Blocked work is not
+promoted to READY, and owned work is not relabeled unowned. No assignment,
+priority or rank changes automatically.
+
+The digest includes P0 work created/closed counts for seven UTC calendar dates,
+including the current partial date. This is explicitly not a rolling 168-hour
+count. `SHANTY_BOARD_METRICS_QUERY` may select the aggregate query (default
+`seeds_board_metrics_v1`). It must supply independent `coverage` and
+`aggregation_control` rows plus reconciled `created`/`closed` grouped counts and
+matching totals; capped, inconsistent or failed reads stay `UNKNOWN`. Inbox
+counts do not become work counts. The aggregate has an eight-second total transport
+budget; role-summary reads retain a two-second total transport budget. A single
+foreground helper performs each HTTP read; the parent's monotonic deadline includes
+helper startup, DNS/connection setup, headers and body consumption. Expiry kills
+and reaps the helper and yields `UNKNOWN`, even if bytes keep arriving. Request
+headers travel over private stdin rather than process arguments. Response and
+completeness caps still apply. Neither budget changes the server deadline.
+Changed actionable digests use the existing
+administrator advisory route only when unowned P0 work exists; lower-priority
+mismatches and unknown cohort counts do not page. Unchanged pushes remain quiet,
+and failed P0 pushes remain eligible for retry. Routine healthy results remain
+in the scheduled pass log, where unchanged digests repeat at most once an hour;
+content changes log immediately. The separate log ledger does not acknowledge
+or suppress administrator delivery. The routine advisory marker does not print
+a second copy of the shared list. The pass budget may defer this
+advisory sweep without interrupting supervision.
+
+### Large durable inboxes
+
+On the native Seeds reader, `st inbox --count` counts message membership without
+loading every message’s metadata. Listing shows at most the newest 100 messages
+and prints `showing N of M` when more are unread. `st inbox --read` selects up to
+15 oldest messages, then uses the existing fresh receipt checks and independent
+closes. Undated messages sort after dated messages in both views; ties use stable
+message IDs. Explicit `--read-id` selection still reads only those receipts.
+
+The membership count and selected metadata are separate observations, not an
+atomic snapshot; concurrent changes can require retrying a read. Unsupported
+owner statuses, duplicate receipts across graphs, legacy format uncertainty and
+transport failures remain UNKNOWN. These bounds never authorize bulk draining
+an operator’s inbox; reading and acknowledging stay separate actions.
+
+Successful administrator deferral digests emit
+`deferral-sweep: ADMIN-DIGEST delivered count=N digest=HASH` in the tend log.
+Quiet `deferral log:` reports, owner reminders, duplicate suppression and failed
+administrator delivery do not emit this marker. Measure the 24-hour acceptance
+window only after verifying the installed source and a scheduled tend pass;
+count delivered digest markers, rather than quiet report headings or item counts.
+
+Rank proposals distinguish `reowner` (a positively observed down owner) from
+`needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
+`in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
+owner observations and held owners do not become down observations. This flag
+never assigns anyone or releases a hold.
+
+For a frozen independent corpus, add `--rank-semantic-only` to
+`st work triage --rank-proposals --benchmark cases.jsonl --rank-rules rules.json`.
+This mode calls only the automation and personal-need nouls, including P0 cases;
+rank-band choices are disabled. Each case needs both independent boolean labels
+under `expected.flags`, a dated before snapshot, owner evidence, source and rule
+references. Unknown ownership labels may remain unknown because this report
+scores only the semantic columns. The entire 30–50 case corpus is validated
+before any model call; the shared budget is at most 100 nouls. Dry-run makes no
+model calls. Real calls still require the explicit verified quarantine graph,
+private request journal and exact readback. Missing observations stay missing,
+not false. The separate semantic report schema cannot authorize a live rank arm.
+
+Deterministic bands use proven open blockers, not a stored blocked/deferred
+status or a `blocked:*` claim. Positive open blockers, explicit
+`blocked:human`/`desk`/`needs-stiwi`, keep a blocked band. Parked-by-design work with proven zero blockers is later;
+with positive blockers it stays blocked.
+With proven zero blockers, other blocked labels produce a visible stale-gate
+flag. An open or deferred P0 behind a proven stale gate is immediate.
+P0 overdue work or a proven prerequisite of P0 work is immediate; work
+due within seven days (including overdue work) is due; other P0–P2 work is
+normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
+a zero count. Native snapshots use bounded candidate-edge and exact endpoint
+status projections; missing or shadowed endpoints refuse the run. These bands
+and flags do not change lifecycle status, clear a hold, or authorize dispatch.

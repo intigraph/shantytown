@@ -1,0 +1,11 @@
+Script started on 2026-10-20 10:26:01-04:00 [COMMAND="python record.py" <not executed on terminal>]
+BASE 90ff87992594efa46f58d54bb405c2f979749e22 (private synthetic panes)
+{"case": "queued_preview", "result": "delivered", "keys": ["Delivery control: continue the assigned work.", "Enter"], "retained": []}
+{"case": "blocked_enter", "result": "unverified", "keys": ["Delivery control: continue the assigned work.", "Enter", "Enter"], "retained": []}
+{"case": "human_draft", "result": "unverified", "keys": [], "retained": []}
+CANDIDATE 21d13b51911f4312c6f1cf08400e75d885134311 (private synthetic panes)
+{"case": "queued_preview", "result": "unverified", "keys": ["Delivery control: continue the assigned work.", "Enter"], "retained": ["queued"]}
+{"case": "blocked_enter", "result": "unverified", "keys": ["Delivery control: continue the assigned work.", "Enter", "Enter", "C-e", "C-u"], "retained": ["cleared"]}
+{"case": "human_draft", "result": "unverified", "keys": [], "retained": []}
+
+Script done on 2026-10-20 10:26:03-04:00 [COMMAND_EXIT_CODE="0"]

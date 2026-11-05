@@ -580,7 +580,7 @@ def test_date_condition_releases_without_a_timestamp(tmp_path):
 def test_mechanical_release_cannot_override_other_gates(tmp_path):
     base = _row(notes='resume_when: closed:aegis-blocker')
     variants = [dict(labels=['needs-human']), dict(labels=['decision-stiwi']),
-        dict(labels=['blocked:external']), dict(labels=['parked:by-design']),
+        dict(labels=['parked:by-design']),
         dict(defer_until=_iso(timedelta(days=1))),
         dict(dependencies=[{'id': 'aegis-other', 'dependency_type': 'blocks', 'status': 'open'}]),
         dict(notes='resume_when: closed:aegis-blocker and ask for approval'),
@@ -736,9 +736,11 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert set(a.sweep()) == {'urgent', 'unknown'}
     assert 'routine' not in sent[0]
     assert 'urgent' in sent[0] and 'unknown' in sent[0]
-    assert len(logs) == 1 and 'routine' in logs[0]
+    assert len(logs) == 2 and 'routine' in logs[0]
+    assert logs[0].startswith('deferral log:')
+    assert logs[1].startswith('deferral-sweep: ADMIN-DIGEST delivered count=2 digest=')
     assert a.sweep() == []
-    assert len(sent) == len(logs) == 1
+    assert len(sent) == 1 and len(logs) == 2
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

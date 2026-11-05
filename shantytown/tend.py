@@ -129,7 +129,10 @@ CODEX_DAEMON_WEDGED = "codex-daemon-wedged"  # named launch-depth blocker
 # is what a fault means here. So the verdict is split at the point of action —
 # see _live — rather than by making the whole condition non-faulty, which would
 # hide the un-fixable half in the same silence auth-dead was rescued from.
+SAFEGUARD_BLOCKED = "safeguard-blocked"  # held for human review, never auto-cycled
+
 _FAULTS = frozenset({RESURRECTED, DEAF, REFUSED, UNEQUIPPED, AUTH_DEAD, CRASH_LOOP,
+                     SAFEGUARD_BLOCKED,
                      LIMITED, RUNTIME_EXITED})
 
 # RESPAWN BACKOFF (GitHub #12). A crash-looping agent — bad card, broken
@@ -512,6 +515,10 @@ class Tender:
         pane_up = self._panes.exists(card.pane)
         shell = shell_foreground(self._panes, card.pane) if pane_up else None
         up = pane_up and shell is None
+        from .stop_failure import state as failure_state
+        if failure_state(getattr(self._runtime, "_root", None), card.name) == SAFEGUARD_BLOCKED:
+            return Finding(card.name, "up" if up else "down", SAFEGUARD_BLOCKED,
+                           "StopFailure hold for administrator review; no automatic recovery or input")
 
         # RETIREMENT FIRST, before anything can decide to act. Ordering is the
         # guarantee: a check that runs after the respawn logic is a check that
@@ -652,7 +659,16 @@ class Tender:
         # command is `st fleet tend --reauth` — one command, operator-timed.
         from .runtime import auth_expired
         plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-        if auth_expired(self._runtime, plain):
+        from .runtime import safeguard_blocked
+        from .stop_failure import pane_state
+        failure = pane_state(getattr(self._runtime, "_root", None), card.pane)
+        if failure == SAFEGUARD_BLOCKED or safeguard_blocked(self._runtime, plain):
+            from .safeguard import request_ids
+            return Finding(card.name, "up", SAFEGUARD_BLOCKED,
+                           "provider refusal; requests=" +
+                           (",".join(request_ids(plain)) or "UNKNOWN") +
+                           "; held for administrator review: no automatic recovery or input")
+        if failure == AUTH_DEAD or auth_expired(self._runtime, plain):
             return Finding(card.name, "up", AUTH_DEAD,
                            "alive and LOGIN-EXPIRED: every API call fails; the "
                            "pane renders idle and nothing can run. Not respawned "
@@ -666,7 +682,7 @@ class Tender:
         # questions below for the reason auth-dead is — those are moot for a
         # session that cannot run anything.
         from .runtime import limit_reached
-        if limit_reached(self._runtime, plain):
+        if failure == LIMITED or limit_reached(self._runtime, plain):
             return self._failover(card)
         wiring = live_wiring(card.pane, self._panes.cmdline)
         if wiring is None:

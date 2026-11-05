@@ -1,0 +1,8 @@
+Script started on 2026-10-20 00:31:31-04:00 [COMMAND="python3 docs/demos/scheduled-inbox.py" <not executed on terminal>]
+actual child: succeeded; descriptor agrees with exit 0
+actual child: failed; descriptor agrees with exit 1
+actual inbox readback: one attributed pointer; recipient down, not live proof
+missing descriptor: exit 2, no second pointer, no TOML/state created
+SYNTHETIC ONLY: no Chaski slot, signature, production graph or natural firing
+
+Script done on 2026-10-20 00:31:31-04:00 [COMMAND_EXIT_CODE="0"]

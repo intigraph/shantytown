@@ -1,11 +1,11 @@
-"""st — the CLI. Seven verbs, five groups, thirty-seven grouped commands: forty-four, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Eight verbs, five groups, forty grouped commands: forty-eight, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
-    · anchor [--short|--events|--harness] · attach [-r|--no-start]
-    work  → item · repool · defer · cost [--sync] · dream [--run] · triage
+    · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
+    work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
-    agent → new · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
-            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair}
+    agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
+            · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
             · window {plan|drain|clear|release|abort} · dashboard [admin]
@@ -35,6 +35,14 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`agent spawn` earned the forty-seventh slot (aegis-c01c.2, Stiwi 2026-10-28: "I
+would like for st to support ephemeral agents that can handle pr reviews and merging
+and whatnot", "managed by the administrator"). It is a command and not a flag on
+`new` because `new` launches a card that already exists and refuses nothing about
+its lifetime; spawn MINTS a card, owns its whole life (admission, deadline, budget,
+report, teardown) and is the one place those supervision rules live.
+docs/ephemeral-agents.md.
 
 `fleet watch` earned the fortieth slot (aegis-az0a40, Stiwi 2026-09-29: "You should
 have an alert for this. And she should have an alert for if you can't be contacted.
@@ -146,6 +154,7 @@ from __future__ import annotations
 
 from .plate_capacity import PlateFull, CapacityUnknown
 import argparse
+import contextlib
 import dataclasses
 import json
 import os
@@ -249,18 +258,19 @@ def _panes(a):
     EVERY LIVE AGENT AS DOWN, confidently and with exit 0. tmux.py has warned
     about exactly this since it was written; the CLI just never asked.
     """
-    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."))
+    return Tmux(socket=declared_socket(getattr(a, "root", None) or "."),
+                root=getattr(a, 'root', None))
 
 
 def _registry(a):
     """Identity backend for this invocation, selected by --registry.
 
     quipu is the SOURCE OF TRUTH (Stiwi: "quipu should be the source of truth");
-    files is the projection/cache and the leak detector. Default stays files so
-    an offline invocation still resolves identity locally; --registry quipu reads
-    it straight from the graph. Either way the SAME roles.check runs over it.
+    files is the projection/cache and the leak detector. A deployment may select
+    another default; an explicit --registry overrides it. With no declaration,
+    files remains the offline default. The SAME roles.check runs over each.
     """
-    chosen = getattr(a, "registry", "files")
+    chosen = _registry_choice(a)
     if chosen == "quipu":
         # Pass the root so the ADDRESS and the NAMESPACE both come from the
         # deployment's shantytown.toml rather than whatever this shell exported. Without
@@ -274,6 +284,17 @@ def _registry(a):
         # for a deployment that wants no ontology and no generated cards.
         return config.TomlRegistry(a.root)
     return FilesRegistry(a.root / "crew")
+
+
+def _registry_choice(a) -> str:
+    """Explicit identity selection, deployment TOML/env, then offline files."""
+    chosen = getattr(a, "registry", None)
+    if chosen is None:
+        chosen = _deployment_default(a, "SHANTY_REGISTRY") or "files"
+    if chosen not in ("files", "quipu", "toml"):
+        raise SystemExit("refused: SHANTY_REGISTRY must be files, quipu, or toml; "
+                         "fix the deployment [env] or environment")
+    return chosen
 
 
 def _deployment_default(a, key: str) -> str | None:
@@ -330,6 +351,28 @@ def _backend(a, default="files") -> str:
 
 
 def _tracker(a, default="files"):
+    from .plate_capacity import guard_producers
+    tracker = _raw_tracker(a, default)
+    def notify(owner, item_id):
+        lead = _registry(a).get(owner).reports_to
+        if not lead:
+            raise ValueError('owner has no lead')
+        # Use the same backend and a message marker: no implementation slot and
+        # no recursive capacity routing. Never recreate the original work item.
+        body = f'capacity: {item_id} retained in pool; {owner} has 10 real work items'
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
+            # message graph: a message window, never a seed; one note per item/owner/day.
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
+            return
+        tracker.create(f'inbox: {body}', assignee=lead, labels='inbox')
+    return guard_producers(tracker, notify)
+
+
+def _raw_tracker(a, default="files"):
     """The tracker for this invocation, selected by --backend (#3).
 
     arnold added beads.plate() (the reader) but the CLI still wired FilesTracker
@@ -458,9 +501,18 @@ def _inbox(a, default="files"):
     if _backend(a, default) in BR_LIKE:
         trk = _tracker(a, default)
         from .br import items as br_items
-        return TrackerInbox(trk, lambda: br_items(trk),
-                            lambda: br_items(trk, include_closed=True),
-                            items_for=getattr(trk, "inbox_items", None))
+        legacy = TrackerInbox(trk, lambda: br_items(trk),
+                              lambda: br_items(trk, include_closed=True),
+                              items_for=getattr(trk, "inbox_items", None))
+        # [inbox] store: "message-graph" sends NEW mail through
+        # `sd msg` into the message windows and reads legacy seeds + windows.
+        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
+            from .inbox import MessageGraphInbox
+            return MessageGraphInbox(legacy, trk)
+        return legacy
     return FilesInbox(Path(a.root) / "inbox")
 
 
@@ -481,7 +533,15 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
     missing pane marker preserves the ordinary non-tmux fallback; a present but
     stale/unresolvable marker refuses attribution, exactly as the stop path does.
     """
-    sender = _me(a)
+    from .actor_identity import authenticated_actor, IdentityError
+    try:
+        authenticated = authenticated_actor()
+    except IdentityError as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return None, False
+    sender = authenticated or _me(a)
+    if authenticated and getattr(a, "me", None) not in (None, authenticated):
+        return None, False
     if not sender:
         return None, True
     if not os.environ.get("TMUX_PANE"):
@@ -501,8 +561,9 @@ def _wire(a) -> Dispatcher:
     # One resolution, the same one `st inbox` attributes with — a coordinator must
     # not be one name on a message and another on the work it hands out.
     from .feed_audit import FeedAudit
+    from .actor_identity import authenticated_actor
     return Dispatcher(_registry(a), _tracker(a), _panes(a),
-                      governor=_dispatch_gate(a), sender=_me(a),
+                      governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
                       audit=FeedAudit(Path(a.root)))
 
 
@@ -580,18 +641,14 @@ def _governors(a):
         snapshot = fg.snapshot(host, local, _governor_agents(a),
                                hosts=[host, *cfg.host_peers],
                                admission_owner=cfg.host_admission_owner)
-        from . import accounts
-        declared = [dict(name=card.name, host=card.host, live=True,
-                         harness=harness_mod.name_for(card, root=a.root),
-                         account=(account.name if (account := accounts.selected(card, cfg))
-                                  else None))
-                    for card in _registry(a).all().exact()
-                    if card.host in cfg.host_peers and not getattr(card, 'retired', False)]
         fleet = fg.FleetGovernor(snapshot, fg.collect(cfg.host_peers), a.root,
-                                 peer_config=cfg.host_peers, declared_agents=declared)
+                                 peer_config=cfg.host_peers,
+                                 census_max_age=cfg.host_peer_census_max_age)
         a._account_governor = fleet
-        for warning in fleet.warnings:
-            print('  ⚠ ' + warning, file=sys.stderr)
+        # One short line per command; the full list is `st crew --governor`.
+        notice = fleet.notice()
+        if notice:
+            print('  ⚠ ' + notice, file=sys.stderr)
         if fleet.errors:
             print('  ⚠ ' + fleet.fallback(), file=sys.stderr)
     policies = {name: g.policy for name, g in fleet.governors.items()}
@@ -648,6 +705,29 @@ def _administrator_launch(a, card=None) -> bool:
                                       and card.host == current.host)))
     except Exception:
         return False
+
+
+@contextlib.contextmanager
+def _held_admission(a, lock):
+    """Enter an admission lock and expose its `Admission` to the launch gates."""
+    with lock as admission:
+        previous = getattr(a, '_admission', None)
+        a._admission = admission
+        try:
+            yield admission
+        finally:
+            a._admission = previous
+
+
+def _say_degraded_admission(a, fleet):
+    """Print the one degraded-admission line, once per census."""
+    from . import fleet_governor as fg
+    if fleet is None or getattr(fleet, '_admission_said', False):
+        return
+    line = fg.degraded_admission_line(getattr(a, '_admission', None), fleet)
+    if line:
+        print('  ' + line, file=sys.stderr)
+        fleet._admission_said = True
 
 
 def _launch_admission_lock(a, card, cfg):
@@ -709,7 +789,10 @@ def _account_launch_refusal(a, card, *, replacing=False):
             return refusal
         _h, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
         verdict = unconfigured or (governor.evaluate(persist=False) if governor else None)
-        return verdict.excludes(card, _catalog(a)) if verdict else ''
+        refusal = verdict.excludes(card, _catalog(a)) if verdict else ''
+        if not refusal:
+            _say_degraded_admission(a, fleet)
+        return refusal
     except Exception as exc:
         return f'account governor cannot establish admission ({type(exc).__name__})'
 
@@ -922,8 +1005,12 @@ def _governor_verdicts_for(a, cards):
     fleet = getattr(a, '_account_governor', None)
     if fleet is not None and fleet.errors:
         raise RuntimeError(fleet.fallback())
+    from . import work_class
     if not governors:
-        return {card.name: (harness_mod.name_for(card, root=a.root), None)
+        return {card.name: (harness_mod.name_for(card, root=a.root),
+                work_class.for_card(
+                    gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                    cfg.governor, card, a.root) if cfg.governor.admit_class else None)
                 for card in cards}
     from . import account_state
     verdicts, out = {}, {}
@@ -934,7 +1021,8 @@ def _governor_verdicts_for(a, cards):
         if lane not in verdicts:
             verdicts[lane] = (unconfigured if unconfigured is not None else
                               governor.evaluate(persist=False))
-        out[card.name] = lane, verdicts[lane]
+        out[card.name] = lane, work_class.for_card(
+            verdicts[lane], cfg.governor, card, a.root)
     return out
 
 
@@ -966,7 +1054,7 @@ def _dispatch_gate(a):
     if fleet is not None and fleet.errors:
         return lambda item, agent=None: fleet.fallback()
     stood_down = bool(getattr(getattr(cfg, "fleet", None), "stood_down", False))
-    if not governors and not stood_down:
+    if not governors and not stood_down and not cfg.governor.admit_class:
         return None
     cards = {card.name: card for card in _registry(a).all().exact()}
     verdicts = {}
@@ -1037,7 +1125,11 @@ def _dispatch_gate(a):
                 print(f"  ⚠ {mem.warning}", file=sys.stderr)
 
         if not governors:
-            return ""
+            from . import work_class
+            verdict = work_class.for_card(
+                gov_mod.Verdict(reading=gov_mod.Reading(source="none")),
+                cfg.governor, card, a.root)
+            return verdict.admits(item, agent)
 
         if sender is not None and (cfg.governor.by_harness or getattr(cfg, "accounts", {})) and not delegated:
             _sh, source_governor, source_unconfigured = _governor_for(
@@ -1063,7 +1155,8 @@ def _dispatch_gate(a):
                                  else governor.evaluate(persist=False))
             if verdicts[harness].alarm:
                 print(f"  ⚠ {verdicts[harness].alarm}", file=sys.stderr)
-        verdict = verdicts[harness]
+        from . import work_class
+        verdict = work_class.for_card(verdicts[harness], cfg.governor, card, a.root)
         refusal = verdict.admits(item, agent)
         if not refusal and verdict.waives(item, agent):
             print(f"  ⚠ {verdict.waiver_says(item, agent)}", file=sys.stderr)
@@ -1330,7 +1423,7 @@ from .surface import SURFACE, GROUP_OF  # noqa: E402
 
 _GROUP_HELP = {
     "work": "the item and the board: item, repool, defer, cost, dream, triage, jobs",
-    "agent": "one agent: new, stop, harness, cycle, input, ask, answer, log, history, stats",
+    "agent": "one agent: new, spawn, stop, harness, cycle, input, ask, answer, log, history, stats",
     "fleet": "the fleet: start, tend, roles, init, hold, window, dashboard, watch",
     "repo": "a shared project repo: worktree, push, context, pr",
     "ops": "the installation: doctor, provision, subscribe, hooks, help",
@@ -1409,11 +1502,14 @@ def build_parser() -> argparse.ArgumentParser:
     # only the SHA distinguishes a fresh install from a stale one.
     from . import __version__, deployed_sha
 
-    ap.add_argument(
-        "--version",
-        action="version",
-        version=f"st {__version__} ({deployed_sha()})",
-    )
+    class Version(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            parser._print_message(f"st {__version__} ({deployed_sha()})\n", sys.stdout)
+            parser.exit()
+
+    # Git metadata can block for seconds. Only --version needs that probe;
+    # ordinary parsing, especially static prime, must not run it eagerly.
+    ap.add_argument("--version", action=Version, nargs=0, help="show version and exit")
     # DEFAULT None, resolved in main() — not computed here. Two commands need
     # different answers for "nobody said": every read/launch command DISCOVERS a
     # store (walk up, then the box's pointer), while `init` must answer cwd/.shanty
@@ -1425,15 +1521,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "walking up from here, else the box's deployment pointer "
                          "(~/.config/shantytown/root), else ./.shanty")
     ap.add_argument("--backend", choices=["files", "beads", "br", "seeds", "forgejo"], default=None,
-                    help="tracker backend (identity is always files). Unset uses "
+                    help="tracker backend (identity uses --registry). Unset uses "
                          "the deployment's SHANTY_BACKEND ([env] in shantytown.toml, "
                          "then environment), otherwise the command default. An "
                          "explicit option overrides deployment configuration.")
     ap.add_argument("--repo", default=None,
                     help="store directory for compatibility tracker adapters (unset: deployment's "
                          "SHANTY_BEADS_REPO/SHANTY_BR_REPO, else the configured store walk-up)")
-    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default="files",
-                    help="identity backend: files (generated cards, the default), "
+    ap.add_argument("--registry", choices=["files", "quipu", "toml"], default=None,
+                    help="identity backend (unset: deployment SHANTY_REGISTRY, else files): "
+                         "files (generated cards), "
                          "quipu (the graph), or toml ([crew.<name>] in "
                          "<root>/shantytown.toml — hand-authored, read-only, for a "
                          "deployment that wants no ontology).")
@@ -1473,6 +1570,14 @@ def build_parser() -> argparse.ArgumentParser:
     mr.add_argument("--json", action="store_true",
                     help="the task context as JSON for hooks and tools: agent, harness, and "
                          "the plate item (id, title, status, priority) or null")
+
+    prime = sub.add_parser("prime", help="stack primer plus bounded, read-only anchor summary")
+    prime.add_argument("me", nargs="?", help="defaults to $SHANTY_AGENT, as for anchor")
+    prime.add_argument("--json", action="store_true")
+    prime_mode = prime.add_mutually_exclusive_group()
+    prime_mode.add_argument("--brief", action="store_true", help="five to ten lines for stack orientation")
+    prime.add_argument("--static", action="store_true", help="skip live state and configuration")
+    prime_mode.add_argument("--section", help="static primer section, by name or unique prefix")
 
     sling = sub.add_parser("sling", help="hand a beaded design to the executive administrator")
     sling.add_argument("item")
@@ -1530,11 +1635,17 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
     wi.add_argument("item")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--spec-file", type=Path)
+    wi.add_argument("--quote")
+    wi.add_argument("--requester")
+    wi.add_argument("--summary")
+    wi.add_argument("--urgent", action="store_true")
+    wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
     wi.add_argument("--replace-text", action="store_true",
@@ -1550,6 +1661,15 @@ def build_parser() -> argparse.ArgumentParser:
              "`br ready`, every haul, and every plate.")
     rp.add_argument("item")
     rp.add_argument("-n", "--dry-run", action="store_true")
+
+    fh = leaf("hold-feed", help="pause automatic haul feeds while keeping the agent live")
+    fh.add_argument("agent")
+    action = fh.add_mutually_exclusive_group()
+    action.add_argument("--status", action="store_true")
+    action.add_argument("--clear", action="store_true")
+    fh.add_argument("--until", help="UTC date/time or closed:<exact-item-id>")
+    fh.add_argument("--reason-file", type=Path)
+    fh.add_argument("-n", "--dry-run", action="store_true")
 
     hold = leaf("hold", help="configurable quiet-time holds and scheduled observation")
     hold.add_argument("kind", help="configured detector name, or all for aggregate status/probe")
@@ -1580,6 +1700,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--window", action="store_true",
+                    help="explicit real scheduled window; permits a short date instead of an event backstop")
     df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
@@ -1590,6 +1712,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
+    cr.add_argument("--review-routing", action="store_true",
+                    help="bounded local identity/pane observation; no full crew census")
     cr.add_argument("--no-priority-advice", action="store_true",
                     help="local JSON observation without optional board-wide priority advice")
     cr.add_argument("--wide", "--no-truncate", action="store_true",
@@ -1691,6 +1815,46 @@ def build_parser() -> argparse.ArgumentParser:
     nw.add_argument("-n", "--dry-run", action="store_true")
     _add_despite_hold(nw)
 
+    # aegis-c01c.2: ephemeral, administrator-managed agents for one job.
+    sp = leaf("spawn", help="ephemeral agent for one job (review, merge, triage, task), "
+                            "managed by the administrator; docs/ephemeral-agents.md")
+    sp_mode = sp.add_mutually_exclusive_group(required=True)
+    sp_mode.add_argument("--ephemeral", action="store_true",
+                         help="spawn one: needs --job and --item")
+    sp_mode.add_argument("--list", action="store_true", help="live and recent jobs")
+    sp_mode.add_argument("--stop", metavar="NAME", help="end a job now: report, tear down")
+    sp_mode.add_argument("--retry", metavar="NAME", help="end it if live, spawn the same job again")
+    sp_mode.add_argument("--report", action="store_true",
+                         help="run BY the ephemeral agent: post its verdict and end")
+    sp_mode.add_argument("--reap", action="store_true",
+                         help="end dead or expired jobs (st fleet tend runs this)")
+    sp_mode.add_argument("--merge", action="store_true",
+                         help="run BY a merge job: the guarded merge of its own PR "
+                              "(lane, pinned head, green CI, non-author approval)")
+    sp.add_argument("--head", default=None,
+                    help="40-hex head SHA: with --merge the verified head; with --job merge the "
+                         "head the job may merge (default: the item's chaski work request); "
+                         "with --report on a review the head that was reviewed")
+    sp.add_argument("--evidence", default=None,
+                    help="with --report on a review: link to the posted review comment")
+    sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
+    sp.add_argument("--item", help="the work item this job reports on")
+    sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
+    # dest is NOT `repo`: the top-level --repo is the tracker store directory.
+    sp.add_argument("--repo", dest="pr_repo", default=None, metavar="OWNER/NAME",
+                    help="GitHub repository the job works on")
+    sp.add_argument("--pr", type=int, default=None, help="pull request number")
+    sp.add_argument("--checkout", type=Path, default=None,
+                    help="local shared checkout to cut the worktree from "
+                         "(default: $GT_ROOT/<name>, else a scratch dir)")
+    sp.add_argument("--verdict", choices=("approve", "request-changes", "merged", "blocked",
+                                          "done", "failed"))
+    sp_sum = sp.add_mutually_exclusive_group()
+    sp_sum.add_argument("--summary", default=None)
+    sp_sum.add_argument("--summary-file", type=Path, default=None, help="file, or - for stdin")
+    sp.add_argument("--json", action="store_true", help="with --list: machine-readable")
+    sp.add_argument("-n", "--dry-run", action="store_true")
+
     hz = leaf(
         "harness",
         help="convert an agent to another harness, one command")
@@ -1779,6 +1943,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--after-turn", action="store_true",
                     help="hold all automatic feeds now; stop at the next Stop hook")
+    st.add_argument('--resume-at', default=None, metavar='ISO8601',
+                    help='dated stopped-owner ownership exemption (timezone required)')
     st.add_argument("--reason", default="", metavar="TEXT",
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
@@ -1812,6 +1978,11 @@ def build_parser() -> argparse.ArgumentParser:
     co.add_argument("bead", nargs="?", metavar="ID")
     co.add_argument("--json", action="store_true")
     co.add_argument("--sync", action="store_true", help="publish metrics and idempotent closed-item receipts")
+    review = co.add_mutually_exclusive_group()
+    review.add_argument("--review-window", action="store_true", help="describe the exact paused cost window")
+    review.add_argument("--accept-window", metavar="SHA256", help="prepare a reviewed successor generation")
+    co.add_argument("--decision-file", help="exact-window bounded-pilot ruling JSON")
+    co.add_argument("--execute", action="store_true", help="commit the reviewed successor pointer; no publication")
 
     ss = leaf("stats", help="what the crew actually did: files, "
                                       "skills, tokens, activity (local store)")
@@ -1852,10 +2023,21 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the recipient when sending; whose inbox when reading "
                          "(defaults to $SHANTY_AGENT)")
     ib.add_argument("message", nargs="*")
+    ib.add_argument("--to", action="append", default=[], dest="broadcast_to",
+                    help="with inbox broadcast: exact recipient (repeat for up to 64)")
+    ib.add_argument("--delivery-key", help="with broadcast: stable caller operation key for replay")
+    ib.add_argument("--json", action="store_true", help="with broadcast: per-recipient durable receipts")
     ib.add_argument("-d", "--durable", action="store_true",
                     help="must-survive: deliver to the recipient's INBOX (an item "
                          "on the aegis store with the configured backend), then "
                          "best-effort live send. Default is ephemeral send-keys.")
+    ib.add_argument("--routine", action="store_true",
+                    help="with -d only: opt-in batchable progress; scoped admin "
+                         "ENFORCE may defer its live nudge to the existing tend tick")
+    ib.add_argument("--retain-pointer", action="store_true",
+                    help="with -d: retain the unread durable pointer after live "
+                         "delivery; on Seeds use a fresh delivery slug and avoid "
+                         "the automatic inbox retirement read")
     inbox_read_mode = ib.add_mutually_exclusive_group()
     inbox_read_mode.add_argument(
         "--count", action="store_true",
@@ -1887,6 +2069,14 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--jev-command", help="quoted argv for the installed Camayoc Jev MCP server")
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
+    bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-semantic-only", action="store_true", help="benchmark only auto/personal nouls; rank-band calls disabled")
+    bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
+    bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
+    bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
+    bt.add_argument("--rank-benchmark-report", help="measured frozen benchmark JSON for an accepted live Jev arm")
+    bt.add_argument("--rank-admission", help="administrator declaration bound to that exact report; never applies board changes")
+    bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
@@ -1912,6 +2102,9 @@ def build_parser() -> argparse.ArgumentParser:
     jb_hist = jb_sub.add_parser("history", help="recent attempts from logs/jobs.jsonl")
     jb_hist.add_argument("name", nargs="?")
     jb_hist.add_argument("--limit", type=int, default=20)
+
+    from .memory_cli import configure as configure_memory
+    configure_memory(leaf("memory", help="explicit crew file-memory transport; no native root replacement"))
 
     cx = leaf("context", help="what code should I be looking at?")
     cx.add_argument("query", nargs="+")
@@ -2178,6 +2371,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="cycle even though a tree holds uncommitted or unpushed "
                          "work. Named separately from any --force ON PURPOSE, so "
                          "reaching past another refusal cannot disarm this one")
+    cy.add_argument("--bundle-custody-item", action="append", default=[], metavar="ID",
+                    help="item with root-accepted, independently verified exact-ref "
+                         "Git bundle custody (repeatable); never covers dirty work")
     # `--dry-run` is on every command that writes, from commit one — and this one
     # kills a live session, so it is not optional here. It also has to run the
     # GUARD before printing "would", or the preview an operator reads to authorise
@@ -2219,10 +2415,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "uncommitted or unpushed work")
 
     ph = leaf("push",
-                        help="push your worktree branch to EVERY peer remote — "
+                        help="push your worktree branch to all peers, or select --remote — "
                              "the repo has two live peers and pushing one forks "
                              "it; declared mirrors (st-push-role=mirror) are "
                              "never pushed")
+    ph.add_argument("--remote", action="append", dest="remotes", metavar="NAME",
+                    help="publish only this configured peer (repeatable); default: all peers")
     ph.add_argument("repo",
                     help="the shared checkout: a path, or a bare name under "
                          "$GT_ROOT (~/gt), e.g. `shantytown` -> ~/gt/shantytown")
@@ -2232,7 +2430,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"per-peer push deadline, 1–3600 seconds (default {DEFAULT_PUSH_TIMEOUT}); "
                          "includes normal pre-push hooks")
     ph.add_argument("--source-branch",
-                    help="explicit source branch; must match the selected worktree and caller")
+                    help="explicit source branch; must match the selected worktree and caller. "
+                         "Run from the selected checkout, even when its path is explicit")
     ph.add_argument("--branch",
                     help="required destination branch on each remote; no default. "
                          "Use the feature branch for source publication; reviewed "
@@ -2475,6 +2674,17 @@ def _refuse_gaming(a, status) -> int:
     return REFUSED
 
 
+def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
+    """An exception's message for stderr: one line, bounded, bearer-redacted.
+
+    The type name alone hid WHY a write failed (aegis-epi). The message can
+    carry a tracker's stderr, so the WHOLE text is redacted before the bound:
+    a cut inside a token would leave a fragment too short to recognise.
+    """
+    from .br import redact_cause
+    return redact_cause(" ".join(str(exc).split()))[:limit] or "no message"
+
+
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
     with declared_command(a.cmd):
@@ -2485,6 +2695,16 @@ def _main(a, argv: list[str] | None = None) -> int:
     # Kept verbatim so a refusal can hand back the operator's OWN command line
     # with the flag appended — a remedy they can paste, not one they translate.
     a.invocation = "st " + " ".join(sys.argv[1:] if argv is None else argv)
+    if a.cmd == "prime":
+        # Static orientation must work without deployment config or identity.
+        # Live resolution and normal identity admission run inside its deadline.
+        previous_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            from .prime import command
+            return command(a)
+        finally:
+            sys.dont_write_bytecode = previous_bytecode
     # RESOLVE THE STORE ONCE, here, so every handler downstream sees a real Path
     # and none of them re-derives one. `how` rides along so a surface that needs
     # to explain an empty or surprising store can say which leg answered.
@@ -2496,22 +2716,36 @@ def _main(a, argv: list[str] | None = None) -> int:
     from .deployment import command_environment
     from .quipu import NamespaceUnconfigured
     with command_environment(a.root, a.root_how, refresh_config=(
-            a.cmd in {"new", "start", "cycle", "attach", "harness", "provision",
+            a.cmd in {"new", "spawn", "start", "cycle", "attach", "harness", "provision",
                       "tend", "window"})):
         try:
+            from .actor_identity import authenticated_actor, IdentityError
+            # The trusted root introducer may create an isolated child; it is
+            # not an agent and cannot use this exception to send/work as one.
+            if not (os.geteuid() == 0 and a.cmd in {"new", "start", "cycle"}):
+                authenticated_actor()
+            a.registry = _registry_choice(a)
             return _run_command(a)
+        except IdentityError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except NamespaceUnconfigured as e:
             print(f"  {e}", file=sys.stderr)
             return REFUSED
 
 
 def _run_command(a) -> int:
+    if a.cmd == "memory":
+        from .memory_cli import command
+        return command(a)
     # Gate replacement operations before they stop a live session. The shared
     # launch seam remains guarded too for internal callers and restore paths.
     if a.cmd in {"new", "start", "cycle"} and not _despite_hold(a) and not _administrator_launch(a):
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.held:
             return _refuse_gaming(a, gaming)
+    if a.cmd == "hold-feed":
+        return _cmd_hold_feed(a)
     if a.cmd == "hold":
         return _cmd_hold(a)
     if a.cmd == "anchor":
@@ -2524,6 +2758,7 @@ def _run_command(a) -> int:
     if a.cmd == "repool":
         return _cmd_repool(a)
     if a.cmd == "item":
+        from .br import NothingWritten
         from .work_item import command
         try:
             print(json.dumps(command(a, _tracker(a)), indent=2))
@@ -2531,13 +2766,21 @@ def _run_command(a) -> int:
         except ValueError as exc:
             print(f"work item refused: {exc}", file=sys.stderr)
             return 2
+        except NothingWritten as exc:
+            # A definite outcome: the tracker says nothing landed (aegis-epi).
+            print(f"work item not written: {_bounded_cause(exc)}; "
+                  "nothing landed, re-read then retry", file=sys.stderr)
+            return 2
         except Exception as exc:
-            print(f"work item operation unproven: {type(exc).__name__}; "
-                  "do not retry writes without readback", file=sys.stderr)
+            print(f"work item operation unproven: {type(exc).__name__}: {_bounded_cause(exc)}; "
+                  "check write readback, then retry transient failures if not applied", file=sys.stderr)
             return 2
     if a.cmd == "defer":
         return _cmd_defer(a)
     if a.cmd == "crew":
+        if getattr(a, "review_routing", False):
+            from .review_routing import command
+            return command(a)
         return _cmd_crew(a)
     if a.cmd == "roles":
         # aegis-fagvi: one noun, three verbs. `set`/`sync` reuse the same
@@ -2598,6 +2841,8 @@ def _run_command(a) -> int:
         return stats_mod.stats_report(a.root, a.agent, since_h=a.since)
     if a.cmd == "new":
         return _cmd_new(a)
+    if a.cmd == "spawn":
+        return _cmd_spawn(a)
     if a.cmd == "harness":
         return _cmd_harness(a)
     if a.cmd == 'account':
@@ -2615,6 +2860,23 @@ def _run_command(a) -> int:
         try:
             if a.limit < 1 or a.limit > 100 or (a.publish and (a.dry_run or a.benchmark)):
                 raise ValueError("limit must be 1..100; publish cannot combine with dry-run/benchmark")
+            if getattr(a, "rank_proposals", False):
+                from . import board_rank, fleet as fleet_mod
+                from .deployment import local_host
+                cfg, err = config.load_or_default(a.root)
+                if err:
+                    raise ValueError("fleet configuration UNKNOWN")
+                result = board_rank.run(a, _tracker(a), QuipuRegistry(root=a.root), _panes(a),
+                    host=local_host(a.root), peers=fleet_mod.collect(cfg.host_peers), crew_registry=_registry(a))
+                if a.benchmark or a.rank_json:
+                    print(json.dumps(result, ensure_ascii=False))
+                else:
+                    print(board_rank.table(result))
+                return OK
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_semantic_only", False) or getattr(a, "rank_json", False)
+                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
+                    or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
+                raise ValueError("rank options require --rank-proposals")
             result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
             print(json.dumps(result, ensure_ascii=False))
             return OK
@@ -2778,6 +3040,65 @@ def _stops(a) -> FilesStops:
     return FilesStops(Path(a.root) / "stopped")
 
 
+def _owned_work_rows(tracker, name):
+    """Complete owner scope on Seeds; the files floor scans only its local store."""
+    if hasattr(tracker, "capacity_rows"):
+        return tracker.capacity_rows(name)
+    if isinstance(tracker, FilesTracker):
+        from .answer import Answer
+        return Answer.complete_read([vars(row) for row in files_items(tracker)
+                                     if row.assignee == name], how="local files owner")
+    raise RuntimeError("stopped-owner metadata adapter unsupported for this tracker")
+
+
+def _owned_work_publish(a, *, agents=None):
+    from . import owned_work_graph
+    owned_work_graph.publish(Path(a.root), agents=agents)
+
+
+def _owned_work_tick(a, *, card=None, ceiling=False, wake_owner=None):
+    from .owned_work import OwnedWork
+    try:
+        service = OwnedWork(a.root)
+        if card is not None:
+            service.stop(card.name, reason=getattr(a, "reason", "") or "",
+                         ceiling=ceiling, wake=True)
+        if wake_owner is not None:
+            service.wake(wake_owner)
+        names = ([card.name] if card else [wake_owner] if wake_owner else
+                 service.pending())
+        if not names:
+            return []
+        tracker, registry, box = _tracker(a), _registry(a), _inbox(a)
+        result = []
+        started = time.monotonic()
+        for index, name in enumerate(names):
+            if card is None and wake_owner is None:
+                # Bound starts, not in-flight writes. Rotate attempts so one
+                # unavailable owner cannot monopolize every supervisor pass.
+                if index >= 4 or time.monotonic() - started >= 5:
+                    print(f"  stopped-owner: {len(names) - index} pending owner(s) "
+                          "deferred to next supervisor pass", file=sys.stderr)
+                    break
+                service.attempted(name)
+            try:
+                result.extend(service.tick(
+                    registry, lambda owner: _owned_work_rows(tracker, owner), box,
+                    agents={name}))
+            except Exception as exc:
+                # One unavailable owner must not starve every later deadline.
+                print(f"  stopped-owner {name}: UNKNOWN ({type(exc).__name__}); "
+                      "pending local evidence retained", file=sys.stderr)
+        return result
+    except Exception as exc:
+        # The shutdown is already verified; metadata failure cannot undo it.
+        print("  stopped-owner: UNKNOWN (" + type(exc).__name__ +
+              "); ownership not measured", file=sys.stderr)
+        return []
+    finally:
+        _owned_work_publish(a, agents={card.name} if card else None)
+
+
 def _launched_now(a, card_name: str, settings_path=None) -> None:
     """ONE place that records 'this agent is now running'.
 
@@ -2793,6 +3114,9 @@ def _launched_now(a, card_name: str, settings_path=None) -> None:
         from . import account_state
         account_state.record(a.root, _registry(a).get(card_name), cfg, _panes(a))
     _stops(a).forget(card_name)
+    from .owned_work import OwnedWork
+    OwnedWork(a.root).launch(card_name)
+    _owned_work_publish(a, agents={card_name})
     agent_hold.clear(a.root, card_name)
 
 
@@ -2836,11 +3160,13 @@ FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
                 "blocked-misstatus")
 
 
-def runs_fleet_sweeps(cfg) -> bool:
+def runs_fleet_sweeps(cfg, owner_unreachable: bool = False) -> bool:
     """True on the host that owns fleet-wide sweeps: the declared
-    [host] admission_owner, or any host when none is declared (single host)."""
+    [host] admission_owner, or any host when none is declared. When the owner
+    cannot be reached, this host runs them itself: a powered-off owner must
+    not leave the fleet-wide sweeps unrun everywhere."""
     owner = getattr(cfg, "host_admission_owner", None)
-    return owner is None or owner == getattr(cfg, "host_name", None)
+    return owner is None or owner == getattr(cfg, "host_name", None) or owner_unreachable
 
 
 def tend_fate(launches, agent: str) -> str:
@@ -3055,6 +3381,606 @@ def _cmd_new(a) -> int:
     return _launch(a, card, panes, runtime, dry_run=a.dry_run)
 
 
+# --- st agent spawn: ephemeral agents (aegis-c01c.2) ---------------------------
+
+def _spawn_actor(*, require_verified=False) -> str | None:
+    from .actor_identity import authenticated_actor, IdentityError
+    from .ephemeral import Refused
+    try:
+        actor = authenticated_actor()
+    except IdentityError:
+        raise Refused("ephemeral mutations require a verified protected UID identity") from None
+    if not require_verified:
+        return actor or os.environ.get("SHANTY_AGENT") or None
+    if not actor:
+        raise Refused("ephemeral mutations require a verified protected UID identity; "
+                      "environment or anonymous callers are not admitted")
+    return actor
+
+
+def _spawn_inside(a, *, principal=None) -> str | None:
+    """A verified job principal survives session detachment. Workspace/ancestry
+    remain conservative restrictions, never a substitute for authenticated role."""
+    from . import ephemeral as eph
+    if eph.is_ephemeral_name(principal):
+        if eph.read(a.root, principal) is None:
+            raise eph.Refused("verified job identity has no ledger entry on this root")
+        return principal
+    if not eph.live(a.root):
+        return None
+    panes = _panes(a)
+    reader = getattr(panes, "_pane_pid", None) or (lambda _s: None)
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path("/")
+    return eph.inside_ephemeral(a.root, cwd=cwd, ancestors=eph.ancestor_pids(),
+                                pane_pid=reader)
+
+
+def _gh_json(*args):
+    import subprocess
+    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(f"gh api {args[0]} failed: {(r.stderr or '').strip()[:160]}")
+    return json.loads(r.stdout)
+
+
+def _spawn_verdict_policy(a):
+    cfg, _err = config.load_or_default(Path(a.root))
+    return cfg.ephemeral, cfg
+
+
+def _spawn_quipu(a):
+    from . import gate_verdict as gv
+    from .quipu import resolve_server
+    return gv.Quipu(resolve_server(None, Path(a.root)))
+
+
+def _spawn_verdict_approval(a, repo, pr, node_id, head, *, quipu=None) -> dict | None:
+    """The signed agent-verdict approval of exactly `head` (aegis-c01c.7), or
+    None when verdict records are off. Any failure to read or verify is "not
+    approved", never an error that could be mistaken for a pass."""
+    from . import gate_verdict as gv
+    policy, _cfg = _spawn_verdict_policy(a)
+    if not policy.verdict_graph or not node_id:
+        return None
+    try:
+        return gv.approval(quipu or _spawn_quipu(a), repo=repo, pr=pr, node_id=node_id,
+                           head=head, graph=policy.verdict_graph,
+                           signers=gv.trusted_signers())
+    except gv.VerdictError as exc:
+        print(f"  verdict source unreadable ({exc}); counts as no approval", file=sys.stderr)
+        return None
+
+
+def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None, now=None):
+    """A review job's signed GateApproval record (aegis-c01c.7). Returns
+    (note, problem): the note goes into the job's summary; a problem means the
+    record was NOT written, so no merge can rest on this review."""
+    from . import gate_verdict as gv
+    outcome = gv.outcome_word(verdict)
+    if rec.get("job") != "review" or outcome is None:
+        return "", ""
+    policy, cfg = _spawn_verdict_policy(a)
+    if not policy.verdict_graph:
+        return "", "verdict record not written: [ephemeral] verdict_graph is unset"
+    try:
+        gh = gh or _gh_json
+        info = gh(f"repos/{rec['repo']}/pulls/{rec['pr']}")
+        quipu = quipu or _spawn_quipu(a)
+        node = info.get("node_id") or ""
+        try:
+            author = (gv.author_agent(quipu, node, graph=policy.verdict_graph)
+                      if node else None)
+        except gv.VerdictError:
+            author = None
+        record = gv.GateApproval(
+            repo=rec["repo"], pr=int(rec["pr"]), pr_node=node, head=head or "",
+            outcome=outcome, by=rec["name"],
+            recorded_at=gv.now_stamp(time.time() if now is None else now),
+            evidence=evidence or "", author_agent=author)
+        record.check()
+        signer = policy.verdict_signer or f"st-review.{cfg.host_name or 'host'}"
+        seed = gv.load_or_generate(Path(policy.verdict_key) if policy.verdict_key
+                                   else gv.default_key_path())
+        iri = gv.write(record, quipu=quipu, graph=policy.verdict_graph, seed=seed,
+                       verifier=signer)
+    except (gv.VerdictError, RuntimeError, OSError, ValueError) as exc:
+        return "", f"verdict record NOT written: {exc}"
+    return f"signed verdict record {iri} ({outcome} on {head[:12]}, signer {signer})", ""
+
+
+def _spawn_item_work_request(a, item) -> dict | None:
+    """chaski's work request from the item body, or None if unreadable/absent."""
+    from . import gate_verdict as gv
+    from .work_item import exact
+    try:
+        found = exact(_tracker(a), item)
+    except Exception:  # noqa: BLE001 — an unreadable item just means no pinned head
+        return None
+    return gv.work_request(getattr(found, "description", None))
+
+
+def _spawn_merge_pin(a, req_head, item, repo, pr) -> tuple[str | None, str | None]:
+    """(head, request_id) for a merge job: --head, or the item's chaski request.
+    Both given and different is refused: the item names the head to merge."""
+    from . import ephemeral as eph
+    wr = _spawn_item_work_request(a, item)
+    if wr is not None:
+        facts = wr.get("facts") or {}
+        if (wr.get("kind") != "merge" or wr.get("repo") != repo
+                or str(facts.get("pr", wr.get("subject", ""))).removeprefix("pr/") != str(pr)):
+            raise eph.Refused(f"{item}'s work request is not a merge of {repo}#{pr}")
+        revision = wr.get("revision")
+        if req_head and revision and req_head != revision:
+            raise eph.Refused(f"{item} pins head {str(revision)[:12]}; --head {req_head[:12]} "
+                              "differs. Merge exactly the item's head")
+        return req_head or revision, wr.get("request_id")
+    return req_head, None
+
+
+def _spawn_lane_release(a, rec, *, run=None) -> str:
+    """A merge job that ended WITHOUT merging hands chaski's lane turn back now
+    instead of waiting out the lease. Off unless [ephemeral] lane_release is set."""
+    from . import gate_verdict as gv
+    result = rec.get("result") or {}
+    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
+        return ""
+    if 'uid_binding' in rec:
+        from . import ephemeral as eph
+        current = eph.read(a.root, rec['name'])
+        if (not current or current.get('uid_binding') != rec['uid_binding']
+                or current.get('state') != eph.DONE):
+            return 'merge lane retained: job UID termination is not verified'
+    policy, _cfg = _spawn_verdict_policy(a)
+    if not policy.lane_release:
+        return ""
+    outcome = ("stopped" if result.get("cause") in ("stopped", "retried")
+               else "blocked" if result.get("verdict") == "blocked" else "failed")
+    import subprocess
+    run = run or subprocess.run
+    try:
+        argv = gv.lane_release_argv(list(policy.lane_release), rec["request_id"], outcome)
+        r = run(argv, capture_output=True, text=True, timeout=60)
+    except (gv.VerdictError, OSError, subprocess.SubprocessError) as exc:
+        return f"merge lane NOT released ({exc}); chaski's lease will free it"
+    if getattr(r, "returncode", 1) != 0:
+        return "merge lane NOT released (chaski refused); chaski's lease will free it"
+    return ""
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
+    """The ONLY merge path a merge job is given. Every condition the prompt
+    states is re-checked here, in code, against fresh forge reads."""
+    from . import ephemeral as eph
+    rec = eph.read(a.root, me)
+    if rec is None or rec.get("job") != "merge":
+        raise eph.Refused(eph.merge_gate(rec, a.head or "", {}, [], []))
+    repo, pr = rec["repo"], rec["pr"]
+    head = a.head or ""
+    info = gh(f"repos/{repo}/pulls/{pr}")
+    reviews = gh(f"repos/{repo}/pulls/{pr}/reviews?per_page=100")
+    sha = (info.get("head") or {}).get("sha") or ""
+    checks = (gh(f"repos/{repo}/commits/{sha}/check-runs?per_page=100").get("check_runs", [])
+              if sha else [])
+    verdict = _spawn_verdict_approval(a, repo, pr, info.get("node_id") or "", head,
+                                      quipu=quipu)
+    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict):
+        raise eph.Refused(why)
+    if a.dry_run:
+        print(f"would merge {repo}#{pr} at {head}")
+        return OK
+    import subprocess
+    run = run or subprocess.run
+    r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash",
+             "--match-head-commit", head], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
+    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    return OK
+
+
+def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:
+    """(this host's administrator, its `dangerous` posture). Host-scoped: a
+    multi-tenant store can hold another host's administrator card."""
+    host = cfg.host_name
+    for card in files.all().exact():
+        if card.role == "administrator" and getattr(card, "host", None) in (None, host):
+            return card.name, bool(card.dangerous)
+    return None, False
+
+
+def _spawn_governor_refusal(a, card) -> str:
+    """The usage governor's say, for an ephemeral launch. FAILS CLOSED, unlike a
+    crew relaunch: an ephemeral job is optional work, and launching one we
+    cannot account for is exactly the unsupervised spend this feature forbids."""
+    try:
+        cfg, governors = _governors(a)
+        if not governors:
+            return ""
+        lane, governor, unconfigured = _governor_for(cfg, governors, card, a.root)
+        verdict = unconfigured or (governor.evaluate(persist=False) if governor else None)
+        if verdict is None:
+            return ""
+        if why := verdict.excludes(card, _catalog(a)):
+            return "governor: " + why
+        cap = verdict.max_agents
+        if cap is not None:
+            live = _live_by_governor(_registry(a).all().exact(), _panes(a), cfg,
+                                     governors, a.root)
+            key = lane if lane in governors else "base"
+            if live.get(key, 0) >= cap:
+                return (f"governor lane {key} is at its cap ({live.get(key, 0)}/{cap} "
+                        "live); refused, not queued")
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        return f"governor admission could not be established ({type(exc).__name__})"
+
+
+def _spawn_checkout(rec) -> Path | None:
+    """The shared checkout to cut a worktree from, or None for a scratch dir."""
+    if rec.get("checkout"):
+        return Path(rec["checkout"]).expanduser()
+    if rec.get("repo"):
+        candidate = _resolve_repo(rec["repo"].split("/", 1)[1])
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _spawn_item_comment(a):
+    from .work_item import _comments, exact
+
+    def comment(item_id, body):
+        # Built HERE, not before: a tracker that cannot be reached must cost
+        # only the comment leg, never the event or the teardown (notify()).
+        tracker = _tracker(a)
+        exact(tracker, item_id)
+        _comments(tracker, item_id, body)
+    return comment
+
+
+def _spawn_end(a, name, verdict, summary, cause, *, detached):
+    """Every ending goes through here: result once, report, teardown."""
+    from . import ephemeral as eph
+    from .events import FilesEvents
+    events = FilesEvents(Path(a.root) / "events")
+    panes = _panes(a)
+
+    def kill(session):
+        try:
+            from . import codex_daemon
+            codex_daemon.stop_owned(name)
+        except Exception:  # noqa: BLE001 — a missing daemon is the goal state
+            pass
+        panes.kill_session(session)
+
+    def schedule(n):
+        if detached:
+            eph.detached_teardown(a.root, n)
+        else:
+            eph.teardown(a.root, n, kill_session=kill)
+    rec = eph.read(a.root, name)
+    if rec is None:
+        raise eph.Refused(f"no ephemeral job named {name}")
+    if verdict is None:                   # an interrupted teardown: finish it only
+        schedule(name)
+        current = eph.read(a.root, name) or rec
+        lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
+        return current, [lane] if lane else []
+    rec, problems = eph.finish(a.root, name, verdict, summary, cause,
+                               persist_event=events.persist,
+                               comment=_spawn_item_comment(a),
+                               schedule_teardown=schedule, now=time.time())
+    if lane := _spawn_lane_release(a, rec):
+        problems = [*problems, lane]
+    # A synchronous teardown has rewritten the ledger; hand back what it says.
+    return (rec if detached else eph.read(a.root, name) or rec), problems
+
+
+def _spawn_summary(a) -> str:
+    if getattr(a, "summary_file", None) is not None:
+        return sys.stdin.read() if str(a.summary_file) == "-" else a.summary_file.read_text()
+    return a.summary or ""
+
+
+def _cmd_spawn(a) -> int:
+    """`st agent spawn` — ephemeral, administrator-managed agents. Rules and the
+    lifecycle are in ephemeral.py and docs/ephemeral-agents.md; this wires them
+    to the real launcher, panes, tracker and event store."""
+    import subprocess
+    from . import ephemeral as eph
+    from .protocols import Agent
+    if a.report:
+        from . import job_launch
+        from .actor_identity import IdentityError
+        from .gate_verdict import VerdictError
+        try:
+            bound = job_launch.local_job()
+            if bound:
+                spec, digest = bound
+                if spec['root'] != str(Path(a.root).resolve()):
+                    raise IdentityError('report root differs from protected job binding')
+                if not a.verdict:
+                    raise IdentityError('job report requires a verdict')
+                if a.dry_run:
+                    print(f"would queue report for {spec['principal']}")
+                    return OK
+                message = {'kind': 'report', 'verdict': a.verdict, 'summary': _spawn_summary(a)}
+                if spec.get('request', {}).get('job') == 'review' and a.verdict in ('approve', 'request-changes'):
+                    from . import job_review
+                    message['review'] = job_review.write(spec, a.verdict, a.head, a.evidence)
+                job_launch.mailbox_call(spec, digest, 'submit', message)
+                print(f"queued result for {spec['principal']}; controller delivery and teardown pending")
+                return OK
+        except (IdentityError, VerdictError, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f'  refused: protected job report unproved ({type(error).__name__})', file=sys.stderr)
+            return REFUSED
+    cfg, err = config.load_or_default(Path(a.root))
+    if err:
+        print(f"  refused: {err}", file=sys.stderr)
+        return REFUSED
+    policy = cfg.ephemeral
+    files = FilesRegistry(Path(a.root) / "crew")
+
+    def role_of(name):
+        for reg in (files, _registry(a)):
+            try:
+                return reg.get(name).role
+            except Exception:  # noqa: BLE001
+                continue
+        return None
+    try:
+        if a.list:
+            recs = eph.records(a.root)
+            if a.json:
+                print(json.dumps(recs, indent=2, sort_keys=True))
+            else:
+                lines = eph.render(recs, time.time())
+                print("\n".join("  " + line for line in lines) if lines
+                      else "  no ephemeral jobs.")
+            return OK
+        actor = _spawn_actor(require_verified=policy.require_verified_identity)
+        inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
+        if a.report:
+            # Migrated hosts require the verified job principal. Compatibility
+            # mode retains the workspace/ancestry and matching-claim checks.
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT") or actor
+            if not me or (policy.require_verified_identity and actor != me) or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--report requires its verified job identity" if policy.require_verified_identity
+                                  else "--report is run by an ephemeral agent from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot report as {claimed}")
+            if not a.verdict:
+                raise eph.Refused("--report needs --verdict")
+            job = eph.read(a.root, me) or {}
+            if job.get("job") == "review" and a.verdict in ("approve", "request-changes"):
+                if not eph._SHA.fullmatch(a.head or ""):
+                    raise eph.Refused("a review verdict needs --head <the 40-hex head you read>")
+            if a.dry_run:
+                print(f"would report {me}: {a.verdict}")
+                return OK
+            summary = _spawn_summary(a)
+            note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, a.evidence)
+            if note or problem:
+                summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()
+            rec, problems = _spawn_end(a, me, a.verdict, summary, "report",
+                                       detached=True)
+            if problem:
+                problems = [problem, *problems]
+            for p in problems:
+                print(f"  ⚠ {p}", file=sys.stderr)
+            print(f"  reported {rec['result']['verdict']} to {rec['administrator']} and "
+                  f"{rec['item']}; this session is being torn down.")
+            return OK if not problems else CANNOT_TELL
+        if a.merge:
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT")
+            if not me or (policy.require_verified_identity and actor != me) or not eph.is_ephemeral(a.root, me):
+                raise eph.Refused("--merge requires its verified merge-job identity" if policy.require_verified_identity
+                                  else "--merge is run by a merge job from its own pane")
+            if claimed and claimed != me:
+                raise eph.Refused(f"this process runs inside {me}; it cannot merge as {claimed}")
+            return _spawn_merge(a, me)
+        # An ephemeral process that unset $SHANTY_AGENT is still that job.
+        eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity)
+        if a.reap:
+            return _spawn_reap(a, dry_run=a.dry_run)
+        if a.stop:
+            rec = eph.read(a.root, a.stop)
+            if rec is None or rec.get("state") == eph.DONE:
+                raise eph.Refused(f"{a.stop} is not a live ephemeral job")
+            if a.dry_run:
+                print(f"would stop {a.stop}")
+                return OK
+            rec, problems = _spawn_end(a, a.stop, "failed",
+                                       f"stopped by {actor or 'operator'}", "stopped",
+                                       detached=False)
+            for p in problems:
+                print(f"  ⚠ {p}", file=sys.stderr)
+            print(f"  stopped {a.stop}; worktree {rec.get('workspace_teardown', '?')}")
+            return OK
+        retry_of, attempt = None, 1
+        if a.retry:
+            old = eph.read(a.root, a.retry)
+            if old is None:
+                raise eph.Refused(f"no ephemeral job named {a.retry}")
+            attempt = int(old.get("attempt", 1)) + 1
+            if attempt > eph.MAX_ATTEMPTS:
+                raise eph.Refused(f"{a.retry} already ran {attempt - 1} attempts; "
+                                  "a fourth is a decision for the administrator, not a retry")
+            req = eph.Request(job=old["job"], item=old["item"], harness=old["harness"],
+                              repo=old.get("repo"), pr=old.get("pr"),
+                              checkout=old.get("checkout"), head=old.get("head"),
+                              request_id=old.get("request_id"))
+            retry_of = a.retry
+        else:
+            if not a.ephemeral or not a.job or not a.item:
+                raise eph.Refused("spawn needs --ephemeral --job <kind> --item <id>")
+            head, request_id = a.head, None
+            if a.job == "merge" and a.pr_repo and a.pr:
+                head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
+            req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
+                              pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
+                              head=head if a.job == "merge" else None, request_id=request_id)
+        admin, admin_dangerous = _spawn_administrator(files, cfg)
+        unattended = admin_dangerous if policy.unattended is None else policy.unattended
+        if unattended and not policy.unattended_uid_ready:
+            raise eph.Refused("unattended ephemeral launches are gated: "
+                              "ephemeral.unattended_uid_ready is false; "
+                              "a distinct protected job UID must be established first")
+        uid_launch = None
+        if unattended:
+            if not policy.require_verified_identity:
+                raise eph.Refused("unattended jobs require verified protected UID identity")
+            from . import job_launch
+            from .actor_identity import IdentityError
+            try:
+                uid_launch = job_launch.select(req, root=a.root,
+                    harness=eph.harness_for(req, policy),
+                    used={r['name'] for r in eph.records(a.root)}, native_probe=not a.dry_run)
+            except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
+                raise eph.Refused("protected job UID admission failed: " + type(error).__name__) from None
+        if unattended and a.retry and old.get('state') != eph.DONE:
+            # The separate UID process must not cost the original its lane if
+            # an exec-time switch later fails. Until an atomic cross-UID handoff
+            # is qualified, live replacement refuses; completed retries can use
+            # a fresh protected slot. Attended compatibility behavior is intact.
+            raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
+        if a.retry and old.get("state") != eph.DONE and not a.dry_run:
+            _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
+                       "retried", detached=False)
+        with eph.lock(a.root):
+            rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
+                           administrator=admin, host=cfg.host_name, now=time.time(),
+                           role_of=role_of, attempt=attempt, retry_of=retry_of,
+                           name=uid_launch[0]['principal'] if uid_launch else None)
+            if uid_launch:
+                rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
+            known = {h.name for h in harness_mod.all_harnesses()}
+            if rec["harness"] not in known:
+                raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "
+                                  f"{', '.join(sorted(known))}")
+            probe = Agent(name=rec["name"], role="worker", roles=("worker", "first"),
+                          harness=rec["harness"], host=rec["host"],
+                          reports_to=rec["administrator"])
+            if refusal := _spawn_governor_refusal(a, probe):
+                raise eph.Refused(refusal)
+            shared = _spawn_checkout(rec)
+            if a.dry_run:
+                print(f"would spawn {rec['name']} ({rec['job']} on {rec['item']}, "
+                      f"{rec['harness']}, worktree of {shared or 'scratch'}, "
+                      f"reports to {rec['administrator']})")
+                print(eph.prompt(rec))
+                return OK
+            if uid_launch:
+                # Staged by the operator under the target UID. Never copy the
+                # controller's credentials or equip it with the crew's MCP kit.
+                rec['workspace'] = uid_launch[0]['workspace']
+                rec['worktree_of'] = str(shared) if shared else None
+            elif shared is not None:
+                from .workspace import ensure_worktree
+                rec["workspace"] = ensure_worktree(shared, rec["name"])
+                rec["worktree_of"] = str(shared)
+            else:
+                scratch = eph.ledger_dir(a.root) / "scratch" / rec["name"]
+                scratch.mkdir(parents=True, exist_ok=True)
+                rec["workspace"] = str(scratch)
+            # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
+            # report and a teardown, including a launch that is refused.
+            eph.write(a.root, rec)
+            files.root.mkdir(parents=True, exist_ok=True)
+            (files.root / f"{rec['name']}.json").write_text(
+                json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
+        card = files.get(rec["name"])
+        panes = _panes(a)
+        a._startup_delivered = False
+        rc = _launch(a, card, panes, _runtime(a, panes))
+        if rc == REFUSED:
+            _spawn_end(a, rec["name"], "failed", "launch refused (see the spawner's stderr)",
+                       "launch refused", detached=False)
+            return REFUSED
+        if not a._startup_delivered:
+            # A pane that never received its job would idle at turn 0 until the
+            # deadline. End it now and say so; never leave an unfed agent up.
+            why = getattr(a, "_startup_failure", "") or "job prompt not delivered to the pane"
+            _spawn_end(a, rec["name"], "failed", f"job not started: {why}",
+                       "launch failed", detached=False)
+            print(f"  refused: {rec['name']} came up but its job was not delivered; "
+                  "ended and reported", file=sys.stderr)
+            return CANNOT_TELL
+        eph.mark_live(a.root, rec["name"])
+        print(f"  spawned {rec['name']}: {rec['job']} on {rec['item']} "
+              f"({rec['harness']}), reports to {rec['administrator']}, "
+              f"ends by {time.strftime('%H:%MZ', time.gmtime(rec['deadline']))}")
+        # Delivered is what spawn promises. Unverifiable hooks (every macOS
+        # launch) are a note, not a failure: tend enforces the deadline.
+        return OK
+    except eph.Refused as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
+
+
+def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
+    """End dead or expired ephemeral jobs. Code-side: st fleet tend calls this
+    every pass, so no agent ever polls for it (DIRECTIVE 10/9)."""
+    from . import ephemeral as eph
+    from . import job_launch
+    from .actor_identity import IdentityError
+    import subprocess
+    panes = _panes(a)
+    problems = []
+
+    if not dry_run:
+        for rec in eph.live(a.root):
+            if 'uid_binding' not in rec or rec['state'] == eph.ENDING:
+                continue
+            try:
+                state = job_launch.poll(a.root, rec)
+                result, cause = eph.apply_mailbox(a.root, rec['name'], state, time.time())
+                if result:
+                    verdict, summary = result['verdict'], result['summary']
+                    if rec['job'] == 'review' and verdict in ('approve', 'request-changes'):
+                        from . import job_review
+                        from .gate_verdict import VerdictError
+                        verified = False
+                        if 'review' in result:
+                            try:
+                                spec, digest = job_launch.load(rec['name'])
+                                if rec['uid_binding'] == {'uid': spec['uid'], 'sha256': digest}:
+                                    verified = job_review.confirmed(spec, result)
+                            except (IdentityError, VerdictError, OSError, ValueError):
+                                pass
+                        if not verified:
+                            verdict = 'blocked'
+                            summary = 'Review signature/scope unproved; no controller signing fallback. ' + summary
+                    _spawn_end(a, rec['name'], verdict, summary, 'report', detached=False)
+                elif cause:
+                    _spawn_end(a, rec['name'], 'failed', 'job budget reached: ' + cause,
+                               cause, detached=False)
+            except (IdentityError, eph.Refused, OSError, ValueError, subprocess.SubprocessError) as error:
+                problems.append(f"{rec['name']}: mailbox/lifecycle unproved ({type(error).__name__})")
+
+    def end(name, verdict, cause):
+        try:
+            _spawn_end(a, name, verdict, f"ended by st ({cause})" if cause else "", cause,
+                       detached=False)
+        except eph.Refused as error:
+            problems.append(f'{name}: termination unproven; lane retained ({type(error).__name__})')
+            return False
+    lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
+                     dry_run=dry_run)
+    for line in lines:
+        print(f"  ephemeral: {line}", file=sys.stderr)
+    for problem in problems:
+        print(f"  ephemeral: {problem}", file=sys.stderr)
+    if not lines and not quiet:
+        print("  ephemeral: nothing to reap")
+    return CANNOT_TELL if problems else OK
+
+
 def _harness_lane_held(a, cfg, target: str) -> bool:
     """Is the governor for `target` restricting right now?
 
@@ -3087,7 +4013,7 @@ def _cmd_harness(a) -> int:
     session is the more dangerous default, and the operator asking for a
     conversion usually wants the next cycle rather than an interruption now.
     """
-    from . import harness_switch
+    from . import harness_switch, harness_options
     try:
         card = _registry(a).get(a.agent)
     except LookupError as e:
@@ -3103,15 +4029,22 @@ def _cmd_harness(a) -> int:
         # deployment rule rather than the card, and says which.
         source = "card" if card.harness else "deployment default"
         print(f"{a.agent}: {current} (from the {source})")
+        for name, options in sorted(harness_options.profiles(card, current).items()):
+            visible = {k: v for k, v in options.items() if k in {'model', 'chrome'}}
+            print(f"  {name}: {json.dumps(visible, sort_keys=True)}")
+            ignored = set(options) - ({'model', 'chrome'} if name == 'claude' else {'model'})
+            if ignored:
+                print(f"    unsupported, retained: {', '.join(sorted(ignored))}")
         return OK
 
+    selected_model, remembered = harness_options.target_model(card, current, a.target, a.model)
     cfg, _err = config.load_or_default(a.root)
     plan = harness_switch.plan_switch(
         agent=a.agent, current=current, target=a.target, role=card.role,
         required_by_role=cfg.harness_required_by_role,
         known=tuple(h.name for h in harness_mod.all_harnesses()),
-        model=a.model,
-        current_model=card.model,
+        model=selected_model,
+        current_model=harness_options.model(card, current), target_model_known=remembered,
         lane_held=(not _administrator_launch(a, card) and
                    _harness_lane_held(a, cfg, a.target)),
         restart_now=a.now, force=a.force)
@@ -3150,10 +4083,8 @@ def _cmd_harness(a) -> int:
         shutil.copy2(src, backup)
         print(f"  card backed up: {backup.name}", file=sys.stderr)
 
-    import dataclasses
-    updated = dataclasses.replace(
-        card, harness=plan.to_harness,
-        model=plan.model if plan.model else card.model)
+    updated = harness_options.converted(card, current, plan.to_harness, plan.model)
+    harness_options.warn_unsupported(updated, plan.to_harness)
     reg.set(updated)
     print(f"{a.agent}: {plan.from_harness} -> {plan.to_harness}"
           + (f", model {plan.model}" if plan.model else ""))
@@ -3377,7 +4308,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
 def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
                             owner_count=None, budget=None, gaming=None,
                             log=None):
-    """Move work held by an agent at a ceiling to a claude agent with headroom.
+    """Move ceiling-held work to another harness with active-plate headroom.
 
     Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
     claude". The decisions live in `ceiling_transfer`; this binds the reads and
@@ -3408,9 +4339,16 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     findings = {f.agent: f for f in getattr(rep, "findings", ())}
     plate = plate or _plate(a)
 
+    from .owned_work import OwnedWork
+    custody = OwnedWork(a.root).snapshot()
+    stopped_owners = _stops(a).all().exact()
     holders = []
     for card in agents:
         if card.retired:
+            continue
+        if (card.name in stopped_owners or
+                custody.get(card.name, {}).get("state") in ("stopped", "ceiling", "expired")):
+            log(f"ceiling-transfer: {card.name} stopped/lease unverified; lead decides ownership")
             continue
         hit = _budget(card.name)[2]
         f = findings.get(card.name)
@@ -3422,7 +4360,8 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             continue
         item = plate(card.name)
         if item is not None and (item.status or "") != "closed":
-            holders.append(ct.Holder(card.name, item.id, why, evidence))
+            holders.append(ct.Holder(card.name, item.id, why, evidence,
+                                     harness=harness_mod.name_for(card, root=a.root)))
     if not holders:
         capture.record("no_holders", budgets=budgets, findings=findings,
                        holders=holders, candidates_observed=False)
@@ -3438,9 +4377,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             answer = reader(name)
             if not answer.complete:
                 return None
-            return sum(1 for row in answer.exact()
-                       if (row.get("status") or "") != "closed")
+            return ct.active_plate_count(answer.exact(), name)
 
+    target_harnesses = {ct.receiver_harness(h.harness) for h in holders} - {None}
     candidates = []
     counts = {}
     for card in agents:
@@ -3454,9 +4393,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         elif agent_hold.reason(a.root, card.name):
             unavailable = "held"
         count = None
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             unavailable = ct.receiver_budget(*_budget(card.name))
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             count = owner_count(card.name)
             counts[card.name] = count
             if count is None:
@@ -3551,6 +4490,35 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False, reuse_session: bool = False) -> int:
+    # Preserve the early quiet-time refusal even for callers without a card.
+    # No identity-dependent lifecycle work may precede that refusal.
+    gaming = quiet_time_mod.read(Path(a.root))
+    if gaming.held and not _administrator_launch(a, card) and not _despite_hold(a):
+        return _refuse_gaming(a, gaming)
+    if card is None:
+        return REFUSED
+    if dry_run:
+        return _launch_locked(a, card, panes, runtime, dry_run=True,
+            window_restore=window_restore, reuse_session=reuse_session)
+    # Match cycle's lock order: lifecycle BEFORE fleet admission. Taking it
+    # only inside _launch_admitted would deadlock against a concurrent cycle.
+    with cycle_mod.lifecycle_lock(a.root, card.name):
+        return _launch_locked(a, card, panes, runtime, dry_run=False,
+            window_restore=window_restore, reuse_session=reuse_session)
+
+
+def _launch_locked(a, card, panes, runtime, *, dry_run: bool = False,
+            window_restore: bool = False, reuse_session: bool = False) -> int:
+    if not dry_run:
+        from .stranded_work import StrandedWork
+        try:
+            pending = StrandedWork(a.root).unresolved_release(card.name)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pending = True
+        if pending:
+            print('  refused: stopped-owner release outcome UNKNOWN; reconcile its '
+                  'retained revision/marker before launching this owner', file=sys.stderr)
+            return REFUSED
     from . import fleet_governor as fg
     cfg, err = config.load_or_default(Path(a.root))
     if err:
@@ -3561,7 +4529,7 @@ def _launch(a, card, panes, runtime, *, dry_run: bool = False,
                                 window_restore=window_restore,
                                 reuse_session=reuse_session)
     try:
-        with _launch_admission_lock(a, card, cfg):
+        with _held_admission(a, _launch_admission_lock(a, card, cfg)):
             # A census made before waiting for the lock cannot admit anything.
             if hasattr(a, '_account_governor'):
                 del a._account_governor
@@ -3605,6 +4573,13 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         print(f"  ⚠ {gaming_mod.OVERRIDE_FLAG}: launching {card.name} THROUGH a "
               f"{hold_name} hold ({gaming.state}) — the hold stays in force for "
               "dispatch, respawns and every other launch.", file=sys.stderr)
+    from . import job_launch
+    from .actor_identity import IdentityError
+    try:
+        uid_launch = job_launch.for_card(a.root, card)
+    except (IdentityError, OSError, ValueError):
+        print('  refused: protected job launch binding unavailable', file=sys.stderr)
+        return REFUSED
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
@@ -3613,7 +4588,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
-    if harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
+    if not uid_launch and harness_mod.name_for(card, root=a.root) == "codex" and not dry_run:
         from . import codex_daemon
         fixed = codex_daemon.repair(card.name)
         if fixed.blocked:
@@ -3631,73 +4606,74 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             runtime.prepare_account_settings(card)
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
-            harness_mod.Unsupported, ValueError, OSError) as e:
+            harness_mod.Unsupported, IdentityError, ValueError, OSError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
     if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
-    # WORKSPACE: the launch string `cd`s into card.workspace, so the
-    # directory has to BE there. Ensure it (clone if absent, leave alone if
-    # present) or REFUSE — before any tmux mutation, so a refusal still creates
-    # nothing. Deliberately AFTER dry-run: dry-run must not clone.
-    try:
-        ensure_workspace(card)
-    except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
-    # current tree — launch is the other safe pull moment (nothing is running
-    # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
-    # and never blocks the launch (stale-but-working beats no agent).
-    if card.workspace:
-        if err := _refresh_clone(card.workspace):
-            # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
-            # forge outage right after fixing the first one. "ff-only pull
-            # refused" for a `Connection refused` blames the TREE for a dead
-            # REMOTE here exactly as it did on the dispatch path — and a guard
-            # fixed at one call site while an identical message stands at
-            # another is the uncovered-surface class this repo keeps paying for.
-            if _pull_failed_on_the_REMOTE(err):
-                print(f"  ⚠ workspace not brought current — THE REMOTE IS "
-                      f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
-                      f"reconcile locally. Launching on the existing tree, "
-                      f"which MAY BE STALE.", file=sys.stderr)
-            else:
-                print(f"  ⚠ workspace not brought current (ff-only pull refused: "
-                      f"{err.splitlines()[0]}) — launching on the existing tree.",
-                      file=sys.stderr)
-    # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
-    # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
-    # token), so an agent launched from one has no code search, no graph and no
-    # ops tools, and looks identical to a healthy one on every surface. Five
-    # agents worked P1 beads for a night that way. Refuse instead.
-    try:
-        selected_settings = (runtime.settings_path(card)
-                             if hasattr(runtime, "settings_path") else None)
-        servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
-    except ProvisionError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
-    if servers:
-        # Say what it CAN reach, parsed back out of the file we wrote — "the file
-        # is there" was true for every broken render.
-        print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
-    elif card.workspace:
-        # No template = this store defines no kit. Say it, every time: silence
-        # here is indistinguishable from the bug (an agent that launches with no
-        # tools and looks fine), and a deleted template would restore it.
-        print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
-              f" — launching {card.name} with NO MCP kit. "
-              "This store has not configured MCP provisioning; "
-              "add a template there if these tools are needed.")
-    if card.workspace:
-        # Skills, same claim shape as the servers: names read back out of the
-        # links we just made, not "the directory is there". A crew that shipped
-        # 22 correct skills to a runtime loading none had every other signal green.
-        linked = prov_mod.skills_linked(card.workspace)
-        if linked:
-            print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
+    if not uid_launch:
+        # WORKSPACE: the launch string `cd`s into card.workspace, so the
+        # directory has to BE there. Ensure it (clone if absent, leave alone if
+        # present) or REFUSE — before any tmux mutation, so a refusal still creates
+        # nothing. Deliberately AFTER dry-run: dry-run must not clone.
+        try:
+            ensure_workspace(card)
+        except WorkspaceError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
+        # current tree — launch is the other safe pull moment (nothing is running
+        # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
+        # and never blocks the launch (stale-but-working beats no agent).
+        if card.workspace:
+            if err := _refresh_clone(card.workspace):
+                # SECOND SITE OF aegis-ghedod, found by running `st agent new` during the
+                # forge outage right after fixing the first one. "ff-only pull
+                # refused" for a `Connection refused` blames the TREE for a dead
+                # REMOTE here exactly as it did on the dispatch path — and a guard
+                # fixed at one call site while an identical message stands at
+                # another is the uncovered-surface class this repo keeps paying for.
+                if _pull_failed_on_the_REMOTE(err):
+                    print(f"  ⚠ workspace not brought current — THE REMOTE IS "
+                          f"UNREACHABLE ({err.splitlines()[0]}); nothing to "
+                          f"reconcile locally. Launching on the existing tree, "
+                          f"which MAY BE STALE.", file=sys.stderr)
+                else:
+                    print(f"  ⚠ workspace not brought current (ff-only pull refused: "
+                          f"{err.splitlines()[0]}) — launching on the existing tree.",
+                          file=sys.stderr)
+        # EQUIPPED OR NOT CREATED. A workspace is not a provisioned agent: a fresh
+        # clone has no .mcp.json (it is uncommitted BY DESIGN — it carries a bearer
+        # token), so an agent launched from one has no code search, no graph and no
+        # ops tools, and looks identical to a healthy one on every surface. Five
+        # agents worked P1 beads for a night that way. Refuse instead.
+        try:
+            selected_settings = (runtime.settings_path(card)
+                                 if hasattr(runtime, "settings_path") else None)
+            servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
+        except ProvisionError as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
+        if servers:
+            # Say what it CAN reach, parsed back out of the file we wrote — "the file
+            # is there" was true for every broken render.
+            print(f"  provisioned {len(servers)} MCP server(s): {', '.join(servers)}")
+        elif card.workspace:
+            # No template = this store defines no kit. Say it, every time: silence
+            # here is indistinguishable from the bug (an agent that launches with no
+            # tools and looks fine), and a deleted template would restore it.
+            print(f"  note: no provisioning template at {prov_mod.provision_dir(a.root)}"
+                  f" — launching {card.name} with NO MCP kit. "
+                  "This store has not configured MCP provisioning; "
+                  "add a template there if these tools are needed.")
+        if card.workspace:
+            # Skills, same claim shape as the servers: names read back out of the
+            # links we just made, not "the directory is there". A crew that shipped
+            # 22 correct skills to a runtime loading none had every other signal green.
+            linked = prov_mod.skills_linked(card.workspace)
+            if linked:
+                print(f"  linked {len(linked)} skill(s): {', '.join(linked)}")
     # Clobber guard: never replace a live agent (RAISES if the session exists).
     # cwd=card.workspace so the SESSION starts in the agent's own directory, not
     # the launcher's (GitHub #18) — the launch string also cd's, but a pane whose
@@ -3740,7 +4716,8 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # A bounded manifest must never launch before its private parent is ready.
     from . import mcp_limits
     try:
-        mcp_limits.prepare_launch(a.root, card.name, panes, session)
+        if not uid_launch:
+            mcp_limits.prepare_launch(a.root, card.name, panes, session)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"  could not tell: pane created but MCP containment preparation failed: {exc}",
               file=sys.stderr)
@@ -3757,8 +4734,18 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     ledger_ok = _record_launch_unretirement(a, card)
     if _observe_live(runtime, panes, session, card):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
+        from . import ephemeral as _eph
         if verified == OK:
-            _deliver_startup_inbox(a, card, panes, session)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+        elif verified == CANNOT_TELL and _eph.is_ephemeral_name(card.name):
+            # ON macOS HOOKS ARE UNREADABLE, NOT ABSENT (no /proc), so
+            # verification is CANNOT_TELL for every launch there. Withholding an
+            # ephemeral job's prompt on that left the pane idle at turn 0 until
+            # the reaper's deadline (live run, 10/28). Deliver it: the job's
+            # bounds do not depend on its hooks — tend reaps it at the deadline.
+            print(f"  ephemeral {card.name}: hooks unverifiable here; delivering the "
+                  "job anyway (tend enforces its deadline).", file=sys.stderr)
+            a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
         return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -3834,7 +4821,23 @@ def _startup_inbox_batch(unread, budget: int = _STARTUP_INBOX_MAX_CHARS):
     return batch, list(unread[len(batch):])
 
 
-def _deliver_startup_inbox(a, card, panes, session: str) -> None:
+_STARTUP_VERIFY_LOOKS = 8
+
+
+def _agent_foreground(panes, session: str) -> bool | None:
+    """Is the agent process still the pane's foreground? False when a shell is
+    back (the agent exited), None when the foreground cannot be read."""
+    from .tmux import SHELL_COMMANDS
+    try:
+        fg = panes.foreground(session)
+    except Exception:  # noqa: BLE001 -- unreadable is "cannot tell", not dead
+        return None
+    if not fg:
+        return None
+    return fg not in SHELL_COMMANDS
+
+
+def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     """Inject unread durable mail into a verified new session, then acknowledge it.
 
     This is deliberately after process + hook verification.  A session existing is
@@ -3850,13 +4853,23 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     # context despite configured hooks. Use the verified initial-input rail,
     # combining anchor and mail so we never submit two competing startup turns.
     anchor = ""
-    if (harness_mod.name_for(card, root=a.root) == "codex"
+    from . import ephemeral as _eph
+    job = _eph.read(a.root, card.name) if _eph.is_ephemeral_name(card.name) else None
+    if job is not None:
+        # AN EPHEMERAL AGENT'S FIRST TURN IS ITS JOB (aegis-c01c.2). It has no
+        # plate and no mail: the job prompt replaces the anchor, and it rides the
+        # same verified rail so "launched" still means "the job was delivered".
+        anchor = _eph.prompt(job)
+    elif (harness_mod.name_for(card, root=a.root) == "codex"
             or card.role == "administrator"):
         from . import session_anchor
         anchor = session_anchor.render(str(a.root), card.name)
     try:
-        box = _inbox(a, default="beads")
-        unread = box.unread(card.name)
+        if job is not None:
+            box, unread = None, []
+        else:
+            box = _inbox(a, default="beads")
+            unread = box.unread(card.name)
     except Exception as e:  # noqa: BLE001 -- launch succeeded; durability survives
         print(f"  ⚠ startup inbox unreadable for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); pointers remain open.",
@@ -3893,19 +4906,50 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     lines += ["", marker]
     prompt = "\n".join(lines)
 
+    if job is not None and harness_mod.name_for(card, root=a.root) != "codex":
+        # AN EPHEMERAL JOB IS NOT DELIVERED UNTIL ITS TURN STARTS (aegis-g9w).
+        # send() types and presses Enter in one burst; Claude Code folded the
+        # job into `[Pasted text #1 +N lines]`, ate the Enter, and the job idled
+        # at turn 0 until its deadline while this check saw the text and called
+        # it delivered. deliver() types, waits to SEE the job in the box, presses
+        # Enter on its own, and waits to SEE the turn start. Codex keeps its own
+        # verified rail inside send().
+        typed = attribute(prompt, "st startup")
+        try:
+            started, why = _eph.deliver(
+                typed,
+                type_text=lambda t: panes.type_text(session, t),
+                submit=lambda: panes.submit(session),
+                capture=lambda: panes.capture(session, history=200, attrs=True),
+                alive=lambda: _agent_foreground(panes, session))
+        except Exception as e:  # noqa: BLE001 -- ends as "launch failed", loudly
+            started, why = False, f"{type(e).__name__}: {str(e)[:120]}"
+        if not started:
+            a._startup_failure = why
+            print(f"  ⚠ ephemeral {card.name}: job not started ({why}).", file=sys.stderr)
+            return
+        print(f"  ephemeral {card.name}: job delivered; {why}.")
+        return True
+
     try:
         panes.send(session, attribute(prompt, "st startup"))
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
-        time.sleep(0.35)
-        screen = panes.capture(session, history=200)
+        # A few patient looks, not one: a long block (an ephemeral job prompt)
+        # was still rendering at 0.35s on macOS and a delivered job read as
+        # undelivered (live run, aegis-c01c.2). Stops at the first sighting.
+        for _look in range(_STARTUP_VERIFY_LOOKS):
+            time.sleep(0.35)
+            screen = panes.capture(session, history=200)
+            if marker in screen:
+                break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
     if (marker not in screen or input_stranded(screen)
-            or (anchor and session_anchor.BANNER not in screen)):
+            or (anchor and job is None and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
               f"pointer(s) remain open.", file=sys.stderr)
@@ -3924,7 +4968,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
 
     if not ids:
         print(f"  startup anchor: verified context for {card.name}.")
-        return
+        return True
     try:
         marked = box.mark_read(card.name, ids=ids)
     except Exception as e:  # noqa: BLE001 -- delivered, but preserve on close doubt
@@ -3940,6 +4984,7 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> None:
     held_note = f"; {len(held)} held for the next launch" if held else ""
     print(f"  startup inbox: delivered and closed {len(marked)} verified "
           f"pointer(s) for {card.name}{held_note}.")
+    return True
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
@@ -3969,10 +5014,28 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     one command. If arnold rules teardown belongs here, it is a small change —
     but it should be a ruling, not a side effect of adding a check.
     """
+    def failure_check():
+        if harness_mod.name_for(card, a.root) != "claude":
+            return None
+        from .stop_failure import verify_wiring
+        verdict = verify_wiring(a.root, card.name, session, getattr(panes, "cmdline", None))
+        if verdict == "verified":
+            print(f"  StopFailure VERIFIED for {card.name}: process-selected settings "
+                  "match the recorded launch snapshot.")
+            return None
+        label = "FAILED" if verdict == "missing" else "UNVERIFIED"
+        print(f"  StopFailure {label} ({verdict}): {card.name}; live notification hook "
+              "not verified. Re-provision settings and start through st; "
+              "the running pane was left intact.", file=sys.stderr)
+        return REFUSED if verdict == "missing" else CANNOT_TELL
+
     need = roles_mod.required_stop_directions(card, _registry(a).all().exact())
     if not need:
-        # NOTHING REQUIRED -> nothing to verify, and we must not manufacture
-        # doubt about a requirement that does not exist. An isolated agent (no
+        failure = failure_check()
+        if failure is not None:
+            return failure
+        # No NORMAL Stop directions are required. Claude's independent API-error
+        # hook was checked above; do not invent a send/drain requirement. An isolated agent (no
         # lead above, no reports below) has no stop event to route in either
         # direction; reporting could-not-tell here would be a false alarm on
         # every leaf agent, and false alarms are what teach an operator to stop
@@ -4022,6 +5085,9 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
               f"with `st agent stop {card.name}`, fix the settings it launches with, "
               f"and start it again.", file=sys.stderr)
         return REFUSED
+    failure = failure_check()
+    if failure is not None:
+        return failure
     verified = sorted(need) if need else "none required by the graph"
     print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
@@ -4503,6 +5569,18 @@ def _foreign_session_refusal(a, agent_name: str, session: str, panes) -> str:
 
 
 def _cmd_stop(a) -> int:
+    resume_at = getattr(a, 'resume_at', None)
+    if resume_at is not None:
+        from datetime import datetime
+        try:
+            stamp = datetime.fromisoformat(resume_at.replace('Z', '+00:00'))
+            if stamp.tzinfo is None or stamp.timestamp() <= time.time():
+                raise ValueError('resume date must be in the future with a timezone')
+            if getattr(a, 'after_turn', False):
+                raise ValueError('dated stop requires an immediate stop')
+        except ValueError as exc:
+            print(f'refusing stop: {exc}', file=sys.stderr)
+            return 2
     # The cycle fallback already owns this lock and must retain its request if
     # launch fails. This is an internal flag, never inferred from user prose.
     if a.dry_run or getattr(a, "_cycle_internal_stop", False):
@@ -4516,6 +5594,23 @@ def _cancel_cycle_for_stop(a) -> None:
         cycle_mod.Requests(a.root).clear(a.agent)
         from .account_switch import Requests
         Requests(a.root).clear(a.agent)
+
+
+def _record_dated_stop(a):
+    stamp = getattr(a, 'resume_at', None)
+    if stamp is None:
+        return True
+    try:
+        store = _stops(a)
+        store.record(a.agent, time.time(), by=_actor(),
+                     reason=getattr(a, 'reason', '') or '', resume_at=stamp)
+        record = store.get(a.agent)
+        if record is None or record.resume_at != stamp:
+            raise ValueError('dated stop read-back unproven')
+        return True
+    except (OSError, ValueError):
+        print('  refused: dated stop intent could not be persisted; no stop mutation', file=sys.stderr)
+        return False
 
 
 def _stop_locked(a) -> int:
@@ -4536,14 +5631,18 @@ def _stop_locked(a) -> int:
     session = agent.pane      # the address; None/absent = not running
     if not session or not panes.exists(session):
         if not a.dry_run:
+            if not _record_dated_stop(a):
+                return REFUSED
             # An already-down pane can still have a queued self-cycle.
             if getattr(a, "after_turn", False):
                 agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
             _launches(a).forget(a.agent)
-            _stops(a).record(a.agent, time.time(), by=_actor(),
+            if getattr(a, 'resume_at', None) is None:
+                _stops(a).record(a.agent, time.time(), by=_actor(),
                              reason="stop requested while already down: "
                              + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
+            _owned_work_tick(a, card=agent)
         if harness_mod.name_for(agent, root=a.root) == "codex" and not a.dry_run:
             from . import codex_daemon
             fixed = codex_daemon.repair(agent.name)
@@ -4571,6 +5670,8 @@ def _stop_locked(a) -> int:
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
+    if not _record_dated_stop(a):
+        return REFUSED
     if harness_mod.name_for(agent, root=a.root) == "codex":
         from . import codex_daemon
         fixed = codex_daemon.repair(agent.name)
@@ -4599,10 +5700,12 @@ def _stop_locked(a) -> int:
     # read a deliberate shutdown and a crash identically, and the measured
     # consequence was nine agents an operator had just been told to stop coming
     # back as `re-dispatch <agent> — STOPPED`.
-    _stops(a).record(a.agent, time.time(),
+    if getattr(a, 'resume_at', None) is None:
+        _stops(a).record(a.agent, time.time(),
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
     _cancel_cycle_for_stop(a)
+    _owned_work_tick(a, card=agent)
     # WHAT TEND WILL ACTUALLY DO, asked rather than assumed (aegis-k9068).
     #
     # This line used to promise "`st fleet tend` will still respawn it" unconditionally.
@@ -5483,6 +6586,21 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
+        print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
+        return REFUSED
+    if getattr(a, "retain_pointer", False) and (
+            not getattr(a, "durable", False) or not a.message
+            or getattr(a, "count", False) or getattr(a, "read", False)
+            or getattr(a, "read_id", [])):
+        print("  refused: --retain-pointer requires a durable send", file=sys.stderr)
+        return REFUSED
+    if a.agent == "broadcast":
+        from .inbox_broadcast import command
+        return command(a)
+    if getattr(a, "broadcast_to", []) or getattr(a, "delivery_key", None) or getattr(a, "json", False):
+        print("  refused: --to, --delivery-key and --json require inbox broadcast", file=sys.stderr)
+        return REFUSED
     # A send flag with nothing to send is a typo, not a request to read somebody's
     # inbox. Say so rather than quietly doing the other thing.
     if not a.message and (getattr(a, "durable", False) or a.dry_run) \
@@ -5548,8 +6666,30 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
+    owned_work_flag, stopped = False, None
+    if not a.dry_run:
+        try:
+            from .owned_work import OwnedWork
+            stopped = _stops(a).get(agent.name)
+            custody = OwnedWork(a.root).snapshot().get(agent.name, {}).get("state")
+            if stopped or custody in ("stopped", "ceiling", "expired"):
+                condition = "deliberately stopped" if stopped else custody
+                print(f"  stopped-owner: {agent.name} {condition}; "
+                      f"lead {agent.reports_to or 'administrator'} must decide ownership",
+                      file=sys.stderr)
+                owned_work_flag = True
+        except Exception:
+            print("  stopped-owner inbox flag UNKNOWN", file=sys.stderr)
     if getattr(a, "durable", False):
-        return _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        result = _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        # Inspect after persistence, including UNKNOWN: the new message must
+        # not disappear behind an earlier empty ownership observation.
+        if owned_work_flag:
+            _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+        return result
+    if owned_work_flag:
+        _owned_work_tick(a, card=agent if stopped else None, wake_owner=agent.name)
+
 
     # ROUTINE — unchanged. send-keys only, ephemeral.
     relayed = _relay_if_offhost(a, agent, typed, sender)
@@ -5684,6 +6824,9 @@ def _peer_inbox_ssh(peer, name: str, typed: str, sender: str | None):
     attributes the message from $SHANTY_AGENT, so the RAW text is sent."""
     import shlex
     import subprocess
+    from .actor_identity import POLICY_PATH, IdentityError
+    if POLICY_PATH.exists():
+        raise IdentityError("cross-host live attribution needs a key-authenticated broker; durable sender remains verified")
     q = shlex.quote
     remote_cmd = (
         (f"SHANTY_AGENT={q(sender)} " if sender else "")
@@ -5709,6 +6852,7 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
     was up and busy, while `st go` reached the same pane through the peer path.
     """
     import subprocess
+    from .actor_identity import IdentityError
     from .deployment import local_host
     local = local_host(a.root)
     if local is None:
@@ -5720,6 +6864,8 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
         return False, f"no [host.peers.{agent.host}] declared in shantytown.toml"
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        return False, str(e)
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"host {agent.host} ({peer.ssh}) did not answer: {type(e).__name__}"
     if res.returncode == OK:
@@ -5764,8 +6910,12 @@ def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
         print("\n  0 writes. 1 relay.")
         return OK
     import subprocess
+    from .actor_identity import IdentityError
     try:
         res = _peer_inbox_ssh(peer, agent.name, typed, sender)
+    except IdentityError as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except (OSError, subprocess.TimeoutExpired) as e:
         print(f"  could not tell: host {agent.host} ({peer.ssh}) did not answer "
               f"the relay ({type(e).__name__}); nothing is known to have been "
@@ -5805,7 +6955,7 @@ def _looks_stranded(panes, pane: str) -> bool:
 
 
 def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
-                   sender: str | None = None) -> int:
+                   sender: str | None = None, *, boundary_only: bool = False) -> int:
     """Persist, deliver live when possible, then retire that delivered pointer."""
     # BEADS BY DEFAULT for -d (dearing, qdal.2 follow-up). `-d` is the flag you
     # reach for when the message MUST survive your session dying. A local files
@@ -5822,6 +6972,13 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     local = local_host(a.root)
     offhost = agent.host is not None and agent.host != local
     live = not offhost and agent.pane is not None and panes.exists(agent.pane)
+    from . import admin_inbox
+    routine_wait = (admin_inbox.wait_for(a.root, agent)
+                    if getattr(a, "routine", False) and not offhost else 0)
+    if a.dry_run and routine_wait:
+        print(f"  would: persist routine pointer via {backend}; batch live nudge "
+              f"after {routine_wait:.0f}s on the next tend tick; 0 writes, 0 send-keys")
+        return OK
     if a.dry_run:
         print(f"  would: deliver a durable message to {agent.name}'s inbox via {backend}")
         if offhost:
@@ -5840,7 +6997,16 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
-        item = box.deliver(a.agent, msg, frm=_me(a))
+        if getattr(a, "retain_pointer", False) and backend == "seeds":
+            # A fresh namespace avoids repeated probes of short-id collisions
+            # on a large board. This uses the SDK's ordinary --slug contract;
+            # persist-first and the store's compare-and-set remain unchanged.
+            import secrets
+            if not isinstance(box, TrackerInbox):
+                raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
+            item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
+        else:
+            item = box.deliver(a.agent, msg, frm=_me(a))
     except MessageTooLong as e:                  # PERMANENT: the message will never fit
         # Not a "could not tell" (2) — the store is fine; the message is too long,
         # and retrying it unchanged will fail identically. That is a REFUSED (1)
@@ -5887,6 +7053,23 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    if boundary_only:
+        print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
+        return OK
+    if routine_wait:
+        try:
+            admin_inbox.enqueue(a.root, agent, item, backend, routine_wait,
+                                retain=getattr(a, "retain_pointer", False))
+        except Exception as error:
+            # A failed write may have committed; never create a second live
+            # attempt by guessing. The durable pointer remains the fallback.
+            print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine "
+                  f"scheduling UNKNOWN ({type(error).__name__}); pointer retained, "
+                  "no live submission. Read with st inbox.")
+            return OK
+        print(f"  -> {agent.name}    persisted as {item.id} ({backend}); routine live "
+              f"nudge queued for {routine_wait:.0f}s + next tend tick; pointer remains unread")
+        return OK
     # Persisted. Now best-effort immediacy — never fatal to the durable result.
     # WRAPPED (GitHub #26): the send was outside the try, so a tmux failure after
     # a SUCCESSFUL persist exited 1 with a traceback. Every consumer reading the
@@ -5910,6 +7093,10 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
                   f"the message survives and they read it with `st inbox`.")
             return OK
 
+        if getattr(a, "retain_pointer", False):
+            print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
+                  "+ live; durable pointer retained by request")
+            return OK
         try:
             box.mark_read(agent.name, ids=[item.id])
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}) "
@@ -5952,6 +7139,8 @@ def _inbox_read(a, me: str) -> int:
     explicit ack. An inbox that emptied itself because a status bar looked at it
     would be worse than no inbox: the recipient would never learn what was said.
     """
+    read_ids = getattr(a, "read_id", [])
+    selected_only = False
     try:
         # SAME DEFAULT AS THE DURABLE WRITE. The write side defaults to beads
         # (dearing, qdal.2); if the read side defaulted to files, a bare
@@ -5962,7 +7151,20 @@ def _inbox_read(a, me: str) -> int:
         # module's own docstring exists to forbid. An inbox you cannot read is
         # not an inbox, so the two defaults move together or not at all.
         box = _inbox(a, default="beads")
-        unread = box.unread(me)
+        select = getattr(box, "unread_selected", None)
+        selected_only = bool(read_ids) and not getattr(a, "count", False) and callable(select)
+        counter = getattr(box, "unread_count", None)
+        if getattr(a, "count", False) and callable(counter):
+            print(counter(me))
+            return OK
+        view = getattr(box, "unread_view", None)
+        total = None
+        if not selected_only and not getattr(a, "count", False) and callable(view):
+            total, unread = view(me, limit=15 if getattr(a, "read", False) else 100,
+                                 oldest_first=bool(getattr(a, "read", False)))
+        else:
+            unread = select(me, read_ids) if selected_only else box.unread(me)
+        total = len(unread) if total is None else total
     except Exception as e:
         # Could-not-look is never "you have no mail" (the whole reason exit 2
         # exists here). --count stays silent on stdout so a parser sees nothing.
@@ -5973,7 +7175,6 @@ def _inbox_read(a, me: str) -> int:
         print(len(unread))
         return OK
 
-    read_ids = getattr(a, "read_id", [])
     if getattr(a, "read", False) or read_ids:
         if read_ids:
             unread_ids = {m.id for m in unread}
@@ -5989,10 +7190,12 @@ def _inbox_read(a, me: str) -> int:
         wanted = set(read_ids)
         selected = ([m for m in unread if m.id in wanted]
                     if read_ids else unread[:15])
-        remaining = len(unread) - len(selected)
+        remaining = total - len(selected)
         if getattr(a, "dry_run", False):
+            remainder = ("other messages not enumerated" if selected_only else
+                         f"{remaining} snapshot message(s) not selected")
             print(f"  would mark {len(selected)} message(s) read for {me}; "
-                  f"{remaining} snapshot message(s) not selected. 0 writes.")
+                  f"{remainder}. 0 writes.")
             return OK
         print(f"  acknowledging {len(selected)} message(s) for {me}; "
               "closes are independent, not atomic.", flush=True)
@@ -6025,6 +7228,8 @@ def _inbox_read(a, me: str) -> int:
         if remaining:
             next_step = " Repeat `st inbox --read` to continue." if not read_ids else ""
             print(f"  {remaining} snapshot message(s) not attempted.{next_step}", flush=True)
+        if selected_only:
+            print("  other messages not enumerated.", flush=True)
         if failed:
             # A timed-out close may have landed. Keep its payload on stderr
             # too: consumers may retain the error channel separately.
@@ -6047,7 +7252,9 @@ def _inbox_read(a, me: str) -> int:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
             print(f"  {m.id}{src}  {m.body}")
-        print(f"\n  {len(unread)} unread. `st inbox --read` to ack up to 15, or "
+        if total > len(unread):
+            print(f"\n  showing {len(unread)} of {total} observed unread messages (newest window).")
+        print(f"\n  {total} unread. `st inbox --read` to ack up to 15, or "
               "`st inbox --read-id <id>` to ack selectively.")
     print()
     return OK
@@ -6137,6 +7344,37 @@ def _lead_status(registry, panes):
     return _lead_is_up(registry, panes)
 
 
+def _resolve_anchor(a, me, *, require_complete=False):
+    """Shared startup read; publication and startup decorations stay in anchor's CLI."""
+    registry, panes = _registry(a), _panes(a)
+    # Which program this agent runs. Resolved HERE, not inside anchor(),
+    # whose docstring makes "reads only" a promise — and resolved
+    # defensively: an unknown harness must render nothing rather than
+    # assert the wrong tooling advice (aegis-h3zyq0).
+    try:
+        from . import harness as _harness_mod
+        _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
+    except Exception:
+        _hn = ""
+    # The deployment's pre-approved MCP servers, resolved HERE for the same
+    # reason `harness` is: anchor() promises reads-only and does not know a
+    # root. Without this the card described the pre-h3zyq0 world — it said
+    # every MCP write was refused while the deployment had pre-approved the
+    # servers, so a codex worker was told it lacked tools it actually had.
+    try:
+        from .runtime import codex_mcp_approve_servers
+        _mcp = tuple(codex_mcp_approve_servers(a.root))
+    except Exception:
+        _mcp = ()
+    _anchor_tracker = _tracker(a)
+    p = do_anchor(me, registry, panes,
+                  plate=_plate(a, tracker=_anchor_tracker, snapshot=require_complete,
+                               require_complete=require_complete, owners=[me]),
+                  lead_status=_lead_status(registry, panes),
+                  harness=_hn, mcp_preapproved=_mcp)
+    return p, _anchor_tracker, registry
+
+
 def _cmd_anchor(a) -> int:
     """anchor is a PURE READ. Note what is NOT here: no _wire(), because the
     Dispatcher exists to write. anchor resolves its own reads and nothing else.
@@ -6157,31 +7395,8 @@ def _cmd_anchor(a) -> int:
         return _anchor_events(a, me)
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
-    registry, panes = _registry(a), _panes(a)
     try:
-        # Which program this agent runs. Resolved HERE, not inside anchor(),
-        # whose docstring makes "reads only" a promise — and resolved
-        # defensively: an unknown harness must render nothing rather than
-        # assert the wrong tooling advice (aegis-h3zyq0).
-        try:
-            from . import harness as _harness_mod
-            _hn = _harness_mod.name_for(registry.get(me), root=a.root) or ""
-        except Exception:
-            _hn = ""
-        # The deployment's pre-approved MCP servers, resolved HERE for the same
-        # reason `harness` is: anchor() promises reads-only and does not know a
-        # root. Without this the card described the pre-h3zyq0 world — it said
-        # every MCP write was refused while the deployment had pre-approved the
-        # servers, so a codex worker was told it lacked tools it actually had.
-        try:
-            from .runtime import codex_mcp_approve_servers
-            _mcp = tuple(codex_mcp_approve_servers(a.root))
-        except Exception:
-            _mcp = ()
-        _anchor_tracker = _tracker(a)
-        p = do_anchor(me, registry, panes, plate=_plate(a, tracker=_anchor_tracker),
-                      lead_status=_lead_status(registry, panes),
-                      harness=_hn, mcp_preapproved=_mcp)
+        p, _anchor_tracker, registry = _resolve_anchor(a, me)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -6215,7 +7430,7 @@ def _cmd_anchor(a) -> int:
         # that wants more (labels, links) asks its tracker with the id.
         it = p.item
         print(json.dumps({
-            "schema": "st.task-context/1", "agent": me, "harness": _hn or None,
+            "schema": "st.task-context/1", "agent": me, "harness": p.harness or None,
             "item": None if it is None else {
                 "id": it.id, "title": it.title or None, "status": it.status,
                 "priority": it.priority},
@@ -6228,12 +7443,38 @@ def _cmd_anchor(a) -> int:
         if p.item:
             print(p.item.id)
         return OK
+    from . import crew_rules
+    p.responsibilities = crew_rules.render(crew_rules.load(a.root, [p.me.role]))
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
         fleet=p.me.role == "administrator")
+    if getattr(_anchor_tracker,"store",None):
+        try:
+            from types import SimpleNamespace
+            rows = _anchor_tracker.spec_rows(None if p.me.role == "administrator" else me)
+            spec_packet = due_brief.projected(SimpleNamespace(decision_rows=lambda _:rows),me).exact()
+            notices = [f'{row["id"]} SPEC CHANGED v{row["previous"]} -> v{row["version"]} (unacked)'
+                       for row in spec_packet["changes"]]
+            if notices:
+                notice = "  " + "; ".join(notices) + "\n"
+                if len((p.decision_view + notice).encode()) > due_brief.CAP:
+                    notice = "  SPEC CHANGED (unacked; display capped)\n"
+                p.decision_view = due_brief._cut(
+                    p.decision_view, due_brief.CAP - len(notice.encode())) + notice
+        except Exception:
+            notice = "  SPEC status UNKNOWN\n"
+            p.decision_view = due_brief._cut(
+                p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
+    from . import feed_hold
+    if feed_note := feed_hold.reason(a.root, me):
+        print(f"  {me}: {feed_note}")
+    if p.me.role == "administrator":
+        from . import ephemeral as _eph
+        for line in _eph.render(_eph.live(a.root), time.time()):
+            print(f"  ephemeral: {line}")
     from . import context_hint
     if context_label := context_hint.crew_label(a.root, registry.get(me)):
         print(f"  {me}: {context_label}")
@@ -6282,6 +7523,44 @@ def _anchor_events(a, me: str) -> int:
     """
     print(len(FilesEvents(Path(a.root) / "events").pending(me)))
     return OK
+
+
+def _cmd_hold_feed(a) -> int:
+    from . import feed_hold
+    from .quipu import QuipuUnreachable, QuipuNotQuipu
+    try:
+        card = _registry(a).get(a.agent)
+        from .deployment import local_host
+        if card.host is not None and card.host != local_host(a.root):
+            raise ValueError(f"feed hold belongs to host {card.host}; select that deployment")
+        if (a.status or a.clear) and (a.until or a.reason_file is not None):
+            raise ValueError("--status/--clear cannot also create a hold")
+        if a.status:
+            print(feed_hold.reason(a.root, a.agent) or "feed clear")
+            return OK
+        if a.clear:
+            if not a.dry_run:
+                feed_hold.clear(a.root, a.agent)
+            print(f"  {a.agent}: " + ("would clear feed hold" if a.dry_run else "feed hold cleared"))
+            return OK
+        if not a.until or a.reason_file is None:
+            raise ValueError("hold-feed requires --until and --reason-file, or --status/--clear")
+        note = sys.stdin.read() if str(a.reason_file) == "-" else a.reason_file.read_text()
+        deadline = feed_hold.expiry(a.until)
+        if deadline is not None and deadline <= time.time():
+            raise ValueError("feed hold expiry must be in the future")
+        if not note.strip() or len(note.encode()) > 4096:
+            raise ValueError("feed hold requires a nonempty reason of at most 4096 bytes")
+        if not a.dry_run:
+            feed_hold.hold(a.root, a.agent, _actor(), a.until, note)
+        print(f"  {a.agent}: " + (
+            f"would hold automatic feed until {a.until}" if a.dry_run else
+            feed_hold.reason(a.root, a.agent)))
+        return OK
+    except (LookupError, OSError, ValueError, CouldNotLook, PartialAnswer,
+            QuipuUnreachable, QuipuNotQuipu) as exc:
+        print(f"  refused: {exc}", file=sys.stderr)
+        return REFUSED
 
 
 def _cmd_repool(a) -> int:
@@ -6333,7 +7612,7 @@ def _cmd_defer(a) -> int:
                     until=getattr(a, "until", "") or "",
                     dependency_reason=getattr(a, "dependency_reason", ""),
                     sattler_reason=getattr(a, "sattler_reason", ""),
-                    gate_authority=_me(a) or "")
+                    gate_authority=_me(a) or "", window=getattr(a, "window", False))
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -6628,7 +7907,9 @@ def _cmd_go(a) -> int:
     # like keep-current's does, visible to both ends.
     if a.worktree:
         try:
-            wt_path = ensure_worktree(_resolve_repo(a.worktree), a.agent)
+            from .ephemeral import provision_worktree
+            wt_path = provision_worktree(a.root, a.agent, _resolve_repo(a.worktree),
+                                         ensure=ensure_worktree)
             _check_worktree_resume(Path(wt_path), a.agent)
         except WorkspaceError as e:
             print(f"  refused: worktree — {e}", file=sys.stderr)
@@ -6734,11 +8015,11 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded — a human re-dispatches rather than the
-        # tracker claiming an assignment that may never have arrived. This must be
+        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; re-dispatch.",
+        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
               file=sys.stderr)
         return CANNOT_TELL
     except LookupError as e:
@@ -6838,20 +8119,9 @@ def _unassigned_open(a):
     three P1s — while `st crew` reported free/busy and the fleet twice read as
     "nothing dispatchable".
 
-    IT CANNOT EXCLUDE `decision-needed`, AND SAYS SO RATHER THAN PRETENDING.
-    A decision-gated bead must not be handed to a worker as implementer work
-    (aegis-2og7d), so unassigned is its CORRECT state and it is not unrouted work.
-    Filtering it out is impossible here: `WorkItem` carries no labels and the
-    beads adapter never parses them, because the Tracker protocol is three
-    functions and deliberately does not grow (aegis-gqr8). Measured on the live
-    store: 113 unassigned, of which 4 are decision-needed — a 3.5% overcount,
-    named in the output so the reader can discount it knowingly instead of
-    discovering it and discounting the whole number.
-
-    (The first version of this function DID filter on `it.labels`. It was tested
-    against a fixture that had been given a `labels` attribute by the test itself,
-    so five green tests proved the filter worked on data that does not exist. The
-    live cross-check against `bd` is what caught it — 113 here against 109 there.)
+    WorkItem carries backend labels. Exclude decision-needed records from
+    routable work in both this fallback and the native aggregate; those records
+    are correctly unassigned while their decision is pending.
     """
     try:
         trk = _tracker(a, "beads")
@@ -6868,6 +8138,8 @@ def _unassigned_open(a):
         if (getattr(it, "status", "") or "").lower() != "open":
             continue
         if (getattr(it, "assignee", None) or "").strip():
+            continue
+        if "decision-needed" in it.labels:
             continue
         n += 1
         pr = getattr(it, "priority", None)
@@ -7036,7 +8308,8 @@ def _cmd_crew(a) -> int:
                 tree_role=ag.role, retired=bool(ag.retired),
                 role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
-                live=live, harness=actual or harness_mod.name_for(ag, root=a.root),
+                live=live, runtime_harness=actual,
+                harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
                 tree=_tree_staleness_cell(a, ag, sweep=False)[0]))
         print(json.dumps(dict(version=fleet_mod.VERSION,
@@ -7093,6 +8366,10 @@ def _cmd_crew(a) -> int:
     peer_roles = [crew_role_cell(row.get("role_sources") or
                                 {"declared": row["role"].split(",")})
                   for row in peer_rows]
+    from . import feed_hold
+    for card in agents:
+        if feed_note := feed_hold.reason(a.root, card.name):
+            print(f"  {card.name}: {feed_note}")
     role_width = max([14, *(len(cell) for cell in [*local_roles.values(), *peer_roles])])
     title_width = None if getattr(a, "wide", False) else max(
         1, shutil.get_terminal_size().columns - 14)
@@ -7111,7 +8388,10 @@ def _cmd_crew(a) -> int:
         if work.endswith("sh"):
             shelled.append(f"{ag.name}({work.rsplit('+', 1)[1][:-2]})")
         if work.startswith(triage_mod.IDLE):
-            free.append(ag.name)
+            # An idle ephemeral agent is between turns of ITS job, not free
+            # for board work (aegis-c01c.2); it is listed on its own line.
+            if not ag.name.startswith("eph-"):
+                free.append(ag.name)
         elif work == "stalled":
             stalled.append(ag.name)
         elif work.startswith(triage_mod.BUSY):
@@ -7258,6 +8538,11 @@ def _cmd_crew(a) -> int:
         names = [n for n, _ in deliberate]
         print(f"    `st agent new <agent>` brings one back. "
               f"{tend_fate(launches, names[0] if len(names) == 1 else '<agent>')}")
+    from . import ephemeral as _eph
+    if eph_line := _eph.summary_line(a.root):
+        # Visible here and on the administrator's anchor (aegis-c01c.2): an
+        # ephemeral agent nobody can see is the polecat failure again.
+        print(f"  {eph_line}")
     if codex_blocked:
         print(f"  ⚠ {len(codex_blocked)} codex-daemon-wedged launch blocker(s):")
         for name, why in codex_blocked:
@@ -7315,8 +8600,6 @@ def _cmd_crew(a) -> int:
         print(f"  {n_un} open item(s) in NOBODY'S haul{p1} — unassigned, so they "
               f"self-feed to no one and no stop event advances to them. "
               f"`br list --status open` and route by domain.")
-        print(f"    (includes any `decision-needed` items, which are correctly "
-              f"unassigned — st cannot read labels, see _unassigned_open.)")
     # THROTTLED-IDLE IS NOT IDLE (aegis-diasw). `3 free` means "three agents can
     # take work"; under an engaged priority floor it may mean "three agents that
     # nothing is allowed to reach". Those are opposite instructions to a
@@ -7791,6 +9074,10 @@ def _crew_states(agents, panes, runtime, cycling=(), untracked_root=None,
                 awaiting=asks_a_question(runtime, plain),
                 auth_dead=auth_expired(runtime, plain),
                 limited=limit_reached(runtime, plain))
+            from .stop_failure import state as failure_state
+            failure = failure_state(getattr(runtime, "_root", None), ag.name)
+            if failure in ("safeguard-blocked", "auth-dead", "limited"):
+                work = failure
             if triage_mod.input_state(screen) == triage_mod.INPUT_QUEUED:
                 work = f"{work}·stranded input"
             cmdline = None
@@ -8421,6 +9708,9 @@ def _cmd_roles(a) -> int:
         for ag in sorted(agents, key=lambda x: x.name):
             print(f"  {ag.name:<11} {ag.role:<14} "
                   f"reports_to: {ag.reports_to or '—'}")
+        from . import crew_rules
+        names = set(_catalog(a).roles) | {role for ag in agents for role in ag.effective_roles()}
+        print(crew_rules.render(crew_rules.load_all(a.root, names)))
         print()
         return OK
 
@@ -9005,7 +10295,7 @@ def _resolve_repo(repo: str) -> Path:
 
     A bare name normally means ``$GT_ROOT/<name>``. When that path exists but is
     a Gas Town rig rather than a checkout, and ``$GT_ROOT/<name>-src`` carries
-    its own ``.git`` marker, the source checkout wins. This is the Hank layout:
+    its own ``.git`` marker, the source checkout wins. Legacy checkout compatibility:
     ``~/gt/hank`` owns ``.beads`` and a bare ``.repo.git`` cache, while
     ``~/gt/hank-src`` is the editable scbrown/hank checkout (aegis-gbuap).
 
@@ -9024,7 +10314,7 @@ def _resolve_repo(repo: str) -> Path:
     shantytown checkout AND every shantytown worktree. `st repo push shantytown <me>`
     — the documented form — therefore failed SPECIFICALLY in the tree you are
     standing in when you push, which is the only place anyone runs it. Same for
-    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    quipu, yupana, bobbin. Measured 2026-08-04: refused with "no worktree at
     shantytown-wt/franklin" while that worktree existed; the absolute-path form
     worked.
 
@@ -9097,12 +10387,21 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     resolved = _resolve_repo(repo)
 
     # A bare name can be a compatibility alias for a differently named source
-    # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
+    # checkout (legacy compatibility: hank -> hank-src). Resolve that alias BEFORE looking
     # for an existing worktree: otherwise a stale hank-wt left by the archived
     # repository captures `st repo push hank`, even while `st repo worktree hank` correctly
     # provisions from the active hank-src checkout.
     gt_worktree = worktree_for(resolved, agent)
     candidates = [gt_worktree, workspace_root / f"{repo}-wt" / agent]
+    crew_sources = {}
+    for container in dict.fromkeys((resolved, workspace_root / repo)):
+        source = container / "crew" / agent
+        # Containers can inherit a parent's Git repository. Only an own marker
+        # identifies the crew clone used by the existing worktree provisioner.
+        if not (container / ".git").exists() and (source / ".git").exists():
+            tree = worktree_for(source, agent)
+            crew_sources[tree] = source
+            candidates.append(tree)
     matches = [path for path in dict.fromkeys(candidates) if path.is_dir()]
     if len(matches) > 1:
         listed = ", ".join(str(path) for path in matches)
@@ -9111,17 +10410,41 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
             "Pass the shared checkout or worktree path explicitly."
         )
     if matches:
-        return matches[0]
+        selected = matches[0]
+        if selected in crew_sources:
+            import subprocess
+            source = crew_sources[selected]
+            try:
+                if not (selected / ".git").is_file():
+                    raise WorkspaceError("crew worktree is not a linked worktree")
+                _resolve_push_worktree(str(selected), agent)
+                common = []
+                for path in (source, selected):
+                    result = subprocess.run(
+                        ["git", "-C", str(path), "rev-parse", "--path-format=absolute",
+                         "--git-common-dir"], capture_output=True, text=True, timeout=5,
+                    )
+                    if result.returncode or not result.stdout.strip():
+                        raise WorkspaceError("crew worktree identity cannot be verified")
+                    common.append(Path(result.stdout.strip()).resolve())
+                if common[0] != common[1]:
+                    raise WorkspaceError("crew worktree belongs to a different repository")
+            except (OSError, subprocess.SubprocessError) as error:
+                raise WorkspaceError("crew worktree identity cannot be read") from error
+        return selected
+    if crew_sources:
+        tree, source = next(iter(crew_sources.items()))
+        raise WorkspaceError(
+            f"no crew worktree at {tree}; run st repo worktree {source} {agent} first"
+        )
     return gt_worktree
 
 
 def _worktree_branch(dest: Path) -> str | None:
     """The branch `dest` has checked out, or None if it cannot be determined.
 
-    None means CANNOT TELL and the caller proceeds: a detached HEAD or an
-    unreadable worktree is not evidence that the wrong branch is about to be
-    pushed, and refusing on it would break the canonical path for a condition we
-    have not observed. The refusal fires only on a POSITIVE disagreement.
+    None means CANNOT TELL. Push must refuse it: after a merged topic is detached,
+    selecting its stale canonical ref would silently omit newly committed work.
     """
     import subprocess
 
@@ -9182,6 +10505,14 @@ def _cycle_anchor_bead(a, agent: str) -> str:
     return str(iid) if iid else ""
 
 
+def _cycle_session_start(root, agent_name):
+    """Exact local launch stamp shared by durable and inferred-quality checks."""
+    from datetime import datetime, timezone
+    stamp = Path(root) / "launched" / f"{agent_name}.json"
+    return (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+            .isoformat() if stamp.is_file() else "")
+
+
 def _durable_checkpoint_gate(a, agent_name: str):
     """The I/O half of cycle.durable_gate — read the held bead, its comments, and
     when this agent last launched. Policy stays in cycle.py, testable without a
@@ -9197,12 +10528,9 @@ def _durable_checkpoint_gate(a, agent_name: str):
     EVERY failure becomes could-not-tell (ok=None), never a refusal and never a
     pass: this is a gate on a saturated agent's only relief valve.
     """
-    from datetime import datetime, timezone
     from . import cycle as cycle_mod
     try:
-        stamp = Path(a.root) / "launched" / f"{agent_name}.json"
-        since = (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
-                 .isoformat() if stamp.is_file() else "")
+        since = _cycle_session_start(a.root, agent_name)
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
@@ -9222,6 +10550,32 @@ def _durable_checkpoint_gate(a, agent_name: str):
         return cycle_mod.durable_gate(agent_name, bead, since, [],
                                       error=f"comments unreadable on {bead} ({e})")
     return cycle_mod.durable_gate(agent_name, bead, since, got)
+
+
+def _cycle_bundle_custody(a, agent):
+    """Read item authors through the existing tracker and roles through cards.
+
+    Unknown reads refuse this optional custody route; they are never approvals.
+    The cycle still re-verifies the exact ref and bundle before changing state.
+    """
+    items = getattr(a, 'bundle_custody_item', None) or []
+    if not items:
+        return None
+    from . import cycle_custody
+    from .br import comments
+    if _backend(a, 'files') not in BR_LIKE:
+        raise ValueError('bundle custody requires item comments on the configured backend')
+    receipts = []
+    registry = _registry(a)
+    for item in dict.fromkeys(items):
+        try:
+            receipts.extend(cycle_custody.accepted_receipts(
+                comments(_tracker(a), item), registry.get, agent, item))
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError('bundle custody item/card read unavailable') from error
+    return lambda tree: cycle_custody.verify_tree(tree, agent, receipts)
 
 
 def _checkpoint_quality_gate(a, agent_name, checkpoint, session=""):
@@ -9283,23 +10637,37 @@ def _advise_situation(a, agent: str, cfg):
                 depth_k = triage_mod.context_tokens_k(panes.capture(card.pane))
         except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
             pass
+    from . import runtime_update
+    update = runtime_update.for_agent(a.root, agent)
     return cycle_advice.Situation(
         agent=agent, depth_k=depth_k,
         cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
         next_task=_cycle_anchor_bead(a, agent),
-        cache=cycle_advice.read_cache(transcript)), transcript
+        cache=cycle_advice.read_cache(transcript),
+        running_version=update.running, installed_version=update.installed,
+        session_id=update.session), transcript
 
 
 def _cycle_advisor(a):
     """CycleDriver's advisor: the same decision `st agent advise` prints, with the
-    depth the sweep just read off the pane. Returns None for an agent with no
-    signal posted, so the driver never pays for a transcript read it cannot use."""
+    depth the sweep just read off the pane. No signal and no measured CLI
+    update returns None. Version-only advice uses local evidence, no tracker or
+    model query."""
     from . import cycle_advice
     cfg, _ = config.load_or_default(Path(a.root))
 
     def advise(agent, depth_k):
-        if cycle_advice.latest(a.root, agent) is None:
-            return None
+        signal = cycle_advice.latest(a.root, agent)
+        if signal is None:
+            from . import runtime_update
+            update = runtime_update.for_agent(a.root, agent)
+            if not update.outdated:
+                return None
+            # A version-only preference needs no tracker/plate/model query.
+            sit = cycle_advice.Situation(agent, depth_k, triage_mod.CYCLE_THRESHOLD_K,
+                running_version=update.running, installed_version=update.installed,
+                session_id=update.session)
+            return cycle_advice.decide(sit, None, cfg.cycle_advice)
         sit, _ = _advise_situation(a, agent, cfg)
         sit = dataclasses.replace(sit, depth_k=depth_k)
         return cycle_advice.decide(sit, cycle_advice.latest(a.root, agent),
@@ -9354,6 +10722,8 @@ def _cmd_advise(a) -> int:
         print(json.dumps(dict(
             agent=agent, depth_k=sit.depth_k, cycle_line_k=sit.cycle_line_k,
             always_cycle_above_k=policy.always_cycle_above_k,
+            running_version=sit.running_version, installed_version=sit.installed_version,
+            runtime_session_id=sit.session_id,
             ask=cycle_advice.should_ask(sit, policy),
             brief=cycle_advice.brief(parts, a.brief_chars or policy.brief_chars, policy),
             next_task=sit.next_task, transcript=transcript,
@@ -9408,6 +10778,16 @@ def _cycle_stop_refusal(a, agent_name) -> str:
         elif agent_name not in cycle_mod.Requests(a.root).pending():
             return "cycle request cancelled"
     return ""
+
+
+def _record_cycle_refusal(root, agent, reason, risks):
+    """A receipt failure must not hide or replace the already printed refusal."""
+    from .cycle import Requests
+    try:
+        Requests(root).mark_refused(agent, reason, risks)
+    except OSError as error:
+        print(f"  warning: could not save refusal receipt ({error}); "
+              "cycle remains refused", file=sys.stderr)
 
 
 def _cmd_cycle(a) -> int:
@@ -9556,10 +10936,21 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
-        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        if ckpt_body:
+            # The file just read is the requested handoff. Re-reading plate and
+            # comments here only feeds inferred quality advice; the executor
+            # independently enforces the durable checkpoint before any cycle.
+            quality_text = ckpt_body
+            try:
+                quality_session = _cycle_session_start(a.root, agent_name)
+            except OSError:
+                quality_session = ""  # unknown launch cannot earn a rewrite veto
+        else:
+            quality_gate = _durable_checkpoint_gate(a, agent_name)
+            quality_text = quality_gate.checkpoint or a.reason.strip()
+            quality_session = quality_gate.since
         quality_ok, quality_note = _checkpoint_quality_gate(
-            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
-            quality_gate.since)
+            a, agent_name, quality_text, quality_session)
         if quality_note:
             print(f"  ⚠ {quality_note}", file=sys.stderr)
         if not quality_ok:
@@ -9567,7 +10958,9 @@ def _cmd_cycle(a) -> int:
         no_in_place = bool(getattr(a, "no_in_place", False))
         cycle_mod.Requests(a.root).request(agent_name, a.reason.strip(),
                                            checkpoint_bead or posted_to,
-                                           quipu_nodes, no_in_place=no_in_place)
+                                           quipu_nodes, no_in_place=no_in_place,
+                                           allow_loss=bool(getattr(a, "allow_loss", False)),
+                                           bundle_custody_items=getattr(a, 'bundle_custody_item', None))
         graph_adoption.record(a.root, "cycle", agent_name,
                               checkpoint_bead or posted_to or "-", gctx)
         print(f"  {agent_name}: cycle REQUESTED — checkpoint recorded"
@@ -9579,13 +10972,15 @@ def _cmd_cycle(a) -> int:
                   f"— named in your resume dispatch.")
         elif gctx.exemption:
             print(f"  no graph context: {gctx.exemption} — recorded.")
+        print(f"  {handoff_text.background_tasks()}")
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
-                  f"End your turn now; nothing is lost if it never fires.")
+                  f"End your turn now; do not poll or reissue this accepted request.")
         else:
-            print(f"  `st fleet tend` performs it. You stay up until it does, so keep "
-                  f"working; nothing is lost if it never fires.")
+            print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
+                  "then end your turn. Do not poll or reissue this accepted request; "
+                  "it stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
@@ -9628,6 +11023,7 @@ def _cmd_cycle(a) -> int:
     import subprocess
     try:
         cfg = config.load(a.root)
+        custody = _cycle_bundle_custody(a, agent_name)
         verdict = cycle_mod.assess(
             agent_name, trees, a.reason,
             # untracked_all: the default porcelain collapses `?? .playwright-mcp/` to
@@ -9638,7 +11034,7 @@ def _cmd_cycle(a) -> int:
                 t, fetch=True, untracked_all=True, tracked_only=True,
                 cycle_per_install=True,
                 fetch_timeout=cfg.keep_current_fetch_timeout_seconds),
-            allow_loss=a.allow_loss)
+            allow_loss=a.allow_loss, custody=custody)
     except subprocess.TimeoutExpired as e:
         command = e.cmd if isinstance(e.cmd, (list, tuple)) else []
         operation = "fetch" if "fetch" in command else "Git preflight"
@@ -9648,6 +11044,9 @@ def _cmd_cycle(a) -> int:
     except (config.ConfigError, OSError) as e:
         print(f"  refused: cycle preflight: {str(e).splitlines()[0]}", file=sys.stderr)
         return REFUSED
+    except ValueError as e:
+        print(f"  refused: cycle custody/preflight: {e}", file=sys.stderr)
+        return REFUSED
     if not verdict.ok:
         print(f"  refused: {verdict.render()}", file=sys.stderr)
         # aegis-7xptd5: STAMP THE REFUSAL ON THE PENDING REQUEST. The refusal is
@@ -9656,8 +11055,7 @@ def _cmd_cycle(a) -> int:
         # tell "in flight" from "refused an hour ago". A no-op when nothing is
         # pending, so an operator's ad-hoc cycle of an agent that never asked
         # cannot mint a request.
-        cycle_mod.Requests(a.root).mark_refused(
-            agent_name, verdict.reason, verdict.risks)
+        _record_cycle_refusal(a.root, agent_name, verdict.reason, verdict.risks)
         return REFUSED
     if verdict.risks:
         # --allow-loss was used. SAY WHAT IS BEING SPENT — an override that prints
@@ -9682,7 +11080,7 @@ def _cmd_cycle(a) -> int:
     gate = _durable_checkpoint_gate(a, agent_name)
     if gate.ok is False and not a.allow_loss:
         print(f"  refused: {gate.render()}", file=sys.stderr)
-        cycle_mod.Requests(a.root).mark_refused(agent_name, gate.render(), [])
+        _record_cycle_refusal(a.root, agent_name, gate.render(), [])
         return REFUSED
     if gate.ok is None:
         # COULD NOT TELL never refuses — an agent that cannot cycle keeps filling,
@@ -9772,7 +11170,9 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         "no_graph_context": "" if nodes else
         "mechanical: tend serving a cycle the agent already requested and gated",
         "no_in_place": bool(request.get("no_in_place", False)),
-        "allow_loss": False, "dry_run": False}))
+        "allow_loss": request.get("allow_loss") is True and not request.get("auto", False),
+        "bundle_custody_item": list(request.get("bundle_custody_items") or []),
+        "dry_run": False}))
 
 
 SELF_SERVE_ENV = "SHANTY_SELF_CYCLE_SERVE"
@@ -9816,6 +11216,7 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
     from . import cycle as cycle_mod
     deadline = clock() + SELF_SERVE_TIMEOUT_S
     blocker = "never idle (last read: pane unreadable)"
+    last_shells = None
     while clock() < deadline:
         request = cycle_mod.Requests(a.root).pending().get(agent)
         if request is None:
@@ -9830,6 +11231,12 @@ def _serve_own_request(a, agent: str, *, sleep=time.sleep, clock=time.monotonic)
             print(f"  {agent}: pane unreadable ({e}); retrying", file=sys.stderr)
         if read is not None:
             blocker = _self_serve_blocker(read)
+            if read.shells and read.shells != last_shells:
+                n = read.shells
+                print(f"  {agent}: waiting: {n} background shell{'s' * (n != 1)} running; "
+                      "stop or await your own tasks before ending the turn.",
+                      file=sys.stderr, flush=True)
+            last_shells = read.shells
         if (read is not None and read.state in (triage_mod.IDLE, triage_mod.SATURATED)
                 and not read.shells):
             if _serve_cycle_request(a, agent, request) == OK:
@@ -9959,11 +11366,42 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         return ""
 
 
+def _safeguard_reports(a, agents, rep, panes):
+    """Persist refusal reports to the canonical administrator, never the worker."""
+    from . import safeguard
+    from .tend import SAFEGUARD_BLOCKED
+    from .tier import find_administrator
+    if not any(f.verdict == SAFEGUARD_BLOCKED for f in rep.findings):
+        return []
+    administrator = find_administrator(_registry(a))
+    if not administrator:
+        raise RuntimeError("safeguard report: administrator UNKNOWN")
+    def deliver(text):
+        message = _inbox(a, default="beads").deliver(administrator, text, frm="st-tend")
+        if not getattr(message, "id", None):
+            raise RuntimeError("safeguard report: durable receipt UNKNOWN")
+        return message.id
+    from .stop_failure import state as failure_state, reconcile
+    log = lambda text: print("  " + text, file=sys.stderr)
+    primary, fallback = [], []
+    for finding in rep.findings:
+        if (finding.verdict == SAFEGUARD_BLOCKED
+                and failure_state(a.root, finding.agent) == "safeguard-blocked"):
+            if reconcile(a.root, finding.agent, deliver, log):
+                primary.append(finding.agent)
+        else:
+            fallback.append(finding)
+    return primary + safeguard.report(a.root, fallback, agents, panes, _plate(a), deliver, log)
+
+
 def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
                              *, allow_limited=False) -> str:
     """Observe a quiet pane and fresh shell ownership under the lifecycle lock."""
     if not session or not panes.exists(session):
         return ""
+    from .stop_failure import state as failure_state
+    if failure_state(root, card.name) == "safeguard-blocked":
+        return "pane reads safeguard-blocked, held for administrator review"
 
     def pane_refusal(screen):
         plain = triage_mod.strip_attrs(screen)
@@ -10064,7 +11502,7 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
         print('  refused: ' + str(err), file=sys.stderr)
         return REFUSED, chosen.mode
     try:
-        with _launch_admission_lock(a, card, cfg):
+        with _held_admission(a, _launch_admission_lock(a, card, cfg)):
             if hasattr(a, '_account_governor'):
                 del a._account_governor
             a._cycle_admission_locked = True
@@ -10422,7 +11860,7 @@ def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
 
-    A shared project checkout (~/gt/shantytown, quipu, hank-src, goldblum) is
+    A shared project checkout (~/gt/shantytown, quipu, yupana, goldblum) is
     multi-writer: index and HEAD belong to the working copy, so two agents
     committing there corrupt each other silently (aegis-repg/iaef). Each agent
     gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
@@ -10441,7 +11879,8 @@ def _cmd_worktree(a) -> int:
             dest = worktree_for(repo, agent)
             print(f"  {'removed' if removed else 'kept (holds work, or absent)'}: {dest}")
             return OK
-        path = ensure_worktree(repo, agent)
+        from .ephemeral import provision_worktree
+        path = provision_worktree(a.root, agent, repo, ensure=ensure_worktree)
         _check_worktree_resume(Path(path), agent, resume=getattr(a, "resume", False))
         # ENFORCE, HAVING JUST ASSISTED (aegis-xig5m). Provisioning a worktree is
         # the moment st KNOWS this shared checkout is in play — so it is the
@@ -10482,7 +11921,11 @@ def _cmd_worktree(a) -> int:
         print(path)
         return OK
     except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
+        from .workspace import WorktreeDamage
+        # A partial delete is not a refusal (aegis-5ox): "refused" reads as
+        # "nothing happened", and here something did.
+        label = "DAMAGE" if isinstance(e, WorktreeDamage) else "refused"
+        print(f"  {label}: {e}", file=sys.stderr)
         return REFUSED
 
 
@@ -10521,6 +11964,7 @@ def _cmd_push(a) -> int:
               "source. This command does not replace the reviewed merge helper.",
               file=sys.stderr)
         return REFUSED
+    remotes = getattr(a, "remotes", None)
     agent = a.agent or os.environ.get("SHANTY_AGENT")
     if not agent:
         print("  refused: no agent. `st repo push <repo> <agent>` or set "
@@ -10545,11 +11989,22 @@ def _cmd_push(a) -> int:
     invocation = _push_invocation_branch(Path(dest))
     if invocation is not None and invocation[1] != branch:
         caller_path, caller_branch = invocation
+        if source_branch is not None:
+            import shlex
+            remedy = (
+                "--source-branch does not override the caller-checkout guard. "
+                f"After verifying the selected checkout, run `cd {shlex.quote(str(Path(dest).resolve()))}` "
+                "and use that absolute source path when repeating the push command."
+            )
+        else:
+            remedy = (
+                "Run st repo push from the canonical worktree, or name the intended "
+                "branch with --source-branch after reviewing the exact ref."
+            )
         print(
             f"  refused before push: checked-out branch '{caller_branch}' at "
             f"{caller_path} differs from selected source '{branch}' at {dest}. "
-            "No remote was contacted. Run st repo push from the canonical worktree, "
-            "or name the intended branch with --source-branch after reviewing the exact ref.",
+            f"No remote was contacted. {remedy}",
             file=sys.stderr,
         )
         return REFUSED
@@ -10571,8 +12026,9 @@ def _cmd_push(a) -> int:
     # This does not change WHERE a push goes; it refuses to push a branch the
     # worktree is not on. The canonical case (worktree on wt/<agent>) is untouched.
     checked_out = _worktree_branch(Path(dest))
-    if source_branch is not None and checked_out is None:
-        print("  refused before push: explicit source branch cannot be verified; "
+    if checked_out is None:
+        print("  refused before push: source branch cannot be verified (possibly detached HEAD); "
+              "create or check out the intended topic and name --source-branch; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
     if checked_out is not None and checked_out != branch:
@@ -10601,13 +12057,14 @@ def _cmd_push(a) -> int:
         print("  refused before push: --timeout must be 1–3600 seconds; "
               "no remote was contacted.", file=sys.stderr)
         return REFUSED
+    selected = {"selected_remotes": tuple(remotes)} if remotes is not None else {}
     if timeout == DEFAULT_PUSH_TIMEOUT:
-        outcomes = push_every_remote(dest, branch, a.branch)
+        outcomes = push_every_remote(dest, branch, a.branch, **selected)
     else:
         from functools import partial
         from .workspace import _git_push
         outcomes = push_every_remote(dest, branch, a.branch,
-                                     push_run=partial(_git_push, timeout=timeout))
+                                     push_run=partial(_git_push, timeout=timeout), **selected)
     if not outcomes:
         print(f"  refused: {dest} has no remotes configured — nothing to push to.",
               file=sys.stderr)
@@ -11160,7 +12617,7 @@ def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
 
 
 def _refresh_worktree(dest, base: str | None = None) -> str | None:
-    """Bring a project WORKTREE current — by REBASE onto its upstream, not ff-pull.
+    """Refresh a project worktree, retiring proved merged topics first.
 
     The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
     is on `wt/<agent>`, so an ff-only pull either no-ops (wrong branch) or fails —
@@ -11195,9 +12652,15 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
         # --prune: see tree_staleness. Without it, refs for branches deleted
         # upstream survive and launder orphaned commits into "on a remote".
         from .workspace import run_with_group_timeout
-        run_with_group_timeout(
+        fetched = run_with_group_timeout(
             ["git", "-C", str(dest), "fetch", "--all", "--prune", "--quiet"], 60,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if fetched.returncode != 0:
+            return "worktree fetch failed — no checkout, pruning or rebase attempted"
+        from .workspace import publication_remotes, _git
+        from .landed import retire_and_prune
+        if retired := retire_and_prune(dest, publication_remotes(dest, _git), _git):
+            return retired
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
         # STRANDED WORK IS REPORTED WHETHER OR NOT THE REBASE SUCCEEDS. It is not
@@ -11644,7 +13107,7 @@ def _cmd_input(a) -> int:
 
     if not rep.changed:
         return CANNOT_TELL
-    if rep.verdict == input_box.TASK_LIST and (a.clear or a.dismiss):
+    if rep.verdict in (input_box.TASK_LIST, input_box.BUSY, input_box.ABSENT) and (a.clear or a.dismiss):
         return REFUSED
     if rep.verdict == input_box.UNKNOWN:
         return CANNOT_TELL
@@ -11895,11 +13358,18 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     policy = cfg.dream
     state = dream_mod.State(a.root)
     tracker = _tracker(a)
-    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
+    cards = {card.name: card for card in agents}
+    # Only a live worker can receive a cycle, so read only their plates plus
+    # unassigned work (where a queued cycle waits). An unscoped read is a
+    # whole-board plate read and exceeds the field budget (aegis-2idcev).
+    owners = sorted(name for name, card in cards.items()
+                    if card.role == "worker" and card.pane
+                    and panes.exists(card.pane))
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker,
+                                           owners=owners)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
-    cards = {card.name: card for card in agents}
     candidates = []
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
@@ -12061,15 +13531,25 @@ def _job_dispatch(a):
 
 
 def _job_escalate(a):
-    def escalate(job, text):
+    def escalate(job, fire, text):
         from .tier import find_administrator
         admin = find_administrator(_registry(a))
         if not admin:
             return False
-        # DURABLE: the administrator may be the agent that is down, and a give-up
-        # notice that vanishes with a missing pane is the silence this replaces.
-        rc, _ = _job_st(a, ["inbox", admin, "-d", text])
-        return rc == OK
+        # The work store may be the very thing that failed. Use the existing
+        # local event/drain channel, independent of durable inbox persistence.
+        # Runner holds the job lock and persists this firing before attempting it.
+        from .tier import Reason
+        key = json.dumps(["job-failed", job.name, fire["queued"], fire["reason"]],
+                         separators=(",", ":"))
+        event = FilesEvents(Path(a.root) / "events").persist(
+            admin, f"job:{job.name}", Reason.JOB_FAILED.value, False,
+            detail=(f"Job {job.name} exhausted retries. Inspect "
+                    f"st work jobs history {job.name}; verify canonical [env] "
+                    "store routing and backend availability. "
+                    "Raw action output remains in the local job history."),
+            key=key)
+        return event.to == admin and event.reason == Reason.JOB_FAILED.value
     return escalate
 
 
@@ -12105,7 +13585,7 @@ def _jobs_runner(a, *, detach=True):
     return jobs_mod.Runner(
         a.root, host=local_host(a.root),
         actions={"inbox": _job_inbox(a), "dispatch": _job_dispatch(a)},
-        escalate=_job_escalate(a),
+        terminal_notice=_job_escalate(a),
         sources=jobs_mod.Sources(a.root, bead_rows=_job_bead_rows(a)),
         detach=detach)
 
@@ -12114,6 +13594,10 @@ def _jobs_sweep(a) -> list[str]:
     """The tend sweep: every due job, once. Inside tend's `_sweep` like every
     other best-effort layer, and each JOB is isolated again inside Runner.sweep,
     so neither a broken file nor a crashing job can reach respawn."""
+    # Tend's governor path can fall back to defaults after a configuration
+    # error. Never let that fallback reactivate a delegated local scheduler.
+    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+        return []
     return _jobs_runner(a).sweep()
 
 
@@ -12152,8 +13636,11 @@ def _cmd_declared_jobs(a, verb) -> int:
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
     for job in selected:
+        cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
+                   if isinstance(job, quipu_jobs.CalendarDeclaredJob)
+                   else f"every {job.interval_s}s")
         print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
-              f"every {job.interval_s}s  timezone {job.timezone}  "
+              f"{cadence}  timezone {job.timezone}  "
               f"host {job.host}  revision {job.revision}  target {job.target}")
     if verb == "check":
         print("Declarations validated; firing eligibility is UNKNOWN until runtime admission.")
@@ -12173,6 +13660,10 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
+    if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
+        print("refused: local job evaluation and execution are delegated to Chaski; "
+              "use --graph for declaration checks and the signed scheduler lane for execution", file=sys.stderr)
+        return REFUSED
     if getattr(a, "expect_job", None) or getattr(a, "json", False):
         print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
@@ -12210,8 +13701,30 @@ def _cmd_jobs(a) -> int:
             print(f"  refused: no job {a.name!r}", file=sys.stderr)
             return REFUSED
         rc = REFUSED if errors else OK
+        store_checked = False
+        store_error = None
         for job in pick:
             verdict, why = runner.check(job)
+            needs_store = (job.action.kind == "dispatch" or
+                           (job.action.kind == "inbox" and job.action.durable))
+            if (needs_store and job.enabled and
+                    jobs_mod.runs_here(job, runner.host)[0]):
+                if not store_checked:
+                    store_checked = True
+                    try:
+                        tracker = _tracker(a)
+                        from .sd import SdTracker
+                        if isinstance(tracker, SdTracker):
+                            tracker.prove_store()
+                    except Exception as exc:
+                        # Avoid echoing endpoint/credential-bearing exception text.
+                        store_error = (f"{type(exc).__name__}: seeds store admission "
+                                       "failed; configure canonical [env] routing "
+                                       "and verify the backend")
+                if store_error:
+                    verdict, why = "cannot tell", store_error
+                elif _backend(a) == "seeds":
+                    why += "; seeds store admitted (read-only identity check)"
             if verdict == "cannot tell":
                 rc = CANNOT_TELL
             print(f"  {job.name:<18} {verdict:<11} {why}")
@@ -12318,6 +13831,8 @@ def _cmd_hold(a) -> int:
                                          delete=False) as stream:
             tmp = Path(stream.name)
             stream.write(quiet_time_mod.metrics(status))
+            from . import quiet_notice
+            stream.write(quiet_notice.metrics(root))
             if a.slowdown:
                 stream.write("# HELP aegis_gaming_slowdown_ok Requested scope operations verified.\n"
                              "# TYPE aegis_gaming_slowdown_ok gauge\n"
@@ -12329,9 +13844,22 @@ def _cmd_hold(a) -> int:
             tmp.unlink(missing_ok=True)
     print(status.render())
     if not a.status:
-        sent = _gaming_advisory(a, status)
-        if sent:
-            print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
+        # Hold/lift delivery is operational, not routine budget advice. The
+        # routine advisory filter deliberately logs risk-zero transitions.
+        from . import quiet_notice
+        try:
+            notified = quiet_notice.sweep(root, status, _registry(a), _panes(a),
+                                          slowdown_unknown=slowdown_unknown)
+            if notified:
+                print("quiet-time transition delivered: " + ", ".join(notified))
+        except Exception as exc:
+            print(f"quiet-time transition delivery UNKNOWN ({type(exc).__name__})", file=sys.stderr)
+        else:
+            # Migrate/journal the old held state before the legacy writer can
+            # replace it with clear. On failure retain it for the next probe.
+            sent = _gaming_advisory(a, status)
+            if sent:
+                print("quiet-time advisory delivered to coordinator: " + ", ".join(sent))
     if a.status:
         # THROTTLED, not held (aegis-da2tfj review). This exit code is the admission gate
         # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
@@ -12541,6 +14069,13 @@ def _code_fingerprint(pkg=None) -> str | None:
 
 def _tend_once(a, quiet: bool = False) -> int:
     from . import account_state
+    # REAP FIRST, before every early return (a maintenance window, a hold, an
+    # unreadable registry): an expired ephemeral job must not outlive its
+    # deadline for as long as some unrelated hold lasts (aegis-c01c.2).
+    try:
+        _spawn_reap(a, dry_run=getattr(a, "dry_run", False), quiet=True)
+    except Exception as exc:  # noqa: BLE001 — a reap fault must not stop supervision
+        print(f"  ⚠ ephemeral reap failed ({type(exc).__name__}: {exc})", file=sys.stderr)
     if (rc := _window_launch_gate(a)) is not None:
         return rc
     # Best-effort sweeps shed by the pass budget (aegis-qwadc). Declared HERE
@@ -12862,11 +14397,18 @@ def _tend_once(a, quiet: bool = False) -> int:
         except fg.AdmissionUnavailable as exc:
             print('  held: administrator launch serialization: ' + str(exc), file=sys.stderr)
             return CANNOT_TELL
-    workers = [card for card in agents if card not in administrators]
+    # EPHEMERAL CARDS ARE NEVER RESPAWNED (aegis-c01c.2). A dead or expired
+    # ephemeral agent is REAPED instead: its result is reported to the
+    # administrator and it is torn down. Respawning one is exactly how a spawned
+    # worker escapes supervision, which is why Gas Town's polecats were retired.
+    from . import ephemeral as _eph
+    workers = [card for card in agents if card not in administrators
+               and not _eph.is_ephemeral_name(card.name)]
+    tend_admission = None
     try:
-        with fg.admission_lock(a.root, cfg.host_name, cfg.host_peers,
-                               owner=cfg.host_admission_owner,
-                               **({"local_required": True} if cfg.accounts else {})):
+        with _held_admission(a, fg.admission_lock(
+                a.root, cfg.host_name, cfg.host_peers, owner=cfg.host_admission_owner,
+                **({"local_required": True} if cfg.accounts else {}))) as tend_admission:
             if cfg.host_peers:
                 if hasattr(a, '_account_governor'):
                     del a._account_governor
@@ -12950,9 +14492,12 @@ def _tend_once(a, quiet: bool = False) -> int:
         # read the shared board and push to the LOCAL admin, so a second host's
         # tend (the Mac) duplicated every one of them to its own admin, with no
         # dedup across hosts. Host-local supervision (respawn, blocked worker,
-        # cycles, stalled) still runs everywhere. No declared owner means a
-        # single-host fleet, which is its own owner.
-        fleet_owner = runs_fleet_sweeps(cfg)
+        # cycles, stalled) still runs everywhere. With no declared owner every
+        # host runs them; with an UNREACHABLE owner this host stands in for it.
+        owner_down = getattr(tend_admission, "unreachable", None)
+        fleet_owner = runs_fleet_sweeps(cfg, owner_unreachable=bool(owner_down))
+        if owner_down:
+            _log(f"· {owner_down} unreachable; running fleet-wide sweeps on {cfg.host_name}")
         skipped_fleet: list[str] = []
 
         def _fleet_sweep(label, fn):
@@ -12966,15 +14511,75 @@ def _tend_once(a, quiet: bool = False) -> int:
                 _log(note)
             return []
 
+        def _stopped_owner_deadlines():
+            from .owned_work import OwnedWork
+            service = OwnedWork(a.root)
+            # Read generations BEFORE legacy stop records. Relaunch clears that
+            # store before minting its generation, so an old scan cannot stop a
+            # newer launch. The empty token fences an absent local record too.
+            observed = service.snapshot()
+            for name, record in _stops(a).all().exact().items():
+                service.stop(name, at=record.at, reason=record.reason,
+                             generation=observed.get(name, {}).get("generation", ""))
+            return _owned_work_tick(a)
+
+        from .refill import from_cli as refill_from_cli
+        _fleet_sweep("auto-refill", lambda: refill_from_cli(a, reg, panes, runtime, cfg, log=_log))
+
+        _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
+        _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
+        def _stranded_owner_work():
+            from .stranded_adapter import mode, sweep
+            if mode() == 'off':
+                return []
+            findings = sweep(a.root, reg, _tracker(a), panes, _inbox(a))
+            for identity, finding in findings:
+                _log(f'stranded-owner {identity}: {finding}')
+            _owned_work_publish(a)
+            return []
+        _fleet_sweep('stranded-owner-work', _stranded_owner_work)
         _fleet_sweep("priority-advisory", _priority_report)
+        def _role_ranking_report():
+            from . import ranking_check
+            def snapshot():
+                trk = _tracker(a)
+                projection = getattr(trk, "ranking_rows", None)
+                packet = projection() if callable(projection) else None
+                if packet is not None:
+                    return packet
+                if not isinstance(trk, FilesTracker):
+                    raise ValueError("selected backend lacks a bounded ranking projection")
+                ready, _active = _priority_snapshot(a)
+                rows = [json.loads(path.read_text()) | {"id": path.stem}
+                        for path in trk.root.glob("*.json")]
+                return ready, rows
+            def label_item(ident):
+                from .work_class import preferred_labels
+                tracker = _tracker(a)
+                current = tracker.get(ident)
+                if current.id != ident or current.status != 'open':
+                    return
+                for label in preferred_labels(current.labels):
+                    tracker.update(ident, add_label=label)
+                    current = tracker.get(ident)
+                    if current.id != ident or label not in current.labels:
+                        raise CouldNotLook('ranker preference label did not read back')
+            return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log,
+                                       label_item=label_item)
+        _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
         _fleet_sweep("ceiling-transfer",
                      lambda: _ceiling_transfer_sweep(a, agents, rep, log=_log))
 
+        from . import admin_inbox
+        _sweep("admin-routine-inbox", lambda: admin_inbox.sweep(
+            Path(a.root), agents, panes,
+            lambda backend: _inbox(argparse.Namespace(**(vars(a) | {"backend": backend})),
+                                   default="beads"), log=_log))
         from . import inbox_recovery
         _sweep("inbox-recovery", lambda: inbox_recovery.sweep(
-            agents, panes, _inbox(a), log=_log))
+            agents, panes, _inbox(a), root=a.root, reg=_registry(a), log=_log))
 
         woke = _sweep("blocked-worker", lambda: notify_mod.Notifier(
             Path(a.root), _registry(a), panes, log=_log).sweep(agents, runtime))
@@ -12989,7 +14594,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, refresh=_refresh_clone,
             log=_log, advise=_cycle_advisor(a)).sweep(agents, runtime))
         if cycled:
-            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
+            print(f"  ⚠ prompted {len(cycled)} agent(s) to checkpoint and cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
         # PERFORM, not just prompt (aegis-zl7jwm, Steve 2026-10-07). A prompted
         # agent that is idle past the line and has checkpointed to its plate bead
@@ -13106,8 +14711,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # the idle-work pushes, so declared work never pre-empts supervision's
         # own notifications; an exec job starts DETACHED, so a long one cannot
         # hold this pass open (aegis-qwadc).
-        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
-            print(f"  {line}", file=sys.stderr)
+        if cfg.jobs_scheduler == "local":
+            for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+                print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off
@@ -13134,7 +14740,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 item = _inbox(a, default="beads").find_delivery(recipient,marker)
                 return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body):
+            def deliver_due(recipient, marker, body, *, boundary_only=False):
                 import re
                 from copy import copy
                 from contextlib import redirect_stdout
@@ -13145,7 +14751,7 @@ def _tend_once(a, quiet: bool = False) -> int:
                 output = StringIO()
                 with redirect_stdout(output):
                     code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend")
+                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
                 if code != OK:
                     return None
                 match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
@@ -13156,8 +14762,18 @@ def _tend_once(a, quiet: bool = False) -> int:
                     return verify_due_receipt(recipient,marker,identifier)
                 except Exception:
                     return PendingReceipt(identifier)
+            def deliver_spec(recipient, marker, body, *, urgent):
+                return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
                 unlock_reader = None
+                spec_reader = None
+                if cfg.overdue_spec_changes:
+                    from .spec_reader import SpecReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("spec changes require the selected Seeds producer")
+                    spec_reader = SpecReader(selected)
                 if cfg.overdue_external_unlocks:
                     from .unlock_reader import UnlockReader
                     from .sd import SdTracker
@@ -13172,6 +14788,9 @@ def _tend_once(a, quiet: bool = False) -> int:
                     receipt=find_due_receipt,
                     events=unlock_reader.events if unlock_reader is not None else None,
                     ack=unlock_reader.ack if unlock_reader is not None else None,
+                    specs=spec_reader.events if spec_reader is not None else None,
+                    spec_ack=spec_reader.ack if spec_reader is not None else None,
+                    spec_deliver=deliver_spec if spec_reader is not None else None,
                     log=_log).sweep()
             overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
             if overdue_sent:
@@ -13561,6 +15180,10 @@ def _actor() -> str:
     ambiguity permanently. `unknown` when neither is readable: this is an audit
     line, so it must be able to say it does not know rather than guess.
     """
+    from .actor_identity import authenticated_actor
+    verified = authenticated_actor()
+    if verified:
+        return verified
     who = os.environ.get("SHANTY_AGENT")
     if who:
         return who
@@ -13597,7 +15220,8 @@ def _tend_retire(a) -> int:
     name = a.retire or a.unretire
     reg = _registry(a)
     try:
-        card = reg.get(name)
+        reader = getattr(reg, 'get_for_lifecycle', reg.get) if a.unretire else reg.get
+        card = reader(name)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -13708,8 +15332,16 @@ def _tend_retire(a) -> int:
     # job is to say what was recorded. Same family as the rest of this bead: a
     # tool describing an operation it did not perform. So the write stays and
     # the wording is direction-specific.
-    reg.set(replace(card, retired=want, retired_by=_actor(),
-                    retired_at=_now_iso()))
+    updated = replace(card, retired=want, retired_by=_actor(), retired_at=_now_iso())
+    try:
+        if callable(writer := getattr(reg, 'set_retirement', None)):
+            writer(updated, want)
+        else:
+            reg.set(updated)
+    except (CouldNotLook, QuipuWriteRejected) as exc:
+        print(f'  could not tell: lifecycle write unverified ({type(exc).__name__}); '
+              'read the registry before retrying', file=sys.stderr)
+        return CANNOT_TELL
     if want:
         print(f"  {name} is RETIRED. `st fleet tend` will not respawn it, and will "
               f"ESCALATE if it finds it alive.")

@@ -99,6 +99,17 @@ def test_existing_foreign_input_is_not_appended_to_or_submitted(monkeypatch):
     assert keys(calls) == []
 
 
+def test_refused_send_into_occupied_composer_is_journaled(monkeypatch):
+    # aegis-9t4: a stranded body silently refused every later sender for an hour.
+    panes, calls = transport(monkeypatch, [OWNED.replace(BODY, "Operator input")])
+    journal = []
+    monkeypatch.setattr(tmux, '_journal_send', lambda pane, text: journal.append((pane, text)))
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='nothing added'):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+    assert journal == [('worker', '<refused:occupied-composer:' + BODY + '>')]
+
+
 def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
     clipped = '\n'.join(['typed text wrapped beyond the prompt'] * 20) + '\n' + FOOTER
     panes, calls = transport(monkeypatch, [clipped])
@@ -114,9 +125,10 @@ def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
     assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
 
 
-def test_observed_queue_with_our_preview_is_submission(monkeypatch):
+def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
     panes, _ = transport(monkeypatch, [BUSY, QUEUED])
-    panes.send('worker', BODY)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
 
 
 def test_other_queue_message_is_not_our_receipt(monkeypatch):
@@ -175,7 +187,8 @@ def test_busy_owned_input_queues_once_without_retyping(monkeypatch):
     busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
     panes, calls = transport(monkeypatch, [busy_owned, busy_owned, busy_owned,
                                           busy_owned, QUEUED])
-    panes.send('worker', BODY)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls)] == ['Tab']
 
 

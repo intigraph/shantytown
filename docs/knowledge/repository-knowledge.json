@@ -1,0 +1,102 @@
+{
+  "source_revision": "456ed29f98309ad4cb1a053f7b29ba8919abe48a",
+  "reviewed_at": "2026-10-27T21:28:52.694807+00:00",
+  "max_age_seconds": 2592000,
+  "records": [
+    {
+      "kind": "idea",
+      "source": "README.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
+      "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
+      "type": "Concept"
+    },
+    {
+      "kind": "idea",
+      "source": "docs/design.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fdesign.md",
+      "summary": "Tracker and pane protocols separate work storage from session transport. Dispatch verification reads back delivery; refusal and dry-run outcomes preserve explicit uncertainty.",
+      "source_sha256": "994bf420ba3acbe04f87fb51e2f057ef625ab4019a9c5ab44132929f6009f914",
+      "type": "Concept"
+    },
+    {
+      "kind": "interface",
+      "source": "shantytown/cli.py",
+      "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
+      "summary": "st provides work-item, crew, repository and scheduled-job commands. Roles show governed responsibilities; priority ranking is advisory. Failed reads stay UNKNOWN. Protected mailboxes and signed reviews bind exact job/PR scope. Cycle requires approved full-history custody and a verified clean branch; checkpoint replacement advice requires fresh native evidence. Chaski delegation refuses local execution. Triage quarantines rank proposals for administrator acceptance. Harness conversion preserves validated model/browser preferences. Semantic benchmarks admit automation and personal needs, never ranks. Pipeline waits require an event and long backstop; --window declares a real appointment. Owner reminders never release gates. Ceiling transfer observes source harnesses and complete active, non-held receiver plates, selects only the other known harness, and preserves budget and ownership gates.",
+      "source_sha256": "1995f55c9536926f22cb4b623f83f6c34cc4c275fe94118c1c12ee9202f5898f",
+      "properties": {
+        "interfaceKind": "CLI",
+        "publicName": "st (shantytown.cli:main)"
+      }
+    },
+    {
+      "kind": "interface",
+      "source": "shantytown/config.py",
+      "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands. The inbox.store setting selects legacy seed pointers by default or the isolated Message graph; invalid or unknown declarations refuse.",
+      "source_sha256": "116e28db8b27a30bfae16f272e82a0936664dbfcfc73353f4e4c0fcb1442de28",
+      "properties": {
+        "interfaceKind": "file-format",
+        "publicName": "shantytown.toml and SHANTY_* settings"
+      }
+    },
+    {
+      "kind": "interface",
+      "source": "docs/integrations.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fintegrations.md",
+      "summary": "Optional Quipu, Seeds, Bobbin and Yupana integration supplies shared registry, work tracking, context and structural policy through configured adapters.",
+      "source_sha256": "a5d15417ba505f695a0fdc98b03c87b94d9f71cb72d8e83192a29ab8a0d8948b",
+      "properties": {
+        "interfaceKind": "library",
+        "publicName": "Optional stack integrations"
+      },
+      "depends_on": [
+        "http://aegis.gastown.local/ontology/code/quipu/src%2Flib.rs"
+      ]
+    },
+    {
+      "kind": "decision",
+      "source": "CONTRIBUTING.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
+      "summary": "The package keeps zero runtime dependencies and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
+      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
+      "type": "DecisionRecord",
+      "properties": {
+        "status": "active",
+        "supersessionStatus": "not-recorded-in-source"
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "README.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
+      "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
+      "properties": {
+        "startHereOrder": 1,
+        "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "docs/configuration.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
+      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
+      "source_sha256": "45f648615f526ed60ccbca9143c9e74ebb1867a5a69fe11fe7c3a380fa4b71c0",
+      "properties": {
+        "startHereOrder": 2
+      }
+    },
+    {
+      "kind": "start-here",
+      "source": "CONTRIBUTING.md",
+      "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
+      "summary": "Use the contribution guide for supported Python versions, the zero-dependency constraint, test conventions and console-entry checks.",
+      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
+      "properties": {
+        "startHereOrder": 3
+      }
+    }
+  ]
+}

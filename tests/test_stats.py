@@ -51,7 +51,7 @@ def test_mcp_tool_recorded(tmp_path, monkeypatch):
 
 
 def test_bash_binary_attributed_in_detail(tmp_path, monkeypatch):
-    # aegis-rcyd: hank/bobbin CLI runs via Bash — record the binary so 'Bash×N'
+    # aegis-rcyd: legacy-command compatibility records the binary that actually ran so 'Bash×N'
     # is not the whole story. Leading VAR=val + wrappers are skipped.
     monkeypatch.setenv("SHANTY_AGENT", "kelly")
     monkeypatch.delenv("ST_STATS_PUSHGATEWAY", raising=False)

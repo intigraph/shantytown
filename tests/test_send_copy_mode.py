@@ -114,3 +114,12 @@ def test_the_double_refuses_exactly_like_the_adapter():
     with pytest.raises(tmux_mod.PaneInMode):
         panes.option("p", 1)
     assert panes.sent == [] and panes.controls == [] and panes.picked == []
+
+
+def test_partial_delivery_says_check_then_retry_without_sending_again(tmux):
+    fake = tmux("1")
+    with pytest.raises(tmux_mod.PaneSubmissionUnverified) as caught:
+        tmux_mod.Tmux()._refuse_in_mode("p", sent=1)
+    assert "check delivery before retrying" in str(caught.value)
+    assert "do not blindly resend" not in str(caught.value)
+    assert fake.sendkeys() == []

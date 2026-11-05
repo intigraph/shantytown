@@ -89,14 +89,12 @@ class UnknownHarness(Exception):
 
 
 class Unsupported(Exception):
-    """A card asks for something ITS harness's program cannot express.
+    """A required launch contract cannot be honored by the selected program.
 
-    The sibling of UnknownHarness, one level in: the program is one we host, but
-    the card sets a field it has no way to honour (`chrome` on codex — there is
-    no browser integration to turn on or off). Dropping the field silently would
-    launch an agent that reads as configured and is not, which is the same class
-    of failure as substituting a different program: it succeeds at being the
-    wrong thing. Raised at COMPOSE time, so nothing is launched."""
+    Optional saved preferences are handled by harness_options: unsupported
+    options are retained and reported without becoming command-line flags.
+    Identity, permission posture and required capabilities still refuse.
+    """
 
 
 def _crew_launch_identity(card, root):
@@ -360,11 +358,11 @@ class ClaudeHarness:
     # already and the test that caught it exists for that reason.
     picker_markers = ()
     ready_patterns = ()
-    # Claude Code submits what st types; no stranded-paste signature has been
-    # observed. Empty means UNMEASURED, not "cannot happen" — if a long send is
-    # ever seen sitting in its box, the marker goes here and the check below
-    # starts covering it with no other change.
-    stranded_markers = ()
+    # MEASURED 2026-10-28 on the Mac (aegis-g9w): an ephemeral job prompt sent
+    # in one burst sat in the composer as `[Pasted text #1 +N lines]`, never
+    # submitted, while st counted it delivered; one later Enter started it. The
+    # number and line count vary, so the marker is the stable prefix.
+    stranded_markers = ("[Pasted text #",)
     # THE CLEAR COMMAND — what st types into a LIVE pane to empty its context
     # without touching the process (aegis-3laza's successor, Stiwi 2026-09-21).
     #
@@ -440,7 +438,9 @@ class ClaudeHarness:
         # `st agent new`'s liveness verify fleet-wide, which is the exact 0-path
         # failure 84z1 was filed to repair. `--chrome` is one agent's decision on
         # one card, never a default anybody inherits.
-        chrome = "--chrome" if card.chrome else "--no-chrome"
+        from . import harness_options
+        harness_options.warn_unsupported(card, self.name)
+        chrome = "--chrome" if harness_options.chrome(card) else "--no-chrome"
         flags = chrome
         if self._remote_control(root):
             flags += f" --remote-control {card.name}"
@@ -973,17 +973,8 @@ class CodexHarness:
         return codex_mod().HOME_VAR
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
-        # A card asking for a browser gets a REFUSAL, not a dropped flag. codex
-        # has no chrome integration; `--no-chrome`/`--chrome` are Claude Code's
-        # answer to a Claude Code consent screen. Honouring the field by ignoring
-        # it would launch an agent whose card says browser and whose process has
-        # none — configured on paper, absent in fact.
-        if card.chrome:
-            raise Unsupported(
-                f"card {card.name!r} sets chrome=True, and harness 'codex' has no "
-                f"browser integration to enable. Refusing to launch an agent whose "
-                f"card claims a capability its program does not have."
-            )
+        from .harness_options import warn_unsupported
+        warn_unsupported(card, self.name)
         # ABSOLUTE, always. The launch `cd`s into the workspace before the env
         # takes effect, so a relative CODEX_HOME (what `st --root .shanty …`
         # resolves to) would name a directory relative to the AGENT's cwd — and
@@ -1027,10 +1018,19 @@ class CodexHarness:
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
         daemon_start = ""
+        from .session_storage import configured, Storage
+        try:
+            session_storage = configured(root)
+        except ValueError as error:
+            raise Unsupported(str(error)) from error
         remote_control = self._remote_control(root)
+        if session_storage is not None and not remote_control:
+            raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
         if remote_control:
             managed = codex_standalone_binary(home)
             if not managed.is_file():
+                if session_storage is not None:
+                    raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
                 # A copied relay preference is not a standalone installation.
                 # A fresh host must still be able to start its first worker;
                 # leave its config intact so installing the payload enables
@@ -1100,6 +1100,17 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
+            session_preflight = ""
+            if session_storage is not None:
+                if not card.name or Path(card.name).name != card.name or card.name in {".", ".."}:
+                    raise Unsupported("session storage requires a single-component agent name")
+                session_storage = Storage(
+                    session_storage.root / card.name / "sessions", session_storage.mount,
+                    session_storage.device, session_storage.minimum_free)
+                durable_sessions = session_storage.root
+                # A missing/wrong mount must refuse BEFORE stopping the old daemon.
+                # This opt-in is a capacity boundary, unlike best-effort durability.
+                session_preflight = session_storage.command() + " && "
             data_base = Path(os.environ.get(
                 "XDG_DATA_HOME", Path.home() / ".local" / "share"))
             # Share the daemon package INCLUDING its native installer lock.
@@ -1208,6 +1219,10 @@ class CodexHarness:
             # (sessions/sessions), and rollouts would keep going to tmpfs with
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
+            if session_storage is not None:
+                # Never run the legacy copy/remove helper against fleet histories.
+                # Existing directories/other links require a separate cold cutover.
+                sessions_setup = session_storage.command(home=daemon_home)
             # Only a sanctioned normal launch reaches this stop/start path.
             # Existing package custody is verified after stop; no live cleanup.
             # The measured runtime-tmpfs failure and /proc custody proof are
@@ -1216,7 +1231,7 @@ class CodexHarness:
                 f"{package_setup} --migrate-stopped && "
                 if sys.platform.startswith("linux") else ""
             )
-            daemon_start = (f"{bootstrap} && {stop} && "
+            daemon_start = (f"{session_preflight}{bootstrap} && {stop} && "
                             f"{packages_after_stop}{sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
@@ -1734,6 +1749,11 @@ def resolve_model(card, root=None) -> str | None:
     """
     if getattr(card, "model", None):
         return card.model
+    if getattr(card, 'harness_options', None) and not getattr(card, 'account', None):
+        from .harness_options import model as selected_model
+        selected = selected_model(card, name_for(card, root))
+        if selected is not None:
+            return selected
     if root is not None:
         from . import accounts
         from .config import load

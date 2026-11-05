@@ -41,6 +41,112 @@ def row_for(body, predicate):
     return next(r for r in body['rows'] if r['p'] == predicate)
 
 
+def weekly_catalogue():
+    body = catalogue()
+    row_for(body, q.SCHEMA+'repeatFrequency')['o'] = 'P7D'
+    row_for(body, q.SCHEMA+'scheduleTimezone')['o'] = 'America/New_York'
+    row_for(body, q.SCHEMA+'startDate')['o'] = '2026-10-26T09:17:00-04:00'
+    row_for(body, q.QUECHUA+'enabled')['o'] = False
+    body['rows'].extend([
+        dict(s=SCHEDULE, p=q.SCHEMA+'byDay', o=q.SCHEMA+'Monday',
+             subjectIRI=True, objectIRI=True),
+        dict(s=SCHEDULE, p=q.SCHEMA+'startTime', o='09:17:00',
+             subjectIRI=True, objectIRI=False, datatype=q.XSD+'time'),
+    ])
+    body['count'] = len(body['rows'])
+    return body
+
+
+def test_weekly_declaration_is_explicit_civil_time_not_elapsed_seconds():
+    from dataclasses import asdict
+    body = weekly_catalogue()
+    before = copy.deepcopy(body)
+    job, = q.decode_catalogue(body)
+    assert isinstance(job, q.CalendarDeclaredJob)
+    assert (job.interval_s, job.weekday, job.local_time, job.anchor_s, job.enabled) == (
+        None, 0, '09:17', 1793020620, False)
+    assert body == before
+    fixed, = q.decode_catalogue(catalogue())
+    assert 'weekday' not in asdict(fixed) and 'local_time' not in asdict(fixed)
+    assert asdict(fixed)['interval_s'] == 600  # preserve fixed JSON compatibility
+
+
+@pytest.mark.parametrize('predicate,value', [
+    ('repeatFrequency', 'P1D'), ('repeatFrequency', 'PT168H'),
+    ('startTime', '9:17:00'), ('startTime', '09:17:01'),
+    ('startTime', '09:17:00Z'), ('startTime', '09:17:00.1'),
+    ('byDay', q.SCHEMA+'Funday'),
+    ('startDate', '2026-10-27T09:17:00-04:00'),
+    ('startDate', '2026-10-26T10:17:00-04:00'),
+    ('startDate', '2026-10-26T09:17:00-05:00'),
+])
+def test_weekly_mutations_cannot_be_treated_as_fixed_or_shifted(predicate, value):
+    body = weekly_catalogue()
+    row_for(body, q.SCHEMA+predicate)['o'] = value
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+
+
+@pytest.mark.parametrize('predicate', ['byDay', 'startTime'])
+def test_partial_or_multivalued_calendar_qualifiers_refuse(predicate):
+    body = weekly_catalogue()
+    body['rows'] = [r for r in body['rows'] if r['p'] != q.SCHEMA+predicate]
+    body['count'] = len(body['rows'])
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+    body = weekly_catalogue()
+    extra = dict(row_for(body, q.SCHEMA+predicate))
+    extra['o'] = q.SCHEMA+'Tuesday' if predicate == 'byDay' else '10:17:00'
+    body['rows'].append(extra)
+    body['count'] += 1
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+
+
+@pytest.mark.parametrize('predicate', ['byDay', 'startTime'])
+def test_weekly_rdf_term_kind_is_not_lexical_guessing(predicate):
+    body = weekly_catalogue()
+    row = row_for(body, q.SCHEMA+predicate)
+    row.update(objectIRI=not row['objectIRI'], datatype=q.XSD+'string')
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+
+
+@pytest.mark.parametrize('anchor,time', [
+    ('2026-11-01T01:30:00-04:00', '01:30:00'),
+    ('2026-11-01T01:30:00-05:00', '01:30:00'),
+    ('2026-03-08T02:30:00-05:00', '02:30:00'),
+])
+def test_calendar_gap_and_overlap_anchor_refuse(anchor, time):
+    body = weekly_catalogue()
+    row_for(body, q.SCHEMA+'byDay')['o'] = q.SCHEMA+'Sunday'
+    row_for(body, q.SCHEMA+'startTime')['o'] = time
+    row_for(body, q.SCHEMA+'startDate')['o'] = anchor
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+
+
+@pytest.mark.parametrize('as_json', [False, True])
+def test_weekly_cli_keeps_unknown_runtime_and_explicit_cadence(
+        tmp_path, monkeypatch, capsys, as_json):
+    from shantytown import cli, jobs
+    monkeypatch.setattr(q.JobCatalogue, 'read', lambda self: q.decode_catalogue(weekly_catalogue()))
+    monkeypatch.setattr(jobs, 'load', lambda *a: pytest.fail('read local TOML'))
+    argv = ['--root', str(tmp_path), 'work', 'jobs', '--graph',
+            'urn:example:catalogue', '--expect-job', JOB]
+    assert cli.main(argv + (['--json'] if as_json else []) + ['list']) == 0
+    out = capsys.readouterr().out
+    if as_json:
+        data = json.loads(out)
+        assert data['jobs'][0]['interval_s'] is None
+        assert data['jobs'][0]['weekday'] == 0 and data['jobs'][0]['local_time'] == '09:17'
+        assert all(data[k] == 'UNKNOWN' for k in (
+            'executable_admission', 'signed_run_status', 'firing_eligibility'))
+    else:
+        assert 'weekly Monday 09:17' in out and 'None' not in out
+    assert not list(tmp_path.rglob('*'))
+
+
 def test_decode_uses_actual_rdf_kinds_and_preserves_disabled_declarations():
     body = catalogue()
     before = copy.deepcopy(body)
@@ -117,7 +223,7 @@ def test_invalid_zone_refuses_and_calendar_qualifier_cannot_be_ignored():
     body['rows'].append(dict(s=SCHEDULE, p=q.SCHEMA+'byDay', o=q.SCHEMA+'Monday',
                              subjectIRI=True, objectIRI=True))
     body['count'] += 1
-    with pytest.raises(q.JobRefused, match='qualifier'):
+    with pytest.raises(q.JobRefused, match='exactly one'):
         q.decode_catalogue(body)
 
 
@@ -280,3 +386,43 @@ def test_json_without_graph_refuses_before_local_execution(tmp_path, monkeypatch
     monkeypatch.setattr(jobs, 'load', lambda *a: pytest.fail('JSON fell back to TOML'))
     assert cli.main(['--root', str(tmp_path), 'work', 'jobs', '--json', 'list']) == cli.REFUSED
     assert capsys.readouterr().out == ''
+
+
+@pytest.mark.parametrize('factory', [catalogue, weekly_catalogue])
+def test_verbose_typed_literals_decode_without_mutating_response(factory, monkeypatch):
+    body = factory()
+    expected = q.decode_catalogue(body)
+    for row in body['rows']:
+        if not row['objectIRI']:
+            row['o'] = {'value': row['o'], 'datatype': row['datatype']}
+    original = copy.deepcopy(body)
+    assert q.decode_catalogue(body) == expected
+    assert body == original
+    # Exercise the real transport boundary, still with explicit verbose scope.
+    monkeypatch.setattr(q.urllib.request, 'urlopen',
+                        lambda req, timeout: Response(json.dumps(body).encode()))
+    assert q.JobCatalogue('urn:example:catalogue', server='http://127.0.0.1:1').read() == expected
+
+
+@pytest.mark.parametrize('cell', [
+    {'value': 'PT10M', 'datatype': q.XSD+'string'},
+    {'value': 'PT10M'},
+    {'value': 'PT10M', 'datatype': q.XSD+'duration', 'language': 'en'},
+    {'value': {'value': 'PT10M'}, 'datatype': q.XSD+'duration'},
+    {'value': ['PT10M'], 'datatype': q.XSD+'duration'},
+    {'value': None, 'datatype': q.XSD+'duration'},
+])
+def test_verbose_literal_refuses_unknown_or_contradictory_wrappers(cell):
+    body = catalogue()
+    row_for(body, q.SCHEMA+'repeatFrequency')['o'] = cell
+    with pytest.raises(q.JobsUnavailable):
+        q.decode_catalogue(body)
+
+
+def test_verbose_literal_cannot_relabel_an_iri():
+    body = catalogue()
+    row = row_for(body, q.SCHEMA+'target')
+    row['datatype'] = q.XSD+'string'
+    row['o'] = {'value': 'urn:example:manifest:revision1', 'datatype': q.XSD+'string'}
+    with pytest.raises(q.JobsUnavailable, match='contradicts'):
+        q.decode_catalogue(body)

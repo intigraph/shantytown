@@ -18,7 +18,7 @@ from shantytown.tmux import NullPanes
 def world(tmp_path: Path):
     tracker = FilesTracker(tmp_path / "items")
     tracker.update("item-1", title="Deploy the service", status="in_progress",
-                   assignee="kelly", defer_until="2026-12-01", labels=["security", "blocked:human"])
+                   assignee="kelly", defer_until="2026-12-01", labels=["security", "blocked:external"])
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     return dispatcher, tracker
 
@@ -27,6 +27,12 @@ def world(tmp_path: Path):
 def test_every_declared_kind_is_recorded_with_status_and_reason(world, kind, label):
     dispatcher, tracker = world
 
+    if kind == "human":
+        before = tracker._path("item-1").read_bytes()
+        with pytest.raises(DeferRefused, match="Brief.*Later"):
+            dispatcher.defer("item-1", kind, "referent: named; re-test: explicit")
+        assert tracker._path("item-1").read_bytes() == before
+        return
     result = dispatcher.defer("item-1", kind, "referent: named; re-test: explicit")
 
     raw = json.loads(tracker._path("item-1").read_text())
@@ -43,7 +49,7 @@ def test_reclassification_removes_the_old_kind_in_the_same_write(world):
 
     raw = json.loads(tracker._path("item-1").read_text())
     assert "blocked:access" in raw["labels"]
-    assert "blocked:human" not in raw["labels"]
+    assert "blocked:external" not in raw["labels"]
 
 
 def test_empty_reason_and_closed_item_are_refused_without_writes(world):

@@ -91,7 +91,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -118,6 +118,11 @@ ACCOUNT_USAGE_METRIC = "claude_usage_utilization_pct"
 PROBE_OK_METRIC = "claude_usage_probe_success"
 PROBE_HTTP_STATUS_METRIC = "claude_usage_probe_http_status"
 PROBE_TS_METRIC = "claude_usage_probe_timestamp_seconds"
+# WHETHER THE SERVER OFFERS A WINDOW AT ALL (aegis-hnv7). 1 = the last successful
+# probe carried this window; 0 = it answered and the window was absent/null, the
+# server's own statement that this plan has no such budget. Never inferred from a
+# missing series: absence of the gauge is UNKNOWN, exactly as before.
+WINDOW_OFFERED_METRIC = "claude_usage_window_offered"
 # How old the PUBLISHED percentage is. Distinct from the probe timestamp and worth
 # reading separately: when the probe fails the producer RETAINS the last good
 # percentages and flags them, so the number stays fresh-looking while this climbs.
@@ -578,6 +583,16 @@ class Policy:
     # about total spend and about a blind signal; this is about the SHAPE of what
     # remains dispatchable under a floor, which is a different question.
     exempt: tuple[str, ...] = ()
+    # Lane eligibility is opt-in and separate from every spend restriction.
+    admit_class: bool = False
+    class_exempt: tuple[str, ...] = ()
+    # WINDOWS A PLAN MAY NOT OFFER (aegis-hnv7). A window named here is skipped,
+    # not blind, ONLY when the producer states the server does not offer it
+    # (WINDOW_OFFERED_METRIC == 0) and the probe that said so is itself fresh and
+    # successful. A missing series, a failed or stale probe, or a window not
+    # listed here keeps the signal-lost path exactly as before. Empty by default,
+    # so every existing config keeps its meaning.
+    optional_windows: tuple[str, ...] = ()
     # THE FLEET-SIZE CAP, and the only governor input that is NOT read from a
     # meter (aegis-tzpo1). Stiwi, 2026-08-04: *"have the governor add a cap, we
     # clearly need a mechanism."*
@@ -815,6 +830,11 @@ class Reading:
     # source cannot tell.  Set by the reader, which is the only layer that knows
     # whether its own side worked; never derived from the error text downstream.
     fault: str = ""
+    # False ONLY when the producer published WINDOW_OFFERED_METRIC == 0 for this
+    # window on every account (aegis-hnv7). Such a reading carries no pct; it is
+    # still LOST by `lost()` and only a policy that declares the window optional
+    # may treat it as not applicable, and only while the probe itself is fresh.
+    offered: bool = True
 
     def resets_in(self, now: float) -> float | None:
         """Seconds until this budget refills, or None if nothing published one.
@@ -976,9 +996,12 @@ def _readings_by_window(samples, source: str, *,
     pct: dict[str, float] = {}
     rule_pct: dict[str, float] = {}
     reset: dict[str, float] = {}
+    offered: dict[str, list[float]] = {}   # window -> one value per account
     for name, labels, value in samples:
         w = labels.get("window")
-        if name == RESET_TS_METRIC and w:
+        if name == WINDOW_OFFERED_METRIC and w:
+            offered.setdefault(w, []).append(value)
+        elif name == RESET_TS_METRIC and w:
             reset[w] = value if w not in reset else max(reset[w], value)
         elif name == metric and w:
             # The recording rule is ALREADY the max across accounts. If Prometheus
@@ -1020,6 +1043,19 @@ def _readings_by_window(samples, source: str, *,
                              cache_age=cache_age, reset_at=reset.get(w),
                              probe_http_status=(None if mixed_probe_status
                                                 else probe_http_status))
+    # NOT OFFERED, stated by the server (aegis-hnv7). Only a window with NO usage
+    # value whose marker is 0 on EVERY account and with a success flag in the
+    # same read. One account still offering it, a missing success flag or a
+    # value anywhere keeps the ordinary path: a percentage is governed, absence
+    # stays UNKNOWN. The reading still has no pct, so `lost()` still refuses it;
+    # only an explicit policy opt-in may read it as not applicable.
+    for w, values in offered.items():
+        if w in out or not values or not saw_ok or any(v != 0 for v in values):
+            continue
+        out[w] = Reading(pct=None, at=at, ok=ok, source=source,
+                         cache_age=cache_age, offered=False,
+                         probe_http_status=(None if mixed_probe_status
+                                            else probe_http_status))
     return out
 
 
@@ -1574,9 +1610,12 @@ class PrometheusReader:
         """(samples, error_reading) — exactly one is not None."""
         from urllib.parse import quote
         import re as _re
+        # WINDOW_OFFERED_METRIC rides the same query (aegis-hnv7): without it the
+        # Prometheus source could never see the server's stated absence.
         names = (self.metric, self.account_metric, PROBE_OK_METRIC,
                  PROBE_HTTP_STATUS_METRIC,
-                 PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC)
+                 PROBE_TS_METRIC, CACHE_AGE_METRIC, RESET_TS_METRIC,
+                 WINDOW_OFFERED_METRIC)
         query = '{__name__=~"' + "|".join(_re.escape(n) for n in names) + '"}'
         url = f"{self.url}/api/v1/query?query={quote(query)}"
         try:
@@ -2017,6 +2056,9 @@ class Verdict:
     # itself is here, and "why was this one let through" is the same question.
     exempt: tuple[str, ...] = ()
     stale_usable: tuple[str, ...] = ()  # accepted cached windows, with original ages
+    admit_class: bool = False
+    class_exempt: tuple[str, ...] = ()
+    work_harness: str = "claude"
 
     def resets_in(self, window: str, now: float) -> float | None:
         at = self.resets.get(window)
@@ -2316,10 +2358,10 @@ class Verdict:
         # the remaining budget — admits the idea that one agent's lane was
         # misjudged by a fleet-wide rule.
         if self.waives(item, agent):
-            return ADMITTED
+            return self._class_refusal(item, agent)
         floor = self.floor
         if self.tier is None or floor is None:
-            return ADMITTED
+            return self._class_refusal(item, agent)
         priority = getattr(item, "priority", None)
         if priority is None:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
@@ -2330,7 +2372,17 @@ class Verdict:
             return (f"{self._tier_says()} and {getattr(item, 'id', 'this item')} "
                     f"is P{priority}. Dispatch it when usage falls, or raise its "
                     f"priority if it really is that important.")
-        return ADMITTED
+        return self._class_refusal(item, agent)
+
+    def _class_refusal(self, item, agent):
+        if not self.admit_class:
+            return ADMITTED
+        from .work_class import authoring_class, lane_refusal
+        # A configured administrator allowance is authoring-only. It cannot
+        # turn any review into an assignment for a non-Codex harness.
+        if agent in self.class_exempt and authoring_class(item):
+            return ADMITTED
+        return lane_refusal(item, self.work_harness, agent)
 
     def excludes(self, agent, catalog=None) -> str:
         """"" if this agent may RUN under the current tier, else WHY not.
@@ -2548,6 +2600,7 @@ class Governor:
         now = self._now()
         if not pol.active:
             return Verdict(reading=Reading(source="none"),
+                           admit_class=pol.admit_class,
                            why="no [[governor.tier]] declared — the governor is off")
 
         # transport_error is shared by EVERY window when the read itself failed.
@@ -2600,11 +2653,22 @@ class Governor:
         stale_usable: list[str] = []
         resets: dict[str, float] = {}      # window -> epoch the budget refills
         relaxed: list[Relaxed] = []        # windows that LEFT a tier this pass
+        not_offered: list[str] = []        # optional windows the plan lacks
         prior = self.state.get() if self.state is not None else Engaged()
         for w in pol.windows():
             r = readings.get(w) or transport_error or Reading(
                 source=pol.source,
                 error=f"no usage series for window {w!r}")
+            # NOT APPLICABLE, NOT BLIND (aegis-hnv7): only an optional window the
+            # server explicitly does not offer, judged by a probe that SUCCEEDED
+            # (ok is True — no rotation grace, no stale-but-usable cache: those
+            # tolerate a FAILED probe's old numbers, and a failed probe can never
+            # vouch for absence) and that passes every freshness check `lost()`
+            # applies. The placeholder pct only lets `lost()` check the PROBE.
+            if (w in pol.optional_windows and r.offered is False and r.ok is True
+                    and not replace(r, pct=0.0).lost(now, pol.max_age_seconds)):
+                not_offered.append(w)
+                continue
             why_lost = r.lost(now, pol.max_age_seconds)
             if why_lost:
                 blind.append((w, why_lost))
@@ -2692,6 +2756,7 @@ class Governor:
                 # in the first place, so blindness is not a reason to relax it.
                 # A dead probe must not be able to uncap the fleet.
                 cap=pol.max_agents,
+                admit_class=pol.admit_class,
                 why=lost,
                 alarm=(f"USAGE SIGNAL LOST [{self.name}]: {lost}. "
                        + ("on_signal_lost = \"freeze\": no new work is being "
@@ -2837,6 +2902,9 @@ class Governor:
 
         if stale_usable:
             why += " · stale-but-usable[" + "; ".join(stale_usable) + "]"
+        if not_offered:
+            # Visible, never an alarm: the plan has no such budget to govern.
+            why += " · not offered by this plan: " + ", ".join(not_offered)
 
         alarm = ""
         if blind:
@@ -2862,7 +2930,8 @@ class Governor:
                        alarm=alarm, engaged=tuple(engaged_tiers),
                        resets=resets, relaxed=tuple(relaxed),
                        burning=tuple(burning), pacing=tuple(pacing),
-                       cap=pol.max_agents, exempt=pol.exempt)
+                       cap=pol.max_agents, exempt=pol.exempt,
+                       admit_class=pol.admit_class)
 
     def episode(self) -> float:
         """The current tier's episode key — what a drain dedupes against."""
@@ -3234,6 +3303,8 @@ _GOV_KEYS = {"source", "window", "on_signal_lost", "relax_margin",
              "stub_pct", "tier", "exempt", "burndown", "pace", "max_agents",
              "metric", "by_harness", "limit_id", "delegation_reserve_pct",
              "balance_band", "reading_needs_live_session"}
+_GOV_KEYS |= {"admit_class", "class_exempt"}
+_GOV_KEYS |= {"optional_windows"}
 _TIER_KEYS = {"at", "min_priority", "traits", "action", "window", "max_agents"}
 _BURN_KEYS = {"window", "within", "reserve"}
 _PACE_KEYS = {"window", "ratio", "length", "curve"}
@@ -3313,6 +3384,15 @@ def parse(tbl: dict) -> Policy:
         raise GovernorError(f"[governor] exempt names {', '.join(dupes)} twice; "
                             f"a repeated name means one of them is a typo nobody "
                             f"will notice.")
+
+    admit_class = tbl.get("admit_class", False)
+    if type(admit_class) is not bool:
+        raise GovernorError("[governor] admit_class must be true or false")
+    class_exempt = tbl.get("class_exempt", [])
+    if (not isinstance(class_exempt, list)
+            or any(not isinstance(name, str) or not name.strip() for name in class_exempt)
+            or len(set(class_exempt)) != len(class_exempt)):
+        raise GovernorError("[governor] class_exempt must be an array of unique agent names")
 
     raw_tiers = tbl.get("tier", [])
     if isinstance(raw_tiers, dict):
@@ -3404,6 +3484,23 @@ def parse(tbl: dict) -> Policy:
                 f"{', '.join(sorted(WINDOW_LENGTH_S))}. Set `length` (seconds) "
                 f"explicitly for a window st does not know.")
 
+    raw_optional = tbl.get("optional_windows", [])
+    if not isinstance(raw_optional, list) or not all(
+            isinstance(w, str) and w.strip() for w in raw_optional):
+        raise GovernorError("[governor] optional_windows must be an ARRAY of "
+                            "window names, e.g. optional_windows = [\"five_hour\"]")
+    optional_windows = tuple(dict.fromkeys(w.strip() for w in raw_optional))
+    if len(optional_windows) != len(raw_optional):
+        raise GovernorError("[governor] optional_windows names a window twice")
+    for w in optional_windows:
+        # A window with no tiers is never read, so listing it would be a typo
+        # that silently opts nothing out while looking configured.
+        if w not in windows_with_tiers:
+            raise GovernorError(
+                f"[governor] optional_windows names {w!r}, which has no "
+                f"[[governor.tier]] rows. Configured windows: "
+                f"{', '.join(sorted(windows_with_tiers)) or 'none'}.")
+
     return Policy(source=source, window=window.strip(), on_signal_lost=on_lost,
                   relax_margin=margin, max_age_seconds=max_age,
                   url=tbl.get("url"), path=tbl.get("path"),
@@ -3411,6 +3508,8 @@ def parse(tbl: dict) -> Policy:
                   password_file=tbl.get("password_file"), stub_pct=stub,
                   limit_id=_limit_id(tbl),
                   tiers=tiers, exempt=tuple(exempt), burndowns=burndowns,
+                  admit_class=admit_class, class_exempt=tuple(class_exempt),
+                  optional_windows=optional_windows,
                   paces=paces, max_agents=_cap(tbl, "[governor]"),
                   delegation_reserve_pct=delegation_reserve,
                   balance_band=float(tbl.get("balance_band", 0.0) or 0.0),

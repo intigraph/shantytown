@@ -1,0 +1,7 @@
+Script started on 2026-10-20 10:11:43-04:00 [COMMAND="python -W ignore::DeprecationWarning docs/demos/inbox-guard-readcut/probe.py --base 90ff87992594efa46f58d54bb405c2f979749e22 --candidate cca2deab51b790c18200d746eaeceac124597d40" <not executed on terminal>]
+{"fixture": "populated", "before": {"requests": 3, "complete": true, "ids": ["demo-receipt"]}, "after": {"requests": 2, "complete": true, "ids": ["demo-receipt"]}}
+{"fixture": "empty", "before": {"requests": 2, "complete": true, "ids": []}, "after": {"requests": 1, "complete": true, "ids": []}}
+{"fixture": "bad-status", "before": {"requests": 1, "complete": false, "ids": []}, "after": {"requests": 1, "complete": false, "ids": []}}
+Same rows and refusal; no production endpoint or installed-rate claim.
+
+Script done on 2026-10-20 10:11:44-04:00 [COMMAND_EXIT_CODE="0"]

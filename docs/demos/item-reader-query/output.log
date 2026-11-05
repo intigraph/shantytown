@@ -1,0 +1,31 @@
+Script started on 2026-10-20 05:11:19-04:00 [COMMAND="python3 -B docs/demos/item-reader-query/demo.py" <not executed on terminal>]
+Target: synthetic local store; no service or deployment access.
+Base: 878f24ea0743f8e0a49e2f9f4fb98aa150a59aa0
+Candidate: 1cc5085a65f29ac261dd7acb6261e380d312068d
+quipu 0.14.1
+git_sha: a7510ca8ea23605b395f164b8bd56dd3de7c26ac
+git_dirty: false
+Input: item/plain, no blockers, 250 unrelated items per graph.
+
+$ qp read <base query> --db <synthetic fixture>
+Query SHA256: 0dff01ef782fdc8a124160fb2d54da9171d345401e2b6da8040bc3af6ae4d59e
+  type = "https://schema.org/Action" [iri]
+  identifier = "plain" [string]
+  name = "plain" [string]
+  status = "open" [string]
+  priority = "0" [integer]
+Elapsed: 14.190 ms
+
+$ qp read <candidate query> --db <synthetic fixture>
+Query SHA256: 78d91745af340e73ec4bbbc4c06388b6594d7ab2d1a076f3e71b16de52d95aec
+  type = "https://schema.org/Action" [iri]
+  identifier = "plain" [string]
+  name = "plain" [string]
+  status = "open" [string]
+  priority = "0" [integer]
+Elapsed: 4.158 ms
+
+PASS: identical row bags; populated control=5, absent control=0.
+Small fixture timings are illustrative, not a production latency guarantee.
+
+Script done on 2026-10-20 05:11:21-04:00 [COMMAND_EXIT_CODE="0"]
