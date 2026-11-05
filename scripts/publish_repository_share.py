@@ -48,9 +48,9 @@ def alignment_digest(stage):
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_ALIGNMENT_BYTES:
             raise ValueError("alignment member must be a bounded regular file")
         data = handle.read(MAX_ALIGNMENT_BYTES + 1)
-    if len(data) > MAX_ALIGNMENT_BYTES or hashlib.sha256(data).hexdigest() != sealed:
+    if len(data) > MAX_ALIGNMENT_BYTES or hashlib.sha256(data).hexdigest() != ALIGNMENTS_SHA256:
         raise ValueError("alignment member hash differs from the reviewed empty carrier")
-    return sealed
+    return ALIGNMENTS_SHA256
 
 
 def alignment_provenance(stage):
