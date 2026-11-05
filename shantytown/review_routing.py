@@ -30,7 +30,7 @@ def read_budget(limit=6):
     are refused before sending.
     """
     original = urllib.request.urlopen
-    from . import seeds_plate
+    from . import seeds_plate, seeds_read_cache
     plate_original = seeds_plate.urlopen
     usage = {"reads": 0, "timeouts": 0}
 
@@ -63,7 +63,8 @@ def read_budget(limit=6):
     urllib.request.urlopen = bounded
     seeds_plate.urlopen = bounded
     try:
-        yield usage
+        with seeds_read_cache.direct_reads():
+            yield usage
     finally:
         urllib.request.urlopen = original
         seeds_plate.urlopen = plate_original

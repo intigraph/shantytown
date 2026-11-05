@@ -358,6 +358,7 @@ class Reason(Enum):
     JOB_FAILED = "job-failed"               # terminal scheduled delivery failure
     DELIVERY_STALLED = "delivery-stalled"   # retained input has no delivery proof
     UNTRACKED_WORK = "untracked-work"       # a report is ACTING with an empty hook
+    EPHEMERAL_RESULT = "ephemeral-result"   # an ephemeral job FINISHED (ephemeral.py)
     # NOTE: "i was busy" is deliberately NOT here. Capacity is a capacity problem
     # and must surface as one (absorb-rate), not be laundered as an escalation.
 
@@ -370,8 +371,11 @@ class Reason(Enum):
 # drain must not render it as one: stop_event._compose_reason gives it its own
 # section, and the drain's mid-flight DEFER must never hold it back (the sender
 # being busy is the entire content of the alert).
+# EPHEMERAL_RESULT is the same kind of thing (aegis-c01c.2): a finished job's
+# verdict, not a stopped crew member. Rendered as a stop it read "PRIORITIZE:
+# re-dispatch eph-review-* — STOPPED" to the administrator (measured 10/28).
 GOVERNANCE_REASONS = (Reason.UNTRACKED_WORK.value, Reason.JOB_FAILED.value,
-                      Reason.DELIVERY_STALLED.value)
+                      Reason.DELIVERY_STALLED.value, Reason.EPHEMERAL_RESULT.value)
 
 
 def is_governance(reason: str | None) -> bool:

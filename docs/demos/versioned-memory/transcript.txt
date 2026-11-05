@@ -1,0 +1,26 @@
+Script started on 2026-10-19 07:07:30-04:00 [COMMAND="python3 docs/demos/versioned-memory/run.py" <not executed on terminal>]
+Synthetic source-only demo; no credential, network or native selection.
+Probe: python -m shantytown.cli --root FIXTURE agent memory alpha inspect --directory SYNTHETIC_NATIVE
+base 708b0348d7ff5dbe140397b95f0b339a4c23a2b4 exit=2
+  memory command unavailable (actual parser refusal)
+head ebf59214799ab7a57fe1393137258eb0b5f3a68c exit=0
+{
+  "coverage": "explicit_directory_snapshot",
+  "files": [
+    {
+      "bytes": 38,
+      "path": "MEMORY.md",
+      "sha256": "3210fd7fdfbcf6503d327cb9622c729aa4c6217ee3dc6142fa56bc4c33c829bb"
+    },
+    {
+      "bytes": 19,
+      "path": "topic.md",
+      "sha256": "eebc0ab668bb42bc5fc8d58418dd203fea546bc0c695c2032f2910555bb1885a"
+    }
+  ],
+  "native_selection": "UNCHANGED"
+}
+Positive target coverage: 2/2 files. Original bytes and mtimes unchanged.
+Native Claude startup/write/read, Quipu round-trip and deployment: NOT exercised.
+
+Script done on 2026-10-19 07:07:31-04:00 [COMMAND_EXIT_CODE="0"]

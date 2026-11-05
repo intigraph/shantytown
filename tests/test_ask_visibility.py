@@ -50,6 +50,22 @@ def test_new_human_label_and_ask_title_are_guarded_but_clear_and_technical_defer
     assert not is_ask(WorkItem('lab-3', title='Discuss ASK Stiwi syntax', labels=['desk-notes']))
 
 
+def test_structured_human_blocker_uses_the_same_ask_and_no_deferral_rule():
+    item = WorkItem('lab-1', title='Choose an option', blocker_kind='blocked:human')
+    assert is_ask(item)
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(item, {'status': 'deferred', 'blocker_kind': None})
+    assert not is_ask(WorkItem('lab-2', title='Wait for service', blocker_kind='blocked:external'))
+
+
+@pytest.mark.parametrize('labels', ['technical, needs-stiwi ', [{'name': ' desk '}]])
+def test_wire_label_forms_share_the_no_deferral_classification(labels):
+    item = {'title': 'Choose an option', 'labels': labels}
+    assert is_ask(item)
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(item, {'status': 'deferred', 'labels': []})
+
+
 @pytest.mark.parametrize('title,labels', CASES)
 def test_unassigned_sdk_producer_refuses_before_execute(title, labels):
     tracker = Mock()
@@ -110,3 +126,16 @@ def test_decision_stiwi_is_ask_and_producer_label_update_refuses_before_write():
     with pytest.raises(ValueError, match='bsf8'):
         producer_capacity.run(['update', 'lab-1', '--add-label', 'decision-stiwi'], tracker, execute, Mock())
     execute.assert_not_called()
+
+
+@pytest.mark.parametrize('labels', [{'desk': False}, {'desk': True}, {'needs-stiwi': False},
+                                   {'name': 'desk'}, [{'name': ['desk']}], 42])
+def test_malformed_label_shapes_do_not_imply_a_human_decision(labels):
+    assert not is_ask({'title': 'Ordinary work', 'labels': labels})
+
+
+def test_valid_ask_marker_still_blocks_deferral_amid_unknown_entries():
+    item = {'title': 'Ordinary title', 'labels': ['desk', {}]}
+    assert is_ask(item)
+    with pytest.raises(ValueError, match='bsf8'):
+        refuse_deferral(item, {'status': 'deferred'})

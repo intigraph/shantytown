@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from contextlib import contextmanager
 import json
 import hashlib
@@ -21,7 +21,13 @@ from . import governor_balance as balance_mod
 from .governor import GovernorError, Reading
 
 VERSION = 1
-PEER_COUNT_MAX_AGE = 24 * 60 * 60
+# The same host-clock allowance applies in either direction and to cached evidence.
+CLOCK_SKEW_SECONDS = 60
+# A remembered census older than this is advisory: reported, never counted and
+# never a source of borrowed policy, so it cannot hold this host's launches.
+# `[host] peer_census_max_age` (seconds) overrides it.
+PEER_CENSUS_MAX_AGE = 6 * 60 * 60
+PEER_COUNT_MAX_AGE = PEER_CENSUS_MAX_AGE  # old name, kept for importers
 
 
 class PeerUnreachable(str):
@@ -51,51 +57,42 @@ class AdmissionUnavailable(GovernorError):
     pass
 
 
-@contextmanager
-def admission_lock(root, host, peers, *, owner=None, local_required=False):
-    """Serialize census-to-launch on the explicitly configured authority.
+@dataclass(frozen=True)
+class Admission:
+    """Which lock serialized this launch, and whether the owner was skipped.
 
-    Every peer must list the same host set and authority. There is no failover:
-    choosing a second lock when the first is unreachable would split the cap.
-    SSH holds the remote flock through stdin until the local launch completes.
-    This is coordination for a trusted, connected fleet, not a consensus service.
+    `lock_host` is the host whose `governor/admission.lock` is held (this host
+    unless the configured owner's lock was taken over SSH). `unreachable` names
+    a configured owner that could not be reached, so the census-to-launch
+    section ran under this host's own lock instead (degraded admission).
     """
-    if not peers:
-        if owner is not None and owner != host:
-            raise AdmissionUnavailable('account admission authority is not a declared host')
-        if not local_required:
-            yield
-            return
-        host = owner = host or 'local'
-    if not host or host in peers:
-        raise AdmissionUnavailable('account admission needs a unique local host name')
-    if not owner:
-        raise AdmissionUnavailable(
-            'multi-host account admission requires [host] admission_owner; '
-            'configure the same always-on host on every peer')
-    if owner not in {host, *peers}:
-        raise AdmissionUnavailable('account admission authority is not a declared host')
-    if owner == host:
-        import fcntl
-        path = Path(root) / 'governor' / 'admission.lock'
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open('a') as handle:
-            deadline = time.monotonic() + 10
-            while True:
-                try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    if time.monotonic() >= deadline:
-                        raise AdmissionUnavailable('account admission busy; retry after the current launch')
-                    time.sleep(.05)
+    lock_host: str | None = None
+    owner: str | None = None
+    unreachable: str | None = None
+
+
+@contextmanager
+def _local_lock(root):
+    import fcntl
+    path = Path(root) / 'governor' / 'admission.lock'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('a') as handle:
+        deadline = time.monotonic() + 10
+        while True:
             try:
-                yield
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-        return
-    peer = peers[owner]
-    script = '''import fcntl, pathlib, sys, time
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise AdmissionUnavailable('account admission busy; retry after the current launch')
+                time.sleep(.05)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+_REMOTE_LOCK = '''import fcntl, pathlib, sys, time
 p = pathlib.Path(sys.argv[1]) / 'governor' / 'admission.lock'
 p.parent.mkdir(parents=True, exist_ok=True)
 with p.open('a') as f:
@@ -111,28 +108,160 @@ with p.open('a') as f:
     print('locked', flush=True)
     sys.stdin.buffer.read(1)
 '''
-    command = 'python3 -u -c ' + shlex.quote(script) + ' ' + shlex.quote(peer.root)
+REMOTE_LOCK_BUSY = 2
+# How long this host waits for the owner's helper to print `locked`.
+REMOTE_LOCK_READY_S = 16
+# After that, how long a helper still waiting on the owner's lock may take to
+# reach its own 10s deadline and exit BUSY. SSH connect+auth time is spent
+# before the helper's clock starts, so the two deadlines are not aligned; a
+# helper that is merely waiting must not be mistaken for an unreachable owner.
+REMOTE_LOCK_BUSY_GRACE_S = 12
+_LOCK_LINE_MAX = 64 * 1024
+
+
+def _await_locked(process, timeout):
+    """True once the helper prints a `locked` line, tolerating shell noise
+    (login banners, rc output) before it. False on EOF, timeout or a flood."""
+    fd = process.stdout.fileno()
+    deadline = time.monotonic() + timeout
+    pending = b''
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        ready, _, _ = select.select([fd], [], [], left)
+        if not ready:
+            return False
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return False
+        lines = (pending + chunk).split(b'\n')
+        pending = lines.pop()
+        if any(line.rstrip(b'\r') == b'locked' for line in lines):
+            return process.poll() is None
+        if len(pending) > _LOCK_LINE_MAX:
+            return False
+
+
+@contextmanager
+def admission_lock(root, host, peers, *, owner=None, local_required=False):
+    """Serialize census-to-launch, preferring the configured owner's lock.
+
+    With a reachable `[host] admission_owner`, every host serializes on that
+    one lock and reads a fresh census under it, exactly as before. When the
+    owner cannot be reached, or none is configured, this host takes its OWN
+    lock and admits against what it can see: fresh censuses of reachable peers
+    and the last census of every unreachable one (FleetGovernor). An
+    unreachable host is never by itself a refusal; `st` must work on any host
+    without depending on another host running `st`.
+
+    A BUSY owner (reachable, lock held by another launch) still refuses: that
+    is real contention, not an outage. Yields an `Admission`.
+    This is coordination for a trusted fleet, not a consensus service.
+    """
+    if not peers:
+        if owner is not None and owner != host:
+            raise AdmissionUnavailable('account admission authority is not a declared host')
+        if not local_required:
+            yield Admission(owner=owner)
+            return
+        with _local_lock(root):
+            yield Admission(lock_host=host or 'local', owner=host or 'local')
+        return
+    if not host or host in peers:
+        raise AdmissionUnavailable('account admission needs a unique local host name')
+    if owner is not None and owner not in {host, *peers}:
+        raise AdmissionUnavailable('account admission authority is not a declared host')
+    if owner is None or owner == host:
+        with _local_lock(root):
+            yield Admission(lock_host=host, owner=owner)
+        return
+    peer = peers[owner]
+    command = 'python3 -u -c ' + shlex.quote(_REMOTE_LOCK) + ' ' + shlex.quote(peer.root)
+    process = None
     try:
         process = subprocess.Popen(
             ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
              '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2',
              '--', peer.ssh, command], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except OSError as exc:
-        raise AdmissionUnavailable(f'account admission authority {owner} unreachable') from exc
-    try:
-        ready, _, _ = select.select([process.stdout], [], [], 16)
-        if not ready or process.stdout.readline() != b'locked\n' or process.poll() is not None:
-            raise AdmissionUnavailable(f'account admission authority {owner} unavailable or busy')
-        yield
-    finally:
-        process.stdin.close()
+    except OSError:
+        process = None
+    locked = process is not None and _await_locked(process, REMOTE_LOCK_READY_S)
+    if locked:
         try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        process.stdout.close()
+            yield Admission(lock_host=owner, owner=owner)
+        finally:
+            _release(process)
+        return
+    busy = False
+    if process is not None:
+        # Let a helper that is still waiting on the owner's lock reach its own
+        # deadline: exit BUSY means the owner is up and another launch holds it.
+        _release(process, grace=REMOTE_LOCK_BUSY_GRACE_S)
+        busy = process.returncode == REMOTE_LOCK_BUSY
+    if busy:
+        raise AdmissionUnavailable(f'account admission authority {owner} busy; '
+                                   'retry after the current launch')
+    # Transport failure, a hung connection, or no working lock helper on the
+    # owner: the owner is out of reach. Degrade to this host's own lock.
+    with _local_lock(root):
+        yield Admission(lock_host=host, owner=owner, unreachable=owner)
+
+
+def _release(process, grace=3):
+    try:
+        process.stdin.close()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+    process.stdout.close()
+
+
+def _age_text(seconds):
+    if seconds is None:
+        return 'unknown'
+    seconds = max(0, int(seconds))
+    for unit, size in (('d', 86400), ('h', 3600), ('m', 60)):
+        if seconds >= size:
+            return f'{seconds // size}{unit}'
+    return f'{seconds}s'
+
+
+def degraded_admission_line(admission, fleet):
+    """ONE line naming every host admission could not see, or '' when none.
+
+    Printed whenever a launch is admitted without a fresh census of every
+    declared host, so a degraded admission is never silent.
+    """
+    estimates = dict(getattr(fleet, 'estimates', None) or {})
+    skipped = getattr(admission, 'unreachable', None)
+    if not estimates and not skipped:
+        return ''
+    down = sorted(set(estimates) | ({skipped} if skipped else set()))
+    against = []
+    for name in down:
+        estimate = estimates.get(name)
+        if estimate is None:
+            against.append(f'a fresh census of {name}')
+        elif estimate['age'] is None:
+            against.append(f'no usable census of {name} (counted 0 live)')
+        elif estimate.get('advisory'):
+            against.append(f"{name}'s last census (age {_age_text(estimate['age'])}, "
+                           'advisory, counted 0)')
+        else:
+            against.append(f"{name}'s last census (age {_age_text(estimate['age'])}, "
+                           f"{estimate['live']} live)")
+    lock_host = getattr(admission, 'lock_host', None)
+    remote_lock = bool(lock_host) and not skipped and lock_host != getattr(fleet, 'local', None)
+    where = f"under {lock_host}'s lock" if remote_lock else 'locally'
+    return f"admission: {', '.join(down)} unreachable; admitted {where} against {', '.join(against)}"
+
+
 # Policy is portable; reader coordinates and credentials emphatically are not.
 POLICY_FIELDS = ('window', 'on_signal_lost', 'relax_margin', 'max_age_seconds',
                  'max_agents', 'delegation_reserve_pct', 'exempt', 'limit_id',
@@ -147,6 +276,10 @@ def policy_wire(policy):
                 # the parser reads a present `curve` key as a declared envelope.
                 pace=[{k: v for k, v in asdict(p).items()
                        if not (k == 'curve' and not v)} for p in policy.paces])
+    # aegis-hnv7: carried ONLY when declared, so a fleet whose configs do not use
+    # it keeps a byte-identical wire that an older peer's strict check accepts.
+    if policy.optional_windows:
+        data['optional_windows'] = list(policy.optional_windows)
 
     def clean(value):
         if isinstance(value, dict):
@@ -173,9 +306,15 @@ def observations(governor):
     except Exception:
         readings = {w: Reading(ok=False, error='local usage reader failed')
                     for w in governor.policy.windows()}
-    return {w: asdict(replace(r, source='host-observation',
+    def wire(r):
+        data = asdict(replace(r, source='host-observation',
                               error='local usage reader failed' if r.error else ''))
-            for w, r in readings.items()}
+        # aegis-hnv7: `offered` travels only when False (the server's stated
+        # absence), so ordinary readings stay byte-identical for older peers.
+        if data.get('offered', True) is True:
+            data.pop('offered', None)
+        return data
+    return {w: wire(r) for w, r in readings.items()}
 
 
 def snapshot(host, governors, agents, *, now=None, hosts=None, admission_owner=None):
@@ -207,7 +346,7 @@ def validate(value, host, *, now=None):
             or not isinstance(value.get('governors'), dict)):
         raise ValueError('incompatible or incomplete governor snapshot')
     _number(value.get('observed_at'))
-    if not -30 <= clock - value['observed_at'] <= 60:
+    if not -CLOCK_SKEW_SECONDS <= clock - value['observed_at'] <= CLOCK_SKEW_SECONDS:
         raise ValueError('stale or future governor census')
     names = set()
     for row in value['agents']:
@@ -221,7 +360,7 @@ def validate(value, host, *, now=None):
         if not isinstance(name, str) or not isinstance(entry, dict):
             raise ValueError('invalid governor lane')
         policy = entry.get('policy')
-        if not isinstance(policy, dict) or set(policy) - set(POLICY_FIELDS) - {'tier', 'burndown', 'pace'}:
+        if not isinstance(policy, dict) or set(policy) - set(POLICY_FIELDS) - {'tier', 'burndown', 'pace', 'optional_windows'}:
             raise ValueError('invalid portable policy')
         gov.parse(policy)
         readings = entry.get('readings')
@@ -233,10 +372,11 @@ def validate(value, host, *, now=None):
             reading = Reading(**raw)
             for key in ('pct', 'at', 'cache_age', 'reset_at', 'probe_http_status'):
                 _number(getattr(reading, key), optional=True)
-            if (type(reading.ok) is not bool or not isinstance(reading.error, str)
+            if (type(reading.ok) is not bool or type(reading.offered) is not bool
+                    or not isinstance(reading.error, str)
                     or not isinstance(reading.source, str)
                     or reading.pct is not None and not 0 <= reading.pct <= 100
-                    or reading.at is not None and reading.at > clock + 30):
+                    or reading.at is not None and reading.at > clock + CLOCK_SKEW_SECONDS):
                 raise ValueError('invalid usage observation')
         state = entry.get('state')
         if not isinstance(state, dict) or not isinstance(state.get('by_window'), dict):
@@ -289,13 +429,18 @@ def read_peer(peer):
                 f'{peer.name} governor unreachable (SSH transport failed'
                 f'{_ssh_transport_detail(result.stderr)})')
         if result.returncode:
-            raise ValueError(f'ssh/governor exit {result.returncode}')
+            # The host answered but its `st` did not (missing, crashed, refused).
+            # Another host's tooling must not be a dependency of this one: use
+            # its last census exactly as for a transport failure. Never echo
+            # remote stderr; it may carry credentials.
+            return None, PeerUnreachable(
+                f'{peer.name} governor unreachable (remote st exit {result.returncode})')
         if len(result.stdout) > 1024 * 1024:
             raise ValueError('governor snapshot exceeds 1 MiB')
         return validate(json.loads(result.stdout), peer.name), ''
-    except (ConnectionError, subprocess.TimeoutExpired) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return None, PeerUnreachable(f'{peer.name} governor unreachable ({type(exc).__name__})')
-    except (OSError, ValueError, TypeError, GovernorError) as exc:
+    except (ValueError, TypeError, GovernorError) as exc:
         return None, f'{peer.name} governor unavailable ({type(exc).__name__}: {exc})'
 
 
@@ -330,12 +475,29 @@ class MergedState:
 
 
 class FleetGovernor:
-    """One invocation's account view, with explicit offline occupancy estimates."""
-    def __init__(self, local, peers, root, *, peer_config=None, declared_agents=None, now=None):
+    """One invocation's account view, with explicit offline occupancy estimates.
+
+    A peer that is UNREACHABLE (transport failure, or its `st` not answering)
+    or that answers with an INVALID census is never by itself a refusal. Its
+    last good census is counted only while younger than `census_max_age`
+    (default PEER_CENSUS_MAX_AGE); an older, future-stamped, corrupt or missing
+    census is ADVISORY: reported in `warnings`, counted as 0, and never a source
+    of policy, so local launches answer to local capacity and the local
+    governor alone. A REACHABLE peer with a valid census that disagrees
+    (policy, membership, owner) still holds growth via `errors`.
+    """
+    def __init__(self, local, peers, root, *, peer_config=None, now=None,
+                 census_max_age=None):
         self.local = local['host']
         clock = time.time() if now is None else now
+        max_age = PEER_CENSUS_MAX_AGE if census_max_age is None else census_max_age
         self.warnings = []
         self.estimated_agents = []
+        # peer name -> dict(age=seconds or None when no usable census, live=int)
+        self.estimates = {}
+        # one short phrase per degraded peer, for the single-line notice()
+        self._degraded = []
+        self._summarized = 0  # warnings the _degraded phrases already cover
         cached = []
         errors = []
         if peer_config:
@@ -344,93 +506,111 @@ class FleetGovernor:
                 errors.append('peer census result count disagrees with declared membership')
             for peer, (snapshot, error) in zip(ordered, peers):
                 path = _peer_cache(root, peer)
-                if not isinstance(error, PeerUnreachable):
-                    # Remember reachable disagreement/invalid data too. A later
-                    # outage must not erase it into a never-seen permission.
+                if not error:
                     try:
-                        _save_peer(path, snapshot, error)
+                        _save_peer(path, snapshot, '')
                     except OSError:
-                        errors.append(f'{peer.name} governor cache could not be saved')
-                    if error:
-                        errors.append(error)
+                        self.warnings.append(f'{peer.name} governor cache could not be saved')
                     continue
-                if local.get('admission_owner') != self.local or declared_agents is None:
-                    errors.append(error)
-                    continue
+                # Unreachable, or reachable with an unusable census (version
+                # skew, clock skew, garbage). Neither may hold this host: fall
+                # back to the last good census while it is fresh enough.
+                state = ('unreachable' if isinstance(error, PeerUnreachable)
+                         else 'census invalid')
+                if not isinstance(error, PeerUnreachable):
+                    self.warnings.append(error)
+                    self._summarized += 1
+                rows, age, advisory = [], None, False
                 try:
-                    try:
-                        record = json.loads(path.read_text())
-                    except FileNotFoundError:
-                        record = None
+                    record = json.loads(path.read_text())
+                    if not isinstance(record, dict):
+                        raise ValueError('invalid cached census record')
+                    if record['error']:
+                        raise ValueError('last reachable census was invalid')
+                    prior = record['snapshot']
+                    validate(prior, peer.name, now=prior['observed_at'])
+                except FileNotFoundError:
+                    detail = 'never seen; occupancy UNKNOWN, counted 0'
+                    short = 'never seen'
+                except (OSError, ValueError, TypeError, KeyError, GovernorError) as exc:
+                    detail = f'cached census unusable ({exc}); occupancy UNKNOWN, counted 0'
+                    short = 'no usable census'
+                else:
+                    age = clock - prior['observed_at']
+                    advisory = age > max_age or age < -CLOCK_SKEW_SECONDS
+                    if age > max_age:
+                        detail = (f'cached census age {age:.0f}s exceeds '
+                                  f'{max_age:.0f}s; advisory only, counted 0')
+                        short = f'census {_age_text(age)} old, advisory'
+                    elif age < -CLOCK_SKEW_SECONDS:
+                        detail = 'cached census stamped in the future; advisory only, counted 0'
+                        short = 'census future-stamped, advisory'
                     else:
-                        if not isinstance(record, dict):
-                            raise ValueError('invalid cached census record')
-                    if record is None:
-                        rows = [dict(row, live=True) for row in declared_agents
-                                if row['host'] == peer.name]
-                        detail = f'never seen; count age unknown; {len(rows)} declared cards counted live'
-                    else:
-                        if record['error']:
-                            raise ValueError('last reachable census was invalid: ' + record['error'])
-                        prior = record['snapshot']
-                        validate(prior, peer.name, now=prior['observed_at'])
-                        age = clock - prior['observed_at']
-                        if not -30 <= age <= PEER_COUNT_MAX_AGE:
-                            raise ValueError(f'cached count age {age:.0f}s exceeds 24h or is in the future')
                         cached.append(prior)
                         rows = prior['agents']
-                        detail = f'cached count age {max(0, age):.0f}s; {sum(r["live"] for r in rows)} counted live'
-                    self.estimated_agents.extend(dict(row, estimated=True) for row in rows)
-                    self.warnings.append(f'{peer.name} unreachable; {detail}')
-                except (OSError, ValueError, TypeError, KeyError, GovernorError) as exc:
-                    errors.append(f'{peer.name} unreachable; cached count unusable ({exc})')
+                        live = sum(r['live'] for r in rows)
+                        detail = f'cached count age {max(0, age):.0f}s; {live} counted live'
+                        short = f'{live} counted from {_age_text(age)}-old census'
+                self.estimated_agents.extend(dict(row, estimated=True) for row in rows)
+                self.estimates[peer.name] = dict(age=age, live=sum(r['live'] for r in rows))
+                if advisory:
+                    self.estimates[peer.name]['advisory'] = True
+                self.warnings.append(f'{peer.name} {state}; {detail}')
+                self._degraded.append(f'{peer.name} {state} ({short})')
+                self._summarized += 1
         else:
             errors.extend(error for _, error in peers if error)
         self.snapshots = [local] + [s for s, error in peers if s is not None and not error]
-        agreement = self.snapshots + cached
         self.errors = errors
-        if self.warnings:
-            # Only occupancy is borrowed. Every account window must still have a
-            # usable local observation, even with a warn-on-signal-loss policy.
-            if not local['governors']:
-                self.errors.append('offline peer fallback requires a local account governor')
-            for name, entry in local['governors'].items():
-                policy = gov.parse(entry['policy'])
-                for window in policy.windows():
-                    reading = Reading(**entry['readings'].get(window, {}))
-                    if reading.lost(clock, policy.max_age_seconds):
-                        self.errors.append(f'offline peer fallback requires fresh local usage for {name}/{window}')
-            for prior in cached:
-                if set(prior['governors']) - set(local['governors']):
-                    self.errors.append(f'{prior["host"]} cached governor has no local account reader')
-        if len(self.snapshots) > 1 or len(local.get('hosts', [])) > 1:
-            owner = local.get('admission_owner')
-            if not owner:
-                self.errors.append('missing [host] admission_owner; configure the same authority on every peer')
-            for item in agreement:
-                if not item.get('admission_owner') or item['admission_owner'] != owner:
-                    self.errors.append(f'{item["host"]} admission authority missing or disagrees; '
-                                       'upgrade and configure every peer before growth')
+        # Agreement is demanded of hosts that ANSWERED. A remembered census is
+        # history: its disagreement is reported but cannot hold this host.
+        owner = local.get('admission_owner')
+        for item in self.snapshots[1:]:
+            if item.get('admission_owner') != owner:
+                self.errors.append(f'{item["host"]} admission authority missing or disagrees; '
+                                   'configure the same [host] admission_owner (or none) on every peer')
+        for prior in cached:
+            if prior.get('admission_owner') != owner:
+                self.warnings.append(f'{prior["host"]} last census named a different admission authority')
         if 'hosts' in local:
-            for item in agreement:
+            for item in self.snapshots[1:]:
                 if item.get('hosts') != local['hosts']:
                     self.errors.append(f'{item["host"]} host membership disagrees; '
                                        'cannot establish one admission authority')
+            for prior in cached:
+                if prior.get('hosts') != local['hosts']:
+                    self.warnings.append(f'{prior["host"]} last census declared different host membership')
         self.governors = {}
         self.policy_hosts = {}
+        live_lanes = {name for s in self.snapshots for name in s['governors']}
         for prior in cached:
             for name, entry in prior['governors'].items():
-                current = local['governors'].get(name)
+                current = next((s['governors'][name] for s in self.snapshots
+                                if name in s['governors']), None)
                 if current and current['policy'] != entry['policy']:
-                    self.errors.append(f'{name} cached governor policies disagree across hosts; growth held')
-        lanes = sorted({name for s in self.snapshots for name in s['governors']})
+                    self.warnings.append(f'{name} policy in {prior["host"]}\'s last census differs; '
+                                         'admitting under the current policy')
+        lanes = sorted(live_lanes | {name for s in cached for name in s['governors']})
         for name in lanes:
             entries = {s['host']: s['governors'][name] for s in self.snapshots
                        if name in s['governors']}
+            borrowed = not entries
+            if borrowed:
+                # Only an unreachable peer declared this lane. Borrow its policy
+                # so its cap still binds; its readings keep their original
+                # timestamps and age into signal-lost like any other reading.
+                entries = {s['host']: s['governors'][name] for s in cached
+                           if name in s['governors']}
+                self.warnings.append(f'{name} policy taken from the last census of '
+                                     + ', '.join(sorted(entries)))
             host = min(entries)
             data = entries[host]['policy']
             if any(entry['policy'] != data for entry in entries.values()):
-                self.errors.append(f'{name} governor policies disagree across hosts; growth held')
+                if borrowed:
+                    self.warnings.append(f'{name} policies in unreachable hosts\' last censuses '
+                                         f'disagree; using {host}\'s')
+                else:
+                    self.errors.append(f'{name} governor policies disagree across hosts; growth held')
             policy = gov.parse(data)
             reader = FreshestReader({h: {w: Reading(**r) for w, r in e['readings'].items()}
                                      for h, e in entries.items()})
@@ -461,6 +641,19 @@ class FleetGovernor:
                 lane = self.lane(row.get('account') or row['harness'])
                 result[lane] = result.get(lane, 0) + 1
         return result
+
+    def notice(self):
+        """At most ONE short line for per-command stderr; '' when all is well.
+
+        The full list stays in `warnings` (`st crew --governor`, JSON)."""
+        if not self.warnings:
+            return ''
+        parts = self._degraded or [self.warnings[0]]
+        extra = len(self.warnings) - (self._summarized if self._degraded else 1)
+        line = 'peers: ' + '; '.join(parts)
+        if extra > 0:
+            line += f'; +{extra} note{"s" if extra > 1 else ""}'
+        return line + ' (st crew --governor)'
 
     def fallback(self):
         if not self.errors:

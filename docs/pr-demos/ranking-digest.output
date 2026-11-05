@@ -1,0 +1,25 @@
+Script started on 2026-11-04 07:19:27-05:00 [COMMAND="sh .work/2inj/demo.sh" <not executed on terminal>]
+$ python3 ranking-digest.py --source BASE_42700874
+ranking check (advisory; no auto-reassignment)
+worker0: active-0 P2 below unowned READY unowned-00, unowned-01, unowned-02, unowned-03, unowned-04, unowned-05, unowned-06, unowned-07, unowned-08, unowned-09, unowned-10, unowned-11, unowned-12, unowned-13, unowned-14, unowned-15, unowned-16, unowned-17, unowned-18, unowned-19, unowned-20, unowned-21, unowned-22, unowned-23, unowned-24, unowned-25, unowned-26, unowned-27, unowned-28, unowned-29, unowned-30, unowned-31, unowned-32, unowned-33
+worker1: active-1 P2 below unowned READY unowned-00, unowned-01, unowned-02, unowned-03, unowned-04, unowned-05, unowned-06, unowned-07, unowned-08, unowned-09, unowned-10, unowned-11, unowned-12, unowned-13, unowned-14, unowned-15, unowned-16, unowned-17, unowned-18, unowned-19, unowned-20, unowned-21, unowned-22, unowned-23, unowned-24, unowned-25, unowned-26, unowned-27, unowned-28, unowned-29, unowned-30, unowned-31, unowned-32, unowned-33
+worker2: active-2 P2 below unowned READY unowned-00, unowned-01, unowned-02, unowned-03, unowned-04, unowned-05, unowned-06, unowned-07, unowned-08, unowned-09, unowned-10, unowned-11, unowned-12, unowned-13, unowned-14, unowned-15, unowned-16, unowned-17, unowned-18, unowned-19, unowned-20, unowned-21, unowned-22, unowned-23, unowned-24, unowned-25, unowned-26, unowned-27, unowned-28, unowned-29, unowned-30, unowned-31, unowned-32, unowned-33
+worker3: active-3 P2 below unowned READY unowned-00, unowned-01, unowned-02, unowned-03, unowned-04, unowned-05, unowned-06, unowned-07, unowned-08, unowned-09, unowned-10, unowned-11, unowned-12, unowned-13, unowned-14, unowned-15, unowned-16, unowned-17, unowned-18, unowned-19, unowned-20, unowned-21, unowned-22, unowned-23, unowned-24, unowned-25, unowned-26, unowned-27, unowned-28, unowned-29, unowned-30, unowned-31, unowned-32, unowned-33
+worker4: active-4 P2 below unowned READY unowned-00, unowned-01, unowned-02, unowned-03, unowned-04, unowned-05, unowned-06, unowned-07, unowned-08, unowned-09, unowned-10, unowned-11, unowned-12, unowned-13, unowned-14, unowned-15, unowned-16, unowned-17, unowned-18, unowned-19, unowned-20, unowned-21, unowned-22, unowned-23, unowned-24, unowned-25, unowned-26, unowned-27, unowned-28, unowned-29, unowned-30, unowned-31, unowned-32, unowned-33
+unowned P0: none in complete active snapshot
+counts
+{"digest_utf8_bytes": 2338, "digest_logs_in_six_10minute_sweeps": 6, "administrator_pushes": 0}
+{"total_digest_logs_after_hourly_reminder": 7}
+$ python3 ranking-digest.py --source CANDIDATE
+ranking check (advisory; no auto-reassignment)
+worker0: active-0 P2 < 34 unowned P1 READY
+worker1: active-1 P2 < 34 unowned P1 READY
+worker2: active-2 P2 < 34 unowned P1 READY
+worker3: active-3 P2 < 34 unowned P1 READY
+worker4: active-4 P2 < 34 unowned P1 READY
+unowned: 34 READY; 0 P0 active; unowned-33 P1, unowned-32 P1, unowned-31 P1, unowned-30 P1, unowned-29 P1, +29 more
+counts
+{"digest_utf8_bytes": 384, "digest_logs_in_six_10minute_sweeps": 1, "administrator_pushes": 0}
+{"total_digest_logs_after_hourly_reminder": 2}
+
+Script done on 2026-11-04 07:19:27-05:00 [COMMAND_EXIT_CODE="0"]

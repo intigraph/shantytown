@@ -198,6 +198,8 @@ class Agent:
     account: str | None = None    # named subscription lane; None preserves legacy routing
     auto_failover: bool | None = None  # per-agent opt-in; None preserves projection
 
+    harness_options: dict | None = None  # saved per-program launch preferences; appended for positional compatibility
+
     def effective_roles(self) -> tuple[str, ...]:
         """The role set to ACT on: the declared stack, or the tree position alone.
 
@@ -381,9 +383,21 @@ class Tracker(Protocol):
     def create(self, title: str, **fields) -> WorkItem: ...
 
 
+@dataclass(frozen=True)
+class SubmissionObserved:
+    """Adapter evidence for this exact body, not merely send-keys success."""
+    pane: str
+    body_sha256: str
+
+    def matches(self, pane: str, text: str) -> bool:
+        import hashlib
+        return (self.pane == pane
+                and self.body_sha256 == hashlib.sha256(text.encode()).hexdigest())
+
+
 @runtime_checkable
 class Panes(Protocol):
-    def send(self, pane: str, text: str) -> None: ...
+    def send(self, pane: str, text: str) -> SubmissionObserved | None: ...
     def exists(self, pane: str) -> bool: ...
     # history=0 (default) returns the VISIBLE pane — what triage must judge on,
     # since a marker in scrollback is an agent TALKING about a state, not being
@@ -396,8 +410,10 @@ class Panes(Protocol):
     # input, both of which render as `❯ <text>`, and plain capture strips exactly
     # that bit. An adapter that cannot supply attributes returns plain text and
     # triage answers UNKNOWN — which is a refusal, not a guess.
+    # check=True propagates a failed native read as CalledProcessError instead
+    # of an ambiguous empty string; default callers keep their existing result.
     def capture(self, pane: str, history: int = 0, attrs: bool = False,
-                *, timeout: float | None = None) -> str: ...
+                *, timeout: float | None = None, check: bool = False) -> str: ...
     # The launch command line of the process in the pane, or None if it cannot be
     # read. A READ of the session surface, exactly like exists/capture — it adds
     # no launch or handoff verb, so the #5 invariant (Panes cannot express a
@@ -487,7 +503,7 @@ class ContextUnavailable(CouldNotLook):
 class RankUnavailable(CouldNotLook):
     """A ranker could not compute weights. NOT "nothing to rank" — "I could not
     look". Same shape as ContextUnavailable, and for the same reason: a down
-    ranker (Hank/Quipu unreachable) and a ranker that found nothing to weight
+    ranker (Yupana/Quipu unreachable) and a ranker that found nothing to weight
     return along different paths. The drain CATCHES this and degrades to the
     rule-based order (workflow.prioritize) — a wrong weight, or a wedged hook, is
     worse than an unweighted one. A ranker must never silently return unweighted
@@ -497,13 +513,13 @@ class RankUnavailable(CouldNotLook):
 @runtime_checkable
 class Ranker(Protocol):
     """Weight prioritization candidates by an external signal (structural blast
-    radius via Hank, governed policy via Quipu).
+    radius via Yupana, governed policy via Quipu).
 
     ONE method, like Context. It takes the candidates and returns them with
     `weight`/`why` populated; it MUST raise RankUnavailable rather than return
     them unweighted when it could not reach its backend. The default impl
     (policy.NullRanker) needs no backend and returns them unchanged — the leak
-    detector that proves the whole feature runs without Hank/Quipu.
+    detector that proves the whole feature runs without Yupana/Quipu.
 
     RETURNS AN `Answer`, NOT A BARE LIST (aegis-q0bzh). `RankUnavailable` already
     covers "I could not reach the backend at all". It does NOT cover the case that

@@ -89,14 +89,12 @@ class UnknownHarness(Exception):
 
 
 class Unsupported(Exception):
-    """A card asks for something ITS harness's program cannot express.
+    """A required launch contract cannot be honored by the selected program.
 
-    The sibling of UnknownHarness, one level in: the program is one we host, but
-    the card sets a field it has no way to honour (`chrome` on codex — there is
-    no browser integration to turn on or off). Dropping the field silently would
-    launch an agent that reads as configured and is not, which is the same class
-    of failure as substituting a different program: it succeeds at being the
-    wrong thing. Raised at COMPOSE time, so nothing is launched."""
+    Optional saved preferences are handled by harness_options: unsupported
+    options are retained and reported without becoming command-line flags.
+    Identity, permission posture and required capabilities still refuse.
+    """
 
 
 def _crew_launch_identity(card, root):
@@ -360,11 +358,11 @@ class ClaudeHarness:
     # already and the test that caught it exists for that reason.
     picker_markers = ()
     ready_patterns = ()
-    # Claude Code submits what st types; no stranded-paste signature has been
-    # observed. Empty means UNMEASURED, not "cannot happen" — if a long send is
-    # ever seen sitting in its box, the marker goes here and the check below
-    # starts covering it with no other change.
-    stranded_markers = ()
+    # MEASURED 2026-10-28 on the Mac (aegis-g9w): an ephemeral job prompt sent
+    # in one burst sat in the composer as `[Pasted text #1 +N lines]`, never
+    # submitted, while st counted it delivered; one later Enter started it. The
+    # number and line count vary, so the marker is the stable prefix.
+    stranded_markers = ("[Pasted text #",)
     # THE CLEAR COMMAND — what st types into a LIVE pane to empty its context
     # without touching the process (aegis-3laza's successor, Stiwi 2026-09-21).
     #
@@ -440,7 +438,9 @@ class ClaudeHarness:
         # `st agent new`'s liveness verify fleet-wide, which is the exact 0-path
         # failure 84z1 was filed to repair. `--chrome` is one agent's decision on
         # one card, never a default anybody inherits.
-        chrome = "--chrome" if card.chrome else "--no-chrome"
+        from . import harness_options
+        harness_options.warn_unsupported(card, self.name)
+        chrome = "--chrome" if harness_options.chrome(card) else "--no-chrome"
         flags = chrome
         if self._remote_control(root):
             flags += f" --remote-control {card.name}"
@@ -973,17 +973,8 @@ class CodexHarness:
         return codex_mod().HOME_VAR
 
     def launch(self, card: Agent, settings_path: str, root=None) -> str:
-        # A card asking for a browser gets a REFUSAL, not a dropped flag. codex
-        # has no chrome integration; `--no-chrome`/`--chrome` are Claude Code's
-        # answer to a Claude Code consent screen. Honouring the field by ignoring
-        # it would launch an agent whose card says browser and whose process has
-        # none — configured on paper, absent in fact.
-        if card.chrome:
-            raise Unsupported(
-                f"card {card.name!r} sets chrome=True, and harness 'codex' has no "
-                f"browser integration to enable. Refusing to launch an agent whose "
-                f"card claims a capability its program does not have."
-            )
+        from .harness_options import warn_unsupported
+        warn_unsupported(card, self.name)
         # ABSOLUTE, always. The launch `cd`s into the workspace before the env
         # takes effect, so a relative CODEX_HOME (what `st --root .shanty …`
         # resolves to) would name a directory relative to the AGENT's cwd — and
@@ -1734,6 +1725,11 @@ def resolve_model(card, root=None) -> str | None:
     """
     if getattr(card, "model", None):
         return card.model
+    if getattr(card, 'harness_options', None) and not getattr(card, 'account', None):
+        from .harness_options import model as selected_model
+        selected = selected_model(card, name_for(card, root))
+        if selected is not None:
+            return selected
     if root is not None:
         from . import accounts
         from .config import load

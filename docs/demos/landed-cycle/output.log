@@ -1,0 +1,9 @@
+Script started on 2026-10-25 11:42:31-04:00 [COMMAND="bash run.sh" <not executed on terminal>]
+BASE 15ddda51: squash landed, remote head deleted; then one new unpublished commit
+{"scenario": "two squash-landed commits, deleted remote head", "unpushed": 2, "cycle_allowed": false, "render": "1 behind origin/main (work you do NOT have \u2014 check for duplication before you build); 2 on no remote ref KNOWN LOCALLY (as of the last fetch \u2014 fetch before treating as lost)"}
+{"scenario": "same plus genuinely unpublished commit", "unpushed": 3, "cycle_allowed": false, "render": "1 behind origin/main (work you do NOT have \u2014 check for duplication before you build); 3 on no remote ref KNOWN LOCALLY (as of the last fetch \u2014 fetch before treating as lost)"}
+CANDIDATE: same real Git topology and explicit merged-PR fixture
+{"scenario": "two squash-landed commits, deleted remote head", "unpushed": 0, "cycle_allowed": true, "render": "landed: 2 reachable from merged PR #7 head 9ec20118a0f5 (origin); 1 behind origin/main (work you do NOT have \u2014 check for duplication before you build)"}
+{"scenario": "same plus genuinely unpublished commit", "unpushed": 1, "cycle_allowed": false, "render": "landed: 2 reachable from merged PR #7 head 9ec20118a0f5 (origin); 1 behind origin/main (work you do NOT have \u2014 check for duplication before you build); 1 on no remote ref KNOWN LOCALLY (as of the last fetch \u2014 fetch before treating as lost)"}
+
+Script done on 2026-10-25 11:42:31-04:00 [COMMAND_EXIT_CODE="0"]

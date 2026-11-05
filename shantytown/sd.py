@@ -34,7 +34,7 @@ import subprocess
 from dataclasses import dataclass
 
 from .br import BrTracker, _failure_reason
-from .query_identity import sdk_subprocess_options
+from .query_identity import sdk_subprocess_options, declared_read_operation
 from .answer import Answer
 from .protocols import WorkItem
 from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
@@ -78,6 +78,54 @@ class SdTracker(BrTracker):
         self._plate_projection_candidates: dict[str, list[dict]] = {}
         self._native_projection: bool | None = None
         self._decision_candidates: dict[str, Answer[list[dict]]] = {}
+
+    # --- message windows: mail that is not a seed -------------------
+    # `sd msg` writes schema:Message records into per-week window graphs that no
+    # board read sees. Exit 8 (indeterminate) is never retried blindly: a keyed
+    # resend is safe, but the caller decides.
+
+    def send_message(self, to: str, body: str, *, key: str, frm: str | None = None,
+                     kind: str = "note") -> Answer[dict]:
+        from .inbox import validate_delivery_key
+        validate_delivery_key(key)
+        args = ["msg", "send", "--to", to, "--key", key, "--kind", kind, "-m", body, "--json"]
+        if frm:
+            args += ["--from", frm]
+        result = self._bd(*args)
+        if result.returncode:
+            raise RuntimeError(f"sd msg send failed: {_failure_reason(result)}")
+        try:
+            value = json.loads(result.stdout)
+            if not isinstance(value, dict) or not str(value.get("id", "")).startswith("msg-"):
+                raise ValueError("missing message id")
+        except (ValueError, TypeError) as error:
+            raise RuntimeError("sd msg send receipt identity UNKNOWN") from error
+        return Answer.complete_read(value, how="sd msg send: validated delivery receipt")
+
+    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2) -> Answer[list[dict]]:
+        args = ["msg", "list", "--to", to, "--weeks", str(weeks), "--json"]
+        if unread:
+            args.append("--unread")
+        result = self._bd(*args)
+        if result.returncode:
+            raise RuntimeError(f"sd msg list failed: {_failure_reason(result)}")
+        value = json.loads(result.stdout)
+        if not isinstance(value, list) or not all(isinstance(v, dict) and v.get("id") for v in value):
+            raise RuntimeError("sd msg list answer unreadable")
+        return Answer.complete_read(value, how=f"sd msg list: complete requested {weeks}-week recipient window")
+
+    def read_messages(self, ids: list[str], *, weeks: int = 2) -> Answer[list[dict]]:
+        result = self._bd("msg", "read", *ids, "--weeks", str(weeks), "--json")
+        if result.returncode:
+            raise RuntimeError(f"sd msg read failed: {_failure_reason(result)}")
+        value = json.loads(result.stdout)
+        if (not isinstance(value, list)
+                or not all(isinstance(v, dict) and isinstance(v.get("id"), str)
+                           and isinstance(v.get("marked"), bool) for v in value)
+                or len(value) != len(set(ids))
+                or {v["id"] for v in value} != set(ids)):
+            raise RuntimeError("sd msg read receipts incomplete or unreadable")
+        return Answer.complete_read(value, how="sd msg read: receipts cover every requested ID")
 
     def create_inbox_message(self, title: str, *, delivery_key: str, **fields) -> WorkItem:
         """Retry only CAS conflicts, using the SDK's existing keyed create.
@@ -162,10 +210,15 @@ class SdTracker(BrTracker):
                 f"seeds backend: SHANTY_SD_PREFIX is not set for {named}. It is "
                 "required: a missing or wrong store reports the default prefix, and "
                 "only the prefix check can tell it from the real board")
+        from .actor_identity import config_environment
+        proof_options = sdk_subprocess_options(read_operation="where")
+        pinned_config = config_environment()
+        if pinned_config:
+            proof_options['env'] = dict(proof_options.get('env') or os.environ, **pinned_config)
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout,
-                               **sdk_subprocess_options(read_operation="where"))
+                               **proof_options)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -230,13 +283,23 @@ class SdTracker(BrTracker):
             raise ValueError("invalid blocker response")
         return value
 
-    def reconcile_blockers(self):
-        value = self._blocker_result("reconcile")
+    def reconcile_blockers(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("reconcile", *args)
         if not isinstance(value.get("changed"),list):
             raise ValueError("blocker reconciliation result UNKNOWN")
+        if identifier is not None and any(not isinstance(row,dict) or row.get("issue_id") != identifier for row in value["changed"]):
+            raise ValueError("blocker reconciliation escaped target")
 
-    def unlock_events(self):
-        value = self._blocker_result("events")
+    @staticmethod
+    def _unlock_target(identifier):
+        if not isinstance(identifier,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*",identifier):
+            raise ValueError("unlock target identity UNKNOWN")
+        return identifier
+
+    def unlock_events(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("events", *args)
         events = value.get("events")
         if not isinstance(events,list) or len(events) >= 1000 or value.get("has_more") is True or value.get("truncated") is True:
             raise ValueError("unlock event completeness UNKNOWN")
@@ -255,6 +318,8 @@ class SdTracker(BrTracker):
                     or event["event_id"] != f"seeds:unlock:{event['issue_id']}:{generation}"):
                 raise ValueError("unlock event identity/generation UNKNOWN")
             identities.add(event["event_id"])
+            if identifier is not None and event["issue_id"] != identifier:
+                raise ValueError("unlock event escaped target")
             rows.append({"kind":"unlock","id":event["issue_id"],
                          "episode":event["event_id"],"recipient":event.get("assignee")})
         return Answer.complete_read(rows,how="selected Seeds persistent pending unlock events")
@@ -440,6 +505,63 @@ class SdTracker(BrTracker):
                 return held
         return self._owner_rows(agent)
 
+    @declared_read_operation("spec-boundary")
+    def spec_rows(self, owner):
+        if self.store:
+            self.prove_store()
+            value = self._spec_json("spec-changes")
+            events = value.get("events")
+            if not isinstance(events,list) or len(events) > 500:
+                raise StoreUnproven("local spec changes UNKNOWN or capped")
+            rows = []
+            for event in events:
+                recipient = event.get("recipient")
+                if owner is not None and recipient not in (owner,owner.split("/")[-1]):
+                    continue
+                rows.append({"id":event["id"],"title":event["title"],"status":event["status"],
+                    "priority":event["priority"],"labels":event["labels"],"assignee":recipient,
+                    "spec_version":event["version"],"spec_previous_version":event["previous_version"],
+                    "spec_changed_at":event["changed_at"]})
+            return Answer.complete_read(rows,how="explicit local Seeds spec changes")
+        if not self._use_remote_projection():
+            raise StoreUnproven("spec boundary projection requires the selected remote schema")
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), owner, timeout=min(self.timeout,1), decision=True, only_specs=True, include_deferred=True)
+
+    def _spec_json(self, *args):
+        result = self._bd(*args, "--json")
+        if result.returncode != 0:
+            raise StoreUnproven(f"Seeds spec operation failed: {_failure_reason(result)[:160]}; no retry")
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict):
+            raise StoreUnproven("invalid Seeds spec operation envelope")
+        return value
+
+    def spec_state(self, identifier):
+        value = self._spec_json("spec-state", identifier)
+        if (value.get("id") != identifier or type(value.get("version")) is not int
+                or value["version"] < 0 or type(value.get("unacked")) is not bool):
+            raise StoreUnproven("invalid spec state readback")
+        return value
+
+    def ack_spec(self, identifier, version, *, session=None):
+        args = ["ack", identifier, "--version", str(version)]
+        if session:
+            args.extend(["--session",session])
+        return self._spec_json(*args)
+
+    def rescope(self, identifier, path, *, quote, requester, summary, urgent, session, dry_run=False):
+        args = ["rescope", identifier, "--spec-file", str(path), "--quote", quote,
+                "--requester", requester, "--summary", summary, "--session", session]
+        if urgent:
+            args.append("--urgent")
+        if dry_run:
+            args.append("--dry-run")
+        value = self._spec_json(*args)
+        if value.get("id") != identifier or type(value.get("version")) is not int:
+            raise StoreUnproven("rescope result UNKNOWN; do not retry")
+        return value
+
     def decision_rows(self, agent: str | None) -> Answer[list[dict]]:
         """Advisory fields; reuse a fresh worker plate's complete projection."""
         if agent is not None and agent in self._decision_candidates:
@@ -448,7 +570,7 @@ class SdTracker(BrTracker):
             if not self._use_remote_projection():
                 raise ValueError("decision projection unavailable on this transport")
             from .seeds_plate import owner_rows
-            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True)
+            return owner_rows(self.prove_store(), agent, timeout=self.timeout, decision=True, include_deferred=agent is not None)
         except Exception as error:
             return Answer.capped([],how="Seeds decision fields",caveat=str(error))
 
@@ -564,6 +686,19 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def ranking_rows(self):
+        """Complete lean active/deferred metadata and proven unowned READY rows."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import ranking_rows, unblocked_ids
+        from .priority_advisory import workable
+        # aegis-bzc: the dedicated bounded cohort reader. owner_rows(None,
+        # include_deferred=True) is refused before any query by design.
+        rows = ranking_rows(self.prove_store(), timeout=self.timeout).exact()
+        candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
+        ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        return [r for r in candidates if r["id"] in ready], rows
+
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
@@ -635,6 +770,46 @@ class SdTracker(BrTracker):
         if answer.complete:
             self._native_projection = True
         return answer
+
+    def inbox_count(self, agent):
+        """Count membership independently of the metadata field budget."""
+        from .seeds_inbox import LegacyInboxSchema
+        from .seeds_inbox_window import count
+        try:
+            proof = self.prove_store()
+            if not self.quipu or not proof.graph or self._native_projection is False:
+                return None
+            return count(proof, agent, timeout=self.timeout)
+        except LegacyInboxSchema:
+            self._native_projection = False
+            return None
+        except (OSError, ValueError, RuntimeError) as error:
+            return Answer.capped(0, how="Seeds inbox membership count", caveat=str(error))
+
+    def inbox_page(self, agent, *, limit=100, oldest_first=False):
+        """A counted view, never a claim that the window is the whole queue."""
+        from .seeds_inbox_window import page_ids
+        from .answer import PartialAnswer
+        try:
+            observed = self.inbox_count(agent)
+            if observed is None:
+                return None
+            total = observed.exact()
+            if not total:
+                return Answer.complete_read((0, []), how=observed.how)
+            ids = page_ids(self.prove_store(), agent, limit=limit,
+                           oldest_first=oldest_first, timeout=self.timeout).exact()
+            if not ids:
+                raise ValueError("inbox changed between count and identity window; retry read")
+            items = self.inbox_receipts(agent, ids).exact()
+            by_id = {item.id: item for item in items}
+            values = [by_id[i] for i in ids if by_id[i].status not in ("closed", "tombstone")]
+            if not values or len(values) > total:
+                raise ValueError("inbox membership changed during the view; retry read")
+            return Answer.complete_read((total, values),
+                how="membership count then bounded identities and fresh exact metadata; not atomic")
+        except (OSError, ValueError, RuntimeError, KeyError, PartialAnswer) as error:
+            return Answer.capped((0, []), how="Seeds bounded inbox view", caveat=str(error))
 
     def inbox_receipts(self, agent, identifiers):
         """Fresh exact identity fields before acknowledging known receipts.
@@ -721,11 +896,30 @@ class SdTracker(BrTracker):
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
         cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
-        return subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
+        options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
-                                      "show", "list", "ready", "where", "search", "count", "info", "stats"
+                                      "show", "list", "ready", "where", "search", "count", "info", "stats",
+                                      "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        from .actor_identity import config_environment
+        pinned_config = config_environment()
+        if pinned_config:
+            options['env'] = dict(options.get('env') or os.environ, **pinned_config)
+        # Reads retain their original route and budget. Optional signing
+        # observation belongs only to the actual Seeds mutation child.
+        from .advise_signing import mutation, run
+        if mutation(self._translate(args)) and not pinned_config:
+            asserted = actor
+            for i, arg in enumerate(args):
+                if arg.startswith('--actor='):
+                    asserted = arg.partition('=')[2]
+                elif arg == '--actor' and i + 1 < len(args):
+                    asserted = args[i + 1]
+            return run(cmd, actor=actor, asserted_actor=asserted,
+                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                       options=options, runner=subprocess.run)
+        return subprocess.run(cmd, **options)
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

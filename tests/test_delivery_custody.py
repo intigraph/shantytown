@@ -9,6 +9,8 @@ from shantytown.events import FilesEvents
 from shantytown.inbox import FilesInbox, Message
 from test_codex_submission import transport, keys, READY, OWNED, BUSY, QUEUED, BODY
 
+IDLE_QUEUE = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
+
 
 def local(monkeypatch, tmp_path, frames):
     panes, calls = transport(monkeypatch, frames)
@@ -128,11 +130,11 @@ def test_queue_retains_one_pointer_and_escalates_once_via_normal_event_drain(tmp
     observe(tmp_path, f, QUEUED, 1299)
     events = FilesEvents(tmp_path / 'events')
     assert events.pending('lead') == []
-    observe(tmp_path, f, QUEUED, 1300)
-    observe(tmp_path, f, QUEUED, 1600)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1600)
     [event] = events.drain('lead')
     assert event.reason == 'delivery-stalled'
-    assert 'busy=True' in event.detail
+    assert 'busy=False' in event.detail
     assert 'box=' in event.detail
     assert 'WORKING UNTRACKED' not in _compose_governance([event], 1600)
     assert 'Unconfirmed message delivery' in _compose_governance([event], 1600)
@@ -208,8 +210,8 @@ def test_failed_redelivery_is_not_retried_on_next_tend(tmp_path, monkeypatch):
 def test_inbox_outage_still_reaches_independent_admin_event(tmp_path, monkeypatch):
     f = fixtures(tmp_path, monkeypatch)
     monkeypatch.setattr(f[-1], 'unread', lambda _: (_ for _ in ()).throw(TimeoutError()))
-    observe(tmp_path, f, QUEUED, 1000)
-    observe(tmp_path, f, QUEUED, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
     [event] = FilesEvents(tmp_path / 'events').pending('lead')
     assert 'unread=UNKNOWN' in event.detail
     assert records(tmp_path)[0]['state'] == 'queued'
@@ -262,9 +264,9 @@ def test_one_coordinator_wake_is_backed_by_a_retained_event(tmp_path, monkeypatc
         wakes.append(worker)
         raise tmux.PaneSubmissionUnverified('coordinator queued')
     monkeypatch.setattr(notify, 'wake_recipient', wake)
-    observe(tmp_path, f, QUEUED, 1000)
-    observe(tmp_path, f, QUEUED, 1300)
-    observe(tmp_path, f, QUEUED, 1600)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1600)
     assert wakes == ['worker']
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
 
@@ -283,10 +285,10 @@ def test_recovery_preserves_original_sender(tmp_path, monkeypatch):
 
 def test_missing_pointer_is_not_invented_acknowledgment(tmp_path, monkeypatch):
     f = fixtures(tmp_path, monkeypatch)
-    observe(tmp_path, f, QUEUED, 1000)
+    observe(tmp_path, f, IDLE_QUEUE, 1000)
     for path in (tmp_path / 'inbox').glob('msg-*.json'):
         path.unlink()
-    observe(tmp_path, f, QUEUED, 1300)
+    observe(tmp_path, f, IDLE_QUEUE, 1300)
     assert records(tmp_path)[0]['state'] == 'queued'
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
 
@@ -308,3 +310,289 @@ def test_ambiguous_pointers_never_create_a_third_or_redeliver(tmp_path, monkeypa
     assert len(f[-1].unread('worker')) == 2
     assert records(tmp_path)[0]['pointer_state'] == 'ambiguous'
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+
+
+# aegis-185l: a stale GOVERNOR HOLD notice stranded dearing 3h and gennaro 10h,
+# and the backlog watch (re-armed only on an EMPTY backlog) never paged.
+
+def test_queued_body_restored_to_idle_composer_unblocks_the_next_sender(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    def capture(*a, **kw):
+        if any(c[-1] == 'Enter' for c in keys(calls)):
+            return BUSY
+        if any(c[-1] == 'C-u' for c in keys(calls)):
+            return READY
+        return OWNED
+    monkeypatch.setattr(panes, 'capture', capture)
+    panes.send('worker', 'Next notice')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert values == {BODY: 'cleared', 'Next notice': 'delivered'}
+    assert [c[-1] for c in keys(calls)] == ['C-e', 'C-u', 'Next notice', 'Enter']
+
+
+def test_queued_body_still_in_codex_queue_is_not_cleared(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [QUEUED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    monkeypatch.setattr(panes, 'capture', lambda *a, **kw: QUEUED)
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', 'Next notice')
+    assert not any(c[-1] in ('C-e', 'C-u') for c in keys(calls))
+    assert {r['text']: r['state'] for r in records(tmp_path)}[BODY] == 'queued'
+
+
+def test_superseded_notice_is_cleared_but_never_resent_or_pointed(tmp_path, monkeypatch):
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('queued')
+    assert delivery.supersede(tmp_path, lambda text: text == BODY, keep='other')
+    def capture(*a, **kw):
+        if any(c[-1] == 'Enter' for c in keys(calls)):
+            return BUSY
+        if any(c[-1] == 'C-u' for c in keys(calls)):
+            return READY
+        return OWNED
+    monkeypatch.setattr(panes, 'capture', capture)
+    panes.send('worker', 'Lifted notice')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert values == {BODY: 'superseded', 'Lifted notice': 'delivered'}
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    sent = len(keys(f[1]))
+    observe(tmp_path, f, READY, 1000)
+    assert f[-1].unread('worker') == []          # no pointer for superseded text
+    assert len(keys(f[1])) == sent               # and nothing typed again
+
+
+def test_supersede_marks_only_unfinished_stale_bodies_and_keeps_the_current_one(tmp_path):
+    for text, state in [('HOLD a', 'queued'), ('HOLD b', 'unknown'), ('HOLD c', 'delivered'),
+                        ('mail', 'queued'), ('HOLD now', 'queued')]:
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(text, 17.0)
+            custody.finish(state)
+    done = delivery.supersede(tmp_path, lambda t: t.startswith('HOLD'), keep='HOLD now')
+    values = {r['text']: r['state'] for r in records(tmp_path)}
+    assert len(done) == 2
+    assert values == {'HOLD a': 'superseded', 'HOLD b': 'superseded', 'HOLD c': 'delivered',
+                      'mail': 'queued', 'HOLD now': 'queued'}
+    assert delivery.supersede(tmp_path / 'absent', lambda t: True, keep='') == []
+
+
+def stranded(tmp_path, monkeypatch, *, state='queued'):
+    from shantytown import notify
+    f = fixtures(tmp_path, monkeypatch, state=state)
+    wakes = []
+    monkeypatch.setattr(notify, 'wake_recipient', lambda reg, panes, worker, detail, **kw:
+                        wakes.append(detail))
+    return f, wakes
+
+
+def stranded_events(tmp_path):
+    return [e for e in FilesEvents(tmp_path / 'events').pending('lead')
+            if 'unsubmitted in an idle composer' in e.detail
+            or 'consecutive sends not delivered' in e.detail]
+
+
+def test_owned_notice_in_idle_composer_pages_lead_after_15_minutes(tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    t = time.time()
+    observe(tmp_path, f, OWNED, t)
+    observe(tmp_path, f, OWNED, t + delivery.STRANDED_SECONDS - 1)
+    assert stranded_events(tmp_path) == []
+    observe(tmp_path, f, OWNED, t + delivery.STRANDED_SECONDS)
+    [event] = stranded_events(tmp_path)
+    assert event.reason == 'delivery-stalled'
+    assert BODY not in event.detail
+    assert 'idle composer' in event.detail
+    assert len([w for w in wakes if 'idle composer' in w]) == 1
+    observe(tmp_path, f, OWNED, t + 2 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1    # one page per episode
+    # The composer empties, then the same body strands again: a new episode.
+    observe(tmp_path, f, READY, t + 2 * delivery.STRANDED_SECONDS + 1)
+    observe(tmp_path, f, OWNED, t + 3 * delivery.STRANDED_SECONDS)
+    observe(tmp_path, f, OWNED, t + 4 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 2
+    assert keys(f[1]) == []                        # the watch never types
+
+
+@pytest.mark.parametrize('screen', [BUSY.replace(READY, OWNED), OWNED.replace(BODY, 'Human draft'), READY])
+def test_busy_pane_foreign_draft_or_empty_composer_never_pages(tmp_path, monkeypatch, screen):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch, state='delivered')
+    t = time.time()
+    for k in range(3):
+        observe(tmp_path, f, screen, t + k * delivery.STRANDED_SECONDS)
+    assert stranded_events(tmp_path) == [] and wakes == []
+
+
+def test_repeated_undelivered_sends_page_once_and_rearm_after_a_delivery(tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch, state=None)
+    for n in range(delivery.FAILED_SENDS - 1):
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(f'notice {n}', 17.0)
+            custody.finish('unknown')
+    t = time.time()  # after the sends: age is measured from the first of them
+    observe(tmp_path, f, BUSY, t + delivery.STRANDED_SECONDS)
+    assert stranded_events(tmp_path) == []        # four is below the threshold
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin('notice 4', 17.0)
+        custody.finish('unknown')
+    observe(tmp_path, f, BUSY, t + delivery.STRANDED_SECONDS)
+    [event] = stranded_events(tmp_path)
+    assert '5 consecutive sends not delivered' in event.detail
+    observe(tmp_path, f, BUSY, t + 2 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin('delivered one', 17.0)
+        custody.finish('delivered')
+    observe(tmp_path, f, BUSY, t + 3 * delivery.STRANDED_SECONDS)
+    assert len(stranded_events(tmp_path)) == 1    # a delivery ends the episode
+
+
+def test_capture_error_while_clearing_keeps_a_superseded_body_terminal(tmp_path, monkeypatch):
+    # Review of #386: failed() persists `unknown` before it captures the pane.
+    # A capture that raises must not leave the old notice resubmittable.
+    panes, calls = local(monkeypatch, tmp_path, [OWNED])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        custody.begin(BODY, 17.0)
+        custody.finish('superseded')
+    def capture(*a, **kw):
+        raise OSError('pane unreadable')
+    monkeypatch.setattr(panes, 'capture', capture)
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        with pytest.raises(OSError):
+            custody.clear_previous(panes, OWNED)
+    assert {r['text']: r['state'] for r in records(tmp_path)} == {BODY: 'superseded'}
+    assert keys(calls) == []
+
+
+@pytest.mark.parametrize('screen', [QUEUED, BUSY])
+def test_busy_codex_queue_is_pending_and_idle_time_starts_after_busy(tmp_path, monkeypatch, screen):
+    f, wakes = stranded(tmp_path, monkeypatch)
+    for n in range(delivery.FAILED_SENDS):
+        with delivery.Custody(tmp_path, 'worker') as custody:
+            custody.begin(f'queued {n}', 17.0)
+            custody.finish('queued')
+    t = max(r['created'] for r in records(tmp_path)) + 1
+    for offset in (0, 300, 900, 1800):
+        observe(tmp_path, f, screen, t + offset)
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    assert wakes == [] and keys(f[1]) == []
+    assert all(r['state'] == 'queued' for r in records(tmp_path))
+    pointers = len(f[-1].unread('worker'))
+    # A queue preview remains, but the runtime is no longer in flight.
+    idle_queue = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
+    observe(tmp_path, f, idle_queue, t + 1801)
+    observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS - 1)
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS)
+    [event] = FilesEvents(tmp_path / 'events').pending('lead')
+    assert event.reason == 'delivery-stalled' and 'busy=False' in event.detail
+    assert len(wakes) == 1 and len(f[-1].unread('worker')) == pointers
+    assert keys(f[1]) == []
+
+
+def test_busy_observation_resets_idle_grace_and_unknown_screen_is_not_idle(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state=None, messages=['pending'])
+    for screen, now in [(READY, 1000), (BUSY, 1299), ('unreadable', 3000),
+                        (READY, 4000), (READY, 4299)]:
+        observe(tmp_path, f, screen, now)
+        assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, READY, 4300)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+
+
+@pytest.mark.parametrize('screen', [BUSY, QUEUED, 'shell or dialog', '❯ unknown draft'])
+def test_absolute_backlog_ceiling_alarms_in_every_pane_state(tmp_path, monkeypatch, screen):
+    f, wakes = stranded(tmp_path, monkeypatch, state=None)
+    f[-1].deliver('worker', 'pending', frm='sender')
+    start = 1000
+    for offset in (0, 300, delivery.MAX_PENDING_SECONDS - 1):
+        observe(tmp_path, f, screen, start + offset)
+        assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    observe(tmp_path, f, screen, start + delivery.MAX_PENDING_SECONDS)
+    [event] = FilesEvents(tmp_path / 'events').pending('lead')
+    assert 'absolute pending ceiling' in event.detail
+    assert 'box=' in event.detail and 'busy=' in event.detail
+    if screen in ('shell or dialog', '❯ unknown draft'):
+        assert 'observation=cannot-tell' in event.detail
+    assert len(wakes) == 1 and keys(f[1]) == []
+    assert len(f[-1].unread('worker')) == 1
+    observe(tmp_path, f, screen, start + 89000)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+    assert len(wakes) == 1
+
+
+# aegis-fu2: Codex can hand several queued st bodies back to the composer
+# together at turn end. No single body matches, so the owned episode never arms.
+JOINED = OWNED.replace(BODY, BODY + ' [from st fleet tend] QUIET-TIME HOLD LIFTED')
+
+
+def occupied_events(tmp_path):
+    return [e for e in FilesEvents(tmp_path / 'events').pending('lead')
+            if 'matching no single st body' in e.detail]
+
+
+def test_unmatched_text_in_idle_composer_with_waiting_mail_pages_once_per_episode(
+        tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    t = time.time()
+    observe(tmp_path, f, JOINED, t)
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS - 1)
+    assert occupied_events(tmp_path) == []
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS)
+    [event] = occupied_events(tmp_path)
+    assert event.reason == 'delivery-stalled'
+    assert BODY not in event.detail and 'HOLD' not in event.detail
+    assert 'box=queued' in event.detail
+    assert len([w for w in wakes if 'matching no single' in w]) == 1
+    observe(tmp_path, f, JOINED, t + 3 * delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 1      # one page per episode
+    assert len([w for w in wakes if 'matching no single' in w]) == 1   # and one wake
+    # Seen busy, then stranded again: a new episode, paged again.
+    observe(tmp_path, f, BUSY, t + 3 * delivery.STRANDED_SECONDS + 1)
+    observe(tmp_path, f, JOINED, t + 4 * delivery.STRANDED_SECONDS)
+    observe(tmp_path, f, JOINED, t + 5 * delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 2
+    assert keys(f[1]) == []                          # unmatched text authorizes no key
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+
+
+def test_latched_october_backlog_watch_does_not_hide_an_occupied_composer(
+        tmp_path, monkeypatch):
+    """The measured fleet state: watch-* alerted since 10-20, never re-armed."""
+    import hashlib
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch)
+    f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    (tmp_path / 'delivery' / (name + '.json')).write_text(json.dumps(
+        dict(id=name, since=1792514093.0, alerted=True)))
+    t = time.time()
+    observe(tmp_path, f, JOINED, t)
+    observe(tmp_path, f, JOINED, t + delivery.STRANDED_SECONDS)
+    assert len(occupied_events(tmp_path)) == 1
+
+
+@pytest.mark.parametrize('case', ['no-backlog', 'busy', 'owned', 'empty'])
+def test_occupied_episode_needs_idle_unmatched_text_and_waiting_mail(tmp_path, monkeypatch, case):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch,
+                        state='delivered' if case == 'no-backlog' else 'queued')
+    if case != 'no-backlog':
+        f[-1].deliver('worker', 'mail from the lead', frm='lead')
+    screen = {'no-backlog': JOINED, 'busy': BUSY.replace(READY, JOINED),
+              'owned': OWNED, 'empty': READY}[case]
+    t = time.time()
+    for k in range(3):
+        observe(tmp_path, f, screen, t + k * delivery.STRANDED_SECONDS)
+    assert occupied_events(tmp_path) == []
+    assert keys(f[1]) == []

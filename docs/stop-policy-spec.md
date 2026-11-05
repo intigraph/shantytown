@@ -84,6 +84,7 @@ able to answer "why did my coordinator not stop?" from this list alone.
 | 0 | *(side effect, never blocks)* route + persist my own stop event upward | — | survival before any decision; a verdict must not be able to lose the event |
 | 1 | a pending event is **urgent** — a governance alert, or one that ROSE past an unreachable lead | **BLOCK**: deliver | the alert's content is "an agent is working untracked right now"; a risen event means the tier already failed once |
 | 2 | **Rule Zero**: free feedable workers AND dispatchable work both exist | **BLOCK**: dispatch | there is work to hand out. Sleeping through this is the stall the gate exists to prevent, and it OVERRIDES hibernate |
+| 2a | **P0 plate**: a ready P0 nobody is working on AND capacity to start it, in a state not already blocked on | **BLOCK** once: start, or re-rank/defer and say why | Rule Zero for the administrator's own plate and for ephemeral slots (§3.1). Yields to stood-down and over-capacity; overrides hibernate out loud |
 | 3 | **hibernate** declines (policy on, schedule not elapsed) | **ALLOW**, loudly | nothing to dispatch and nothing urgent: quiet is correct. Says how many events stay pending |
 | 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver | the ordinary drain |
 | 5 | idle because a **usage-governor tier** holds the whole queue | **ALLOW**, loudly | idle is the CORRECT state under an engaged floor — and indistinguishable from a broken feeder unless something says so |
@@ -99,6 +100,61 @@ for the coordinator to stop hearing from its crew. And rank 2's `dispatchable`
 now means *passes the governor's priority floor* — computed by the governor's own
 `Verdict.admits`, the resolver `st go` gates on, so the gate can no longer demand
 a dispatch that dispatch will refuse.
+
+### 3.1 Rank 2a — the P0 plate (aegis-c01c.1)
+
+Measured 2026-10-28 on the Mac: the only crew member was busy, ~10 P0s sat
+unstarted, and the administrator's stop was **allowed** — Rule Zero only sees
+*(free crew) × (unassigned ready work)*, so the administrator's own plate and
+its own in-flight work were invisible. Stiwi: *"you keep stopping when there is
+much work to do."*
+
+**The plate.** READY items (open, unblocked — the tracker's own readiness read,
+scoped to the administrator and unassigned work) with priority 0, not deferred
+into the future, owned by nobody or by the administrator, and passing
+`feed_check.dispatchable`'s exclusions (epic, `parked:*`, `feed:manual`,
+message, ASK, decision-gated, unfeedable). Ordered by Seeds priority, then
+rank (`protocols.rank_order`), then id; the block names the top three.
+Unassigned items the governor's floor refuses are HELD, not plate — rank 5
+names them, exactly as for Rule Zero; overlapping held IDs count only once.
+Items labelled with a configured peer host name, or assigned to a crew card
+whose declared host differs from this host, cannot start here. Ordinary labels
+and unlabelled, unassigned work stay eligible. Items held by launching, live or
+ending ephemeral job records are already being worked, even if the board still
+shows them as unassigned. They become eligible again after teardown, unless a
+retry job holds the same item.
+
+**Capacity** is one value with three sources, so new sources plug in as a
+number rather than as a new rank:
+
+| source | starts | measured as |
+|---|---|---|
+| free crew | unassigned items | Rule Zero's free feedable workers (idle, unhauled) |
+| ephemeral slots | unassigned items | `shantytown.ephemeral.free_slots(root)` — 0 until aegis-c01c.2 ships that module |
+| self slots | the administrator's own items | `[fleet] admin_self_slots` (default 1) minus the administrator's own `in_progress` items — its in-flight (subagent) work is counted HERE, as occupancy |
+
+A coordinator is never told to execute unassigned work itself: a self slot
+starts only its own items.
+
+**No loop.** The rank blocks ONCE per state, where the state is the
+(startable ids, free crew, ephemeral slots, self slots) fingerprint, recorded in
+`<root>/stop-policy/<agent>.p0.json` after the block. A later stop over the
+**same** state falls through to ranks 3–6 (so hibernate and event delivery
+behave as if the plate were empty) and the final allow names the plate as
+`p0-plate-unchanged`. Only relevant capacity changes re-arm it: free crew and
+ephemeral slots for unassigned work, self slots for the administrator's own
+work. Crew churn cannot re-arm an own-only plate. The
+ledger is untouched when a rank above 2a decided (2a never looked), kept while
+the plate is unchanged, and cleared when nothing is startable — a plate that
+empties and refills is a new state. A missing or unreadable ledger reads as
+"never judged": the worst case is one extra block, never a silent one.
+
+**Fail-open.** A failed board read leaves the plate empty and says
+`P0-plate read FAILED` on stderr; a failed ephemeral read counts 0 slots. When
+no capacity is possible (no free crew, no ephemeral slots, `admin_self_slots =
+0`) the board is not read at all. When Rule Zero reads the board, it includes
+the administrator's scope and rank 2a reuses those rows, avoiding a second read
+and a second board snapshot.
 
 ### Inputs, gathered ONCE
 
@@ -426,3 +482,43 @@ older version that does not recognize this table, remove the entire
 `[admin_wake_budget]` table from deployment configuration, then revert the source
 merge through the normal lane. Leaving even an OFF unknown table behind would
 make that older version reject its configuration.
+
+## Optional ruling-memory reminder
+
+`[env] SHANTY_STOP_RULING_MEMORY = "1"` enables a reminder through the existing
+Stop policy and worker haul seam. It is **OFF by default**; no extra hook is
+installed. This is an advisory hold once per session and unchanged pending
+ruling set, using the same persisted-state pattern as rank 2a. It runs alongside
+the existing context advice before normal haul/policy work. Repeating Stop
+without changing that set proceeds through the ordinary policy; this reminder
+never requires a successful write to release the next Stop.
+
+Only a user message whose first line is `Stiwi ruling: <choice>` or
+`Stiwi decided: <choice>` qualifies (an optional `[from stiwi]` prefix is
+accepted). Assistant prose, tool output, quoted examples, questions and vague
+mentions do not qualify. This is an explicit attribution cue, not authentication
+of the human issuer. Verify the attribution before recording it.
+
+The reminder gives `cy record decision --chose ... --by person-stiwi --about ...
+--topic ...`, shell-quoting literal values. Optional `About: <entity>` and
+`Topic: <registered-topic>` lines supply those arguments. Without them the
+command uses required `RULING_ABOUT` and `RULING_TOPIC` shell variables and names
+what must be selected; it never invents entities or topics. Camayoc validates
+these fields and fills provenance. No command is executed by the hook.
+
+The checker reads only the hook's exact, session-bound transcript, at most 8 MiB
+and 20,000 rows. It recognizes Claude messages/tool results and Codex response
+items/function calls. A paired positive receipt from Quipu episode/knot or
+Camayoc record tools, or a successful direct `cy record` CLI result, discharges
+rulings observed before that call. Queued, refused, missing or unpaired results
+do not. Composite shell commands, custom-code wrappers, out-of-session writes
+and tool surfaces without a recognized receipt are unobserved; the prompt says
+"no confirmed receipt", never that the graph has no record. This check does no
+network reads or writes and does not verify graph contents.
+
+Missing, malformed, mixed-session, incomplete, nonregular or over-cap transcripts
+fail open as UNKNOWN. A ledger failure also fails open. Only hashes are stored
+under `<root>/ruling-memory/`; a state is durably claimed before the block is
+emitted. Enablement does not install the Camayoc schema or CLI, change auto-memory
+settings, or establish production acceptance. Test both harnesses through their
+normal Stop hooks before enabling it in a deployment.
