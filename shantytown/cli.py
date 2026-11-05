@@ -3991,7 +3991,7 @@ def _cmd_harness(a) -> int:
     session is the more dangerous default, and the operator asking for a
     conversion usually wants the next cycle rather than an interruption now.
     """
-    from . import harness_switch
+    from . import harness_switch, harness_options
     try:
         card = _registry(a).get(a.agent)
     except LookupError as e:
@@ -4007,15 +4007,22 @@ def _cmd_harness(a) -> int:
         # deployment rule rather than the card, and says which.
         source = "card" if card.harness else "deployment default"
         print(f"{a.agent}: {current} (from the {source})")
+        for name, options in sorted(harness_options.profiles(card, current).items()):
+            visible = {k: v for k, v in options.items() if k in {'model', 'chrome'}}
+            print(f"  {name}: {json.dumps(visible, sort_keys=True)}")
+            ignored = set(options) - ({'model', 'chrome'} if name == 'claude' else {'model'})
+            if ignored:
+                print(f"    unsupported, retained: {', '.join(sorted(ignored))}")
         return OK
 
+    selected_model, remembered = harness_options.target_model(card, current, a.target, a.model)
     cfg, _err = config.load_or_default(a.root)
     plan = harness_switch.plan_switch(
         agent=a.agent, current=current, target=a.target, role=card.role,
         required_by_role=cfg.harness_required_by_role,
         known=tuple(h.name for h in harness_mod.all_harnesses()),
-        model=a.model,
-        current_model=card.model,
+        model=selected_model,
+        current_model=harness_options.model(card, current), target_model_known=remembered,
         lane_held=(not _administrator_launch(a, card) and
                    _harness_lane_held(a, cfg, a.target)),
         restart_now=a.now, force=a.force)
@@ -4054,10 +4061,8 @@ def _cmd_harness(a) -> int:
         shutil.copy2(src, backup)
         print(f"  card backed up: {backup.name}", file=sys.stderr)
 
-    import dataclasses
-    updated = dataclasses.replace(
-        card, harness=plan.to_harness,
-        model=plan.model if plan.model else card.model)
+    updated = harness_options.converted(card, current, plan.to_harness, plan.model)
+    harness_options.warn_unsupported(updated, plan.to_harness)
     reg.set(updated)
     print(f"{a.agent}: {plan.from_harness} -> {plan.to_harness}"
           + (f", model {plan.model}" if plan.model else ""))
