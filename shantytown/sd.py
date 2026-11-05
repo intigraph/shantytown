@@ -162,10 +162,15 @@ class SdTracker(BrTracker):
                 f"seeds backend: SHANTY_SD_PREFIX is not set for {named}. It is "
                 "required: a missing or wrong store reports the default prefix, and "
                 "only the prefix check can tell it from the real board")
+        from .actor_identity import config_environment
+        proof_options = sdk_subprocess_options(read_operation="where")
+        pinned_config = config_environment()
+        if pinned_config:
+            proof_options['env'] = dict(proof_options.get('env') or os.environ, **pinned_config)
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout,
-                               **sdk_subprocess_options(read_operation="where"))
+                               **proof_options)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -849,10 +854,14 @@ class SdTracker(BrTracker):
                                       "show", "list", "ready", "where", "search", "count", "info", "stats",
                                       "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        from .actor_identity import config_environment
+        pinned_config = config_environment()
+        if pinned_config:
+            options['env'] = dict(options.get('env') or os.environ, **pinned_config)
         # Reads retain their original route and budget. Optional signing
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
-        if mutation(self._translate(args)):
+        if mutation(self._translate(args)) and not pinned_config:
             asserted = actor
             for i, arg in enumerate(args):
                 if arg.startswith('--actor='):
