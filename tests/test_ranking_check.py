@@ -22,8 +22,9 @@ def test_digest_names_every_live_lower_plate_and_every_unowned_p0_without_mutati
     before=repr(rows)
     text,actionable=ranking.digest([rows[4],rows[6]],rows,cards,{"a","b"},counts="P0 created 4, closed 2")
     assert "a: a-active P2" in text and "b: b-active P1" in text
-    assert "down:" not in text and "unowned P0: p0-wait, urgent" in text
-    assert "below unowned READY urgent" in text and "READY owned" not in text
+    assert "down:" not in text and "2 P0 active" in text
+    assert "p0-wait P0 (not READY)" in text and "urgent P0" in text
+    assert "< 1 unowned P0 READY" in text and "READY owned" not in text
     assert actionable and repr(rows)==before
     assert "no auto-reassignment" in text
 
@@ -64,7 +65,7 @@ def test_report_preserves_unknown_counts_instead_of_zero():
     reg=SimpleNamespace(all=lambda:Answer.complete_read(cards,how="fixture"))
     def fail(root):raise OSError("down")
     text,_,actionable=ranking.report(None,[],[],reg,SimpleNamespace(exists=lambda p:True),counts_reader=fail)
-    assert "counts UNKNOWN" in text and "created 0" not in text and actionable
+    assert "counts UNKNOWN" in text and "created 0" not in text and not actionable
 
 
 def test_actual_tend_digest_routes_once_to_administrator_and_changes_no_items(tmp_path):
@@ -80,9 +81,9 @@ def test_actual_tend_digest_routes_once_to_administrator_and_changes_no_items(tm
     assert ranking.sweep(tmp_path,reg,panes,snapshot=lambda:([rows[1]],rows),
                          counts_reader=counts,push=push,log=logs.append)==[]
     assert len(sent)==1 and sent[0][0]=='chief'
-    assert 'worker: active P2 below unowned READY urgent' in sent[0][1]
+    assert 'worker: active P2 < 1 unowned P0 READY' in sent[0][1]
     assert 'created 5, closed 2' in sent[0][1]
-    assert 'unowned P0: urgent' in logs[0] and repr(rows)==before
+    assert 'urgent P0' in logs[0] and repr(rows)==before
 
 
 def test_unknown_snapshot_cannot_send_or_claim_no_unowned_work(tmp_path):

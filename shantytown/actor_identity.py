@@ -7,6 +7,8 @@ read by this module. Distinct Unix users remain a deployment prerequisite.
 """
 from __future__ import annotations
 import json
+import hashlib
+import tomllib
 import os
 from pathlib import Path
 import stat
@@ -54,12 +56,48 @@ def _policy(path: Path, *, for_principal=None):
             raise IdentityError('caller cannot launch a different agent Unix identity')
     else:
         row = users.get(selected_uid) if isinstance(users, dict) else None
-    if (not isinstance(row, dict) or set(row) != {'principal', 'home', 'endpoint', 'sd'}
+    if (not isinstance(row, dict) or set(row) not in ({'principal', 'home', 'endpoint', 'sd'},
+                                      {'principal', 'home', 'endpoint', 'sd', 'seeds_config_dir'})
             or not all(isinstance(v, str) and v and not any(c in v for c in '\r\n\0') for v in row.values())
             or not Path(row['home']).is_absolute() or not Path(row['sd']).is_absolute()
             or not row['endpoint'].startswith('https://')):
         raise IdentityError('current Unix UID has no valid protected identity binding')
+    config_environment(row)
     return dict(row, uid=int(selected_uid)) if for_principal is not None else row
+
+def config_environment(row=None):
+    """Only operator-owned identity policy selects a job's TLS config.
+
+    The selected user-level Seeds file and CA are immutable, public inputs.
+    Signing keys stay in the UID's private home; none are read or copied here.
+    """
+    if row is None:
+        row = _policy(POLICY_PATH)
+    if row is None or 'seeds_config_dir' not in row:
+        return {}
+    from .job_launch import protected
+    directory = Path(row['seeds_config_dir'])
+    config = directory / 'seeds' / 'config.toml'
+    try:
+        protected(directory, directory=True)
+        protected(config)
+        if config.stat().st_size > 65536:
+            raise IdentityError('protected Seeds config exceeds its bound')
+        data = tomllib.loads(config.read_text())
+        quipu = data.get('quipu', {})
+        path, pin = quipu.get('ca_file'), quipu.get('ca_sha256')
+        if (not isinstance(path, str) or not Path(path).is_absolute()
+                or not isinstance(pin, str) or len(pin) != 64
+                or any(c not in '0123456789abcdef' for c in pin)):
+            raise IdentityError('protected Seeds config requires absolute ca_file and SHA-256 pin')
+        protected(path)
+        ca = Path(path)
+        if ca.stat().st_size > 1024 * 1024 or hashlib.sha256(ca.read_bytes()).hexdigest() != pin:
+            raise IdentityError('protected Seeds CA digest mismatch or oversized file')
+    except (OSError, ValueError, AttributeError) as error:
+        raise IdentityError('protected Seeds CA config unavailable') from error
+    return {'XDG_CONFIG_HOME': str(directory)}
+
 
 def authenticated_actor(*, policy_path=None, run=None):
     """Return a verified principal, None for unmigrated hosts, or fail closed."""
@@ -71,6 +109,7 @@ def authenticated_actor(*, policy_path=None, run=None):
     # environment or actor flag cannot redirect this authentication request.
     env = {k: v for k, v in os.environ.items() if not k.startswith(('SEEDS_', 'QUIPU_', 'XDG_'))}
     env['HOME'] = row['home']
+    env.update(config_environment(row))
     try:
         answer = run([row['sd'], '--quipu', row['endpoint'], 'identity', '--json'],
                      cwd=row['home'], env=env, capture_output=True, text=True, timeout=20)

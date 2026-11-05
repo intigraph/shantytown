@@ -48,8 +48,23 @@ def test_closed_messages_anchors_and_decisions_do_not_occupy_capacity(change):
 
 @pytest.mark.parametrize('value', [True,'not-a-date','2026-10-15T17:45:00'])
 def test_ambiguous_dates_are_unknown_not_spare_capacity(value):
-    with pytest.raises(ValueError):
-        busy_wait.from_rows([row(defer_until=value)], ['worker'], now=NOW)
+    assert busy_wait.from_rows([row(defer_until=value)], ['worker'], now=NOW) == {'worker'}
+
+
+@pytest.mark.parametrize('stamp', [None, '2026-11-06', 'not-a-date'])
+def test_one_unreadable_gate_occupies_only_its_owner(stamp):
+    """aegis-ao5s: one bad row used to raise for the whole read, so the feed
+    proved NO worker free anywhere. Only its owner is unknown now."""
+    values = [row('bad', assignee='a', labels=['blocked:external'], defer_until=stamp),
+              row('wip', assignee='b'), row('ready', assignee='c', status='open',
+                                            defer_until=None)]
+    assert busy_wait.from_rows(values, ['a', 'b', 'c', 'd'], now=NOW) == {'a', 'b'}
+
+
+def test_unknown_owner_with_own_ready_work_still_reaches_haul():
+    values = [row('bad', labels=['blocked:external'], defer_until=None),
+              row('ready', status='open', defer_until=None)]
+    assert busy_wait.from_rows(values, ['worker'], now=NOW) == set()
 
 
 def test_long_hold_and_undated_defer_do_not_hide_worker_forever():

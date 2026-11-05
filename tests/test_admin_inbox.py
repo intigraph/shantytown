@@ -237,3 +237,51 @@ def test_unreadable_inbox_retains_its_rows_and_others_still_deliver(tmp_path, mo
     assert [name for name, _ in ai.sweep(tmp_path, [card, other], panes,
                                          lambda _: box, now=111)] == ['admin']
     assert sent == ['readable', 'capped'] and box.unread(card.name) == []
+
+
+@pytest.mark.parametrize('retain', [False, True])
+def test_tracker_batch_reads_only_named_receipts_when_full_inbox_is_capped(
+        tmp_path, monkeypatch, retain):
+    from shantytown.answer import PartialAnswer
+    from test_inbox_read_progress import metadata_box
+    card, _, sent, panes = setup(tmp_path, monkeypatch)
+    card.name = 'reader'
+    _, box, messages, _, calls, writes = metadata_box(tmp_path, monkeypatch)
+    def capped():
+        raise PartialAnswer('full inbox field budget reached')
+    box._items = capped
+    msg = messages[1]
+    ai.enqueue(tmp_path, card, msg, 'seeds', 10, now=100, retain=retain)
+    assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=110) == [('reader', msg.id)]
+    assert sent == [msg.body]
+    assert calls == [('reader', [msg.id])] * (1 if retain else 2)
+    assert writes == ([] if retain else [(msg.id, {'status': 'closed'})])
+    assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=111) == []
+    assert sent == [msg.body]
+
+
+@pytest.mark.parametrize('failure', ['immediate', 'partial', 'oserror'])
+def test_selected_read_failure_retains_pending_bytes_without_listing_fallback(
+        tmp_path, monkeypatch, failure):
+    from shantytown.answer import PartialAnswer
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    msg = box.deliver(card.name, 'private routine')
+    ai.enqueue(tmp_path, card, msg, 'seeds', 10, now=100)
+    paths = list(ai._directory(tmp_path).glob('*.json'))
+    before = {path: path.read_bytes() for path in paths}
+    def selected(name, ids):
+        assert (name, ids) == (card.name, [msg.id])
+        if failure == 'partial':
+            yield msg
+        if failure == 'oserror':
+            raise OSError('private detail')
+        raise PartialAnswer('private detail')
+    selected_box = NS(unread_selected=selected,
+                      unread=lambda *_: pytest.fail('no listing fallback'),
+                      mark_read=lambda *a, **k: pytest.fail('no ACK'))
+    logs = []
+    assert ai.sweep(tmp_path, [card], panes, lambda _: selected_box, now=110,
+                    log=logs.append) == []
+    assert sent == [] and {path: path.read_bytes() for path in paths} == before
+    assert any('unread read UNKNOWN' in line for line in logs)
+    assert all('private detail' not in line for line in logs)

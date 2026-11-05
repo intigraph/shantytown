@@ -273,8 +273,49 @@ def export_share(run, binary, source, database, query, stage):
     files = manifest.get("files", {})
     if (read_alignment(member) != expected or not isinstance(files, dict)
         or files.get("alignments") != "alignments.ttl"
-        or manifest.get("alignments_hash") != hashlib.sha256(expected).hexdigest()):
+        or manifest.get("alignments_hash") != "sha256:" + hashlib.sha256(expected).hexdigest()):
         raise ValueError("native share did not bind the exact alignment carrier")
+
+
+FORMER_NAME_LEGACY = "http://aegis.gastown.local/ontology/"
+
+
+def former_name(public):
+    """The exact name the release query renamed ``public`` from, or None."""
+    match = re.fullmatch(r"https://w3id\.org/intigraph/([A-Za-z0-9-]+)/id/(.+)", public)
+    if not match:
+        return None
+    owner, rest = match.groups()
+    kind, _, tail = rest.partition("/")
+    if kind in ("code", "doc", "chunk") and tail:
+        return f"{FORMER_NAME_LEGACY}{kind}/{owner}/{tail}"
+    if rest == "repo":
+        return f"{FORMER_NAME_LEGACY}repo_{owner}"
+    if owner == "quipu" and kind == "idea" and tail:
+        return "https://quipu.dev/knowledge/" + tail
+    if owner == "stack" and rest == "repo-embedded-knowledge-databases-directive-2026-09-03":
+        return FORMER_NAME_LEGACY + rest
+    return None
+
+
+def verify_former_names(export):
+    """Admit owl:sameAs only from a public name to its exact former name."""
+    same_as = "<http://www.w3.org/2002/07/owl#sameAs>"
+    linked = set()
+    for line in Path(export).read_text().splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3 or parts[1] != same_as:
+            continue
+        subject, value = parts[0], parts[2].rstrip(" .")
+        if not (subject.startswith("<") and value.startswith("<")):
+            raise ValueError("owl:sameAs between non-IRIs")
+        expected = former_name(subject[1:-1])
+        if expected is None or value[1:-1] != expected:
+            raise ValueError(f"owl:sameAs is not a former-name link: {subject} {value}")
+        if subject in linked:
+            raise ValueError(f"more than one former name: {subject}")
+        linked.add(subject)
+    return len(linked)
 
 
 def build(revision, source, tooling, binary, bobbin, output):
@@ -297,6 +338,15 @@ def build(revision, source, tooling, binary, bobbin, output):
         raise ValueError("release lacks a supported public corpus positive control")
     private = output.parent / "build-private"
     private.mkdir(mode=0o700)
+    # The provider belongs to this private working directory, not ambient HOME.
+    import importlib.util
+
+    provider_spec = importlib.util.spec_from_file_location(
+        "repository_share_embedding", Path(__file__).with_name("repository_share_embedding.py")
+    )
+    provider_contract = importlib.util.module_from_spec(provider_spec)
+    provider_spec.loader.exec_module(provider_contract)
+    expected_provider = provider_contract.configure(private)
 
     def run(args, *, env=None):
         return command(args, env=env, cwd=private)
@@ -329,6 +379,7 @@ entities = false
 model = "all-MiniLM-L6-v2"
 batch_size = 64
 """)
+    provider_contract.configure_indexer(index, private, expected_provider)
     env = isolated_environment(private)
     # Keep default inference concurrency bounded; a caller may supply its measured limit.
     env.setdefault("BOBBIN_ONNX_THREADS", "1")
@@ -396,8 +447,10 @@ aegis:repo-embedded-knowledge-databases-directive-2026-09-03 a aegis:Directive ;
     query = (source / "queries/repository-share-shantytown.rq").read_text()
     stage = private / "share"
     export_share(run, binary, source, database, query, stage)
+    provider_contract.verify_manifest(stage, expected_provider)
     if not (stage / "shapes.ttl").is_file() or (stage / "shapes.ttl").stat().st_size == 0:
         raise ValueError("repository share omitted receiver shapes")
+    verify_former_names(stage / "export.nt")
     receiver = private / "receiver.db"
     run([binary, "shapes", "load", "repository-share", stage / "shapes.ttl", "--db", receiver])
     imported = json.loads(run([binary, "import", stage, "--db", receiver]))

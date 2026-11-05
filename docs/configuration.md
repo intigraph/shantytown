@@ -134,7 +134,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_SELF_CYCLE_SERVE` | `0`/`off`/`false`/`no` stops `st agent cycle --self` from starting its detached single-agent waiter (aegis-oj2z7m), leaving the request to `st fleet tend`. The waiter performs the request at the agent's next idle turn and gives up after 20 minutes. | on |
 | `SHANTY_CHECKPOINT_JEV_COMMAND` | installed Jev MCP server command for checkpoint-only handoff quality advice before cycling. Five-second judge deadline; one rewrite opportunity per launch below measured cycle depth; unknown or saturated depth proceeds. Usually set in `[env]`. | `SHANTY_CREATE_JEV_COMMAND`, otherwise UNKNOWN advice |
 | `SHANTY_ESCALATE_COMMAND` | the human-escalation command `st fleet watch` runs when a peer administrator stays down past `--escalate-after` or a repair fails (aegis-az0a40). Invoked as `<command> -s <severity> "<description>"`; its exit code is the verdict (0 paged, 1 fallback attempted, 2 nobody paged). Usually set in `[env]`. Unset = the watch alerts and repairs but says `escalation NOT CONFIGURED` and pages nobody. | — |
-| `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
+| `SHANTY_RANKER` | `policy` to weight the admin workflow by Yupana blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |

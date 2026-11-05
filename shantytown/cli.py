@@ -359,8 +359,16 @@ def _tracker(a, default="files"):
             raise ValueError('owner has no lead')
         # Use the same backend and a message marker: no implementation slot and
         # no recursive capacity routing. Never recreate the original work item.
-        tracker.create(f'inbox: capacity: {item_id} retained in pool; {owner} has 10 real work items',
-                       assignee=lead, labels='inbox')
+        body = f'capacity: {item_id} retained in pool; {owner} has 10 real work items'
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
+            # message graph: a message window, never a seed; one note per item/owner/day.
+            from datetime import datetime, timezone
+            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
+            return
+        tracker.create(f'inbox: {body}', assignee=lead, labels='inbox')
     return guard_producers(tracker, notify)
 
 
@@ -493,9 +501,18 @@ def _inbox(a, default="files"):
     if _backend(a, default) in BR_LIKE:
         trk = _tracker(a, default)
         from .br import items as br_items
-        return TrackerInbox(trk, lambda: br_items(trk),
-                            lambda: br_items(trk, include_closed=True),
-                            items_for=getattr(trk, "inbox_items", None))
+        legacy = TrackerInbox(trk, lambda: br_items(trk),
+                              lambda: br_items(trk, include_closed=True),
+                              items_for=getattr(trk, "inbox_items", None))
+        # [inbox] store: "message-graph" sends NEW mail through
+        # `sd msg` into the message windows and reads legacy seeds + windows.
+        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        from .config import load_or_default
+        cfg, _ = load_or_default(Path(a.root))
+        if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
+            from .inbox import MessageGraphInbox
+            return MessageGraphInbox(legacy, trk)
+        return legacy
     return FilesInbox(Path(a.root) / "inbox")
 
 
@@ -2050,6 +2067,14 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--jev-command", help="quoted argv for the installed Camayoc Jev MCP server")
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
+    bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-semantic-only", action="store_true", help="benchmark only auto/personal nouls; rank-band calls disabled")
+    bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
+    bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
+    bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
+    bt.add_argument("--rank-benchmark-report", help="measured frozen benchmark JSON for an accepted live Jev arm")
+    bt.add_argument("--rank-admission", help="administrator declaration bound to that exact report; never applies board changes")
+    bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
     jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
@@ -2833,6 +2858,23 @@ def _run_command(a) -> int:
         try:
             if a.limit < 1 or a.limit > 100 or (a.publish and (a.dry_run or a.benchmark)):
                 raise ValueError("limit must be 1..100; publish cannot combine with dry-run/benchmark")
+            if getattr(a, "rank_proposals", False):
+                from . import board_rank, fleet as fleet_mod
+                from .deployment import local_host
+                cfg, err = config.load_or_default(a.root)
+                if err:
+                    raise ValueError("fleet configuration UNKNOWN")
+                result = board_rank.run(a, _tracker(a), QuipuRegistry(root=a.root), _panes(a),
+                    host=local_host(a.root), peers=fleet_mod.collect(cfg.host_peers), crew_registry=_registry(a))
+                if a.benchmark or a.rank_json:
+                    print(json.dumps(result, ensure_ascii=False))
+                else:
+                    print(board_rank.table(result))
+                return OK
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_semantic_only", False) or getattr(a, "rank_json", False)
+                    or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
+                    or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
+                raise ValueError("rank options require --rank-proposals")
             result = board_triage.run(a, _tracker(a), QuipuRegistry(root=a.root))
             print(json.dumps(result, ensure_ascii=False))
             return OK
@@ -3969,7 +4011,7 @@ def _cmd_harness(a) -> int:
     session is the more dangerous default, and the operator asking for a
     conversion usually wants the next cycle rather than an interruption now.
     """
-    from . import harness_switch
+    from . import harness_switch, harness_options
     try:
         card = _registry(a).get(a.agent)
     except LookupError as e:
@@ -3985,15 +4027,22 @@ def _cmd_harness(a) -> int:
         # deployment rule rather than the card, and says which.
         source = "card" if card.harness else "deployment default"
         print(f"{a.agent}: {current} (from the {source})")
+        for name, options in sorted(harness_options.profiles(card, current).items()):
+            visible = {k: v for k, v in options.items() if k in {'model', 'chrome'}}
+            print(f"  {name}: {json.dumps(visible, sort_keys=True)}")
+            ignored = set(options) - ({'model', 'chrome'} if name == 'claude' else {'model'})
+            if ignored:
+                print(f"    unsupported, retained: {', '.join(sorted(ignored))}")
         return OK
 
+    selected_model, remembered = harness_options.target_model(card, current, a.target, a.model)
     cfg, _err = config.load_or_default(a.root)
     plan = harness_switch.plan_switch(
         agent=a.agent, current=current, target=a.target, role=card.role,
         required_by_role=cfg.harness_required_by_role,
         known=tuple(h.name for h in harness_mod.all_harnesses()),
-        model=a.model,
-        current_model=card.model,
+        model=selected_model,
+        current_model=harness_options.model(card, current), target_model_known=remembered,
         lane_held=(not _administrator_launch(a, card) and
                    _harness_lane_held(a, cfg, a.target)),
         restart_now=a.now, force=a.force)
@@ -4032,10 +4081,8 @@ def _cmd_harness(a) -> int:
         shutil.copy2(src, backup)
         print(f"  card backed up: {backup.name}", file=sys.stderr)
 
-    import dataclasses
-    updated = dataclasses.replace(
-        card, harness=plan.to_harness,
-        model=plan.model if plan.model else card.model)
+    updated = harness_options.converted(card, current, plan.to_harness, plan.model)
+    harness_options.warn_unsupported(updated, plan.to_harness)
     reg.set(updated)
     print(f"{a.agent}: {plan.from_harness} -> {plan.to_harness}"
           + (f", model {plan.model}" if plan.model else ""))
@@ -10245,7 +10292,7 @@ def _resolve_repo(repo: str) -> Path:
 
     A bare name normally means ``$GT_ROOT/<name>``. When that path exists but is
     a Gas Town rig rather than a checkout, and ``$GT_ROOT/<name>-src`` carries
-    its own ``.git`` marker, the source checkout wins. This is the Hank layout:
+    its own ``.git`` marker, the source checkout wins. Legacy checkout compatibility:
     ``~/gt/hank`` owns ``.beads`` and a bare ``.repo.git`` cache, while
     ``~/gt/hank-src`` is the editable scbrown/hank checkout (aegis-gbuap).
 
@@ -10264,7 +10311,7 @@ def _resolve_repo(repo: str) -> Path:
     shantytown checkout AND every shantytown worktree. `st repo push shantytown <me>`
     — the documented form — therefore failed SPECIFICALLY in the tree you are
     standing in when you push, which is the only place anyone runs it. Same for
-    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    quipu, yupana, bobbin. Measured 2026-08-04: refused with "no worktree at
     shantytown-wt/franklin" while that worktree existed; the absolute-path form
     worked.
 
@@ -10337,7 +10384,7 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     resolved = _resolve_repo(repo)
 
     # A bare name can be a compatibility alias for a differently named source
-    # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
+    # checkout (legacy compatibility: hank -> hank-src). Resolve that alias BEFORE looking
     # for an existing worktree: otherwise a stale hank-wt left by the archived
     # repository captures `st repo push hank`, even while `st repo worktree hank` correctly
     # provisions from the active hank-src checkout.
@@ -10455,6 +10502,14 @@ def _cycle_anchor_bead(a, agent: str) -> str:
     return str(iid) if iid else ""
 
 
+def _cycle_session_start(root, agent_name):
+    """Exact local launch stamp shared by durable and inferred-quality checks."""
+    from datetime import datetime, timezone
+    stamp = Path(root) / "launched" / f"{agent_name}.json"
+    return (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
+            .isoformat() if stamp.is_file() else "")
+
+
 def _durable_checkpoint_gate(a, agent_name: str):
     """The I/O half of cycle.durable_gate — read the held bead, its comments, and
     when this agent last launched. Policy stays in cycle.py, testable without a
@@ -10470,12 +10525,9 @@ def _durable_checkpoint_gate(a, agent_name: str):
     EVERY failure becomes could-not-tell (ok=None), never a refusal and never a
     pass: this is a gate on a saturated agent's only relief valve.
     """
-    from datetime import datetime, timezone
     from . import cycle as cycle_mod
     try:
-        stamp = Path(a.root) / "launched" / f"{agent_name}.json"
-        since = (datetime.fromtimestamp(stamp.stat().st_mtime, tz=timezone.utc)
-                 .isoformat() if stamp.is_file() else "")
+        since = _cycle_session_start(a.root, agent_name)
     except OSError as e:
         return cycle_mod.durable_gate(agent_name, "", "", [], error=f"launch stamp unreadable ({e})")
     try:
@@ -10582,23 +10634,37 @@ def _advise_situation(a, agent: str, cfg):
                 depth_k = triage_mod.context_tokens_k(panes.capture(card.pane))
         except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
             pass
+    from . import runtime_update
+    update = runtime_update.for_agent(a.root, agent)
     return cycle_advice.Situation(
         agent=agent, depth_k=depth_k,
         cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
         next_task=_cycle_anchor_bead(a, agent),
-        cache=cycle_advice.read_cache(transcript)), transcript
+        cache=cycle_advice.read_cache(transcript),
+        running_version=update.running, installed_version=update.installed,
+        session_id=update.session), transcript
 
 
 def _cycle_advisor(a):
     """CycleDriver's advisor: the same decision `st agent advise` prints, with the
-    depth the sweep just read off the pane. Returns None for an agent with no
-    signal posted, so the driver never pays for a transcript read it cannot use."""
+    depth the sweep just read off the pane. No signal and no measured CLI
+    update returns None. Version-only advice uses local evidence, no tracker or
+    model query."""
     from . import cycle_advice
     cfg, _ = config.load_or_default(Path(a.root))
 
     def advise(agent, depth_k):
-        if cycle_advice.latest(a.root, agent) is None:
-            return None
+        signal = cycle_advice.latest(a.root, agent)
+        if signal is None:
+            from . import runtime_update
+            update = runtime_update.for_agent(a.root, agent)
+            if not update.outdated:
+                return None
+            # A version-only preference needs no tracker/plate/model query.
+            sit = cycle_advice.Situation(agent, depth_k, triage_mod.CYCLE_THRESHOLD_K,
+                running_version=update.running, installed_version=update.installed,
+                session_id=update.session)
+            return cycle_advice.decide(sit, None, cfg.cycle_advice)
         sit, _ = _advise_situation(a, agent, cfg)
         sit = dataclasses.replace(sit, depth_k=depth_k)
         return cycle_advice.decide(sit, cycle_advice.latest(a.root, agent),
@@ -10653,6 +10719,8 @@ def _cmd_advise(a) -> int:
         print(json.dumps(dict(
             agent=agent, depth_k=sit.depth_k, cycle_line_k=sit.cycle_line_k,
             always_cycle_above_k=policy.always_cycle_above_k,
+            running_version=sit.running_version, installed_version=sit.installed_version,
+            runtime_session_id=sit.session_id,
             ask=cycle_advice.should_ask(sit, policy),
             brief=cycle_advice.brief(parts, a.brief_chars or policy.brief_chars, policy),
             next_task=sit.next_task, transcript=transcript,
@@ -10865,10 +10933,21 @@ def _cmd_cycle(a) -> int:
                   f"graph context and nothing is lost.", file=sys.stderr)
             return REFUSED
         quipu_nodes = list(gctx.nodes)
-        quality_gate = _durable_checkpoint_gate(a, agent_name)
+        if ckpt_body:
+            # The file just read is the requested handoff. Re-reading plate and
+            # comments here only feeds inferred quality advice; the executor
+            # independently enforces the durable checkpoint before any cycle.
+            quality_text = ckpt_body
+            try:
+                quality_session = _cycle_session_start(a.root, agent_name)
+            except OSError:
+                quality_session = ""  # unknown launch cannot earn a rewrite veto
+        else:
+            quality_gate = _durable_checkpoint_gate(a, agent_name)
+            quality_text = quality_gate.checkpoint or a.reason.strip()
+            quality_session = quality_gate.since
         quality_ok, quality_note = _checkpoint_quality_gate(
-            a, agent_name, quality_gate.checkpoint or ckpt_body or a.reason.strip(),
-            quality_gate.since)
+            a, agent_name, quality_text, quality_session)
         if quality_note:
             print(f"  ⚠ {quality_note}", file=sys.stderr)
         if not quality_ok:
@@ -10894,10 +10973,11 @@ def _cmd_cycle(a) -> int:
         waiter = _spawn_self_cycle_server(a, agent_name)
         if waiter:
             print(f"  it is performed at your next idle turn (waiter log: {waiter}). "
-                  f"End your turn now; nothing is lost if it never fires.")
+                  f"End your turn now; do not poll or reissue this accepted request.")
         else:
             print("  `st fleet tend` performs it at an idle turn. Leave work safe, "
-                  "then end your turn; the request stays pending if it never fires.")
+                  "then end your turn. Do not poll or reissue this accepted request; "
+                  "it stays pending if it never fires.")
         print(f"  {handoff_text.refusal_note()}")
         return OK
 
@@ -11777,7 +11857,7 @@ def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
 
-    A shared project checkout (~/gt/shantytown, quipu, hank-src, goldblum) is
+    A shared project checkout (~/gt/shantytown, quipu, yupana, goldblum) is
     multi-writer: index and HEAD belong to the working copy, so two agents
     committing there corrupt each other silently (aegis-repg/iaef). Each agent
     gets its own worktree off the shared repo instead — <repo>-wt/<agent> on
@@ -11838,7 +11918,11 @@ def _cmd_worktree(a) -> int:
         print(path)
         return OK
     except WorkspaceError as e:
-        print(f"  refused: {e}", file=sys.stderr)
+        from .workspace import WorktreeDamage
+        # A partial delete is not a refusal (aegis-5ox): "refused" reads as
+        # "nothing happened", and here something did.
+        label = "DAMAGE" if isinstance(e, WorktreeDamage) else "refused"
+        print(f"  {label}: {e}", file=sys.stderr)
         return REFUSED
 
 
@@ -13271,11 +13355,18 @@ def _dream_sweep(a, cfg, agents, panes, *, force=False, dry_run=False):
     policy = cfg.dream
     state = dream_mod.State(a.root)
     tracker = _tracker(a)
-    ready, active = feed_check.queue_state(a.root, _registry(a), tracker)
+    cards = {card.name: card for card in agents}
+    # Only a live worker can receive a cycle, so read only their plates plus
+    # unassigned work (where a queued cycle waits). An unscoped read is a
+    # whole-board plate read and exceeds the field budget (aegis-2idcev).
+    owners = sorted(name for name, card in cards.items()
+                    if card.role == "worker" and card.pane
+                    and panes.exists(card.pane))
+    ready, active = feed_check.queue_state(a.root, _registry(a), tracker,
+                                           owners=owners)
     free = feed_check.free_feedable_workers(_registry(a), panes, _runtime(a, panes),
                                             root=a.root)
     free = [name for name in free if name not in feed_check.hauls(ready, active)]
-    cards = {card.name: card for card in agents}
     candidates = []
     cfg_now, governors = _governors(a)
     verdicts = {name: governor.evaluate(persist=False)
@@ -13500,6 +13591,10 @@ def _jobs_sweep(a) -> list[str]:
     """The tend sweep: every due job, once. Inside tend's `_sweep` like every
     other best-effort layer, and each JOB is isolated again inside Runner.sweep,
     so neither a broken file nor a crashing job can reach respawn."""
+    # Tend's governor path can fall back to defaults after a configuration
+    # error. Never let that fallback reactivate a delegated local scheduler.
+    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+        return []
     return _jobs_runner(a).sweep()
 
 
@@ -13562,6 +13657,10 @@ def _cmd_jobs(a) -> int:
     verb = getattr(a, "jobs_sub", None) or "list"
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
+    if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
+        print("refused: local job evaluation and execution are delegated to Chaski; "
+              "use --graph for declaration checks and the signed scheduler lane for execution", file=sys.stderr)
+        return REFUSED
     if getattr(a, "expect_job", None) or getattr(a, "json", False):
         print("refused: --expect-job and --json require --graph", file=sys.stderr)
         return REFUSED
@@ -14492,7 +14591,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, refresh=_refresh_clone,
             log=_log, advise=_cycle_advisor(a)).sweep(agents, runtime))
         if cycled:
-            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
+            print(f"  ⚠ prompted {len(cycled)} agent(s) to checkpoint and cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
         # PERFORM, not just prompt (aegis-zl7jwm, Steve 2026-10-07). A prompted
         # agent that is idle past the line and has checkpointed to its plate bead
@@ -14609,8 +14708,9 @@ def _tend_once(a, quiet: bool = False) -> int:
         # the idle-work pushes, so declared work never pre-empts supervision's
         # own notifications; an exec job starts DETACHED, so a long one cannot
         # hold this pass open (aegis-qwadc).
-        for line in _sweep("jobs", lambda: _jobs_sweep(a)):
-            print(f"  {line}", file=sys.stderr)
+        if cfg.jobs_scheduler == "local":
+            for line in _sweep("jobs", lambda: _jobs_sweep(a)):
+                print(f"  {line}", file=sys.stderr)
         # BLOCKED ON A HUMAN (internal-ref): the beads NOTHING else looks at.
         # The plate-reader fix took blocked beads off plates — correct, and it
         # also removed the last thing that touched them at all. They are off

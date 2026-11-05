@@ -4,7 +4,7 @@
 <p align="center">
 <a href="https://github.com/scbrown/shantytown/blob/main/LICENSE"><img alt="Apache-2.0 license" src="https://img.shields.io/badge/license-Apache_2.0-blue"/></a>
 <a href="https://github.com/scbrown/shantytown/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/scbrown/shantytown/actions/workflows/ci.yml/badge.svg"/></a>
-<a href="https://github.com/scbrown/caboodle"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
+<a href="https://github.com/intigraph/tambo"><img alt="Quipu stack" src="https://img.shields.io/badge/stack-quipu-8B5E3C.svg"/></a>
 </p>
 
 **A crew of AI agents for shipping software and running everyday operations:
@@ -164,7 +164,7 @@ Shantytown provisions role instructions and hooks for the selected harness.
 It works with Quipu for shared work and memory, Seeds for Quipu-backed tasks,
 Bobbin for code context, and Yupana for structural checks. Camayoc prepares
 knowledge for Quipu; Desire Path can turn recurring agent mistakes into requests.
-Caboodle installs reviewed tool versions. Chaski reactions and Shuttle workflows
+Tambo installs reviewed tool versions. Chaski reactions and Shuttle workflows
 can supply external event-driven work. These integrations are optional and need
 [configuration](https://scbrown.github.io/shantytown/integrations.html).
 

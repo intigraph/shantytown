@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 
 from .files import write_json_atomic
-from .owned_work import OwnedWork, _agent, _time, LEASE
+from .owned_work import OwnedWork, _agent, _time
 
 RDFS = 'http://www.w3.org/2000/01/rdf-schema#'
 SCHEMA = 'https://schema.org/'
@@ -56,7 +56,6 @@ def fact(agent, state, onto, source):
     digest = hashlib.sha256((source + '\0' + payload).encode()).hexdigest()
     iri = onto + 'owned-work-' + digest
     stamp = datetime.fromtimestamp(observed, timezone.utc).isoformat().replace('+00:00', 'Z')
-    review = datetime.fromtimestamp(observed + LEASE, timezone.utc).isoformat().replace('+00:00', 'Z')
     lit = json.dumps
     turtle = '\n'.join([
         f'<{iri}> a <{onto}OperationalFact> ;',
@@ -65,7 +64,6 @@ def fact(agent, state, onto, source):
         f' <{onto}source> {lit(source)} ;',
         f' <{onto}ownedBy> <{onto}{agent}> ;',
         f' <{onto}observedAt> {lit(stamp)} ;',
-        f' <{onto}reviewAfter> {lit(review)} ;',
         f' <{SCHEMA}version> {revision} ;',
         f' <{RDFS}comment> {lit(payload)} .',
     ]) + '\n'
