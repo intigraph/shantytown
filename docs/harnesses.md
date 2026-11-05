@@ -643,7 +643,9 @@ with its sandbox and `useG1Credits = false`; st never enables paid credit fallba
 
 The session settings pointer is `settings/agy/<role>/settings.json` (or an
 independent `agent-<name>` override). Those settings carry st's canonical hook
-commands, but agy does **not** execute hooks from `--settings`. Provisioning
+commands. A separate sibling `launch-settings.json` contains only agy-native
+settings and is passed to `--settings`; canonical st keys are not valid provider
+settings. Agy does **not** execute hooks from `--settings`. Provisioning
 projects the native definitions into `<workspace>/.agents/hooks.json`, preserving
 personal named hooks, and MCP entries into `.agents/mcp_config.json`. Existing
 `.agents/skills` links and the shared `AGENTS.md` instructions are reused. The
@@ -651,7 +653,7 @@ operator's global configuration is never rewritten. Dynamic HTTP header helpers
 and named account profiles are currently refused rather than translated silently.
 
 A native SessionStart receipt binds the session, running process/start time,
-workspace, settings hash and projected hook hash. A settings pointer alone is
+workspace, canonical and native settings hashes, and projected hook hash. A settings pointer alone is
 not evidence that agy loaded the hooks. `st ops doctor` reports projected hooks
 and native receipt separately. Missing, changed or stale proof stays UNKNOWN.
 Agy remains worker-only until a normal installed blocking drain is qualified.

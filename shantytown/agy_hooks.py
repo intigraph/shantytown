@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from .agy import canonical, private_write, projected_hooks, receipt_path, native_process
+from .agy import canonical, private_write, projected_hooks, receipt_path, native_process, native_settings_path
 
 TOOLS = {'run_command': 'Bash', 'write_file': 'Write', 'view_file': 'Read', 'write_to_file': 'Write',
          'replace_file_content': 'Edit', 'multi_replace_file_content': 'MultiEdit'}
@@ -125,7 +125,8 @@ def dispatch(event, native, settings_path, *, runner=execute):
             raise ValueError('native agy process ancestry unproved')
         receipt.update(pid=pid, process_identity=identity, at=time.time(), settings=str(Path(settings_path).resolve()),
                        settings_sha256=hashlib.sha256(text.encode()).hexdigest(),
-                       hooks_sha256=hashlib.sha256((ws / '.agents/hooks.json').read_bytes()).hexdigest())
+                       hooks_sha256=hashlib.sha256((ws / '.agents/hooks.json').read_bytes()).hexdigest(),
+                       native_settings_sha256=hashlib.sha256(native_settings_path(settings_path).read_bytes()).hexdigest())
         path = receipt_path(env['SHANTY_ROOT'], env['SHANTY_AGENT'])
         path.parent.mkdir(parents=True, exist_ok=True)
         private_write(path, json.dumps(receipt) + '\n')

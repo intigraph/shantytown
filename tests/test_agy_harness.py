@@ -92,6 +92,11 @@ def test_native_receipt_binds_both_artifacts(tmp_path,monkeypatch):
     agy_hooks.dispatch('SessionStart',{'conversationId':'native','workspacePaths':[str(ws)]},path,
                        runner=lambda *a:(0,'',''))
     assert agy.receipt_matches(tmp_path,'local',path,ws)
+    original=agy.native_settings_path(path).read_text()
+    agy.native_settings_path(path).write_text('{}')
+    assert not agy.receipt_matches(tmp_path,'local',path,ws)
+    agy.native_settings_path(path).write_text(original)
+    assert agy.receipt_matches(tmp_path,'local',path,ws)
     path.write_text('{}')
     assert not agy.receipt_matches(tmp_path,'local',path,ws)
 
@@ -142,3 +147,19 @@ def test_native_mcp_identity_requires_exact_workspace_server(tmp_path):
     assert payload['tool_input']=={'id':1}
     native['toolCall']['args']['ServerName']='unconfigured'
     with pytest.raises(ValueError):agy_hooks.translated('PreToolUse',native)
+
+
+def test_executable_reader_does_not_confuse_arguments_and_directories():
+    assert running_name('claude --model agy --settings /fixture/settings.json') == 'claude'
+    assert running_name('cd /workspace/agy && claude --settings /fixture/settings.json') == 'claude'
+    assert get('agy').settings_in_cmdline('echo agy --settings /fixture/settings.json') is None
+    assert get('agy').settings_in_cmdline('SHANTY_AGY_RECEIPT=/fixture/receipt.json /opt/bin/agy --settings /fixture/settings.json') == '/fixture/settings.json'
+
+
+def test_native_launch_settings_exclude_canonical_claude_keys(tmp_path):
+    path=config(tmp_path,'SessionStart')
+    get('agy').provision(str(path))
+    native=agy.native_settings_path(path)
+    assert json.loads(native.read_text()) == {'useG1Credits': False}
+    assert native.stat().st_mode & 0o777 == 0o600
+    assert get('agy').settings_in_cmdline(f'agy --settings {native}') == str(path)

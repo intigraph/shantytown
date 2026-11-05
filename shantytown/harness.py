@@ -676,10 +676,8 @@ class ClaudeHarness:
         return ""
 
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
-        try:
-            if any(Path(t).name == "agy" for t in shlex.split(cmdline)):
-                return None
-        except ValueError:
+        from .agy import is_agy_command
+        if is_agy_command(cmdline):
             return None
         toks = cmdline.split()
         for i, t in enumerate(toks):

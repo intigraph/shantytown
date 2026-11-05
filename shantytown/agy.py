@@ -34,6 +34,18 @@ def selected_config(card, root):
     return agent if agent.is_file() else directory / program.settings_name(card.role)
 
 
+def native_settings_path(settings_path):
+    return Path(settings_path).with_name('launch-settings.json')
+
+
+def write_native_settings(settings_path):
+    # The canonical file contains st commands and environment metadata. The
+    # provider rejects those keys; only provider-owned options cross --settings.
+    path = native_settings_path(settings_path)
+    private_write(path, json.dumps({'useG1Credits': False}) + '\n')
+    return path
+
+
 def projected_hooks(settings_path):
     command = shlex.join([sys.executable, '-m', 'shantytown.agy_hooks',
                           '--settings', str(Path(settings_path).resolve())])
@@ -48,6 +60,7 @@ def projected_hooks(settings_path):
 def project_hooks(workspace, settings_path):
     from .provision import ProvisionError
     ws = Path(workspace).resolve()
+    write_native_settings(settings_path)
     path = ws / '.agents' / 'hooks.json'
     if path.is_symlink() or (path.parent.exists() and path.parent.resolve() != ws / '.agents'):
         raise ProvisionError('agy hooks destination must stay in its workspace')
@@ -105,6 +118,7 @@ def receipt_matches(root, agent, settings_path, workspace):
         return (record['settings'] == str(Path(settings_path).resolve())
                 and record['settings_sha256'] == hashlib.sha256(Path(settings_path).read_bytes()).hexdigest()
                 and record['hooks_sha256'] == hashlib.sha256((ws / '.agents/hooks.json').read_bytes()).hexdigest()
+                and record['native_settings_sha256'] == hashlib.sha256(native_settings_path(settings_path).read_bytes()).hexdigest()
                 and str(ws) in record['workspacePaths']
                 and bool(record['conversationId'])
                 and process_identity(record['pid']) == record['process_identity'])
@@ -154,6 +168,39 @@ def live_proof(cmdline, settings_path):
         return receipt_matches(path.parent.parent.parent, path.stem, settings_path, workspace)
     except (OSError, ValueError, KeyError, TypeError, IndexError):
         return False
+
+
+def is_agy_command(cmdline):
+    """Read the executable position, never a model argument or directory name."""
+    import re
+    try:
+        tokens = shlex.split(cmdline)
+    except ValueError:
+        return False
+    if tokens[:1] == ['cd']:
+        if len(tokens) < 4 or tokens[2] != '&&':
+            return False
+        tokens = tokens[3:]
+    i = 0
+    if tokens[:1] == ['env']:
+        i = 1
+        while i < len(tokens):
+            token = tokens[i]
+            if token == '-u':
+                i += 2
+            elif token.startswith('--unset='):
+                i += 1
+            elif token == '--':
+                i += 1
+                break
+            elif re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', token):
+                i += 1
+            else:
+                break
+    else:
+        while i < len(tokens) and re.match(r'^[A-Za-z_][A-Za-z0-9_]*=', tokens[i]):
+            i += 1
+    return i < len(tokens) and Path(tokens[i]).name == 'agy'
 
 
 def make_harness(base):
@@ -210,7 +257,7 @@ def make_harness(base):
                     '-u CODEX_HOME -u CODEX_THREAD_ID -u CODEX_SESSION_ID '
                     '-u CLAUDECODE -u CLAUDE_CODE_SESSION_ID ') + options + credentials + ' '.join(
                 f'{k}={shlex.quote(v)}' for k, v in env.items())
-            line += ' agy --sandbox --settings ' + shlex.quote(str(Path(settings_path).resolve()))
+            line += ' agy --sandbox --settings ' + shlex.quote(str(native_settings_path(settings_path).resolve()))
             if model:
                 line += ' --model ' + shlex.quote(model)
             effort = (getattr(card, 'harness_options', None) or {}).get('agy', {}).get('effort')
@@ -227,17 +274,24 @@ def make_harness(base):
                 tokens = shlex.split(cmdline)
             except ValueError:
                 return None
-            if not any(Path(t).name == 'agy' for t in tokens):
+            if not is_agy_command(cmdline):
                 return None
             for i, token in enumerate(tokens):
                 if token == '--settings' and i + 1 < len(tokens):
-                    return tokens[i + 1]
+                    path = Path(tokens[i + 1])
+                    return str(path.with_name('settings.json')) if path.name == 'launch-settings.json' else str(path)
                 if token.startswith('--settings='):
-                    return token.split('=', 1)[1]
+                    path = Path(token.split('=', 1)[1])
+                    return str(path.with_name('settings.json')) if path.name == 'launch-settings.json' else str(path)
             return None
 
         def carries_settings(self, launch, settings_path):
-            return self.settings_in_cmdline(launch) == str(Path(settings_path).resolve())
+            # This is our own builder, which may contain a child-shell credential
+            # sanitizer. Live process sniffing uses executable-position parsing.
+            tokens = shlex.split(launch)
+            return any(t == '--settings' and i + 1 < len(tokens)
+                       and tokens[i + 1] == str(native_settings_path(settings_path).resolve())
+                       for i, t in enumerate(tokens))
 
         def hooks(self, card):
             from .runtime import HookSpec
@@ -245,6 +299,7 @@ def make_harness(base):
             return HookSpec(blocking_stop=False)
 
         def provision(self, settings_path, root=None, workspaces=()):
+            write_native_settings(settings_path)
             for workspace in workspaces:
                 project_hooks(workspace, settings_path)
             return []
