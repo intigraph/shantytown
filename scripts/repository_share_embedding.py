@@ -79,3 +79,14 @@ def verify_manifest(stage, expected):
     actual = json.loads((Path(stage) / "manifest.json").read_text()).get("embedding")
     if actual != expected:
         raise ValueError("share embedding recipe does not match the explicit provider pins")
+
+
+def configure_indexer(index, private, expected):
+    """Use the same verified private bytes for indexing, without cache downloads."""
+    config = Path(index) / ".bobbin/config.toml"
+    with config.open("a") as handle:
+        handle.write("dimensions = " + str(expected["dimension"]) + "\n")
+        handle.write("[embedding.custom_model]\n")
+        handle.write("model_path = " + json.dumps(str(Path(private) / "provider/model.onnx")) + "\n")
+        handle.write("tokenizer_path = " + json.dumps(str(Path(private) / "provider/tokenizer.json")) + "\n")
+        handle.write("max_seq_len = 256\n")

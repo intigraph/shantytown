@@ -47,6 +47,19 @@ class ProviderContract(unittest.TestCase):
             "QUIPU_SHARE_EMBEDDING_DIMENSION": "384",
         }
 
+    def test_indexer_uses_the_same_private_bytes_without_builtin_cache(self):
+        expected = provider.configure(self.private, self.env)
+        index = self.root / "index"
+        (index / ".bobbin").mkdir(parents=True)
+        config = index / ".bobbin/config.toml"
+        config.write_text('[embedding]\nmodel = "all-MiniLM-L6-v2"\n')
+        provider.configure_indexer(index, self.private, expected)
+        embedding = tomllib.loads(config.read_text())["embedding"]
+        self.assertEqual(embedding["dimensions"], 384)
+        self.assertEqual(embedding["custom_model"]["model_path"], str(self.private / "provider/model.onnx"))
+        self.assertEqual(embedding["custom_model"]["tokenizer_path"], str(self.private / "provider/tokenizer.json"))
+        self.assertEqual(embedding["custom_model"]["max_seq_len"], 256)
+
     def test_private_snapshot_config_and_exact_manifest(self):
         expected = provider.configure(self.private, self.env)
         config = self.private / ".bobbin/config.toml"

@@ -379,6 +379,7 @@ entities = false
 model = "all-MiniLM-L6-v2"
 batch_size = 64
 """)
+    provider_contract.configure_indexer(index, private, expected_provider)
     env = isolated_environment(private)
     # Keep default inference concurrency bounded; a caller may supply its measured limit.
     env.setdefault("BOBBIN_ONNX_THREADS", "1")
