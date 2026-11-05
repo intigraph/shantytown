@@ -126,8 +126,8 @@ def make_harness(base):
 
         def launch(self, card, settings_path, root=None):
             from .harness import Unsupported, resolve_model
-            if card.chrome:
-                raise Unsupported("OpenCode has no measured browser integration")
+            from .harness_options import warn_unsupported
+            warn_unsupported(card, self.name)
             config = Path(settings_path).resolve()
             model = resolve_model(card, root)
             env = {"OPENCODE_CONFIG": str(config), "SHANTY_AGENT": card.name,

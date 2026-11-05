@@ -211,3 +211,77 @@ def test_batch_bound_still_applies_to_eligible_pointers(tmp_path, monkeypatch):
         ai.enqueue(tmp_path, card, box.deliver(card.name, f'p{n}'), 'files', 10, now=100 + n)
     assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=200)) == 20
     assert len(ai.sweep(tmp_path, [card], panes, lambda _: box, now=201)) == 1
+
+
+def test_unreadable_inbox_retains_its_rows_and_others_still_deliver(tmp_path, monkeypatch):
+    from shantytown.answer import PartialAnswer
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    other = NS(name='other-admin', role='administrator', pane='other-pane', retired=False)
+    ai.enqueue(tmp_path, card, box.deliver(card.name, 'capped'), 'files', 10, now=100)
+    ai.enqueue(tmp_path, other, box.deliver(other.name, 'readable'), 'files', 10, now=100)
+    real = box.unread
+    capped = FilesInbox(tmp_path / 'inbox')
+    def unread(name):
+        if name == card.name:
+            raise PartialAnswer('private capped inbox read')
+        return real(name)
+    capped.unread = unread
+    logs = []
+    delivered = ai.sweep(tmp_path, [card, other], panes, lambda _: capped, now=110,
+                         log=logs.append)
+    assert [name for name, _ in delivered] == ['other-admin'] and sent == ['readable']
+    assert len(box.unread(card.name)) == 1
+    assert any('admin unread read UNKNOWN (PartialAnswer); 1 pointer(s) retained' in m
+               for m in logs)
+    # The retained row is still pending and delivers once the read recovers.
+    assert [name for name, _ in ai.sweep(tmp_path, [card, other], panes,
+                                         lambda _: box, now=111)] == ['admin']
+    assert sent == ['readable', 'capped'] and box.unread(card.name) == []
+
+
+@pytest.mark.parametrize('retain', [False, True])
+def test_tracker_batch_reads_only_named_receipts_when_full_inbox_is_capped(
+        tmp_path, monkeypatch, retain):
+    from shantytown.answer import PartialAnswer
+    from test_inbox_read_progress import metadata_box
+    card, _, sent, panes = setup(tmp_path, monkeypatch)
+    card.name = 'reader'
+    _, box, messages, _, calls, writes = metadata_box(tmp_path, monkeypatch)
+    def capped():
+        raise PartialAnswer('full inbox field budget reached')
+    box._items = capped
+    msg = messages[1]
+    ai.enqueue(tmp_path, card, msg, 'seeds', 10, now=100, retain=retain)
+    assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=110) == [('reader', msg.id)]
+    assert sent == [msg.body]
+    assert calls == [('reader', [msg.id])] * (1 if retain else 2)
+    assert writes == ([] if retain else [(msg.id, {'status': 'closed'})])
+    assert ai.sweep(tmp_path, [card], panes, lambda _: box, now=111) == []
+    assert sent == [msg.body]
+
+
+@pytest.mark.parametrize('failure', ['immediate', 'partial', 'oserror'])
+def test_selected_read_failure_retains_pending_bytes_without_listing_fallback(
+        tmp_path, monkeypatch, failure):
+    from shantytown.answer import PartialAnswer
+    card, box, sent, panes = setup(tmp_path, monkeypatch)
+    msg = box.deliver(card.name, 'private routine')
+    ai.enqueue(tmp_path, card, msg, 'seeds', 10, now=100)
+    paths = list(ai._directory(tmp_path).glob('*.json'))
+    before = {path: path.read_bytes() for path in paths}
+    def selected(name, ids):
+        assert (name, ids) == (card.name, [msg.id])
+        if failure == 'partial':
+            yield msg
+        if failure == 'oserror':
+            raise OSError('private detail')
+        raise PartialAnswer('private detail')
+    selected_box = NS(unread_selected=selected,
+                      unread=lambda *_: pytest.fail('no listing fallback'),
+                      mark_read=lambda *a, **k: pytest.fail('no ACK'))
+    logs = []
+    assert ai.sweep(tmp_path, [card], panes, lambda _: selected_box, now=110,
+                    log=logs.append) == []
+    assert sent == [] and {path: path.read_bytes() for path in paths} == before
+    assert any('unread read UNKNOWN' in line for line in logs)
+    assert all('private detail' not in line for line in logs)

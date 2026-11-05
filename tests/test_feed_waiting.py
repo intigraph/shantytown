@@ -34,8 +34,7 @@ def test_review_boundary(seconds, expected):
 @pytest.mark.parametrize("stamp", [None, "", "tomorrow", "2026-01-01", "2026-01-01T01:00:00",
                                    "2026-01-01T01:00:00+01:00", "2026-99-01T01:00:00Z"])
 def test_unreadable_gate_is_unknown_not_free(stamp):
-    with pytest.raises(ValueError):
-        waiting_on_event(waiting(defer_until=stamp), NOW)
+    assert waiting_on_event(waiting(defer_until=stamp), NOW) is True
 
 
 @pytest.mark.parametrize("overrides", [{"status": "closed"}, {"status": "tombstone"}])

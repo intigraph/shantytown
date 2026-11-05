@@ -979,12 +979,12 @@ def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], li
 
 
 
-def tend_active(root, reg, *, roles=None):
+def tend_active(root, reg, *, roles=None, owners=None):
     """Fresh roster-scoped fields; never cache the final pre-feed anchor check."""
     from .sd import SdTracker
     tracker = _br_tracker(root, reg)
     if isinstance(tracker, SdTracker):
-        owners = [card.name for card in reg.all().exact()
+        owners = owners if owners is not None else [card.name for card in reg.all().exact()
                   if roles is None or card.role in roles]
         projected = tracker.active_rows(owners)
         if projected is not None:

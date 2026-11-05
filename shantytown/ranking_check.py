@@ -6,12 +6,16 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import hashlib
+import json
+import math
+import time
+from pathlib import Path
 
 from . import crew_rules
 from .deployment import deployment_default
 from .inbox import is_message
 from .priority_advisory import priority, workable
-from .protocols import plate_key
+from .protocols import plate_key, rank_order
 
 
 def cohorts(root, *, now=None, reader=None):
@@ -54,7 +58,8 @@ def cohorts(root, *, now=None, reader=None):
 
 def digest(ready, rows, cards, live, *, counts):
     """Every live agent's canonical plate witness; strict unowned READY comparisons."""
-    unowned = [r for r in ready if not r.get("assignee") and workable(r)]
+    unowned = list({r["id"]: r for r in ready
+                    if not r.get("assignee") and workable(r)}.values())
     p0 = sorted({r["id"] for r in rows if not r.get("assignee") and priority(r) == 0
                  and r.get("status") not in ("closed", "tombstone")
                  and not is_message(r.get("title", ""))
@@ -73,12 +78,36 @@ def digest(ready, rows, cards, live, *, counts):
         higher = [r for r in unowned if priority(r) is not None and priority(current) is not None
                   and priority(r) < priority(current)]
         if higher:
-            names = ", ".join(r["id"] for r in sorted(higher, key=lambda r: (priority(r), r["id"])))
-            mismatches.append(f"{card.name}: {current['id']} P{priority(current)} below unowned READY {names}")
+            by_priority = {}
+            for row in higher:
+                q = priority(row)
+                by_priority[q] = by_priority.get(q, 0) + 1
+            summary = (f"{len(higher)} unowned P{next(iter(by_priority))} READY"
+                       if len(by_priority) == 1 else
+                       f"{len(higher)} unowned READY (" + ", ".join(
+                           f"{n} P{q}" for q, n in sorted(by_priority.items())) + ")")
+            mismatches.append(f"{card.name}: {current['id']} P{priority(current)} < {summary}")
     lines += mismatches or ["no proven live-agent priority mismatch"]
-    lines.append("unowned P0: " + (", ".join(p0) if p0 else "none in complete active snapshot"))
+    # One bounded witness list for the whole digest. Non-READY unowned P0
+    # work remains actionable, but is labelled rather than presented as READY.
+    p0_ids = set(p0)
+    witnesses = {r["id"]: r for r in rows if r["id"] in p0_ids}
+    witnesses.update({r["id"]: r for r in unowned})
+    ordered = sorted(witnesses.values(), key=lambda r: (
+        priority(r) if priority(r) is not None else math.inf,
+        *rank_order(r.get("rank"), r.get("due_at"), r.get("created_at")), r["id"]))
+    names = ", ".join(f"{r['id']} P{priority(r) if priority(r) is not None else '?'}"
+                      + (" (not READY)" if r["id"] not in ready_ids else "")
+                      for r in ordered[:5])
+    if len(ordered) > 5:
+        names += f", +{len(ordered) - 5} more"
+    lines.append(f"unowned: {len(unowned)} READY; {len(p0)} P0 active; "
+                 + (names or "none in complete active snapshot"))
     lines.append(counts)
-    return "\n".join(lines), bool(mismatches or p0)
+    # Only an unowned P0 interrupts the administrator (Stiwi 2026-11-04: the
+    # per-worker mismatch digest was "way too verbose"). Mismatches stay in the
+    # tend log as an advisory; they are not a page.
+    return "\n".join(lines), bool(p0)
 
 
 def report(root, ready, rows, reg, panes, *, counts_reader=None):
@@ -89,19 +118,67 @@ def report(root, ready, rows, reg, panes, *, counts_reader=None):
     except Exception:
         counts = "P0 created/closed 7-day counts UNKNOWN"
     text, actionable = digest(ready, rows, cards, live, counts=counts)
-    return text, hashlib.sha256(text.encode()).hexdigest(), actionable or "UNKNOWN" in counts
+    # Unknown counts are logged, not paged: an unreadable board metric is not an
+    # unowned P0 (Stiwi 2026-11-04, ranking digest noise).
+    return text, hashlib.sha256(text.encode()).hexdigest(), actionable
 
 
-def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None):
+def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None,
+          label_item=None):
     """Reuse the existing administrator notifier and changed-digest ledger."""
     try:
         ready, rows = snapshot()
+        if label_item is not None:
+            from .work_class import preferred_labels
+            import time
+            deadline, labelled = time.monotonic() + 20, 0
+            # Candidate metadata only selects exact IDs. The callback reads
+            # current labels, appends individually, and verifies each write.
+            for row in ready:
+                if labelled >= 3 or time.monotonic() >= deadline:
+                    break
+                if workable(row) and preferred_labels(row.get('labels')):
+                    try:
+                        label_item(row['id'])
+                        labelled += 1
+                    except Exception as exc:
+                        log(f"ranking preference UNKNOWN {row['id']} ({type(exc).__name__}); no blind retry")
+                        break
         text, key, actionable = report(root, ready, rows, reg, panes, counts_reader=counts_reader)
-        log(text)
+        _log_digest(root, text, key, log)
         from .creel_advisory import Advice, Alerter
         return Alerter(root, reg, panes, push=push, filename="role_ranking.json",
                        label="administrator ranking").sweep(
-                           {"fleet": Advice(text, key, failure=actionable, risk=2)})
+                           {"fleet": Advice(text if actionable else
+                               "ranking check recorded in tend log; no unowned P0 in complete active snapshot",
+                               key, failure=actionable, risk=2)})
     except Exception as exc:
         log(f"ranking check UNKNOWN ({type(exc).__name__}); no auto-reassignment")
         return []
+
+
+def _log_digest(root, text, key, log):
+    """Changed content logs immediately; an unchanged digest at most hourly.
+
+    This ledger controls only verbose tend output. Alerter still owns paging,
+    including retrying a failed push and preserving the P0-only risk contract.
+    """
+    path = Path(root) / "notify" / "role_ranking_log.json"
+    try:
+        previous = json.loads(path.read_text())
+        if not isinstance(previous, dict):
+            previous = {}
+    except (OSError, ValueError):
+        previous = {}
+    now = time.time()
+    at = previous.get("at")
+    if (previous.get("key") == key and type(at) in (int, float)
+            and math.isfinite(at) and 0 <= now - at < 3600):
+        return
+    log(text)
+    try:
+        from .files import write_json_atomic
+        path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(path, dict(key=key, at=now))
+    except OSError as exc:
+        log(f"ranking log dedupe UNKNOWN ({type(exc).__name__}); paging unchanged")

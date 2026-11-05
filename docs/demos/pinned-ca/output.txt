@@ -1,0 +1,12 @@
+Script started on 2026-11-05 02:28:58-05:00 [COMMAND="PYTHONPATH=. python3 docs/demos/pinned-ca/demo.py" <not executed on terminal>]
+Fixture: protected ownership/UID and sd response mocked; actual config files and SHA-256.
+before source 9697c751
+refused: current Unix UID has no valid protected identity binding
+after source: current checkout
+sd identity config: operator fixture
+authenticated principal: synthetic-owner
+after / changed CA bytes
+refused: protected Seeds CA digest mismatch or oversized file
+Config propagation and pre-sd tamper refusal demonstrated. No native identity acceptance.
+
+Script done on 2026-11-05 02:28:58-05:00 [COMMAND_EXIT_CODE="0"]

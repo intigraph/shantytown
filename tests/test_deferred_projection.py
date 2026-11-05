@@ -298,10 +298,44 @@ def test_structural_refusal_splits_until_all_25_candidates_are_evaluated(monkeyp
                     show=lambda ident: rows[ident], is_closed=lambda ident: True,
                     release=released.append, push=lambda *a: None).sweep()
     assert sorted(released) == [f'test-{i:03}' for i in range(25)]
-    assert len(calls[0][0]) == 25
+    assert len(calls[0][0]) == seeds_plate.DEFERRED_FIELD_BATCH
     assert all(timeout > 0 for _, timeout in calls)
     assert len(calls) <= 49  # finite binary split tree, even if every leaf refuses
     assert sorted(accepted) == sorted(released)
+
+
+def test_default_field_batch_fits_the_measured_structural_limit(monkeypatch):
+    """aegis-6c4: the first attempt must not be a guaranteed refusal.
+
+    Measured on Quipu 0.16.x: cost = 6 x UNION branches + 4, branches =
+    subjects x 2 graphs x fields; 25 subjects with the real 20 fields cost 6004
+    against 4096, so every first 25-subject read was a 400 then a halving.
+    """
+    fields = len(seeds_plate.FIELDS) + 1  # deferred_rows adds notes
+    assert seeds_plate.DEFERRED_FIELD_BATCH * 2 * fields * 6 + 4 <= 4096
+    # Same cost model as the native refusal, on the real field set: a full
+    # board of 40 candidates is read with zero refusals.
+    import io, json, re
+    from urllib.error import HTTPError
+    candidates = [dict(subject=seeds_plate.SEEDS + f'item/test-{i:03}', graph=G) for i in range(40)]
+    refusals, reads = [], []
+    def query(proof, text, timeout):
+        if 'AS ?predicate' not in text:
+            return dict(rows=candidates, count=len(candidates), truncated=False)
+        cost = (text.count(' UNION ') + 1) * 6 + 4
+        identifiers = sorted(set(re.findall(r'<https://seeds.local/item/(test-\d+)>', text)))
+        if cost > 4096:
+            refusals.append(cost)
+            raise HTTPError(PROOF.quipu_url + '/query', 400, 'fixture refusal', {}, io.BytesIO(json.dumps({'error':
+                f'SPARQL request is too deeply nested or too long a chain: structural cost {cost} exceeds the limit of 4096. Split it into smaller requests.'}).encode()))
+        reads.append(identifiers)
+        return dict(rows=[dict(field, subject=seeds_plate.SEEDS + 'item/' + i) for i in identifiers for field in wire(id=i)],
+                    count=0, truncated=False)
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    rows = seeds_plate.deferred_rows(PROOF).exact()
+    assert refusals == []
+    assert sorted(r['id'] for r in rows) == [f'test-{i:03}' for i in range(40)]
+    assert [len(r) for r in reads] == [16, 16, 8]
 
 
 def test_single_candidate_structural_refusal_is_unknown_never_skipped(monkeypatch):
@@ -342,16 +376,18 @@ def test_split_fields_share_original_batch_wall_budget(monkeypatch):
 def test_later_half_failure_never_returns_partial_candidates(monkeypatch):
     import io
     from urllib.error import HTTPError
-    calls = structural_fixture(monkeypatch)
+    # A limit below the default batch's cost (16 x 2 x 20 x 6 + 4 = 3844)
+    # forces the split this test is about (aegis-6c4 moved the batch from 25).
+    calls = structural_fixture(monkeypatch, limit=2000)
     original = seeds_plate._query
     observed = []
     def query(proof, text, timeout):
         if 'AS ?predicate' in text:
-            # Original 25 refuses; left half completes; right half fails.
+            # Original 16 refuses; left half completes; right half fails.
             import re
             ids = set(re.findall(r'<https://seeds.local/item/(test-\d+)>', text))
             observed.append(len(ids))
-            if len(ids) == 13:
+            if observed == [16, 8, 8]:
                 raise HTTPError(PROOF.quipu_url, 500, 'fixture failure', {}, io.BytesIO(b'{}'))
         return original(proof, text, timeout)
     monkeypatch.setattr(seeds_plate, '_query', query)
@@ -359,7 +395,7 @@ def test_later_half_failure_never_returns_partial_candidates(monkeypatch):
     with pytest.raises(PartialAnswer):
         result.exact()
     assert not result.complete and result.at_least() == []
-    assert observed == [25, 12, 13]
+    assert observed == [16, 8, 8]
 
 
 def test_slow_success_still_respects_original_field_wall_budget(monkeypatch):

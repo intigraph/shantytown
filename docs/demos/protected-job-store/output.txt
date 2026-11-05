@@ -1,0 +1,17 @@
+Script started on 2026-10-29 14:49:17-04:00 [COMMAND="/usr/bin/python3 -I docs/demos/protected-job-store/capture.py" <not executed on terminal>]
+$ python3 -I docs/demos/protected-job-store/run.py --source demo-base
+Before: no protected own-job metadata preparation component
+$ python3 -I docs/demos/protected-job-store/run.py --source .
+Synthetic fixture: substituted trust anchors, no native account or UID operation
+prepare exact slot: CREATED
+files: crew/eph-task-123abc.json, shantytown.toml
+own principal: eph-task-123abc ; controller fields: None None
+[ephemeral]
+max_agents = 0
+unattended = false
+require_verified_identity = true
+unattended_uid_ready = false
+identical retry: UNCHANGED
+extra-file control: REFUSED; unexpected file retained
+
+Script done on 2026-10-29 14:49:17-04:00 [COMMAND_EXIT_CODE="0"]
