@@ -58,7 +58,7 @@ import json
 import os
 import tempfile
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -129,6 +129,9 @@ class Situation:
     next_task: str = ""
     cache: Cache = field(default_factory=Cache)
     now: float = field(default_factory=time.time)
+    running_version: str | None = None
+    installed_version: str | None = None
+    session_id: str = ""
 
     @property
     def idle_seconds(self) -> float | None:
@@ -142,6 +145,8 @@ class Advice:
     keep_cost_k: float | None = None
     cycle_cost_k: float | None = None
     cache_lapsed: bool | None = None
+    restart_required: bool = False
+    runtime_version_key: str = ""
 
     def render(self) -> str:
         costs = ""
@@ -176,6 +181,20 @@ def costs(sit: Situation, related: float, policy: Policy) -> tuple[float, float]
 
 
 def decide(sit: Situation, signal: Signal | None, policy: Policy = Policy()) -> Advice:
+    """Keep existing context/manual policy; prefer replacement on known updates."""
+    advice = _decide_context(sit, signal, policy)
+    from .runtime_update import Evidence
+    evidence = Evidence(sit.session_id, sit.running_version, sit.installed_version)
+    if not evidence.outdated or advice.decision == KEEP:
+        return advice
+    why = evidence.reason + "; prefer process replacement at a safe checkpoint"
+    if advice.decision == CYCLE:
+        why += "; " + advice.why
+    return replace(advice, decision=CYCLE, why=why, restart_required=True,
+                   runtime_version_key=evidence.key)
+
+
+def _decide_context(sit: Situation, signal: Signal | None, policy: Policy = Policy()) -> Advice:
     lapsed = cache_lapsed(sit, policy)
     if sit.depth_k is not None and sit.depth_k >= sit.cycle_line_k:
         return Advice(CYCLE, f"{sit.depth_k:.0f}k is past the {sit.cycle_line_k:.0f}k "
@@ -235,7 +254,9 @@ def should_ask(sit: Situation, policy: Policy) -> bool:
     """Is there anything for an outside judge to decide? False past either line,
     and False when depth is unreadable: a judge asked about a context of unknown
     size is the request this bound exists to prevent."""
-    return (sit.depth_k is not None and sit.depth_k < sit.cycle_line_k
+    from .runtime_update import newer
+    return (not (sit.session_id and newer(sit.running_version, sit.installed_version))
+            and sit.depth_k is not None and sit.depth_k < sit.cycle_line_k
             and sit.depth_k < policy.always_cycle_above_k)
 
 

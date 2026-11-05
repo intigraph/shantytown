@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed responsibilities; fleet tend ranks priorities without reassignment. Failed reads remain UNKNOWN. Protected results use authenticated own-job mailboxes and exact job/PR scope. Cycle requires item-bound root-approved bundle custody and an independently verified clean branch. Explicit Chaski delegation refuses local job execution and eligibility checks. Work triage proposes governed ranks using quarantined model evidence for administrator acceptance. Harness conversion retains validated model/browser preferences and reports unsupported fields. Pipeline waits require an event and a long backstop; --window declares a real appointment. Owner reminders do not release gates.",
-      "source_sha256": "4a5a679cc6651a7cc77d49af11d66bddff1b80467253b12b3659f674505e05b1",
+      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed responsibilities; tend ranks priorities without reassignment. Failed reads stay UNKNOWN. Protected results use own-job mailboxes and exact job/PR scope. Cycle requires item-bound approved bundle custody and an independently verified clean branch; dirty work stays gated. Chaski delegation refuses local execution. Triage proposes quarantined ranks for administrator acceptance. Harness conversion retains validated model/browser preferences and reports unsupported fields. Semantic-only benchmarks call automation/personal-need nouls and cannot admit ranks. Cycle advice requires fresh native evidence before preferring checkpointed process replacement. Pipeline waits require an event and a long backstop; --window declares a real appointment. Owner reminders do not release gates.",
+      "source_sha256": "3c94ec1ad3485b5b3ed490fd44b8296475ae79a75dc2c2577701fa84995051b9",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"

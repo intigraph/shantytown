@@ -730,18 +730,20 @@ def stop_advice(root, card):
             if age is not None and age < cycle.stuck_after():
                 print(f"  {card.name}: cycle pending; allowing the stop", file=sys.stderr)
                 return True  # no model feedback: allow the idle edge
-    payload = None
-    if ruling_memory.enabled(root):
-        try:
-            payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
-            if not isinstance(payload, dict):
-                payload = {}
-        except (OSError, ValueError):
+    try:
+        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+        if not isinstance(payload, dict):
             payload = {}
+    except (OSError, ValueError):
+        payload = {}
+    if ruling_memory.enabled(root):
         if reason := ruling_memory.check(root, card.name, payload):
             print(json.dumps(dict(decision='block', reason=reason)))
             return True
-    return context_hint.emit(root, card, payload=payload)
+    if context_hint.emit(root, card, payload=payload):
+        return True
+    from . import runtime_update
+    return runtime_update.emit(root, card, payload)
 
 
 def run(root, me: str, **kw) -> int:

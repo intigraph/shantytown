@@ -2051,6 +2051,7 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--publish", action="store_true", help="append advisory comments; never assign")
     bt.add_argument("--benchmark", help="JSONL of at least 30 previously routed issues")
     bt.add_argument("--rank-proposals", action="store_true", help="complete P0/P1 governed priority/rank proposals; never apply")
+    bt.add_argument("--rank-semantic-only", action="store_true", help="benchmark only auto/personal nouls; rank-band calls disabled")
     bt.add_argument("--rank-rules", help="JSON reviewed kind/IRI/text digest/scope/expiry bindings")
     bt.add_argument("--rank-inferred-graph", help="existing committed low-trust crew/inferred graph; Jev benchmark only")
     bt.add_argument("--rank-journal-dir", help="private exact-request journal for inferred answers")
@@ -2853,7 +2854,7 @@ def _run_command(a) -> int:
                 else:
                     print(board_rank.table(result))
                 return OK
-            if (getattr(a, "rank_rules", None) or getattr(a, "rank_json", False)
+            if (getattr(a, "rank_rules", None) or getattr(a, "rank_semantic_only", False) or getattr(a, "rank_json", False)
                     or getattr(a, "rank_inferred_graph", None) or getattr(a, "rank_journal_dir", None)
                     or getattr(a, "rank_benchmark_report", None) or getattr(a, "rank_admission", None)):
                 raise ValueError("rank options require --rank-proposals")
@@ -10552,23 +10553,37 @@ def _advise_situation(a, agent: str, cfg):
                 depth_k = triage_mod.context_tokens_k(panes.capture(card.pane))
         except Exception:  # noqa: BLE001 — advice degrades to unknown, never fails
             pass
+    from . import runtime_update
+    update = runtime_update.for_agent(a.root, agent)
     return cycle_advice.Situation(
         agent=agent, depth_k=depth_k,
         cycle_line_k=triage_mod.CYCLE_THRESHOLD_K,
         next_task=_cycle_anchor_bead(a, agent),
-        cache=cycle_advice.read_cache(transcript)), transcript
+        cache=cycle_advice.read_cache(transcript),
+        running_version=update.running, installed_version=update.installed,
+        session_id=update.session), transcript
 
 
 def _cycle_advisor(a):
     """CycleDriver's advisor: the same decision `st agent advise` prints, with the
-    depth the sweep just read off the pane. Returns None for an agent with no
-    signal posted, so the driver never pays for a transcript read it cannot use."""
+    depth the sweep just read off the pane. No signal and no measured CLI
+    update returns None. Version-only advice uses local evidence, no tracker or
+    model query."""
     from . import cycle_advice
     cfg, _ = config.load_or_default(Path(a.root))
 
     def advise(agent, depth_k):
-        if cycle_advice.latest(a.root, agent) is None:
-            return None
+        signal = cycle_advice.latest(a.root, agent)
+        if signal is None:
+            from . import runtime_update
+            update = runtime_update.for_agent(a.root, agent)
+            if not update.outdated:
+                return None
+            # A version-only preference needs no tracker/plate/model query.
+            sit = cycle_advice.Situation(agent, depth_k, triage_mod.CYCLE_THRESHOLD_K,
+                running_version=update.running, installed_version=update.installed,
+                session_id=update.session)
+            return cycle_advice.decide(sit, None, cfg.cycle_advice)
         sit, _ = _advise_situation(a, agent, cfg)
         sit = dataclasses.replace(sit, depth_k=depth_k)
         return cycle_advice.decide(sit, cycle_advice.latest(a.root, agent),
@@ -10623,6 +10638,8 @@ def _cmd_advise(a) -> int:
         print(json.dumps(dict(
             agent=agent, depth_k=sit.depth_k, cycle_line_k=sit.cycle_line_k,
             always_cycle_above_k=policy.always_cycle_above_k,
+            running_version=sit.running_version, installed_version=sit.installed_version,
+            runtime_session_id=sit.session_id,
             ask=cycle_advice.should_ask(sit, policy),
             brief=cycle_advice.brief(parts, a.brief_chars or policy.brief_chars, policy),
             next_task=sit.next_task, transcript=transcript,
@@ -14476,7 +14493,7 @@ def _tend_once(a, quiet: bool = False) -> int:
             Path(a.root), _registry(a), panes, refresh=_refresh_clone,
             log=_log, advise=_cycle_advisor(a)).sweep(agents, runtime))
         if cycled:
-            print(f"  ⚠ prompted {len(cycled)} saturated agent(s) to cycle: "
+            print(f"  ⚠ prompted {len(cycled)} agent(s) to checkpoint and cycle: "
                   f"{', '.join(cycled)}", file=sys.stderr)
         # PERFORM, not just prompt (aegis-zl7jwm, Steve 2026-10-07). A prompted
         # agent that is idle past the line and has checkpointed to its plate bead
