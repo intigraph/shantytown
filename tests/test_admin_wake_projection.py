@@ -5,7 +5,7 @@ import pytest
 
 from shantytown import provision as P
 from shantytown.protocols import Agent
-from shantytown.runtime import admin_budget_prompt_hooks
+from shantytown.runtime import admin_budget_prompt_hooks, stop_failure_hooks
 
 
 def configure(root, mode=None):
@@ -79,7 +79,8 @@ def test_role_owner_prevents_duplicate_and_is_not_rewritten(tmp_path):
     configure(tmp_path, "advise")
     role = tmp_path / "administrator.settings.json"
     original = json.dumps({"hooks": {"UserPromptSubmit":
-        admin_budget_prompt_hooks("administrator", tmp_path)}})
+        admin_budget_prompt_hooks("administrator", tmp_path),
+        "StopFailure": stop_failure_hooks(tmp_path)}})
     role.write_text(original)
     identity = role.stat()
     projected = render(tmp_path, role_settings=str(role))

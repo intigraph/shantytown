@@ -47,6 +47,7 @@ from pathlib import Path
 
 from .answer import Answer
 from .inbox import is_anchor, is_decision, is_message, is_unfeedable
+from .ask_visibility import is_ask
 from . import handoff_text
 
 
@@ -114,6 +115,9 @@ def haul_hold_reason(root, agent: str) -> str:
     """A deliberate stop or gaming hold must precede claims and continuation."""
     if root is None:
         return ""
+    from . import feed_hold
+    if held := feed_hold.reason(root, agent):
+        return held
     from .cycle import Requests
     if agent in Requests(Path(root)).pending():
         return "context cycle pending; keep the haul queued until the cycle completes"
@@ -165,6 +169,7 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
     # level to match this function's other deferred imports and to keep
     # feed_check free of a top-level dependency on the supervisor.
     from .tend import is_retired
+    from .ephemeral import is_ephemeral_name
 
     dark = dark_agents()
     stamped = st_launched_agents(root) if root is not None else None
@@ -178,6 +183,9 @@ def free_feedable_workers(reg, panes, runtime, root=None, roles=("worker",)) -> 
         # tri-state (None = not expressed), and every consumer tests truthiness.
         if is_retired(ag):
             continue                     # deliberately stopped -> not a target
+        if is_ephemeral_name(ag.name):
+            continue                     # one job, then torn down: never board
+                                         # capacity (aegis-c01c.2)
         if haul_hold_reason(root, ag.name):
             continue
         if ag.name in dark:
@@ -292,8 +300,7 @@ def idle_resumable_codex(reg, panes, runtime, active_beads, root=None) -> list[s
     from .tend import is_retired
 
     stamped = st_launched_agents(root) if root is not None else None
-    names = sorted({(b.get("assignee") or "").split("/")[-1]
-                    for b in active_beads if b.get("assignee")})
+    names = sorted(hauls([], active_beads))
     out = []
     for name in names:
         try:
@@ -425,7 +432,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
                        or str(label).strip().lower() == "feed:manual"
                        for label in (b.get("labels") or []))
                 or is_message(b.get("title", ""))
-                or is_decision(b.get("labels"))
+                or is_ask(b) or is_decision(b.get("labels"))
                 or is_unfeedable(b.get("title", ""), b.get("labels"))):
             continue
         out.append((b.get("id", "?"), b.get("title", "")))
@@ -469,7 +476,7 @@ def hauls(ready_beads, in_progress_beads=()) -> dict[str, list[str]]:
         # it must stay on the coordinator's feedable free list rather than read
         # as self-feeding (aegis-2og7d) — the same reasoning as messages above.
         if (not assignee or is_message(b.get("title", ""))
-                or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
+                or is_ask(b) or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
         if not name:
@@ -663,7 +670,36 @@ def admitted_haul(beads, card, verdict, log, *, root=None):
     return admitted
 
 
-def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
+def startable_here(root, reg, rows):
+    """Exclude peer-host work and items already held by supervised jobs.
+
+    Host names are deployment identities, never inferred from the OS hostname.
+    Ordinary labels do not constrain execution; only known peer names do.
+    """
+    from . import config, ephemeral
+    cfg, err = config.load_or_default(root)
+    if err:
+        raise RuntimeError(err)
+    held = {job["item"] for job in ephemeral.live(root) if job.get("item")}
+    peers = set(cfg.host_peers)
+    out = []
+    for row in rows:
+        if row.get("id") in held or peers.intersection(row.get("labels") or []):
+            continue
+        owner = str(row.get("assignee") or "").rsplit("/", 1)[-1]
+        if owner:
+            try:
+                card = reg.get(owner)
+            except LookupError:
+                card = None  # Unscoped board rows may belong to a non-local owner.
+            if cfg.host_name and card and card.host and card.host != cfg.host_name:
+                continue
+        out.append(row)
+    return out
+
+
+def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None,
+                *, queue_reader=None):
     """(free feedable workers, dispatchable ready beads, HELD-BY-GOVERNOR beads).
 
     The third value is the aegis-diasw fix and it is not decoration: with a tier
@@ -687,7 +723,9 @@ def gate_inputs(root, reg, panes, runtime, me: str | None = None, admits=None):
     # bd_cwd, not the ambient cwd, even though the hook usually fires in the
     # admin's workspace: "usually" is how the tend caller silently never
     # fired (see bd_cwd). None still falls back to ambient — fail-open.
-    ready_beads, active = queue_state(root, reg, owners=free)
+    ready_beads, active = (queue_reader(owners=free) if queue_reader is not None
+                           else queue_state(root, reg, owners=free))
+    ready_beads = startable_here(root, reg, ready_beads)
     # HAULING WORKERS ARE NOT THE COORDINATOR'S TO FEED (aegis-wjgt
     # groundwork): an idle worker whose queue is already assigned self-feeds
     # — holding the coordinator's stop hostage over one is the exact inverse
@@ -941,12 +979,12 @@ def queue_state(root, reg, tracker=None, *, owners=None) -> tuple[list[dict], li
 
 
 
-def tend_active(root, reg, *, roles=None):
+def tend_active(root, reg, *, roles=None, owners=None):
     """Fresh roster-scoped fields; never cache the final pre-feed anchor check."""
     from .sd import SdTracker
     tracker = _br_tracker(root, reg)
     if isinstance(tracker, SdTracker):
-        owners = [card.name for card in reg.all().exact()
+        owners = owners if owners is not None else [card.name for card in reg.all().exact()
                   if roles is None or card.role in roles]
         projected = tracker.active_rows(owners)
         if projected is not None:

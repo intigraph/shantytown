@@ -47,7 +47,22 @@ CYCLE_CMD = "st agent cycle --self"
 # difference between a pointer and a truncation.
 NO_CLEAR = "Do NOT run /clear — it drops bypass into MANUAL."
 
-HELP_POINTER = "Why/details: `st ops help handoff`."
+HELP_POINTER = "Template/details: `st ops help handoff`."
+
+CHECKPOINT_TEMPLATE = """    <item>: <current state and exact next action>
+    Landed: <commit/PR; distinguish installed/running>
+    Local: <worktree, branch, dirty/unpublished work and evidence>
+    Decisions: <constraints and holds; or none>
+    Next: <one exact action and its success check>
+    Rollback: <recovery; owned background tasks; pending outcomes>"""
+
+
+def background_tasks() -> str:
+    """Name the agent-owned work that otherwise prevents an idle cycle."""
+    return ("Before ending your turn for a cycle, stop or await only your own running "
+            "background tasks. Claude: TaskStop each running task you own. "
+            "Codex: /ps to inspect, then stop or await your running processes. "
+            "The cycle waits for an idle turn with no running background tasks.")
 
 
 def cycle_now(depth_k: float | int | None = None,
@@ -59,10 +74,10 @@ def cycle_now(depth_k: float | int | None = None,
     where = (f"{int(depth_k)}k, past the {int(threshold_k)}k cycle line"
              if depth_k and threshold_k else "past the cycle line")
     return (f"⚠ CONTEXT HIGH ({where}). CHECKPOINT, then cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-file <notes>\n"
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-file <notes> --checkpoint-bead <id> --quipu-node <existing-node>\n"
             f"{NO_CLEAR} Cycle keeps bypass/MCP/skills/hooks and re-dispatches "
-            f"your plate. Keep working until it fires. {HELP_POINTER}")
+            f"your plate. {background_tasks()} {HELP_POINTER}")
 
 
 def haul_handoff(context_k: float | int, line_k: float | int) -> str:
@@ -73,14 +88,14 @@ def haul_handoff(context_k: float | int, line_k: float | int) -> str:
     """
     return (f"⚠ HANDOFF: {int(context_k)}k, past the {int(line_k)}k line. Do not "
             f"start the next item. CHECKPOINT, then cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-file <notes>\n"
-            f"{NO_CLEAR} Your haul resumes itself afterwards. {HELP_POINTER}")
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-file <notes> --checkpoint-bead <id> --quipu-node <existing-node>\n"
+            f"{NO_CLEAR} Your haul resumes itself afterwards. {background_tasks()} {HELP_POINTER}")
 
 
 def deep_context_hint() -> str:
     """One clause for the haul feed message — the nudge, not the procedure."""
-    return (f"Context deep? Checkpoint + `{CYCLE_CMD}` first — not /clear; "
+    return (f"Context deep? Checkpoint, stop or await your own background tasks, then `{CYCLE_CMD}` — not /clear; "
             f"the haul survives it.")
 
 
@@ -124,8 +139,8 @@ def coordinator_self_handoff(depth_k: float | int, threshold_k: float | int) -> 
     return (f"⚠ YOUR OWN CONTEXT: {int(depth_k)}k, past the {int(threshold_k)}k "
             f"line. You enforce this on the crew — same rule. CHECKPOINT, then "
             f"cycle:\n"
-            f"  st work item comment <id> --file <notes>  &&  {CYCLE_CMD} "
-            f"--checkpoint-bead <id> --checkpoint-file <notes>\n"
+            f"  {CYCLE_CMD} "
+            f"--checkpoint-bead <id> --checkpoint-file <notes> --quipu-node <existing-node>\n"
             f"{NO_CLEAR} {HELP_POINTER}")
 
 

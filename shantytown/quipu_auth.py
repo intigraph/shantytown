@@ -8,7 +8,7 @@ import sys
 import urllib.parse
 
 HELP = ('Configure QUIPU_AUTH_TOKEN > QUIPU_AUTH_TOKEN_FILE > ~/.config/quipu/token; '
-        'ask the Quipu administrator for an accepted credential and run caboodle doctor.')
+        'ask the Quipu administrator for an accepted credential and run tambo doctor.')
 _disabled: set[str] = set()
 
 
@@ -81,4 +81,6 @@ def write_headers(server: str) -> dict[str, str]:
         raise refuse(server, 'unreadable or invalid') from None
     if not value:
         raise refuse(server, 'missing')
-    return {'Content-Type': 'application/json', 'Authorization': f'Bearer {value}'}
+    from . import quipu_provenance
+    return {'Content-Type': 'application/json', 'Authorization': f'Bearer {value}',
+            **quipu_provenance.headers()}

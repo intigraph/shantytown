@@ -784,3 +784,74 @@ def test_seeds_drain_incomplete_owner_read_is_unknown(tmp_path, monkeypatch):
     assert 'PLATE UNKNOWN' in text
     assert 'assign work' not in text
     assert 'empty plate' not in text
+
+
+def test_bound_job_turn_queues_without_controller_ledger_access(tmp_path, monkeypatch):
+    from shantytown import job_launch, ephemeral
+    from shantytown.stop_event import _ephemeral_bounds
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    messages = []
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: messages.append(a))
+    monkeypatch.setattr(ephemeral, 'on_stop', lambda *a: (_ for _ in ()).throw(AssertionError('ledger write')))
+    assert _ephemeral_bounds(tmp_path, spec['principal'], 32, now=1) == 'queued'
+    assert len(messages) == 1
+    assert messages[0][:3] == (spec, 'a' * 64, 'submit')
+    message = messages[0][3]
+    assert message['kind'] == 'turn' and message['context_k'] == 32 and len(message['token']) == 64
+
+
+def test_bound_turn_skips_shared_recovery_and_blocks_unacknowledged_receipt(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch, stop_failure
+    name = 'eph-task-123abc'
+    spec = {'principal': name, 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    monkeypatch.setattr(stop_event, '_my_context_k', lambda *a: None)
+    monkeypatch.setattr(stop_failure, 'clear_recovered',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('shared recovery write')))
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: None)
+    assert stop_event._send(None, None, None, name, tmp_path) == 0
+    monkeypatch.setattr(job_launch, 'mailbox_call',
+                        lambda *a: (_ for _ in ()).throw(OSError('no acknowledgement')))
+    assert stop_event._send(None, None, None, name, tmp_path) == 1
+    assert json.loads(capsys.readouterr().out)['decision'] == 'block'
+
+
+def test_protected_identity_failure_blocks_turn_before_ledger_fallback(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch, ephemeral
+    from shantytown.actor_identity import IdentityError
+    monkeypatch.setattr(job_launch, 'local_job',
+                        lambda: (_ for _ in ()).throw(IdentityError('binding unknown')))
+    monkeypatch.setattr(ephemeral, 'on_stop',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('ledger fallback')))
+    assert stop_event._ephemeral_bounds(tmp_path, 'eph-task-123abc', None) == 'unproved'
+    assert json.loads(capsys.readouterr().out)['decision'] == 'block'
+
+
+def test_protected_hook_uses_kernel_binding_without_controller_panes_or_holds(tmp_path, monkeypatch):
+    from shantytown import job_launch, agent_hold
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.delenv('SHANTY_AGENT', raising=False)
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    messages = []
+    monkeypatch.setattr(job_launch, 'mailbox_call', lambda *a: messages.append(a))
+    def forbidden(*a, **kw):
+        raise AssertionError('controller surface used')
+    monkeypatch.setattr(stop_event, 'Tmux', forbidden)
+    monkeypatch.setattr(stop_event, 'FilesRegistry', forbidden)
+    monkeypatch.setattr(agent_hold, 'finish_turn', forbidden)
+    assert stop_event.main(['send']) == 0
+    assert messages[0][3]['context_k'] is None  # no fabricated controller-pane measurement
+    assert stop_event.main(['drain']) == 0
+    assert stop_event.main(['haul']) == 0
+    assert len(messages) == 1
+
+
+def test_protected_hook_rejects_foreign_explicit_root(tmp_path, monkeypatch, capsys):
+    from shantytown import job_launch
+    spec = {'principal': 'eph-task-123abc', 'root': str(tmp_path)}
+    monkeypatch.setattr(job_launch, 'local_job', lambda: (spec, 'a' * 64))
+    monkeypatch.setattr(job_launch, 'mailbox_call',
+                        lambda *a: (_ for _ in ()).throw(AssertionError('unexpected submit')))
+    assert stop_event.main(['send', '--root', str(tmp_path / 'foreign')]) == 1
+    assert json.loads(capsys.readouterr().out)['decision'] == 'block'

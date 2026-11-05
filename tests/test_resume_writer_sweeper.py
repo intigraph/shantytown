@@ -96,6 +96,30 @@ def test_extra_notes_are_not_discarded_as_generated_metadata(tmp_path, suffix):
     assert not w.released
 
 
+@pytest.mark.parametrize("envelope", [
+    'defer_provenance: not-json',
+    'defer_provenance: {"actor":"worker","set_at":"bad","until":""}',
+    'defer_provenance: {"actor":"worker","set_at":"2026-01-01T00:00:00Z","until":"","approval":"needed"}',
+    'defer_provenance: {"actor":"worker","set_at":"2026-01-01T00:00:00Z","until":"bad"}',
+    'defer_provenance: {"until": "", "set_at": "2026-01-01T00:00:00Z", "actor": "worker"}',
+])
+def test_malformed_or_extended_provenance_is_not_discarded(tmp_path, envelope):
+    w = World(tmp_path)
+    notes = w.row()["notes"].splitlines()
+    assert notes[-1].startswith("defer_provenance: ")
+    w.tracker.update("waiter", notes="\n".join(notes[:-1] + [envelope]))
+    w.sweep()
+    assert not w.released
+
+
+def test_duplicate_provenance_envelopes_are_not_discarded(tmp_path):
+    w = World(tmp_path)
+    notes = w.row()["notes"]
+    w.tracker.update("waiter", notes=notes + "\n" + notes.splitlines()[-1])
+    w.sweep()
+    assert not w.released
+
+
 def test_historical_prose_is_not_erased_by_a_new_closed_marker(tmp_path):
     w = World(tmp_path, old_notes="Needs Stiwi sign-off")
     w.sweep()

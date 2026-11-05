@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import sys
 from urllib.parse import quote
@@ -158,14 +159,56 @@ def verify_origin(checkout, repo, api):
         raise Refused(fix) from error
 
 
+def require_clean_source(checkout):
+    """Permit only untracked private scratch directories; never print their names."""
+    refusal = "commit candidate changes before PR preflight"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(checkout), "status", "--porcelain=v1", "-z",
+             "--untracked-files=all", "--ignore-submodules=none"],
+            capture_output=True, timeout=30)
+        raw = result.stdout
+        if result.returncode or result.stderr or not isinstance(raw, bytes):
+            raise Refused(refusal)
+        if not raw:
+            return
+        if not raw.endswith(b"\0"):
+            raise Refused(refusal)
+        # Porcelain paths are repository-relative, even for a subdirectory
+        # checkout. --show-cdup contains only parent hops, never private names.
+        checkout_root = Path(checkout) / git(checkout, "rev-parse", "--show-cdup")
+        checked = set()
+        for record in raw[:-1].split(b"\0"):
+            # Every tracked/index status (including renames and conflicts),
+            # unknown status and malformed record refuses regardless of path.
+            if not record.startswith(b"?? "):
+                raise Refused(refusal)
+            path = record[3:]
+            parts = path.split(b"/")
+            if parts[-1] == b"":  # Git keeps nested repositories as directories.
+                parts.pop()
+            if (b"/" not in path or parts[0] not in {b".work", b".task-notes"}
+                    or any(part in {b"", b".", b".."} for part in parts)):
+                raise Refused(refusal)
+            root = parts[0]
+            if root not in checked:
+                # lstat inspects the root itself; no private content or link
+                # target is opened, even when a root has been replaced.
+                mode = (checkout_root / root.decode("ascii")).lstat().st_mode
+                if not stat.S_ISDIR(mode):
+                    raise Refused(refusal)
+                checked.add(root)
+    except (OSError, subprocess.SubprocessError):
+        raise Refused(refusal) from None
+
+
 def candidate(checkout, repo, base, api):
     verify_origin(checkout, repo, api)
     head_ref = git(checkout, "symbolic-ref", "--short", "HEAD")
     git(checkout, "check-ref-format", "--branch", base)
     if base == head_ref:
         raise Refused("candidate cannot be the base branch")
-    if git(checkout, "status", "--porcelain"):
-        raise Refused("commit candidate changes before PR preflight")
+    require_clean_source(checkout)
     head = git(checkout, "rev-parse", "HEAD")
     remote_head = api(f"repos/{repo}/commits/{quote(head_ref, safe='')}").get("sha")
     base_sha = api(f"repos/{repo}/commits/{quote(base, safe='')}").get("sha")
@@ -298,7 +341,40 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
              and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
     if not valid:
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
-    return {**review, "created": result["html_url"], "number": result["number"]}
+    return {**review, "created": result["html_url"], "number": result["number"],
+            "node_id": result.get("node_id") if isinstance(result.get("node_id"), str) else None}
+
+
+def record_authorship(result, *, root=None, actor=None, quipu=None, policy=None):
+    """aegis-c01c.7: `<PR> aegis:authoredByAgent "<agent>"` in Quipu right after a
+    crew PR is created, so chaski and the guarded merge can tell the author
+    agent from a reviewer when every PR comes from one GitHub account.
+
+    Best-effort and never fatal: the PR exists either way. Without the fact a
+    verdict's own authorAgent is the only source, and an unknown author agent
+    approves nothing (fail closed). Off unless [ephemeral] verdict_graph is set.
+    Returns a one-line note, or "" when off."""
+    from . import gate_verdict as gv
+    if policy is None:
+        from . import config
+        cfg, _err = config.load_or_default(Path(root or os.environ.get("SHANTY_ROOT") or "."))
+        policy = cfg.ephemeral
+    if not policy.verdict_graph or not result.get("node_id"):
+        return ""
+    if actor is None:
+        from .actor_identity import authenticated_actor
+        actor = authenticated_actor() or os.environ.get("SHANTY_AGENT") or ""
+    if not actor:
+        return "authorship NOT recorded: no agent identity (a human-opened PR has no author agent)"
+    try:
+        if quipu is None:
+            from .quipu import resolve_server
+            quipu = gv.Quipu(resolve_server(None, root))
+        iri = gv.write_authorship(quipu=quipu, graph=policy.verdict_graph,
+                                  node_id=result["node_id"], agent=actor)
+    except gv.VerdictError as exc:
+        return f"authorship NOT recorded: {exc}"
+    return f"recorded {iri} authoredByAgent {actor}"
 
 
 def command(args):
@@ -308,6 +384,10 @@ def command(args):
         result = run(args.checkout, args.repository, args.base, args.bead, body,
                      args.title or "", decisions, bead_families=args.bead_family,
                      create=args.create, draft=args.draft, dry_run=args.dry_run)
+        if result.get("created"):
+            note = record_authorship(result, root=getattr(args, "root", None))
+            if note:
+                result["authorship"] = note
         print(json.dumps(result, indent=2))
         return 0
     except Indeterminate as error:

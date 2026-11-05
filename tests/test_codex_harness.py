@@ -426,21 +426,16 @@ def test_the_cards_model_and_workspace_are_honoured():
     assert launch.startswith("cd /w && ")
 
 
-def test_a_chrome_card_is_REFUSED_not_silently_stripped():
-    """codex has no browser integration. Honouring the field by ignoring it would
-    launch an agent whose card claims a capability its process does not have —
-    the same class of failure as launching a different program than the card
-    asked for, which is what UnknownHarness already refuses."""
+def test_a_chrome_card_is_ignored_with_notice(capsys):
     card = Agent(name="ellie", role="worker", chrome=True)
-    with pytest.raises(harness_mod.Unsupported, match="chrome"):
-        CODEX.launch(card, "/s/c/w/config.toml")
+    command = CODEX.launch(card, "/s/c/w/config.toml")
+    assert "--chrome" not in command and "--no-chrome" not in command
+    assert "chrome" in capsys.readouterr().err
 
 
-def test_st_new_turns_that_refusal_into_exit_1_not_a_traceback(tmp_path, capsys,
+def test_st_new_ignores_legacy_chrome_with_notice(tmp_path, capsys,
                                                               monkeypatch):
-    """The refusal has to reach the operator the way every other one does. A new
-    exception type that nothing catches is an exit-1 path that exits 2 with a
-    stack trace (the bug aegis-85ox fixed for UnknownHarness)."""
+    """Legacy browser preference is retained without blocking a Codex launch."""
     root = tmp_path / ".shanty"
     (root / "crew").mkdir(parents=True)
     (root / "crew" / "ellie.json").write_text(json.dumps(
@@ -454,8 +449,8 @@ def test_st_new_turns_that_refusal_into_exit_1_not_a_traceback(tmp_path, capsys,
         def __init__(self, root):
             self.root = root
     rc = cli._cmd_new(_Args(root))
-    assert rc == cli.REFUSED
-    assert "refused:" in capsys.readouterr().err
+    assert rc == cli.OK
+    assert "chrome" in capsys.readouterr().err
 
 
 # --- the capability (the claim that changed) -----------------------------------

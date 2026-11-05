@@ -120,3 +120,54 @@ def test_missing_workspace_refuses_before_any_write(rig, capsys):
     assert run(root) != 0
     assert "workspace missing for missing" in capsys.readouterr().err
     assert not (ws / ".mcp.json").exists()
+
+
+@pytest.mark.parametrize("role", ["worker", "keeper", "lead", "administrator"])
+@pytest.mark.parametrize("per_agent", [False, True])
+def test_provision_repairs_selected_failure_hook_without_changing_other_settings(
+        rig, role, per_agent):
+    root, ws, _ = rig
+    FilesRegistry(root / "crew").set(
+        Agent(name="ada", role=role, workspace=str(ws), harness="claude"))
+    selected = root / "settings" / (
+        "agent-ada.settings.json" if per_agent else f"{role}.settings.json")
+    selected.parent.mkdir(exist_ok=True)
+    original = {"permissions": {"allow": ["Read"]}, "env": {"CUSTOM": "preserve"},
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "operator-stop"}]}]}}
+    if per_agent:
+        original["hooks"]["StopFailure"] = [{"hooks": [
+            {"type": "command", "command": "operator-failure"},
+            {"type": "command", "command": "python -m shantytown.stop_failure --root old",
+             "async": False}]}]
+    selected.write_text(json.dumps(original))
+    assert run(root, "ada") == 0
+    actual = json.loads(selected.read_text())
+    groups = actual["hooks"].pop("StopFailure")
+    commands = [h for g in groups for h in g["hooks"]]
+    generated = [h for h in commands if "-m shantytown.stop_failure" in h["command"]]
+    assert len(generated) == 1
+    assert generated[0]["async"] is True and generated[0]["timeout"] == 30
+    assert str(root.resolve()) in generated[0]["command"]
+    if per_agent:
+        assert any(h["command"] == "operator-failure" for h in commands)
+    original["hooks"].pop("StopFailure", None)
+    assert actual == original
+    stamp, before = selected.stat().st_mtime_ns, selected.read_bytes()
+    assert run(root, "ada") == 0
+    assert selected.read_bytes() == before and selected.stat().st_mtime_ns == stamp
+
+
+def test_failure_hook_refresh_preserves_module_mentions_and_refuses_bad_settings(tmp_path):
+    from shantytown.protocols import Agent
+    path = tmp_path / "selected.json"
+    operator = {"type": "command", "command": "echo -m shantytown.stop_failure"}
+    original = {"hooks": {"StopFailure": [{"hooks": [operator]}]}}
+    path.write_text(json.dumps(original))
+    provision._refresh_failure_hook(Agent(name="ada", harness="claude"), tmp_path, path)
+    actual = json.loads(path.read_text())
+    assert actual["hooks"]["StopFailure"][0]["hooks"] == [operator]
+    for invalid in ("{bad json", "[]", '{"hooks":[]}'):
+        path.write_text(invalid)
+        with pytest.raises(provision.ProvisionError, match="StopFailure"):
+            provision._refresh_failure_hook(Agent(name="ada", harness="claude"), tmp_path, path)
+        assert path.read_text() == invalid

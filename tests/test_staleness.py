@@ -328,7 +328,7 @@ def test_a_PUSHED_FEATURE_BRANCH_is_not_reported_as_stranded(tmp_path):
 
     `<ref>..HEAD` measures ahead-of-main, not unpushed, so every in-flight
     feature branch on the fleet reported "+N, exists only here". Measured false
-    positives: hank-wt/tim's commit was on origin/hank-1-daemon-stage3c, and
+    positives: a legacy checkout's commit was on its published daemon branch, and
     dearing's four quipu commits were all on origin — pushed, mid-review,
     nothing at risk.
 
@@ -995,10 +995,13 @@ def test_stale_ref_qualifies_phantom_ahead_details(tmp_path, monkeypatch, age):
 
     up = _repo(tmp_path / "up")
     wt = _clone(up, tmp_path / "wt")
+    frozen = _run(wt, "rev-parse", "origin/main")
     _commit(wt, "already-published")
-    # Push through a URL so origin/main stays frozen in this clone.
     _run(up, "checkout", "--detach", "-q")
     _run(wt, "push", str(up), "HEAD:main")
+    # git >= 2.56 also moves origin/main on a push to a URL that matches the
+    # remote's; put it back so this clone's cached ref stays stale.
+    _run(wt, "update-ref", "refs/remotes/origin/main", frozen)
     cached = tree_staleness(wt)
     assert cached.unpushed == 1
     assert _run(up, "rev-parse", "main") == _run(wt, "rev-parse", "HEAD")

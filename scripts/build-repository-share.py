@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import sqlite3
+import stat
 import io
 import tarfile
 import subprocess
@@ -156,26 +157,79 @@ def indexed_labels(binary, database, subjects):
     return labels
 
 
+def is_tracked_alias(link, target, files):
+    """True when symlink ``link`` -> ``target`` names a tracked regular file.
+
+    Agent files such as CLAUDE.md -> AGENTS.md are aliases of a file the
+    release already carries. Absolute, escaping, dangling and chained links,
+    and links to directories, are not.
+    """
+    if not target or target.startswith("/"):
+        return False
+    parts = []
+    for part in (Path(link).parent / target).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return False
+            parts.pop()
+        else:
+            parts.append(part)
+    return bool(parts) and Path(*parts) in files
+
+
 def materialize_release(source, revision, destination):
-    """Index only exact tracked release bytes in a new private source tree."""
+    """Index only exact tracked release bytes in a new private source tree.
+
+    A tracked alias of a tracked regular file is skipped rather than copied, so
+    its target is indexed once; any other non-file member refuses.
+    """
     destination = Path(destination)
     destination.mkdir(mode=0o700)
     archive = subprocess.run(
-        ["git", "-C", str(source), "archive", "--format=tar", revision], check=True, capture_output=True
+        ["git", "-C", str(source), "archive", "--format=tar", revision],
+        check=True,
+        capture_output=True,
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as bundle:
-        for member in bundle.getmembers():
+        members = bundle.getmembers()
+        files = {Path(member.name) for member in members if member.isfile()}
+        for member in members:
             relative = Path(member.name)
-            if relative.is_absolute() or ".." in relative.parts or not (member.isfile() or member.isdir()):
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("unsupported tracked release member")
+            if member.issym() and is_tracked_alias(relative, member.linkname, files):
+                continue
+            if not (member.isfile() or member.isdir()):
                 raise ValueError("unsupported tracked release member")
             target = destination / relative
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with bundle.extractfile(member) as original, target.open("xb") as copied:
+                with (
+                    bundle.extractfile(member) as original,
+                    target.open("xb") as copied,
+                ):
                     shutil.copyfileobj(original, copied)
     return destination
+
+
+def read_alignment(path):
+    limit = 2 * 1024 * 1024  # The native ancillary-member bound.
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= limit:
+        raise ValueError("alignment input must be a bounded regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(path, flags), "rb") as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
+            raise ValueError("alignment input must be a bounded regular file")
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("alignment input exceeds byte limit")
+    return data
 
 
 def alignment_carrier(source):
@@ -185,7 +239,7 @@ def alignment_carrier(source):
     not interpret a dependency, lexical match, or candidate as an identity.
     """
     source = Path(source)
-    data = (source / "docs/knowledge/alignments.ttl").read_bytes()
+    data = read_alignment(source / "docs/knowledge/alignments.ttl")
     status = json.loads((source / "docs/knowledge/alignment-status.json").read_text())
     if (
         status.get("status") != "no-approved-mappings"
@@ -205,6 +259,63 @@ def alignment_carrier(source):
         ):
             raise ValueError("empty alignment profile contains mapping data")
     return data.decode()
+
+
+def export_share(run, binary, source, database, query, stage):
+    # Let the native API seal the member; never patch a manifest after export.
+    expected = alignment_carrier(source).encode()
+    run([binary, "share", "--construct", query, "--turtle", "--alignments",
+         source / "docs/knowledge/alignments.ttl", "--output", stage, "--db", database])
+    member = stage / "alignments.ttl"
+    if member.is_symlink() or not member.is_file() or member.stat().st_size != len(expected):
+        raise ValueError("native share omitted or changed the alignment carrier")
+    manifest = json.loads((stage / "manifest.json").read_text())
+    files = manifest.get("files", {})
+    if (read_alignment(member) != expected or not isinstance(files, dict)
+        or files.get("alignments") != "alignments.ttl"
+        or manifest.get("alignments_hash") != "sha256:" + hashlib.sha256(expected).hexdigest()):
+        raise ValueError("native share did not bind the exact alignment carrier")
+
+
+FORMER_NAME_LEGACY = "http://aegis.gastown.local/ontology/"
+
+
+def former_name(public):
+    """The exact name the release query renamed ``public`` from, or None."""
+    match = re.fullmatch(r"https://w3id\.org/intigraph/([A-Za-z0-9-]+)/id/(.+)", public)
+    if not match:
+        return None
+    owner, rest = match.groups()
+    kind, _, tail = rest.partition("/")
+    if kind in ("code", "doc", "chunk") and tail:
+        return f"{FORMER_NAME_LEGACY}{kind}/{owner}/{tail}"
+    if rest == "repo":
+        return f"{FORMER_NAME_LEGACY}repo_{owner}"
+    if owner == "quipu" and kind == "idea" and tail:
+        return "https://quipu.dev/knowledge/" + tail
+    if owner == "stack" and rest == "repo-embedded-knowledge-databases-directive-2026-09-03":
+        return FORMER_NAME_LEGACY + rest
+    return None
+
+
+def verify_former_names(export):
+    """Admit owl:sameAs only from a public name to its exact former name."""
+    same_as = "<http://www.w3.org/2002/07/owl#sameAs>"
+    linked = set()
+    for line in Path(export).read_text().splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) < 3 or parts[1] != same_as:
+            continue
+        subject, value = parts[0], parts[2].rstrip(" .")
+        if not (subject.startswith("<") and value.startswith("<")):
+            raise ValueError("owl:sameAs between non-IRIs")
+        expected = former_name(subject[1:-1])
+        if expected is None or value[1:-1] != expected:
+            raise ValueError(f"owl:sameAs is not a former-name link: {subject} {value}")
+        if subject in linked:
+            raise ValueError(f"more than one former name: {subject}")
+        linked.add(subject)
+    return len(linked)
 
 
 def build(revision, source, tooling, binary, bobbin, output):
@@ -227,6 +338,15 @@ def build(revision, source, tooling, binary, bobbin, output):
         raise ValueError("release lacks a supported public corpus positive control")
     private = output.parent / "build-private"
     private.mkdir(mode=0o700)
+    # The provider belongs to this private working directory, not ambient HOME.
+    import importlib.util
+
+    provider_spec = importlib.util.spec_from_file_location(
+        "repository_share_embedding", Path(__file__).with_name("repository_share_embedding.py")
+    )
+    provider_contract = importlib.util.module_from_spec(provider_spec)
+    provider_spec.loader.exec_module(provider_contract)
+    expected_provider = provider_contract.configure(private)
 
     def run(args, *, env=None):
         return command(args, env=env, cwd=private)
@@ -259,6 +379,7 @@ entities = false
 model = "all-MiniLM-L6-v2"
 batch_size = 64
 """)
+    provider_contract.configure_indexer(index, private, expected_provider)
     env = isolated_environment(private)
     # Keep default inference concurrency bounded; a caller may supply its measured limit.
     env.setdefault("BOBBIN_ONNX_THREADS", "1")
@@ -325,9 +446,11 @@ aegis:repo-embedded-knowledge-databases-directive-2026-09-03 a aegis:Directive ;
     register_queries(binary, database, json.loads(queries.read_text()))
     query = (source / "queries/repository-share-shantytown.rq").read_text()
     stage = private / "share"
-    run([binary, "share", "--construct", query, "--turtle", "--output", stage, "--db", database])
+    export_share(run, binary, source, database, query, stage)
+    provider_contract.verify_manifest(stage, expected_provider)
     if not (stage / "shapes.ttl").is_file() or (stage / "shapes.ttl").stat().st_size == 0:
         raise ValueError("repository share omitted receiver shapes")
+    verify_former_names(stage / "export.nt")
     receiver = private / "receiver.db"
     run([binary, "shapes", "load", "repository-share", stage / "shapes.ttl", "--db", receiver])
     imported = json.loads(run([binary, "import", stage, "--db", receiver]))

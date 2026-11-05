@@ -97,6 +97,13 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
             raise JobsUnavailable("typed/IRI query capability missing")
         subject, predicate = _iri(row.get('s')), _iri(row.get('p'))
         value, is_iri, datatype = row.get('o'), row['objectIRI'], row.get('datatype')
+        # Verbose Quipu wraps typed literals; projected DATATYPE remains the
+        # independent term-kind witness. Never unwrap an IRI or contradictory cell.
+        if isinstance(value, dict):
+            if (is_iri or set(value) != {'value', 'datatype'} or
+                    not isinstance(datatype, str) or value['datatype'] != datatype):
+                raise JobsUnavailable("typed literal contradicts query metadata")
+            value = value['value']
         if type(value) not in (str, bool, int, float):
             raise JobsUnavailable("unsupported query cell")
         if is_iri:

@@ -29,6 +29,7 @@
 - [Private stop samples](stop-samples.md)
 - [Sleep / dream](dream.md)
 - [Scheduled & event jobs](jobs.md)
+- [Ephemeral agents](ephemeral-agents.md)
 - [Everyday work with one agent](everyday-work.md)
 
 # The shape
@@ -42,5 +43,6 @@
 - [Cross-harness handoff envelope](handoff-envelope.md)
 - [Cycle advice: keep or cycle at a handoff](cycle-advice.md)
 - [Durable browser handoffs](inbox-bridge.md)
+- [Messages in their own graph (design)](message-graph.md)
 - [MCP containment](mcp-containment.md)
 - [Private-key checks](private-key-checks.md)

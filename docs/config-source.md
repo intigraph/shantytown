@@ -90,6 +90,8 @@ one. Existing `st work defer` and `repool` retain their verified lifecycle guard
 
 Exact-ID readback precedes writes, and update/close/comment readback verifies the
 result. A timeout or unproven readback is an indeterminate write: inspect the
-known item, never automatically resend. A tracker that cannot support a comment
+known item, never automatically resend. A timed-out comment is read back once
+before st answers, so it can take about 60s in total (write limit plus read limit).
+A tracker that cannot support a comment
 or verify terminal evidence refuses before that operation. The Tracker protocol
 remains get/update/create; backend helpers own comments and transport details.

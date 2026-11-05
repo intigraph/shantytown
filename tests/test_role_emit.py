@@ -116,8 +116,8 @@ def test_the_guard_invokes_yupanas_pre_edit_event():
     "stop asking yupana". It wraps the call; it does not replace it.
 
     THE BINARY NAME IS PART OF THIS ASSERTION, and that is the point. An earlier
-    version of this test asserted `hank hook pre-edit`, which stayed green for
-    nine days after the crate was renamed hank -> yupana at v0.6.0 — because the
+    version of this test asserted the former executable name, which stayed green
+    for nine days after the v0.6.0 rename — because the
     test checks what shantytown EMITS, and shantytown emitted the dead name
     faithfully. A guard invoking a binary that is not on PATH exits 127, the
     wrapper's `|| exit 0` swallows it, and empty stdout is ALLOW. So the fleet
@@ -172,7 +172,7 @@ def test_guard_cannot_block_when_yupana_is_present_but_stale(tmp_path):
     exits 2 (clap's usage-error code), which is the one code Claude Code treats
     as a hard block.
 
-    Specimen: `hook pre-edit` against hank 0.1.0 (this crate's pre-rename name) ->
+    Specimen: `hook pre-edit` against the pre-rename 0.1.0 binary ->
         error: invalid value 'pre-edit' for '<EVENT>'   (exit 2)
     """
     import subprocess

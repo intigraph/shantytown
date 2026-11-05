@@ -89,3 +89,88 @@ def test_inbox_receipt_binds_exact_id_recipient_label_and_marker():
     assert verify_inbox_receipt(value,"worker","[overdue:abc]","receipt-1")=="receipt-1"
     for changed in [dict(id="foreign"),dict(assignee="other"),dict(labels=[]),dict(title="inbox: different marker")]:
         with pytest.raises(ValueError): verify_inbox_receipt(dict(value,**changed),"worker","[overdue:abc]","receipt-1")
+
+
+def test_targeted_sdk_never_falls_back_or_accepts_foreign_rows(tmp_path,monkeypatch):
+    tracker=SdTracker(store=str(tmp_path/'fixture')); calls=[]
+    event=dict(event_id='seeds:unlock:example-1:1',issue_id='example-1',assignee='worker',ready_generation=1,observed_at='2026-11-04T19:00:00Z',receipt=None)
+    payload={'changed':[],'events':[event]}
+    def cli(*args):
+        calls.append(args)
+        return CompletedProcess(args,0,json.dumps(payload),'')
+    monkeypatch.setattr(tracker,'_bd',cli)
+    tracker.reconcile_blockers('example-1')
+    assert calls[-1]==('blockers','reconcile','example-1','--json')
+    assert tracker.unlock_events('example-1').exact()[0]['id']=='example-1'
+    assert calls[-1]==('blockers','events','example-1','--json')
+    with pytest.raises(ValueError): tracker.unlock_events('other-1')
+    payload['changed']=[{'issue_id':'other-1','tx':1}]
+    with pytest.raises(ValueError): tracker.reconcile_blockers('example-1')
+    for identifier in ['','--all','../other']:
+        before=len(calls)
+        with pytest.raises(ValueError): tracker.unlock_events(identifier)
+        assert len(calls)==before
+
+
+def test_targeted_reaction_shared_ledger_retains_other_work_and_never_resends(tmp_path):
+    from shantytown.unlock_reader import react
+    sends=[]; writes=[]; stored=[None]; ack_calls=[]
+    event=dict(kind='unlock',id='example-1',episode='seeds:unlock:example-1:1',recipient='worker')
+    def reconcile(identifier): writes.append(identifier)
+    def events(identifier):
+        assert identifier=='example-1'
+        return Answer.complete_read([event],how='targeted fixture')
+    def ack(identifier,episode,receipt):
+        ack_calls.append((identifier,episode,receipt)); stored[0]=receipt
+        raise TimeoutError('lost committed ACK response')
+    tracker=SimpleNamespace(reconcile_blockers=reconcile,unlock_events=events,
+                            unlock_receipt=lambda *args:stored[0],ack_unlock=ack)
+    path=tmp_path/'notify'/'overdue.json';path.parent.mkdir()
+    due_key=json.dumps(['overdue','other-1','2026-10-01','other'],separators=(',',':'))
+    path.write_text(json.dumps({'entries':{due_key:123},'pending':{}}))
+    def deliver(*args): sends.append(args);return 'receipt-1'
+    assert react(tracker,tmp_path,Registry(),'example-1',deliver=deliver,receipt=lambda *args:None)==['worker']
+    assert react(tracker,tmp_path,Registry(),'example-1',deliver=deliver,receipt=lambda *args:None)==[]
+    assert len(sends)==1 and len(ack_calls)==1
+    assert writes==['example-1','example-1']
+    assert json.loads(path.read_text())['entries'][due_key]==123
+
+
+def test_targeted_reaction_unknown_write_fence_is_per_target(tmp_path):
+    writes=[]
+    def reconcile(identifier):writes.append(identifier);raise TimeoutError()
+    tracker=SimpleNamespace(reconcile_blockers=reconcile,unlock_events=lambda identifier:Answer.complete_read([],how='retained target'))
+    first=UnlockReader(tracker,tmp_path,identifier='example-1')
+    second=UnlockReader(tracker,tmp_path,identifier='example-2')
+    with pytest.raises(TimeoutError):first.events()
+    assert first.events().exact()==[]
+    with pytest.raises(TimeoutError):second.events()
+    assert writes==['example-1','example-2']
+    with pytest.raises(ValueError):first.ack('example-2','event','receipt')
+
+
+def test_targeted_reaction_holds_unrelated_pending_packet_without_reading_or_resending(tmp_path):
+    from shantytown.unlock_reader import react
+    calls=[]
+    key=json.dumps(['unlock','other-1','seeds:unlock:other-1:1',None],separators=(',',':'))
+    packet=dict(marker='[overdue:existing]',body='existing',keys=[key],attempted=True)
+    path=tmp_path/'notify'/'overdue.json';path.parent.mkdir()
+    path.write_text(json.dumps({'entries':{},'pending':{'worker':packet}}))
+    tracker=SimpleNamespace(reconcile_blockers=lambda identifier:None,
+        unlock_events=lambda identifier:Answer.complete_read([dict(kind='unlock',id=identifier,episode=f'seeds:unlock:{identifier}:1',recipient='worker')],how='fixture'))
+    assert react(tracker,tmp_path,Registry(),'example-1',deliver=lambda *args:calls.append('send'),receipt=lambda *args:calls.append('read'))==[]
+    assert calls==[]
+    assert json.loads(path.read_text())['pending']=={'worker':packet}
+
+
+def test_targeted_reaction_does_not_poll_due_board_or_ack_other_events(tmp_path):
+    calls=[]
+    key=json.dumps(['unlock','other-1','seeds:unlock:other-1:1',None],separators=(',',':'))
+    evidence=dict(at=123,receipt='prior-receipt',ack='attempted')
+    path=tmp_path/'notify'/'overdue.json';path.parent.mkdir()
+    path.write_text(json.dumps({'entries':{key:evidence},'pending':{}}))
+    a=OverdueAlerter(tmp_path,Registry(),read=lambda:calls.append('due'),
+        events=lambda:Answer.complete_read([],how='pending condition; no unlock'),
+        deliver=lambda *args:calls.append('send'),ack=lambda *args,**kw:calls.append('ack'),unlock_target='example-1')
+    assert a.sweep()==[] and calls==[]
+    assert json.loads(path.read_text())['entries'][key]==evidence

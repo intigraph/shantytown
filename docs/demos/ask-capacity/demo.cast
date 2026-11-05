@@ -1,0 +1,5 @@
+{"version": 2, "width": 100, "height": 24, "title": "Human decisions and active capacity"}
+[1.485925167798996e-06, "o", "BASE cd2e749fd723959e40049e00c32692cd042ded33\r\n$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/probe.py\r\n"]
+[0.04734928603284061, "o", "Input: 5 ordinary work + 5 owned ASK records\r\nWeighted work count: 10\r\nNew P1 admission: refused\r\nAll input rows, owners and statuses unchanged: yes\r\nInput: 10 ordinary work + 5 owned ASK records\r\nWeighted work count: 15\r\nNew P1 admission: refused\r\nAll input rows, owners and statuses unchanged: yes\r\n"]
+[0.047352446941658854, "o", "HEAD 63058c9e\r\n$ PYTHONPATH=SOURCE python docs/demos/ask-capacity/probe.py\r\n"]
+[0.08375457488000393, "o", "Input: 5 ordinary work + 5 owned ASK records\r\nWeighted work count: 5\r\nNew P1 admission: allowed\r\nAll input rows, owners and statuses unchanged: yes\r\nInput: 10 ordinary work + 5 owned ASK records\r\nWeighted work count: 10\r\nNew P1 admission: refused\r\nAll input rows, owners and statuses unchanged: yes\r\n"]

@@ -1,6 +1,6 @@
 {
-  "source_revision": "085afb5394bd9bad89b8a25a574fc1c9c47844a7",
-  "reviewed_at": "2026-10-24T02:04:07.168021Z",
+  "source_revision": "456ed29f98309ad4cb1a053f7b29ba8919abe48a",
+  "reviewed_at": "2026-10-27T21:28:52.694807+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
+      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
       "type": "Concept"
     },
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands; command parsing and exit handling are defined in this module.",
-      "source_sha256": "053ea7dd86b5f7e666579c2adee72b69784a840179057633c7bc50be01301b80",
+      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed role summaries; fleet-owner tend adds advisory ranking without reassignment. Failed reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed reviews require exact job and PR scope. Cycle accepts item-bound approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work stays gated. Explicit Chaski delegation skips the local evaluator and refuses local execution. Work triage offers quarantined priority/rank proposals for administrator acceptance. Harness conversion retains per-harness model and browser preferences and reports unsupported fields. Frozen semantic-only benchmarks call only automation and personal-need nouls; they cannot admit rank decisions. Cycle advice prefers checkpointed process replacement when exact native evidence proves an older running CLI; missing or stale evidence stays UNKNOWN.",
+      "source_sha256": "5af841af1c243120344d98d58fb91f4a78b485a0a08de591f1379889d657d481",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -34,8 +34,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration.",
-      "source_sha256": "8bfcfcb79adcb336669a1af1414c036f9bf386cc144b9495a6f6b3f4415bc221",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands. The inbox.store setting selects legacy seed pointers by default or the isolated Message graph; invalid or unknown declarations refuse.",
+      "source_sha256": "116e28db8b27a30bfae16f272e82a0936664dbfcfc73353f4e4c0fcb1442de28",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "3cdc13e76a61f57fa8be8eb03f8bd34be30b931fb90075be53252973e51ff899",
+      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -82,8 +82,8 @@
       "kind": "start-here",
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
-      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration.",
-      "source_sha256": "4fea586325041d84723e0ec3eb7828996a5c3572a756653489044e97eb9a43d5",
+      "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
+      "source_sha256": "455e4bd50a87fa76d10d0debc41b02c63fadabcbec29f94c1ccbc174f6910b02",
       "properties": {
         "startHereOrder": 2
       }

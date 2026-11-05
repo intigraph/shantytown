@@ -42,6 +42,9 @@ acknowledged handoff. The full payload stays in the bridge spool, not the inbox.
 """
 from __future__ import annotations
 import json
+import hashlib
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, runtime_checkable
@@ -451,13 +454,50 @@ class FilesInbox:
         return Message(id=p.stem, to=d["to"], body=d.get("body", ""),
                        frm=d.get("frm"), read=d.get("read", False))
 
-    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+    @contextmanager
+    def _delivery_lock(self):
+        # Allocation and publication are one local critical section. The old
+        # max(id)+1 sequence let concurrent writers overwrite each other's mail.
+        import fcntl
         self.root.mkdir(parents=True, exist_ok=True)
-        msg = Message(id=self._next_id(), to=to, body=body, frm=frm)
-        self._path(msg.id).write_text(json.dumps(
-            {"to": msg.to, "frm": msg.frm, "body": msg.body, "read": msg.read},
-            indent=2, sort_keys=True))
-        return msg
+        with (self.root / ".delivery.lock").open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
+    def _publish(self, msg):
+        import os
+        import tempfile
+        payload = {"to": msg.to, "frm": msg.frm, "body": msg.body, "read": msg.read}
+        fd, name = tempfile.mkstemp(prefix=".delivery-", dir=self.root)
+        try:
+            with os.fdopen(fd, "w") as handle:
+                json.dump(payload, handle, sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(name, self._path(msg.id))
+        finally:
+            Path(name).unlink(missing_ok=True)
+
+    def deliver(self, to: str, body: str, frm: str | None = None) -> Message:
+        with self._delivery_lock():
+            msg = Message(id=self._next_id(), to=to, body=body, frm=frm)
+            self._publish(msg)
+            return msg
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        identity = json.dumps([frm, to, key], separators=(",", ":")).encode()
+        msg_id = "msg-" + hashlib.sha256(identity).hexdigest()
+        with self._delivery_lock():
+            path = self._path(msg_id)
+            if path.exists():
+                msg = self._read(path)
+                if (msg.to, msg.body, msg.frm) != (to, body, frm):
+                    raise RuntimeError("delivery key binds a different receipt identity/content")
+                return msg
+            msg = Message(id=msg_id, to=to, body=body, frm=frm)
+            self._publish(msg)
+            return msg
 
     def unread(self, me: str) -> list[Message]:
         """PURE READ — no mkdir, no rewrite, nothing marked."""
@@ -476,16 +516,17 @@ class FilesInbox:
         return matches[0] if matches else None
 
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
+        if not self.root.is_dir():
+            return []
         marked = []
-        for msg in self.unread(me):
-            if ids is not None and msg.id not in ids:
-                continue
-            p = self._path(msg.id)
-            d = json.loads(p.read_text())
-            d["read"] = True
-            p.write_text(json.dumps(d, indent=2, sort_keys=True))
-            marked.append(Message(id=msg.id, to=msg.to, body=msg.body,
-                                  frm=msg.frm, read=True))
+        with self._delivery_lock():
+            for msg in self.unread(me):
+                if ids is not None and msg.id not in ids:
+                    continue
+                acknowledged = Message(id=msg.id, to=msg.to, body=msg.body,
+                                       frm=msg.frm, read=True)
+                self._publish(acknowledged)
+                marked.append(acknowledged)
         return marked
 
 
@@ -537,6 +578,13 @@ class TrackerInbox:
 
     def deliver(self, to: str, body: str, frm: str | None = None,
                 *, slug: str | None = None) -> Message:
+        return self._deliver(to, body, frm, None, slug)
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        return self._deliver(to, body, frm, key)
+
+    def _deliver(self, to, body, frm, key, slug=None):
         title = f"{PREFIX} {body}"
         # If the concrete tracker declares a title cap, honour it HERE — a clean
         # refusal before the write beats bd rejecting the create with a validation
@@ -587,8 +635,15 @@ class TrackerInbox:
             fields["slug"] = slug
         if frm:
             fields["description"] = f"from {frm}"
-        item = self._tracker.create(title, **fields)
-        return Message(id=item.id, to=to, body=body, frm=frm)
+        stable_create = getattr(self._tracker, "create_inbox_message", None)
+        if callable(stable_create):
+            item = stable_create(title, delivery_key=key or uuid.uuid4().hex, **fields)
+        elif key is not None:
+            raise RuntimeError("selected tracker lacks stable inbox delivery support")
+        else:
+            item = self._tracker.create(title, **fields)
+        return Message(id=item.id, to=to, body=body, frm=frm,
+                       read=item.status == "closed")
 
     def unread(self, me: str) -> list[Message]:
         """PURE READ. It lists and filters; it closes nothing."""
@@ -599,6 +654,20 @@ class TrackerInbox:
             and it.assignee in (me, me.split("/")[-1])
             and it.status != "closed"
         ]
+
+    def unread_count(self, me: str) -> int:
+        reader = getattr(self._tracker, "inbox_count", None)
+        answer = reader(me) if callable(reader) else None
+        return answer.exact() if answer is not None else len(self.unread(me))
+
+    def unread_view(self, me: str, *, limit=100, oldest_first=False):
+        reader = getattr(self._tracker, "inbox_page", None)
+        answer = reader(me, limit=limit, oldest_first=oldest_first) if callable(reader) else None
+        if answer is None:
+            values = self.unread(me)
+            return len(values), values
+        total, items = answer.exact()
+        return total, [Message(id=item.id, to=me, body=_body_of(item.title)) for item in items]
 
     def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
         """Read named receipts without enumerating the recipient's queue.
@@ -680,3 +749,108 @@ class TrackerInbox:
         if failed:
             raise MarkReadIncomplete(marked, failed)
         return marked
+
+
+class MessageGraphInbox:
+    """`[inbox] store = "message-graph"`: NEW mail goes through
+    `sd msg` into the per-week message windows, never into the board graph.
+
+    Reading unions the legacy inbox seeds (still closed by mark_read, exactly as
+    before) with window messages (marked read by an append-only `sd msg read`;
+    nothing is closed or deleted). Message ids tell the two apart: windows use
+    `msg-…`, seeds use the board prefix. Rollback is the config flip back to
+    "seed"; window messages stay readable with `sd msg list`.
+    """
+
+    def __init__(self, legacy: "TrackerInbox", tracker):
+        self._legacy = legacy
+        self._tracker = tracker
+
+    @staticmethod
+    def _is_window(msg_id: str) -> bool:
+        return msg_id.startswith("msg-")
+
+    def _as_message(self, me: str, v: dict) -> Message:
+        return Message(id=v["id"], to=v.get("to") or me, body=v.get("text", ""),
+                       frm=v.get("from"), read=v.get("read_at") is not None)
+
+    def _window_unread(self, me: str) -> list[Message]:
+        name = me.split("/")[-1]
+        return [self._as_message(name, v)
+                for v in self._tracker.list_messages(name, unread=True).exact()
+                if v.get("to") in (me, name)]
+
+    def deliver(self, to: str, body: str, frm: str | None = None,
+                *, slug: str | None = None) -> Message:
+        return self._send(to, body, frm, uuid.uuid4().hex)
+
+    def deliver_once(self, to: str, body: str, key: str, frm: str | None = None) -> Message:
+        validate_delivery_key(key)
+        return self._send(to, body, frm, key)
+
+    def _send(self, to, body, frm, key):
+        v = self._tracker.send_message(to, body, key=key, frm=frm).exact()
+        return Message(id=v["id"], to=to, body=body, frm=frm, read=v.get("read_at") is not None)
+
+    def find_delivery(self, me: str, marker: str) -> Message | None:
+        name = me.split("/")[-1]
+        matches = [self._as_message(name, v)
+                   for v in self._tracker.list_messages(name, unread=False).exact()
+                   if str(v.get("text", "")).startswith(marker + " ")]
+        if len(matches) > 1:
+            raise RuntimeError("ambiguous durable delivery: multiple receipts")
+        if matches:
+            return matches[0]
+        return self._legacy.find_delivery(me, marker)
+
+    def unread(self, me: str) -> list[Message]:
+        return self._legacy.unread(me) + self._window_unread(me)
+
+    def unread_count(self, me: str) -> int:
+        return self._legacy.unread_count(me) + len(self._window_unread(me))
+
+    def unread_view(self, me: str, *, limit=100, oldest_first=False):
+        total, legacy = self._legacy.unread_view(me, limit=limit, oldest_first=oldest_first)
+        window = self._window_unread(me)
+        if not oldest_first:
+            window = list(reversed(window))
+        merged = (legacy + window) if oldest_first else (window + legacy)
+        return total + len(window), merged[:limit]
+
+    def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
+        legacy_ids = [i for i in ids if not self._is_window(i)]
+        wanted = {i for i in ids if self._is_window(i)}
+        found = self._legacy.unread_selected(me, legacy_ids) if legacy_ids else []
+        if wanted:
+            found += [m for m in self._window_unread(me) if m.id in wanted]
+        return found
+
+    def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
+        if ids is None:
+            window = self._window_unread(me)
+            marked = self._legacy.mark_read(me, None)
+        else:
+            legacy_ids = [i for i in ids if not self._is_window(i)]
+            wanted = [i for i in dict.fromkeys(ids) if self._is_window(i)]
+            window = []
+            if wanted:
+                mine = {m.id: m for m in self._window_unread(me)}
+                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False).exact()}
+                for i in wanted:
+                    if i in mine:
+                        window.append(mine[i])
+                    elif i not in read_ids:
+                        raise RuntimeError(f"refused inbox acknowledgment of {i}: "
+                                           "no such message to this recipient")
+            marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
+        if window:
+            self._tracker.read_messages([m.id for m in window]).exact()
+            marked += [Message(id=m.id, to=m.to, body=m.body, frm=m.frm, read=True) for m in window]
+        return marked
+
+
+def validate_delivery_key(key):
+    """An explicit caller operation identity, never a guessed retry of a write."""
+    import re
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", key):
+        raise ValueError("delivery key must be 1..128 ASCII letters/digits or _.:-")

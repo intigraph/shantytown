@@ -265,4 +265,7 @@ def test_real_provision_updates_old_profile_without_role_reemission(tmp_path, mo
     commands = [h['command'] for g in cfg['hooks']['UserPromptSubmit'] for h in g['hooks']]
     assert sum('shantytown.incident_recall' in c for c in commands) == 1
     if harness_name == 'claude':
-        assert role.read_text() == '{}'  # workspace fallback leaves role ownership intact
+        from shantytown.runtime import stop_failure_hooks
+        # Only the failure event is repaired; recall stays workspace-owned.
+        assert json.loads(role.read_text()) == {
+            'hooks': {'StopFailure': stop_failure_hooks(root)}}

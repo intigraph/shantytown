@@ -25,7 +25,7 @@ socket = "default"             # the fleet's tmux server, DECLARED, never inferr
 
 [host]                         # only on a multi-host fleet
 name = "rig-a"                 # which rig this is, as the graph spells it
-admission_owner = "rig-a"      # same always-on lock host on EVERY peer
+admission_owner = "rig-a"      # optional: same always-on lock host on EVERY peer
 
 [host.peers.laptop]            # how to reach the OTHER host's st
 ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent lives there
@@ -49,6 +49,8 @@ restores the caller's environment on return when invoked as a Python function.
 
 | variable | what it points at | default |
 |---|---|---|
+| `SHANTY_WORKTREE_ROOT` | optional storage root for NEW project worktrees; must be paired with `SHANTY_WORKTREE_MOUNT` on a separate mounted filesystem. Existing trees are reused; invalid explicit selection refuses. See [mounted worktree storage](worktree-storage.md). | adjacent `<repository>-wt/<agent>`; or `worktree-storage.json` |
+| `SHANTY_WORKTREE_MOUNT` | required mount for `SHANTY_WORKTREE_ROOT`; both environment variables take precedence over the optional schema-1 config. Keep the configured root while external trees exist for enumeration. | unset |
 | `SHANTY_ROOT` | **which store `st` reads and writes** — the single most consequential setting. Precedence: `--root` > `$SHANTY_ROOT` > a `.shanty` found walking UP from the cwd > this box's pointer (`~/.config/shantytown/root`, written by `st fleet init`) > `cwd/.shanty`. The CLI and the Stop hook resolve it identically. The walk-up cannot help from a directory that is a SIBLING of the store rather than under it — an agent workspace, typically — which is what the pointer is for; with neither, `st` says so before the command runs rather than reporting "no such agent: &lt;your own name&gt;". | discovered; else `./.shanty` |
 | `SHANTY_MODEL` | Launch-generated provenance: exact resolved card/role/fleet model carried to client and tools; absent selection clears inherited metadata. Configure selection through cards or `[model]`, not this carrier. | resolved model; else unset |
 | `SHANTY_AGENT` | who you are, so `st anchor` needs no argument | — |
@@ -89,10 +91,12 @@ restores the caller's environment on return when invoked as a Python function.
 | `SHANTY_CODEX_SESSIONS_DEVICE` | Required expected decimal `major:minor` device identity for that mount. Read it from the actual deployment's mounted filesystem; do not copy another host's value. | unset |
 | `SHANTY_CODEX_SESSIONS_MIN_FREE` | Required positive minimum available bytes on the session filesystem. Existing destination components must be owned by the launching user and mode0700; setup never changes their permissions. This is launch admission, not a retention or automatic cleanup policy. | unset |
 | `SHANTY_STOP_CAPTURE` | a command appended LAST to every role's Stop hook list — the deployment's session-end knowledge-capture hook. Runs after the role's own stop machinery (send/drain/haul/feed-gate) settles. Solicitation etiquette (block-once, markers) is the command's own responsibility. Unset = nothing appended; shantytown ships no capture hook and hardcodes no path. | — |
+| `SHANTY_STOP_RULING_MEMORY` | `1` enables the explicit-ruling Stop reminder once per unchanged session state, with a Camayoc record command. Uses the existing Stop policy; unknown transcript or ledger state allows Stop. See [stop policy](stop-policy-spec.md#optional-ruling-memory-reminder). | Off |
 | `SHANTY_STOP_JEV_COMMAND` | Opt-in quoted argv for the canonical Jev MCP server. Classifies an open anchor using only bounded, masked last assistant message plus status; five-second total deadline. Unknown preserves stop routing. No command means disabled. | — |
 | `SHANTY_STOP_SAMPLES` | Absolute private evidence directory for an opt-in, local-only 30-sample stop-hook collection. Requires a daily retention sweep before enabling; see [Private stop samples](stop-samples.md). Pane text is never attached to normal events. Unset = disabled. | — |
 | `SHANTY_HIERARCHY_FILE` | the hierarchy file `st fleet roles sync` falls back to when the graph cannot be read (`.ttl`\|`.yaml`\|`.json` describing `CrewMember` + `reports_to`). Unset = look for `hierarchy.*` beside the crew root; if that is absent too, `sync` REFUSES rather than projecting an empty crew. Only the ontology-first *default* falls back — an explicit `--from quipu` that cannot reach the graph refuses instead of silently substituting this file. | `<root>/hierarchy.*` if present |
 | `SHANTY_SHARED_CHECKOUT_OK` | set to `1` to allow ONE deliberate `git commit`/`rebase`/`merge` in a SHARED project checkout, past the guard `st repo worktree` installs there. Read by the hook, not by `st` — it is the maintenance escape hatch, not a mode. Everyday work belongs in `st repo worktree <repo>`, where index and HEAD are per-agent; the guard exists because a shared checkout's index is shared, so one session's commit can carry another's staged files and its reset can drop the other's commit, with git reporting success to both. Note the guard fires at COMMIT only — `git reset` has no hook and is not guarded, so this is a seatbelt, not a cage. | unset (guard active) |
+| `SHANTY_OWNED_WORK_PUBLISH` | Opt in to authenticated lifecycle observation publication from the existing stop, launch, capture and supervisor hooks. `1` enables it; otherwise local escalation stays active without graph writes. Facts use the configured host/root writer scope and expire to UNKNOWN for the held-work reader. See [lifecycle observations](stopped-owner-graph.md). | off |
 | `SHANTY_GRAPH_CONTEXT` | how hard `st go` and `st agent cycle` insist on graph context: `advise` (default) warns and RECORDS the gap, `require` refuses a dispatch that names neither a `--quipu-node` nor a `--no-graph-context` reason. Advise is the default because this landed on a fleet whose scripts and crons already call `st go`, and a flag that refuses every existing caller the day it ships is a fleet-stopping change dressed as a measurement — so the ledger measures the habit first and the flip is one line once the callers carry it. Independent of the mode: a node the graph positively does NOT hold is refused either way (a wrong claim, not an absent one), while a graph that cannot be reached never refuses. Read the numbers with `st agent stats --graph`. | `advise` |
 | `SHANTY_ENTITY_LINK` | the graph-node SUGGESTION for work that names none (aegis-4hhqoe.12): `write` (default) suggests and records the link as an inferred, quarantined `aegis:about`; `suggest` only prints it; `off` asks nothing. When `st go` names no `--quipu-node`, and when a resume brief carries no node, st runs camayoc `scripts/entity_link.py` (quipu `/search`, then one Jev choice with none-of-these) and SHOWS the result as a suggestion. It is never added to the dispatch's nodes: citing it with `--quipu-node` is the agent's act, and `st agent stats --graph` reads that act as accepted/rejected, the live precision. Any failure (no camayoc at `CAMAYOC_SOURCE`, default `~/.local/share/camayoc-src/camayoc`, no Jev key, a timeout) is "no suggestion" and never blocks a dispatch. | `write` |
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend acts on the neglected anchor. At this threshold tend NUDGES the agent itself to close-or-release it (self-heal); the coordinator is only escalated to if that goes unanswered. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
@@ -117,6 +121,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_INSTRUCTIONS_MODE` | `compare` reports byte-level migration differences; `apply` realizes the reviewed fragment body during provision. Local identity files stay untouched. | compare |
 | `SHANTY_TOOLING_MANIFEST` | Absolute Quipu entity IRI whose single `rdf:value` is the canonical MCP, skills, and tooling-instructions JSON. Provision and doctor read it fresh; unavailable or ambiguous data refuses rather than falling back. See [harness tooling](harnesses.md#canonical-tooling-from-quipu). | unset (legacy local kit) |
 | `SHANTY_RULES_QUERY` | Name of the stored Quipu query that returns this deployment's crew process rules. When set, the session-start anchor tells every session to run it for its role and that a failed or empty read means the rules are UNKNOWN. Process rules then live in the graph, not in instruction files. | unset (no rules pointer) |
+| `SHANTY_BOARD_METRICS_QUERY` | Named query used by the fleet-owner ranking advisory for reconciled P0 created/closed counts across seven UTC calendar dates. Failed or incomplete coverage is UNKNOWN. | `seeds_board_metrics_v1` |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
 | `SHANTY_ONTO_STATUS_PRED` | the predicate local-name marking a non-live crew member (its ABSENCE means active, so a forgotten mark leaves a retiree visible rather than hiding a live agent). | `crewStatus` |
@@ -132,7 +137,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_SELF_CYCLE_SERVE` | `0`/`off`/`false`/`no` stops `st agent cycle --self` from starting its detached single-agent waiter (aegis-oj2z7m), leaving the request to `st fleet tend`. The waiter performs the request at the agent's next idle turn and gives up after 20 minutes. | on |
 | `SHANTY_CHECKPOINT_JEV_COMMAND` | installed Jev MCP server command for checkpoint-only handoff quality advice before cycling. Five-second judge deadline; one rewrite opportunity per launch below measured cycle depth; unknown or saturated depth proceeds. Usually set in `[env]`. | `SHANTY_CREATE_JEV_COMMAND`, otherwise UNKNOWN advice |
 | `SHANTY_ESCALATE_COMMAND` | the human-escalation command `st fleet watch` runs when a peer administrator stays down past `--escalate-after` or a repair fails (aegis-az0a40). Invoked as `<command> -s <severity> "<description>"`; its exit code is the verdict (0 paged, 1 fallback attempted, 2 nobody paged). Usually set in `[env]`. Unset = the watch alerts and repairs but says `escalation NOT CONFIGURED` and pages nobody. | — |
-| `SHANTY_RANKER` | `policy` to weight the admin workflow by Hank blast radius; else rule-based | — |
+| `SHANTY_RANKER` | `policy` to weight the admin workflow by Yupana blast radius; else rule-based | — |
 | `SHANTY_FORGEJO_URL` | a self-hosted forge: `st ops doctor`'s release checks, and the base URL for `--backend forgejo` (issues as work items; pair with `SHANTY_FORGEJO_TOKEN` and `--repo owner/name`) | `http://localhost:3000` |
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
@@ -279,3 +284,19 @@ A governor refusal is terminal for post-cycle redispatch. The fallback itself
 requires the existing governor to admit a lowest-priority status prompt; it
 cannot borrow a checkpoint's priority when the current plate is unreadable.
 The recovery prompt asks for verification before work, and creates no work item.
+
+## Per-crew file memory (default OFF)
+
+`[memory.<crew>]` declares one opt-in Claude plan. `enabled` is boolean and
+defaults to false; the remaining fields are `server`, `deployment`, `project`,
+`account` (optional exact named-account/`legacy` pin; empty uses the selected account), `source` (the actual existing
+native directory), `outbox` and `staging`. Enabled plans require all three
+directories to exist, not overlap and satisfy the private-directory checks.
+See [crew memory](crew-memory.md) for the identity, conflict and rollout contract.
+No memory body, bearer or account credential belongs in this table.
+
+`SHANTY_MEMORY_GENERATION` is an internal per-launch marker emitted into a
+prepared Claude settings artifact. It identifies a pending/active retained
+generation; it is not an operator override or authority to import arbitrary
+paths. SessionStart must acknowledge the matching pending selection before
+Stop can ingest it. Codex and OpenCode receive no generated-writeback adapter.

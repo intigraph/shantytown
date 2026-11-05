@@ -714,9 +714,9 @@ def _yupana_trace_cmd() -> dict:
 # that is what "first class" means: you cannot launch an unguarded agent by
 # forgetting a flag.
 #
-# THE BINARY IS `yupana`. It was named `hank` until v0.6.0 and this line said
-# `hank` for nine days after the rename, which is the most expensive kind of
-# stale reference: `hank` is not on PATH, so the command exits 127, `|| exit 0`
+# THE BINARY IS `yupana`. This line retained the former executable name for
+# nine days after the v0.6.0 rename, which is the most expensive kind of
+# stale reference: the absent command exits 127, `|| exit 0`
 # swallows it, stdout is empty — and EMPTY STDOUT IS ALLOW. The wrapper below is
 # built to convert any yupana failure into an allow, so it converted "this
 # binary does not exist" into an allow too, silently, on every edit by every
@@ -739,7 +739,7 @@ def _yupana_trace_cmd() -> dict:
 # is never confused with a failure, and this wrapper cannot swallow it.
 # 2026-07-19 (window, kelly): the "yupana never exits 2" contract was
 # FALSIFIED IN PRODUCTION and this line hard-blocked the whole fleet. Installed
-# hank 0.1.0 implemented only `post-edit`; `hook pre-edit` was a clap USAGE
+# The pre-rename 0.1.0 binary implemented only `post-edit`; `hook pre-edit` was a clap USAGE
 # error, and clap exits 2 — Claude Code's one blocking code. Every Write/Edit by
 # every shantytown worker was refused with:
 #   PreToolUse:Write hook error: invalid value 'pre-edit' for '<EVENT>'
@@ -828,7 +828,7 @@ def _guard_hook() -> dict:
 
     The cost of that contract, stated because it has already been paid once: a
     guard nothing can hard-block is also a guard whose ABSENCE is indistinguishable
-    from silence. `command -v` would have caught the hank->yupana rename; the
+    from silence. `command -v` would have caught the executable rename; the
     contract says not to use it, and it did not. Liveness is answered by
     yupana's own `pre_edit_invoked` spool record, not by this file.
 
@@ -1272,6 +1272,15 @@ def admin_budget_prompt_hooks(role: str, root=None) -> list:
     return [{"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}]
 
 
+def stop_failure_hooks(root=None) -> list[dict]:
+    """API errors bypass Stop; regeneration and old-artifact repair share this."""
+    return [{"hooks": [{
+        "type": "command", "async": True, "timeout": 30,
+        "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
+                   + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
+    }]}]
+
+
 def claude_settings_for_role(role: str, root=None) -> dict:
     """The Claude Code settings.json a role needs. CLAUDE-CODE-SPECIFIC (this
     container and its keys) — owned by ClaudeHarness, which is the only thing
@@ -1279,6 +1288,7 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     from the three shared builders above.
     """
     capture = _capture_cmd(root)
+    from .memory_lifecycle import hooks as memory_hooks
     artifact_hooks = []
     # Deployment-owned publication policy must survive settings regeneration.
     # Scope it to administrators; workers and other harnesses do not publish
@@ -1292,17 +1302,13 @@ def claude_settings_for_role(role: str, root=None) -> dict:
     return {
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
-            "SessionStart": session_start_hooks(root),
+            "SessionStart": session_start_hooks(root) + memory_hooks(root, 'start'),
             "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
-                     {"hooks": [capture]}],
+                     {"hooks": [capture]}] + memory_hooks(root, 'stop'),
             # API errors bypass Stop. This handler is notification-only and
             # asynchronous: its network/plate reads cannot delay the harness.
-            "StopFailure": [{"hooks": [{
-                "type": "command", "async": True, "timeout": 30,
-                "command": f"{shlex.quote(_hook_interpreter())} -m shantytown.stop_failure"
-                           + (f" --root {shlex.quote(str(Path(root).resolve()))}" if root is not None else ""),
-            }]}],
+            "StopFailure": stop_failure_hooks(root),
             # yupana policy guard on every edit-shaped tool call. See _YUPANA_GUARD.
             "PreToolUse": pre_tool_use_hooks(root) + artifact_hooks + [
                 {"matcher": ".*", "hooks": [capture]}],
@@ -1722,6 +1728,7 @@ class ClaudeRuntime:
         self._panes = panes
         self._resolve = resolve_settings
         self._root = root
+        self._memory_settings = {}
 
     def hooks(self, card: Agent) -> HookSpec:
         # FORWARDS to the card's harness — the single source of truth for this
@@ -1742,6 +1749,10 @@ class ClaudeRuntime:
         Capability still precedes settings: a lead the program cannot host refuses
         before we bother writing anything.
         """
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return job_launch.command(*prepared)
         # THE ARGV, THE SETTINGS FORMAT, AND THE CAPABILITY ARE ALL THE HARNESS'S
         # (harness.py). This method keeps only what is the RUNTIME's — the
         # settings-or-nothing invariant and the assert below — and asks the harness
@@ -1756,7 +1767,8 @@ class ClaudeRuntime:
         from .tier import deployment_catalog
         require_capability(program, card, consequence="Nothing launched.",
                            catalog=deployment_catalog(self._root))
-        settings_path = self.settings_path(card)
+        from .account_auth import settings_path as account_settings_path
+        settings_path = account_settings_path(card, self._resolve(card), self._root)
         if not settings_path:
             # A new store may have a card whose role has never been emitted.
             # Name the generating command, rooted to THIS store, so repair does
@@ -1770,6 +1782,17 @@ class ClaudeRuntime:
                 f"(role {card.role!r}); refusing to launch a settings-less agent. "
                 f"Emit the role settings with `{shlex.join(repair)}`, then retry."
             )
+        from .memory_lifecycle import prepare_launch
+        base_settings_path = settings_path
+        try:
+            settings_path = prepare_launch(self._root, card, settings_path)
+        except (OSError, ValueError):
+            raise SettingsError('native memory preparation UNKNOWN; nothing launched; '
+                                'preserve source and outbox') from None
+        if settings_path != base_settings_path:
+            self._memory_settings[card.name] = (base_settings_path, settings_path)
+        else:
+            self._memory_settings.pop(card.name, None)
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
@@ -1785,10 +1808,25 @@ class ClaudeRuntime:
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return prepared[0]['settings']
         from .account_auth import settings_path
-        return settings_path(card, self._resolve(card), self._root)
+        base = settings_path(card, self._resolve(card), self._root)
+        prepared = self._memory_settings.get(card.name)
+        if prepared is not None and prepared[0] == base:
+            return prepared[1]
+        from .memory_lifecycle import selected_settings
+        try:
+            return selected_settings(self._root, card, base)
+        except (OSError, ValueError):
+            raise SettingsError('native memory settings UNKNOWN; preserve prior artifacts') from None
 
     def prepare_account_settings(self, card: Agent) -> None:
+        from . import job_launch
+        if job_launch.for_card(self._root, card):
+            return
         from .account_auth import settings_path
         settings_path(card, self._resolve(card), self._root, prepare=True)
 

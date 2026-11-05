@@ -78,7 +78,8 @@ def test_native_header_matches_sdk_service_identity(monkeypatch):
     monkeypatch.setenv('SEEDS_AGENT_NAME', 'worker')
     with declared_query_identity(None, source='st-tend', operation='tend'):
         seeds_plate.ready_count(PROOF, now=NOW)
-    assert seen == ['worker']
+    # Both the watermark request and fallback projection retain attribution.
+    assert seen == ['worker', 'worker']
 
 
 def test_active_projection_is_owner_scoped_not_open_unassigned(monkeypatch):
