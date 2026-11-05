@@ -213,6 +213,8 @@ Context occupancy hints are opt-in in `shantytown.toml`:
 context_window = 1000000
 context_threshold_pct = 50
 context_hard_pct = 70
+context_nudge_pct = 35
+context_nudge_repeat_seconds = 120
 
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
@@ -226,12 +228,28 @@ variants. Role and agent overrides inherit global settings; an agent override ta
 precedence over its role. Use agent declarations for mixed-model crews. Without an explicit window, Codex uses the server-provided `model_context_window`
 from the same usage record. Claude needs a declaration; missing capacity reports
 UNKNOWN. Enabling any context setting enables coverage for the whole crew:
-otherwise undeclared agents use a 70% threshold with no assumed capacity. A
+otherwise undeclared agents use a 50% threshold with no assumed capacity. A
 role/agent-specific capacity is never borrowed by another agent. Omitting all
 context settings leaves hints disabled.
 
-Existing Stop hooks read the latest turn's input occupancy, including Claude
-cache tokens, and give one advisory per threshold crossing or session change.
+The existing PostToolUse capture hook reads the latest turn's input occupancy,
+including Claude cache tokens, and adds nonblocking preparation reminders during
+long turns for every role, including administrators. `context_nudge_pct` defaults
+to 15 percentage points below the hint (or half the hint for thresholds below 30%).
+Reminders repeat every `context_nudge_repeat_seconds` (default 120, range 1–3600),
+or after another five percentage points. Explicit nudge percentages must be below
+the hint. Session changes, compaction below the nudge and threshold crossings re-arm
+feedback; busy observations do not postpone the next reminder. Unknown or invalid
+capacity never becomes a percentage.
+
+Stop also emits early preparation advice and repeats ordinary handoff hints at
+the configured interval. Tool reminders never call Jev, suppress Stop decisions,
+extend a bounded exception or schedule a cycle. Jev exceptions still expire after
+ten minutes or five percentage points; the hard limit still has no override.
+Tool feedback scans at most the latest 2 MiB of transcript, never a partial first
+record. Usage outside that bound stays UNKNOWN until a fresh record arrives.
+Live acceptance requires both the installed capture hook and a fresh usage event;
+source tests alone do not prove delivery to a running administrator.
 The [compact checkpoint template](guides/context-cycle.md) gives one request command;
 `--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
 Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
