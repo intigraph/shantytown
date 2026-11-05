@@ -78,3 +78,25 @@ def test_native_refusal_remains_no_verdict_even_with_success_text():
     with pytest.raises(ValueError,match='refusal'):
         agy_job.parse_result(stream(denied_actions=[{'action':'mcp'}]),'gemini-test')
     with pytest.raises(ValueError):agy_job.parse_result('42','gemini-test')
+
+
+def test_cancelled_job_kills_child_and_removes_temporary_auth(tmp_path,monkeypatch):
+    from shantytown import agy_usage
+    from shantytown.governor import Reading
+    auth=tmp_path/'auth';auth.write_text('fixture-only');auth.chmod(0o600)
+    monkeypatch.setattr(agy_usage.AgyUsageReader,'read_all',lambda self:{'seven_day':Reading(pct=0,ok=True)})
+    monkeypatch.setattr(agy_job.shutil,'which',lambda name:'/fixture/agy')
+    captured={}
+    class Child:
+        pid=31337
+        returncode=None
+        def communicate(self,*a,**kw):raise KeyboardInterrupt()
+        def poll(self):return self.returncode
+        def wait(self,**kw):self.returncode=-9
+    def popen(*a,**kw):captured['home']=Path(kw['env']['HOME']);return Child()
+    monkeypatch.setattr(agy_job.subprocess,'Popen',popen)
+    monkeypatch.setattr(agy_job.os,'killpg',lambda pid,sig:captured.update(killed=pid))
+    with pytest.raises(KeyboardInterrupt):
+        agy_job.run_review('fixture','gemini-3.8-flash-low',tmp_path/'result',auth=auth,lock_root=tmp_path/'locks')
+    assert captured['killed']==31337 and not captured['home'].exists()
+    assert auth.read_text()=='fixture-only'

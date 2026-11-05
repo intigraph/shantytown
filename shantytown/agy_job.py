@@ -155,10 +155,23 @@ def run_review(prompt, model, directory, *, timeout=840, auth=None, lock_root=No
             started=time.time()
             timed_out=False
             try:
-                stdout,stderr=child.communicate(message,timeout=timeout+60)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid,signal.SIGKILL)
-                stdout,stderr=child.communicate();timed_out=True
+                try:
+                    stdout,stderr=child.communicate(message,timeout=timeout+60)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(child.pid,signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    stdout,stderr=child.communicate(timeout=10);timed_out=True
+            finally:
+                # Outer scheduler cancellation must not orphan an authenticated
+                # model process after removing its temporary credential HOME.
+                if child.poll() is None:
+                    try:
+                        os.killpg(child.pid,signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    child.wait(timeout=10)
             private_write(result_dir/'events.ndjson',stdout)
             private_write(result_dir/'stderr.txt',stderr)
             after=AgyUsageReader(limit_id=group,run=quota_run).read_all()
@@ -201,7 +214,12 @@ def post_advisory(repo, pr, head, directory, *, run=subprocess.run):
                capture_output=True,text=True,timeout=30,check=True).stdout.strip()
 
 
+def _cancel(signum, frame):
+    raise InterruptedError('agy advisory job cancelled')
+
+
 def main(argv=None):
+    signal.signal(signal.SIGTERM, _cancel)
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo',required=True);p.add_argument('--pr',required=True,type=int)
     p.add_argument('--head',required=True);p.add_argument('--model',required=True)

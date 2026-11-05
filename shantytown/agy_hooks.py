@@ -67,11 +67,22 @@ def execute(command, payload, timeout, env):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              env=env, start_new_session=True, text=True)
     try:
-        stdout, stderr = child.communicate(json.dumps(payload), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(child.pid, signal.SIGKILL)
-        child.communicate()
-        raise ValueError('st agy hook timed out') from None
+        try:
+            stdout, stderr = child.communicate(json.dumps(payload), timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.communicate(timeout=10)
+            raise ValueError('st agy hook timed out') from None
+    finally:
+        if child.poll() is None:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            child.wait(timeout=10)
     if len(stdout) > 1024 * 1024:
         raise ValueError('st agy hook output exceeds limit')
     return child.returncode, stdout, stderr[:65536]
@@ -151,7 +162,13 @@ def dispatch(event, native, settings_path, *, runner=execute):
     return {}
 
 
+def _cancel(signum, frame):
+    raise InterruptedError('st agy hook cancelled')
+
+
 def main(argv=None):
+    import signal
+    signal.signal(signal.SIGTERM, _cancel)
     parser = argparse.ArgumentParser()
     parser.add_argument('--settings', required=True)
     parser.add_argument('--event', required=True,
