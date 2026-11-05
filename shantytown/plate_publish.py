@@ -3,7 +3,7 @@
 aegis-qdjof. The epic's premise is "one scope, THREE consumers (policy, trace,
 context)", and all three begin by answering *what is this agent working on*.
 shantytown owns that answer (``plate(tracker, agent)``), but it owned it only in
-Python: there was no env var carrying it and nothing on disk holding it, so hank
+Python: there was no env var carrying it and nothing on disk holding it, so yupana
 (Rust) and bobbin (Rust) could not answer it at all.
 
 WHY A FILE AND NOT THE TWO OBVIOUS ALTERNATIVES
@@ -22,7 +22,7 @@ WRITES ARE FAIL-SILENT, and that is stricter than it sounds: publishing is
 bookkeeping on the side of a command the operator actually asked for. A full
 disk, a read-only root or a lost race must never change what `st anchor` or
 `st go` does or prints. Every error here is swallowed whole — the same contract
-hank's metrics spool holds, and for the same reason (a bookkeeping write took a
+yupana's metrics spool holds, and for the same reason (a bookkeeping write took a
 supervisor down once already).
 
 READS ABSTAIN RATHER THAN GUESS. Missing, malformed, or stale all resolve to

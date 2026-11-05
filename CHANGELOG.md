@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.10.0](https://github.com/intigraph/shantytown/compare/v0.9.1...v0.10.0) (2026-11-05)
+
+
+### Features
+
+* **cycle:** prefer process replacement for installed CLI updates ([#463](https://github.com/intigraph/shantytown/issues/463)) ([551f966](https://github.com/intigraph/shantytown/commit/551f9660975df58cd50cdb972557d9d43e10feb1))
+* **input:** retain bounded composer observation evidence ([#432](https://github.com/intigraph/shantytown/issues/432)) ([108b17e](https://github.com/intigraph/shantytown/commit/108b17e0900d6e311372840e6e37cfcd1bcb7260))
+* **jobs:** delegate the local evaluator explicitly to Chaski ([#462](https://github.com/intigraph/shantytown/issues/462)) ([00aeb88](https://github.com/intigraph/shantytown/commit/00aeb887d5ec2f8575283bd1c8eca5bbf09aa795))
+* **notify:** add a finite targeted unlock reaction seam ([#471](https://github.com/intigraph/shantytown/issues/471)) ([ee7bf0a](https://github.com/intigraph/shantytown/commit/ee7bf0a2265319967c2a042b149703d8b6346706))
+* **rank:** derive bands from measured gates and isolate semantic evaluation ([#466](https://github.com/intigraph/shantytown/issues/466)) ([64176a5](https://github.com/intigraph/shantytown/commit/64176a59703efce5487285de626fa82249800e4c))
+* **rank:** governed board proposals with a quarantined Jev benchmark ([#456](https://github.com/intigraph/shantytown/issues/456)) ([023868b](https://github.com/intigraph/shantytown/commit/023868baafd9cc36ae49dfc5654110ac8b20b9d1))
+* **share:** publish pendant entities under w3id.org/intigraph names ([#450](https://github.com/intigraph/shantytown/issues/450)) ([17010a5](https://github.com/intigraph/shantytown/commit/17010a52a4aab0eebc62607a0d4f9d1931b0f94f))
+
+
+### Bug Fixes
+
+* bind repository shares to pinned providers and native seals ([#480](https://github.com/intigraph/shantytown/issues/480)) ([a93335d](https://github.com/intigraph/shantytown/commit/a93335d37caad89e8007d0a711de9166d4dd0a0a))
+* **comments:** retain terminal SDK errors after warnings ([#455](https://github.com/intigraph/shantytown/issues/455)) ([7923c5c](https://github.com/intigraph/shantytown/commit/7923c5cfc68057406a39c4aee6479f6e509954bf))
+* **context:** nudge every role before handoff and repeat advice ([#460](https://github.com/intigraph/shantytown/issues/460)) ([f7b3b34](https://github.com/intigraph/shantytown/commit/f7b3b346a2494fb43d77cf749a5f59ed1defbdf5))
+* **cost:** one missing or unreadable item no longer aborts the cost report ([#441](https://github.com/intigraph/shantytown/issues/441)) ([202c6b0](https://github.com/intigraph/shantytown/commit/202c6b0edaef10dfdfd9dd869e3738e9877c207b))
+* **cycle:** cut redundant checkpoint round trips ([#453](https://github.com/intigraph/shantytown/issues/453)) ([2981a4e](https://github.com/intigraph/shantytown/commit/2981a4ebc808356d5aef9ff600c606ac7bdbcc71))
+* **cycle:** let pending self-cycles reach idle ([#472](https://github.com/intigraph/shantytown/issues/472)) ([ca80682](https://github.com/intigraph/shantytown/commit/ca80682f096aba9a604ccaa872750339969c63e8))
+* **harness:** preserve per-harness browser preferences and model selections ([#458](https://github.com/intigraph/shantytown/issues/458)) ([b06d1ec](https://github.com/intigraph/shantytown/commit/b06d1ec51c2a4ba3c003bf9618b6386ce369d19b))
+* **hooks:** encode resume briefs as SessionStart context ([#473](https://github.com/intigraph/shantytown/issues/473)) ([577f64f](https://github.com/intigraph/shantytown/commit/577f64fb64e6da5e3a8754c5c7908839ea05d6b2))
+* **rank:** preserve Unicode scalars in quarantine Turtle ([#465](https://github.com/intigraph/shantytown/issues/465)) ([67cf0a4](https://github.com/intigraph/shantytown/commit/67cf0a4c46bf31ded4920ed39eac195c7e036a96))
+* **rank:** require explicit host placement for local owner probes ([#464](https://github.com/intigraph/shantytown/issues/464)) ([087c9f9](https://github.com/intigraph/shantytown/commit/087c9f9b153bb87defd63e95275a19b7b7c051af))
+* **remote:** report discovery limits without inventing phone identity ([#469](https://github.com/intigraph/shantytown/issues/469)) ([db4561f](https://github.com/intigraph/shantytown/commit/db4561f60a5ccbbd51673248ec64e36332f84d5f))
+* **tend:** compact ranking digest and suppress unchanged logs ([#461](https://github.com/intigraph/shantytown/issues/461)) ([8ee0f7e](https://github.com/intigraph/shantytown/commit/8ee0f7eaa1bd453838e2a4df69a5eea83673449e))
+* **tend:** ranking check pages only for an unowned P0 ([bccb036](https://github.com/intigraph/shantytown/commit/bccb036cd65183cc16f79a2c56fe24419565afbe))
+* **tend:** ranking check pages the administrator only for an unowned P0 (aegis-2inj) ([bccb036](https://github.com/intigraph/shantytown/commit/bccb036cd65183cc16f79a2c56fe24419565afbe))
+* **tend:** unknown board counts are logged, not paged ([#452](https://github.com/intigraph/shantytown/issues/452)) ([4270087](https://github.com/intigraph/shantytown/commit/42700874c0ef2207b54caaea619ff9bd5e8f7096))
+* **worktree:** refuse --gc on a relocated worktree; report partial deletes as damage ([#459](https://github.com/intigraph/shantytown/issues/459)) ([9f3d233](https://github.com/intigraph/shantytown/commit/9f3d233c874bcff072a97d426e5e05f7b9cad15f))
+
+## [0.9.1](https://github.com/intigraph/shantytown/compare/v0.9.0...v0.9.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **deferrals:** start field reads below the structural limit ([#444](https://github.com/intigraph/shantytown/issues/444)) ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
+* **deferrals:** start field reads below the structural limit ([02216eb](https://github.com/intigraph/shantytown/commit/02216ebf2acf9377204c571356578a80eaf25c5a))
+* **owned-work:** stop putting a review deadline on immutable lifecycle observations ([#448](https://github.com/intigraph/shantytown/issues/448)) ([3f29f25](https://github.com/intigraph/shantytown/commit/3f29f2577beedd802ef69f7ef55161f2a1c012ac))
+
 ## [0.9.0](https://github.com/intigraph/shantytown/compare/v0.8.0...v0.9.0) (2026-11-02)
 
 

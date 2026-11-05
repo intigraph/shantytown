@@ -1,0 +1,13 @@
+Script started on 2026-11-04 03:07:58-05:00 [COMMAND="PYTHONPATH=. python3 docs/pr-demos/comment-terminal-error.py" <not executed on terminal>]
+BASE 2981a4ebc808356d5aef9ff600c606ac7bdbcc71
+br comments add task-1 failed: sd: actor/principal mismatch (observe): actor="worker" principal="shared-writer" verb="comments add" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+write attempts: 1
+
+CANDIDATE (current source checkout)
+br comments add task-1 failed: exit 1: …" principal="shared-writer" verb="comments add" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+sd: quipu 503: write outcome UNKNOWN; inspect readback before retrying
+write attempts: 1
+
+CONTROL: observe warning + exit 0 accepted; one write, no retry
+
+Script done on 2026-11-04 03:07:58-05:00 [COMMAND_EXIT_CODE="0"]
