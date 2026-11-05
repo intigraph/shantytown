@@ -1,0 +1,11 @@
+{
+  "source_revision": "ec00530716fd4d8b356e8988ff38c5785e930de8",
+  "sha256": {
+    "shantytown/cli.py": "b46e16bc7de5ce7204e46e17d33ee011b743709f55f959a7638c615f464feb3f",
+    "shantytown/dispatch.py": "798ea6e75cc9f336b93de2c156183543e693cc252a46b71cbfe60e91a949963a",
+    "shantytown/deferral_notes.py": "312b7c5f711bd9315c4a4c66a3a788f6513c8a53707844c24ed58a9d696bc401",
+    "shantytown/deferral_pacing.py": "209b8d41b22a44ea59aa5b0b2b63e6c73c5f9fb8bc5487e9bf3fa8558caf4a88",
+    "shantytown/deferral_waits.py": "09dde87f849c285147f450be7e3dc0e53eb795ffafb63137b5beb141fd169e5e",
+    "shantytown/notify.py": "56fcfa58c243a47d4649176bf6ba8253641a1a951854efec9affd067e4fd72d3"
+  }
+}

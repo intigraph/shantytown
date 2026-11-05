@@ -432,6 +432,16 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
+CI, review, merge and install waits require a non-date `resume_when` condition
+and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
+required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
+existing registered `event:` binding; a new event name is not a registration.
+For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
+with an exact UTC `--until` at least a day away. Short date-only polling and
+dry-run attempts refuse before writes. A real scheduled appointment may use
+`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
+This exception does not bypass human decisions, dependency checks or resume gates.
+
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
 command's exact scope flag are informational metadata; they do not turn that
@@ -2783,19 +2793,24 @@ and indeterminate writes retry on the next pass. Three consecutive failures
 produce one UNTESTABLE finding for the administrator; continued failure stays
 silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
-mechanical conditions remain quiet even after a separate timestamp lapses;
+mechanical conditions without verified owner timer provenance remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
-Short owner-set deferrals use an owner reminder instead of an administrator
+Owner-set deferrals use an owner reminder instead of an administrator
 ruling when their recorded setter matches the assignee, the original window
-is positive and at most 60 minutes, and the owner has a live runtime with no
+is positive, and the owner has a live runtime with no
 deliberate stop record. ASK-class items retain the administrator path. The
 normal `st work defer` writer retains `defer_provenance` (actor, set time and
 deadline) in the notes; missing or mismatched provenance does not qualify.
 An item touch is not a substitute for the defer's set time. This routing never
-releases a hold. The owner is nudged once per unchanged item; on the third
-unchanged scheduled observation it returns to the administrator path. An item
-update resets that budget. Failed owner delivery also retains the admin path.
+releases a hold. The owner is nudged once per unchanged item and condition state;
+repeated scheduled observations do not escalate merely by count. A met event
+can prompt the owner before the backstop, while its future date and all existing
+release gates remain intact. An unmet event at the owner backstop requests an
+owner recheck, never release. A new deferral archives old setter envelopes as
+history. Down, deliberately stopped or unreadable owners, and failed owner
+delivery retain the administrator fallback. Missing or ambiguous provenance and
+ASK-class items retain their existing judgement route.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
@@ -3435,6 +3450,13 @@ atomic snapshot; concurrent changes can require retrying a read. Unsupported
 owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
+
+Successful administrator deferral digests emit
+`deferral-sweep: ADMIN-DIGEST delivered count=N digest=HASH` in the tend log.
+Quiet `deferral log:` reports, owner reminders, duplicate suppression and failed
+administrator delivery do not emit this marker. Measure the 24-hour acceptance
+window only after verifying the installed source and a scheduled tend pass;
+count delivered digest markers, rather than quiet report headings or item counts.
 
 Rank proposals distinguish `reowner` (a positively observed down owner) from
 `needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
