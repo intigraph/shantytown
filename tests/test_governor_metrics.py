@@ -88,6 +88,41 @@ def test_cannot_tell_omits_the_recommendation():
     assert s['st_governor_recommendation_known{lane="base"}'] == 0
 
 
+@pytest.mark.parametrize("mode", ["blind", "mixed", "all-unknown"])
+def test_every_counted_lane_has_knownness_without_inventing_advice(
+        tmp_path, monkeypatch, mode):
+    """The sample group must account for every lane in the producer group."""
+    readings = {gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58, length=WEEK)}
+    hold = _assess(readings=readings, live=9, cap=9)
+    unknown = _assess(readings=readings, ready=None)
+    assert hold.advice == 0 and unknown.advice is None
+    lanes = [_lane(lane="blind")]
+    if mode != "blind":
+        lanes += [_lane(lane="unreadable", utilization=unknown)]
+    if mode == "mixed":
+        lanes += [_lane(lane="hold", utilization=hold)]
+    sent = {}
+    monkeypatch.setattr(gm, "_push", lambda url, job, inst, body, **kw:
+                        sent.update({job: _samples(body)}))
+    assert gm.publish(tmp_path, lanes, now=NOW, url="http://gw.invalid",
+                      instance="test-host", env={}) == gm.OK
+    samples = sent[gm.JOB]
+    producer = sent[gm.PRODUCER_JOB]
+    knownness = {key: value for key, value in samples.items()
+                 if key.startswith("st_governor_recommendation_known{")}
+    assert len(knownness) == producer["st_governor_lanes"] == len(lanes)
+    assert producer["st_governor_publish_status"] == gm.OK
+    for lane in lanes:
+        name = lane["lane"]
+        expected = name == "hold"
+        assert samples[f'st_governor_recommendation_known{{lane="{name}"}}'] == expected
+        advice = f'st_governor_recommendation{{lane="{name}"}}'
+        if expected:
+            assert samples[advice] == 0
+        else:
+            assert advice not in samples
+
+
 def test_a_hold_publishes_zero_and_says_it_is_known():
     seen = _assess(readings={gov_mod.SEVEN_DAY: _reading(52, elapsed=0.58,
                                                          length=WEEK)},

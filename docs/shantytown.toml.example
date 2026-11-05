@@ -130,10 +130,36 @@ max_quiet_minutes = 60
 #                      we cannot measure never suppresses the gate — refusing to
 #                      dispatch on an unmeasured number would be the mirror of the
 #                      bug.
+#
+#   admin_self_slots   How many P0 items the administrator may have in flight
+#                      ITSELF (in_progress on its own plate) before its own
+#                      ready P0s stop counting as startable work. The stop
+#                      policy's P0-plate rank blocks the administrator's stop
+#                      while one of its own ready P0s has a free slot here (or
+#                      an unassigned one has a free crew member or ephemeral
+#                      slot). 0 = only crew and ephemeral slots are capacity.
 # ---------------------------------------------------------------------------
 [fleet]
 stood_down = false
 max_load_per_core = 4.0
+admin_self_slots = 1
+
+# ---------------------------------------------------------------------------
+# [ephemeral] — bounds on `st agent spawn --ephemeral` (docs/ephemeral-agents.md).
+# Every number is a SUPERVISION bound: a host-wide cap (0 turns spawning off),
+# a hard deadline, and a per-job turn and context budget. Refused over cap,
+# never queued. Defaults shown; reviews default to codex.
+# ---------------------------------------------------------------------------
+# [ephemeral]
+# max_agents = 2
+# lifetime_minutes = 60
+# max_turns = 40
+# max_context_k = 300
+# merge_spacing_minutes = 10
+# unattended = true          # omitted: inherit the administrator card's posture
+#
+# [ephemeral.harness_by_job]
+# review = "codex"
 
 # ---------------------------------------------------------------------------
 # [env] — this deployment's PLUMBING: where the tracker is, which backend, the
@@ -577,3 +603,13 @@ min_sync_version = 1
 [admin_wake_budget]
 mode = "off"
 agents = []
+
+# [inbox] — where NEW durable messages go (docs/message-graph.md).
+#   "seed"          (default) today's behaviour: an `inbox:` seed on the board.
+#   "message-graph" `sd msg send` into the per-week message windows; no board
+#                   seed is written. Readers (st inbox, unread counts, mark-read)
+#                   union the legacy seeds with the windows. Needs an sd with
+#                   `sd msg` and a server that admits schema:Message.
+# Rollback: set it back to "seed"; window messages stay readable (`sd msg list`).
+# [inbox]
+# store = "message-graph"

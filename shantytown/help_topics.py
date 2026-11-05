@@ -18,12 +18,17 @@ HANDOFF / CYCLE — what to do when st fleet tend says your context is high
   THE COMMAND
     Write your notes to a file, then ONE command:
 
-      st agent cycle --self --checkpoint-file <notes>
+      st agent cycle --self --checkpoint-file <notes> --checkpoint-bead <id> --quipu-node <existing-node>
 
     It posts the file as a comment on your checkpoint item (or your active anchor),
-    uses its first line as the reason, and records the request. `st fleet tend` performs
-    the actual stop + relaunch on its next pass. You keep working until it fires,
-    and nothing is lost if it never does.
+    uses its first line as the reason, and records the request. Do not separately
+    post the same file. Stop or await your own background tasks before requesting.
+    After acceptance, END YOUR TURN; do not poll or reissue the accepted request.
+    The detached waiter (or tend) performs it only once your pane is idle with no
+    running background tasks. Remaining busy prevents the cycle from starting.
+
+  CHECKPOINT TEMPLATE
+{handoff_text.CHECKPOINT_TEMPLATE}
 
     Carrying graph context across the cycle:
 

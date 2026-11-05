@@ -141,6 +141,35 @@ class Hibernate:
 
 
 @dataclass(frozen=True)
+class Ephemeral:
+    """[ephemeral] — bounds on `st agent spawn --ephemeral` (aegis-c01c.2).
+
+    Every number here is a SUPERVISION bound, not a tuning knob: Gas Town's
+    polecats were retired partly because a spawned worker could outlive its
+    job, spend without limit and fan out unseen. Defaults are deliberately
+    small; `max_agents = 0` turns spawning off. docs/ephemeral-agents.md.
+    """
+    max_agents: int = 2
+    lifetime_minutes: int = 60
+    max_turns: int = 40
+    max_context_k: int = 300
+    merge_spacing_minutes: int = 10
+    # None = inherit the administrator card's `dangerous` posture.
+    unattended: bool | None = None
+    require_verified_identity: bool = False
+    unattended_uid_ready: bool = False
+    harness_by_job: dict = field(default_factory=dict)
+    # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
+    # Empty = off: no record is written and the merge gate reads none.
+    verdict_graph: str = ""         # registered committed graph IRI for the records
+    verdict_signer: str = ""        # verifier key id; default st-review.<host>
+    verdict_key: str = ""           # signer key file; default $XDG_STATE_HOME/shantytown/verdict-signer.pk8
+    # chaski-github-work prefix for `lane release` when a merge job ends unmerged;
+    # empty = leave it to chaski's lease.
+    lane_release: tuple = ()
+
+
+@dataclass(frozen=True)
 class Fleet:
     """Fleet-wide state that Rule Zero must respect (GitHub #29, #23).
 
@@ -160,6 +189,12 @@ class Fleet:
     """
     stood_down: bool = False
     max_load_per_core: float = 4.0
+    # admin_self_slots — how many P0 items the ADMINISTRATOR may have in flight
+    # itself (in_progress on its own plate, typically run as in-process
+    # subagents) before its own ready P0s stop counting as startable. Feeds the
+    # stop policy's P0-plate rank (aegis-c01c.1). 0 = the administrator never
+    # starts work itself; only crew and ephemeral slots count as capacity.
+    admin_self_slots: int = 1
 
 
 @dataclass(frozen=True)
@@ -178,8 +213,11 @@ class Config:
     """
     # Cycle preflight fetch budget; local Git probes keep their shorter bound.
     keep_current_fetch_timeout_seconds: float = 180
+    overdue_spec_changes: bool = False
     overdue_external_unlocks: bool = False
     overdue_enabled: bool = False
+    # Explicit per-host scheduler cutover; omission preserves local TOML jobs.
+    jobs_scheduler: str = "local"
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -209,6 +247,9 @@ class Config:
     # which is every deployment written before this existed.
     host_name: str | None = None
     host_admission_owner: str | None = None
+    # [host] peer_census_max_age (seconds): a peer's remembered census older
+    # than this is advisory only and never holds local launches (aegis-lfeg).
+    host_peer_census_max_age: int = 6 * 60 * 60
     host_min_sync_version: int = 1
     # [host.peers.<name>] ssh = "user@addr", root = "/path/to/.shanty" — how the
     # ephemeral inbox reaches an agent whose card says it lives elsewhere.
@@ -244,6 +285,12 @@ class Config:
     # [cycle_advice] — keep-or-cycle tunables. Inert with no signal posted: the
     # table only prices a signal something outside st chose to send.
     cycle_advice: CycleAdvicePolicy = field(default_factory=CycleAdvicePolicy)
+    ephemeral: Ephemeral = field(default_factory=Ephemeral)
+    # [inbox] store: where NEW durable messages go. "seed" keeps
+    # today's inbox seeds; "message-graph" sends through `sd msg` into the
+    # per-week message windows, and readers union the legacy seeds with them.
+    # Rollback is setting it back to "seed"; window messages stay readable.
+    inbox_store: str = "seed"
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -312,7 +359,7 @@ def config_path(root) -> Path:
 
 def load(root, *, refresh_source=False) -> Config:
     """Read <root>/shantytown.toml. Absent -> the built-in defaults. Malformed or
-    unrecognised -> ConfigError.
+    unrecognised or unreadable -> ConfigError.
 
     UNKNOWN KEYS ARE REFUSED, not ignored. A silently-dropped key is the config
     failure mode this repo has already paid for elsewhere (a hook file that was
@@ -324,12 +371,18 @@ def load(root, *, refresh_source=False) -> Config:
     path = config_path(root)
     try:
         raw = path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
         # Preserve the historical no-file behavior for deployments that did not
         # opt into graph configuration; in particular, do not newly read env.json.
         if not os.environ.get("SHANTY_CONFIG_ENTITY"):
             return Config()
         raw = b""
+    except OSError as exc:
+        # An unreadable declaration is UNKNOWN, never an absent declaration.
+        # Defaulting here can reactivate local jobs after a Chaski cutover;
+        # execution boundaries rely on this strict read even when supervision
+        # uses load_or_default to keep its other sweeps alive.
+        raise ConfigError(f"{path}: could not read config ({exc})") from exc
     try:
         data = tomllib.loads(raw.decode("utf-8"))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
@@ -364,16 +417,18 @@ def load_or_default(root) -> tuple[Config, str | None]:
 
 # --- parsing ----------------------------------------------------------------
 
-_TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream",
+_TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "crew", "env", "tmux", "dream", "jobs",
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
-             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory"}
+             "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory",
+             "ephemeral", "inbox"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
 _HIB_KEYS = {"enabled", "max_quiet_minutes"}
 _TMUX_KEYS = {"socket"}
-_HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner"}
+_HOST_KEYS = {"name", "peers", "min_sync_version", "admission_owner",
+              "peer_census_max_age"}
 _HOST_PEER_KEYS = {"ssh", "root"}
 _DREAM_KEYS = {"enabled", "interval_minutes", "min_headroom_pct", "domains"}
 _CYCLE_ADVICE_KEYS = set(CycleAdvicePolicy.__dataclass_fields__)
@@ -435,14 +490,18 @@ def _resolve(data: dict, path: Path) -> Config:
             or not math.isfinite(fetch_timeout) or fetch_timeout <= 0):
         raise ConfigError(f"{path}: keep_current.fetch_timeout_seconds must be a finite positive number")
     overdue = _table(path, data, "overdue")
-    _refuse_unknown(path, "overdue", overdue, {"enabled", "external_unlocks"})
+    _refuse_unknown(path, "overdue", overdue, {"enabled", "external_unlocks", "spec_changes"})
     overdue_enabled = overdue.get("enabled", False)
     if type(overdue_enabled) is not bool:
         raise ConfigError(f"{path}: overdue.enabled must be boolean")
     external_unlocks = overdue.get("external_unlocks",False)
     if type(external_unlocks) is not bool:
         raise ConfigError(f"{path}: overdue.external_unlocks must be boolean")
-    return Config(mode=mode, modes=modes, overdue_enabled=overdue_enabled,
+    spec_changes = overdue.get("spec_changes",False)
+    if type(spec_changes) is not bool:
+        raise ConfigError(f"{path}: overdue.spec_changes must be boolean")
+    return Config(mode=mode, modes=modes, overdue_spec_changes=spec_changes, overdue_enabled=overdue_enabled,
+                  jobs_scheduler=_jobs_scheduler(path, _table(path, data, "jobs")),
                   overdue_external_unlocks=external_unlocks,
                   accounts=_accounts(path, _table(path, data, "accounts")),
                   memory=_memory(path, _table(path, data, "memory")),
@@ -463,6 +522,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   tmux_socket=_tmux_socket(path, _table(path, data, "tmux")),
                   host_name=_host_name(path, _table(path, data, "host")),
                   host_admission_owner=_host_admission_owner(path, _table(path, data, "host")),
+                  host_peer_census_max_age=_host_census_max_age(path, _table(path, data, "host")),
                   host_min_sync_version=_host_sync_version(path, _table(path, data, "host")),
                   host_peers=_host_peers(path, _table(path, data, "host")),
                   roles=declared_roles,
@@ -474,7 +534,29 @@ def _resolve(data: dict, path: Path) -> Config:
                   hostmem=_hostmem(path, _table(path, data, "hostmem")),
                   dream=_dream(path, _table(path, data, "dream")),
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
+                  ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
+                  inbox_store=_inbox_store(path, _table(path, data, "inbox")),
                   path=path)
+
+
+INBOX_STORES = ("seed", "message-graph")
+
+
+def _inbox_store(path: Path, tbl: dict) -> str:
+    _refuse_unknown(path, "inbox", tbl, {"store"})
+    store = tbl.get("store", "seed")
+    if store not in INBOX_STORES:
+        raise ConfigError(f"{path}: inbox.store must be one of {', '.join(INBOX_STORES)}, "
+                          f"not {store!r}")
+    return store
+
+
+def _jobs_scheduler(path: Path, tbl: dict) -> str:
+    _refuse_unknown(path, "jobs", tbl, {"scheduler"})
+    scheduler = tbl.get("scheduler", "local")
+    if not isinstance(scheduler, str) or scheduler not in {"local", "chaski"}:
+        raise ConfigError(f"{path}: jobs.scheduler must be 'local' or 'chaski'")
+    return scheduler
 
 
 def _dream(path: Path, tbl: dict) -> DreamPolicy:
@@ -864,6 +946,14 @@ def _host_admission_owner(path: Path, tbl: dict) -> str | None:
     return owner
 
 
+def _host_census_max_age(path: Path, tbl: dict) -> int:
+    value = tbl.get("peer_census_max_age", 6 * 60 * 60)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{path}: [host] peer_census_max_age must be a positive "
+                          "integer number of seconds")
+    return value
+
+
 def _host_peers(path: Path, tbl: dict) -> dict:
     """[host.peers.<name>] — how to reach each OTHER host's st (aegis-5du1bz).
 
@@ -949,7 +1039,7 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
 # The card fields a human may DECLARE. `pane` is included but optional — omitted,
 # it is generated (tier.pane_for), which is the whole point of that change.
 _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
-              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome"}
+              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome", "harness_options"}
 
 
 def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
@@ -994,8 +1084,14 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
                                   f"false, got {spec[flag]!r}")
+        from .harness_options import validate
+        try:
+            options = validate(spec.get("harness_options"))
+        except ValueError as error:
+            raise ConfigError(f"{path}: [crew.{name}] {error}") from error
         out[name] = Agent(
             name=name, role=role, reports_to=spec.get("reports_to"),
+            harness_options=options,
             pane=spec.get("pane") or pane_for(name),
             workspace=spec.get("workspace"),
             workspace_source=spec.get("workspace_source"),
@@ -1071,7 +1167,56 @@ class TomlRegistry:
             f"source of truth.")
 
 
-_FLEET_KEYS = {"stood_down", "max_load_per_core"}
+_FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
+
+
+_EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "harness_by_job",
+                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release"}
+EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
+
+
+def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
+    _refuse_unknown(path, "ephemeral", tbl, _EPHEMERAL_KEYS)
+    values = {}
+    for key in ("max_agents", "lifetime_minutes", "max_turns", "max_context_k",
+                "merge_spacing_minutes"):
+        value = tbl.get(key, getattr(Ephemeral, key))
+        # max_agents and spacing may be 0 (off / no gap); a zero lifetime or
+        # budget would end every job at its first stop, which is a typo.
+        floor = 0 if key in ("max_agents", "merge_spacing_minutes") else 1
+        if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+            raise ConfigError(f"{path}: ephemeral.{key} must be an integer >= {floor}, "
+                              f"got {value!r}")
+        values[key] = value
+    unattended = tbl.get("unattended")
+    if unattended is not None and not isinstance(unattended, bool):
+        raise ConfigError(f"{path}: ephemeral.unattended must be true or false")
+    verified = tbl.get("require_verified_identity", False)
+    if type(verified) is not bool:
+        raise ConfigError(f"{path}: ephemeral.require_verified_identity must be true or false")
+    uid_ready = tbl.get("unattended_uid_ready", False)
+    if type(uid_ready) is not bool:
+        raise ConfigError(f"{path}: ephemeral.unattended_uid_ready must be true or false")
+    by_job = tbl.get("harness_by_job", {})
+    if not isinstance(by_job, dict):
+        raise ConfigError(f"{path}: [ephemeral.harness_by_job] must be a table")
+    _refuse_unknown(path, "ephemeral.harness_by_job", by_job, set(EPHEMERAL_JOBS))
+    for job, harness in by_job.items():
+        if not isinstance(harness, str) or not harness.strip():
+            raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    for key in ("verdict_graph", "verdict_signer", "verdict_key"):
+        value = tbl.get(key, "")
+        if not isinstance(value, str) or any(c in value for c in '"<>\\\n '):
+            raise ConfigError(f"{path}: ephemeral.{key} must be a plain string")
+        values[key] = value
+    release = tbl.get("lane_release", [])
+    if not isinstance(release, list) or not all(isinstance(x, str) and x for x in release):
+        raise ConfigError(f"{path}: ephemeral.lane_release must be a list of strings")
+    values["lane_release"] = tuple(release)
+    return Ephemeral(unattended=unattended, require_verified_identity=verified,
+                     unattended_uid_ready=uid_ready,
+                     harness_by_job=dict(by_job), **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:
@@ -1085,7 +1230,13 @@ def _fleet(path: Path, tbl: dict) -> Fleet:
         raise ConfigError(f"{path}: fleet.max_load_per_core must be a "
                           f"non-negative number (0 disables the check), "
                           f"got {load!r}")
-    return Fleet(stood_down=down, max_load_per_core=float(load))
+    slots = tbl.get("admin_self_slots", Fleet.admin_self_slots)
+    if isinstance(slots, bool) or not isinstance(slots, int) or slots < 0:
+        raise ConfigError(f"{path}: fleet.admin_self_slots must be a "
+                          f"non-negative integer (0 = the administrator never "
+                          f"starts work itself), got {slots!r}")
+    return Fleet(stood_down=down, max_load_per_core=float(load),
+                 admin_self_slots=slots)
 
 
 def _hibernate(path: Path, tbl: dict) -> Hibernate:

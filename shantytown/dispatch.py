@@ -284,6 +284,16 @@ class Blocked(Exception):
         )
 
 
+class HumanDecision(Blocked):
+    """An ASK can stay open without becoming executable crew work."""
+
+    def __init__(self, item_id: str, requested: str):
+        self.item_id, self.requested = item_id, requested
+        Exception.__init__(self,
+            f"{item_id} is gated on a human; refusing to serve it to {requested}. "
+            "Keep the ASK owned and visible; dispatch executable work instead.")
+
+
 class Closed(Exception):
     """The item is CLOSED, and closed is terminal for the serve path (aegis-vuh33).
 
@@ -572,6 +582,9 @@ class Dispatcher:
         # payload, so a refusal does no work at all.
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
+        from .ask_visibility import is_ask
+        if is_ask(item):
+            raise HumanDecision(item_id, agent_name)
         # ...AND AN UNMET BLOCKER IS THE SAME REFUSAL (internal-ref). Third
         # variant of the one hole: an item whose `blocks` dependency is open
         # cannot be advanced, and the dispatch path never asked. Only a POSITIVE
@@ -1026,6 +1039,14 @@ class Dispatcher:
             return result
         if dry_run:
             return result
+
+        # Persist setter and deadline together with the reason. updated_at is
+        # an item touch, not evidence of who chose a short CI pacing window.
+        from datetime import datetime, timezone
+        from .deferral_pacing import provenance
+        reason += "\n" + provenance(gate_authority,
+                                    datetime.now(timezone.utc).isoformat(), date)
+        result.reason = reason
 
         def write_verified(fields, final=False):
             # A timeout can follow commit. Read once for evidence, but do not

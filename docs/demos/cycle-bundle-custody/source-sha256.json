@@ -1,0 +1,6 @@
+{
+  "shantytown/cli.py": "7ca2d6189a6a303a08d763990bea996bbd8d64ed48fb78ef427d5f9fbf79c5fb",
+  "shantytown/cycle.py": "8c972866b80bb41b558fdbd77c95998e6c6b87f3c71c016bfed4be2899934c95",
+  "shantytown/cycle_custody.py": "1cdb35e41fd1413e0a04bb695c414895a7b7f221ed6abe8c0b42463e32e53f5b",
+  "docs/demos/cycle-bundle-custody/demo.py": "071ee2f8fedc73c2b7e15fc6500fc06d8c8a35b3473da1a4bac9605504404ed2"
+}

@@ -190,8 +190,8 @@ class Briefs:
 def main(argv=None) -> int:
     """The SessionStart hook. `<interpreter> -m shantytown.resume_brief`.
 
-    Prints the pending brief for $SHANTY_AGENT, or nothing. stdout of a
-    SessionStart hook is added to the model's context, so "prints nothing" is the
+    Emits the pending brief as SessionStart additionalContext, or nothing.
+    Both harnesses accept this context envelope, so "prints nothing" is the
     correct and common case — this hook runs at EVERY session start and most of
     them are not cycles.
 
@@ -227,7 +227,12 @@ def main(argv=None) -> int:
         return 0
     text = record.get("text") or ""
     if text:
-        print(text)
+        # The bracketed banner can be parsed as malformed JSON by Codex.
+        # Use the same explicit SessionStart envelope as the anchor hook so
+        # the checkpoint reaches context on both harnesses after consumption.
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "SessionStart", "additionalContext": text,
+        }}, ensure_ascii=False))
     return 0
 
 

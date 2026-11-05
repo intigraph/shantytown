@@ -714,9 +714,9 @@ def _yupana_trace_cmd() -> dict:
 # that is what "first class" means: you cannot launch an unguarded agent by
 # forgetting a flag.
 #
-# THE BINARY IS `yupana`. It was named `hank` until v0.6.0 and this line said
-# `hank` for nine days after the rename, which is the most expensive kind of
-# stale reference: `hank` is not on PATH, so the command exits 127, `|| exit 0`
+# THE BINARY IS `yupana`. This line retained the former executable name for
+# nine days after the v0.6.0 rename, which is the most expensive kind of
+# stale reference: the absent command exits 127, `|| exit 0`
 # swallows it, stdout is empty — and EMPTY STDOUT IS ALLOW. The wrapper below is
 # built to convert any yupana failure into an allow, so it converted "this
 # binary does not exist" into an allow too, silently, on every edit by every
@@ -739,7 +739,7 @@ def _yupana_trace_cmd() -> dict:
 # is never confused with a failure, and this wrapper cannot swallow it.
 # 2026-07-19 (window, kelly): the "yupana never exits 2" contract was
 # FALSIFIED IN PRODUCTION and this line hard-blocked the whole fleet. Installed
-# hank 0.1.0 implemented only `post-edit`; `hook pre-edit` was a clap USAGE
+# The pre-rename 0.1.0 binary implemented only `post-edit`; `hook pre-edit` was a clap USAGE
 # error, and clap exits 2 — Claude Code's one blocking code. Every Write/Edit by
 # every shantytown worker was refused with:
 #   PreToolUse:Write hook error: invalid value 'pre-edit' for '<EVENT>'
@@ -828,7 +828,7 @@ def _guard_hook() -> dict:
 
     The cost of that contract, stated because it has already been paid once: a
     guard nothing can hard-block is also a guard whose ABSENCE is indistinguishable
-    from silence. `command -v` would have caught the hank->yupana rename; the
+    from silence. `command -v` would have caught the executable rename; the
     contract says not to use it, and it did not. Liveness is answered by
     yupana's own `pre_edit_invoked` spool record, not by this file.
 
@@ -1749,6 +1749,10 @@ class ClaudeRuntime:
         Capability still precedes settings: a lead the program cannot host refuses
         before we bother writing anything.
         """
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return job_launch.command(*prepared)
         # THE ARGV, THE SETTINGS FORMAT, AND THE CAPABILITY ARE ALL THE HARNESS'S
         # (harness.py). This method keeps only what is the RUNTIME's — the
         # settings-or-nothing invariant and the assert below — and asks the harness
@@ -1804,6 +1808,10 @@ class ClaudeRuntime:
 
     def settings_path(self, card: Agent) -> str | None:
         """The graph-aware settings artifact resolved for this launch."""
+        from . import job_launch
+        prepared = job_launch.for_card(self._root, card)
+        if prepared:
+            return prepared[0]['settings']
         from .account_auth import settings_path
         base = settings_path(card, self._resolve(card), self._root)
         prepared = self._memory_settings.get(card.name)
@@ -1816,6 +1824,9 @@ class ClaudeRuntime:
             raise SettingsError('native memory settings UNKNOWN; preserve prior artifacts') from None
 
     def prepare_account_settings(self, card: Agent) -> None:
+        from . import job_launch
+        if job_launch.for_card(self._root, card):
+            return
         from .account_auth import settings_path
         settings_path(card, self._resolve(card), self._root, prepare=True)
 

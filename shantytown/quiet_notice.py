@@ -12,6 +12,24 @@ from pathlib import Path
 from .files import write_json_atomic
 
 LONG_HOLD_SECONDS = 1800
+# Every hold/lift notice carries this, so its custody can be told apart from mail.
+NOTICE_MARK = ' Re-check st fleet hold all --status before honouring hold notes;'
+
+
+# How each quiet-time render begins (quiet_time.Status.render, gaming render).
+_NOTICE_STARTS = ('GOVERNOR HOLD', 'QUIET-TIME HOLD LIFTED',
+                  'quiet-time observation UNKNOWN', 'quiet-time detection off')
+
+
+def is_notice(text):
+    """A hold/lift notice tend itself typed: its own attribution, a quiet-time
+    render, and the marker. Mail that merely quotes the marker is still mail."""
+    from .attribution import ST_TEND, attribute
+    prefix = attribute('', ST_TEND)
+    if not text.startswith(prefix):
+        return False
+    body = text[len(prefix):]
+    return body.startswith(_NOTICE_STARTS) and NOTICE_MARK in body
 
 
 def metrics(root):
@@ -69,9 +87,19 @@ def sweep(root, status, reg, panes, *, slowdown_unknown=False, now=None,
                 cards = reg.all().exact()
                 data['pending'] = sorted(c.name for c in cards
                                          if c.pane and panes.exists(c.pane))
-                data['message'] = (status.render() +
-                    ' Re-check st fleet hold all --status before honouring hold notes;'
+                data['message'] = (status.render() + NOTICE_MARK +
                     ' an elapsed note is not current authority.')
+                # A hold or lift notice describes state. Once the state moves
+                # on, an earlier one still in a composer is wrong and blocks
+                # every later send (aegis-185l: 3h and 10h). Supersede it, so it
+                # is never resent; the next send clears it from an idle composer.
+                from .attribution import ST_TEND, attribute
+                from .delivery import supersede
+                try:
+                    supersede(getattr(panes, 'delivery_root', None) or root, is_notice,
+                              keep=attribute(data['message'], ST_TEND))
+                except OSError:
+                    pass  # custody unreadable: the notice itself still goes out
             else:
                 data['pending'] = []
             data['page_pending'] = unknown

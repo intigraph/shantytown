@@ -60,6 +60,17 @@ class WorkspaceError(RuntimeError):
     """
 
 
+class WorktreeDamage(WorkspaceError):
+    """A removal FAILED PART-WAY: files are already gone. Never report as refused.
+
+    aegis-5ox: `git worktree remove` on a relocated (symlinked) worktree deleted
+    every file THROUGH the link and only then failed on the link itself. The CLI
+    printed "refused:", so the agent and two reviewers read it as "nothing ran"
+    while 284 MB had been deleted. A refusal means the state is unchanged; this
+    exception exists so a partial delete can never be worded as one.
+    """
+
+
 # Cloning is INJECTED so the whole contract is testable without a network, a
 # remote, or git itself. The default is the real thing.
 Cloner = Callable[[str, Path], None]
@@ -347,7 +358,7 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone,
 #
 # ensure_workspace above owns the agent's OWN clone (crew/<name>): one writer,
 # one tree. This owns the other case: a SHARED project repo — ~/gt/shantytown,
-# ~/gt/quipu, ~/gt/hank, ~/gt/goldblum — that many agents touch at once. A shared
+# ~/gt/quipu, ~/gt/yupana, ~/gt/goldblum — that many agents touch at once. A shared
 # checkout shares its index and HEAD with every process in it, so one agent's
 # `git add`/`commit`/`reset` reaches into another's staging area and BOTH SIDES
 # report success (measured: aegis-repg/iaef — a commit left `git log` entirely and
@@ -432,6 +443,15 @@ def git_worktree_remove(shared: Path, dest: Path) -> None:
         capture_output=True, text=True,
     )
     if r.returncode != 0:
+        # git can fail AFTER deleting files (aegis-5ox: the contents went, the
+        # symlinked path did not). If the worktree's .git pointer is gone, the
+        # tree was damaged: say so, never "refused".
+        if Path(dest).exists() and not (Path(dest) / ".git").exists():
+            raise WorktreeDamage(
+                f"git worktree remove {dest} FAILED PART-WAY (exit {r.returncode}) "
+                f"and its files are already deleted; the tree is NOT intact. "
+                f"git said: {(r.stderr or r.stdout).strip()}"
+            )
         raise WorkspaceError(
             f"git worktree remove {dest} failed (exit {r.returncode}): "
             f"{(r.stderr or r.stdout).strip()}"
@@ -457,6 +477,14 @@ def git_worktree_holds_work(dest: Path, base: str) -> bool:
         return True                      # cannot tell -> keep, never discard
     if ahead.stdout.strip() in ("", "0"):
         return False
+    from .landed import classify
+    code, commits = _git(dest, "rev-list", "--max-count=512", f"{base}..HEAD")
+    candidates = commits.splitlines()
+    if (code == 0 and candidates and ahead.stdout.strip().isdigit()
+            and len(candidates) == int(ahead.stdout.strip())):
+        cleared, _ = classify(dest, candidates, publication_remotes(dest, _git), _git)
+        if cleared == set(candidates):
+            return False
     return not _squash_landed_tree(dest, base)
 
 
@@ -893,9 +921,9 @@ class Staleness:
                 (corrected by tim, aegis-ib65p). The first version counted
                 `<ref>..HEAD` — commits not on origin/main — and that is a
                 different and much larger set: it counts every in-flight FEATURE
-                BRANCH as stranded. Measured false positive: hank-wt/tim was
-                reported "+1, exists only here" while the commit was sitting on
-                `origin/hank-1-daemon-stage3c`, pushed and mid-review. Nothing
+                BRANCH as stranded. Measured false positive: a legacy checkout was
+                reported "+1, exists only here" while the commit was sitting
+                on its published daemon-stage branch, pushed and mid-review. Nothing
                 was at risk.
 
                 That error runs in the WORST direction for this particular
@@ -964,6 +992,7 @@ class Staleness:
     publication_remote: str = ""
     # Cycle-only exemptions; other staleness consumers still see these as dirty.
     per_install: tuple = ()
+    landed: tuple = ()
 
     def measurement_is_stale(self) -> bool:
         """Is this reading too old to be worth calling "ok"?
@@ -994,6 +1023,8 @@ class Staleness:
         if self.error:
             return f"staleness UNKNOWN ({self.error})"
         bits = []
+        if self.landed:
+            bits.append("landed: " + "; ".join(self.landed))
         if self.unverified:
             # FIRST, so the reader cannot take the measured half for the whole.
             # No behind-count is printed at all in this state — it was not
@@ -1595,6 +1626,18 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
     if rc != 0 or rc2 != 0:
         return Staleness(ref=ref, note=note,
                          error=f"could not count commits against {ref}")
+    landed = ()
+    if unpushed.isdigit() and int(unpushed):
+        from . import landed as landing
+        code, orphan_text = run(dest, "rev-list", f"--max-count={landing.LIMIT}",
+                                "HEAD", "--not", *saved_refs)
+        candidates = [oid for oid in orphan_text.splitlines() if landing.SHA.fullmatch(oid)]
+        trusted = refreshed if selected else [n for n in names if n not in mirrors]
+        if code == 0 and candidates:
+            cleared, why = landing.classify(dest, candidates, trusted, run,
+                                            network=bool(fetch and refreshed))
+            unpushed = str(max(0, int(unpushed) - len(cleared)))
+            landed = tuple(why)
     status_args = ["status", "--porcelain"]
     if untracked_all:
         # Directory-collapsed output (`?? .playwright-mcp/`) is enough to COUNT
@@ -1611,6 +1654,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
             behind=int(behind) if behind.isdigit() else 0,
             unpushed=int(unpushed) if unpushed.isdigit() else 0,
             publication_remote=remote or "",
+            landed=landed,
             dirty=True,
             note=note,
             unverified=unverified,
@@ -1652,6 +1696,7 @@ def tree_staleness(dest: Path | str, run: GitRunner = _git,
         behind=int(behind) if behind.isdigit() else 0,
         unpushed=int(unpushed) if unpushed.isdigit() else 0,
         publication_remote=remote or "",
+        landed=landed,
         dirty=tracked_dirty,
         provisioned=provisioned,
         per_install=per_install,
@@ -1712,6 +1757,18 @@ def cleanup_worktree(repo: Path | str, agent: str, base: str = "origin/main",
     dest = worktree_for(repo, agent)
     if not dest.is_dir():
         return False                     # nothing to clean — idempotent
+    # A RELOCATED worktree (root relief moved it and left a symlink) cannot be
+    # removed by `git worktree remove`: git deletes the contents THROUGH the link,
+    # then fails on the link, leaving an empty target and a dangling registry
+    # (aegis-5ox, 2026-11-04). Refuse before ANY git call; the state is unchanged.
+    if dest.is_symlink():
+        raise WorkspaceError(
+            f"{dest} is a relocated worktree (symlink to {dest.resolve()}); "
+            f"--gc refuses BEFORE removing anything, because `git worktree remove` "
+            f"would delete its contents through the link (aegis-5ox). Nothing was "
+            f"changed. Retire it deliberately: remove the target with its owner, "
+            f"then `git worktree prune` and the link."
+        )
     if holds_work(dest, base):
         return False                     # holds work — keep it, never discard
     remove(_shared_repo(repo), dest)

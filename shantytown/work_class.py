@@ -1,8 +1,8 @@
 """Work-lane eligibility from an authoritative item read (aegis-x1q).
 
 Callers must supply the exact tracker item, never a ready-list/caller snapshot.
-The Quipu-specific class label is authoritative; no repository field or title
-inference is involved (Wu's 87ix ruling).
+Review status and class preferences come from exact labels; no repository field
+or title inference is involved (Wu's 87ix ruling).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from . import harness
 
 
-def claude_work_class(item) -> tuple[bool, str]:
+def important_work_class(item) -> tuple[bool, str]:
     labels = getattr(item, "labels", None)
     if not isinstance(labels, (tuple, list, set, frozenset)) or not all(
             isinstance(label, str) for label in labels):
@@ -24,22 +24,62 @@ def claude_work_class(item) -> tuple[bool, str]:
     return True, "authoritative work:important-quipu-code label"
 
 
+# Retain the historical internal name for callers inspecting class metadata.
+# Classification is a routing preference, not an authoring restriction.
+claude_work_class = important_work_class
+
+
+def preferred_labels(labels):
+    """Ranker preference metadata, never a condition for Claude authoring.
+
+    Use declared repository/design labels, not a guessed title or review role.
+    Append only; a ranking pass never replaces the item's other labels.
+    """
+    if not isinstance(labels, (list, tuple, set, frozenset)) or not all(
+            isinstance(label, str) for label in labels):
+        return ()
+    labels = set(labels)
+    if 'work:review' in labels:
+        return ()
+    if labels & {'work:design', 'design'}:
+        wanted = {'work:design', 'work:claude-authorized'}
+    elif ('work:important-quipu-code' in labels or
+          (labels & {'quipu', 'repo:quipu'} and not labels & {'docs', 'documentation'})):
+        wanted = {'work:important-quipu-code', 'work:claude-authorized'}
+    else:
+        return ()
+    return tuple(sorted(wanted - labels))
+
+
 def exempt(card, policy) -> bool:
-    """A configured lead exemption concerns only this filter, never a budget."""
-    return (card.role in ("lead", "administrator", "keeper")
-            and card.name in policy.class_exempt)
+    """Only a configured actual administrator receives a class exemption."""
+    return card.role == "administrator" and card.name in policy.class_exempt
+
+
+def authoring_class(item) -> bool:
+    """An exemption needs readable authoring metadata, never an unknown review."""
+    labels = getattr(item, "labels", None)
+    readable = isinstance(labels, (tuple, list, set, frozenset)) and all(
+        isinstance(label, str) for label in labels)
+    return readable and "work:review" not in labels
 
 
 def lane_refusal(item, actual, agent=None) -> str:
-    eligible, reason = claude_work_class(item)
-    wanted = "claude" if eligible else "codex"
-    if actual == wanted:
+    if actual == "codex":
         return ""
+    # Both harnesses author any class. An unreadable exact item cannot prove
+    # that a Claude assignment is authoring rather than a Codex-only review.
     if actual == "claude":
-        return ("claude lane admits designs and important Quipu code only "
-                f"(aegis-x1q); dispatch to codex: {reason}")
-    return (f"work class requires {wanted}, but explicit target {agent} uses "
-            f"{actual}: {reason} (aegis-x1q); target and harness unchanged")
+        if authoring_class(item):
+            return ""
+        labels = getattr(item, "labels", None)
+        reason = ("reviews require codex" if isinstance(labels, (tuple, list, set, frozenset))
+                  and "work:review" in labels else "work-class labels are missing or unreadable")
+    else:
+        reason = "authoring requires claude or codex; reviews require codex"
+    return (f"work class refuses explicit "
+            f"target {agent} using {actual}: {reason} (aegis-x1q); "
+            "target and harness unchanged")
 
 
 def for_card(verdict, policy, card, root=None):
@@ -52,7 +92,7 @@ def for_card(verdict, policy, card, root=None):
 def read_item(root, item):
     """Feed rows select IDs only; an exact normal tracker read supplies class.
 
-    A failed class read is ordinary, never a caller's claimed design permission.
+    A failed class read cannot establish authoring rather than review.
     Priority remains available for the already-existing floor to run first.
     """
     from .cli import _raw_tracker
@@ -64,4 +104,3 @@ def read_item(root, item):
     except Exception:
         return SimpleNamespace(id=item.id, priority=getattr(item, "priority", None),
                                labels=None)
-

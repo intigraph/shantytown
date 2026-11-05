@@ -915,3 +915,19 @@ def test_global_seeds_queue_keeps_priority_creation_id_order(monkeypatch, tmp_pa
     ready, active = feed_check.queue_state(tmp_path, None, tracker)
     assert [r["id"] for r in ready] == ["test-earlier", "test-later", "test-lower"]
     assert [r["id"] for r in active] == ["test-earlier", "test-later"]
+
+
+
+def test_gate_excludes_peer_work_and_live_job_items(tmp_path, monkeypatch):
+    from shantytown import ephemeral
+    (tmp_path / "shantytown.toml").write_text(
+        '[host]\nname = "local"\n[host.peers.remote]\nssh = "remote"\nroot = "/crew"\n')
+    ephemeral.write(tmp_path, {"name": "eph-task-abcdef", "state": ephemeral.LIVE,
+                               "item": "held"})
+    rows = [{"id": "peer", "labels": ["remote"]}, {"id": "held"},
+            {"id": "ordinary", "labels": ["unrelated"]}]
+    monkeypatch.setattr(feed_check, "free_feedable_workers", lambda *a, **k: ["worker"])
+    free, ready, held = feed_check.gate_inputs(
+        tmp_path, _Reg([]), None, None, admits=lambda item: "",
+        queue_reader=lambda **kw: (rows, []))
+    assert free == ["worker"] and ready == [("ordinary", "")] and held == []

@@ -338,3 +338,54 @@ identified legacy revision ledger retain the SDK adapter. A failed format probe,
 malformed field, ambiguous graph membership, truncated response or exhausted
 field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
 The projection sends the SDK's caller-declared attribution headers when present.
+
+## Quipu request provenance
+
+The Quipu adapters derive `X-Quipu-Agent`, `-Harness`, `-Model`, `-Session` and
+`-Host` from the current environment on each request. Explicit `QUIPU_*` values
+win; agent sessions otherwise use `SHANTY_AGENT`, `SHANTY_MODEL` and their own
+harness session ID. Unavailable fields are omitted. A standalone invocation
+identifies the `shantytown` producer with harness `cli`; it does not inherit an
+agent merely because `SHANTY_AGENT` remains in its environment. Header values
+are printable ASCII, trimmed and bounded to 128 characters.
+
+The default client label is `shantytown`; adapter-specific labels remain in
+place. These fields are declared diagnostic context. Bearer authentication,
+credential refusal and graph authority retain their existing checks.
+
+## Tmux server lifetime under user services
+
+A detached tmux client can leave its server inside the launching oneshot service.
+Normal service cleanup then kills the server, including its sessions, even when
+individual panes have their own scopes. When `Tmux.new_session` runs inside a
+Linux user service, it launches the client through a separate transient user
+scope (`st-tmux-<unique-id>.scope`). This retains the sanitized launch environment
+and keeps the server outside the launching service's cleanup boundary. A scope
+failure refuses the launch; it never retries in the unsafe service cgroup.
+Interactive scopes, the user manager itself and non-Linux platforms retain their
+existing launch path. Existing servers are neither moved nor restarted.
+
+The isolated Linux acceptance test uses fresh random sockets and temporary user
+services: the raw control server dies at oneshot exit, while the protected server
+survives. Set `SHANTY_TEST_SYSTEMD_TMUX=1` and run
+`python -m pytest -s tests/test_tmux_scope_systemd.py` through the normal test guard on a host with a
+working user manager. It never addresses the fleet socket. Remove any temporary
+service-cleanup mitigation only after this control and the normal deployed source
+have been verified by the incident owner.
+
+### Seeds push projection reads
+
+`ST_SEEDS_PUSH_READS=1` opts Seeds plate projections into the SDK's
+`read-stream-query` transport. This requires a compatible `sd` and its admitted
+user-level `quipu.read_stream_config`. The SDK owns the private socket, source
+binding, signed freshness proof and query-scope validation. Shantytown does not
+open another applier or replace the configured primary URL.
+
+When enabled, plate queries skip the watermark cache entirely. A missing SDK,
+projection refusal, malformed reply or incomplete result remains UNKNOWN; it
+never falls back to HTTP polling. Explicit `seeds_read_cache.direct_reads()`
+admission scopes keep their original query-only transport. Primary profiling is
+refused on the projection path rather than presenting local timing as primary
+performance. The default `0` retains existing reads. Invalid setting values
+refuse. Live activation and measured acceptance require the upstream admission
+packet and normal deployment; enabling this flag alone cannot establish either.

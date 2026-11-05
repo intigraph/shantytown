@@ -7,10 +7,7 @@ import fcntl
 from functools import wraps
 import hashlib
 import json
-import os
-import sys
 import threading
-from datetime import datetime, timezone
 from pathlib import Path
 
 from .inbox import is_anchor, is_message, _deferred_until_is_future
@@ -110,44 +107,6 @@ def size(tracker, owner):
     return len(counted_rows(tracker, owner))
 
 
-def _record_overflow(owner, candidate, counted):
-    """Write ahead of a possible mutation, never claim it committed.
-
-    Pure plans and dry runs hold no assignment lock and write nothing. Nested
-    producer guards share the outer decision. A failed journal blocks the write;
-    a later backend timeout leaves an admission record, not a success receipt.
-    """
-    owner = owner_name(owner)
-    if hashlib.sha256(owner.encode()).hexdigest() not in getattr(_locks, 'held', set()):
-        return
-    identifiers = sorted(row['id'] for row in counted)
-    key = (owner, candidate.get('id'), tuple(identifiers))
-    recorded = _locks.overflow_recorded
-    if key in recorded:
-        return
-    path = Path.home() / '.local/state/shantytown/plate-capacity/overflow.jsonl'
-    event = dict(event='overflow_admission', owner=owner, item=candidate.get('id'),
-                 title=candidate.get('title'),
-                 priority=0, count=len(counted), cap=MAX_ACTIVE, counted_ids=identifiers,
-                 at=datetime.now(timezone.utc).isoformat(), mutation_outcome='not_observed')
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'a') as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-            length = os.fstat(fd).st_size
-            if length and os.pread(fd, 1, length - 1) != b'\n':
-                raise OSError('incomplete overflow journal; preserve and reconcile it')
-            handle.write(json.dumps(event, sort_keys=True) + '\n')
-            handle.flush()
-            os.fsync(handle.fileno())
-    except OSError as error:
-        raise CapacityUnknown(f'P0 overflow journal unavailable; no assignment attempted: {error}') from error
-    recorded.add(key)
-    print(f'capacity overflow: {owner} {len(counted)}/{MAX_ACTIVE}; '
-          f'item={candidate.get("id") or "new"}; counted_ids={",".join(identifiers)}; '
-          f'admission recorded at {path} (not a mutation receipt)', file=sys.stderr)
-
-
 def ensure_room(tracker, owner, item=None, *, candidate=None):
     prospective = candidate if candidate is not None else (vars(item) if item is not None else {})
     if prospective and not real_work(prospective):
@@ -158,11 +117,7 @@ def ensure_room(tracker, owner, item=None, *, candidate=None):
     counted = counted_rows(tracker, owner, admission=True)
     count = len(counted)
     if count >= MAX_ACTIVE:
-        # Blockers inherit priority 0 through the existing verified technical
-        # dependency path. A label or an unknown/Boolean priority is no proof.
-        if type(prospective.get('priority')) is int and prospective['priority'] == 0:
-            _record_overflow(owner, prospective, counted)
-            return
+        # Urgency changes queue order, not the number of slots a worker holds.
         identifiers = ','.join(sorted(row['id'] for row in counted))
         raise PlateFull(f'{owner_name(owner)} plate full ({count}/{MAX_ACTIVE}); '
                         f'counted_ids=[{identifiers}]; '
@@ -207,12 +162,9 @@ def assignment_lock(tracker, owner, *, dry_run=False):
     with (folder / (key + '.lock')).open('a') as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         _locks.held = held | {key}
-        previous_records = getattr(_locks, 'overflow_recorded', set())
-        _locks.overflow_recorded = set()
         try:
             yield
         finally:
-            _locks.overflow_recorded = previous_records
             _locks.held = held
             fcntl.flock(handle, fcntl.LOCK_UN)
 

@@ -1,0 +1,9 @@
+Script started on 2026-10-25 14:12:27-04:00 [COMMAND="python docs/probes/role-responsibilities/deadline_demo.py /path/to/before-checkout" <not executed on terminal>]
+{"source": "before", "case": "ordinary", "budget_s": 2, "elapsed_s": 0.086698, "outcome": "accepted"}
+{"source": "before", "case": "slow-progress", "budget_s": 0.2, "elapsed_s": 0.436162, "outcome": "accepted"}
+{"source": "before", "case": "stalled", "budget_s": 0.2, "elapsed_s": 0.200885, "outcome": "TimeoutError"}
+{"source": "after", "case": "ordinary", "budget_s": 2, "elapsed_s": 0.086366, "outcome": "accepted"}
+{"source": "after", "case": "slow-progress", "budget_s": 0.2, "elapsed_s": 0.20214, "outcome": "TimeoutError"}
+{"source": "after", "case": "stalled", "budget_s": 0.2, "elapsed_s": 0.20227, "outcome": "TimeoutError"}
+
+Script done on 2026-10-25 14:12:30-04:00 [COMMAND_EXIT_CODE="0"]

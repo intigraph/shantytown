@@ -46,6 +46,7 @@ from typing import NamedTuple
 from . import governor_balance as balance_mod
 from . import harness as harness_mod
 from . import triage as triage_mod
+from .ask_visibility import is_ask
 from .attribution import ST_TEND, attribute
 from .tmux import PaneNotAgent
 from .protocols import Agent
@@ -215,7 +216,7 @@ def agent_states(agents, panes, runtime) -> dict:
     return out
 
 
-def _cycle_message() -> str:
+def _cycle_message(*, restart=False) -> str:
     # An INSTRUCTION the agent executes, NOT a bare `/clear` keystroke. The agent
     # checkpoints FIRST — a raw /clear drops unsaved work (h562's rule). Pushed as
     # a user turn to the agent's own Claude.
@@ -244,8 +245,14 @@ def _cycle_message() -> str:
     # which is how the one safety-critical sentence in it gets skipped.
     from . import handoff_text
     from .triage import CYCLE_THRESHOLD_K
-    return handoff_text.cycle_now(None, None).replace(
+    text = handoff_text.cycle_now(None, None).replace(
         "past the cycle line", f"past the {int(CYCLE_THRESHOLD_K)}k cycle line")
+    if restart:
+        return ("Checkpoint, then request `st agent cycle --self --no-in-place "
+                "--checkpoint-file <notes> --checkpoint-bead <id> "
+                "--quipu-node <existing-node>`. " + handoff_text.NO_CLEAR + " "
+                + handoff_text.background_tasks() + " " + handoff_text.HELP_POINTER)
+    return text
 
 
 def _pre_handoff_message(depth_k) -> str:
@@ -311,8 +318,8 @@ class CycleDriver:
         self._refresh = refresh
         self._log = log or (lambda msg: None)
         # (agent, depth_k) -> cycle_advice.Advice | None (aegis cycle-advice). Only
-        # ever ESCALATES a pre-handoff agent to the cycle prompt; None = no advisor,
-        # which is every deployment where nothing posts a signal.
+        # escalates at a safe boundary. Known CLI updates can also advise shallow
+        # idle sessions; they require process replacement rather than a clear.
         self._advise = advise
 
     def _load(self) -> dict:
@@ -330,6 +337,8 @@ class CycleDriver:
         """One pass. PROMPT each newly-saturated agent to cycle, re-arm any that
         recovered, and return the names actually prompted (empty when none are
         newly saturated — the quiet, common case)."""
+        agents = list(agents)
+        cards = {card.name: card for card in agents}
         states = agent_states(agents, self._panes, runtime)
         saturated = {n for n, r in states.items()
                      if r.state == triage_mod.SATURATED}
@@ -404,12 +413,55 @@ class CycleDriver:
             if read.depth_k < line:
                 del ledger[agent]
 
+        # A known CLI update prefers a process replacement even at shallow
+        # depth. Only positively idle, shell-free, st-wired panes are prompted;
+        # no cycle is performed here. Version/session keys have their own ledger
+        # so a low depth cannot re-arm this reminder every sweep.
+        from .runtime_update import pending_cycles
+        pending = pending_cycles(self._root)
+        if pending is None:
+            self._log("cycle: pending requests UNKNOWN; no competing prompts this pass")
+            pending = dict.fromkeys(states)
+        update_candidates, advice_by_agent = set(), {}
+        for agent, read in sorted(states.items()):
+            if read.state not in (triage_mod.IDLE, triage_mod.SATURATED) or read.shells != 0:
+                continue
+            advice = self._advice(agent, read.depth_k)
+            advice_by_agent[agent] = advice
+            if (advice is None or advice.decision != "cycle"
+                    or not getattr(advice, "restart_required", False)):
+                continue
+            update_candidates.add(agent)
+            if agent in pending:
+                continue
+            key = getattr(advice, "runtime_version_key", "")
+            mark = "runtime-update:" + agent
+            if not key or ledger.get(mark) == key:
+                continue
+            wiring = self._wiring_fn(agent)
+            if wiring is None or not wiring.directions:
+                continue
+            # Version lookup may take time. Re-observe immediately before
+            # sending; the initial idle snapshot is not authority to type now.
+            fresh = agent_states([cards[agent]], self._panes, runtime).get(agent)
+            if (fresh is None or fresh.state not in (triage_mod.IDLE, triage_mod.SATURATED)
+                    or fresh.shells != 0):
+                continue
+            message = "RUNTIME UPDATE: " + advice.why + ". " + _cycle_message(restart=True)
+            if self._push(self._reg, self._panes, agent, message) is None:
+                continue
+            ledger[mark] = key
+            prompted.append(agent)
+            self._log(f"cycle: prompted {agent} for process replacement — {advice.why}")
+
         # THE PRE-HANDOFF NUDGE, before the saturated loop so an agent that
         # crosses both lines between two sweeps still gets the ask to write
         # first. Ledgered under its own key: reaching the cycle line later must
         # still deliver the cycle prompt, so this state cannot be allowed to
         # look like "already handled".
         for agent in sorted(nearing):
+            if agent in update_candidates or agent in pending:
+                continue
             if ledger.get(agent) in ("saturated", "advised"):
                 continue
             wiring = self._wiring_fn(agent)
@@ -418,7 +470,8 @@ class CycleDriver:
             # CYCLE EARLY ON ADVICE: a signal posted through `st agent advise`
             # says the next task is not worth this context. Checked even after
             # the pre-handoff nudge, because the signal may land after it.
-            advice = self._advice(agent, states[agent].depth_k)
+            advice = (advice_by_agent[agent] if agent in advice_by_agent else
+                      self._advice(agent, states[agent].depth_k))
             if advice is not None and advice.decision == "cycle":
                 if self._push(self._reg, self._panes, agent, _cycle_message()) is None:
                     continue                   # unreachable pane: retry next sweep
@@ -437,6 +490,8 @@ class CycleDriver:
                       f"{int(states[agent].depth_k)}k (pre-handoff line)")
 
         for agent in sorted(saturated):
+            if agent in update_candidates or agent in pending:
+                continue
             if ledger.get(agent) == "saturated":
                 continue                       # already prompted this episode
             # DARK AGENTS ARE NOT ST'S TO DRIVE (aegis-arma follow-up, measured:
@@ -878,6 +933,7 @@ class IdleFleetAlerter:
             self._audit.record(window_id, leg="anchor", backend=backend,
                                attempted=True, acted_on=True,
                                reason=f"read {len(active)} active item(s)")
+            active = [row for row in active if not is_ask(row)]
         except Exception as exc:      # noqa: BLE001
             self._audit.record(window_id, leg="anchor", backend=backend,
                                attempted=True, refused=True,
@@ -1036,6 +1092,8 @@ class IdleFleetAlerter:
                 cwd = feed_check.bd_cwd(self._reg)
                 open_anchors: dict[str, set[str]] | None = {}
                 for b in self._bd_in_progress(cwd):
+                    if is_ask(b):
+                        continue
                     w = (b.get("assignee") or "").split("/")[-1]
                     if w:
                         open_anchors.setdefault(w, set()).add(b.get("id"))
@@ -1807,6 +1865,36 @@ class DeferralAlerter:
                 failed(finding)
                 self._log(f"deferral-sweep: {finding.bead} release/read failed ({e!r}); retry next pass")
         budget.save()
+        from .deferral_pacing import OwnerPacing
+        pacing = OwnerPacing(self._root)
+        if store_error:
+            pacing.current.update(pacing.previous)
+
+        def live_owner(name):
+            try:
+                card = self._reg.get(name)
+                # A surviving shell is not a live runtime. Missing process
+                # evidence retains the existing administrator route.
+                return bool(not card.retired and card.pane
+                            and not (Path(self._root) / "stopped" / f"{name}.json").exists()
+                            and self._panes.exists(card.pane)
+                            and harness_mod.running_name(self._panes.cmdline(card.pane)))
+            except Exception:
+                return False
+
+        routed = []
+        for finding in reports:
+            row = by_id.get(finding.bead)
+            if (row and finding.lapsed_at and not finding.read_error
+                    and not finding.untestable and not finding.prose_gate
+                    and (finding.condition is None or finding.condition.kind == "date"
+                         or (finding.met and finding.condition.kind == "event"))
+                    and pacing.route(row, now, live_owner, deliver_backstop)):
+                self._log(f"deferral-sweep: OWNER-PACING {finding.bead}; no admin ruling")
+            else:
+                routed.append(finding)
+        pacing.save()
+        reports = routed
         findings = reports
         seen = pol.Reported(self._root)
         fresh = seen.unreported(findings)

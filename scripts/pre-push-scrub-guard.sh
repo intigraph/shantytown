@@ -184,7 +184,7 @@ warn_degraded() {
 
 # ticket_files <from> <to|commit> — the changed files this rule GOVERNS, i.e.
 # every changed file its exemption regex does not name. ONE definition, shared
-# with hank, which matches the identical string against the same repo-relative
+# with yupana, which matches the identical string against the same repo-relative
 # path (aegis-rdclc). Unset regex -> every file, the pre-scope behaviour, so a
 # stale config enforces MORE than the graph asks and never less.
 ticket_files() {
