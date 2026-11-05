@@ -3,7 +3,7 @@
 quipu is written-to by hooks far more than it is QUERIED for context by agents
 (aegis-rcyd measured reality: 152k facts, but agents grep beads instead of
 asking the graph). A CLAUDE.md line does not move that — the fleet already
-mandates bobbin/hank before edits and adoption is ~0, so "requested" is proven
+mandates bobbin/yupana before edits and adoption is ~0, so "requested" is proven
 insufficient. This puts the directive in the model's LIVE context at every
 session start, the same mechanism as the bobbin-first hint. It is static,
 best-effort, and fail-open: it names the provisioned MCP tool plus a REST

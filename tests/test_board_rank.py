@@ -322,3 +322,26 @@ def test_observed_facts_do_not_dilute_semantic_model_error():
     assert metric['brier_mean']==1
     with pytest.raises(rank.TriageError,match='calibration bound'):
         rank.admitted_flags(out,dict(flag_bounds={'automation':dict(minimum_cases=30,maximum_brier=.6)}))
+
+
+@pytest.mark.parametrize('placement,expected,probed',[
+    (None,'unknown',False),('', 'unknown',False),
+    ('here','down',True),('other','unknown',False)])
+def test_local_owner_liveness_requires_explicit_matching_host(placement,expected,probed):
+    card=Agent('worker',host=placement,pane='worker-pane')
+    reg=NS(all=lambda:Answer.complete_read([card],how='fixture'))
+    probes=[]
+    states=rank.owner_states(reg,NS(exists=lambda pane:probes.append(pane) or False),host='here',peers=[])
+    proposal=rank.propose([row()],POLICIES,states,now=NOW)['proposals'][0]
+    assert proposal['owner_state']==expected
+    assert proposal['reowner'] is (expected=='down')
+    assert probes==(['worker-pane'] if probed else [])
+
+
+def test_hostless_local_card_can_use_separately_attributed_peer_evidence():
+    card=Agent('remote',host=None,pane='not-local')
+    reg=NS(all=lambda:Answer.complete_read([card],how='fixture'))
+    def forbidden(pane):raise AssertionError('host-less owner cannot be locally probed')
+    peers=[dict(host='other',error=None,agents=[dict(name='remote',host='other',live=False,state='down')])]
+    assert rank.owner_states(reg,NS(exists=forbidden),host='here',peers=peers)=={'remote':'down'}
+    assert rank.owner_states(reg,NS(exists=forbidden),host=None,peers=[])=={}

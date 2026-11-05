@@ -18,7 +18,7 @@ A NUDGE, NOT A BLOCK — and that is load-bearing, not politeness. Untracked wor
 is sometimes legitimate (setup, orientation, a two-command fix); SUSTAINED
 untracked work is drift. A guard that hard-refused the first unhooked Edit would
 brick an agent doing the legal thing, and this repo has already shipped one
-fail-closed hook that took the whole fleet down (aegis-w1nd: `hank hook pre-edit`
+fail-closed hook that took the whole fleet down (aegis-w1nd: `yupana hook pre-edit`
 exiting 2 on every Write). So the ladder is:
 
     hook empty, acting        -> WARN the agent, in its own context, on a cooldown

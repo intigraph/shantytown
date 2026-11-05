@@ -99,7 +99,7 @@ def read_consumed(session_path: str | Path) -> tuple[int, str | None] | None:
     return snapshot[:2] if snapshot is not None else None
 
 
-def _read_snapshot(session_path: str | Path) -> tuple[int, str | None, int | None] | None:
+def _read_snapshot(session_path: str | Path, max_bytes: int | None = None) -> tuple[int, str | None, int | None] | None:
     """(input occupancy, model, native window) from the latest usage record.
 
     None means cannot-tell — an unreadable, absent or usage-free transcript. It is
@@ -115,7 +115,7 @@ def _read_snapshot(session_path: str | Path) -> tuple[int, str | None, int | Non
         # Stop hooks and the crew table poll this. Walking from the end avoids
         # repeatedly scanning a long session's entire transcript at its ceiling.
         with Path(session_path).open("rb") as fh:
-            for line in _reverse_lines(fh):
+            for line in _reverse_lines(fh, max_bytes=max_bytes):
                 try:
                     rec = json.loads(line)
                 except ValueError:
@@ -155,25 +155,26 @@ def _read_snapshot(session_path: str | Path) -> tuple[int, str | None, int | Non
     return None
 
 
-def _reverse_lines(fh):
+def _reverse_lines(fh, max_bytes=None):
     """Yield complete JSONL records newest first, retaining cross-block lines."""
     fh.seek(0, 2)
     offset = fh.tell()
+    lower = max(0, offset - max_bytes) if max_bytes is not None else 0
     pending = b""
-    while offset:
-        size = min(offset, 65536)
+    while offset > lower:
+        size = min(offset - lower, 65536)
         offset -= size
         fh.seek(offset)
         parts = (fh.read(size) + pending).split(b"\n")
         pending = parts[0]
         yield from reversed(parts[1:])
-    if pending:
+    if pending and lower == 0:
         yield pending
 
 
-def read(session_path: str | Path, window: int | None) -> ContextReading:
+def read(session_path: str | Path, window: int | None, *, max_bytes: int | None = None) -> ContextReading:
     """Use an explicit window, otherwise the native window from the same record."""
-    got = _read_snapshot(session_path)
+    got = _read_snapshot(session_path, max_bytes=max_bytes)
     if got is None:
         return ContextReading(
             UNKNOWN, detail=f"no usage records readable at {session_path}")
