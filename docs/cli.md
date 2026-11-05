@@ -3437,3 +3437,34 @@ atomic snapshot; concurrent changes can require retrying a read. Unsupported
 owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
+
+Rank proposals distinguish `reowner` (a positively observed down owner) from
+`needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
+`in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
+owner observations and held owners do not become down observations. This flag
+never assigns anyone or releases a hold.
+
+For a frozen independent corpus, add `--rank-semantic-only` to
+`st work triage --rank-proposals --benchmark cases.jsonl --rank-rules rules.json`.
+This mode calls only the automation and personal-need nouls, including P0 cases;
+rank-band choices are disabled. Each case needs both independent boolean labels
+under `expected.flags`, a dated before snapshot, owner evidence, source and rule
+references. Unknown ownership labels may remain unknown because this report
+scores only the semantic columns. The entire 30–50 case corpus is validated
+before any model call; the shared budget is at most 100 nouls. Dry-run makes no
+model calls. Real calls still require the explicit verified quarantine graph,
+private request journal and exact readback. Missing observations stay missing,
+not false. The separate semantic report schema cannot authorize a live rank arm.
+
+Deterministic bands use proven open blockers, not a stored blocked/deferred
+status or a `blocked:*` claim. Positive open blockers, explicit
+`blocked:human`/`desk`/`needs-stiwi`, keep a blocked band. Parked-by-design work with proven zero blockers is later;
+with positive blockers it stays blocked.
+With proven zero blockers, other blocked labels produce a visible stale-gate
+flag. An open or deferred P0 behind a proven stale gate is immediate.
+P0 overdue work or a proven prerequisite of P0 work is immediate; work
+due within seven days (including overdue work) is due; other P0–P2 work is
+normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
+a zero count. Native snapshots use bounded candidate-edge and exact endpoint
+status projections; missing or shadowed endpoints refuse the run. These bands
+and flags do not change lifecycle status, clear a hold, or authorize dispatch.
