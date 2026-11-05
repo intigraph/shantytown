@@ -1,0 +1,10 @@
+Script started on 2026-11-04 15:25:14-05:00 [COMMAND="python3 docs/demos/resume-hook-json/demo.py 00aeb88 e3b9d29" <not executed on terminal>]
+00aeb88: actual resume hook, isolated saved-brief fixture
+not a JSON envelope (JSONDecodeError, column 2)
+second invocation: empty; pending brief: consumed
+e3b9d29: actual resume hook, isolated saved-brief fixture
+SessionStart additionalContext contains complete checkpoint + pointers
+second invocation: empty; pending brief: consumed
+Source output only; native Codex relaunch/injection acceptance remains separate.
+
+Script done on 2026-11-04 15:25:15-05:00 [COMMAND_EXIT_CODE="0"]
