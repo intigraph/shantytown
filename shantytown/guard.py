@@ -216,7 +216,7 @@ def _repo_behind(container: Path) -> Path | None:
     it provisions; it is not a fact, and treating it as one was wrong on two of
     twelve containers the first time this ran against a real fleet:
 
-        hank-wt/*     ->  git says  ~/gt/hank-build/.git     (not ~/gt/hank,
+        yupana-wt/*   ->  git says  ~/gt/yupana-build/.git   (not ~/gt/yupana,
                           which exists and is not even a repo)
         gastown-wt/*  ->  git says  ~/workspace/gastown/.git (a shared repo
                           OUTSIDE the root entirely, so name inference could

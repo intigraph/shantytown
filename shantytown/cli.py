@@ -10209,7 +10209,7 @@ def _resolve_repo(repo: str) -> Path:
 
     A bare name normally means ``$GT_ROOT/<name>``. When that path exists but is
     a Gas Town rig rather than a checkout, and ``$GT_ROOT/<name>-src`` carries
-    its own ``.git`` marker, the source checkout wins. This is the Hank layout:
+    its own ``.git`` marker, the source checkout wins. Legacy checkout compatibility:
     ``~/gt/hank`` owns ``.beads`` and a bare ``.repo.git`` cache, while
     ``~/gt/hank-src`` is the editable scbrown/hank checkout (aegis-gbuap).
 
@@ -10228,7 +10228,7 @@ def _resolve_repo(repo: str) -> Path:
     shantytown checkout AND every shantytown worktree. `st repo push shantytown <me>`
     — the documented form — therefore failed SPECIFICALLY in the tree you are
     standing in when you push, which is the only place anyone runs it. Same for
-    quipu, hank, bobbin. Measured 2026-08-04: refused with "no worktree at
+    quipu, yupana, bobbin. Measured 2026-08-04: refused with "no worktree at
     shantytown-wt/franklin" while that worktree existed; the absolute-path form
     worked.
 
@@ -10301,7 +10301,7 @@ def _resolve_push_worktree(repo: str, agent: str) -> Path:
     resolved = _resolve_repo(repo)
 
     # A bare name can be a compatibility alias for a differently named source
-    # checkout (currently hank -> hank-src).  Resolve that alias BEFORE looking
+    # checkout (legacy compatibility: hank -> hank-src). Resolve that alias BEFORE looking
     # for an existing worktree: otherwise a stale hank-wt left by the archived
     # repository captures `st repo push hank`, even while `st repo worktree hank` correctly
     # provisions from the active hank-src checkout.
@@ -11774,7 +11774,7 @@ def _cmd_worktree(a) -> int:
     """worktree <repo> [<agent>] [--gc] — st PROVISIONS the isolated worktree so
     the agent never runs `git worktree add` by hand (aegis-h2rr).
 
-    A shared project checkout (~/gt/shantytown, quipu, hank-src, goldblum) is
+    A shared project checkout (~/gt/shantytown, quipu, yupana, goldblum) is
     multi-writer: index and HEAD belong to the working copy, so two agents
     committing there corrupt each other silently (aegis-repg/iaef). Each agent
     gets its own worktree off the shared repo instead — <repo>-wt/<agent> on

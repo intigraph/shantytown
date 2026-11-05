@@ -2666,7 +2666,7 @@ added. It refreshes only the shantytown handler, preserving other settings and
 operator hooks. An unreadable selected file refuses provisioning. Already-running
 sessions still require their natural relaunch boundary to load the repaired hook.
 
-Caboodle owns binary installation and functional proof; this command owns harness
+Tambo owns binary installation and functional proof; this command owns harness
 registration. It requires existing crew workspaces and a nonempty
 `SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
 or failed configuration read-back return nonzero. No local-template fallback is
