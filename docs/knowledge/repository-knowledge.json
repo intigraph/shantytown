@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed responsibilities; tend ranks priorities without reassignment. Failed reads stay UNKNOWN. Protected results use own-job mailboxes and exact job/PR scope. Cycle requires item-bound approved bundle custody and an independently verified clean branch; dirty work stays gated. Chaski delegation refuses local execution. Triage proposes quarantined ranks for administrator acceptance. Harness conversion retains validated model/browser preferences and reports unsupported fields. Semantic-only benchmarks call automation/personal-need nouls and cannot admit ranks. Cycle advice requires fresh native evidence before preferring checkpointed process replacement. Pipeline waits require an event and a long backstop; --window declares a real appointment. Owner reminders do not release gates.",
-      "source_sha256": "8278cd19b3067a0c8fb1f29f73a95857ccb166a2b509bb8923eae991469f92d4",
+      "summary": "st provides work-item, crew, repository and scheduled-job commands. Roles show governed responsibilities; priority ranking is advisory. Failed reads stay UNKNOWN. Protected mailboxes and signed reviews bind exact job/PR scope. Cycle requires approved full-history custody and a verified clean branch; checkpoint replacement advice requires fresh native evidence. Chaski delegation refuses local execution. Triage quarantines rank proposals for administrator acceptance. Harness conversion preserves validated model/browser preferences. Semantic benchmarks admit automation and personal needs, never ranks. Pipeline waits require an event and long backstop; --window declares a real appointment. Owner reminders never release gates. Ceiling transfer observes source harnesses and complete active, non-held receiver plates, selects only the other known harness, and preserves budget and ownership gates.",
+      "source_sha256": "1995f55c9536926f22cb4b623f83f6c34cc4c275fe94118c1c12ee9202f5898f",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "455e4bd50a87fa76d10d0debc41b02c63fadabcbec29f94c1ccbc174f6910b02",
+      "source_sha256": "45f648615f526ed60ccbca9143c9e74ebb1867a5a69fe11fe7c3a380fa4b71c0",
       "properties": {
         "startHereOrder": 2
       }
