@@ -400,12 +400,16 @@ mixed result.
 
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded
-change feed. Unrelated writes do not invalidate an exact answer. A returned
+change feed. Query misses are published into the shared cache only after this
+whole-projection proof succeeds; duplicate per-query watermark reads are not
+needed inside that fence. Unrelated writes do not invalidate an exact answer. A returned
 entity's payload change re-reads only that entity's lean fields, then re-fences
 **all** selected entities; a second change during repair must also be reconciled.
 A membership-attribute change, including status or ownership, restarts candidate
 selection. A store replacement discards all retained rows and restarts the whole
-projection. Missing, malformed, truncated or changed-history proof remains
+projection and invalidates render-scoped shape admission from the old store.
+A regressing watermark under the same store identity is UNKNOWN, not a restart.
+Missing, malformed, truncated or changed-history proof remains
 UNKNOWN, never permission to return retained rows.
 
 Initial projections, entity repairs and whole restarts share three total passes

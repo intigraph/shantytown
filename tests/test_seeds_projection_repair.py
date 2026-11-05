@@ -26,6 +26,7 @@ def changing(monkeypatch, tmp_path):
             query=json.loads(request.data)['query']
             if '?predicate ?value' not in query:
                 state['candidates']+=1
+                state.setdefault('candidate_queries',[]).append(query)
                 subjects=[B] if state.get('moved') else [A,B]
                 rows=[dict(subject=s, graph=G) for s in subjects]
             else:
@@ -130,3 +131,14 @@ def test_elapsed_time_budget_is_shared_with_repairs(changing,monkeypatch):
     assert not plate.owner_rows(proof,'worker',timeout=1).complete
     assert state['candidates']==1
     assert state['fields']==[[A,B],[A]]
+
+
+def test_store_restart_drops_render_scoped_shape_admission(changing):
+    proof,state=changing;state['mode']='store'
+    admission=plate.RenderShapeReads()
+    assert admission.check(proof,('worker',),timeout=30)
+    assert admission.supported
+    assert plate.owner_rows(proof,'worker',shape_reads=admission).exact()
+    assert state['candidates']==2
+    assert 'unsupported-owner-status' in state['candidate_queries'][1]
+    assert not admission.supported  # No old-store positive leaks to later owners.

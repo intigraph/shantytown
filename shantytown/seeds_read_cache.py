@@ -42,7 +42,7 @@ _CHANGE_PAGES = 8
 def projection_reads(budget=None):
     """Collect the oldest observation used by one exact owner projection."""
     token = _PROJECTION.set({"mark": None, "paths": set(), "epoch": None,
-                              "refresh": False, "budget": budget})
+                              "refresh": False, "pending": [], "budget": budget})
     try:
         yield
     finally:
@@ -55,6 +55,7 @@ def _projection_mark(mark):
         return
     previous = scope["mark"]
     if previous is not None and previous[0] != mark[0]:
+        _forget_projection(scope)
         raise StoreChanged("seeds store changed across projection")
     scope["mark"] = mark if previous is None else (mark[0], min(previous[1], mark[1]))
 
@@ -71,9 +72,13 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
         return  # Explicit query-only admission (or an entirely injected reader).
     store, since = scope["mark"]
     end_store, target = _watermark(server, projection_timeout(timeout), opener)
-    if end_store != store or target < since:
+    if end_store != store:
+        _forget_projection(scope)
         raise StoreChanged("seeds store changed across projection")
+    if target < since:
+        raise ValueError("seeds watermark regressed across projection")
     if target == since:
+        _publish_projection(scope, (store, target))
         return
     epoch = scope["epoch"]
     changed = set()
@@ -139,14 +144,34 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
     projection_timeout(timeout)
     scope["epoch"] = epoch
     if membership_changed or changed:
-        for path in scope["paths"]:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        _forget_projection(scope)
         if membership_changed:
             raise WatermarkMoved("seeds membership changed during projection")
         raise EntityChanges(changed, (store, target))
+
+    _publish_projection(scope, (store, target))
+
+
+def _forget_projection(scope):
+    for path in scope["paths"]:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    scope["pending"].clear()
+
+
+def _publish_projection(scope, mark):
+    # Every consumed query is certified by the owner membership/selected-entity
+    # proof. Publish only now; a refused projection must not cache its misses.
+    for directory, path, mark_path, result in scope["pending"]:
+        try:
+            with _locked(directory, path.stem[5:]):
+                _publish(directory, mark_path, None, mark)
+                _publish(directory, path, mark, result)
+        except _CACHE_ERRORS:
+            pass  # A correct answer does not depend on writable cache storage.
+    scope["pending"].clear()
 
 
 def projection_timeout(timeout):
@@ -379,7 +404,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
             before = _cached(mark_path, None, valid_mark, max_age=_WATERMARK_MAX_AGE)
             hit = _cached(path, before, validate) if before is not None else None
         if before is None:
-            before = _watermark(server, timeout, opener)
+            before = (scope["mark"] if scope is not None else
+                      _watermark(server, timeout, opener))
             with _locked(directory, key):
                 _publish(directory, mark_path, None, before)
                 hit = _cached(path, before, validate)
@@ -407,6 +433,12 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
     if hit is not None:
         _projection_mark(before)
         return hit
+
+    if scope is not None:
+        _projection_mark(before)
+        result = fetch()
+        scope["pending"].append((directory, path, mark_path, result))
+        return result  # The whole projection owns the post-read proof.
 
     result = fetch()  # Never swallow a wire or completeness refusal.
     # A changed watermark cannot certify this answer, even without caching:

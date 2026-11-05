@@ -298,6 +298,14 @@ def _retry_owner_projection(function):
                     return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
+                if isinstance(changed, seeds_read_cache.StoreChanged):
+                    admission = kwargs.get("shape_reads")
+                    if isinstance(admission, RenderShapeReads):
+                        admission.supported.clear()
+                    # Explicit/render-scoped admission belongs to the old
+                    # store. The restarted candidate pass must prove shape
+                    # on the replacement, and later owners cannot reuse it.
+                    kwargs = {**kwargs, "shape_reads": None}
         return Answer.capped(
             [], how="Seeds owner projection; shared and ephemeral graphs",
             caveat=f"owner plate unreadable after 3 snapshot passes: {error}")

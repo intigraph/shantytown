@@ -125,3 +125,42 @@ def test_incomplete_or_changed_history_never_certifies(wire, monkeypatch, mode):
     monkeypatch.setattr(cache, "_CHANGE_PAGES", 2)
     assert not plate.owner_rows(proof, "worker").complete
     assert state["queries"] == 2
+
+
+def test_projection_misses_publish_only_after_complete_fence(wire):
+    proof, state = wire
+    state.update(step=0, mode="offline")
+    # A store movement is necessary to exercise the unavailable feed.
+    marks = iter([("fixture", 10), ("fixture", 11)])
+    original = cache._watermark
+    from unittest.mock import patch
+    with patch.object(cache, "_watermark", side_effect=lambda *a: next(marks)):
+        assert not plate.owner_rows(proof, "worker").complete
+    assert state["queries"] == 2
+    state.update(mode="unrelated-entity", tx=11)
+    assert plate.owner_rows(proof, "worker").exact()
+    assert state["queries"] == 4  # Neither uncertified miss was published.
+
+
+def test_projection_uses_one_initial_and_one_final_watermark(wire,monkeypatch):
+    proof,state=wire
+    state.update(step=0)
+    original=cache._watermark
+    calls=[]
+    def counted(*a):
+        calls.append(1)
+        return original(*a)
+    monkeypatch.setattr(cache,"_watermark",counted)
+    assert plate.owner_rows(proof,"worker").exact()
+    assert len(calls)==2
+    assert state["queries"]==2
+    assert plate.owner_rows(proof,"worker").exact()
+    assert state["queries"]==2  # Certified entries still accelerate warm reads.
+
+
+def test_same_store_watermark_regression_is_unknown_not_a_restart(wire,monkeypatch):
+    proof,state=wire
+    marks=iter([("fixture",10),("fixture",9)])
+    monkeypatch.setattr(cache,"_watermark",lambda *a:next(marks))
+    assert not plate.owner_rows(proof,"worker").complete
+    assert state["queries"]==2

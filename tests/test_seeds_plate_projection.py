@@ -853,7 +853,7 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
     observed = {"marks": 0, "queries": 0}
     def watermark(*args):
         observed["marks"] += 1
-        tx = (10 if observed["marks"] <= 2 else 11) if motion == "settles" else (
+        tx = (10 if observed["marks"] <= 1 else 11) if motion == "settles" else (
             observed["marks"] if motion == "never" else 10)
         observed["tx"] = tx
         return ("fixture-store", tx)
