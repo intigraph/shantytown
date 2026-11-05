@@ -147,3 +147,30 @@ def test_version_metadata_before_relaunch_or_without_timestamp_is_unknown(tmp_pa
     assert update.running_version(path,"exact",not_before=1000) is None
     path.write_text(json.dumps(dict(sessionId="exact",version="2.1.317",timestamp="1970-01-01T00:16:41Z"))+"\n")
     assert update.running_version(path,"exact",not_before=1000)=="2.1.317"
+
+
+def test_pending_cycle_precedes_stdin_and_all_advice(tmp_path, monkeypatch, capsys):
+    from shantytown import cycle, context_hint, ruling_memory
+    card, _ = world(tmp_path)
+    cycle.Requests(tmp_path).request(card.name, 'saved checkpoint')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('pending cycle must precede stdin and advice')
+    monkeypatch.setattr(stop_policy.json, 'load', forbidden)
+    monkeypatch.setattr(ruling_memory, 'enabled', forbidden)
+    monkeypatch.setattr(context_hint, 'emit', forbidden)
+    monkeypatch.setattr(update, 'emit', forbidden)
+    assert stop_policy.stop_advice(tmp_path, card)
+    assert capsys.readouterr().out == ''
+
+
+def test_advice_order_after_pending_cycle_check(tmp_path, monkeypatch):
+    from shantytown import context_hint, ruling_memory
+    card, payload = world(tmp_path)
+    calls=[]
+    monkeypatch.setattr('sys.stdin', io.StringIO(json.dumps(payload)))
+    monkeypatch.setattr(ruling_memory, 'enabled', lambda root: True)
+    monkeypatch.setattr(ruling_memory, 'check', lambda *args: calls.append('memory'))
+    monkeypatch.setattr(context_hint, 'emit', lambda *args, **kwargs: calls.append('context'))
+    monkeypatch.setattr(update, 'emit', lambda *args: calls.append('update'))
+    assert not stop_policy.stop_advice(tmp_path, card)
+    assert calls == ['memory', 'context', 'update']
