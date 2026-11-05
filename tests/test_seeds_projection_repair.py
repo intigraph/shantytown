@@ -1,5 +1,6 @@
 """A changed payload repairs its fields; membership/store changes restart."""
 import json
+import re
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 import pytest
@@ -7,6 +8,7 @@ from shantytown import seeds_plate as plate, seeds_read_cache as cache
 
 G = 'https://example.test/repair'
 A, B = [plate.SEEDS + 'item/' + key for key in ('test-a', 'test-b')]
+C = plate.SEEDS + 'item/test-c'
 
 @pytest.fixture
 def changing(monkeypatch, tmp_path):
@@ -31,9 +33,18 @@ def changing(monkeypatch, tmp_path):
                 state['candidates']+=1
                 state.setdefault('candidate_queries',[]).append(query)
                 subjects=[B] if state.get('moved') else [A,B]
+                if state.get('entered'):subjects.append(C)
+                if 'VALUES ?s {' in query:
+                    if state.get('bad_scoped'):return Response(dict(rows=[],count=0,truncated=True))
+                    scoped=set(re.findall(r'<([^>]+)>', query.split('VALUES ?s {',1)[1].split('}',1)[0]))
+                    subjects=[s for s in subjects if s in scoped]
+                    if state.get('payload_during_revalidation'):
+                        state['tx']+=1;state['labels'][B]='late-b'
+                        state['records'].append(dict(tx=state['tx'],graph=G,entity=B,attribute=plate.SCHEMA+'keywords',op='assert'))
                 rows=[dict(subject=s, graph=G) for s in subjects]
+                if state.get('unsupported'):rows.append(dict(subject=C,problem='unsupported-owner-status'))
             else:
-                subjects=[s for s in (A,B) if '<'+s+'>' in query]
+                subjects=[s for s in (A,B,C) if '<'+s+'>' in query]
                 state['fields'].append(subjects)
                 inverse={v:k for k,v in plate.FIELDS.items()}
                 rows=[]
@@ -44,8 +55,14 @@ def changing(monkeypatch, tmp_path):
                 n=len(state['fields']);mode=state['mode']
                 if n==1 or mode=='always' or (mode in ('second','late-membership','late-store','epoch') and n==2):
                     subject=B if n==2 and mode in ('second','late-membership','late-store','epoch') else A
-                    state['tx']+=1;state['labels'][subject]='new-'+subject[-1]
+                    state['tx']+=1
                     attribute=plate.SCHEMA+'keywords'
+                    if state.get('foreign_membership'):
+                        subject=C if state.get('foreign_enters') or state.get('foreign_bad_status') else C+'/comment/1';attribute=plate.SCHEMA+'agent'
+                        if state.get('foreign_enters'):
+                            state['entered']=True;state['labels'][C]='new-c'
+                        if state.get('foreign_bad_status'):state['unsupported']=True
+                    if subject in state['labels']:state['labels'][subject]='new-'+subject[-1]
                     if state.get('priority_change'):
                         attribute=plate.SEEDS+'ontology/priority'
                         state.setdefault('priorities',{})[subject]=2
@@ -55,6 +72,8 @@ def changing(monkeypatch, tmp_path):
             return Response(dict(rows=rows,count=len(rows),truncated=False))
         q=parse_qs(urlsplit(request.full_url).query);since=int(q['since'][0]);graph=q['graph'][0]
         records=[r.copy() for r in state['records'] if r['graph']==graph and r['tx']>since]
+        if state.get('many_foreign') and records:
+            records=[dict(record,entity=C+'/comment/'+str(i)) for record in records for i in range(129)]
         if state['mode']=='malformed' and records:records[-1].pop('attribute')
         return Response(dict(since=since,records=records,next_tx=max((r['tx'] for r in records),default=since),watermark_tx=state['tx'],capture='new_values',source=dict(store_id=state['store'],log_epoch=('replacement' if state['mode']=='epoch' and len(state['fields'])>1 else 'epoch'))))
     monkeypatch.setattr(plate,'urlopen',send)
@@ -194,3 +213,55 @@ def test_store_restart_rechecks_native_schema_not_only_owner_status(changing):
     assert not answer.complete
     assert state['candidates']==1
     assert state['schema_checks']==1
+
+
+def test_foreign_membership_revalidates_without_full_hydration(changing):
+    proof,state=changing;state['foreign_membership']=True
+    rows=plate.owner_rows(proof,'worker').exact()
+    assert len(rows)==2
+    assert state['fields']==[[A,B]]
+    assert state['candidates']==2
+    assert 'VALUES ?s {' in state['candidate_queries'][-1]
+
+
+def test_payload_during_foreign_revalidation_is_repaired_and_refenced(changing):
+    proof,state=changing
+    state.update(foreign_membership=True,payload_during_revalidation=True)
+    rows=plate.owner_rows(proof,'worker').exact()
+    assert state['fields']==[[A,B],[B]]
+    assert {r['id']:r['labels'] for r in rows}=={'test-a':['old-a'],'test-b':['late-b']}
+
+
+def test_new_candidate_during_foreign_revalidation_forces_full_restart(changing):
+    proof,state=changing;state.update(foreign_membership=True,foreign_enters=True)
+    rows=plate.owner_rows(proof,'worker').exact()
+    assert {r['id'] for r in rows}=={'test-a','test-b','test-c'}
+    assert state['fields']==[[A,B],[A,B,C]]
+    assert state['candidates']==3  # Initial, scoped check, complete restart.
+
+
+def test_foreign_unsupported_status_never_reuses_old_rows(changing):
+    proof,state=changing;state.update(foreign_membership=True,foreign_bad_status=True)
+    assert not plate.owner_rows(proof,'worker').complete
+    assert state['fields']==[[A,B]]
+
+
+def test_oversized_foreign_membership_set_keeps_complete_restart(changing):
+    proof,state=changing;state.update(foreign_membership=True,many_foreign=True)
+    assert len(plate.owner_rows(proof,'worker').exact())==2
+    assert state['fields']==[[A,B],[A,B]]
+    assert all('VALUES ?s {' not in q for q in state['candidate_queries'])
+
+
+def test_custom_admission_keeps_complete_membership_restart(changing):
+    proof,state=changing;state['foreign_membership']=True
+    shape=SimpleNamespace(check=lambda *args,**kwargs:True)
+    assert len(plate.owner_rows(proof,'worker',shape_reads=shape).exact())==2
+    assert state['fields']==[[A,B],[A,B]]
+    assert all('VALUES ?s {' not in q for q in state['candidate_queries'])
+
+
+def test_truncated_scoped_relation_cannot_certify_old_rows(changing):
+    proof,state=changing;state.update(foreign_membership=True,bad_scoped=True)
+    assert not plate.owner_rows(proof,'worker').complete
+    assert state['fields']==[[A,B]]

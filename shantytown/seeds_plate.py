@@ -470,6 +470,29 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 seeds_read_cache.certify_projection(
                     proof.quipu_url, graphs, set(selected), OWNER_MEMBERSHIP, timeout, urlopen)
                 break
+            except seeds_read_cache.UnselectedMembershipChanges as change:
+                # Only the fused candidate/guard relation can prove that a
+                # foreign subject is still irrelevant. Custom admission keeps
+                # the original complete restart, as do selected membership
+                # changes and oversized affected sets.
+                if not inline_owner_guard:
+                    raise seeds_read_cache.WatermarkMoved("owner membership needs full admission")
+                seeds_read_cache.repair_entities(change)
+                values = "VALUES ?s { " + " ".join(_iri(s) for s in sorted(change.membership)) + " } "
+                scoped = query
+                for graph in graphs:
+                    # This is our fixed query compiler output, not arbitrary
+                    # SPARQL. Bind within every candidate AND guard branch;
+                    # factoring the UNION changes the refusal relation.
+                    anchor = f"GRAPH {_iri(graph)} {{ "
+                    if anchor not in scoped:
+                        raise ValueError("owner membership query cannot be scoped")
+                    scoped = scoped.replace(anchor, anchor + values)
+                if _query(proof, scoped, timeout)["rows"]:
+                    raise seeds_read_cache.WatermarkMoved("owner candidate or guard relation changed")
+                subset = {subject: selected[subject] for subject in change.entities}
+                if subset:
+                    grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
             except seeds_read_cache.EntityChanges as change:
                 seeds_read_cache.repair_entities(change)
                 subset = {subject: selected[subject] for subject in change.entities}

@@ -411,8 +411,13 @@ entity's payload change re-reads only that entity's lean fields, then re-fences
 Priority, rank and defer fields are selected-row payload in this reader. Their
 changes reload a selected subject, but do not restart selection when they belong
 to an unselected subject: they cannot change the candidate or status-guard relation.
-A membership-attribute change, including status or ownership, restarts candidate
-selection. A store replacement discards all retained rows and restarts the whole
+A membership-attribute change on a selected subject, including status or ownership,
+restarts candidate selection. For at most 128 unselected changed subjects, the
+reader first revalidates the same candidate and status-guard relation restricted
+to those subjects. An empty result retains other rows, repairs changed selected
+fields, and re-fences every selected subject within the same three-pass budget.
+A new candidate or refusal counterexample still restarts the complete projection;
+custom admission and larger changed sets also use the complete restart. A store replacement discards all retained rows and restarts the whole
 projection, rechecks native-schema admission, and invalidates render-scoped
 shape admission from the old store. A replacement using a legacy revision
 ledger is UNKNOWN for this native projection.

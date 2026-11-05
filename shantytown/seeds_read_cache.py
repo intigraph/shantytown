@@ -90,7 +90,7 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
         return
     epoch = scope["epoch"]
     changed = set()
-    membership_changed = False
+    membership_changed = set()
     deadline = time.monotonic() + projection_timeout(timeout)
     for graph in graphs:
         cursor = since
@@ -137,7 +137,8 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
                     raise ValueError("invalid projection change record")
                 transactions.add(record["tx"])
                 if record["tx"] <= target:
-                    membership_changed |= record["attribute"] in membership
+                    if record["attribute"] in membership:
+                        membership_changed.add(record["entity"])
                     if record["entity"] in entities:
                         changed.add(record["entity"])
             if (next_tx != (max(transactions) if transactions else cursor)
@@ -154,6 +155,8 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
     if membership_changed or changed:
         _forget_projection(scope)
         if membership_changed:
+            if not membership_changed.intersection(entities) and len(membership_changed) <= 128:
+                raise UnselectedMembershipChanges(membership_changed, changed, (store, target))
             raise WatermarkMoved("seeds membership changed during projection")
         raise EntityChanges(changed, (store, target))
 
@@ -253,6 +256,14 @@ class EntityChanges(WatermarkMoved):
         super().__init__("selected entity payload changed during projection")
         self.entities = frozenset(entities)
         self.mark = mark
+
+
+class UnselectedMembershipChanges(EntityChanges):
+    """Unselected subjects whose candidate/guard relation needs revalidation."""
+
+    def __init__(self, membership, entities, mark):
+        super().__init__(entities, mark)
+        self.membership = frozenset(membership)
 
 
 @contextmanager

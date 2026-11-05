@@ -45,9 +45,9 @@ def wire(monkeypatch, tmp_path):
         attribute = state.get("attribute", plate.SCHEMA + "description")
         mode = state["mode"]
         if mode == "returned": entity = S
-        if mode == "membership": attribute = plate.SCHEMA + "agent"
-        if mode == "status": attribute = plate.SEEDS + "ontology/status"
-        if mode == "blocker": attribute = "https://scbrown.github.io/quechua/ns#blockedOn"
+        if mode == "membership": entity = S; attribute = plate.SCHEMA + "agent"
+        if mode == "status": entity = S; attribute = plate.SEEDS + "ontology/status"
+        if mode == "blocker": entity = S; attribute = "https://scbrown.github.io/quechua/ns#blockedOn"
         records = [] if mode == "unrelated-graph" else [
             dict(tx=since + 1, graph=graph, entity=entity, attribute=attribute, op="assert")]
         if mode == "past-returned":
