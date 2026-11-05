@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "type": "Concept"
     },
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed role summaries; fleet-owner tend adds advisory ranking without reassignment. Failed reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed reviews require exact job and PR scope. Cycle accepts item-bound approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work stays gated. Explicit Chaski delegation skips the local evaluator and refuses local execution. Work triage offers quarantined priority/rank proposals for administrator acceptance. Harness conversion retains per-harness model and browser preferences and reports unsupported fields. Frozen semantic-only benchmarks call only automation and personal-need nouls; they cannot admit rank decisions. Cycle advice prefers checkpointed process replacement when exact native evidence proves an older running CLI; missing or stale evidence stays UNKNOWN.",
-      "source_sha256": "b618733887a3984234fcebe593018703b9bd3dc60dd4fe21edbac0d9eae9f5e0",
+      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed responsibilities; tend ranks priorities without reassignment. Failed reads stay UNKNOWN. Protected results use own-job mailboxes and exact job/PR scope. Cycle requires item-bound approved bundle custody and an independently verified clean branch; dirty work stays gated. Chaski delegation refuses local execution. Triage proposes quarantined ranks for administrator acceptance. Harness conversion retains validated model/browser preferences and reports unsupported fields. Semantic-only benchmarks call automation/personal-need nouls and cannot admit ranks. Cycle advice requires fresh native evidence before preferring checkpointed process replacement. Pipeline waits require an event and a long backstop; --window declares a real appointment. Owner reminders do not release gates.",
+      "source_sha256": "6861ef4214bfda0933de5ee89f15b679efbc7805dfd8d7721e2b6cc324e83d18",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "a6a2763cc095d5ac89a567ac89add437d396b6ec66b6e5398c705fe1271d9629",
+      "source_sha256": "45f648615f526ed60ccbca9143c9e74ebb1867a5a69fe11fe7c3a380fa4b71c0",
       "properties": {
         "startHereOrder": 2
       }

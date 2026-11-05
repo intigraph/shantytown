@@ -1,0 +1,12 @@
+Script started on 2026-11-04 16:16:02-05:00 [COMMAND="python3 docs/demos/defer-waits/run.py" <not executed on terminal>]
+BEFORE isolated library fixture
+same input: CI pending, one-hour date-only -> ACCEPT
+same expired owner timer, three observations -> owner, owner, administrator
+No resume gate released; fixture only.
+AFTER isolated library fixture
+same input: CI pending, one-hour date-only -> REFUSE
+control: explicit scheduled --window -> ACCEPT
+same expired owner timer, three observations -> owner, owner, owner
+No resume gate released; fixture only.
+
+Script done on 2026-11-04 16:16:03-05:00 [COMMAND_EXIT_CODE="0"]
