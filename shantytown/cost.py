@@ -139,8 +139,15 @@ def discover_sources(root, since_h=24):
         fmt = for_card(card, root=root).name
         if fmt == 'claude':
             paths = (Path.home() / '.claude/projects' / _claude_project_dir(card.workspace)).glob('*.jsonl')
-        elif fmt == 'codex' and settings(card):
-            paths = (Path(settings(card)).parent / 'sessions').glob('*/*/*/*.jsonl')
+        elif fmt == 'codex':
+            # Harness compose redirects runtime sessions into this durable home.
+            # A role settings file lives elsewhere and is not CODEX_HOME.
+            state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state'))
+            homes = [state / 'shantytown/codex' / card.name / 'sessions']
+            configured = settings(card)
+            if configured:
+                homes.append(Path(configured).parent / 'sessions')
+            paths = dict.fromkeys(p.resolve() for home in homes for p in home.glob('*/*/*/*.jsonl'))
         else:
             continue
         for path in paths:
@@ -185,16 +192,25 @@ def retrieve(root, config):
     # match. Without this filter every historical declaration of every agent
     # was read from the tracker one by one: 2149 items for 18 sources on
     # 2026-11-02, against 11 that could match (aegis-59jx).
-    seen = _sessions(config, sources)
+    seen, bases = _sessions(config, sources)
     provisional = [b for b in bindings(root, config['rig'], {}, agents)
                    if (b['agent'], b['session']) in seen]
     records, unresolved = read_records(config, sorted({b['bead'] for b in provisional}))
+    declared = [b for b in bindings(root, config['rig'], records, agents)
+                if (b['agent'], b['session']) in seen]
+    # Inferred-held bindings only when Camayoc says it ranks them below declared
+    # focus. An older Camayoc would treat them as declared, i.e. as observed.
+    inference = {'basis': INFERRED_HELD, 'status': 'unavailable: Camayoc lacks the basis'}
+    held = []
+    if INFERRED_HELD in bases:
+        held = held_bindings(root, config['rig'], seen,
+                             time.time() - config.get('since_hours', 24) * 3600 - 3600)
+        inference = {'basis': INFERRED_HELD, 'status': 'used', 'intervals': len(held)}
     method = {'system': 'session_usage', 'query': 'work_cost', 'params': {
-        'bindings': [b for b in bindings(root, config['rig'], records, agents)
-                     if (b['agent'], b['session']) in seen],
-        'sources': sources}}
+        'bindings': declared + held, 'sources': sources}}
     payload = _camayoc(config, method)
-    return {**payload['result'], 'unresolved_items': unresolved}, records, method
+    return {**payload['result'], 'unresolved_items': unresolved,
+            'inference': inference}, records, method
 
 
 def _camayoc(config, method):
@@ -219,11 +235,72 @@ def _sessions(config, sources):
     """
     payload = _camayoc(config, {'system': 'session_usage', 'query': 'work_cost',
                                 'params': {'bindings': [], 'sources': sources}})
-    return {(r['agent'], r['session']) for r in payload['result'].get('records', [])}
+    result = payload['result']
+    return ({(r['agent'], r['session']) for r in result.get('records', [])},
+            set(result.get('binding_bases') or ()))
+
+
+INFERRED_HELD = 'inferred-held'
+HELD_STATUSES = ('in_progress', 'hooked')
+
+
+def held_bindings(root, rig, seen, since):
+    """Inferred-held intervals from st's own stop events (aegis-59jx step 2a).
+
+    A stop event records the item the agent held when its turn ended. Between
+    two consecutive stops of one agent that name the same item, in progress at
+    both ends, the agent held that item. That is an assignment, not proof of the
+    work, so these bindings carry basis inferred-held: Camayoc ranks them below
+    any declared focus and reports their spend separately, never as observed.
+    """
+    stops = {}
+    directory = Path(root) / 'events'
+    if not directory.is_dir():
+        return []
+    for entry in os.scandir(directory):
+        try:
+            if entry.stat().st_mtime < since:
+                continue
+            event = json.loads(Path(entry.path).read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(event, dict) or event.get('kind') != 'stop':
+            continue
+        agent, stamp = event.get('frm'), event.get('ts')
+        if not isinstance(agent, str) or type(stamp) not in (int, float):
+            continue
+        stops.setdefault(agent, []).append((stamp, event.get('item'), event.get('item_status')))
+    sessions = {}
+    for agent, session in seen:
+        sessions.setdefault(agent, []).append(session)
+    result = []
+    for agent, rows in stops.items():
+        if agent not in sessions:
+            continue
+        rows.sort(key=lambda row: row[0])
+        runs = []                       # [item, start, end]
+        for (t1, item1, status1), (t2, item2, status2) in zip(rows, rows[1:]):
+            held = (isinstance(item1, str) and item1 and item1 == item2
+                    and status1 in HELD_STATUSES and status2 in HELD_STATUSES and t2 > t1)
+            if not held:
+                continue
+            if runs and runs[-1][0] == item1 and runs[-1][2] == t1:
+                runs[-1][2] = t2        # the same item continues from the previous stop
+            else:
+                runs.append([item1, t1, t2])
+        for item, start, end in runs:
+            for session in sorted(sessions[agent]):
+                result.append({'schema_version': 1, 'rig': rig, 'bead': item, 'agent': agent,
+                               'session': session, 'start': start, 'end': end,
+                               'basis': INFERRED_HELD,
+                               'boundary_reason': 'same held item at consecutive stops',
+                               'evidence': 'st stop events'})
+    return result
 
 
 def receipt(result, bead):
-    groups = [g for g in result['groups'] if g['bead'] == bead]
+    # Closure receipts carry declared spend only; inferred spend is never a receipt.
+    groups = [g for g in result['groups'] if g['bead'] == bead and g.get('basis') != INFERRED_HELD]
     if not groups:
         return None
     body = {'scope': result['scope'], 'groups': groups}
@@ -291,17 +368,60 @@ def comment_closed(config, result, records, pending_path):
     return posted
 
 
+def price_description(result, bead):
+    """Display Camayoc's projection without repricing or changing receipts."""
+    costs = result.get('costs') or {}
+    groups = [g for g in costs.get('groups', []) if g.get('bead') == bead]
+    if not groups:
+        return 'API-equivalent USD: UNKNOWN (' + costs.get('reason', 'no priced request projection') + ')'
+    lines = ['API-equivalent USD; current published rates, not an invoice:']
+    for group in groups:
+        dollars = group.get('usd')
+        value = dollars if dollars is not None else 'UNKNOWN (known subtotal ' + str(group.get('known_usd', 'UNKNOWN')) + ')'
+        lines.append(f"  {group.get('model') or 'UNKNOWN'} / {group['harness']} / {group['basis']}: {value}; "
+                     f"priced tokens {group['priced_tokens']}/{group['tokens']}")
+        for reason, count in sorted(group.get('unknown_reasons', {}).items()):
+            lines.append(f'    {reason}: {count} request(s)')
+    lines.append('Price table SHA-256: ' + str(costs.get('price_table_sha256', 'UNKNOWN')))
+    lines.append('Plan share USD: UNKNOWN (' + costs.get('plan_share_reason', 'no measured allocation') + ')')
+    return '\n'.join(lines)
+
+
 def metrics(result):
     # Corrected allocations can decrease, so these absolute totals are gauges.
     lines = ['# TYPE st_bead_tokens_total gauge', '# TYPE st_bead_cost_coverage gauge',
+             '# TYPE st_bead_tokens_inferred_total gauge',
              '# TYPE st_bead_cost_last_success_timestamp_seconds gauge']
     for group in result['groups']:
+        if group.get('basis') == INFERRED_HELD:
+            # Its own series, so observed totals and their history never include it.
+            labels = {k: group[k] or 'UNKNOWN' for k in ('rig', 'bead', 'agent', 'harness', 'model')}
+            label = ','.join(f'{k}={json.dumps(str(v))}' for k, v in labels.items())
+            for kind, count in group['counts'].items():
+                if count is not None:
+                    lines.append(f'st_bead_tokens_inferred_total{{{label},kind="{kind}"}} {count}')
+            continue
         labels = {k: group[k] or 'UNKNOWN' for k in ('rig', 'bead', 'agent', 'harness', 'model')}
         label = ','.join(f'{k}={json.dumps(str(v))}' for k, v in labels.items())
         for kind, count in group['counts'].items():
             if count is not None:
                 lines.append(f'st_bead_tokens_total{{{label},kind="{kind}"}} {count}')
         lines.append(f'st_bead_cost_coverage{{{label}}} {int(group["coverage"] == "observed")}')
+    # Currency samples use Camayoc's exact per-request price projection. A
+    # partial known subtotal has its own name; never emit it as a complete cost.
+    costs = result.get('costs') or {}
+    for name in ('st_bead_api_equivalent_usd', 'st_bead_api_equivalent_known_usd', 'st_bead_priced_token_share'):
+        lines.append('# TYPE ' + name + ' gauge')
+    for group in costs.get('groups', []):
+        labels = {k: group.get(k) or 'UNKNOWN' for k in ('rig', 'bead', 'agent', 'harness', 'model', 'basis')}
+        labels['price_table_sha256'] = costs.get('price_table_sha256', 'UNKNOWN')
+        label = ','.join(f'{k}={json.dumps(str(v))}' for k, v in labels.items())
+        if group.get('usd') is not None:
+            lines.append(f"st_bead_api_equivalent_usd{{{label}}} {group['usd']}")
+        if group.get('priced_tokens', 0):
+            lines.append(f"st_bead_api_equivalent_known_usd{{{label}}} {group['known_usd']}")
+        if group.get('tokens', 0):
+            lines.append(f"st_bead_priced_token_share{{{label}}} {group['priced_tokens'] / group['tokens']}")
     lines.append(f'st_bead_cost_last_success_timestamp_seconds {time.time()}')
     return '\n'.join(lines) + '\n'
 
@@ -471,6 +591,7 @@ def _run_selected(args, config, graph_state):
             print(json.dumps(result, indent=2))
         else:
             print(value[1] if value else 'cost: UNKNOWN (no attributable requests)')
+            print(price_description(result, args.bead))
             print(cost_coverage.describe(result['cost_coverage']))
             for item in result.get('unresolved_items', []):
                 print(f"cost: item {item['bead']} {item['reason']}: {item['detail']}")

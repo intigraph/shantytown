@@ -118,7 +118,12 @@ def test_local_codex_launch_carries_pin_and_preserves_inherited_pin(namespace, t
     assert 'SHANTY_PHYSICAL_HOST=ada ' not in command
 
 
-def test_remote_daemon_and_attached_tui_carry_same_pin(namespace, tmp_path):
+def test_remote_daemon_and_attached_tui_carry_same_pin(namespace, tmp_path, monkeypatch):
+    # This checks command rendering only; no daemon/socket is created. Keep its
+    # rendered address short independently of the runner's fixture root length.
+    from pathlib import Path
+    from shantytown import codex_daemon
+    monkeypatch.setattr(codex_daemon, 'runtime_home', lambda name: Path('/fixture') / name)
     (tmp_path / 'shantytown.toml').write_text('[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
     config = tmp_path / 'settings/codex/worker/config.toml'
     managed = config.parent / 'packages/standalone/current/codex'
