@@ -38,7 +38,7 @@ def changing(monkeypatch, tmp_path):
                 inverse={v:k for k,v in plate.FIELDS.items()}
                 rows=[]
                 for subject in subjects:
-                    values=dict(id=subject.rsplit('/',1)[1],title='work',status='open',assignee='worker',priority=1,issue_type='task',labels=state['labels'][subject])
+                    values=dict(id=subject.rsplit('/',1)[1],title='work',status='open',assignee='worker',priority=state.get('priorities',{}).get(subject,1),issue_type='task',labels=state['labels'][subject])
                     if state['mode']=='bad-fields' and len(state['fields'])==2: values['priority']={'unsupported':'bad'}
                     rows.extend(dict(subject=subject,graph=G,predicate=inverse[k],value=v) for k,v in values.items())
                 n=len(state['fields']);mode=state['mode']
@@ -46,6 +46,9 @@ def changing(monkeypatch, tmp_path):
                     subject=B if n==2 and mode in ('second','late-membership','late-store','epoch') else A
                     state['tx']+=1;state['labels'][subject]='new-'+subject[-1]
                     attribute=plate.SCHEMA+'keywords'
+                    if state.get('priority_change'):
+                        attribute=plate.SEEDS+'ontology/priority'
+                        state.setdefault('priorities',{})[subject]=2
                     if mode=='membership' or (mode=='late-membership' and n==2): attribute=plate.SCHEMA+'agent';state['moved']=True
                     if mode=='store' or (mode=='late-store' and n==2): state['store']='replacement';state['records']=[]
                     else: state['records'].append(dict(tx=state['tx'],graph=G,entity=subject,attribute=attribute,op='assert'))
@@ -63,6 +66,15 @@ def test_returned_payload_reloads_only_changed_subject(changing):
     assert state['candidates']==1
     assert state['fields']==[[A,B],[A]]
     assert {r['id']:r['labels'] for r in rows}=={'test-a':['new-a'],'test-b':['old-b']}
+
+
+def test_selected_priority_change_repairs_fields_without_candidate_restart(changing):
+    proof,state=changing
+    state['priority_change']=True
+    rows=plate.owner_rows(proof,'worker').exact()
+    assert state['candidates']==1
+    assert state['fields']==[[A,B],[A]]
+    assert {r['id']:r['priority'] for r in rows}=={'test-a':2,'test-b':1}
 
 def test_change_during_repair_is_fenced_and_repaired_too(changing):
     proof,state=changing;state['mode']='second'

@@ -408,6 +408,9 @@ needed inside that fence. Field requests bind at most 1,000 subjects while
 retaining the aggregate 10,000-field ceiling. Unrelated writes do not invalidate an exact answer. A returned
 entity's payload change re-reads only that entity's lean fields, then re-fences
 **all** selected entities; a second change during repair must also be reconciled.
+Priority, rank and defer fields are selected-row payload in this reader. Their
+changes reload a selected subject, but do not restart selection when they belong
+to an unselected subject: they cannot change the candidate or status-guard relation.
 A membership-attribute change, including status or ownership, restarts candidate
 selection. A store replacement discards all retained rows and restarts the whole
 projection, rechecks native-schema admission, and invalidates render-scoped

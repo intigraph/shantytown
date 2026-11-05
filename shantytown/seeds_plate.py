@@ -42,13 +42,15 @@ FIELDS = {
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
 }
 
-# Candidate membership and scheduling eligibility can change even on an entity
-# absent from the returned set. Payload-only changes on other entities cannot.
+# Only changes to the candidate/guard relation require full selection again.
+# Priority, rank and defer fields do not select subjects here: changed selected
+# subjects reload their fields, while unselected scheduling changes cannot add
+# a candidate. Keep identity, status and guard dependencies global.
 OWNER_MEMBERSHIP = frozenset({
     "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-    SCHEMA + "agent", SCHEMA + "name", SCHEMA + "scheduledTime",
+    SCHEMA + "agent", SCHEMA + "name",
     *(SEEDS + "ontology/" + name for name in (
-        "status", "priority", "rank", "issueType", "deferUntil", "specVersion", "blockedOn", "revision")),
+        "status", "issueType", "specVersion", "blockedOn", "revision")),
     "https://scbrown.github.io/quechua/ns#blockedOn",
 })
 

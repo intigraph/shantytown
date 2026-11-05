@@ -41,7 +41,8 @@ def wire(monkeypatch, tmp_path):
         params = parse_qs(parsed.query)
         graph, since = params["graph"][0], int(params["since"][0])
         state["feeds"].append((graph, since))
-        entity, attribute = plate.SEEDS + "item/other", plate.SCHEMA + "description"
+        entity = plate.SEEDS + "item/other"
+        attribute = state.get("attribute", plate.SCHEMA + "description")
         mode = state["mode"]
         if mode == "returned": entity = S
         if mode == "membership": attribute = plate.SCHEMA + "agent"
@@ -76,6 +77,31 @@ def test_unrelated_commits_do_not_empty_exact_owner_answers(wire, mode):
     assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
     assert {g for g, _ in state["feeds"]} == {G, G + "#seeds-ephemeral"}
     assert state["queries"] == 2
+
+
+SCHEDULING_FIELDS = (
+    plate.SEEDS + "ontology/priority",
+    plate.SEEDS + "ontology/rank",
+    plate.SCHEMA + "scheduledTime",
+    plate.SEEDS + "ontology/deferUntil",
+)
+
+
+@pytest.mark.parametrize("attribute", SCHEDULING_FIELDS)
+def test_unselected_scheduling_changes_do_not_restart_candidates(wire, attribute):
+    proof, state = wire
+    state["attribute"] = attribute
+    assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
+    assert state["queries"] == 2
+    assert len(state["feeds"]) == 2
+
+
+@pytest.mark.parametrize("attribute", SCHEDULING_FIELDS)
+def test_continuously_changed_selected_scheduling_still_refuses(wire, attribute):
+    proof, state = wire
+    state.update(mode="returned", attribute=attribute)
+    assert not plate.owner_rows(proof, "worker").complete
+    assert state["queries"] == 4  # Initial selection/fields, then two field repairs.
 
 
 @pytest.mark.parametrize("mode", ["returned", "membership", "status", "blocker"])
