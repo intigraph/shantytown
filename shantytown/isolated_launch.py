@@ -37,12 +37,13 @@ def wrap(card, launch):
     row = actor_identity._policy(actor_identity.POLICY_PATH, for_principal=card.name)
     if row is None:
         return launch
+    config_env = [f'{key}={value}' for key, value in actor_identity.config_environment(row).items()]
     if os.geteuid() == row['uid']:
         # Already inside the correct OS boundary (also the native Mac path).
         return shlex.join(['/usr/bin/env','-i','PATH=/usr/local/bin:/usr/bin:/bin',
-            'HOME='+row['home'],'SHANTY_AGENT='+row['principal'],
+            'HOME='+row['home'],'SHANTY_AGENT='+row['principal'],*config_env,
             '/bin/sh','-c',launch])
     if not __import__('sys').platform.startswith('linux'):
         raise IdentityError('introduce this session under its dedicated local user before launch')
-    return quoted_invocation(['/bin/sh','-c',launch], uid=row['uid'],gid=row['uid'],
+    return quoted_invocation(['/usr/bin/env', *config_env, '/bin/sh','-c',launch], uid=row['uid'],gid=row['uid'],
         home=row['home'],principal=row['principal'],env={'PATH':'/usr/local/bin:/usr/bin:/bin'})

@@ -1,0 +1,7 @@
+Script started on 2026-11-04 06:28:53-05:00 [COMMAND="python3 docs/pr-demos/harness-options.py" <not executed on terminal>]
+BEFORE: {"codex_chrome": true, "codex_command": "REFUSED: chrome", "restored": false, "return_code": 1}
+elapsed_seconds: 0.566
+AFTER: {"codex_chrome": false, "codex_command": "COMPOSED; no Chrome flags", "restored": true, "return_code": 0}
+elapsed_seconds: 0.227
+
+Script done on 2026-11-04 06:28:54-05:00 [COMMAND_EXIT_CODE="0"]

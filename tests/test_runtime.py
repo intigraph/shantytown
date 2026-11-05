@@ -61,8 +61,8 @@ def test_compose_carries_no_chrome():
 
 
 def test_compose_exports_BOBBIN_ROLE_so_the_guard_has_a_scope():
-    """hank's policy guard resolves its scope from --tenant, then BOBBIN_ROLE
-    (hank#20). Scopes live under [hank.policy.scopes.<role>], so exporting the
+    """yupana's policy guard resolves its scope from --tenant, then BOBBIN_ROLE
+    (yupana#20). Scopes live under [yupana.policy.scopes.<role>], so exporting the
     role per agent is what lets ONE hook registration serve every role. Without
     it the guard has no scope to enforce and every agent is effectively
     ungoverned — the guard would run and decide nothing."""

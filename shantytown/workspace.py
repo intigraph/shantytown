@@ -358,7 +358,7 @@ def ensure_workspace(card: Agent, clone: Cloner = git_clone,
 #
 # ensure_workspace above owns the agent's OWN clone (crew/<name>): one writer,
 # one tree. This owns the other case: a SHARED project repo — ~/gt/shantytown,
-# ~/gt/quipu, ~/gt/hank, ~/gt/goldblum — that many agents touch at once. A shared
+# ~/gt/quipu, ~/gt/yupana, ~/gt/goldblum — that many agents touch at once. A shared
 # checkout shares its index and HEAD with every process in it, so one agent's
 # `git add`/`commit`/`reset` reaches into another's staging area and BOTH SIDES
 # report success (measured: aegis-repg/iaef — a commit left `git log` entirely and
@@ -921,9 +921,9 @@ class Staleness:
                 (corrected by tim, aegis-ib65p). The first version counted
                 `<ref>..HEAD` — commits not on origin/main — and that is a
                 different and much larger set: it counts every in-flight FEATURE
-                BRANCH as stranded. Measured false positive: hank-wt/tim was
-                reported "+1, exists only here" while the commit was sitting on
-                `origin/hank-1-daemon-stage3c`, pushed and mid-review. Nothing
+                BRANCH as stranded. Measured false positive: a legacy checkout was
+                reported "+1, exists only here" while the commit was sitting
+                on its published daemon-stage branch, pushed and mid-review. Nothing
                 was at risk.
 
                 That error runs in the WORST direction for this particular

@@ -718,19 +718,32 @@ def _load_per_core() -> float | None:
 
 def stop_advice(root, card):
     """One payload consumer for optional memory advice and existing context hints."""
-    from . import context_hint, ruling_memory
-    payload = None
-    if ruling_memory.enabled(root):
-        try:
-            payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
-            if not isinstance(payload, dict):
-                payload = {}
-        except (OSError, ValueError):
+    from . import context_hint, ruling_memory, cycle
+    # A self-cycle waiter needs this turn to become idle. Re-blocking for
+    # context or self-feed wakes it again forever. Refused/stale requests need
+    # the agent back; an automatic request must not preempt its current work.
+    if root is not None:
+        requests = cycle.Requests(root)
+        request = requests.pending().get(card.name)
+        if request and not request.get("auto") and not request.get("refused"):
+            age = requests.age(request)
+            if age is not None and age < cycle.stuck_after():
+                print(f"  {card.name}: cycle pending; allowing the stop", file=sys.stderr)
+                return True  # no model feedback: allow the idle edge
+    try:
+        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+        if not isinstance(payload, dict):
             payload = {}
+    except (OSError, ValueError):
+        payload = {}
+    if ruling_memory.enabled(root):
         if reason := ruling_memory.check(root, card.name, payload):
             print(json.dumps(dict(decision='block', reason=reason)))
             return True
-    return context_hint.emit(root, card, payload=payload)
+    if context_hint.emit(root, card, payload=payload):
+        return True
+    from . import runtime_update
+    return runtime_update.emit(root, card, payload)
 
 
 def run(root, me: str, **kw) -> int:

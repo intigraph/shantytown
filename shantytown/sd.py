@@ -210,10 +210,15 @@ class SdTracker(BrTracker):
                 f"seeds backend: SHANTY_SD_PREFIX is not set for {named}. It is "
                 "required: a missing or wrong store reports the default prefix, and "
                 "only the prefix check can tell it from the real board")
+        from .actor_identity import config_environment
+        proof_options = sdk_subprocess_options(read_operation="where")
+        pinned_config = config_environment()
+        if pinned_config:
+            proof_options['env'] = dict(proof_options.get('env') or os.environ, **pinned_config)
         try:
             r = subprocess.run([self._bin, *loc, "where", "--json"], cwd=self.repo,
                                capture_output=True, text=True, timeout=self.timeout,
-                               **sdk_subprocess_options(read_operation="where"))
+                               **proof_options)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise StoreUnproven(f"seeds backend: `sd where` for {named} failed: {e}") from e
         if r.returncode != 0:
@@ -278,13 +283,23 @@ class SdTracker(BrTracker):
             raise ValueError("invalid blocker response")
         return value
 
-    def reconcile_blockers(self):
-        value = self._blocker_result("reconcile")
+    def reconcile_blockers(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("reconcile", *args)
         if not isinstance(value.get("changed"),list):
             raise ValueError("blocker reconciliation result UNKNOWN")
+        if identifier is not None and any(not isinstance(row,dict) or row.get("issue_id") != identifier for row in value["changed"]):
+            raise ValueError("blocker reconciliation escaped target")
 
-    def unlock_events(self):
-        value = self._blocker_result("events")
+    @staticmethod
+    def _unlock_target(identifier):
+        if not isinstance(identifier,str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*",identifier):
+            raise ValueError("unlock target identity UNKNOWN")
+        return identifier
+
+    def unlock_events(self, identifier=None):
+        args = () if identifier is None else (self._unlock_target(identifier),)
+        value = self._blocker_result("events", *args)
         events = value.get("events")
         if not isinstance(events,list) or len(events) >= 1000 or value.get("has_more") is True or value.get("truncated") is True:
             raise ValueError("unlock event completeness UNKNOWN")
@@ -303,6 +318,8 @@ class SdTracker(BrTracker):
                     or event["event_id"] != f"seeds:unlock:{event['issue_id']}:{generation}"):
                 raise ValueError("unlock event identity/generation UNKNOWN")
             identities.add(event["event_id"])
+            if identifier is not None and event["issue_id"] != identifier:
+                raise ValueError("unlock event escaped target")
             rows.append({"kind":"unlock","id":event["issue_id"],
                          "episode":event["event_id"],"recipient":event.get("assignee")})
         return Answer.complete_read(rows,how="selected Seeds persistent pending unlock events")
@@ -885,10 +902,14 @@ class SdTracker(BrTracker):
                                       "show", "list", "ready", "where", "search", "count", "info", "stats",
                                       "spec-state", "spec-events", "spec-receipt", "spec-changes"
                                   } else None))
+        from .actor_identity import config_environment
+        pinned_config = config_environment()
+        if pinned_config:
+            options['env'] = dict(options.get('env') or os.environ, **pinned_config)
         # Reads retain their original route and budget. Optional signing
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
-        if mutation(self._translate(args)):
+        if mutation(self._translate(args)) and not pinned_config:
             asserted = actor
             for i, arg in enumerate(args):
                 if arg.startswith('--actor='):

@@ -116,7 +116,14 @@ def sweep(root, agents, panes, box_for, *, now=None, log=lambda message: None):
                 continue
             box = box_for(backend)
             try:
-                unread = {msg.id: msg for msg in box.unread(name)}
+                # These durable receipts are already named. Enumerating the
+                # whole inbox can exceed its field budget and strand a tiny
+                # batch forever. A failed selected read must never fall back
+                # to that enumeration or authorize a send/ACK.
+                selected = getattr(box, 'unread_selected', None)
+                messages = (selected(name, [row['id'] for _, row in entries])
+                            if callable(selected) else box.unread(name))
+                unread = {msg.id: msg for msg in messages}
             except Exception as error:
                 # A capped or failed unread read cannot prove which pointers are
                 # still deliverable. Retain this recipient's rows; one unreadable
