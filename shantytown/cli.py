@@ -1700,6 +1700,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--window", action="store_true",
+                    help="explicit real scheduled window; permits a short date instead of an event backstop")
     df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
@@ -7543,7 +7545,7 @@ def _cmd_defer(a) -> int:
                     until=getattr(a, "until", "") or "",
                     dependency_reason=getattr(a, "dependency_reason", ""),
                     sattler_reason=getattr(a, "sattler_reason", ""),
-                    gate_authority=_me(a) or "")
+                    gate_authority=_me(a) or "", window=getattr(a, "window", False))
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

@@ -30,7 +30,10 @@ def parse_provenance(line):
         return None
 
 def historical_notes(text: str) -> str:
-    return MARKER_PREFIX.sub("historical resume condition:", text)
+    text = MARKER_PREFIX.sub("historical resume condition:", text)
+    # A new writer envelope must not compete with its retained predecessor.
+    # Keep old bytes as history, without declaring two active timer setters.
+    return re.sub(r"(?m)^defer_provenance:", "historical defer provenance:", text)
 
 def canonical_reason(reason: str, condition: str) -> str:
     from .deferrals import parse_condition
