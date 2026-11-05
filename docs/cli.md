@@ -253,6 +253,9 @@ source tests alone do not prove delivery to a running administrator.
 The [compact checkpoint template](guides/context-cycle.md) gives one request command;
 `--checkpoint-file` posts the handoff, so a separate comment is unnecessary.
 Explicit checkpoint and graph pointers avoid repeated discovery/refusals.
+The resume hook emits the saved brief in the `SessionStart` JSON
+`hookSpecificOutput.additionalContext` field, like the anchor hook, and consumes
+it once. With no pending brief it emits nothing.
 They name `st agent cycle --self --checkpoint-file <notes-file>`; they never schedule
 that cycle or latch a work ceiling. Finish critical work before checkpointing.
 
@@ -262,7 +265,10 @@ with `/ps`, then stop or await their running processes. A remaining background
 shell prevents the cycle from reaching its idle boundary. The self-cycle waiter
 logs the observed shell count when it changes and still waits safely; it never
 stops those tasks itself. After the tasks exit, the next idle poll can serve the
-existing request.
+existing request. While a fresh, unrefused self-cycle request is pending,
+Stop advice and self-feed stay silent so the pane can reach idle. Refused or
+stale requests resume normal advice; automatic requests do not silence it.
+This does not relax the waiter's busy-pane or background-task checks.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -2494,7 +2500,8 @@ Set the per-tree fetch deadline in `<root>/shantytown.toml`:
 fetch_timeout_seconds = 180
 ```
 
-The default is 180 seconds; the value must be finite and positive. Local Git
+The default is 180 seconds for each remote fetch in each tree, not a total
+budget shared across worktrees; the value must be finite and positive. Local Git
 probes retain their 60-second bound. A timeout kills the Git process group and
 returns a one-line refusal without stopping the pane or changing the card or
 pending cycle request. Retry after connectivity recovers or adjust the budget.
@@ -2659,7 +2666,7 @@ added. It refreshes only the shantytown handler, preserving other settings and
 operator hooks. An unreadable selected file refuses provisioning. Already-running
 sessions still require their natural relaunch boundary to load the repaired hook.
 
-Caboodle owns binary installation and functional proof; this command owns harness
+Tambo owns binary installation and functional proof; this command owns harness
 registration. It requires existing crew workspaces and a nonempty
 `SHANTY_TOOLING_MANIFEST`. Missing crew, an unavailable graph, unresolved secrets,
 or failed configuration read-back return nonzero. No local-template fallback is
@@ -3430,3 +3437,34 @@ atomic snapshot; concurrent changes can require retrying a read. Unsupported
 owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
+
+Rank proposals distinguish `reowner` (a positively observed down owner) from
+`needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
+`in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
+owner observations and held owners do not become down observations. This flag
+never assigns anyone or releases a hold.
+
+For a frozen independent corpus, add `--rank-semantic-only` to
+`st work triage --rank-proposals --benchmark cases.jsonl --rank-rules rules.json`.
+This mode calls only the automation and personal-need nouls, including P0 cases;
+rank-band choices are disabled. Each case needs both independent boolean labels
+under `expected.flags`, a dated before snapshot, owner evidence, source and rule
+references. Unknown ownership labels may remain unknown because this report
+scores only the semantic columns. The entire 30–50 case corpus is validated
+before any model call; the shared budget is at most 100 nouls. Dry-run makes no
+model calls. Real calls still require the explicit verified quarantine graph,
+private request journal and exact readback. Missing observations stay missing,
+not false. The separate semantic report schema cannot authorize a live rank arm.
+
+Deterministic bands use proven open blockers, not a stored blocked/deferred
+status or a `blocked:*` claim. Positive open blockers, explicit
+`blocked:human`/`desk`/`needs-stiwi`, keep a blocked band. Parked-by-design work with proven zero blockers is later;
+with positive blockers it stays blocked.
+With proven zero blockers, other blocked labels produce a visible stale-gate
+flag. An open or deferred P0 behind a proven stale gate is immediate.
+P0 overdue work or a proven prerequisite of P0 work is immediate; work
+due within seven days (including overdue work) is due; other P0–P2 work is
+normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
+a zero count. Native snapshots use bounded candidate-edge and exact endpoint
+status projections; missing or shadowed endpoints refuse the run. These bands
+and flags do not change lifecycle status, clear a hold, or authorize dispatch.
