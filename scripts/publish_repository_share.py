@@ -37,7 +37,7 @@ def alignment_digest(stage):
     declared, sealed = files.get("alignments"), manifest.get("alignments_hash")
     if not present and declared is None and sealed is None:
         return None  # Legacy no-carrier envelopes keep their existing identity.
-    if not present or declared != "alignments.ttl" or sealed != ALIGNMENTS_SHA256:
+    if not present or declared != "alignments.ttl" or sealed != "sha256:" + ALIGNMENTS_SHA256:
         raise ValueError("alignment member must be declared, reviewed, sealed and present together")
     metadata = member.lstat()
     if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_ALIGNMENT_BYTES:
@@ -48,9 +48,9 @@ def alignment_digest(stage):
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_ALIGNMENT_BYTES:
             raise ValueError("alignment member must be a bounded regular file")
         data = handle.read(MAX_ALIGNMENT_BYTES + 1)
-    if len(data) > MAX_ALIGNMENT_BYTES or hashlib.sha256(data).hexdigest() != sealed:
+    if len(data) > MAX_ALIGNMENT_BYTES or hashlib.sha256(data).hexdigest() != ALIGNMENTS_SHA256:
         raise ValueError("alignment member hash differs from the reviewed empty carrier")
-    return sealed
+    return ALIGNMENTS_SHA256
 
 
 def alignment_provenance(stage):
