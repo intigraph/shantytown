@@ -286,6 +286,11 @@ class Config:
     # table only prices a signal something outside st chose to send.
     cycle_advice: CycleAdvicePolicy = field(default_factory=CycleAdvicePolicy)
     ephemeral: Ephemeral = field(default_factory=Ephemeral)
+    # [inbox] store: where NEW durable messages go. "seed" keeps
+    # today's inbox seeds; "message-graph" sends through `sd msg` into the
+    # per-week message windows, and readers union the legacy seeds with them.
+    # Rollback is setting it back to "seed"; window messages stay readable.
+    inbox_store: str = "seed"
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -416,7 +421,7 @@ _TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "cre
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
              "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory",
-             "ephemeral"}
+             "ephemeral", "inbox"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -530,7 +535,20 @@ def _resolve(data: dict, path: Path) -> Config:
                   dream=_dream(path, _table(path, data, "dream")),
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
                   ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
+                  inbox_store=_inbox_store(path, _table(path, data, "inbox")),
                   path=path)
+
+
+INBOX_STORES = ("seed", "message-graph")
+
+
+def _inbox_store(path: Path, tbl: dict) -> str:
+    _refuse_unknown(path, "inbox", tbl, {"store"})
+    store = tbl.get("store", "seed")
+    if store not in INBOX_STORES:
+        raise ConfigError(f"{path}: inbox.store must be one of {', '.join(INBOX_STORES)}, "
+                          f"not {store!r}")
+    return store
 
 
 def _jobs_scheduler(path: Path, tbl: dict) -> str:
@@ -1029,7 +1047,7 @@ def _crew_list(path: Path, mode: str, spec) -> list[str]:
 # The card fields a human may DECLARE. `pane` is included but optional — omitted,
 # it is generated (tier.pane_for), which is the whole point of that change.
 _CREW_KEYS = {"role", "reports_to", "pane", "workspace", "workspace_source",
-              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome"}
+              "model", "harness", "account", "auto_failover", "dangerous", "retired", "chrome", "harness_options"}
 
 
 def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
@@ -1074,8 +1092,14 @@ def _crew(path: Path, tbl: dict, declared: set[str] | None = None) -> dict:
             if flag in spec and not isinstance(spec[flag], bool):
                 raise ConfigError(f"{path}: [crew.{name}] {flag} must be true or "
                                   f"false, got {spec[flag]!r}")
+        from .harness_options import validate
+        try:
+            options = validate(spec.get("harness_options"))
+        except ValueError as error:
+            raise ConfigError(f"{path}: [crew.{name}] {error}") from error
         out[name] = Agent(
             name=name, role=role, reports_to=spec.get("reports_to"),
+            harness_options=options,
             pane=spec.get("pane") or pane_for(name),
             workspace=spec.get("workspace"),
             workspace_source=spec.get("workspace_source"),

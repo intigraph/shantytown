@@ -606,3 +606,13 @@ min_sync_version = 1
 [admin_wake_budget]
 mode = "off"
 agents = []
+
+# [inbox] — where NEW durable messages go (docs/message-graph.md).
+#   "seed"          (default) today's behaviour: an `inbox:` seed on the board.
+#   "message-graph" `sd msg send` into the per-week message windows; no board
+#                   seed is written. Readers (st inbox, unread counts, mark-read)
+#                   union the legacy seeds with the windows. Needs an sd with
+#                   `sd msg` and a server that admits schema:Message.
+# Rollback: set it back to "seed"; window messages stay readable (`sd msg list`).
+# [inbox]
+# store = "message-graph"

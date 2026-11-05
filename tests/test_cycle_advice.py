@@ -336,13 +336,16 @@ def test_concurrent_posts_retain_other_agents_and_clear_is_scoped(tmp_path):
 
 def test_advice_uses_role_or_account_model_resolution_when_card_model_is_unset(tmp_path,monkeypatch):
     from types import SimpleNamespace
-    from shantytown import harness
+    from shantytown import harness, runtime_update
     from shantytown.protocols import Agent
     p=tmp_path/'codex.jsonl';_codex_cache_log(p,model=None)
     folder=tmp_path/'context_budget';folder.mkdir()
     (folder/'ada.json').write_text(json.dumps({'payload':{'transcript_path':str(p)}}))
     monkeypatch.setattr(harness,'resolve_model',lambda card,root=None:'gpt-6.1-sol')
+    monkeypatch.setattr(runtime_update,'for_agent',lambda *args:runtime_update.Evidence('exact','2.1.317','2.1.318'))
     sit,_=cli._advise_situation(SimpleNamespace(root=tmp_path),'ada',config.Config(),
                                next_task='next',card=Agent(name='ada',role='worker'))
     assert sit.cache.model=='gpt-6.1-sol' and sit.cache.ttl_seconds==1800
     assert 'configured model' in sit.cache.ttl_source
+    assert sit.next_task=='next'
+    assert (sit.running_version,sit.installed_version,sit.session_id)==('2.1.317','2.1.318','exact')

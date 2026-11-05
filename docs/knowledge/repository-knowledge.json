@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
+      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
       "type": "Concept"
     },
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "The st console entry point provides work-item, crew, repository and scheduled-job commands. Anchor and roles show project governed role summaries; fleet-owner tend adds advisory priority ranking without reassignment. Failed responsibility reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed review results require exact job and PR scope. Cycle accepts item-bound root-approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work remains gated. Explicit host Chaski delegation skips the local job evaluator and refuses manual local execution and eligibility checks. Work triage offers governed priority/rank proposals with quarantined model evidence; an administrator accepts changes. Dispatch reports deterministic work overlap and measured cache usage with explicitly assumed model windows.",
-      "source_sha256": "f3ab7546f877f19646fdb8cdfc28bdf650415e8a631038f2f4a9b982c09f5e3d",
+      "summary": "st manages work, crew, repositories and jobs. Roles and anchors expose governed summaries; tend ranks proposals without reassignment. Failed reads stay UNKNOWN. Protected results use authenticated own-job mailboxes; signed reviews bind exact job and PR scope. Cycle accepts item-bound approved full-history custody only for an independently verified clean branch. Chaski delegation refuses local execution. Quarantined rank proposals require administrator acceptance; semantic-only benchmarks cannot admit rank decisions. Harness conversion retains per-harness model/browser preferences and reports unsupported fields. Measured CLI updates prefer checkpointed replacement; missing or stale native evidence stays UNKNOWN. Dispatch reports deterministic work overlap and measured cache usage with explicitly assumed model windows.",
+      "source_sha256": "b45fa00b3def5995042dc3c576553a780c4ca80cf6285eee94c4b7402af3f11d",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -34,8 +34,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Cycle advice accepts strict per-model cache-window estimates; observed transcript TTLs take precedence.",
-      "source_sha256": "49de9db71fd2214e8f89ff72d9efbbc80a9e21f5f3d8c149e3e187cc9a581a29",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands. The inbox.store setting selects legacy seed pointers by default or the isolated Message graph; invalid or unknown declarations refuse. Cycle advice accepts per-model cache-window estimates; observed TTLs win.",
+      "source_sha256": "6ecd93cfab0a4d455b9ceb010ab7660eacc76b6c88dd577e6307fcf3230da1eb",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "d290303ddd66447ebf19a4df4541e950b80e488e87ba9911bc628f97766719fd",
+      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "7ebcdd69673bb97b147481cfe88be5472a41a4a8768d35592f4c80a7c3480bca",
+      "source_sha256": "e40309c7e22f245e75d65dc031a7a07c5f2471be5e2605ec028fd775da203be5",
       "properties": {
         "startHereOrder": 2
       }

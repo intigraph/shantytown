@@ -61,6 +61,10 @@ shares that brief fairly with the next task's title and notes. `--brief-chars`
 can request more up to `max_brief_chars`; no conversation is included in the brief.
 `--next-need-k` estimates fresh context needed by the next item.
 
+The `ask` flag is false at hard context limits or when depth is unreadable,
+and when measured CLI evidence already prefers replacement. A caller with
+`ask: false` does not call a judge. Checkpoint briefs remain bounded.
+
 ## Decision rules
 
 | Situation | Advice |
@@ -76,6 +80,62 @@ can request more up to `max_brief_chars`; no conversation is included in the bri
 Unknown cache timing is priced warm, so missing data alone does not cause a
 cycle. Strong overlap can preserve reasoning below the hard ceiling even when
 an assumed cache window elapsed. An explicit cycle request still requests a cycle.
+
+## Picking up an installed Claude Code update
+
+`st agent advise --json` includes `running_version`, `installed_version`, and
+`runtime_session_id`. Advice names both versions and marks process replacement
+with `restart_required`. Missing or malformed versions, a different session, or absent launch evidence
+remain UNKNOWN. Equal or older installed binaries give no update preference. Stable numeric versions are compared numerically.
+
+The running version is read from at most the last 256 KiB of native transcript
+metadata. Tend uses the exact session last recorded in the local stats store,
+and its version record must be newer than the current launch stamp. No newest-file
+search or model-name inference is used. A missing stamp/transcript or a session
+that the stats reader can no longer bind stays UNKNOWN. A Stop hook has the live
+session payload directly and gives one reminder per session/version pair.
+
+The installed version is a local `claude --version` probe with a two-second
+limit, cached for at most five minutes and invalidated by executable identity
+changes. It does not check the network or run an updater. Current Codex launchers
+can select a role-specific standalone binary; this feature does not borrow a
+PATH Codex version for that process. Claude Code is the supported measured path.
+
+Tend can prompt even a shallow session, but only when its pane is positively
+idle, shell-free and st-wired. It checks the pane again after version lookup,
+logs both versions, and deduplicates by session/version pair. Busy, queued,
+waiting, auth-limited, foreign, shell-unknown and unreadable panes are not update
+candidates. An accepted or unreadable cycle-request ledger prevents competing
+prompts. Failed delivery remains retryable. Manual keep advice is preserved;
+context hard limits still win.
+
+At a safe handoff, checkpoint first and request replacement explicitly:
+
+```sh
+st agent cycle --self --no-in-place --checkpoint-file notes.md \
+  --checkpoint-bead <item> --quipu-node <existing-node>
+```
+
+An in-place context clear keeps the old process. `--no-in-place` is retained in
+the accepted request and uses the existing checkpoint, graph, ownership, idle,
+background-work and loss guards. Update advice itself never creates a request,
+stops a process, rewrites an accepted request, or installs a binary. After normal
+relaunch, verify the new session's native version matches the installed release.
+Source tests and an accepted request alone do not prove that result.
+
+## The arithmetic
+
+In thousands of base-input-equivalent tokens, D = depth, F = `fresh_floor_k`,
+N = `expected_turns`, r = read multiplier, w = write multiplier for the
+session's TTL:
+
+- keep = (w if the cache lapsed else r)·D + r·D·(N−1)
+- cycle = w·(F+R) + r·(F+R)·(N−1), with R = related · `rebuild_fraction` · (D−F)
+
+The multipliers default to Anthropic's list prices (read 0.1×, write 1.25× for
+5m and 2× for 1h). On a subscription seat the currency is the governor's usage
+window, which st cannot see into, so every number is configurable.
+
 
 ## Configuration
 

@@ -92,9 +92,14 @@ class Quarantine:
                 or type(confidence) not in (int,float) or not math.isfinite(confidence)
                 or not 0 <= confidence <= 1):
             raise TriageError('rank answer lacks inferred provenance or valid confidence')
-        record = dict(inference, request_digest='sha256:' + digest(verdict['request']))
-        content = json.dumps(record,sort_keys=True,separators=(',',':'),ensure_ascii=False)
-        identity = digest(record)
+        try:
+            record = dict(inference, request_digest='sha256:' + digest(verdict['request']))
+            content = json.dumps(record,sort_keys=True,separators=(',',':'),ensure_ascii=False)
+            identity = digest(record)
+        except UnicodeEncodeError:
+            # A Python surrogate is not a Unicode scalar. Refuse before the
+            # durable journal or any write, rather than repairing the evidence.
+            raise TriageError('rank inference contains invalid Unicode; nothing sent') from None
         iri = self.registry.onto + 'rank-verdict-' + identity
         reference = 'sha256:' + identity
         onto = self.registry.onto
@@ -103,7 +108,9 @@ class Quarantine:
                   (onto+'reference',json.dumps(reference)),
                   (onto+'sourceKind','"inferred"'),
                   (onto+'claim',json.dumps('Untrusted model answer; administrator acceptance required')),
-                  ('http://www.w3.org/1999/02/22-rdf-syntax-ns#value',json.dumps(content))]
+                  # JSON's surrogate-pair escapes are not Turtle Unicode scalars.
+                  # Keep real code points; JSON still escapes quotes/backslashes.
+                  ('http://www.w3.org/1999/02/22-rdf-syntax-ns#value',json.dumps(content,ensure_ascii=False))]
         turtle = '\n'.join(f'<{iri}> <{predicate}> {value} .' for predicate,value in values)
         packet = dict(graph=self.graph,turtle=turtle,source='st-board-rank '+reference)
         raw = json.dumps(packet,sort_keys=True,separators=(',',':')).encode()
