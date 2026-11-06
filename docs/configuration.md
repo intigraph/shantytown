@@ -47,6 +47,22 @@ Every CLI command loads `[env]` after resolving its root. These values also reac
 child processes and readers that use the process environment directly. The CLI
 restores the caller's environment on return when invoked as a Python function.
 
+Optional Desire Path metrics delivery uses the supported
+`DESIRE_PATH_METRICS_PUSHGATEWAY` and `DESIRE_PATH_METRICS_PASSWORD_FILE`
+pair in `[env]` (with the normal ambient fallback). Claude settings and both
+harness launch commands carry the same pair. The gateway must be an HTTP(S) URL
+without an inline password, query or fragment; the password-file path must be
+absolute. Rendering never opens that file. An incomplete pair refuses explicitly.
+No configured pair emits no placeholder and makes no successful-delivery claim.
+
+DP values are deliberately excluded from removal-owned environment keys. Existing
+manually configured values survive canonical absence, including a later render
+with the pair removed. Conflicting existing Claude settings or inherited launch
+values refuse with a migration error instead of being overwritten. Equal values
+do not establish ownership. Reconciliation or removal needs an explicit operator
+migration; changing canonical configuration alone does not clear old values.
+Rendered configuration does not prove a natural hook ran or metrics arrived.
+
 | variable | what it points at | default |
 |---|---|---|
 | `SHANTY_PHYSICAL_HOST` | Launcher-owned attribution pin, captured from the original physical hostname before a private display namespace. Preserves lifecycle and telemetry identity in child shells. Configure fleet aliases through `[host]`, not this carrier; an invalid pin refuses. Explicit `QUIPU_HOST` retains precedence for Quipu attribution. | original process hostname |

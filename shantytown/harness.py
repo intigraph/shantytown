@@ -559,9 +559,15 @@ class ClaudeHarness:
         # reason as codex.render's _apply_mcp_approval: `env` is a MERGED
         # container, so a carried key st has stopped emitting has nothing to
         # replace it and would latch at its old value (aegis-936dop).
-        from .runtime import apply_carried_env   # call-time: runtime imports us
+        from .runtime import apply_carried_env, check_dp_metrics_migration
+        previous = _load_json(existing)
+        previous_env = previous.get("env")
+        requested_env = settings.get("env")
+        check_dp_metrics_migration(
+            previous_env if isinstance(previous_env, dict) else {},
+            requested_env if isinstance(requested_env, dict) else {})
         return json.dumps(
-            apply_carried_env(merge_one_level(_load_json(existing), settings),
+            apply_carried_env(merge_one_level(previous, settings),
                               settings),
             indent=2, sort_keys=True)
 
