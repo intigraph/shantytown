@@ -2805,6 +2805,11 @@ deadline) in the notes; missing or mismatched provenance does not qualify.
 An item touch is not a substitute for the defer's set time. This routing never
 releases a hold. The owner is nudged once per unchanged item and condition state;
 repeated scheduled observations do not escalate merely by count. A met event
+or lapsed backstop reaches the existing administrator route once it has been
+at least 72 hours since both the backstop and the last item update. A later
+deadline or item update starts that elapsed-time ceiling again; the existing
+administrator state key prevents repeated unchanged digests. This does not
+release the hold or change ASK routing. A met event
 can prompt the owner before the backstop, while its future date and all existing
 release gates remain intact. An unmet event at the owner backstop requests an
 owner recheck, never release. A new deferral archives old setter envelopes as
