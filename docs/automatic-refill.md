@@ -36,6 +36,10 @@ python -m shantytown.refill_reconcile --root /path/to/deployment --receipt recei
 
 Use the deployment's normally installed interpreter and source. This is an
 explicit reconciliation operation, not a new scheduler or a forced tend tick.
+Native metadata and the target receipt remain limited to 2 MiB each. Unrelated
+preceding events are skipped in bounded chunks, preserving physical line numbers;
+the archive and traversal remain limited to 256 MiB.
+
 The receipt is a JSON object with exactly these fields:
 
 ```json
