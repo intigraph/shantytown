@@ -1,7 +1,7 @@
-"""Exact native fields for read-only work-item display, never mutation reads.
+"""Exact native fields for work-item display and deferral observations.
 
 The SDK show includes comments and reverse dependencies. WorkItem discards
-those, so hydrating them amplifies every known-ID display. Keep the fields
+those, so hydrating them amplifies every display and deferral read-back. Keep the fields
 and outgoing dependency classification in one bounded observation instead.
 """
 from __future__ import annotations
