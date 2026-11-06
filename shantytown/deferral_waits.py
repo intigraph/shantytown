@@ -9,9 +9,9 @@ def validate(reason, dependency_reason, condition, deadline, now, *, window=Fals
     from .deferrals import _CONDITION
     # A tool named "ci" or the installed: marker is an identifier, not prose
     # declaring a polling wait. Preserve marker-only mechanical deferrals.
-    if condition.kind in ('pr-merged', 'ci-terminal'):
+    if condition.kind in ('pr-merged', 'ci-terminal', 'ruling', 'activation'):
         if deadline is None or deadline - now < timedelta(hours=24):
-            raise ValueError('forge event waits require a backstop of at least 24 hours')
+            raise ValueError('registered event waits require a backstop of at least 24 hours')
         return
     prose = _CONDITION.sub("", reason)
     if window or not WAIT.search(prose + "\n" + dependency_reason):

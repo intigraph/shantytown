@@ -1790,7 +1790,19 @@ class DeferralAlerter:
                 except Exception as e:
                     self._log(f"deferral-sweep: condition batch unreadable ({e!r}); retry next pass")
                     cache.update(dict.fromkeys(targets))
-        findings = pol.evaluate(rows, now, is_closed=is_closed)
+        ruling_budget = 12
+        def ruling_reader(condition, waiting):
+            nonlocal ruling_budget
+            if ruling_budget <= 0:
+                return None, 'ruling read budget exhausted; retry next scheduled pass'
+            ruling_budget -= 1
+            from .resume_rulings import evaluate
+            return evaluate(condition.kind, condition.arg, waiting, now,
+                show=show, comments=backend().ruling_comments, registry=self._reg)
+        findings = pol.evaluate(rows, now, is_closed=is_closed, ruling_reader=ruling_reader)
+        # Reserve a distinct bounded budget for fresh pre-write checks; consuming
+        # the candidate budget must not starve every admitted release forever.
+        ruling_budget = 12
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
         reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
@@ -1844,7 +1856,7 @@ class DeferralAlerter:
                         or (detail.get("status") == "open" and not detail.get("defer_until"))):
                     continue
                 cache.clear()
-                fresh = pol.evaluate([detail], now, is_closed=is_closed)
+                fresh = pol.evaluate([detail], now, is_closed=is_closed, ruling_reader=ruling_reader)
                 if not fresh:
                     continue  # re-deferred, closed or already released
                 current = fresh[0]
