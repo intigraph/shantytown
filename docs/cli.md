@@ -608,6 +608,14 @@ launch is not archival acceptance. The worker retains the scrub residual check
 and never publishes raw history. `--worker` runs the same work in the foreground
 for diagnostics and tests; no additional timer is installed.
 
+Capture and scrub preserve citation symlinks when cold archives are relocated.
+Unchanged captures inspect the target size; growing captures and regenerated
+derivatives publish atomically beside the private archive target. Relocated
+files must retain the agent directory and filename, be owner-only, and have a
+private parent directory owned by the same user. Dangling or mismatched links
+are refused rather than replaced. Derivative links into the raw archive are
+refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
+
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
 wholesale, including nested Claude results and their `toolUseResult` mirrors,
