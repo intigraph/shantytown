@@ -7,15 +7,17 @@ and unreadable anchors. The packaged primer's Camayoc/cy whole-word count goes
 from 0 to 6. Watch `stack-prime/1`, the Camayoc skill and `map_question` change
 from false to true while identity/plate or the unreadable warning remains.
 
-[Terminal recording](output.log) and [timing](timing.log) are retained here as
-small repository artifacts. Download both and replay with util-linux:
+[Terminal recording](output.log.gz) and [timing](timing.log) are retained here as
+small repository artifacts. Download both, decompress the output, and replay with util-linux:
 
 ```sh
+gzip -dc output.log.gz > output.log
 scriptreplay --log-out output.log --log-timing timing.log
 ```
 
 Playback was verified locally. This is a replayable terminal recording; the
-output log also provides a readable transcript. Reproduce from the repo root:
+[normalized transcript](transcript.txt) provides readable output. Raw CRLF bytes
+are preserved in the compressed recording so replay timing stays exact. Reproduce from the repo root:
 
 ```sh
 python3 docs/demos/stack-primer/probe.py --base a2afbdf4660908757245f349b826d5707c6e22f9
