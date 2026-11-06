@@ -1,0 +1,8 @@
+Script started on 2026-11-05 21:04:16-05:00 [COMMAND="stty -onlcr; python3 docs/demos/codex-busy-composer/demo.py --base 39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076" <not executed on terminal>]
+Sanitized captured composer; base 39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076; candidate working tree
+before: input=no-box run=busy
+before: unreadable control=?
+after: input=queued run=busy
+after: unreadable control=?
+
+Script done on 2026-11-05 21:04:16-05:00 [COMMAND_EXIT_CODE="0"]
