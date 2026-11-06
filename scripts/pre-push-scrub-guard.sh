@@ -203,9 +203,12 @@ ticket_files() {
 scrub_version_contexts() {
   local original filtered code
   original=$(cat)
-  # Most pushes contain no address-shaped text. Keep their original scan cheap.
+  # This cheap candidate scan must include every suffix the parser/projected
+  # matcher can see, including 1.10.x.y.z inside a version. The fallback's
+  # stricter leading boundary would make adding a second artifact change the
+  # verdict. Extra candidates only invoke the parser; they exempt no bytes.
   # Consume the full input: grep -q can turn pipefail/SIGPIPE into a false miss.
-  if ! printf '%s\n' "$original" | grep -E "$BUILTIN_RFC1918" >/dev/null; then
+  if ! printf '%s\n' "$original" | grep -E '(10|172|192)\.' >/dev/null; then
     printf '%s\n' "$original"
     return 0
   fi
@@ -713,9 +716,11 @@ PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df
     base=$(git rev-parse HEAD)
     cf="$r/patterns.conf"
     printf 'internal_host_re=forge\.invalid\npatterns=%s|[a-z0-9-]+\\.invalid\\b\n' "$BUILTIN_RFC1918" > "$cf"
+    sed 's/\[\^0-9\.\]/[^0-9]/g' "$cf" > "$cf.projected"
+    mv "$cf.projected" "$cf"
     mkdir -p src/gpu_runtime
     fixture='src/gpu_runtime/artifacts.json'
-    for arm in valid other_repo checksum other_file filename filename_build filename_long_version tar tar_underscore path_version address_path intermediate_address_path malformed_wheel bare10 bare172 bare192 hostport private_host query fragment userinfo relative malformed malformed_label malformed_port escaped unsupported_scheme parser_failure message_version message_address message_mixed ambiguous extra_address extra_field later_leak named_host; do
+    for arm in nested_wheel nested_wheel_pair nested_tar nested_tar_pair valid other_repo checksum other_file filename filename_build filename_long_version tar tar_underscore path_version address_path intermediate_address_path malformed_wheel bare10 bare172 bare192 hostport private_host query fragment userinfo relative malformed malformed_label malformed_port escaped unsupported_scheme parser_failure message_version message_address message_mixed ambiguous extra_address extra_field later_leak named_host; do
       mkdir -p src/gpu_runtime || exit 1
       record=$PUBLIC_ARTIFACT_RECORD
       destination=https://github.com/scbrown/bobbin.git
@@ -726,6 +731,10 @@ PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df
         extra_field) record=${record%\}}', "endpoint": "10.255.255.2"}' ;;
         other_file) path=another.json ;;
         other_repo) destination=https://github.com/scbrown/another.git ;;
+        nested_wheel) record='pkg-1.10.255.255.1-py3-none-any.whl' ;;
+        nested_wheel_pair) record='pkg-1.10.255.255.1-py3-none-any.whl package-10.3.9.90-py3-none-any.whl' ;;
+        nested_tar) record='pkg-1.192.168.255.1.tar.gz' ;;
+        nested_tar_pair) record='pkg-1.192.168.255.1.tar.gz package-10.3.9.90-py3-none-any.whl' ;;
         filename) record='package-10.255.255.1-py3-none-any.whl' ;;
         filename_build) record='package-10.255.255.1-1-py3-none-any.whl' ;;
         filename_long_version) record='package-10.3.9.90.1-py3-none-any.whl' ;;
@@ -782,7 +791,7 @@ PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df
         named_host) needle='private-host.invalid' ;;
         parser_failure) needle='10.3.9.90' ;;
       esac
-      case "$arm" in valid|other_repo|checksum|other_file|filename|filename_build|filename_long_version|tar|tar_underscore|path_version|message_version) want=0 ;; esac
+      case "$arm" in nested_wheel|nested_wheel_pair|nested_tar|nested_tar_pair|valid|other_repo|checksum|other_file|filename|filename_build|filename_long_version|tar|tar_underscore|path_version|message_version) want=0 ;; esac
       if { [ "$want" -eq 0 ] && [ "$rc" -eq 0 ]; } ||
          { [ "$want" -ne 0 ] && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '✗ REFUSED' && printf '%s' "$out" | grep -F "$needle" >/dev/null; }; then
         echo "ok   version/address context: $arm (hook_exit=$rc)"
