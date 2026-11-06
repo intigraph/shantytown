@@ -1,7 +1,7 @@
-Script started on 2026-11-06 12:29:29-05:00 [COMMAND="stty -onlcr && python3 docs/demos/receipt-reconciliation-cost/compare.py" <not executed on terminal>]
+Script started on 2026-11-06 12:57:48-05:00 [COMMAND="stty -onlcr && python3 docs/demos/receipt-reconciliation-cost/compare.py" <not executed on terminal>]
 Frozen input: 100 closed receipts + one stopped worker delivery
 Base: 6c52e0ba54cca8beb1b9a6a697686f06da4fd6e8
-Candidate: 1bf1b545a0f29aea2455cb8ca3bd45c894b1ffe3
+Candidate: 85e2525135445310883f23477afab700bce27e9b
 
 BEFORE: same real stopped-owner tick, serialized HTTP fixture
 F                                                                        [100%]
@@ -10,7 +10,7 @@ _____________ test_known_delivery_does_not_select_retained_history _____________
 tests/test_owned_receipt_cost.py:76: in test_known_delivery_does_not_select_retained_history
     assert max(len(c['subjects']) for c in world.calls)==1
 E   assert 101 == 1
-E    +  where 101 = max(<generator object test_known_delivery_does_not_select_retained_history.<locals>.<genexpr> at 0x7cc375207140>)
+E    +  where 101 = max(<generator object test_known_delivery_does_not_select_retained_history.<locals>.<genexpr> at 0x70ae8c872a40>)
 =========================== short test summary info ============================
 FAILED tests/test_owned_receipt_cost.py::test_known_delivery_does_not_select_retained_history
 1 failed, 583 warnings in 0.40s
@@ -23,4 +23,4 @@ AFTER exit 0
 Observed: baseline selected 101 receipt subjects; candidate selects one.
 This is frozen source behavior, not production recovery or runtime activation.
 
-Script done on 2026-11-06 12:29:31-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-06 12:57:49-05:00 [COMMAND_EXIT_CODE="0"]
