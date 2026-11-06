@@ -146,6 +146,39 @@ def test_launch_render_remains_plain_text(monkeypatch):
     assert sa.render("/r", "ana").startswith(sa.BANNER)
 
 
+@pytest.mark.parametrize("anchor", [(0, PLATE), (2, "")])
+def test_startup_keeps_packaged_stack_orientation_when_anchor_unreadable(monkeypatch, anchor):
+    from shantytown import crew_memory, prime
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: anchor)
+    monkeypatch.setattr(crew_memory, "for_agent", lambda *args: "existing crew memory")
+    monkeypatch.setattr(prime, "probe", lambda *args: pytest.fail("startup must stay static"))
+    out = sa.render("/r", "ana")
+    assert out.count("[st stack primer — stack-prime/1]") == 1
+    for tool in ("Quipu", "Seeds", "Camayoc", "Bobbin", "Yupana", "Tambo",
+                 "Chaski", "Shuttle", "Rikuy", "Desire Path", "Camayoc skill",
+                 "cy prime --static", "jev_noul", "jev_choice", "jev_score",
+                 "map_question", "jev_dry_run"):
+        assert tool in out
+    assert "refused writes retain their" in out
+    assert out.endswith("existing crew memory")
+    if anchor[0]:
+        assert "could not read your plate" in out
+
+
+@pytest.mark.parametrize("broken", [OSError("missing resource"), "## Other\ntext\n"])
+def test_damaged_stack_primer_is_unknown_and_preserves_anchor(monkeypatch, broken):
+    from shantytown import prime
+    def read():
+        if isinstance(broken, Exception):
+            raise broken
+        return broken
+    monkeypatch.setattr(prime, "primer", read)
+    monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
+    out = sa.render("/r", "ana")
+    assert "Stack primer UNKNOWN" in out
+    assert "x-1  do the thing" in out and "STARTUP" in out
+
+
 def test_hook_binds_exact_session_before_anchor_render(tmp_path, monkeypatch):
     import io
     from shantytown import context_hint

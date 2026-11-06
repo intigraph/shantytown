@@ -1174,6 +1174,60 @@ def test_the_budget_never_interrupts_a_sweep_in_flight(tmp_path, monkeypatch):
     assert finished == ["ran to completion"]
 
 
+def test_deferral_sweep_executes_next_tend_after_slow_inbox_prefix(
+        tmp_path, monkeypatch, capsys):
+    """UTA production case: respawn first, 0/2 reads before -> 2/4 after.
+
+    A 130s inbox sweep repeatedly spends the unchanged 120s admission budget.
+    Actual tend calls must carry the skipped suffix into a fresh process/pass;
+    a scheduling-class unit test alone would miss wiring/reset mistakes.
+    """
+    from shantytown import inbox_recovery, notify
+
+    crew = tmp_path / "crew"
+    crew.mkdir()
+    (crew / "w.json").write_text(json.dumps({"role": "worker", "pane": "p-w"}))
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(screens={"p-w": IDLE}))
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(cli, "_TEND_SWEEP_BUDGET_S", 120.0)
+    events = []
+    original_pass = tend_mod.Tender.pass_over
+
+    def respawn(self, *args, **kwargs):
+        events.append("respawn")
+        return original_pass(self, *args, **kwargs)
+
+    monkeypatch.setattr(tend_mod.Tender, "pass_over", respawn)
+
+    def slow_inbox(*args, **kwargs):
+        events.append("inbox")
+        clock["t"] += 130
+        return []
+
+    monkeypatch.setattr(inbox_recovery, "sweep", slow_inbox)
+
+    class Deferrals:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sweep(self):
+            events.append("deferrals")
+            return []
+
+    monkeypatch.setattr(notify, "DeferralAlerter", Deferrals)
+    args = type("A", (), {"root": tmp_path, "dry_run": False,
+                         "backend": "files", "repo": None, "registry": "files"})()
+    counts = []
+    for _ in range(4):
+        start = len(events)
+        assert cli._tend_once(args) in (cli.OK, cli.CANNOT_TELL)
+        assert events[start] == "respawn"
+        counts.append(events.count("deferrals"))
+    assert counts == [0, 1, 1, 2]
+    assert "rotation-skipped=UNKNOWN" in capsys.readouterr().err
+
+
 def test_a_normal_pass_defers_nothing(tmp_path, monkeypatch, capsys):
     """The quiet direction. A budget that trips on an ordinary pass would shed
     supervision every five minutes and read as though the store were on fire."""
