@@ -12,7 +12,8 @@ and actual host acceptance remain separate.
 
 Reproduce: `PYTHONPATH=. python3 docs/demos/host-skill-roots/probe.py`.
 
-[Transcript](transcript.txt), [raw recording](output.log.gz), [timing](timing.log).
-Decompress the recording and play it with `scriptreplay --log-out <file> --log-timing
-docs/demos/host-skill-roots/timing.log`. Raw bytes are preserved compressed; the
+[Transcript](transcript.txt), [raw recording](output.log), [timing](timing.log).
+Play the recording with `scriptreplay --log-out
+docs/demos/host-skill-roots/output.log --log-timing
+docs/demos/host-skill-roots/timing.log`. Raw bytes are preserved as plain text; the
 transcript only normalizes CRLF. The fixture's temporary-path digest varies per run.
