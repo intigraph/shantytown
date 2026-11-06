@@ -29,3 +29,6 @@ docs/demos/targeted-unlock/output.log -text whitespace=cr-at-eol
 # Retain raw remote-discovery terminal bytes and replay timings.
 docs/demos/remote-discovery/output.log -whitespace
 docs/demos/remote-discovery/timing.log -whitespace
+
+# Preserve metrics renderer PTY bytes and matching replay timings.
+docs/demos/dp-metrics/output.log -text whitespace=cr-at-eol
