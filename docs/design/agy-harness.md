@@ -1,6 +1,8 @@
 # Design: `agy` (Antigravity CLI) as a shantytown harness
 
-Status: DESIGN for review. Nothing here is implemented.
+Status: design with an initial implementation candidate. The harness reference
+documents shipped-surface limits; native installed end-to-end acceptance remains
+open. Historical measurements below retain their dates and limits.
 
 Scope: run crew on Gemini through the Antigravity CLI (`agy`). The same
 harness also gives st one-shot, paneless review and review-fix jobs.

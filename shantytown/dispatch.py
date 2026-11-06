@@ -898,7 +898,10 @@ class Dispatcher:
         reason = reason.strip()
         if not reason:
             raise DeferRefused("a defer reason is required")
-        item = self.tracker.get(item_id)
+        # Remote Seeds can read these fields without hydrating every comment.
+        # Use the same observation for preconditions AND every write read-back.
+        read = getattr(self.tracker, "defer_read", self.tracker.get)
+        item = read(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
         from .ask_visibility import refuse_deferral
@@ -976,7 +979,7 @@ class Dispatcher:
             from .gate_backstop import validate_gate, scope
             if not dependency_reason.strip() or "\n" in dependency_reason.strip() or "\r" in dependency_reason.strip():
                 raise DeferRefused("closed gate requires --dependency-reason: one-line technical dependency; queue order is not a gate")
-            gate_target = self.tracker.get(active.arg)
+            gate_target = read(active.arg)
             if gate_target.id != active.arg:
                 raise DeferRefused("gate lookup returned a different target ID")
             try:
@@ -1066,7 +1069,7 @@ class Dispatcher:
             except Exception as exc:
                 error = exc
             try:
-                current = self.tracker.get(item_id)
+                current = read(item_id)
             except Exception as exc:
                 raise DeferUnconfirmed(f"{item_id}: defer read-back failed: {exc}") from exc
             absent = missing(current, final)
@@ -1080,7 +1083,7 @@ class Dispatcher:
         if gate_target is not None and inherited_priority < gate_target.priority:
             try:
                 self.tracker.update(gate_target.id, priority=inherited_priority)
-                after_target = self.tracker.get(gate_target.id)
+                after_target = read(gate_target.id)
                 if after_target.priority != inherited_priority:
                     raise ValueError("priority inheritance readback failed")
             except Exception as exc:

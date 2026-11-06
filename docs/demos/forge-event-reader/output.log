@@ -1,0 +1,14 @@
+Script started on 2026-11-06 01:57:31-05:00 [COMMAND="/usr/bin/python3 docs/demos/forge-event-reader/demo.py" <not executed on terminal>]
+Offline fixture; base a2afbdf4660908757245f349b826d5707c6e22f9; candidate reader from this checkout
+
+Native trigger_event, empty legacy event
+before: None (forge event read failed, incomplete or invalid; retain hold)
+after: True (observed CI is terminal (any conclusion; not approval))
+
+Pending context on status page two
+before: True (observed CI is terminal (any conclusion; not approval))
+after: False (exact-head CI is still active)
+
+Controls PASS. Terminal is a wake condition, never permission to merge.
+
+Script done on 2026-11-06 01:57:31-05:00 [COMMAND_EXIT_CODE="0"]

@@ -268,6 +268,8 @@ class Finding:
     # (aegis-152; specimen aegis-tnr, parked 9h after qbl closed). Report-only:
     # it never sets `met`, so can_release() can never act on it.
     prose_gate: str = ""
+    # UNKNOWN due to bounded observation capacity, not a failed attempted read.
+    read_deferred: bool = False
 
     def key(self) -> str:
         """The transition key: bead + the STATE being reported.
@@ -322,6 +324,21 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
     still be open, which is worse than staying quiet.
     """
     out: list[Finding] = []
+    rows = list(rows)
+    # A fixed prefix would consume every pass's bounded forge reads forever.
+    # Rotate *facts*, not owners, once per natural five-minute slot; duplicate
+    # waiters remain adjacent and share one observation. Non-forge gates retain
+    # their order and semantics. A fresh singleton recheck is unchanged.
+    def forge_key(row):
+        condition = parse_condition(str(row.get('notes') or '')) if isinstance(row, dict) else None
+        return ((condition.kind, condition.arg) if condition is not None
+                and condition.kind in ('pr-merged', 'ci-terminal') else None)
+    targets = sorted({key for row in rows if (key := forge_key(row)) is not None})
+    if targets:
+        offset = (int(now.timestamp()) // 300) % len(targets)
+        turns = targets[offset:] + targets[:offset]
+        rank = {key: index for index, key in enumerate(turns)}
+        rows.sort(key=lambda row: rank.get(forge_key(row), len(rank)))
     event_answers = {}  # bounded reads, only within this candidate pass
     for row in rows:
         if not isinstance(row, dict):
@@ -365,6 +382,7 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
 
         met, untestable = False, ""
         read_error = False
+        read_deferred = False
         if cond is not None:
             if cond.kind == "date":
                 stamp = parse_stamp(cond.arg)
@@ -429,6 +447,9 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
                 if answer is None:
                     untestable = f"{cond.render()} (UNKNOWN: {why})"
                     read_error = True
+                    if cond.kind in ('pr-merged', 'ci-terminal'):
+                        from .resume_forge_events import BUDGET_DEFERRED
+                        read_deferred = why == BUDGET_DEFERRED
                 else:
                     met = answer
             else:
@@ -524,7 +545,8 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
             priority=row.get("priority"),
             lapsed_at=when if lapsed else None,
             lapsed_days=(now - when).days if lapsed else 0,
-            condition=cond, met=met, untestable=untestable, read_error=read_error))
+            condition=cond, met=met, untestable=untestable, read_error=read_error,
+            read_deferred=read_deferred))
     out.sort(key=lambda f: (-(f.lapsed_days), f.bead))
     return out
 

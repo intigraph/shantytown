@@ -481,7 +481,14 @@ inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
 share a second twelve-request budget; even many rows waiting on the same fact
 cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
-next scheduled pass, with no immediate retries. GitHub uses the existing
+next scheduled pass, with no immediate retries. Distinct forge facts rotate
+through the observation budget every five-minute slot; duplicate waiters share
+one read. A capacity-skipped observation keeps any prior failure count unchanged
+and never counts toward the three-pass error report. Attempted reads that fail
+still count. A complete workflow inventory with an active run proves the wait
+is unmet without fetching statuses or checks; terminal CI still requires all
+those inventories. Commit statuses paginate within the same request budget,
+and repeated or capped pages remain UNKNOWN. GitHub uses the existing
 `gh` credential lookup. Forgejo uses the deployment's configured
 `SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
 per-item `event:` producer registry and ASK visibility rules remain unchanged.
