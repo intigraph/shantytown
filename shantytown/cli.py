@@ -1648,6 +1648,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--if-revision", type=int,
+                    help="Seeds only: refuse unless the item still has this revision; reread and rebase on conflict")
     wi.add_argument("--replace-text", action="store_true",
                     help="explicitly replace non-empty notes/description from the supplied file; read back first")
     wi.add_argument("--file", type=Path)
@@ -2758,11 +2760,23 @@ def _run_command(a) -> int:
     if a.cmd == "repool":
         return _cmd_repool(a)
     if a.cmd == "item":
-        from .br import NothingWritten
+        from .br import NothingWritten, TrackerUpdateError, redact_cause
         from .work_item import command
         try:
             print(json.dumps(command(a, _tracker(a)), indent=2))
             return 0
+        except TrackerUpdateError as exc:
+            # These are bounded SDK diagnostics, not arbitrary exception text.
+            # Preserve their recovery identity and JSON structure while keeping
+            # the existing bearer-redaction rule for every string value.
+            def redacted(value):
+                if isinstance(value, dict):
+                    return {key: redacted(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [redacted(item) for item in value]
+                return redact_cause(value) if isinstance(value, str) else value
+            print(json.dumps({"error": redacted(exc.error)}, ensure_ascii=False), file=sys.stderr)
+            return {"CONFLICT": 4, "INDETERMINATE": 8}.get(exc.code, 2)
         except ValueError as exc:
             print(f"work item refused: {exc}", file=sys.stderr)
             return 2
