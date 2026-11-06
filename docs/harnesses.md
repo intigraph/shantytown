@@ -123,6 +123,26 @@ QUIPU_SERVER = "https://knowledge.example.com"
 SHANTY_TOOLING_MANIFEST = "urn:example:crew-tooling"
 ```
 
+Skill sources may bind to local source roots through the deployment's `[env]`:
+
+```toml
+SHANTY_SKILL_SOURCE_ROOT = "/srv/toolkit"
+CAMAYOC_SRC = "/srv/camayoc"
+```
+
+The governed manifest can then use `${SHANTY_SKILL_SOURCE_ROOT}/skills/search`
+or `${CAMAYOC_SRC}/camayoc/skills/camayoc`. Only these two source-root references
+are accepted; arbitrary environment expansion, missing/relative roots, and
+parent traversal refuse provisioning. The deployment file takes precedence over
+ambient environment values. Existing absolute, home-relative and workspace-relative
+sources keep their behavior. Source availability and personal-skill replacement
+checks still run before projection writes. Last-good snapshots retain the raw
+references and bind them again to the current host configuration.
+
+Install compatible source readers on every selected host before changing a shared
+manifest. Change the authoritative graph through its governed write path, then
+provision normally; do not edit generated skill links or host paths by hand.
+
 The selected entity must have exactly one `rdf:value` literal containing this
 versioned JSON document. Use an existing governed configuration entity type in
 your graph. Keep shared credentials in `provision/secrets.env` or the environment;
