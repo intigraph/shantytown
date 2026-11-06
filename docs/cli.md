@@ -351,7 +351,10 @@ at the terminal width. `st crew --wide` (also `--no-truncate`) prints the comple
 title, suitable for piping or terminal scrollback. Control characters in titles
 are rendered as spaces so tracker text cannot move the terminal cursor. The
 bead-backed roster shares one store/readiness snapshot across its assigned rows;
-a new invocation reads fresh work.
+a new invocation reads fresh work. Seeds roster membership and status validation
+share one candidate observation, and capacity reuses the same render. Missing,
+unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
+a failed read never means an empty roster.
 
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text

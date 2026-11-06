@@ -8291,7 +8291,7 @@ def _cmd_crew(a) -> int:
 
     capacity_tracker = _tracker(a)
     from .seeds_plate import RenderShapeReads
-    capacity_tracker.render_shape_reads = RenderShapeReads()
+    capacity_tracker.render_shape_reads = RenderShapeReads(inline_roster=True)
     try:
         plate = _plate(a, snapshot=True, require_complete=True,
                        owners=[ag.name for ag in agents], tracker=capacity_tracker)
