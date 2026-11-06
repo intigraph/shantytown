@@ -21,7 +21,7 @@ def row(identifier="test-ci", **changes):
 
 
 def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False, log=None,
-          admin_available=True):
+          admin_available=True, now=None):
     sent, admin = [], []
     card = SimpleNamespace(name="worker", retired=False, pane="worker-pane")
     reg = SimpleNamespace(get=lambda name: card)
@@ -39,7 +39,7 @@ def sweep(tmp_path, rows, *, live=True, stopped=False, send_error=False, log=Non
             return "admin"
         return None
     alerter = DeferralAlerter(tmp_path, reg, panes, read=lambda: rows,
-                             now=lambda: NOW, push=push, log=log)
+                             now=lambda: now or NOW, push=push, log=log)
     result = alerter.sweep()
     return sent, admin, result
 
@@ -184,3 +184,43 @@ def test_single_canonical_envelope_keeps_owner_route_end_to_end(tmp_path):
     sent, admin, result = sweep(tmp_path, [item])
     assert len(sent) == 1 and "OWNER-PACING" in sent[0][1]
     assert admin == result == [] and item["status"] == "deferred"
+
+
+def aged_row(hours, **changes):
+    end = NOW - timedelta(hours=hours)
+    return row(defer_until=end.isoformat(),
+               updated_at=(end - timedelta(minutes=1)).isoformat(),
+               notes="CI pending\nresume_when: date:" + end.isoformat() + "\n"
+               + provenance("worker", (end - timedelta(days=1)).isoformat(),
+                            end.isoformat())) | changes
+
+
+@pytest.mark.parametrize("hours", [72, 73])
+def test_unchanged_lapsed_owner_timer_reaches_admin_once_at_ceiling(tmp_path, hours):
+    item = aged_row(hours)
+    sent, admin, result = sweep(tmp_path, [item])
+    assert not sent and len(admin) == 1 and result == [item["id"]]
+    assert sweep(tmp_path, [item]) == ([], [], [])
+    assert item["status"] == "deferred"  # escalation never releases the gate
+
+
+def test_71_hour_lapse_stays_with_owner_regardless_of_sweep_count(tmp_path):
+    item = aged_row(71)
+    assert sweep(tmp_path, [item])[0]
+    for _ in range(4):
+        assert sweep(tmp_path, [item]) == ([], [], [])
+
+
+def test_recent_touch_resets_elapsed_ceiling_for_old_deadline(tmp_path):
+    item = aged_row(73, updated_at=(NOW - timedelta(hours=71)).isoformat())
+    sent, admin, result = sweep(tmp_path, [item])
+    assert sent and not admin and not result
+
+
+def test_already_nudged_owner_escalates_when_elapsed_ceiling_crosses(tmp_path):
+    item = aged_row(71)
+    assert sweep(tmp_path, [item])[0]
+    later = NOW + timedelta(hours=2)
+    sent, admin, result = sweep(tmp_path, [item], now=later)
+    assert not sent and len(admin) == 1 and result == [item["id"]]
+    assert sweep(tmp_path, [item], now=later) == ([], [], [])
