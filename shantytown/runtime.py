@@ -1637,6 +1637,11 @@ def live_wiring(pane: str, cmdline_reader) -> LiveWiring | None:
         # — there is no settings file, so it carries no stop directions. That
         # is an EMPTY SET (a measurement), not None (a failure to measure).
         return LiveWiring(directions=set(), settings_path=None)
+    from .harness import running_name
+    if running_name(cmdline) == "agy":
+        from .agy import live_proof
+        if not live_proof(cmdline, p):
+            return None
     d = stop_directions_in(p)
     if d is None:
         return None

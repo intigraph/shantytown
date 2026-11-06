@@ -66,6 +66,13 @@ class SdTracker(BrTracker):
 
     _tool = "sd"
 
+    def defer_read(self, item_id):
+        """Deferral needs exact fields, not comments or reverse dependencies."""
+        if not self.quipu:
+            return self.get(item_id)
+        from .seeds_item import read_item
+        return read_item(self, item_id)
+
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
         result = self._bd_for(item_id, 'show', item_id, '--json')
