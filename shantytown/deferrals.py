@@ -339,6 +339,22 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
         turns = targets[offset:] + targets[:offset]
         rank = {key: index for index, key in enumerate(turns)}
         rows.sort(key=lambda row: rank.get(forge_key(row), len(rank)))
+    # Typed gates share a separate bounded reader. Rotate waiting-item
+    # identities without moving other gate kinds. Two waiters for one target
+    # can have different deferral boundaries and cannot share an observation.
+    def typed_key(row):
+        condition = parse_condition(str(row.get('notes') or '')) if isinstance(row, dict) else None
+        return ((condition.kind, condition.arg, str(row.get('id') or ''))
+                if condition is not None and condition.kind in ('ruling', 'activation') else None)
+    typed_targets = sorted({key for row in rows if (key := typed_key(row)) is not None})
+    if typed_targets:
+        offset = (int(now.timestamp()) // 300) % len(typed_targets)
+        turns = typed_targets[offset:] + typed_targets[:offset]
+        rank = {key: index for index, key in enumerate(turns)}
+        slots = [index for index, row in enumerate(rows) if typed_key(row) is not None]
+        ordered = sorted((rows[index] for index in slots), key=lambda row: rank[typed_key(row)])
+        for index, row in zip(slots, ordered):
+            rows[index] = row
     event_answers = {}  # bounded reads, only within this candidate pass
     for row in rows:
         if not isinstance(row, dict):
@@ -427,6 +443,8 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
                 if answer is None:
                     untestable = f"{cond.render()} (UNKNOWN: {why})"
                     read_error = True
+                    from .resume_rulings import BUDGET_DEFERRED
+                    read_deferred = why == BUDGET_DEFERRED
                 elif type(answer) is not bool:
                     untestable = f"{cond.render()} (UNKNOWN: invalid ruling verdict)"
                     read_error = True
