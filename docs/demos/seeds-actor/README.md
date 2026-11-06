@@ -6,11 +6,13 @@ with private harness and `sd` doubles. On base
 `SEEDS_ACTOR` even though the crew card is `writer`: all three checks fail.
 With this change, all three child tools receive `writer` and pass.
 
-[Terminal output](output.log) and [timing](timing.log) are plain-text recording
-artifacts. Download both and replay with util-linux:
+[Terminal output](output.json) and [timing](timing.log) are text recording
+artifacts. JSON escapes preserve the exact recorded CRLF bytes without
+trailing-whitespace changes. The [replay helper](replay.py) verifies the
+recording hash, restores a private temporary log and runs util-linux:
 
 ```sh
-scriptreplay --log-out output.log --log-timing timing.log
+python3 docs/demos/seeds-actor/replay.py
 ```
 
 Reproduce from the repository root:
