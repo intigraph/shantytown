@@ -71,7 +71,7 @@ TOP_KEYS = {"name", "description", "enabled", "host", "timeout", "catch_up",
             "trigger", "action", "retry"}
 TRIGGER_KEYS = {"cron", "every", "on", "manual", "when", "repo", "match"}
 ACTION_KEYS = {"inbox", "message", "durable", "dispatch", "title", "body",
-               "quipu_node", "no_graph_context", "labels", "priority", "exec"}
+               "quipu_node", "no_graph_context", "labels", "priority", "exec", "agy_review"}
 
 # A slot seen more than this late was MISSED, not merely late: tend runs every
 # five minutes, so an on-time slot is always seen within one interval. Two
@@ -384,6 +384,10 @@ def parse(path, data: dict) -> Job:
         raise JobError(path, "retry.backoff", str(e)) from None
     trigger = _parse_trigger(path, data.get("trigger"))
     action = _parse_action(path, data.get("action"), events=trigger.kind == "on")
+    if action.kind == "agy-review" and (trigger.kind != "manual" or retry_max != 0):
+        raise JobError(path, "action.agy_review", "requires manual trigger and retry.max=0")
+    if action.kind == "agy-review" and timeout_s < 900:
+        raise JobError(path, "timeout", "agy review requires at least 900s including child cleanup")
     desc = data.get("description", "")
     if not isinstance(desc, str):
         raise JobError(path, "description", "must be a string")
@@ -457,7 +461,7 @@ def _parse_action(path, a, *, events: bool) -> Action:
     unknown = sorted(set(a) - ACTION_KEYS)
     if unknown:
         raise JobError(path, f"action.{unknown[0]}", "unknown key")
-    kinds = [k for k in ("inbox", "dispatch", "exec") if k in a]
+    kinds = [k for k in ("inbox", "dispatch", "exec", "agy_review") if k in a]
     if len(kinds) != 1:
         raise JobError(path, "action", "needs exactly one of inbox, dispatch or exec"
                        + (f" (has {' and '.join(kinds)})" if kinds else ""))
@@ -508,6 +512,26 @@ def _parse_action(path, a, *, events: bool) -> Action:
             _placeholders_ok(path, fld, text, events)
         return Action("dispatch", to=to, title=title, body=body, quipu_nodes=nodes,
                       no_graph_context=reason, labels=labels, priority=prio)
+    if kind == "agy_review":
+        spec = a[kind]
+        required = {"repo", "pr", "head", "model", "result_dir"}
+        if not isinstance(spec, dict) or set(spec) != required:
+            raise JobError(path, "action.agy_review", "needs repo, pr, head, model and result_dir")
+        from .agy_job import model_group
+        try:
+            model_group(spec["model"])
+        except (ValueError, TypeError, AttributeError):
+            raise JobError(path, "action.agy_review.model", "needs a qualified Gemini model") from None
+        if (not isinstance(spec["repo"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", spec["repo"])
+                or type(spec["pr"]) is not int or spec["pr"] <= 0
+                or not isinstance(spec["head"], str) or not re.fullmatch(r"[0-9a-f]{40}", spec["head"])
+                or not isinstance(spec["result_dir"], str) or not spec["result_dir"]
+                or ".." in Path(spec["result_dir"]).parts):
+            raise JobError(path, "action.agy_review", "invalid PR identity or result directory")
+        command = [sys.executable, "-m", "shantytown.agy_job"]
+        for key in ("repo", "pr", "head", "model", "result_dir"):
+            command += ["--" + key.replace("_", "-"), str(spec[key])]
+        return Action("agy-review", command=tuple(command))
     cmd = a["exec"]
     if isinstance(cmd, str) and cmd.strip():
         command = ("/bin/sh", "-c", cmd)
@@ -1094,7 +1118,8 @@ class Runner:
         # no root journals nothing, which is the unjournaled-cron failure this
         # module exists to retire (aegis-0681f6).
         return dict(os.environ, SHANTY_ROOT=str(self.root), ST_JOB=job.name,
-                    ST_JOB_EVENT=json.dumps(fire.get("event") or {}, sort_keys=True))
+                    ST_JOB_EVENT=json.dumps(fire.get("event") or {}, sort_keys=True),
+                    ST_JOB_ATTENDED="1" if job.action.kind == "agy-review" and not self.detach else "")
 
     def _attempt(self, job: Job, fire: dict) -> Outcome:
         now = self.now()
@@ -1104,7 +1129,9 @@ class Runner:
             rendered = self._rendered(job, fire, now)
         except RenderError as e:
             return Outcome(False, str(e))
-        if job.action.kind == "exec":
+        if job.action.kind in ("exec", "agy-review"):
+            if job.action.kind == "agy-review" and self.detach:
+                return Outcome(False, "agy review requires attended manual invocation")
             if not self.detach:
                 res = run_exec(rendered["argv"], job.timeout_s, log_path=self._log_path(job),
                                env=self._exec_env(job, fire), cwd=str(self.root))
