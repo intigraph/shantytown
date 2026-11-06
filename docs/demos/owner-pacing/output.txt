@@ -1,0 +1,10 @@
+Script started on 2026-11-05 20:45:26-05:00 [COMMAND="stty -onlcr; python3 docs/demos/owner-pacing/demo.py --base 39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076" <not executed on terminal>]
+Synthetic source fixture; baseline 39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076; candidate working tree
+before: lapse=71h owner=1 admin_digest=0 status=deferred
+before: lapse=73h owner=0 admin_digest=0 status=deferred
+before: lapse=73h owner=0 admin_digest=0 status=deferred
+after: lapse=71h owner=1 admin_digest=0 status=deferred
+after: lapse=73h owner=0 admin_digest=1 status=deferred
+after: lapse=73h owner=0 admin_digest=0 status=deferred
+
+Script done on 2026-11-05 20:45:27-05:00 [COMMAND_EXIT_CODE="0"]
