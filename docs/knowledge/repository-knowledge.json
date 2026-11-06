@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st provides work-item, crew, repository and scheduled-job commands. Roles show governed responsibilities; ranking is advisory. Failed reads stay UNKNOWN. Protected mailboxes and signed reviews bind exact scope. Cycle requires approved history custody and a clean branch; checkpoint advice needs fresh native evidence. Chaski delegation refuses local execution. Rank proposals need administrator acceptance. Harness conversion preserves validated preferences. Pipeline waits bind merged PRs, terminal exact-commit CI or verified ordinary Codex cold launches; independent holds remain, and CI failure resumes investigation without approval. Owner reminders never release gates. Ceiling transfer observes source harnesses and complete active receiver plates, preserving budget and ownership gates.",
-      "source_sha256": "5d137dbb8a6dfbc3cc54c9fdb507d0a024162c2991ee6d58d1ce5168c38196bc",
+      "summary": "st manages work, crew, repositories and jobs. Roles are governed; failed reads stay UNKNOWN. Protected mailboxes and reviews bind exact scope. Cycle requires approved history custody and a clean branch. Chaski delegation refuses local execution; administrators accept ranks. Harness conversion preserves model/browser preferences. Pipeline waits require events and backstops; --window declares an appointment. Verified ordinary administrator/Codex cold-launch receipts can resume work without causing a launch; independent holds remain. Owner reminders never release gates. Ceiling transfer preserves source harness, active receiver, budget and ownership gates. Explicit Seeds revision fences pass unchanged through admission; structured conflicts retain operation identity without retry.",
+      "source_sha256": "ca1b9740a4500e459898075ae6d50d385fe4baf237188a7e64c715257571c8da",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
