@@ -1,0 +1,5 @@
+BEFORE exit=1 context_passes=1 elapsed=1.071s source_sha256=7ac75c4658bd07a14acb07c0486bfe8aa4a4b4f21f2676a251d5258af49665a1
+BEFORE: public wheel version refused outside the old record exception
+AFTER exit=0 context_passes=30 elapsed=4.640s source_sha256=6536f8e1b29f43aa1bce58ae99b49ba06fa2281ad35f8f76c6d6384aea94a14d
+AFTER: version cases pass; private addresses, authorities, adjacent leaks, ambiguous contexts, parser failure and commit-message leaks still refuse
+AFTER: chained refusal retained
