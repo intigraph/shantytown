@@ -14498,9 +14498,15 @@ def _tend_once(a, quiet: bool = False) -> int:
         # considered — the budget can only ever shed the best-effort layer the
         # comment above calls "on top".
         sweep_deadline = time.monotonic() + _TEND_SWEEP_BUDGET_S
+        from .sweep_rotation import SweepRotation
+        sweep_rotation = SweepRotation(Path(a.root), dry_run=a.dry_run, log=_log)
 
         def _sweep(label, fn):
-            if time.monotonic() > sweep_deadline:
+            admission = sweep_rotation.admission(
+                label, within_budget=time.monotonic() <= sweep_deadline)
+            if admission == "rotation":
+                return []
+            if admission == "budget":
                 # Collected, not printed per sweep: a pass that blows the budget
                 # skips most of what follows, and one line each would bury the
                 # summary in its own noise.
@@ -14918,6 +14924,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         for line in _sweep("governor-wake",
                            lambda: _governor_wake_sweep(a, verdict)):
             print(f"  {line}", file=sys.stderr)
+        sweep_rotation.finish()
     if not quiet:
         print()
         if verdict is not None:
