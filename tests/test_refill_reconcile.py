@@ -261,3 +261,27 @@ def test_cli_defaults_to_read_only_and_refuses_bad_receipt_without_private_error
     result = subprocess.run([sys.executable, '-m', 'shantytown.refill_reconcile',
                              '--root', str(root), '--receipt', str(path), '--apply'], capture_output=True, text=True)
     assert result.returncode == 2 and 'secret-private-body' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('padding', [2_272_787, 2 * rr.MAX_JSON + 1])
+def test_large_unrelated_event_before_exact_receipt_is_streamed(packet, padding):
+    root, request, _, _, history = packet
+    meta, event = history.read_bytes().splitlines(keepends=True)
+    unrelated = json.dumps(dict(type='tool_result', output='x' * padding)).encode() + b'\n'
+    history.write_bytes(meta + unrelated + event)
+    request['line'] = 3
+    before = snapshot(root)
+    assert rr.reconcile(root, request, now=1100)['state'] == 'qualified'
+    assert snapshot(root) == before
+
+
+def test_oversized_target_receipt_still_refuses_without_writes(packet):
+    root, request, _, _, history = packet
+    meta, event = history.read_bytes().splitlines(keepends=True)
+    event = event.rstrip(b'\n') + b' ' * rr.MAX_JSON + b'\n'
+    history.write_bytes(meta + event)
+    request['event_sha256'] = hashlib.sha256(event).hexdigest()
+    before = snapshot(root)
+    with pytest.raises(ValueError):
+        rr.reconcile(root, request, apply=True, now=1100)
+    assert snapshot(root) == before
