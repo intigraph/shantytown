@@ -216,6 +216,12 @@ context_hard_pct = 70
 context_nudge_pct = 35
 context_nudge_repeat_seconds = 120
 
+# Administrator incident policy: first reminder at 250k of the declared 1M,
+# then at 350k, 450k, etc. Workers retain the global cadence.
+[session_budget.context_by_role.administrator]
+context_nudge_pct = 25
+context_nudge_step_pct = 10
+
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
 
@@ -238,7 +244,14 @@ long turns for every role, including administrators. `context_nudge_pct` default
 to 15 percentage points below the hint (or half the hint for thresholds below 30%).
 Reminders repeat every `context_nudge_repeat_seconds` (default 120, range 1–3600),
 or after another five percentage points. Explicit nudge percentages must be below
-the hint. Session changes, compaction below the nudge and threshold crossings re-arm
+the hint. Optional `context_nudge_step_pct` (finite, greater than zero and below
+100) replaces timed preparation repeats with milestones anchored at the nudge:
+25 with step 10 means 25%, 35%, 45%, and onward. A late first observation at 26%
+still repeats at 35%. Elapsed time alone does not repeat this preparation advice.
+Stop's soft/hard decisions and bounded exceptions retain their existing cadence.
+Omit the step to retain the existing worker behavior. This setting inherits
+through role and agent overrides like the other context settings.
+Session changes, compaction below the nudge and threshold crossings re-arm
 feedback; busy observations do not postpone the next reminder. Unknown or invalid
 capacity never becomes a percentage.
 
