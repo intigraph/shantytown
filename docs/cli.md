@@ -3572,3 +3572,17 @@ normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
 a zero count. Native snapshots use bounded candidate-edge and exact endpoint
 status projections; missing or shadowed endpoints refuse the run. These bands
 and flags do not change lifecycle status, clear a hold, or authorize dispatch.
+
+### Observed cold-launch resume condition
+
+`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
+agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+in this deployment root and host. The normal launcher records a private receipt
+only after observing the live process, verifying hooks and acknowledging startup
+inbox delivery. Dry runs, cycles, window restores, hold overrides, other
+harnesses and unverified starts cannot produce it. The sweep observes receipts;
+it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
+before its reminder date while independent human and dependency holds remain.
+It does not prove provider responses or bypass launch admission. Existing
+`pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
+and budgets.
