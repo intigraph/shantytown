@@ -512,6 +512,16 @@ remain UNKNOWN. A fresh read before release catches a later revocation. Existing
 ASK visibility, human/access labels, dependency and prose gates still apply;
 this event prompts lifecycle work and never runs a deployment or live writer.
 
+Typed ruling/activation observations have their own unchanged limits of twelve
+candidate reads and twelve fresh release checks per pass. Waiting-item identities
+rotate every five-minute slot so a fixed prefix cannot starve later gates.
+Different waiters for one target keep separate evidence because their deferral
+boundaries may differ. A skipped observation stays UNKNOWN and preserves its
+previous failure count without incrementing or clearing it. An admitted read
+that fails still counts toward the three-pass report. Logs expose only a finite
+failure stage (`binding`, `target`, `registry`, `comments`, or `markers`), never
+private comment contents or transport exception text.
+
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
 command, path, URL or query. Each binding names one item, producer, host, unit,
@@ -3570,3 +3580,17 @@ normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
 a zero count. Native snapshots use bounded candidate-edge and exact endpoint
 status projections; missing or shadowed endpoints refuse the run. These bands
 and flags do not change lifecycle status, clear a hold, or authorize dispatch.
+
+### Observed cold-launch resume condition
+
+`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
+agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+in this deployment root and host. The normal launcher records a private receipt
+only after observing the live process, verifying hooks and acknowledging startup
+inbox delivery. Dry runs, cycles, window restores, hold overrides, other
+harnesses and unverified starts cannot produce it. The sweep observes receipts;
+it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
+before its reminder date while independent human and dependency holds remain.
+It does not prove provider responses or bypass launch admission. Existing
+`pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
+and budgets.

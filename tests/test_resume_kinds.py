@@ -102,6 +102,31 @@ def test_installed_runs_only_the_allowlisted_tool_with_a_fixed_argv():
             resume_kinds.validate("installed", bad)
 
 
+@pytest.mark.parametrize("have,expect", [("0.12.1", False), ("0.12.2", True)])
+def test_dp_native_version_command_distinguishes_old_and_ready(have, expect):
+    seen = []
+
+    def native_dp(argv):
+        seen.append(argv)
+        if argv == ["/fixture/dp", "version"]:
+            return done(out=f"dp {have} (fixture)\n")
+        return done(1, err="unknown flag: --version")
+
+    met, _ = resume_kinds.installed("dp>=0.12.2", run=native_dp,
+                                    which=lambda tool: "/fixture/dp")
+    assert met is expect
+    assert seen == [["/fixture/dp", "version"]]
+
+
+def test_dp_native_missing_binary_stays_unknown_without_execution():
+    def unexpected(argv):
+        pytest.fail(f"missing binary must not execute {argv}")
+
+    met, _ = resume_kinds.installed("dp>=0.12.2", run=unexpected,
+                                    which=lambda tool: None)
+    assert met is None
+
+
 def test_installed_is_unknown_when_it_cannot_tell():
     assert resume_kinds.installed("yupana@0.15", run=version("x"), which=lambda t: None)[0] is None
     assert resume_kinds.installed("yupana@0.15", run=version("no digits"),
