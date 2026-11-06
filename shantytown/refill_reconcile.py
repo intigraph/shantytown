@@ -111,9 +111,19 @@ def native(root, request, card, record, now):
         require(isinstance(identity.get('id'), str) and
                 request['history'].endswith(identity['id'] + '.jsonl'), "native session ID mismatch")
         raw = b''
-        for _ in range(1, request['line']):
+        for line in range(2, request['line'] + 1):
             raw = stream.readline(MAX_JSON + 1)
-            require(raw and len(raw) <= MAX_JSON, "native line missing or exceeds bound")
+            require(raw, "native line missing")
+            if line == request['line']:
+                require(len(raw) <= MAX_JSON, "native receipt exceeds bound")
+            else:
+                # Tool outputs can exceed the receipt bound. Skip unrelated
+                # records in bounded chunks without shifting physical line IDs.
+                while not raw.endswith(b'\n'):
+                    require(stream.tell() <= MAX_HISTORY, "native traversal exceeds bound")
+                    raw = stream.readline(MAX_JSON + 1)
+                    require(raw, "native line missing")
+            require(stream.tell() <= MAX_HISTORY, "native traversal exceeds bound")
         require(digest(raw) == request['event_sha256'], "native event hash changed")
         event = decode(raw)
     payload = event.get('payload', {})
