@@ -68,15 +68,19 @@ class BrTracker(BeadsTracker):
         blind force costs the resume_when condition permanently.
         """
         try:
-            r = self._bd_for(item_id, "show", item_id, "--json")
-            if r.returncode != 0:
-                return reason, False
-            value = json.loads(r.stdout) if r.stdout.strip() else {}
-            if isinstance(value, dict) and "issues" in value:
-                value = value["issues"]
-            if isinstance(value, list):
-                value = value[0] if value else {}
-            existing = value.get("notes") if isinstance(value, dict) else None
+            reader = getattr(self, "defer_read", None)
+            if callable(reader):
+                existing = reader(item_id).notes
+            else:
+                r = self._bd_for(item_id, "show", item_id, "--json")
+                if r.returncode != 0:
+                    return reason, False
+                value = json.loads(r.stdout) if r.stdout.strip() else {}
+                if isinstance(value, dict) and "issues" in value:
+                    value = value["issues"]
+                if isinstance(value, list):
+                    value = value[0] if value else {}
+                existing = value.get("notes") if isinstance(value, dict) else None
         except Exception:
             return reason, False
         merged, force = merge_notes(existing, reason)
