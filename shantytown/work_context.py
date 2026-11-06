@@ -148,12 +148,16 @@ def render(ctx: Context) -> str:
             out.append(f"  {section.name}: 0 found at {section.checked}")
             continue
         out.append(f"  {section.name} ({len(section.rows)}):")
+        out.append(f"    exact read: {section.checked}")
         for row in section.rows:
             if section.name == "episodes":
                 out.append(f"    - {row.get('when') or '?'} {row.get('label') or row.get('act')}: "
                            f"{_line(row.get('gist'))}")
+                out.append(f"      record: {row.get('act') or '?'}; "
+                           f"source: {_line(row.get('who')) or 'UNKNOWN'}")
             elif section.name == "rulings":
                 out.append(f"    - {row.get('label') or row.get('ruling')} ({row.get('type') or '?'})")
+                out.append(f"      record: {row.get('ruling') or '?'}")
             else:
                 who = str(row.get('author') or '?').rsplit('/', 1)[-1]
                 out.append(f"    - #{row.get('position')} {row.get('when') or '?'} {who}: "

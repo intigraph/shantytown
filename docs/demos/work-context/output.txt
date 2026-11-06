@@ -4,7 +4,9 @@ EXACT CONTEXT for test-123 (read by ID first; semantic search is second)
   notes: Retained evidence exists
   comments: 0 found at https://seeds.local/item/test-123 in urn:fixture:project
   episodes (1):
+    exact read: ?act <urn:fixture:aboutWorkItem> <urn:fixture:test-123>
     - 2026-01-01T00:00:00Z Example evidence: Identity finds linked evidence
+      record: urn:fixture:episode; source: UNKNOWN
   rulings: 0 found at ?ruling <urn:fixture:trackedBy> <urn:fixture:test-123>
   then: quipu_search for related history. A NO CONTEXT search answer is not absence; the exact reads above are the authority.
 

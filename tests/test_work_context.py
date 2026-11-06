@@ -78,11 +78,21 @@ def test_exact_reads_surface_linked_episodes_a_search_would_miss(monkeypatch, kn
     assert "episodes (1):" in text and "2026-10-25T02:25:50Z arnold-edp-final-end: BEFORE: kota moved AFTER: names" in text
     assert "#31 2026-10-25T02:25:57Z arnold: END recap" in text
     assert "dns-names-only" in text
+    assert "record: " + EPISODE["act"] in text
+    assert "source: " + EPISODE["who"] in text
+    assert "record: " + ONTO + "r1" in text
+    assert "exact read:" in text
     assert "is not absence" in text
     # Every read names its subject exactly; none is an unbound scan.
     assert all(f"<{ONTO}aegis-edp>" in q or "<https://seeds.local/item/aegis-edp>" in q for q in seen)
     assert not any("CONTAINS" in q or "REGEX" in q for q in seen)
     assert all("LIMIT" in q for q in seen)
+
+
+def test_missing_episode_attribution_is_explicit_unknown(monkeypatch, known):
+    evidence = {k: v for k, v in EPISODE.items() if k != "who"}
+    _, text, _ = run(monkeypatch, {"aboutWorkItem": [evidence]})
+    assert "record: " + EPISODE["act"] + "; source: UNKNOWN" in text
 
 
 def test_one_failed_read_is_unknown_and_the_others_still_answer(monkeypatch, known):
