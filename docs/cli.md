@@ -435,7 +435,8 @@ item is only a no-op when all requested fields are present.
 CI, review, merge and install waits require a non-date `resume_when` condition
 and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
 required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding; a new event name is not a registration.
+existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
+per-item event name is not a registration.
 For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
 with an exact UTC `--until` at least a day away. Short date-only polling and
 dry-run attempts refuse before writes. A real scheduled appointment may use
@@ -463,6 +464,25 @@ original batch's time budget. It keeps both graphs and every evaluation field.
 A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
+
+Forge event waits use two registered generic kinds:
+
+- `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
+  observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
+- `resume_when: ci-terminal:<github|forgejo>/<owner>/<repo>@<full-sha>` wakes when
+  the observed workflows, checks and statuses for that exact commit are terminal,
+  including failure or cancellation. This is a prompt to inspect CI, never a
+  green result, review receipt or permission to merge.
+
+Both require an explicit backstop at least 24 hours away, including marker-only
+reasons and scheduled-window requests. They read only configured forge hosts;
+item text cannot choose a URL or command. Failed, missing, malformed or capped
+inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
+candidate pass and share a twelve-request budget; budget exhaustion is UNKNOWN
+until the next scheduled pass, with no immediate retries. GitHub uses the existing
+`gh` credential lookup. Forgejo uses the deployment's configured
+`SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
+per-item `event:` producer registry and ASK visibility rules remain unchanged.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
