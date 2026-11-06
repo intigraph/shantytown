@@ -1,0 +1,13 @@
+Script started on 2026-11-05 22:59:57-05:00 [COMMAND="python3 docs/demos/defer-forge-events/demo.py" <not executed on terminal>]
+Library demonstration; private forge fixtures, no network or live tracker writes.
+Base: f9941a35a914ec925a8d2226aade3dcb79b124b8
+Head: c2ac41433f1d06ecac8d7f8a241fd873d9b88ce3
+Same input: resume_when: pr-merged:github/owner/repo#7
+Before: condition testable = False
+After:  condition testable = True
+open PR: ready=False; PR has not merged (closed alone is not merged)
+matching merged PR: ready=True; github/owner/repo#7 merged 2026-11-05T21:00:00Z
+foreign merged PR: ready=None; PR identity or merge result is unreadable
+PASS: only matching positive merge evidence satisfies the condition.
+
+Script done on 2026-11-05 22:59:57-05:00 [COMMAND_EXIT_CODE="0"]
