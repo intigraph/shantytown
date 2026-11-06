@@ -1,7 +1,7 @@
-"""Exact native fields for read-only work-item display, never mutation reads.
+"""Exact native fields for work-item display and deferral observations.
 
 The SDK show includes comments and reverse dependencies. WorkItem discards
-those, so hydrating them amplifies every known-ID display. Keep the fields
+those, so hydrating them amplifies every display and deferral read-back. Keep the fields
 and outgoing dependency classification in one bounded observation instead.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ EDGES = (BLOCKS, SCHEMA + "isPartOf", "http://purl.org/dc/terms/relation",
          "http://www.w3.org/ns/prov#wasDerivedFrom")
 FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SCHEMA + "agent", SCHEMA + "dateModified", SCHEMA + "keywords",
+          SCHEMA + "version",
           SEEDS + "ontology/status", SEEDS + "ontology/priority",
           SCHEMA + "description", SEEDS + "ontology/notes",
           SCHEMA + "scheduledTime", SCHEMA + "result",
@@ -82,6 +83,13 @@ def _value(row):
     if predicate == TYPE or predicate in EDGES:
         if kind != "iri":
             raise ValueError("item reference is not an IRI")
+    elif predicate == SCHEMA + "version":
+        if kind != XSD + "integer" or not re.fullmatch(r"[+]?\d+", value):
+            raise ValueError("item revision type unreadable")
+        revision = int(value)
+        if not 1 <= revision <= 18446744073709551615:
+            raise ValueError("item revision outside supported range")
+        value = str(revision)
     elif predicate == SEEDS + "ontology/priority":
         if kind != XSD + "integer" or not re.fullmatch(r"[+-]?\d+", value):
             raise ValueError("item priority type unreadable")
@@ -226,8 +234,10 @@ def read_item(tracker, identifier):
                                  "status": _one(other, SEEDS + "ontology/status"),
                                  "dependency_type": "blocks" if edge == BLOCKS else "context"})
     assignee = _one(facts, SCHEMA + "agent")
+    revision = _one(facts, SCHEMA + "version")
     return WorkItem(
         id=identifier, title=_name(facts), status=status, assignee=assignee,
+        revision=int(revision) if revision is not None else None,
         priority=int(priority), description=_one(facts, SCHEMA + "description", ""),
         notes=_one(facts, SEEDS + "ontology/notes") or None,
         defer_until=_one(facts, SCHEMA + "scheduledTime") or None,

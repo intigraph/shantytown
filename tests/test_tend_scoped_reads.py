@@ -94,7 +94,9 @@ def test_active_projection_is_owner_scoped_not_open_unassigned(monkeypatch):
     seen = []
     monkeypatch.setattr(seeds_plate, '_query', lambda p,q,t: seen.append(q) or dict(rows=fields, count=len(fields), truncated=False))
     assert tracker.active_rows(['worker']).exact()[0]['id'] == 'test-active'
-    assert '"in_progress"' in seen[0] and '"open"' not in seen[0]
+    # Status vocabulary also appears in the inline admission counterexample;
+    # candidate leaves must still select only active work.
+    assert '"in_progress" . ' in seen[0] and '"open" . ' not in seen[0]
     assert 'FILTER(STR(?owner) != "")' not in seen[0]
 
 

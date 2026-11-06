@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-import socket
+from .host_identity import physical_hostname
 from contextlib import contextmanager
 from contextvars import ContextVar
 
@@ -49,7 +49,7 @@ def headers() -> dict[str, str]:
         'Harness': harness,
         'Model': get('QUIPU_MODEL') or get('SHANTY_MODEL'),
         'Session': session,
-        'Host': get('QUIPU_HOST') or socket.gethostname(),
+        'Host': get('QUIPU_HOST') or physical_hostname(),
     }
     result = {'X-Quipu-Client': 'shantytown'}
     for name, value in fields.items():

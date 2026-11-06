@@ -61,7 +61,7 @@ def test_marker_only_writer_output_resumes_once_when_condition_is_met(tmp_path):
     assert w.released == ["waiter"]
 
 
-@pytest.mark.parametrize("prose", ["Needs Stiwi sign-off", "Waiting for review."])
+@pytest.mark.parametrize("prose", ["Needs Stiwi sign-off", "Waiting for owner judgement."])
 def test_reason_prose_is_still_a_judgement_gate(tmp_path, prose):
     w = World(tmp_path, prose)
     w.sweep()

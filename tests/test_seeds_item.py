@@ -67,7 +67,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "unreadable_deps": 0, "description": "body preserved",
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
         "rank": None, "due_at": None, "created_at": None,
-        "labels": ("blocked:external",),
+        "labels": ("blocked:external",), "revision": None,
     }
     assert len(calls) == 1
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]
@@ -261,3 +261,24 @@ def test_exact_item_refuses_malformed_rank(monkeypatch, rank):
     value, _ = tracker(monkeypatch, rows(**{seeds_item.SEEDS + "ontology/rank": rank}))
     with pytest.raises(ValueError):
         seeds_item.read_item(value, "test-one")
+
+
+def test_native_revision_is_preserved_in_the_same_bounded_read(monkeypatch):
+    payload = rows()
+    payload.append({'graph': GRAPH, 's': SUBJECT, 'p': seeds_item.SCHEMA + 'version',
+                    'o': '7', 'kind': seeds_item.XSD + 'integer'})
+    value, calls = tracker(monkeypatch, payload)
+    item = seeds_item.read_item(value, 'test-one')
+    assert item.revision == 7
+    assert len(calls) == 1 and seeds_item.SCHEMA + 'version' in calls[0]
+
+
+@pytest.mark.parametrize('text,kind', [('0', 'integer'), ('-1', 'integer'),
+    ('18446744073709551616', 'integer'), ('7', 'string'), ('true', 'boolean'), ('1.5', 'integer')])
+def test_native_revision_rejects_unproved_tokens(monkeypatch, text, kind):
+    payload = rows()
+    payload.append({'graph': GRAPH, 's': SUBJECT, 'p': seeds_item.SCHEMA + 'version',
+                    'o': text, 'kind': seeds_item.XSD + kind})
+    value, _ = tracker(monkeypatch, payload)
+    with pytest.raises(ValueError, match='revision'):
+        seeds_item.read_item(value, 'test-one')

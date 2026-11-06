@@ -1,6 +1,6 @@
 {
-  "source_revision": "456ed29f98309ad4cb1a053f7b29ba8919abe48a",
-  "reviewed_at": "2026-10-27T21:28:52.694807+00:00",
+  "source_revision": "60e6734f91839497888b1a9d3c04fcb7fc03069a",
+  "reviewed_at": "2026-11-05T15:08:19.803468+00:00",
   "max_age_seconds": 2592000,
   "records": [
     {
@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "type": "Concept"
     },
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st provides work-item, crew, repository and scheduled-job commands. Anchor and roles show governed role summaries; fleet-owner tend adds advisory ranking without reassignment. Failed reads remain UNKNOWN. Protected job results use authenticated own-job mailboxes; signed reviews require exact job and PR scope. Cycle accepts item-bound approved full-history bundle custody only for an independently verified exact clean branch; dirty or unrelated work stays gated. Explicit Chaski delegation skips the local evaluator and refuses local execution. Work triage offers quarantined priority/rank proposals for administrator acceptance. Harness conversion retains per-harness model and browser preferences and reports unsupported fields. Frozen semantic-only benchmarks call only automation and personal-need nouls; they cannot admit rank decisions. Work item context reads an item's linked rulings, episodes and comments by exact ID before semantic search. Cycle advice prefers checkpointed process replacement when exact native evidence proves an older running CLI; missing or stale evidence stays UNKNOWN.",
-      "source_sha256": "632801058b7954b81a81eedb2b0f149a13df57945f1f9741821f69424bda7882",
+      "summary": "Governed roles; advisory ranks; unreadable facts UNKNOWN. Protected mailboxes and signed reviews bind exact scopes. Cycle needs full-history custody and a clean branch; checkpoint advice requires fresh proof. Chaski delegation refuses local execution. Administrators accept quarantined ranks. Harness conversion validates model/browser choices. Semantic benchmarks admit automation and personal needs, never ranks. Pipeline waits require an event and backstop; --window is an appointment. Owner reminders never release gates. Ceiling transfer observes source harnesses and complete non-held receiver plates, chooses the other known harness, and preserves budget/ownership gates. Explicit Seeds revision fences pass unchanged; structured conflicts retain operation identity without retry. AGY diagnostics distinguish projected hooks from verified native SessionStart; missing proof remains UNKNOWN. Exact work context reads rulings, episodes and comments by ID before search.",
+      "source_sha256": "a05dd85a02797c4cdb51516cddeaa718e7faa4d8a693398d4e8a6a2fe5551351",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "e40309c7e22f245e75d65dc031a7a07c5f2471be5e2605ec028fd775da203be5",
+      "source_sha256": "389e857d2b917098152c183de3f75c0ac9cdef4f01cc309f80592cc7a584e86f",
       "properties": {
         "startHereOrder": 2
       }

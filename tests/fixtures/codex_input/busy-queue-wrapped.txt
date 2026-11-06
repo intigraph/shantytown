@@ -1,0 +1,12 @@
+[1m[38;2;128;128;128m•[0m [2mWorking[0m [2m(4h 04m 30s • [0;1mesc[0;2m to interrupt)[0m
+
+
+[1m›[0m Example pending message
+  sanitized continuation 0
+  sanitized continuation 1
+  sanitized continuation 2
+  sanitized continuation 3
+
+
+  [38;2;246;226;183mGPT-6.1-Sol default[39m · [38;2;171;223;167m~/project[39m · Fixture task
+  [1mtab[0m to queue message

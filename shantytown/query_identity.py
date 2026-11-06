@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import os
 import re
-import socket
+from .host_identity import physical_hostname
 
 _command = ContextVar("query_command", default=None)
 _caller = ContextVar("query_caller", default=None)
@@ -33,7 +33,7 @@ def _host():
     if "QUIPU_HOST" in os.environ:
         return _key(os.environ["QUIPU_HOST"])
     try:
-        return _key(socket.gethostname())
+        return _key(physical_hostname())
     except OSError:
         return None
 

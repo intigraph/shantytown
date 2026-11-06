@@ -1,0 +1,15 @@
+Script started on 2026-11-05 09:32:19-05:00 [COMMAND="python3 docs/demos/terminal-custody/demo.py" <not executed on terminal>]
+Disposable source-library fixtures; session and screen observations mocked. No live delivery.
+before source: e126d6d61415d3f8cf386caf6ff69ba37ec28d4b
+after delivery.py SHA256: 0f7690ae806e15b46fcc3474be6bfce342b822bc75bb1b5dac5613ac7b1f70ec
+before old-session: states=['queued'], unread=4, watch_exists=True
+before drained: states=['queued'], unread=1, watch_exists=True
+before busy: states=['queued'], unread=1, watch_exists=True
+before watch: states=['queued'], unread=0, watch_exists=True
+after old-session: states=['orphaned'], unread=1, watch_exists=True
+after drained: states=['dequeued'], unread=1, watch_exists=True
+after busy: states=['queued'], unread=1, watch_exists=True
+after watch: states=['orphaned'], unread=0, watch_exists=False
+Control: busy queue retained; zero keys sent in every case. Runtime acceptance remains open.
+
+Script done on 2026-11-05 09:32:20-05:00 [COMMAND_EXIT_CODE="0"]

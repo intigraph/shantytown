@@ -13,7 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
-import socket
+from .host_identity import physical_hostname
 import sys
 import time
 import urllib.error
@@ -32,7 +32,7 @@ def producer(root):
     # This head belongs to ONE host and crew root. graph.lock is host-local;
     # another host has a different producer/head and must not be merged into
     # this reader scope merely because it names the same agent.
-    identity = socket.gethostname() + '\0' + str(root.resolve())
+    identity = physical_hostname() + '\0' + str(root.resolve())
     return 'urn:shantytown:owned-work:' + hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -127,7 +127,7 @@ def _head(registry, source):
             or not isinstance(value.get('agents'), list)
             or len(value['agents']) > value['source_agents']):
         raise ValueError('lifecycle head malformed')
-    if value.get('host') != socket.gethostname():
+    if value.get('host') != physical_hostname():
         raise ValueError('lifecycle head belongs to another source host')
     return iri, value
 
@@ -208,7 +208,7 @@ def _advance_head(registry, service, receipts):
         if prior and (current[0] < prior[0] or current[0] == prior[0] and current != prior):
             raise ValueError('agent lifecycle revision or content replay refused')
         versions[name] = current
-    value = dict(contract=HEAD_CONTRACT, source=source, host=socket.gethostname(), state_revision=revision,
+    value = dict(contract=HEAD_CONTRACT, source=source, host=physical_hostname(), state_revision=revision,
                  complete=complete, source_agents=len(states), agents=agents, agent_versions=versions)
     if previous and {k: v for k, v in previous.items() if k != 'revision'} == value:
         payload = json.dumps(previous, sort_keys=True, separators=(',', ':'))
