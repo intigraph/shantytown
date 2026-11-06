@@ -1,0 +1,11 @@
+Script started on 2026-11-06 02:11:17-05:00 [COMMAND="python3 docs/demos/cold-launch-resume/demo.py" <not executed on terminal>]
+Library fixture only: no network, tracker mutation, crew launch or cycle.
+Same marker: resume_when: cold-launch:operator@2026-11-05T21:00:00Z
+Before: testable = False
+After: testable = True
+Before receipt: False
+Hold-override fixture: False
+Verified ordinary fixture receipt: True
+PASS: receipt observation only; installed and natural-launch acceptance remain separate.
+
+Script done on 2026-11-06 02:11:17-05:00 [COMMAND_EXIT_CODE="0"]

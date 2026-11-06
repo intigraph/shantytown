@@ -897,6 +897,31 @@ class TrackerAdapter:
             value = value[0] if isinstance(value, list) else value
         return Answer.complete_read(value, how=f"{self.kind} show {item}")
 
+    def ruling_comments(self, item):
+        """Complete selected-item comment metadata, or a raising UNKNOWN.
+
+        Do not infer ruling timestamps from show()/dateModified: only the
+        comment reader carries author and creation time.
+        """
+        if self.tracker is not None:
+            result = self.tracker._bd_for(item, "comments", item, "--json")
+            if result.returncode or not result.stdout.strip():
+                raise ValueError('ruling comment read failed or was empty')
+            value = json.loads(result.stdout)
+        else:
+            value = self._legacy("bd", "comments", item, "--json")
+        if isinstance(value, dict):
+            rows = value.get('comments')
+            if (value.get('has_more') or value.get('truncated')
+                    or not isinstance(rows, list)
+                    or ('total' in value and value['total'] != len(rows))):
+                raise ValueError('ruling comment inventory is capped or incomplete')
+            value = rows
+        if (not isinstance(value, list) or len(value) >= 1000
+                or any(not isinstance(row, dict) for row in value)):
+            raise ValueError('ruling comment inventory is unreadable or capped')
+        return value
+
     def gate_details(self, items):
         reader = getattr(self.tracker, "gate_details", None)
         return reader(items) if callable(reader) else {item:self.show(item).exact() for item in items}

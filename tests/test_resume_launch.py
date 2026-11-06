@@ -119,3 +119,47 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
                         reuse_session=mode == "cycle", window_restore=mode == "restore")
     path = launch._path(tmp_path, card.name)
     assert path.exists() is expected
+
+
+def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp_path):
+    from shantytown.dispatch import Dispatcher, DeferRefused
+    from shantytown.files import FilesRegistry, FilesTracker
+    from shantytown.tmux import NullPanes
+    tracker = FilesTracker(tmp_path / 'items')
+    tracker.update('item-1', title='wait for natural launch', status='open', assignee='worker', priority=1)
+    dispatch = Dispatcher(FilesRegistry(tmp_path / 'crew'), tracker, NullPanes())
+    until = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    dispatch.defer('item-1', 'external', 'resume_when: cold-launch:' + ARG, until=until)
+    item = tracker.get('item-1')
+    assert item.status == 'deferred' and item.defer_until == until
+    assert deferrals.parse_condition(item.notes).arg == ARG
+    original = tracker._path('item-1').read_bytes()
+    with pytest.raises(DeferRefused):
+        dispatch.defer('item-1', 'external', 'resume_when: cold-launch:operator@now', until=until)
+    assert tracker._path('item-1').read_bytes() == original
+
+
+@pytest.mark.parametrize('fault', ['none', 'missing', 'human', 'dependency', 'fresh-changed'])
+def test_actual_sweep_rechecks_receipt_and_preserves_independent_holds(tmp_path, fault):
+    from shantytown.files import FilesRegistry
+    from shantytown.notify import DeferralAlerter
+    from shantytown.tmux import NullPanes
+    if fault != 'missing':
+        record(tmp_path)
+    row = dict(id='waiter', status='deferred', assignee='worker', priority=1,
+               title='natural launch acceptance', labels=['blocked:external'],
+               defer_until=(NOW + timedelta(days=7)).isoformat(),
+               notes='resume_when: cold-launch:' + ARG)
+    if fault == 'human':
+        row['labels'].append('blocked:human')
+    if fault == 'dependency':
+        row['dependencies'] = [dict(dependency_type='blocks', status='open')]
+    released = []
+    def fresh(_):
+        if fault == 'fresh-changed':
+            launch._path(tmp_path, 'operator').unlink()
+        return row
+    DeferralAlerter(tmp_path, FilesRegistry(tmp_path / 'crew'), NullPanes(),
+        read=lambda: [row], show=fresh, release=lambda item: released.append(item),
+        now=NOW, push=lambda *a: None).sweep()
+    assert bool(released) is (fault == 'none')
