@@ -1,11 +1,14 @@
 """Owner pacing changes the reminder recipient, never the resume gate."""
 import json
+from datetime import timedelta
 from pathlib import Path
 
 from .ask_visibility import is_ask
 from .deferrals import parse_stamp
 from .deferral_notes import PROVENANCE_PREFIX as PREFIX, provenance, parse_provenance
 from .files import write_json_atomic
+
+OWNER_ONLY_CEILING = timedelta(hours=72)
 
 def owner_window(row, now, *, event_ready=False):
     """Unknown/legacy provenance cannot earn the owner-only route."""
@@ -32,7 +35,7 @@ def owner_window(row, now, *, event_ready=False):
 
 
 class OwnerPacing:
-    """A live owner retains their reminder; sweep count is not new evidence."""
+    """A live owner gets 72 hours without progress; sweep count is not evidence."""
     def __init__(self, root):
         self.path = Path(root) / "notify" / "deferral-owner-pacing.json"
         try:
@@ -51,6 +54,11 @@ class OwnerPacing:
         touched = parse_stamp(row.get("updated_at"))
         if touched is None or touched > now:
             return False
+        deadline = parse_stamp(row.get("defer_until"))
+        # Neither an old item with a fresh deadline nor a freshly updated item
+        # with an old deadline has been neglected for the full ceiling.
+        if now - max(deadline, touched) >= OWNER_ONLY_CEILING:
+            return False  # existing administrator ledger deduplicates this state
         old = self.previous.get(row["id"], {})
         if not isinstance(old, dict) or old.get("key") != key:
             old = {}
