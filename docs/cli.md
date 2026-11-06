@@ -478,11 +478,32 @@ Both require an explicit backstop at least 24 hours away, including marker-only
 reasons and scheduled-window requests. They read only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
-candidate pass and share a twelve-request budget; budget exhaustion is UNKNOWN
-until the next scheduled pass, with no immediate retries. GitHub uses the existing
+candidate phase and share a twelve-request budget. All fresh pre-release reads
+share a second twelve-request budget; even many rows waiting on the same fact
+cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
+next scheduled pass, with no immediate retries. GitHub uses the existing
 `gh` credential lookup. Forgejo uses the deployment's configured
 `SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
 per-item `event:` producer registry and ASK visibility rules remain unchanged.
+
+Controller waits use `resume_when: ruling:<item>` or
+`resume_when: activation:<item>`, also with a mandatory backstop at least 24 hours
+away. They require a typed comment on that exact target item, for example:
+
+```text
+resume-event-v1: activation:example-123 outcome=granted authority=administrator at=2026-11-06T03:01:00Z
+```
+
+The authority must match the comment author and be the configured administrator
+or the target owner's lead from the crew card. Both the declared UTC timestamp
+and the stored comment creation timestamp must follow the current canonical
+deferral boundary. The comment must be recorded within five minutes of its
+declared timestamp and cannot be future-dated. Free prose and quoted old rulings
+do not satisfy a gate. Only `granted` meets it; a newer `denied` or `revoked`
+keeps it held. Missing authority, malformed/capped metadata and read failures
+remain UNKNOWN. A fresh read before release catches a later revocation. Existing
+ASK visibility, human/access labels, dependency and prose gates still apply;
+this event prompts lifecycle work and never runs a deployment or live writer.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a

@@ -171,3 +171,31 @@ def test_github_transport_is_fixed_read_only_and_shared_pass_budget_is_real(monk
     assert sum(f.met for f in findings) == events.MAX_READS
     exhausted = next(f for f in findings if f.bead == 'item-' + str(events.MAX_READS))
     assert exhausted.read_error and not exhausted.met
+
+
+def test_whole_sweeper_shares_fresh_read_budget_for_duplicate_fact_waits(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from shantytown import deferral_notes
+    from shantytown.files import FilesRegistry
+    from shantytown.notify import DeferralAlerter
+    from shantytown.tmux import NullPanes
+    until = '2026-11-06T03:00:00Z'
+    notes = ('resume_when: pr-merged:github/example/project#123\n' +
+             deferral_notes.provenance('worker', '2026-11-04T03:00:00Z', until))
+    rows = [dict(id='item-' + str(i), title='fixture', priority=1, assignee='worker',
+                 status='deferred', defer_until=until, labels=['blocked:external'], notes=notes)
+            for i in range(30)]
+    by_id = {row['id']: row for row in rows}
+    calls = []
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, json.dumps(dict(
+            number=123, merged=True, state='closed', merged_at='2026-11-06T03:01:00Z')), '')
+    monkeypatch.setattr(events.subprocess, 'run', run)
+    released = []
+    DeferralAlerter(tmp_path, FilesRegistry(tmp_path / 'crew'), NullPanes(), read=lambda: rows,
+        show=lambda item: by_id[item], release=lambda item: released.append(item),
+        now=datetime(2026, 11, 6, 4, tzinfo=timezone.utc), push=lambda *a: None).sweep()
+    assert len(calls) == 1 + events.MAX_READS  # one deduplicated candidate + fresh phase
+    assert len(released) == events.MAX_READS

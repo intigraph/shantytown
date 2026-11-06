@@ -37,7 +37,7 @@ def validate(kind, arg):
 
 
 class Reader:
-    """One candidate-pass budget, shared by initial and fresh reads by the caller."""
+    """One phase budget, shared across all selected rows by the caller."""
     def __init__(self):
         self.remaining = MAX_READS
 
@@ -156,7 +156,7 @@ def evaluate(kind, arg, read=None):
                 or doc.get('state') not in ('open', 'closed')):
             raise ValueError('PR event identity/state is unreadable')
         if doc['merged']:
-            if doc['state'] != 'closed' or not doc.get('merged_at'):
+            if doc['state'] != 'closed' or not isinstance(doc.get('merged_at'), str) or not doc['merged_at']:
                 raise ValueError('merged PR event is incomplete')
             return True, 'exact PR is merged'
         return False, 'exact PR is not merged (closed is not merged)'

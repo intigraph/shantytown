@@ -33,7 +33,10 @@ _VERSION = re.compile(r"(?<![\w.])v?(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?(?
 
 def validate(kind: str, arg: str) -> None:
     """Refuse a malformed argument at write time, so it is never stored untestable."""
-    if kind in ("pr-merged", "ci-terminal"):
+    if kind in ('ruling', 'activation'):
+        from .resume_rulings import validate as validate_ruling
+        validate_ruling(kind, arg)
+    elif kind in ("pr-merged", "ci-terminal"):
         from .resume_forge_events import validate as validate_event
         validate_event(kind, arg)
     elif kind == "release":

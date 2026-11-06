@@ -964,7 +964,7 @@ class Dispatcher:
                 binding_for(active.arg, item_id)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
-        if active.kind in ("release", "installed", "pr-merged", "ci-terminal"):
+        if active.kind in ("release", "installed", "pr-merged", "ci-terminal", "ruling", "activation"):
             from .resume_kinds import validate as validate_kind
             try:
                 validate_kind(active.kind, active.arg)
