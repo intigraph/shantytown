@@ -1,0 +1,10 @@
+Script started on 2026-11-05 22:18:33-05:00 [COMMAND="stty -onlcr; python3 docs/demos/forge-resume-events/demo.py" <not executed on terminal>]
+before: exact PR marker REFUSED
+after: exact PR marker ACCEPTED
+closed unmerged: met=False; exact PR is not merged (closed is not merged)
+merged: met=True; exact PR is merged
+failed read: met=None; forge event read failed, incomplete or invalid; retain hold
+1h backstop: REFUSED even with window=True
+24h backstop: ACCEPTED
+
+Script done on 2026-11-05 22:18:33-05:00 [COMMAND_EXIT_CODE="0"]
