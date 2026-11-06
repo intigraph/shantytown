@@ -197,35 +197,89 @@ ticket_files() {
   printf '%s\n' "$names" | grep -v '^$' || true
 }
 
-# One reviewed upstream artifact has a version that resembles RFC1918 text.
-# This is a byte-exact record exception, NOT a private-address pattern change.
-# Only the known public destination and manifest path qualify. Extra fields or
-# extra text on the line refuse the exception; only the URL bytes are filtered.
-PUBLIC_ARTIFACT_URL='https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl'
-PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df5d6eefa0554c565b626c7216f87a06a4f56fab27c3b68a830ec9", "url": "https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl"}'
+# Filter only unambiguous version spans; every other byte reaches the original
+# projected matcher. Missing Python or a parser error retains the original text.
+# This is context, never a repository/path/host allowlist.
+scrub_version_contexts() {
+  local original filtered code
+  original=$(cat)
+  # This cheap candidate scan must include every suffix the parser/projected
+  # matcher can see, including 1.10.x.y.z inside a version. The fallback's
+  # stricter leading boundary would make adding a second artifact change the
+  # verdict. Extra candidates only invoke the parser; they exempt no bytes.
+  # Consume the full input: grep -q can turn pipefail/SIGPIPE into a false miss.
+  if ! printf '%s\n' "$original" | grep -E '(10|172|192)\.' >/dev/null; then
+    printf '%s\n' "$original"
+    return 0
+  fi
+  code=$(cat <<'PY_VERSION'
+import re
+import sys
+from urllib.parse import urlsplit
+
+private = re.compile(r"(?<![0-9])(?:10(?:\.[0-9]{1,3}){3}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2}|192\.168(?:\.[0-9]{1,3}){2})(?![0-9])")
+url = re.compile(r"""(?i)\b[a-z][a-z0-9+.-]*://[^\s<>"']+""")
+filename = re.compile(r"(?<![\w./@:-])[A-Za-z0-9][A-Za-z0-9_.+-]*\.(?:whl|tar(?:\.(?:gz|bz2|xz))?)(?![\w./@:-])")
+version = r"(?P<version>[0-9]+(?:\.[0-9]+){3,})"
+wheel = re.compile(r"[A-Za-z0-9_]+-" + version + r"(?:-[0-9][A-Za-z0-9_]*)?-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl")
+archive = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]*[-_]" + version + r"\.tar(?:\.(?:gz|bz2|xz))?")
+
+
+def artifact_version(text, start):
+    match = wheel.fullmatch(text) or archive.fullmatch(text)
+    if match and private.search(match.group("version")):
+        yield start + match.start("version"), start + match.end("version")
+
+
+def filter_line(line):
+    # Escaped/ambiguous representations need their original conservative scan.
+    if "\\" in line:
+        return line
+    spans = []
+    urls = list(url.finditer(line))
+    authorities = list(re.finditer(r"//[^\s/?#<>\"']+", line))
+    for match in urls:
+        try:
+            parsed = urlsplit(match.group())
+            if (parsed.scheme.lower() not in ("http", "https")
+                    or parsed.username is not None or parsed.password is not None
+                    or not re.fullmatch(r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}(?::[0-9]{1,5})?", parsed.netloc)
+                    or "%" in parsed.netloc):
+                continue
+            parsed.port  # invalid ports are ambiguous, not exceptions
+            # Only a final artifact filename establishes a version field. A
+            # hyphenated host address in another path component remains a hit.
+            component = parsed.path.rsplit("/", 1)[-1]
+            start = match.start() + len(parsed.scheme) + 3 + len(parsed.netloc)
+            spans.extend(artifact_version(component, start + len(parsed.path) - len(component)))
+        except ValueError:
+            continue
+    for match in filename.finditer(line):
+        # Never interpret URL authority, query, fragment or userinfo as filename.
+        if any(match.start() < region.end() and match.end() > region.start()
+               for region in [*urls, *authorities]):
+            continue
+        spans.extend(artifact_version(match.group(), match.start()))
+    for start, end in sorted(set(spans), reverse=True):
+        line = line[:start] + "PACKAGE_VERSION" + line[end:]
+    return line
+
+
+text = sys.stdin.read()
+try:
+    sys.stdout.write("".join(filter_line(line) for line in text.splitlines(keepends=True)))
+except Exception:
+    sys.stdout.write(text)
+PY_VERSION
+)
+  if ! filtered=$(printf '%s\n' "$original" | python3 -I -S -c "$code" 2>/dev/null); then
+    filtered=$original
+  fi
+  printf '%s\n' "$filtered"
+}
+
 scrub_added_lines() {
-  local line path="" eligible=0 header=0
-  case "${REMOTE_URL:-}" in
-    https://github.com/scbrown/bobbin|https://github.com/scbrown/bobbin.git|git@github.com:scbrown/bobbin.git|ssh://git@github.com/scbrown/bobbin.git) eligible=1 ;;
-  esac
-  while IFS= read -r line; do
-    case "$line" in
-      'diff --git '*) path=""; header=1 ;;
-      '+++ b/'*) [ "$header" -eq 1 ] && path=${line#+++ b/} ;;
-      '@@ '*) header=0 ;;
-    esac
-    case "$line" in
-      +*)
-        if [ "$eligible" -eq 1 ] && [ "$path" = 'src/gpu_runtime/artifacts.json' ]; then
-          case "$line" in
-            "+$PUBLIC_ARTIFACT_RECORD"|"+$PUBLIC_ARTIFACT_RECORD,")
-              line=${line/"$PUBLIC_ARTIFACT_URL"/PUBLIC_ARTIFACT_VERIFIED} ;;
-          esac
-        fi
-        printf '%s\n' "$line"
-        ;;
-    esac
-  done
+  grep '^+' | scrub_version_contexts
 }
 
 if [ "${1:-}" = "--selftest" ]; then
@@ -649,7 +703,9 @@ PROBE
     rm -rf "$r"
   fi
 
-  # Exercise the exact artifact exception through the real hook and matcher.
+  # Exercise version/address contexts through the real hook and matcher.
+PUBLIC_ARTIFACT_URL='https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl'
+PUBLIC_ARTIFACT_RECORD='  {"name": "nvidia-curand-cu12", "sha256": "b32331d4f4df5d6eefa0554c565b626c7216f87a06a4f56fab27c3b68a830ec9", "url": "https://files.pythonhosted.org/packages/fb/aa/6584b56dc84ebe9cf93226a5cde4d99080c8e90ab40f0c27bda7a0f29aa1/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_x86_64.whl"}'
   r=$(selftest_fixture) || { echo "FAIL selftest fixture allocation" >&2; exit 1; }
   (
     cd "$r" || exit 1
@@ -659,10 +715,12 @@ PROBE
     git -c core.hooksPath=/dev/null commit -qm base --allow-empty
     base=$(git rev-parse HEAD)
     cf="$r/patterns.conf"
-    printf 'internal_host_re=forge\.invalid\npatterns=%s\n' "$BUILTIN_RFC1918" > "$cf"
+    printf 'internal_host_re=forge\.invalid\npatterns=%s|[a-z0-9-]+\\.invalid\\b\n' "$BUILTIN_RFC1918" > "$cf"
+    sed 's/\[\^0-9\.\]/[^0-9]/g' "$cf" > "$cf.projected"
+    mv "$cf.projected" "$cf"
     mkdir -p src/gpu_runtime
     fixture='src/gpu_runtime/artifacts.json'
-    for arm in valid checksum extra_address extra_field other_file other_repo later_leak; do
+    for arm in nested_wheel nested_wheel_pair nested_tar nested_tar_pair valid other_repo checksum other_file filename filename_build filename_long_version tar tar_underscore path_version address_path intermediate_address_path malformed_wheel bare10 bare172 bare192 hostport private_host query fragment userinfo relative malformed malformed_label malformed_port escaped unsupported_scheme parser_failure message_version message_address message_mixed ambiguous extra_address extra_field later_leak named_host; do
       mkdir -p src/gpu_runtime || exit 1
       record=$PUBLIC_ARTIFACT_RECORD
       destination=https://github.com/scbrown/bobbin.git
@@ -673,20 +731,72 @@ PROBE
         extra_field) record=${record%\}}', "endpoint": "10.255.255.2"}' ;;
         other_file) path=another.json ;;
         other_repo) destination=https://github.com/scbrown/another.git ;;
+        nested_wheel) record='pkg-1.10.255.255.1-py3-none-any.whl' ;;
+        nested_wheel_pair) record='pkg-1.10.255.255.1-py3-none-any.whl package-10.3.9.90-py3-none-any.whl' ;;
+        nested_tar) record='pkg-1.192.168.255.1.tar.gz' ;;
+        nested_tar_pair) record='pkg-1.192.168.255.1.tar.gz package-10.3.9.90-py3-none-any.whl' ;;
+        filename) record='package-10.255.255.1-py3-none-any.whl' ;;
+        filename_build) record='package-10.255.255.1-1-py3-none-any.whl' ;;
+        filename_long_version) record='package-10.3.9.90.1-py3-none-any.whl' ;;
+        tar_underscore) record='package_192.168.255.1.tar.gz' ;;
+        address_path) record='https://example.com/hosts/node-10.255.255.1-ssh' ;;
+        intermediate_address_path) record='https://pypi.org/hosts/node-10.255.255.1-ssh/package-10.3.9.90-py3-none-any.whl' ;;
+        malformed_wheel) record='package-10.255.255.1-py3.whl' ;;
+        tar) record='package-192.168.255.1.tar.gz' ;;
+        path_version) record='https://pypi.org/packages/package-172.31.255.1-py3-none-any.whl' ;;
+        bare10) record='address 10.255.255.1' ;;
+        bare172) record='address 172.31.255.1' ;;
+        bare192) record='address 192.168.255.1' ;;
+        hostport) record='10.255.255.1:443' ;;
+        private_host) record='https://10.255.255.1/package-10.3.9.90-py3-none-any.whl' ;;
+        query) record='https://pypi.org/package-10.3.9.90-py3-none-any.whl?host=10.255.255.1' ;;
+        fragment) record='https://pypi.org/file#package-10.255.255.1-py3-none-any.whl' ;;
+        userinfo) record='https://user@pypi.org/package-10.255.255.1-py3-none-any.whl' ;;
+        relative) record='//package-10.255.255.1-py3-none-any.whl/file' ;;
+        malformed) record='https://[bad]/package-10.255.255.1-py3-none-any.whl' ;;
+        malformed_label) record='https://-pypi.org/package-10.255.255.1-py3-none-any.whl' ;;
+        malformed_port) record='https://pypi.org:/package-10.255.255.1-py3-none-any.whl' ;;
+        escaped) record='https:\/\/pypi.org/package-10.255.255.1-py3-none-any.whl' ;;
+        unsupported_scheme) record='ftp://pypi.org/package-10.255.255.1-py3-none-any.whl' ;;
+        message_version) record='package-10.255.255.1-py3-none-any.whl' ;;
+        message_address|message_mixed) record='address 10.255.255.1' ;;
+        ambiguous) record='package-10.255.255.1-py3-none-any.whl:443' ;;
+        named_host) record="$record endpoint=private-host.invalid" ;;
+
       esac
+      message=$arm
+      case "$arm" in
+        message_version|message_address) message=$record; record='ordinary content' ;;
+        message_mixed) message="package-10.3.9.90-py3-none-any.whl $record"; record='ordinary content' ;;
+      esac
+      fault_env="$r/empty-bash-env"
+      : > "$fault_env"
+      if [ "$arm" = parser_failure ]; then
+        printf 'python3() { return 127; }\n' > "$fault_env"
+      fi
       printf '[\n%s\n]\n' "$record" > "$path" || exit 1
       [ "$arm" = later_leak ] && printf '\n10.255.255.2\n' >> "$path"
       git add "$path" || exit 1
-      git -c core.hooksPath=/dev/null commit -qm "$arm" --allow-empty || exit 1
+      git -c core.hooksPath=/dev/null commit -qm "$message" --allow-empty || exit 1
       head=$(git rev-parse HEAD)
       out=$(printf 'refs/heads/topic %s refs/heads/topic %s\n' "$head" "$base" |
-        SCRUB_PATTERNS_FILE="$cf" bash "$SELF" origin "$destination" 2>&1)
+        SCRUB_PATTERNS_FILE="$cf" BASH_ENV="$fault_env" bash "$SELF" origin "$destination" 2>&1)
       rc=$?
-      if { [ "$arm" = valid ] && [ "$rc" -eq 0 ]; } ||
-         { [ "$arm" != valid ] && [ "$rc" -ne 0 ]; }; then
-        echo "ok   exact artifact exception: $arm"
+      want=1
+      needle='10.255.255.1'
+      case "$arm" in
+        bare172) needle='172.31.255.1' ;;
+        bare192) needle='192.168.255.1' ;;
+        extra_address|extra_field|later_leak) needle='10.255.255.2' ;;
+        named_host) needle='private-host.invalid' ;;
+        parser_failure) needle='10.3.9.90' ;;
+      esac
+      case "$arm" in nested_wheel|nested_wheel_pair|nested_tar|nested_tar_pair|valid|other_repo|checksum|other_file|filename|filename_build|filename_long_version|tar|tar_underscore|path_version|message_version) want=0 ;; esac
+      if { [ "$want" -eq 0 ] && [ "$rc" -eq 0 ]; } ||
+         { [ "$want" -ne 0 ] && [ "$rc" -ne 0 ] && printf '%s' "$out" | grep -q '✗ REFUSED' && printf '%s' "$out" | grep -F "$needle" >/dev/null; }; then
+        echo "ok   version/address context: $arm (hook_exit=$rc)"
       else
-        echo "FAIL exact artifact exception: $arm (rc=$rc) $out"
+        echo "FAIL version/address context: $arm (rc=$rc) $out"
         exit 1
       fi
       # Reset only this disposable fixture, never an operator checkout.
@@ -874,12 +984,13 @@ while read -r _lref lsha _rref rsha; do
       tf=$(ticket_files "$c")
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
-      rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+      commit_message=$(git log -1 --format=%B "$c" 2>/dev/null | scrub_version_contexts)
+      rawmsgs+="$commit_message"$'\n'
       # ATTRIBUTION, per commit: which commit carries the leak, and is it one
       # this push introduces? Same matcher as the aggregate below, so the two can
       # never disagree about what counts as a hit.
-      if printf '%s\n' "$commit_added" | grep -qE "$PATTERNS" \
-         || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
+      if printf '%s\n' "$commit_added" | grep -E "$PATTERNS" >/dev/null \
+         || printf '%s\n' "$commit_message" | grep -E "$PATTERNS" >/dev/null; then
         where=$(already_elsewhere "$c" || true)
         [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))
         offenders+="$(git log -1 --format='%h %s' "$c" 2>/dev/null)"$'\t'"$where"$'\n'
@@ -919,12 +1030,13 @@ while read -r _lref lsha _rref rsha; do
       tf=$(ticket_files "$c")
       [ -n "$tf" ] && ticketlines+=$(printf '%s\n' "$tf" | tr '\n' '\0' \
         | xargs -0 git show --format= "$c" -- 2>/dev/null | grep -E '^\+' || true)$'\n'
-      rawmsgs+=$(git log -1 --format=%B "$c" 2>/dev/null)$'\n'
+      commit_message=$(git log -1 --format=%B "$c" 2>/dev/null | scrub_version_contexts)
+      rawmsgs+="$commit_message"$'\n'
       # ATTRIBUTION, per commit: which commit carries the leak, and is it one
       # this push introduces? Same matcher as the aggregate below, so the two can
       # never disagree about what counts as a hit.
-      if printf '%s\n' "$commit_added" | grep -qE "$PATTERNS" \
-         || git log -1 --format=%B "$c" 2>/dev/null | grep -qE "$PATTERNS"; then
+      if printf '%s\n' "$commit_added" | grep -E "$PATTERNS" >/dev/null \
+         || printf '%s\n' "$commit_message" | grep -E "$PATTERNS" >/dev/null; then
         where=$(already_elsewhere "$c" || true)
         [ -z "$where" ] && offenders_mine=$((offenders_mine + 1))
         offenders+="$(git log -1 --format='%h %s' "$c" 2>/dev/null)"$'\t'"$where"$'\n'

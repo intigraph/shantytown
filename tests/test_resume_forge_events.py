@@ -169,8 +169,9 @@ def test_github_transport_is_fixed_read_only_and_shared_pass_budget_is_real(monk
     findings = deferrals.evaluate(rows, datetime(2026, 11, 6, 4, tzinfo=timezone.utc))
     assert len(calls) == events.MAX_READS
     assert sum(f.met for f in findings) == events.MAX_READS
-    exhausted = next(f for f in findings if f.bead == 'item-' + str(events.MAX_READS))
-    assert exhausted.read_error and not exhausted.met
+    exhausted = [f for f in findings if not f.met]
+    assert len(exhausted) == 1
+    assert exhausted[0].read_error and exhausted[0].read_deferred
 
 
 def test_whole_sweeper_shares_fresh_read_budget_for_duplicate_fact_waits(tmp_path, monkeypatch):
@@ -199,3 +200,141 @@ def test_whole_sweeper_shares_fresh_read_budget_for_duplicate_fact_waits(tmp_pat
         now=datetime(2026, 11, 6, 4, tzinfo=timezone.utc), push=lambda *a: None).sweep()
     assert len(calls) == 1 + events.MAX_READS  # one deduplicated candidate + fresh phase
     assert len(released) == events.MAX_READS
+
+
+@pytest.mark.parametrize('event,trigger', [('', 'workflow_dispatch'), ('push', 'schedule')])
+def test_live_forgejo_trigger_identity_is_not_the_legacy_event_field(event, trigger):
+    def read(forge, repo, path):
+        if path.startswith('actions/runs?'):
+            return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id='ci.yml',
+                event=event, trigger_event=trigger, commit_sha=SHA, status='success')]}
+        return []
+    assert events.evaluate('ci-terminal', 'forgejo/example/project@' + SHA, read=read)[0] is True
+
+
+def test_validated_active_workflow_is_a_sufficient_unmet_witness_without_extra_reads():
+    calls = []
+    def read(*args):
+        calls.append(args)
+        assert args[-1].startswith('actions/runs?')
+        return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id=2,
+            event='push', head_sha=SHA, status='in_progress', conclusion=None)]}
+    assert events.evaluate('ci-terminal', CI, read=read)[0] is False
+    assert len(calls) == 1
+
+
+def test_active_witness_does_not_mask_invalid_or_foreign_workflow_inventory():
+    rows = [dict(id=1, workflow_id=2, event='push', head_sha=SHA,
+                 status='in_progress', conclusion=None),
+            dict(id=2, workflow_id=3, event='push', head_sha='b' * 40,
+                 status='completed', conclusion='success')]
+    assert events.evaluate('ci-terminal', CI, read=lambda *a:
+        {'total_count': 2, 'workflow_runs': rows})[0] is None
+
+
+def test_forgejo_running_is_known_unmet_not_a_parser_failure():
+    def read(*args):
+        assert args[-1].startswith('actions/runs?')
+        return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id='ci.yml',
+            event='', trigger_event='push', commit_sha=SHA, status='running')]}
+    assert events.evaluate('ci-terminal', 'forgejo/example/project@' + SHA, read=read)[0] is False
+
+
+def test_forgejo_default_fifty_row_status_page_cannot_hide_a_later_pending_context():
+    calls = []
+    def read(forge, repo, path):
+        calls.append(path)
+        if path.startswith('actions/runs?'):
+            return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id=2,
+                event='push', trigger_event='push', commit_sha=SHA, status='success')]}
+        if 'page=1' in path:
+            return [dict(id=i + 2, context='finished-' + str(i), status='success') for i in range(50)]
+        assert 'page=2' in path
+        return [dict(id=100, context='late-visible', status='pending')]
+    assert events.evaluate('ci-terminal', 'forgejo/example/project@' + SHA, read=read)[0] is False
+    assert len(calls) == 3
+
+
+def test_repeated_or_capped_status_pages_remain_unknown():
+    rows = [dict(id=i + 2, context='finished-' + str(i), status='success') for i in range(50)]
+    def read(forge, repo, path):
+        if path.startswith('actions/runs?'):
+            return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id=2,
+                event='push', commit_sha=SHA, status='success')]}
+        return rows
+    assert events.evaluate('ci-terminal', 'forgejo/example/project@' + SHA, read=read)[0] is None
+
+
+def test_budgeted_fact_rotation_eventually_observes_every_target_without_mutating_rows(monkeypatch):
+    import copy
+    import json
+    import subprocess
+    from datetime import timedelta
+    calls = []
+    def run(argv, **kwargs):
+        number = int(argv[-1].rsplit('/', 1)[1])
+        calls.append(number)
+        return subprocess.CompletedProcess(argv, 0, json.dumps(dict(
+            number=number, merged=True, state='closed', merged_at='2026-11-06T03:00:00Z')), '')
+    monkeypatch.setattr(events.subprocess, 'run', run)
+    rows = [dict(id='item-' + str(i), status='deferred', labels=[],
+                 notes='resume_when: pr-merged:github/example/project#' + str(i + 1))
+            for i in range(7)]
+    original = copy.deepcopy(rows)
+    observed = set()
+    now = datetime(2026, 11, 6, 4, tzinfo=timezone.utc)
+    for slot in range(7):
+        reader = events.Reader()
+        reader.remaining = 2
+        before = len(calls)
+        findings = deferrals.evaluate(rows, now + timedelta(minutes=5 * slot), forge_reader=reader)
+        assert len(calls) - before <= 2
+        observed.update(f.bead for f in findings if f.met)
+        skipped = [f for f in findings if not f.met]
+        assert skipped and all(f.read_error and f.read_deferred for f in skipped)
+        assert all(not deferrals.can_release(rows[int(f.bead.split('-')[1])], f, now)
+                   for f in skipped)
+    assert observed == {row['id'] for row in rows}
+    assert rows == original
+
+
+def test_budget_skips_preserve_prior_failure_counts_in_actual_sweeper(tmp_path, monkeypatch):
+    import json
+    import subprocess
+    from shantytown.files import FilesRegistry
+    from shantytown.notify import DeferralAlerter
+    from shantytown.tmux import NullPanes
+    monkeypatch.setattr(events, 'MAX_READS', 1)
+    def run(argv, **kwargs):
+        number = int(argv[-1].rsplit('/', 1)[1])
+        return subprocess.CompletedProcess(argv, 0, json.dumps(dict(
+            number=number, merged=True, state='closed', merged_at='2026-11-06T03:00:00Z')), '')
+    monkeypatch.setattr(events.subprocess, 'run', run)
+    rows = [dict(id='item-' + str(i), title='fixture', status='deferred', labels=['blocked:human'],
+                 notes='resume_when: pr-merged:github/example/project#' + str(i + 1))
+            for i in range(4)]
+    now = datetime(2026, 11, 6, 4, tzinfo=timezone.utc)
+    findings = deferrals.evaluate(rows, now)
+    skipped = {f.bead for f in findings if f.read_deferred}
+    path = tmp_path / 'notify/deferral-retries.json'
+    path.parent.mkdir()
+    path.write_text(json.dumps({row['id']: 2 for row in rows}))
+    logs = []
+    for _ in range(3):
+        DeferralAlerter(tmp_path, FilesRegistry(tmp_path / 'crew'), NullPanes(),
+            read=lambda: rows, now=now, push=lambda *a: None, log=logs.append).sweep()
+        current = json.loads(path.read_text())
+        assert all(current[item] == 2 for item in skipped)
+    assert any('observation budget deferred; retains hold' in line for line in logs)
+    assert not any('read/release retry pending' in line for line in logs)
+
+
+def test_status_inventory_page_bound_is_still_unknown():
+    def read(forge, repo, path):
+        if path.startswith('actions/runs?'):
+            return {'total_count': 1, 'workflow_runs': [dict(id=1, workflow_id=2,
+                event='push', commit_sha=SHA, status='success')]}
+        page = int(path.rsplit('page=', 1)[1])
+        return [dict(id=page * 100 + i, context=str(page * 100 + i), status='success')
+                for i in range(50)]
+    assert events.evaluate('ci-terminal', 'forgejo/example/project@' + SHA, read=read)[0] is None

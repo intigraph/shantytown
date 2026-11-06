@@ -494,7 +494,14 @@ inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
 share a second twelve-request budget; even many rows waiting on the same fact
 cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
-next scheduled pass, with no immediate retries. GitHub uses the existing
+next scheduled pass, with no immediate retries. Distinct forge facts rotate
+through the observation budget every five-minute slot; duplicate waiters share
+one read. A capacity-skipped observation keeps any prior failure count unchanged
+and never counts toward the three-pass error report. Attempted reads that fail
+still count. A complete workflow inventory with an active run proves the wait
+is unmet without fetching statuses or checks; terminal CI still requires all
+those inventories. Commit statuses paginate within the same request budget,
+and repeated or capped pages remain UNKNOWN. GitHub uses the existing
 `gh` credential lookup. Forgejo uses the deployment's configured
 `SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
 per-item `event:` producer registry and ASK visibility rules remain unchanged.
@@ -3121,6 +3128,22 @@ it deliberately, read back the item, preserve its evidence and use
 `--notes-file FILE --replace-text`. The same option applies to
 `--description-file`; it is refused without a text file. It affects only the
 explicit update and does not weaken ordinary tracker or deferral writes.
+
+On Seeds, `st work item show ITEM` includes its `revision` (unknown backends
+report null). The native exact-item display reads the typed version in its
+existing bounded observation, without a second request. Malformed or contradictory
+native tokens refuse; missing tokens remain unknown. Carry the token into the edit:
+`st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
+The token is passed unchanged through any admission reread. A stale edit refuses
+and retains Seeds' structured conflict metadata; it never refreshes the token or
+retries the write. An indeterminate Seeds outcome also retains its operation
+identity and readback metadata, rather than truncating it into a generic error.
+Guarded Seeds failures emit JSON on stderr with exit 4 (conflict) or 8
+(indeterminate); bearer strings remain redacted. The option refuses every
+non-update verb before it can write.
+Independent fields still share one item revision: explicitly
+reread and rebase even when another writer changed a different field. Other
+backends refuse `--if-revision` rather than silently dropping the guard.
 
 The command writes once and verifies the exact new text. A timeout or failed
 read-back can follow a committed write: inspect the item before deciding on any
