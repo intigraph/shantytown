@@ -19,7 +19,7 @@ import re
 import shutil
 import subprocess
 
-#: Stack tools whose own `--version` may be read. Nothing else is executed.
+#: Stack tools whose fixed native version command may be read. Nothing else is executed.
 TOOLS = ("sd", "st", "quipu", "bobbin", "yupana", "camayoc", "tambo", "dp")
 TIMEOUT = 15
 
@@ -104,13 +104,14 @@ def installed(arg: str, run=_run, which=shutil.which):
     path = which(tool)
     if not path:
         return None, f"{tool} is not on PATH"
+    argument = "version" if tool == "dp" else "--version"
     try:
-        out = run([path, "--version"])
+        out = run([path, argument])
     except (OSError, subprocess.SubprocessError) as exc:
-        return None, f"{tool} --version failed ({type(exc).__name__})"
+        return None, f"{tool} {argument} failed ({type(exc).__name__})"
     have = _parse(out.stdout) if out.returncode == 0 else None
     if have is None:
-        return None, f"{tool} --version gave no version"
+        return None, f"{tool} {argument} gave no version"
     need = _wanted(want)
     ok = {"@": have >= need, ">=": have >= need, ">": have > need, "==": have == need}[op]
     shown = ".".join(map(str, have[:3])) + ("" if have[3] else " (pre-release)")
