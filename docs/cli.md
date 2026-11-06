@@ -3120,6 +3120,17 @@ trusted peer, equivalent to `st-push-allowed=true`. Any other role value refuses
 before any remote is contacted, and so does a remote set in which every remote
 is a mirror. Advance a mirror only through its own reviewed mirror sync.
 
+### Close failure diagnostics
+
+A failed `st work item close` emits a structured `CLOSE_FAILED` error with the
+actual tracker backend, child exit code, stdout and stderr. An observe warning
+does not replace a later blocker refusal or a JSON reason on stdout. Each output
+channel is bearer-redacted first. Outputs longer than 2,048 characters retain
+the first 768 and last 1,280 characters, with an omission marker. A nonzero child
+outcome remains unproven: read back the
+item before deciding whether to retry. The command never retries or changes the
+principal, blocker checks or close reason to get past a failure.
+
 ### Replacing work-item text
 
 `st work item update ITEM --notes-file FILE` fills empty notes or verifies an
