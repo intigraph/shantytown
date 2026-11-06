@@ -1810,6 +1810,15 @@ class DeferralAlerter:
         reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
+            if finding.read_deferred:
+                # No read was admitted (or the bounded inventory was unfinished).
+                # Keep UNKNOWN and every existing failure count, without
+                # pretending capacity exhaustion was a third transport failure.
+                retry.add(finding.bead)
+                if finding.bead in budget.previous:
+                    budget.current[finding.bead] = budget.previous[finding.bead]
+                self._log(f"deferral-sweep: {finding.bead} observation budget deferred; retains hold")
+                return
             if budget.failed(finding.bead):
                 persistent_failures.add(finding.bead)
                 from dataclasses import replace
