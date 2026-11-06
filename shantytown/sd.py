@@ -146,8 +146,10 @@ class SdTracker(BrTracker):
             raise RuntimeError("sd msg send receipt identity UNKNOWN") from error
         return Answer.complete_read(value, how="sd msg send: validated delivery receipt")
 
-    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2) -> Answer[list[dict]]:
-        args = ["msg", "list", "--to", to, "--weeks", str(weeks), "--json"]
+    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2,
+                      all_windows: bool = False) -> Answer[list[dict]]:
+        scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
+        args = ["msg", "list", "--to", to, *scope, "--json"]
         if unread:
             args.append("--unread")
         result = self._bd(*args)
@@ -156,10 +158,13 @@ class SdTracker(BrTracker):
         value = json.loads(result.stdout)
         if not isinstance(value, list) or not all(isinstance(v, dict) and v.get("id") for v in value):
             raise RuntimeError("sd msg list answer unreadable")
-        return Answer.complete_read(value, how=f"sd msg list: complete requested {weeks}-week recipient window")
+        scope_name = "all registered live recipient windows" if all_windows else f"requested {weeks}-week recipient window"
+        return Answer.complete_read(value, how=f"sd msg list: complete {scope_name}")
 
-    def read_messages(self, ids: list[str], *, weeks: int = 2) -> Answer[list[dict]]:
-        result = self._bd("msg", "read", *ids, "--weeks", str(weeks), "--json")
+    def read_messages(self, ids: list[str], *, weeks: int = 2,
+                      all_windows: bool = False) -> Answer[list[dict]]:
+        scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
+        result = self._bd("msg", "read", *ids, *scope, "--json")
         if result.returncode:
             raise RuntimeError(f"sd msg read failed: {_failure_reason(result)}")
         value = json.loads(result.stdout)
