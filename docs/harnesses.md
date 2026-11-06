@@ -273,9 +273,14 @@ st agent new <agent>
 
 ```
 cd /w && SHANTY_ROOT=<root> CODEX_HOME=<root>/settings/codex/worker \
-SHANTY_AGENT=dearing BOBBIN_ROLE=worker BEADS_ACTOR=dearing ST_ROLES=worker \
+SHANTY_AGENT=dearing BOBBIN_ROLE=worker BEADS_ACTOR=dearing SEEDS_ACTOR=dearing ST_ROLES=worker \
 codex --dangerously-bypass-hook-trust
 ```
+
+Each harness carries `SEEDS_ACTOR` from the crew card alongside `BEADS_ACTOR`,
+so direct `sd` calls and child tools declare the same actor as `st` writes.
+This declaration does not authenticate the agent or change signing policy.
+Existing sessions receive it on their next normal launch.
 
 When `[env] SHANTY_REMOTE_CONTROL = "true"`, the Codex harness first starts the
 managed standalone app-server daemon idempotently, then attaches the TUI only

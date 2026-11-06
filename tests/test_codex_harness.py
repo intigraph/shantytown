@@ -363,7 +363,7 @@ def test_the_launch_carries_the_same_identity_env_as_claude():
     card = Agent(name="ada", role="lead", domain="ops", reports_to="arnold")
     launch = CODEX.launch(card, "/s/codex/lead/config.toml", root="/store/r")
     for expected in ("SHANTY_ROOT=/store/r", "SHANTY_AGENT=ada", "BOBBIN_ROLE=lead",
-                     "BEADS_ACTOR=ada", "ST_ROLES=lead", "ST_ROLE_DOMAIN=ops",
+                     "BEADS_ACTOR=ada", "SEEDS_ACTOR=ada", "ST_ROLES=lead", "ST_ROLE_DOMAIN=ops",
                      "ST_REPORTS_TO=arnold"):
         assert expected in launch, f"{expected} missing from {launch}"
 

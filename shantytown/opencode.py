@@ -132,6 +132,7 @@ def make_harness(base):
             model = resolve_model(card, root)
             env = {"OPENCODE_CONFIG": str(config), "SHANTY_AGENT": card.name,
                    "BOBBIN_ROLE": card.role, "BEADS_ACTOR": card.name,
+                   "SEEDS_ACTOR": card.name,
                    "ST_ROLES": ",".join(card.effective_roles())}
             if model:
                 env["SHANTY_MODEL"] = model
