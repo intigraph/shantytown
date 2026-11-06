@@ -478,8 +478,10 @@ Both require an explicit backstop at least 24 hours away, including marker-only
 reasons and scheduled-window requests. They read only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
-candidate pass and share a twelve-request budget; budget exhaustion is UNKNOWN
-until the next scheduled pass, with no immediate retries. GitHub uses the existing
+candidate phase and share a twelve-request budget. All fresh pre-release reads
+share a second twelve-request budget; even many rows waiting on the same fact
+cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
+next scheduled pass, with no immediate retries. GitHub uses the existing
 `gh` credential lookup. Forgejo uses the deployment's configured
 `SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
 per-item `event:` producer registry and ASK visibility rules remain unchanged.

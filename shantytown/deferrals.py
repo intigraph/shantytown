@@ -312,7 +312,7 @@ class Finding:
                 f"{' — ' + self.title if self.title else ''}")
 
 
-def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None) -> list:
+def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_reader=None) -> list:
     """Findings for `rows`, newest-lapse last. Reads only; mutates nothing.
 
     `is_closed(bead_id) -> bool | None` decides a `closed:` condition. **None
@@ -323,7 +323,6 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None) -> list:
     """
     out: list[Finding] = []
     event_answers = {}  # bounded reads, only within this candidate pass
-    forge_reader = None
     for row in rows:
         if not isinstance(row, dict):
             continue

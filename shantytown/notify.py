@@ -1799,7 +1799,10 @@ class DeferralAlerter:
             from .resume_rulings import evaluate
             return evaluate(condition.kind, condition.arg, waiting, now,
                 show=show, comments=backend().ruling_comments, registry=self._reg)
-        findings = pol.evaluate(rows, now, is_closed=is_closed, ruling_reader=ruling_reader)
+        from .resume_forge_events import Reader as ForgeEventReader
+        findings = pol.evaluate(rows, now, is_closed=is_closed, ruling_reader=ruling_reader,
+                                forge_reader=ForgeEventReader())
+        fresh_forge_reader = ForgeEventReader()
         # Reserve a distinct bounded budget for fresh pre-write checks; consuming
         # the candidate budget must not starve every admitted release forever.
         ruling_budget = 12
@@ -1856,7 +1859,8 @@ class DeferralAlerter:
                         or (detail.get("status") == "open" and not detail.get("defer_until"))):
                     continue
                 cache.clear()
-                fresh = pol.evaluate([detail], now, is_closed=is_closed, ruling_reader=ruling_reader)
+                fresh = pol.evaluate([detail], now, is_closed=is_closed, ruling_reader=ruling_reader,
+                                     forge_reader=fresh_forge_reader)
                 if not fresh:
                     continue  # re-deferred, closed or already released
                 current = fresh[0]
