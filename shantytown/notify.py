@@ -1793,10 +1793,10 @@ class DeferralAlerter:
         ruling_budget = 12
         def ruling_reader(condition, waiting):
             nonlocal ruling_budget
+            from .resume_rulings import BUDGET_DEFERRED, evaluate
             if ruling_budget <= 0:
-                return None, 'ruling read budget exhausted; retry next scheduled pass'
+                return None, BUDGET_DEFERRED
             ruling_budget -= 1
-            from .resume_rulings import evaluate
             return evaluate(condition.kind, condition.arg, waiting, now,
                 show=show, comments=backend().ruling_comments, registry=self._reg)
         from .resume_forge_events import Reader as ForgeEventReader
@@ -1828,6 +1828,13 @@ class DeferralAlerter:
                         + "; inspect deferral-sweep logs"))
             else:
                 retry.add(finding.bead)
+            if finding.condition and finding.condition.kind in ('ruling', 'activation'):
+                # Only finite reader stage codes, never raw comments,
+                # exception text, transport bodies or headers.
+                reason = re.search(r'reason=(binding|target|registry|comments|markers)\)',
+                                   finding.untestable or '')
+                code = reason.group(1) if reason else 'unknown'
+                self._log(f"deferral-sweep: {finding.bead} typed evidence UNKNOWN reason={code}")
             self._log(f"deferral-sweep: {finding.bead} read/release retry pending")
 
         if store_error:

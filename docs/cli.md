@@ -515,6 +515,16 @@ remain UNKNOWN. A fresh read before release catches a later revocation. Existing
 ASK visibility, human/access labels, dependency and prose gates still apply;
 this event prompts lifecycle work and never runs a deployment or live writer.
 
+Typed ruling/activation observations have their own unchanged limits of twelve
+candidate reads and twelve fresh release checks per pass. Waiting-item identities
+rotate every five-minute slot so a fixed prefix cannot starve later gates.
+Different waiters for one target keep separate evidence because their deferral
+boundaries may differ. A skipped observation stays UNKNOWN and preserves its
+previous failure count without incrementing or clearing it. An admitted read
+that fails still counts toward the three-pass report. Logs expose only a finite
+failure stage (`binding`, `target`, `registry`, `comments`, or `markers`), never
+private comment contents or transport exception text.
+
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
 command, path, URL or query. Each binding names one item, producer, host, unit,
