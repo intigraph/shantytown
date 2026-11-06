@@ -10,7 +10,7 @@ from shantytown.harness import get
 from shantytown.protocols import Agent
 
 
-@pytest.mark.parametrize("program", ["claude", "codex", "opencode"])
+@pytest.mark.parametrize("program", ["claude", "codex", "opencode", "agy"])
 def test_tool_child_gets_card_actor_instead_of_inherited_actor(tmp_path, program):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -31,7 +31,7 @@ def test_tool_child_gets_card_actor_instead_of_inherited_actor(tmp_path, program
                        "import subprocess\n"
                        "subprocess.run(['sd'], check=True)\n")
     harness.chmod(0o700)
-    launch = get(program).launch(Agent("writer", harness=program),
+    launch = get(program).launch(Agent("writer", harness=program, workspace=str(tmp_path)),
                                  str(tmp_path / "settings.json"))
     subprocess.run(["/bin/sh", "-c", launch], check=True, env={
         "HOME": str(home), "PATH": str(bindir) + os.pathsep + os.defpath,

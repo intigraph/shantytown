@@ -1,10 +1,10 @@
 # Declared actor in child tools
 
-The same isolated probe executes each real Claude, Codex and OpenCode launch
+The same isolated probe executes each real Claude, Codex, OpenCode and AGY launch
 with private harness and `sd` doubles. On base
-`9fddefbee23f4d40e06552efefc52ed2f26a4126`, the child inherits `other-card` as
-`SEEDS_ACTOR` even though the crew card is `writer`: all three checks fail.
-With this change, all three child tools receive `writer` and pass.
+`0d9fbe9a736f0c4febab814acd44a23344c29a86`, the child inherits `other-card` as
+`SEEDS_ACTOR` even though the crew card is `writer`: all four checks fail.
+With this change, all four child tools receive `writer` and pass.
 
 [Terminal output](output.json) and [timing](timing.log) are text recording
 artifacts. JSON escapes preserve the exact recorded CRLF bytes without
@@ -18,7 +18,7 @@ python3 docs/demos/seeds-actor/replay.py
 Reproduce from the repository root:
 
 ```sh
-python3 docs/demos/seeds-actor/probe.py --base 9fddefbee23f4d40e06552efefc52ed2f26a4126
+python3 docs/demos/seeds-actor/probe.py --base 0d9fbe9a736f0c4febab814acd44a23344c29a86
 ```
 
 The probe prints hashes of the actual launch implementations and checks the

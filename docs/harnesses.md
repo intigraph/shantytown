@@ -277,7 +277,7 @@ SHANTY_AGENT=dearing BOBBIN_ROLE=worker BEADS_ACTOR=dearing SEEDS_ACTOR=dearing 
 codex --dangerously-bypass-hook-trust
 ```
 
-Each harness carries `SEEDS_ACTOR` from the crew card alongside `BEADS_ACTOR`,
+Claude, Codex, OpenCode and AGY carry `SEEDS_ACTOR` from the crew card alongside `BEADS_ACTOR`,
 so direct `sd` calls and child tools declare the same actor as `st` writes.
 This declaration does not authenticate the agent or change signing policy.
 Existing sessions receive it on their next normal launch.

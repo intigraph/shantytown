@@ -9,6 +9,8 @@ import sys
 import tarfile
 import tempfile
 
+import pytest
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,7 +31,7 @@ def main():
         home.mkdir()
         for label, source, expected in [("before", before, 1), ("after", root, 0)]:
             print(f"{label}: real harness launch -> private child tool", flush=True)
-            for name in ["harness.py", "opencode.py"]:
+            for name in ["harness.py", "opencode.py", "agy.py"]:
                 digest = hashlib.sha256((source / "shantytown" / name).read_bytes()).hexdigest()
                 print(f"  {name} sha256: {digest}", flush=True)
             result = subprocess.run(
@@ -37,7 +39,8 @@ def main():
                  "-p", "no:cacheprovider", "-c", "/dev/null",
                  "--basetemp", str(scratch / (label + "-data")), str(test)],
                 cwd=scratch, env={"HOME": str(home), "PATH": os.defpath,
-                                  "PYTHONPATH": str(source),
+                                  "PYTHONPATH": os.pathsep.join([
+                                      str(source), str(Path(pytest.__file__).resolve().parent.parent)]),
                                   "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
                 capture_output=True, text=True)
             # Normalize private fixture paths, preserving test output and status.
@@ -45,7 +48,7 @@ def main():
             print(result.stderr.replace(str(scratch), "<scratch>"), end="", flush=True)
             if result.returncode != expected:
                 raise SystemExit(f"{label}: unexpected probe exit {result.returncode}")
-        print("Confirmed: inherited actor fails before; all three card actors pass after.")
+        print("Confirmed: inherited actor fails before; all four card actors pass after.")
         print("Private harness/tool doubles only; no tracker write or live launch.")
 
 
