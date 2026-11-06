@@ -7813,7 +7813,12 @@ def _priority_snapshot(a):
 def _priority_go_note(a):
     from . import priority_advisory as pa
     try:
-        ready, active = _priority_snapshot(a)
+        tracker = _tracker(a)
+        projection = getattr(tracker, "priority_rows", None)
+        # SdTracker inherits BrTracker: the legacy snapshot hydrates every
+        # READY body even though this advisory only needs ranking fields.
+        snapshot = projection() if callable(projection) else None
+        ready, active = snapshot if snapshot is not None else _priority_snapshot(a)
         row = next((r for r in ready + active if r.get("id") == a.item), None)
         if row is None:
             row = vars(_tracker(a).get(a.item))
