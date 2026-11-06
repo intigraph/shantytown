@@ -14,8 +14,9 @@ Capacity for all 14 owners adds no per-owner requests. Total query text is
 21,565 → 21,626 bytes; this change removes an HTTP round trip, not guard logic.
 Constructor nanoseconds in the recording are individual local samples, not a
 benchmark or evidence of lower production connection-held time. The frozen
-fixture bypasses transport caching/fencing; separate projection fence/retry
-controls cover those contracts.
+fixture observes the real serialized HTTP Requests at an in-memory transport
+boundary with normal query-only admission; shared-cache hits cannot hide I/O.
+Separate projection fence/retry controls cover ordinary cached transport.
 
 [Recording output](output.log) and [original timing](timing.log) are small text
 artifacts retained with this demo. Replay after downloading both files:

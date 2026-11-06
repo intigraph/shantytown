@@ -1,7 +1,7 @@
-Script started on 2026-11-06 11:29:38-05:00 [COMMAND="python3 -m pytest -q -s --disable-warnings tests/test_crew_roster_shape_cost.py::test_fused_and_separate_shape_observations_render_identical_rows" <not executed on terminal>]
-{"requests": 3, "constructors": 1, "constructor_ns": 71327, "query_bytes": 21565}
-{"requests": 2, "constructors": 1, "constructor_ns": 32800, "query_bytes": 21626}
+Script started on 2026-11-06 12:00:04-05:00 [COMMAND="stty -onlcr && python3 -m pytest -q -s --disable-warnings tests/test_crew_roster_shape_cost.py::test_fused_and_separate_shape_observations_render_identical_rows" <not executed on terminal>]
+{"requests": 3, "constructors": 1, "constructor_ns": 89439, "query_bytes": 21565}
+{"requests": 2, "constructors": 1, "constructor_ns": 35704, "query_bytes": 21626}
 .
-1 passed, 592 warnings in 0.92s
+1 passed, 592 warnings in 7.88s
 
-Script done on 2026-11-06 11:29:40-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-06 12:00:13-05:00 [COMMAND_EXIT_CODE="0"]

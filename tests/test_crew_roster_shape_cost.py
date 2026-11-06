@@ -32,15 +32,23 @@ def world(tmp_path, monkeypatch, capsys):
                                  (sp.SEEDS+'ontology/status','in_progress'),
                                  (sp.SEEDS+'ontology/priority',1)]:
             graph.add((subject, URIRef(predicate), Literal(value)))
-    def query(proof, text, timeout):
+    class Response:
+        status = 200
+        def __init__(self,value): self.value = value
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self,size): return json.dumps(self.value).encode()[:size]
+    def send(request,timeout):
+        assert request.get_method() == 'POST'
+        assert request.full_url == 'https://example.test/'+store[0]+'/query'
+        text = json.loads(request.data)['query']
         calls.append(text)
-        assert proof.quipu_url == 'https://example.test/'+store[0]
         result = data.query(text)
         if text.startswith('ASK'):
-            return {'result':bool(result.askAnswer)}
+            return Response({'result':bool(result.askAnswer)})
         rows = [{str(k): v.toPython() if isinstance(v, Literal) else str(v)
                  for k, v in row.asdict().items()} for row in result]
-        return {'rows':rows,'count':len(rows),'truncated':False}
+        return Response({'rows':rows,'count':len(rows),'truncated':False})
     original = sp._unsupported_owner_branches
     def construct(*args):
         start = time.perf_counter_ns()
@@ -56,15 +64,15 @@ def world(tmp_path, monkeypatch, capsys):
         return t
     monkeypatch.setattr(cli,'_tracker',tracker)
     monkeypatch.setattr(cli,'Tmux',lambda *a,**kw:NullPanes())
-    monkeypatch.setattr(sp,'_query',query)
+    monkeypatch.setattr(sp,'urlopen',send)
     monkeypatch.setattr(sp,'_unsupported_owner_branches',construct)
-    # The dataset is frozen during each render. Projection fence semantics have
-    # independent transport tests; this fixture measures constructor/query calls.
-    monkeypatch.setattr(sp.seeds_read_cache,'certify_projection',lambda *a,**kw:None)
     def render():
         calls.clear();constructors.clear()
-        assert cli.main(['--root',str(root),'--backend','seeds','crew','--local',
-                         '--json','--no-priority-advice']) == cli.OK
+        # Query-only measurement uses the normal direct-read admission. No
+        # cache hits or mocked projection certification can hide extra I/O.
+        with sp.seeds_read_cache.direct_reads():
+            assert cli.main(['--root',str(root),'--backend','seeds','crew','--local',
+                             '--json','--no-priority-advice']) == cli.OK
         answer = json.loads(capsys.readouterr().out)
         with capsys.disabled():
             print(json.dumps({'requests':len(calls),'constructors':len(constructors),
