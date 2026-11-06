@@ -13,7 +13,7 @@ Bash tool call Claude Code runs is a direct child shell whose argv sources
 running, so the snapshot shells still alive are the background ones.
 
 None means "could not look", never zero: no pane pid, no single claude runtime
-under the pane, or ps/pgrep failed. Callers keep refusing on None.
+under the pane, an argv missing for any listed pid, or ps/pgrep failed. Callers keep refusing on None.
 """
 from __future__ import annotations
 
@@ -73,7 +73,10 @@ def count(pane_pid: "str | int | None") -> int | None:
     if kids is None:
         return None
     args = _args([root, *kids])
-    if args is None:
+    # Every pid pgrep listed must have an argv. A pid ps did not return (exited
+    # in between, or a partial read) could be the runtime or a second one, so
+    # an incomplete inventory cannot prove which runtime is unique (wu, ST514).
+    if args is None or set(args) != {root, *kids}:
         return None
     # Two launch shapes: the pane pid IS claude, or claude is its child.
     runtimes = [p for p in [root, *kids] if _is_claude(args.get(p, ""))]

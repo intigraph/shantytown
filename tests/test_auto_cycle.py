@@ -376,6 +376,20 @@ def test_claude_shell_count_reads_only_snapshot_children(monkeypatch):
     assert claude_shells.count(None) is None and claude_shells.count("x1") is None
 
 
+@pytest.mark.parametrize("missing", ["100", "102"])
+def test_incomplete_runtime_inventory_must_not_prove_zero(monkeypatch, missing):
+    """wu's ST514 review: a pid that ps did not return could be the runtime or
+    a second one, so a partial argv inventory must read None, never zero."""
+    from shantytown import claude_shells
+    tree = {"100": ["101", "102"], "101": []}
+    argv = ({"100": "claude", "101": "claude", "102": "caffeinate"} if missing == "100"
+            else {"100": "zsh", "101": "claude", "102": "claude"})
+    monkeypatch.setattr(claude_shells, "_children", lambda pid: tree.get(pid, []))
+    monkeypatch.setattr(claude_shells, "_args",
+                        lambda pids: {p: argv[p] for p in pids if p != missing})
+    assert claude_shells.count("100") is None
+
+
 def test_checkpointed_agent_with_truncated_footer_is_not_auto_cycled(tmp_path):
     screen = _saturated_pane(646.0) + "\n⏵⏵ bypass permissions on · ← for ag…"
     ac, panes, reqs, pushed, store, clock = _world(tmp_path, screen)
