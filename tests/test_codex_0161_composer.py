@@ -1,5 +1,6 @@
 """Codex 0.161 framed, wrapped input; no private message bodies or live keys."""
 import pytest
+from pathlib import Path
 
 from shantytown import input_box, triage, tmux
 
@@ -57,3 +58,26 @@ def test_newest_composer_wins_and_footer_looking_body_cannot_hide_foreign_text()
 
 def test_framed_scan_is_bounded():
     assert triage.codex_composer(frame('row\n' * 100)) is None
+
+
+def busy_capture():
+    # Sanitized live busy capture: preserve row layout/chrome, replace message/path.
+    return (Path(__file__).parent / 'fixtures/codex_input/busy-queue-wrapped.txt').read_text()
+
+
+def test_captured_busy_queue_footer_preserves_typed_composer_and_busy_run():
+    screen = busy_capture()
+    assert triage.codex_composer(screen) is not None
+    assert triage.input_state(screen) == triage.INPUT_QUEUED
+    assert triage.work_state(screen, True) == triage.BUSY
+    assert 'Example pending message' in triage.input_evidence(screen)
+    assert input_box._classify(screen)[0] == input_box.TYPED
+
+
+def test_busy_queue_footer_does_not_make_unreadable_or_history_known():
+    screen = busy_capture()
+    stripped = triage.strip_attrs(screen)
+    assert triage.input_state(stripped) != triage.INPUT_QUEUED
+    assert triage.input_state('› unreadable text\n') == triage.INPUT_UNKNOWN
+    assert triage.codex_composer(screen.replace('~/project', 'unframed prose')) is None
+    assert triage.codex_composer(screen + '\n'.join('ordinary output' for _ in range(12))) is None
