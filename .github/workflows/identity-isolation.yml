@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
     paths: ['shantytown/actor_identity.py', 'shantytown/isolated_launch.py', 'shantytown/runtime.py', 'shantytown/cli.py', 'shantytown/sd.py', 'tests/test_actor_identity.py', 'tests/uid_boundary.py', '.github/workflows/identity-isolation.yml']
+# Superseded PR heads may stop; each main push keeps its own verdict.
+concurrency:
+  group: "${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 jobs:
