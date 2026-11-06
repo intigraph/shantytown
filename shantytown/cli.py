@@ -11466,8 +11466,10 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
         if refusal := pane_refusal(screen):
             return refusal
         name = harness_mod.name_for(card, root)
+        from . import claude_shells
         refusal = notify_mod.unattended_shell_block(
-            triage_mod.strip_attrs(screen), name, agent=card.name, root=root)
+            triage_mod.strip_attrs(screen), name, agent=card.name, root=root,
+            process_shells=claude_shells.counter(panes, session))
         if refusal or name != "codex":
             return refusal
         # The native read may wait on IPC. Recheck busy/input before mutation.

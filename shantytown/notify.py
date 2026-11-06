@@ -2296,8 +2296,14 @@ def _visible_shell_block(plain: str) -> str:
     return ""
 
 
-def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None) -> str:
-    """An unattended cycle needs fresh runtime-owned zero on Codex."""
+def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None,
+                           process_shells=None) -> str:
+    """An unattended cycle needs fresh runtime-owned zero on Codex.
+
+    `process_shells` (optional, zero-arg -> int | None) reads Claude's shell
+    count from the process tree (claude_shells). It is consulted only when the
+    footer is truncated, so a narrow pane no longer refuses forever; None from
+    it still refuses."""
     if visible := _visible_shell_block(plain):
         return visible
     if harness_name == "codex":
@@ -2310,6 +2316,9 @@ def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", 
     if n is None and harness_name in _SHELL_COUNT_COMPLETE:
         footer = triage_mod._tail(plain).splitlines()
         if footer and footer[-1].rstrip().endswith(("…", "...")):
+            counted = process_shells() if process_shells is not None else None
+            if type(counted) is int and counted >= 0:
+                return f"{counted} background shell(s) still running" if counted else ""
             return "background shells cannot be read from a truncated footer, so zero is not visible"
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
@@ -2393,7 +2402,10 @@ class AutoCycler:
         try:
             card = next(c for c in self._agents if c.name == agent)
             plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-            return unattended_shell_block(plain, self._harness(card), agent=card.name, root=self._root)
+            from . import claude_shells
+            return unattended_shell_block(
+                plain, self._harness(card), agent=card.name, root=self._root,
+                process_shells=claude_shells.counter(self._panes, card.pane))
         except Exception as e:  # noqa: BLE001 — cannot tell is not clear
             return f"background shells unreadable ({e})"
 
