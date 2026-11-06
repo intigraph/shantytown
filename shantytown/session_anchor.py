@@ -130,8 +130,15 @@ def main(argv=None) -> int:
 def render(root: str, agent: str) -> str:
     """The same context for hook output and verified launch-time delivery."""
     from .crew_memory import for_agent
+    from .prime import primer, select
+    try:
+        orientation = select(primer(), "Stack orientation").rstrip()
+    except Exception:  # damaged resources must not prevent a session starting
+        orientation = "Stack primer UNKNOWN: run `st prime` and `st ops doctor`."
     memory = for_agent(root, agent)
-    suffix = f"\n\n{memory}" if memory else ""
+    suffix = "\n\n[st stack primer — stack-prime/1]\n" + orientation
+    if memory:
+        suffix += f"\n\n{memory}"
     try:
         rc, text = _run_anchor(root, agent)
     except Exception:  # noqa: BLE001 -- a failed lookup must not hide the launch
