@@ -61,6 +61,8 @@ def test_missing_store_keeps_primer_and_creates_nothing(tmp_path):
     assert v["schema"] == "stack-prime/1" and v["tool"] == "st" and v["version"]
     assert v["live"]["status"] == "absent" and v["status"] == "degraded"
     assert "## Agent workflow" in v["primer"]["text"]
+    assert "Camayoc skill" in v["primer"]["text"]
+    assert "cy prime --static" in v["primer"]["text"]
     assert v["live"]["summary"]["crew"] is None
     assert snapshot(tmp_path) == before
 
@@ -88,6 +90,7 @@ def test_brief_is_five_to_ten_lines(tmp_path, tail):
     result = run(tmp_path, ["--root", str(tmp_path / "absent"), "prime", "--brief", *tail])
     assert result.returncode == 0
     lines = result.stdout.splitlines()
+    assert "Camayoc (`cy`)" in result.stdout
     assert 5 <= len(lines) <= 10
     assert lines[0].startswith("st ") and lines[-1] == "Run `st prime` for the full primer."
 
@@ -231,7 +234,7 @@ def test_generated_skill_docs_and_packaged_primer_match():
     spec.loader.exec_module(sync)
     source = (ROOT / "shantytown/primer.md").read_text()
     assert prime.primer() == source
-    assert prime.sections(source) == ["What Shantytown is", "Agent workflow", "Core commands",
+    assert prime.sections(source) == ["What Shantytown is", "Stack orientation", "Agent workflow", "Core commands",
                                       "MCP tools", "Next steps"]
     for path, depth in [(ROOT / "docs/prime.md", 1), (ROOT / "skills/shantytown/SKILL.md", 2)]:
         text = path.read_text()
