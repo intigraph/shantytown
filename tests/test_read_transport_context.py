@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
 import pytest
-from shantytown import seeds_plate
+from shantytown import host_identity, seeds_plate
 from shantytown.query_identity import declared_query_identity, declared_read_operation, read_headers, sdk_subprocess_options
 
 
@@ -132,18 +132,21 @@ def test_malformed_explicit_caller_stays_unknown_not_a_different_reader(clean_co
         assert "X-Quipu-Agent" not in read_headers()
 
 
-@pytest.mark.parametrize("declared,local,expected", [
-    (None, "local-host", "local-host"),
-    ("declared-host", "local-host", "declared-host"),
-    ("EXPLICIT.EXAMPLE", "local-host", "explicit.example"),
-    ("bad\nhost", "local-host", None),
-    ("", "local-host", None),
-    (None, "bad host", None),
+@pytest.mark.parametrize("declared,local,pinned,expected", [
+    (None, "local-host", None, "local-host"),
+    ("declared-host", "local-host", None, "declared-host"),
+    ("EXPLICIT.EXAMPLE", "local-host", None, "explicit.example"),
+    ("bad\nhost", "local-host", None, None),
+    ("", "local-host", None, None),
+    (None, "bad host", None, None),
+    (None, "display-host", "physical-host", "physical-host"),
+    ("declared-host", "display-host", "physical-host", "declared-host"),
 ])
 def test_host_header_crosses_http_without_inventing_caller(
-        clean_context, monkeypatch, transport, declared, local, expected):
-    from shantytown import query_identity
-    monkeypatch.setattr(query_identity.socket, "gethostname", lambda: local)
+        clean_context, monkeypatch, transport, declared, local, pinned, expected):
+    monkeypatch.setattr(host_identity.socket, "gethostname", lambda: local)
+    if pinned is not None:
+        monkeypatch.setenv(host_identity.ENV, pinned)
     if declared is not None:
         monkeypatch.setenv("QUIPU_HOST", declared)
     before = dict(os.environ)
@@ -158,10 +161,9 @@ def test_host_header_crosses_http_without_inventing_caller(
 
 
 def test_hostname_failure_stays_unknown(clean_context, monkeypatch, transport):
-    from shantytown import query_identity
     def unavailable():
         raise OSError("no local hostname")
-    monkeypatch.setattr(query_identity.socket, "gethostname", unavailable)
+    monkeypatch.setattr(host_identity.socket, "gethostname", unavailable)
     url, seen = transport
     query(url)
     assert "x-quipu-host" not in lower(seen[0][0])
