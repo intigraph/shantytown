@@ -86,6 +86,9 @@ def test_inbox_scopes_recipient_and_closed_receipts_and_refuses_partial(monkeypa
         owner = args[args.index("--assignee") + 1]
         closed = "--all" in args
         calls.append((owner, closed))
+        if closed:
+            assert args[args.index("--limit") + 1] == "3"
+            assert args[args.index("--title-contains") + 1] == "marker"
         rows = [dict(id="receipt", title="inbox: marker payload", assignee=owner,
                      status="closed" if closed else "open", priority=2)]
         return subprocess.CompletedProcess(args, 0,
@@ -96,7 +99,7 @@ def test_inbox_scopes_recipient_and_closed_receipts_and_refuses_partial(monkeypa
                          items_for=t.inbox_items)
     assert len(inbox.unread("worker")) == 1
     assert inbox.find_delivery("worker", "marker").read
-    assert calls == [("worker", False), ("worker", False), ("worker", True), ("worker", True)]
+    assert calls == [("worker", False), ("worker", False), ("worker", True)]
     monkeypatch.setattr(t, "_bd", lambda *args: subprocess.CompletedProcess(args, 0,
         '{"issues":[],"total":10,"has_more":true}', ""))
     with pytest.raises(PartialAnswer):

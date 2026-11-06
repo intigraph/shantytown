@@ -627,6 +627,12 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
 
     def query(proof, text, timeout):
         queries.append(text)
+        if 'LIMIT 3' in text:
+            return answer([{'subject': seeds_plate.SEEDS+'item/test-receipt', 'graph': G}])
+        if '?predicate ?value' in text:
+            from shantytown.seeds_inbox import FIELDS
+            return answer([f for f in fields('test-receipt', title='inbox: delivered payload',
+                                             status='closed') if f['predicate'] in FIELDS])
         wire = fields("test-modern", title="inbox: marker payload", status="open")
         wire += fields("test-legacy", title="mail: legacy payload", status="blocked")
         if '"deferred", "closed"))' in text or '?predicate ?value' in text and closed[0]:
@@ -647,8 +653,9 @@ def test_native_inbox_combines_prefixes_and_keeps_closed_receipts(monkeypatch):
     assert '"deferred", "closed"))' not in queries[0]
     closed[0] = True
     assert box.find_delivery("worker", "delivered").read
-    assert len(queries) == 2
-    assert '"deferred", "closed"))' in queries[1]
+    assert len(queries) == 3
+    assert "LIMIT 3" in queries[1]
+    assert "?predicate ?value" in queries[2]
 
 
 @pytest.mark.parametrize("fault", ["offline", "foreign", "ambiguous", "missingfield", "nonmessage"])
