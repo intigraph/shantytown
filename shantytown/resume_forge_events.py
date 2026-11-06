@@ -17,11 +17,17 @@ from urllib.parse import urlsplit
 KINDS = ('pr-merged', 'ci-terminal')
 MAX_BYTES = 2_000_000
 PAGE = 100
+STATUS_PAGES = 3
 MAX_READS = 12
 TIMEOUT = 15
 REPO = r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}'
 PR = re.compile(r'(github|forgejo)/(' + REPO + r')#([1-9][0-9]{0,9})')
 CI = re.compile(r'(github|forgejo)/(' + REPO + r')@([0-9a-f]{40}|[0-9a-f]{64})')
+BUDGET_DEFERRED = 'forge event request budget exhausted; waiting for a scheduled turn'
+
+
+class BudgetDeferred(ValueError):
+    """Not observed this turn; not a failed transport or malformed response."""
 
 
 def validate(kind, arg):
@@ -43,7 +49,7 @@ class Reader:
 
     def __call__(self, forge, repo, path):
         if self.remaining <= 0:
-            raise ValueError('forge event read budget exhausted; retry next scheduled pass')
+            raise BudgetDeferred(BUDGET_DEFERRED)
         self.remaining -= 1
         if forge == 'github':
             out = subprocess.run(['gh', 'api', '--method', 'GET', 'repos/' + repo + '/' + path],
@@ -74,6 +80,27 @@ class Reader:
 
 def _rows(read, forge, repo, path, key=None):
     sep = '&' if '?' in path else '?'
+    if key is None:
+        # Forgejo's commit-status endpoint caps pages at fifty even when a
+        # larger limit is requested. A short *hundred*-row page is not proof
+        # of completion there. Keep bounded pagination inside Reader's shared
+        # request budget, and refuse repeated pages or a capped inventory.
+        size = 50 if forge == 'forgejo' else PAGE
+        rows, seen = [], set()
+        for page in range(1, STATUS_PAGES + 1):
+            doc = read(forge, repo, path + sep + f'per_page={size}&limit={size}&page={page}')
+            if (not isinstance(doc, list) or len(doc) > size
+                    or any(not isinstance(row, dict) for row in doc)):
+                raise ValueError('status inventory is unreadable')
+            for row in doc:
+                identity = row.get('id')
+                if type(identity) is not int or identity in seen:
+                    raise ValueError('status inventory repeats or lacks identity')
+                seen.add(identity)
+                rows.append(row)
+            if len(doc) < size:
+                return rows
+        raise ValueError('status inventory reached its page bound')
     doc = read(forge, repo, path + sep + f'per_page={PAGE}&limit={PAGE}&page=1')
     rows = doc.get(key) if key and isinstance(doc, dict) else doc if not key else None
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
@@ -90,16 +117,22 @@ def _rows(read, forge, repo, path, key=None):
 
 def _ci(forge, repo, sha, read):
     runs = _rows(read, forge, repo, 'actions/runs?head_sha=' + sha, 'workflow_runs')
-    statuses = _rows(read, forge, repo, 'commits/' + sha + '/statuses')
-    checks = (_rows(read, forge, repo, 'commits/' + sha + '/check-runs?filter=latest', 'check_runs')
-              if forge == 'github' else [])
     latest = {}
     for row in runs:
         if row.get('head_sha', row.get('commit_sha')) != sha:
             raise ValueError('workflow event names a different head')
-        if type(row.get('id')) is not int or not row.get('workflow_id') or not row.get('event'):
+        # Forgejo's event is a legacy payload field, sometimes empty or
+        # 'push' for a scheduled/dispatched run. trigger_event is its native
+        # run identity; GitHub uses event. Retain legacy fixture/API support
+        # only when the native field is absent, never when malformed.
+        event = (row.get('trigger_event', row.get('event'))
+                 if forge == 'forgejo' else row.get('event'))
+        workflow = row.get('workflow_id')
+        if (type(row.get('id')) is not int
+                or type(workflow) not in (str, int) or not workflow
+                or not isinstance(event, str) or not event):
             raise ValueError('workflow identity is unreadable')
-        key = ('run', row['workflow_id'], row['event'])
+        key = ('run', workflow, event)
         if key not in latest or row['id'] > latest[key]['id']:
             latest[key] = row
     active, count = False, 0
@@ -109,11 +142,21 @@ def _ci(forge, repo, sha, read):
         conclusion = row.get('conclusion')
         if forge == 'forgejo' and state in ('success', 'failure', 'cancelled', 'skipped'):
             conclusion, state = state, 'completed'
+        if forge == 'forgejo' and state == 'running':
+            state = 'in_progress'
         if state not in ('completed', 'queued', 'in_progress', 'waiting', 'pending', 'requested'):
             raise ValueError('workflow state is unreadable')
         if state == 'completed' and (not isinstance(conclusion, str) or not conclusion):
             raise ValueError('completed workflow has no conclusion')
         active |= state != 'completed'
+    if active:
+        # A validated, complete workflow inventory containing an active run
+        # already disproves terminal CI. No later status/check read can turn
+        # that into MET. Save those requests for other waiting principals.
+        return False, 'exact-head CI is still active'
+    statuses = _rows(read, forge, repo, 'commits/' + sha + '/statuses')
+    checks = (_rows(read, forge, repo, 'commits/' + sha + '/check-runs?filter=latest', 'check_runs')
+              if forge == 'github' else [])
     seen_checks = set()
     for row in checks:
         if row.get('head_sha') != sha or type(row.get('id')) is not int or row['id'] in seen_checks:
@@ -160,6 +203,8 @@ def evaluate(kind, arg, read=None):
                 raise ValueError('merged PR event is incomplete')
             return True, 'exact PR is merged'
         return False, 'exact PR is not merged (closed is not merged)'
+    except BudgetDeferred:
+        return None, BUDGET_DEFERRED
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         # Never include transport output/URLs/credentials in the item or logs.
         return None, 'forge event read failed, incomplete or invalid; retain hold'
