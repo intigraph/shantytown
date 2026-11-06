@@ -8,6 +8,7 @@ from .deferral_notes import PROVENANCE_PREFIX, parse_provenance
 from .deferrals import parse_stamp
 
 KINDS = ('ruling', 'activation')
+BUDGET_DEFERRED = 'typed ruling observation deferred by read budget'
 ITEM = re.compile(r'[a-z][a-z0-9-]{1,79}(?:\.[0-9]+)*')
 STAMP = r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z'
 MARKER = re.compile(r'resume-event-v1: (ruling|activation):(' + ITEM.pattern +
@@ -65,18 +66,23 @@ def authorities(target, registry):
 
 def evaluate(kind, item, waiting, now, *, show, comments, registry):
     """Latest exact authorized post-boundary outcome; a denial stays held."""
+    stage = 'binding'
     try:
         validate(kind, item)
         start = boundary(waiting, now)
+        stage = 'target'
         target = show(item)
         if not isinstance(target, dict) or target.get('id') != item:
             raise ValueError('target identity is UNKNOWN')
+        stage = 'registry'
         allowed = authorities(target, registry)
+        stage = 'comments'
         rows = comments(item)
         if (not isinstance(rows, list) or len(rows) >= MAX_COMMENTS
                 or any(not isinstance(row, dict) for row in rows)
                 or sum(len(str(row.get('text') or '').encode()) for row in rows) > MAX_BYTES):
             raise ValueError('comment inventory is incomplete or capped')
+        stage = 'markers'
         evidence = []
         seen = set()
         for row in rows:
@@ -124,4 +130,4 @@ def evaluate(kind, item, waiting, now, *, show, comments, registry):
     except Exception:
         # Registry/store failures stay UNKNOWN. No raw comment/private transport
         # text is exposed, and no read failure can release a runtime gate.
-        return None, 'typed ruling evidence is UNKNOWN; retain hold'
+        return None, f'typed ruling evidence is UNKNOWN; retain hold; reason={stage}'

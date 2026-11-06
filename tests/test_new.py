@@ -805,6 +805,9 @@ def test_codex_gets_verified_anchor_even_with_no_unread_mail(codex_startup, caps
     assert "[st anchor — session start]" in prompt
     assert "You are ellie" in prompt and "ON YOUR PLATE" in prompt
     assert "YOUR LEAD" in prompt and "STARTUP" in prompt
+    assert "[st stack primer — stack-prime/1]" in prompt
+    assert "Camayoc skill" in prompt and "cy prime --static" in prompt
+    assert "map_question" in prompt and "jev_dry_run" in prompt
     assert "ST-STARTUP-ANCHOR-COMPLETE:ellie:" in prompt
     assert "verified context" in capsys.readouterr().out
     assert box.unread("ellie") == []
