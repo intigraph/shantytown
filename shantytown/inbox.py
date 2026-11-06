@@ -604,7 +604,7 @@ class TrackerInbox:
         matches = [Message(id=it.id, to=me, body=_body_of(it.title),
                            read=it.status == "closed")
                    for it in source
-                   if is_message(it.title) and it.assignee == me
+                   if is_message(it.title) and it.assignee in (me, me.split("/")[-1])
                    and _body_of(it.title).startswith(marker + " ")]
         if len(matches) > 1:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")

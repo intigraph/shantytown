@@ -148,11 +148,16 @@ def test_failed_known_id_never_falls_back_to_marker_or_history(world,monkeypatch
     assert world.service.snapshot()['worker']['receipt']=='test-new-1'
 
 
-def test_unsupported_unknown_marker_reader_stays_unknown_without_sdk(world):
+def test_unavailable_legacy_marker_reader_stays_unknown_after_bounded_refusal(world,monkeypatch):
+    import subprocess
     from shantytown.answer import PartialAnswer
     assert world.tick()==[('worker','delivered')]
     lose_receipt(world)
     world.tracker._native_projection=False
+    def unavailable(*args):
+        assert args[args.index('--limit')+1]=='3' and '--all' in args
+        return subprocess.CompletedProcess(args,2,'','legacy unavailable')
+    monkeypatch.setattr(world.tracker,'_bd',unavailable)
     with pytest.raises(PartialAnswer,match='unavailable'):
         world.tick()
     assert not world.calls
@@ -169,3 +174,38 @@ def test_truncated_marker_observation_cannot_become_absence(world,monkeypatch):
     with pytest.raises(PartialAnswer,match='truncated'):
         world.tick()
     assert len(world.creates)==1
+
+
+@pytest.mark.parametrize('fault',['none','incomplete','cap','ambiguous','foreign','status','missing'])
+def test_legacy_marker_lookup_is_bounded_and_preserves_uncertainty(world,monkeypatch,fault):
+    import subprocess
+    from shantytown.answer import PartialAnswer
+    assert world.tick()==[('worker','delivered')]
+    body=lose_receipt(world)
+    world.tracker._native_projection=False
+    row=dict(id='test-new-1',title='inbox: '+body,status='closed',assignee='lead',priority=2)
+    rows=[row]
+    if fault=='foreign':row['assignee']='other'
+    if fault=='status':row['status']='future'
+    if fault=='missing':row.pop('priority')
+    if fault in ('cap','ambiguous'):
+        rows += [{**row,'id':'test-extra-'+str(i)} for i in range(2 if fault=='cap' else 1)]
+    def legacy(*args):
+        assert args[args.index('--assignee')+1]=='lead'
+        assert args[args.index('--limit')+1]=='3' and '--all' in args
+        assert args[args.index('--title-contains')+1]==body.split(' ',1)[0]
+        return subprocess.CompletedProcess(args,0,json.dumps(dict(
+            issues=rows,total=len(rows),has_more=fault=='incomplete')),'')
+    monkeypatch.setattr(world.tracker,'_bd',legacy)
+    if fault=='none':assert world.tick()==[('worker','reconciled')]
+    else:
+        with pytest.raises(PartialAnswer):world.tick()
+        assert world.service.snapshot()['worker']['notice']=='unknown'
+    assert len(world.creates)==1
+
+
+def test_marker_lookup_accepts_the_selected_short_recipient_alias(world):
+    world.add('test-alias','marker payload',owner='lead')
+    with sp.seeds_read_cache.direct_reads():
+        found=world.box.find_delivery('crew/lead','marker')
+    assert found.id=='test-alias' and found.read

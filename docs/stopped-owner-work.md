@@ -87,8 +87,9 @@ has a three-row ceiling; multiple matches, reaching the ceiling, malformed
 metadata, or incomplete transport refuse reconciliation. A unique result then
 uses the same exact metadata reader. Closed receipts remain eligible. Other
 receipts' descriptions and comments are never hydrated for this lookup.
-Unsupported native/legacy marker lookup remains UNKNOWN rather than enumerating
-all recipient history. Adapters without the optional point-reader capability
+A positively selected legacy store uses its SDK recipient-and-marker filter
+with the same three-row ceiling and explicit completeness checks. An unavailable
+reader remains UNKNOWN rather than enumerating all recipient history. Adapters without the optional point-reader capability
 retain their declared adapter behavior; no cross-adapter cost claim is implied.
 This source change does not enable a lifecycle publisher or admit a runtime
 measurement cohort.

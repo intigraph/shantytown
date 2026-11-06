@@ -860,20 +860,65 @@ class SdTracker(BrTracker):
         except (OSError, ValueError, RuntimeError, KeyError, PartialAnswer) as error:
             return Answer.capped((0, []), how="Seeds bounded inbox view", caveat=str(error))
 
+    def _delivery_marker_sdk(self, agent, marker):
+        """Legacy compatibility: capped marker query, never recipient history."""
+        from .inbox import _body_of
+        from .seeds_inbox import STATUSES
+        how = "sd list exact recipient, all statuses, opaque marker, limit 3"
+        try:
+            if not isinstance(marker, str) or not marker or len(marker.encode()) > 512:
+                raise ValueError("invalid delivery marker")
+            owners = tuple(dict.fromkeys((agent, agent.split('/')[-1])))
+            if any(not owner for owner in owners):
+                raise ValueError("empty inbox owner")
+            found = {}
+            for owner in owners:
+                result = self._bd("list", "--assignee", owner, "--all", "--title-contains",
+                                  marker, "--limit", "3", "--json")
+                if result.returncode:
+                    raise RuntimeError(_failure_reason(result))
+                payload = json.loads(result.stdout)
+                rows = payload.get("issues") if isinstance(payload, dict) else None
+                if (not isinstance(rows, list) or len(rows) >= 3
+                        or payload.get("has_more") is not False
+                        or type(payload.get("total")) is not int
+                        or payload['total'] != len(rows)):
+                    raise ValueError("marker listing did not prove bounded completeness")
+                for row in rows:
+                    if (not isinstance(row, dict) or not isinstance(row.get('id'), str)
+                            or not row['id'] or not isinstance(row.get('title'), str)
+                            or row.get('assignee') not in owners or row.get('status') not in STATUSES
+                            or type(row.get('priority')) is not int or not 0 <= row['priority'] <= 4):
+                        raise ValueError("invalid marker receipt metadata")
+                    if not is_message(row['title']) or not _body_of(row['title']).startswith(marker + ' '):
+                        continue
+                    item = WorkItem(id=row['id'],title=row['title'],assignee=row['assignee'],
+                                    status=row['status'],priority=row['priority'])
+                    if item.id in found and found[item.id] != item:
+                        raise ValueError("ambiguous marker receipt metadata")
+                    found[item.id] = item
+            if len(found) > 1:
+                raise ValueError("ambiguous durable delivery: multiple receipts")
+            return Answer.complete_read(list(found.values()), how=how)
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
+            return Answer.capped([], how=how, caveat=str(error))
+
     def inbox_delivery(self, agent, marker):
-        """Bounded marker recovery; unsupported legacy readers stay UNKNOWN."""
+        """Bounded marker recovery, with positive legacy compatibility only."""
         from .seeds_inbox import LegacyInboxSchema, marker_ids
         from .answer import PartialAnswer
         try:
             proof = self.prove_store()
             if not self.quipu or not proof.graph or self._native_projection is False:
-                raise ValueError("bounded delivery marker reader unavailable")
+                return self._delivery_marker_sdk(agent, marker)
             identifiers = marker_ids(proof, agent, marker, timeout=self.timeout).exact()
             if not identifiers:
                 return Answer.complete_read([], how="complete bounded marker lookup, no receipt")
             return self.inbox_receipts(agent, identifiers)
-        except (OSError, ValueError, RuntimeError, LookupError, PartialAnswer,
-                LegacyInboxSchema) as error:
+        except LegacyInboxSchema:
+            self._native_projection = False
+            return self._delivery_marker_sdk(agent, marker)
+        except (OSError, ValueError, RuntimeError, LookupError, PartialAnswer) as error:
             return Answer.capped([], how="bounded delivery marker recovery", caveat=str(error))
 
     def inbox_receipts(self, agent, identifiers):
