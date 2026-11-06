@@ -169,4 +169,5 @@ def test_github_transport_is_fixed_read_only_and_shared_pass_budget_is_real(monk
     findings = deferrals.evaluate(rows, datetime(2026, 11, 6, 4, tzinfo=timezone.utc))
     assert len(calls) == events.MAX_READS
     assert sum(f.met for f in findings) == events.MAX_READS
-    assert findings[-1].read_error and not findings[-1].met
+    exhausted = next(f for f in findings if f.bead == 'item-' + str(events.MAX_READS))
+    assert exhausted.read_error and not exhausted.met
