@@ -8,8 +8,11 @@ is accepted.
 
 This is offline source replay against controlled reader fixtures, not a live
 forge observation, deferral write, installation or haul acceptance. The runtime
-implementation demonstrated is `884b1d8c`; the commit containing this demo retains
-those runtime blobs unchanged.
+implementation demonstrated is `a8ac4a73c09198d6d30b0b7741f00a5f5ddc07be`;
+the commit containing this recording retains those runtime blobs unchanged.
+The controller examples also show free prose staying unmet, an exact authorized
+grant meeting its gate, spoofed authors staying UNKNOWN, and a newer authorized
+revocation retaining the hold.
 
 ```sh
 python3 docs/demos/forge-resume-events/demo.py

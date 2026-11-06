@@ -37,3 +37,28 @@ for hours in (1, 24):
         print(f'{hours}h backstop: ACCEPTED')
     except ValueError:
         print(f'{hours}h backstop: REFUSED even with window=True')
+
+# Controller evidence is a typed comment, not an authority claim in free prose.
+from types import SimpleNamespace
+from shantytown import deferral_notes, resume_rulings
+from shantytown.answer import Answer
+from shantytown.protocols import Agent
+crew = [Agent('admin', role='administrator'), Agent('lead', role='lead'),
+        Agent('worker', reports_to='lead')]
+registry = SimpleNamespace(all=lambda: Answer.complete_read(crew, how='offline fixture'))
+until = '2026-11-07T04:00:00Z'
+waiting = dict(id='example-123', defer_until=until,
+    notes=deferral_notes.provenance('worker', '2026-11-06T03:00:00Z', until))
+marker = ('resume-event-v1: activation:example-123 outcome=granted '
+          'authority=admin at=2026-11-06T03:01:00Z')
+row = dict(id=1, author='admin', created_at='2026-11-06T03:01:01Z', text=marker)
+for label, evidence in [('free prose', [row | {'text': 'approved, go ahead'}]),
+                        ('typed administrator grant', [row]),
+                        ('spoofed author', [row | {'author': 'worker'}]),
+                        ('newer revocation', [row, dict(id=2, author='lead',
+                            created_at='2026-11-06T03:02:01Z',
+                            text='resume-event-v1: activation:example-123 outcome=revoked authority=lead at=2026-11-06T03:02:00Z')])]:
+    met, why = resume_rulings.evaluate('activation', 'example-123', waiting, now,
+        show=lambda item: dict(id=item, assignee='worker'),
+        comments=lambda item: evidence, registry=registry)
+    print(f'{label}: met={met}; {why}')

@@ -1,4 +1,4 @@
-Script started on 2026-11-05 22:18:33-05:00 [COMMAND="stty -onlcr; python3 docs/demos/forge-resume-events/demo.py" <not executed on terminal>]
+Script started on 2026-11-05 22:33:41-05:00 [COMMAND="stty -onlcr; python3 docs/demos/forge-resume-events/demo.py" <not executed on terminal>]
 before: exact PR marker REFUSED
 after: exact PR marker ACCEPTED
 closed unmerged: met=False; exact PR is not merged (closed is not merged)
@@ -6,5 +6,9 @@ merged: met=True; exact PR is merged
 failed read: met=None; forge event read failed, incomplete or invalid; retain hold
 1h backstop: REFUSED even with window=True
 24h backstop: ACCEPTED
+free prose: met=False; no exact authorized post-deferral marker observed
+typed administrator grant: met=True; latest exact authorized outcome is granted
+spoofed author: met=None; typed ruling evidence is UNKNOWN; retain hold
+newer revocation: met=False; latest exact authorized outcome is revoked
 
-Script done on 2026-11-05 22:18:33-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-05 22:33:41-05:00 [COMMAND_EXIT_CODE="0"]
