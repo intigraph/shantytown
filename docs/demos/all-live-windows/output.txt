@@ -1,0 +1,2 @@
+{"error": "refused inbox acknowledgment of msg-old-live: no such message to this recipient", "implementation": "39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076", "marked": [], "scopes": ["recent-2", "recent-2", "recent-2", "recent-2"], "unread_after": 0, "unread_before": 0}
+{"error": null, "implementation": "d9370924febd29e77c5e41b912e21f969ba88ecd", "marked": ["msg-old-live"], "scopes": ["all-live", "all-live", "all-live", "all-live"], "unread_after": 0, "unread_before": 1}
