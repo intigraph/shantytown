@@ -338,6 +338,44 @@ def test_truncated_claude_footer_cannot_prove_zero_shells():
     assert "2 background" in unattended_shell_block("❯ \n⏵⏵ bypass permissions on · 2 shells · esc to interrupt · ← for ag…", "claude")
 
 
+def test_truncated_claude_footer_falls_back_to_the_process_tree():
+    """hammond 2026-11-06: a narrow tmux attach truncated an idle footer and the
+    agent's own cycle request was refused for 50+ minutes. The process tree is
+    the same fact without the width; None from it still refuses."""
+    screen = "❯ \n⏵⏵ bypass permissions on · esc to interrupt · ← for ag…"
+    assert unattended_shell_block(screen, "claude", process_shells=lambda: 0) == ""
+    assert "1 background" in unattended_shell_block(screen, "claude", process_shells=lambda: 1)
+    for unreadable in (lambda: None, lambda: -1, lambda: True):
+        assert "truncated footer" in unattended_shell_block(screen, "claude", process_shells=unreadable)
+    # A visible count still wins over the tree; codex never uses it.
+    shown = "❯ \n⏵⏵ bypass permissions on · 2 shells · esc to interrupt · ← for ag…"
+    assert "2 background" in unattended_shell_block(shown, "claude", process_shells=lambda: 0)
+    assert "codex" in unattended_shell_block("❯ \n› for ag…", "codex", process_shells=lambda: 0)
+
+
+def test_claude_shell_count_reads_only_snapshot_children(monkeypatch):
+    from shantytown import claude_shells
+    tree = {"100": ["101", "102"], "101": ["201", "202", "203"]}
+    args = {"100": "-zsh", "101": "claude --settings x.json", "102": "caffeinate -i",
+            "201": "/bin/zsh -c source /u/.claude/shell-snapshots/snapshot-zsh-1.sh && sleep 60",
+            "202": "yupana serve", "203": "node mcp.js"}
+    monkeypatch.setattr(claude_shells, "_children", lambda pid: tree.get(pid, []))
+    monkeypatch.setattr(claude_shells, "_args", lambda pids: {p: args[p] for p in pids})
+    assert claude_shells.count("100") == 1
+    args["201"] = "yupana serve"
+    assert claude_shells.count("100") == 0
+    # Pane pid IS the runtime (gt shape).
+    assert claude_shells.count("101") == 0
+    # No runtime, two runtimes, or an unreadable step: could not look, not zero.
+    args["101"] = "bash"
+    assert claude_shells.count("100") is None
+    args["101"] = args["102"] = "claude"
+    assert claude_shells.count("100") is None
+    monkeypatch.setattr(claude_shells, "_children", lambda pid: None)
+    assert claude_shells.count("100") is None
+    assert claude_shells.count(None) is None and claude_shells.count("x1") is None
+
+
 def test_checkpointed_agent_with_truncated_footer_is_not_auto_cycled(tmp_path):
     screen = _saturated_pane(646.0) + "\n⏵⏵ bypass permissions on · ← for ag…"
     ac, panes, reqs, pushed, store, clock = _world(tmp_path, screen)
