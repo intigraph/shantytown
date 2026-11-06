@@ -506,6 +506,19 @@ class FilesInbox:
         return [m for p in sorted(self.root.glob("msg-*.json"))
                 if (m := self._read(p)).to == me and not m.read]
 
+    def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
+        """A known receipt stays a point read, including after acknowledgement."""
+        if (not isinstance(receipt_id, str) or not receipt_id
+                or Path(receipt_id).name != receipt_id or receipt_id in ('.', '..')):
+            raise ValueError("invalid receipt identity")
+        path = self._path(receipt_id)
+        if not path.exists():
+            return None
+        message = self._read(path)
+        if message.to != me or not message.body.startswith(marker + " "):
+            raise RuntimeError("receipt recipient or marker differs")
+        return message
+
     def find_delivery(self, me: str, marker: str) -> Message | None:
         """Find a bridge receipt, including acknowledged messages. Pure read."""
         matches = [m for p in self.root.glob("msg-*.json")
@@ -562,11 +575,32 @@ class TrackerInbox:
         self._all_items = all_items
         self._items_for = items_for
 
+    def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
+        """No history enumeration or marker fallback after a known-ID refusal."""
+        exact = getattr(self._tracker, "inbox_receipts", None)
+        if callable(exact):
+            items = exact(me, [receipt_id]).exact()
+        else:
+            item = self._tracker.get(receipt_id)
+            items = [] if item is None else [item]
+        if not items:
+            return None
+        if len(items) != 1:
+            raise RuntimeError("exact receipt answer ambiguous")
+        item = items[0]
+        if (item.id != receipt_id or item.assignee not in (me, me.split('/')[-1])
+                or item.status not in ('open', 'hooked', 'in_progress', 'blocked', 'deferred', 'closed')
+                or not is_message(item.title) or not _body_of(item.title).startswith(marker + " ")):
+            raise RuntimeError("receipt identity, recipient, status or marker differs")
+        return Message(id=item.id, to=me, body=_body_of(item.title), read=item.status == 'closed')
+
     def find_delivery(self, me: str, marker: str) -> Message | None:
         """Receipt lookup needs CLOSED rows too; an unread-only query lies here."""
         if self._all_items is None and self._items_for is None:
             raise RuntimeError("durable receipt lookup requires an all-status reader")
-        source = self._items_for(me, True).exact() if self._items_for else self._all_items()
+        scoped = getattr(self._tracker, "inbox_delivery", None)
+        source = (scoped(me, marker).exact() if callable(scoped) else
+                  self._items_for(me, True).exact() if self._items_for else self._all_items())
         matches = [Message(id=it.id, to=me, body=_body_of(it.title),
                            read=it.status == "closed")
                    for it in source

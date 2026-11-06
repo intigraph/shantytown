@@ -860,6 +860,22 @@ class SdTracker(BrTracker):
         except (OSError, ValueError, RuntimeError, KeyError, PartialAnswer) as error:
             return Answer.capped((0, []), how="Seeds bounded inbox view", caveat=str(error))
 
+    def inbox_delivery(self, agent, marker):
+        """Bounded marker recovery; unsupported legacy readers stay UNKNOWN."""
+        from .seeds_inbox import LegacyInboxSchema, marker_ids
+        from .answer import PartialAnswer
+        try:
+            proof = self.prove_store()
+            if not self.quipu or not proof.graph or self._native_projection is False:
+                raise ValueError("bounded delivery marker reader unavailable")
+            identifiers = marker_ids(proof, agent, marker, timeout=self.timeout).exact()
+            if not identifiers:
+                return Answer.complete_read([], how="complete bounded marker lookup, no receipt")
+            return self.inbox_receipts(agent, identifiers)
+        except (OSError, ValueError, RuntimeError, LookupError, PartialAnswer,
+                LegacyInboxSchema) as error:
+            return Answer.capped([], how="bounded delivery marker recovery", caveat=str(error))
+
     def inbox_receipts(self, agent, identifiers):
         """Fresh exact identity fields before acknowledging known receipts.
 
