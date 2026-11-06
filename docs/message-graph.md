@@ -1,9 +1,10 @@
 # Messages in their own graph (design)
 
-**Status:** DESIGN, not built. Tracking item: aegis-snq. Nothing in this page is
-installed, and no vocabulary named here is admitted yet. Every term marked
-*proposed* needs the shape admission step in [Vocabulary](#vocabulary-proposed-not-admitted)
-before any code writes it.
+**Status:** source slices exist; the storage flip and native acceptance remain
+gated. The default remains the seed inbox. Ack, expiry, escalation and legacy
+migration are not implemented by the window reader. Every term marked
+*proposed* still needs the admission step in
+[Vocabulary](#vocabulary-proposed-not-admitted) before any code writes it.
 
 ## Problem
 
@@ -233,3 +234,21 @@ nothing. The cost of moving them can be measured and decided separately.
    holds a second credential.
 3. **Should `note` messages expire faster?** Recommended: no. One TTL is easier
    to reason about, and the cost is a few days of storage.
+
+## Live unread window coverage
+
+Until expiry exists, unread mail must remain visible in every registered local,
+unfrozen message window, regardless of age. The message-graph adapter explicitly
+uses `sd msg list --all-windows` for listing, counts, selected reads and delivery
+reconciliation, and `sd msg read --all-windows` for acknowledgment. The Seeds
+CLI discovers these windows from the graph registry, excludes frozen/attached
+windows and other projects, then applies the existing recipient/message checks.
+A malformed, truncated or unavailable registry refuses the read; it never falls
+back to a recent-week subset. An older Seeds executable that lacks this option
+also refuses, so install the supporting release before enabling this adapter.
+
+The standalone Seeds default still uses its documented two-week window unless
+`--all-windows` is requested. The option conflicts with an explicit `--weeks`
+bound. It creates no graph, changes no configuration and archives no messages.
+This source fix alone does not authorize the production storage flip or satisfy
+the later 24-hour no-new-inbox-seeds acceptance check.
