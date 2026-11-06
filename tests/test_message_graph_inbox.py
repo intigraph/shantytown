@@ -29,11 +29,11 @@ class FakeMsgTracker:
             self.msgs.append({"id": mid, "to": to, "from": frm, "text": body, "read_at": None})
         return Answer.complete_read({"id": mid, "written": True}, how="fixture delivery")
 
-    def list_messages(self, to, *, unread=True, weeks=2):
+    def list_messages(self, to, *, unread=True, weeks=2, all_windows=False):
         return Answer.complete_read([dict(m) for m in self.msgs
                 if m["to"] == to and (not unread or m["read_at"] is None)], how="fixture messages")
 
-    def read_messages(self, ids, *, weeks=2):
+    def read_messages(self, ids, *, weeks=2, all_windows=False):
         self.read_calls.append(list(ids))
         for m in self.msgs:
             if m["id"] in ids and m["read_at"] is None:
@@ -190,3 +190,58 @@ def test_sd_read_accepts_complete_receipts_including_already_read():
     tracker = object.__new__(SdTracker)
     tracker._bd = lambda *args: SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr="")
     assert tracker.read_messages(["msg-one", "msg-two"]).exact() == receipt
+
+
+@pytest.mark.parametrize("operation", ["unread", "unread_count", "unread_view", "unread_selected", "mark_read"])
+def test_mail_older_than_two_weeks_remains_visible_and_acknowledgeable(operation):
+    box, tracker = _box()
+    old = {"id": "msg-old-live-window", "to": "wu", "text": "old unread",
+           "sent_at": "2025-12-22T10:00:00Z", "read_at": None}
+    calls = []
+    def listing(to, *, unread=True, weeks=2, all_windows=False):
+        calls.append(all_windows)
+        return Answer.complete_read([old] if all_windows else [], how="age-aware window fixture")
+    tracker.list_messages = listing
+    tracker.msgs.append(old)
+    if operation == "unread":
+        assert [m.id for m in box.unread("wu")] == [old["id"]]
+    elif operation == "unread_count":
+        assert box.unread_count("wu") == 1
+    elif operation == "unread_view":
+        count, rows = box.unread_view("wu")
+        assert count == 1 and rows[0].id == old["id"]
+    elif operation == "unread_selected":
+        assert box.unread_selected("wu", [old["id"]])[0].id == old["id"]
+    else:
+        assert box.mark_read("wu", [old["id"]])[0].id == old["id"]
+    assert calls and all(calls)
+
+
+def test_sdk_all_window_scope_is_explicit_for_listing_and_acknowledgment():
+    import json
+    from types import SimpleNamespace
+    from shantytown.sd import SdTracker
+    tracker = object.__new__(SdTracker)
+    calls = []
+    def bd(*args):
+        calls.append(args)
+        value = [] if args[1] == "list" else [{"id": "msg-old", "marked": True}]
+        return SimpleNamespace(returncode=0, stdout=json.dumps(value), stderr="")
+    tracker._bd = bd
+    assert tracker.list_messages("wu", all_windows=True).exact() == []
+    assert tracker.read_messages(["msg-old"], all_windows=True).exact()[0]["marked"]
+    assert all("--all-windows" in args and "--weeks" not in args for args in calls)
+
+
+def test_unsupported_all_window_scope_refuses_without_recent_window_retry():
+    from types import SimpleNamespace
+    from shantytown.sd import SdTracker
+    tracker = object.__new__(SdTracker)
+    calls = []
+    def bd(*args):
+        calls.append(args)
+        return SimpleNamespace(returncode=2, stdout="", stderr="unknown --all-windows")
+    tracker._bd = bd
+    with pytest.raises(RuntimeError, match="sd msg list failed"):
+        tracker.list_messages("wu", all_windows=True)
+    assert len(calls) == 1
