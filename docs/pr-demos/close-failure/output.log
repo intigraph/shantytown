@@ -1,0 +1,12 @@
+Script started on 2026-11-06 11:25:54-05:00 [COMMAND="python3 -B docs/pr-demos/close-failure/record.py" <not executed on terminal>]
+CONTROLLED FIXTURE: real close CLI; simulated blocker refusal; no live tracker writes
+BEFORE 834b8811c4ceafe8f58d425f384ee902590db369
+work item operation unproven: RuntimeError: br close test-item failed: sd: actor/principal mismatch (observe): principal="fixture-principal" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; check write readback, then retry transient failures if not applied
+CLI exit=2; child fixture calls=1; item still open
+Actual blocker hidden; sd transport reported as br
+AFTER 7707fbc2155219c3e92ea9d4a8bb49ecff3f70f9
+{"error": {"code": "CLOSE_FAILED", "message": "sd close test-item failed; outcome unproven, read back before retry", "details": {"backend": "sd", "exit_code": 1, "stdout": "{\"error\": {\"code\": \"OPEN_BLOCKER\", \"message\": \"open blocker test-blocker\"}}", "stderr": "sd: actor/principal mismatch (observe): principal=\"fixture-principal\" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}}
+CLI exit=2; child fixture calls=1; item still open
+Actual blocker, sd transport and child exit retained
+
+Script done on 2026-11-06 11:25:55-05:00 [COMMAND_EXIT_CODE="0"]
