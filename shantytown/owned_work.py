@@ -40,6 +40,15 @@ def _agent(name):
     return name
 
 
+def _delivery_receipt(inbox, recipient, marker, receipt_id=None):
+    # Older adapters retain their declared marker reader. A failed exact reader
+    # never falls back to history or licenses a second delivery.
+    exact = getattr(inbox, "find_delivery_receipt", None)
+    if receipt_id is not None and callable(exact):
+        return exact(recipient, marker, receipt_id)
+    return inbox.find_delivery(recipient, marker)
+
+
 class OwnedWork:
     def __init__(self, root):
         self.root = Path(root) / "owned-work"
@@ -241,7 +250,7 @@ class OwnedWork:
             marker = "stopped-owner:" + hashlib.sha256(
                 (name + ":" + state["event"]).encode()).hexdigest()
             if state.get("notice") in ("attempting", "unknown"):
-                receipt = inbox.find_delivery(state["recipient"], marker)
+                receipt = _delivery_receipt(inbox, state["recipient"], marker, state.get("receipt"))
                 matched = receipt is not None and receipt.body == state["body"]
                 if self._finish(name, state, "delivered" if matched else "unknown",
                                 receipt if matched else None):
@@ -312,7 +321,13 @@ class OwnedWork:
             try:
                 write_json_atomic(report_path, report)
                 receipt = inbox.deliver(recipient, body, frm="st stopped-owner")
-                observed = inbox.find_delivery(recipient, marker)
+                if not isinstance(receipt.id, str) or not receipt.id:
+                    raise RuntimeError("stopped-owner receipt identity unproven")
+                # Persist the point-read key before any follow-up metadata I/O.
+                # A process crash leaves attempting+id, not a history scan.
+                if not self._finish(name, attempt, "attempting", receipt):
+                    continue
+                observed = _delivery_receipt(inbox, recipient, marker, receipt.id)
                 if observed is None or observed.id != receipt.id or observed.body != body:
                     raise RuntimeError("stopped-owner receipt read-back unproven")
             except Exception:
