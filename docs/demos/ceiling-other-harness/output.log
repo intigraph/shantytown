@@ -1,0 +1,10 @@
+Script started on 2026-11-04 09:31:53-05:00 [COMMAND="python3 docs/demos/ceiling-other-harness/demo.py" <not executed on terminal>]
+Target: isolated library fixtures; no live transfers
+Base: 8ee0f7eaa1bd453838e2a4df69a5eea83673449e
+Input: Claude source at usage ceiling; live Claude and Codex receivers, both count=0
+before: ['same-harness']
+after: ['other-harness']
+Candidate active count: 52 deferred + 1 held + 1 active -> 1
+Full-receiver negative control: moves=0
+
+Script done on 2026-11-04 09:31:53-05:00 [COMMAND_EXIT_CODE="0"]

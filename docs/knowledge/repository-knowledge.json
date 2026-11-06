@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "type": "Concept"
     },
     {
@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st manages work, crew, repositories and jobs. Roles and anchors expose governed summaries; tend ranks proposals without reassignment. Failed reads stay UNKNOWN. Protected results use authenticated own-job mailboxes; signed reviews bind exact job and PR scope. Cycle accepts item-bound approved full-history custody only for an independently verified clean branch. Chaski delegation refuses local execution. Quarantined rank proposals require administrator acceptance; semantic-only benchmarks cannot admit rank decisions. Harness conversion retains per-harness model/browser preferences and reports unsupported fields. Measured CLI updates prefer checkpointed replacement; missing or stale native evidence stays UNKNOWN. Agy diagnostics distinguish projected hooks from a verified native SessionStart receipt; missing proof remains UNKNOWN.",
-      "source_sha256": "960b70715be3c309359e2ba91e37e34ddd15836830c0a04edaa4078470bdfc9a",
+      "summary": "st manages work, crew, repositories and jobs. Roles are governed; ranking is advisory and failed reads stay UNKNOWN. Protected mailboxes and signed reviews bind job/PR scope. Cycle requires approved full-history custody and a clean branch; checkpoint advice requires fresh evidence. Chaski delegation refuses local execution. Administrators accept quarantined ranks. Harness conversion preserves validated model/browser preferences. Semantic benchmarks admit automation and personal needs, never ranks. Pipeline waits need an event and backstop; --window declares an appointment. Owner reminders never release gates. Ceiling transfer observes source harnesses and complete active, non-held receiver plates, selects only the other known harness, and preserves budget/ownership gates. Agy diagnostics distinguish projected hooks from a verified native SessionStart receipt; missing proof stays UNKNOWN.",
+      "source_sha256": "31884e18da72241d3d11e5f8c9239c9ad1fcfe5b0056776fd0ad367dd21386ed",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -72,7 +72,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "7e51ef7e63c896b037a6392c37e9f086af60ac780f9480f8e5eea8cfa04b4bb8",
+      "source_sha256": "c4166a4cb0757573c2c720c8f395e94923d7e29cc36ad629b45160a81b13b3bd",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "e40309c7e22f245e75d65dc031a7a07c5f2471be5e2605ec028fd775da203be5",
+      "source_sha256": "8adcf5cf872424ee96d15bba53a4d1e167603ce7416f63eb9da6cfae2a96e5f1",
       "properties": {
         "startHereOrder": 2
       }

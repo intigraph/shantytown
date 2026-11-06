@@ -741,7 +741,13 @@ def publish(root, lanes, *, agents=None, now=None, url=None, instance=None,
     url = env.get(PUSHGATEWAY_ENV, "").strip() if url is None else url
     if not url:
         return NOTHING_TO_SAY
-    instance = instance or os.uname().nodename.split(".")[0]
+    from .host_identity import physical_hostname
+    try:
+        instance = instance or physical_hostname(env=env).split(".")[0]
+    except ValueError:
+        if log:
+            log("governor telemetry: invalid pinned physical hostname")
+        return COULD_NOT_RENDER
     status, body, producer = OK, "", ""
     try:
         lanes = list(lanes)

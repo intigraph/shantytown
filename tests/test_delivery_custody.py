@@ -190,7 +190,9 @@ def test_reused_session_never_redelivers(tmp_path, monkeypatch):
     monkeypatch.setattr(f[0], 'session_created', lambda _: 99)
     monkeypatch.setattr(f[0], 'send', lambda *_: pytest.fail('wrong session'))
     observe(tmp_path, f, READY, 1000)
-    assert records(tmp_path)[0]['state'] == 'cleared'
+    # aegis-u2s: a body from another session ends custody as 'orphaned'; the
+    # guarantee is unchanged: it is never redelivered (send would fail above).
+    assert records(tmp_path)[0]['state'] == 'orphaned'
 
 
 def test_failed_redelivery_is_not_retried_on_next_tend(tmp_path, monkeypatch):
@@ -596,3 +598,169 @@ def test_occupied_episode_needs_idle_unmatched_text_and_waiting_mail(tmp_path, m
         observe(tmp_path, f, screen, t + k * delivery.STRANDED_SECONDS)
     assert occupied_events(tmp_path) == []
     assert keys(f[1]) == []
+
+
+# aegis-u2s: custody ends on evidence, never on elapsed time.
+
+@pytest.mark.parametrize('n', [1, 4])
+def test_dead_session_bodies_get_one_consolidated_pointer_then_orphan(tmp_path, monkeypatch, n):
+    """Dearing's #445 blocker: a restart-stranded body must still reach its owner.
+
+    Base minted one pointer per body; 1 body -> 1 pointer, N bodies -> 1 pointer.
+    """
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    for i in range(n):
+        with delivery.Custody(tmp_path, 'worker') as c:
+            c.begin(f'old body {i}', 17.0)
+            c.finish(('queued', 'unknown', 'cleared', 'queued')[i % 4])
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)   # agent was cycled
+    monkeypatch.setattr(f[0], 'send', lambda *_: pytest.fail('dead session redelivered'))
+    observe(tmp_path, f, READY, 1000)
+    [pointer] = f[-1].unread('worker')
+    assert f'{n} notice(s) from a previous session of worker' in pointer.body
+    assert 'st agent input worker --show' in pointer.body
+    recs = records(tmp_path)
+    assert {r['state'] for r in recs} == {'orphaned'}
+    assert {r['pointer'] for r in recs} == {pointer.id}
+    observe(tmp_path, f, READY, 1100)              # a second pass mints nothing more
+    assert len(f[-1].unread('worker')) == 1
+    assert keys(f[1]) == []
+
+
+def test_dead_session_body_with_a_pointer_or_matching_inbox_item_mints_nothing(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state=None, messages=['inbox body'])
+    with delivery.Custody(tmp_path, 'worker') as c:
+        c.begin('inbox body', 17.0)             # its own inbox item is its pointer
+        c.finish('queued')
+        c.begin('pointed body', 17.0)
+        c.record.update(pointer='x-1', pointer_state='recorded')
+        c.finish('unknown')
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    observe(tmp_path, f, READY, 1000)
+    assert [m.body for m in f[-1].unread('worker')] == ['inbox body']
+    assert {r['state'] for r in records(tmp_path)} == {'orphaned'}
+
+
+def test_unreadable_inbox_never_orphans_a_pointerless_dead_body(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    with delivery.Custody(tmp_path, 'worker') as c:
+        c.begin('old body', 17.0)
+        c.finish('queued')
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    monkeypatch.setattr(f[-1], 'unread', lambda *_: (_ for _ in ()).throw(OSError('board')))
+    observe(tmp_path, f, READY, 1000)
+    [r] = records(tmp_path)
+    assert r['state'] == 'queued' and not r.get('pointer_state')
+
+
+def test_unknown_pointer_write_is_never_minted_blindly_again(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    with delivery.Custody(tmp_path, 'worker') as c:
+        c.begin('old body', 17.0)
+        c.finish('queued')
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    real = f[-1].deliver
+    monkeypatch.setattr(f[-1], 'deliver', lambda *a, **k: (_ for _ in ()).throw(TimeoutError('board')))
+    with pytest.raises(TimeoutError):
+        observe(tmp_path, f, READY, 1000)
+    [r] = records(tmp_path)
+    assert r['pointer_state'] == 'attempting' and r['state'] == 'queued'
+    observe(tmp_path, f, READY, 1100)              # outcome still unknown: no second write
+    assert f[-1].unread('worker') == [] and records(tmp_path)[0]['state'] == 'queued'
+    # The first write did land after all: its marker in unread mail resolves it.
+    real('worker', records(tmp_path)[0]['receipt_marker'] + ' late', frm='st tend')
+    observe(tmp_path, f, READY, 1200)
+    assert records(tmp_path)[0]['state'] == 'orphaned'
+    assert len(f[-1].unread('worker')) == 1
+
+
+def test_current_session_and_sessionless_records_are_not_orphaned(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, state='unknown')          # session 17.0 == current
+    with delivery.Custody(tmp_path, 'worker') as c:
+        c.begin('no session', None)
+        c.finish('unknown')
+    observe(tmp_path, f, QUEUED, 1000)
+    assert sorted(r['state'] for r in records(tmp_path)) == ['unknown', 'unknown']
+
+
+def test_unreadable_session_identity_decides_nothing(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch)
+    def boom(_):
+        raise OSError('tmux gone')
+    monkeypatch.setattr(f[0], 'session_created', boom)
+    with pytest.raises(OSError):
+        observe(tmp_path, f, READY, 1000)   # the existing recovery read also needs it
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+
+
+def test_queue_drained_by_an_idle_pane_ends_custody_as_dequeued(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch)
+    observe(tmp_path, f, READY, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'dequeued'}
+    assert keys(f[1]) == []
+
+
+@pytest.mark.parametrize('screen', ['busy', 'queue-preview', 'owned', 'joined'])
+def test_queued_body_still_possibly_on_screen_is_not_dequeued(tmp_path, monkeypatch, screen):
+    f = fixtures(tmp_path, monkeypatch)
+    s = {'busy': QUEUED, 'queue-preview': IDLE_QUEUE, 'owned': OWNED, 'joined': JOINED}[screen]
+    observe(tmp_path, f, s, 1000)
+    # Never ended by the drain rule; an owned body may still take the existing
+    # single recovery path, which is not this rule's business.
+    assert 'dequeued' not in {r['state'] for r in records(tmp_path)}
+
+
+def test_latched_backlog_watch_rearms_once_only_dead_session_records_remain(tmp_path, monkeypatch):
+    """The measured fleet state: watch-* alerted since 10-20, never re-armed."""
+    import hashlib
+    f = fixtures(tmp_path, monkeypatch, state=None)
+    with delivery.Custody(tmp_path, 'worker') as c:
+        c.begin('old body', 17.0)
+        c.record.update(pointer='x-1', pointer_state='recorded')   # already read
+        c.finish('queued')
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    path = tmp_path / 'delivery' / (name + '.json')
+    path.write_text(json.dumps(dict(id=name, since=1792514093.0, alerted=True)))
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    observe(tmp_path, f, READY, 1000)
+    assert not path.exists()                     # empty backlog: the episode re-arms
+
+
+def test_an_unread_consolidated_pointer_keeps_the_backlog_watch_armed(tmp_path, monkeypatch):
+    import hashlib
+    f = fixtures(tmp_path, monkeypatch)          # pointerless queued body, session 17
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    path = tmp_path / 'delivery' / (name + '.json')
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    observe(tmp_path, f, READY, 1000)
+    assert len(f[-1].unread('worker')) == 1 and path.exists()   # unread mail is backlog
+
+
+def test_orphaned_records_do_not_page_consecutive_failed_sends(tmp_path, monkeypatch):
+    import time
+    f, wakes = stranded(tmp_path, monkeypatch, state=None)
+    for n in range(delivery.FAILED_SENDS + 2):
+        with delivery.Custody(tmp_path, 'worker') as c:
+            c.begin(f'old notice {n}', 17.0)
+            c.finish('unknown')
+    monkeypatch.setattr(f[0], 'session_created', lambda _: 99.0)
+    observe(tmp_path, f, BUSY, time.time() + 3 * delivery.STRANDED_SECONDS)
+    assert stranded_events(tmp_path) == [] and wakes == []
+
+
+def test_new_unread_pointer_keeps_latched_watch_when_queue_drains(tmp_path, monkeypatch):
+    """Ending terminal custody must not rearm while its new notice is unread."""
+    import hashlib
+    f = fixtures(tmp_path, monkeypatch)
+    name = 'watch-' + hashlib.sha256(b'worker').hexdigest()
+    path = tmp_path / 'delivery' / (name + '.json')
+    original = dict(id=name, since=1, alerted=True)
+    path.write_text(json.dumps(original))
+    observe(tmp_path, f, READY, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'dequeued'}
+    assert len(f[-1].unread('worker')) == 1
+    assert path.exists()
+    assert json.loads(path.read_text())['alerted'] is True
+    observe(tmp_path, f, READY, 1100)
+    assert len(f[-1].unread('worker')) == 1
+    assert json.loads(path.read_text())['since'] == 1

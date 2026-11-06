@@ -880,7 +880,8 @@ class Dispatcher:
 
     def defer(self, item_id: str, kind: str, reason: str,
               dry_run: bool = False, until: str = "", dependency_reason: str = "",
-              sattler_reason: str = "", gate_authority: str = "") -> Deferred:
+              sattler_reason: str = "", gate_authority: str = "",
+              window: bool = False) -> Deferred:
         """Persist and verify the resume condition before hiding an item.
 
         A backend may partially apply an update before timing out. Staging the
@@ -991,6 +992,8 @@ class Dispatcher:
                 reason += "\ngate_scope_flag: UNKNOWN repo/epic; Sattler verification pending natural tend"
             if sattler_reason:
                 reason += "\nsattler_gate_reason: " + sattler_reason.strip()
+        if window:
+            reason += "\ndefer_window: scheduled"
         reason = canonical_reason(reason, active.render())
 
         def missing(current, final=False):
@@ -1037,12 +1040,18 @@ class Dispatcher:
         if not missing(item, final=True):
             result.noop = True
             return result
+        from datetime import datetime, timezone
+        from .deferral_waits import validate as validate_wait
+        try:
+            validate_wait(reason, dependency_reason, active,
+                          parse_stamp(date), datetime.now(timezone.utc), window=window)
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         if dry_run:
             return result
 
         # Persist setter and deadline together with the reason. updated_at is
         # an item touch, not evidence of who chose a short CI pacing window.
-        from datetime import datetime, timezone
         from .deferral_pacing import provenance
         reason += "\n" + provenance(gate_authority,
                                     datetime.now(timezone.utc).isoformat(), date)
