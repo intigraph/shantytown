@@ -776,8 +776,10 @@ class MessageGraphInbox:
 
     def _window_unread(self, me: str) -> list[Message]:
         name = me.split("/")[-1]
+        # No expiry exists yet: every live registered week must remain visible.
+        # Older sd versions refuse --all-windows rather than silently hiding mail.
         return [self._as_message(name, v)
-                for v in self._tracker.list_messages(name, unread=True).exact()
+                for v in self._tracker.list_messages(name, unread=True, all_windows=True).exact()
                 if v.get("to") in (me, name)]
 
     def deliver(self, to: str, body: str, frm: str | None = None,
@@ -795,7 +797,7 @@ class MessageGraphInbox:
     def find_delivery(self, me: str, marker: str) -> Message | None:
         name = me.split("/")[-1]
         matches = [self._as_message(name, v)
-                   for v in self._tracker.list_messages(name, unread=False).exact()
+                   for v in self._tracker.list_messages(name, unread=False, all_windows=True).exact()
                    if str(v.get("text", "")).startswith(marker + " ")]
         if len(matches) > 1:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
@@ -835,7 +837,7 @@ class MessageGraphInbox:
             window = []
             if wanted:
                 mine = {m.id: m for m in self._window_unread(me)}
-                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False).exact()}
+                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False, all_windows=True).exact()}
                 for i in wanted:
                     if i in mine:
                         window.append(mine[i])
@@ -844,7 +846,7 @@ class MessageGraphInbox:
                                            "no such message to this recipient")
             marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
         if window:
-            self._tracker.read_messages([m.id for m in window]).exact()
+            self._tracker.read_messages([m.id for m in window], all_windows=True).exact()
             marked += [Message(id=m.id, to=m.to, body=m.body, frm=m.frm, read=True) for m in window]
         return marked
 

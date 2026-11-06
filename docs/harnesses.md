@@ -1,7 +1,7 @@
 # Harnesses — running more than one agent program
 
-> Claude Code is **a** harness, not the shape of the world. Two ship: `claude` (the default) and
-> `codex`. This is the setup and reference doc for both — what to put on a card, what to put in
+> Claude Code is **a** harness, not the shape of the world. Four adapters ship: `claude` (the default), `codex`, `opencode` and
+> experimental `agy`. This is the setup and reference doc for both — what to put on a card, what to put in
 > config, what lands on disk, and what does **not** work yet.
 >
 > For *why* the interface looks like this, see [`adapters.md`](adapters.md). This doc is the
@@ -632,3 +632,93 @@ eligibility retain their separate normal admission checks.
 
 The generic default remains `admit_class = false`; disabling the optional
 filter does not change any other governor or dispatch safeguard.
+
+## Antigravity CLI (`agy`, experimental)
+
+`harness = "agy"` selects Antigravity CLI 1.4.12 or later. A workspace is
+required. The normal harness-switch command preserves other harness profiles;
+`harness_options.agy.model` and `harness_options.agy.effort` select its model and
+reasoning effort. The browser option remains a Claude preference. Agy launches
+with its sandbox and `useG1Credits = false`; st never enables paid credit fallback.
+
+The session settings pointer is `settings/agy/<role>/settings.json` (or an
+independent `agent-<name>` override). Those settings carry st's canonical hook
+commands. A separate sibling `launch-settings.json` contains only agy-native
+settings and is passed to `--settings`; canonical st keys are not valid provider
+settings. Agy does **not** execute hooks from `--settings`. Provisioning
+projects the native definitions into `<workspace>/.agents/hooks.json`, preserving
+personal named hooks, and MCP entries into `.agents/mcp_config.json`. Existing
+`.agents/skills` links and the shared `AGENTS.md` instructions are reused. The
+operator's global configuration is never rewritten. Dynamic HTTP header helpers
+and named account profiles are currently refused rather than translated silently.
+
+A native SessionStart receipt binds the session, running process/start time,
+workspace, canonical and native settings hashes, and projected hook hash. A settings pointer alone is
+not evidence that agy loaded the hooks. `st ops doctor` reports projected hooks
+and native receipt separately. Missing, changed or stale proof stays UNKNOWN.
+Agy remains worker-only until a normal installed blocking drain is qualified.
+Unmeasured tool identities are refused; readiness/paste auto-clear markers remain
+empty until a qualified TUI session establishes them. Fresh isolated TUI profiles
+can require interactive Terms/Data Use setup; st never accepts it automatically.
+
+The opt-in governor source is `agy_usage`. It invokes the zero-model-turn
+`agy -p /usage --output-format json` command and requires an exact group name:
+
+```toml
+[governor.by_harness.agy]
+source = "agy_usage"
+limit_id = "Gemini Models"  # choose the group of the selected model
+on_signal_lost = "freeze"
+
+[[governor.by_harness.agy.tier]]
+at = 100
+window = "seven_day"
+action = "drain"
+```
+
+`Gemini 4 Argon` has a separate quota. General Gemini availability must never
+stand in for Argon availability. Missing groups, malformed fractions, absent
+windows and failed quota commands are UNKNOWN. Reset times schedule another
+read; they do not establish refilled quota. Token counts are available from
+headless results; native pane transcript usage and API-equivalent dollar costs
+remain UNKNOWN until qualified/configured.
+
+### Attended advisory review jobs
+
+The existing `st work jobs run <name>` surface supports a manual `agy_review`
+action. It requires `retry.max = 0`, a timeout of at least 900 seconds, an exact
+open PR head, and an explicit qualified Gemini model. It runs without a pane.
+Automatic/unattended launch and the protected-UID admission rules are unchanged.
+Deployment delegation to Chaski still refuses local job execution.
+
+```toml
+# <root>/jobs/review-example.toml
+name = "review-example"
+timeout = "16m"
+[trigger]
+manual = true
+[retry]
+max = 0
+[action.agy_review]
+repo = "example/project"
+pr = 42
+head = "0123456789abcdef0123456789abcdef01234567"
+model = "gemini-3.8-flash-low"
+result_dir = "reviews/example-42"
+```
+
+Each attempt uses an empty workspace and a temporary private HOME containing
+only a real 0600 copy of `antigravity-oauth-token`. The copy and temporary
+conversation state are removed on every exit. Native hooks deny all tools;
+PR descriptions and diffs are untrusted data. Jobs serialize under one local
+subscription lock, check the selected quota before dispatch, disable credit
+fallback and never retry. A model mismatch, tool attempt, timeout, nonzero exit,
+workspace mutation, empty response or invalid verdict schema yields no verdict.
+Raw events, stderr and metadata remain private in the result directory.
+
+Posting is separate: `python -m shantytown.agy_job ... --post` explicitly posts
+an advisory only after rechecking the bound PR head and open state and rejecting
+internal identifiers. This is not a native review approval or an author identity
+change; a non-author crew reviewer must validate and record the native review.
+Review-fix execution, named account switching, and unattended review authority
+are not enabled by this initial adapter.

@@ -22,8 +22,18 @@ docs/demos/cycle-refusal/output.log -text whitespace=cr-at-eol
 docs/demos/cycle-request/output.log -text whitespace=cr-at-eol
 # Preserve the replayable isolated tend refresh-budget probe.
 docs/probes/tend-refresh-budget/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+
+# Preserve terminal recording bytes for replay.
+docs/demos/physical-host-identity/output.log -text whitespace=cr-at-eol
+docs/demos/ceiling-other-harness/output.log -text whitespace=cr-at-eol
 docs/demos/targeted-unlock/output.log -text whitespace=cr-at-eol
 
 # Retain raw remote-discovery terminal bytes and replay timings.
 docs/demos/remote-discovery/output.log -whitespace
 docs/demos/remote-discovery/timing.log -whitespace
+
+# Preserve metrics renderer PTY bytes and matching replay timings.
+docs/demos/dp-metrics/output.log -text whitespace=cr-at-eol
+
+# Preserve the version-context terminal recording for timed replay.
+docs/pr-demos/version-context/output.log -text whitespace=cr-at-eol

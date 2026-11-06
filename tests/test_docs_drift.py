@@ -267,6 +267,7 @@ _ENV_ALLOWLIST = {
     # `tmux showenv` (not os.environ) to prove it owns a session before reaping
     # it. Internal provenance marker, never set by an operator.
     "SHANTY_OWNED": "tmux session ownership marker, set by st, not operator config",
+    "SHANTY_AGY_RECEIPT": "native process receipt pointer set by the agy launcher, not operator config",
 }
 
 

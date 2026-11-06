@@ -82,6 +82,9 @@ class ToolSpec:
 # Surveyed, not assumed. beads has NO releases → source build; quipu's
 # --version is known-broken; reactor has no install mechanism yet (blocked upstream).
 SPECS: tuple[ToolSpec, ...] = (
+    ToolSpec("agy", "agy", ("agy", "--version"), r"(\d+\.\d+\.\d+)",
+             toolchain="unknown", installs_via="Antigravity CLI installer",
+             leverage="Gemini panes, lifecycle hooks and bounded headless reviews"),
     ToolSpec(
         "beads", "bd", ("bd", "version"), r"(\d+\.\d+\.\d+)",
         toolchain="go",

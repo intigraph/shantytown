@@ -75,7 +75,8 @@ def model(card, current):
 def warn_unsupported(card, current):
     saved = validate(getattr(card, 'harness_options', None)) or {}
     options = saved.get(current, {})
-    ignored = set(options) - ({'model', 'chrome'} if current == 'claude' else {'model'})
+    supported = {'model', 'chrome'} if current == 'claude' else {'model', 'effort'} if current == 'agy' else {'model'}
+    ignored = set(options) - supported
     if current != 'claude' and card.chrome:
         ignored.add('chrome')
     if ignored:

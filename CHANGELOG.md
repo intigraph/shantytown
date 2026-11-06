@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.11.1](https://github.com/intigraph/shantytown/compare/v0.11.0...v0.11.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **identity:** preserve physical host across private display namespaces ([#470](https://github.com/intigraph/shantytown/issues/470)) ([e184213](https://github.com/intigraph/shantytown/commit/e1842131b3198012d8f856b88aa7fb6bfef65d27))
+
+## [0.11.0](https://github.com/intigraph/shantytown/compare/v0.10.0...v0.11.0) (2026-11-05)
+
+
+### Features
+
+* **cost:** attribute unattributed spend to the held item, as inferred ([#443](https://github.com/intigraph/shantytown/issues/443)) ([f25d644](https://github.com/intigraph/shantytown/commit/f25d64485e569c0d4f59baefd08908243841dbec))
+* **cost:** attribute unattributed spend to the held item, as inferred (aegis-59jx) ([f25d644](https://github.com/intigraph/shantytown/commit/f25d64485e569c0d4f59baefd08908243841dbec))
+* **cost:** display priced coverage and discover durable Codex usage ([4a16b4c](https://github.com/intigraph/shantytown/commit/4a16b4c1a1d1b3628cf15d007aaf11c414fedfb9))
+* **cost:** show dollar coverage and discover durable Codex usage ([#454](https://github.com/intigraph/shantytown/issues/454)) ([4a16b4c](https://github.com/intigraph/shantytown/commit/4a16b4c1a1d1b3628cf15d007aaf11c414fedfb9))
+* **identity:** carry protected CA config through isolated jobs ([#486](https://github.com/intigraph/shantytown/issues/486)) ([6a381cf](https://github.com/intigraph/shantytown/commit/6a381cfe8a5dd52ed9475996b87abeac81a6b604))
+* **inbox:** [inbox] store = "message-graph": new mail to message windows, not seeds ([#438](https://github.com/intigraph/shantytown/issues/438)) ([e126d6d](https://github.com/intigraph/shantytown/commit/e126d6d61415d3f8cf386caf6ff69ba37ec28d4b))
+* require mounted storage for configured Codex sessions ([#376](https://github.com/intigraph/shantytown/issues/376)) ([1a20bda](https://github.com/intigraph/shantytown/commit/1a20bdab1cf08e2b3e873bd76c96be06c103b101))
+* **work:** recover open work from measured stopped owners ([#446](https://github.com/intigraph/shantytown/issues/446)) ([fb33e64](https://github.com/intigraph/shantytown/commit/fb33e641c3ded75d8ea569d5d0413325cec6afeb))
+
+
+### Bug Fixes
+
+* **defer:** require event backstops and retain owner reminders ([#476](https://github.com/intigraph/shantytown/issues/476)) ([59274a7](https://github.com/intigraph/shantytown/commit/59274a71de00829932cd0f80e26182a2476a2376))
+* deliver routine batches using exact inbox receipts ([#487](https://github.com/intigraph/shantytown/issues/487)) ([dd11e1c](https://github.com/intigraph/shantytown/commit/dd11e1ce4a1bb63988e3df457a842cb743ea5222))
+* **delivery:** retain terminal custody evidence and unresolved notices ([#457](https://github.com/intigraph/shantytown/issues/457)) ([cd43f01](https://github.com/intigraph/shantytown/commit/cd43f01d4578cfa685d35d51d92609b0543fc345))
+* **dream:** scope the admission read to live worker plates ([#474](https://github.com/intigraph/shantytown/issues/474)) ([9697c75](https://github.com/intigraph/shantytown/commit/9697c7514e6cbab26b1743f8d79ee7d125525253))
+* **feed:** scope an unreadable gate to its owner, not the whole fleet ([#484](https://github.com/intigraph/shantytown/issues/484)) ([f160693](https://github.com/intigraph/shantytown/commit/f160693613dc2c71744ff6fa5bccfaa52c4f51d7))
+* **governor:** transfer ceiling-held work across harnesses ([#467](https://github.com/intigraph/shantytown/issues/467)) ([94d15ff](https://github.com/intigraph/shantytown/commit/94d15ffd67de4de8a93d9adb71ac4fd297360b58))
+* **guard:** separate persistent coverage from producer scratch clones ([#485](https://github.com/intigraph/shantytown/issues/485)) ([604b880](https://github.com/intigraph/shantytown/commit/604b88058719c82e72c920ec615594ae668d9012))
+* read queued routine inbox receipts without full enumeration ([dd11e1c](https://github.com/intigraph/shantytown/commit/dd11e1ce4a1bb63988e3df457a842cb743ea5222))
+* use current stack names and retain legacy compatibility ([#483](https://github.com/intigraph/shantytown/issues/483)) ([05a8a94](https://github.com/intigraph/shantytown/commit/05a8a943464da76149b2eb1d08d41ecb9c893627))
+
+
+### Documentation
+
+* **readme:** embed the hero and a non-writing crew preview ([#419](https://github.com/intigraph/shantytown/issues/419)) ([17b6798](https://github.com/intigraph/shantytown/commit/17b6798a15e0607b56f9a0de94606b6e2ddbfcc5))
+
 ## [0.10.0](https://github.com/intigraph/shantytown/compare/v0.9.1...v0.10.0) (2026-11-05)
 
 

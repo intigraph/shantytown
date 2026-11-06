@@ -435,7 +435,8 @@ item is only a no-op when all requested fields are present.
 CI, review, merge and install waits require a non-date `resume_when` condition
 and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
 required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding; a new event name is not a registration.
+existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
+per-item event name is not a registration.
 For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
 with an exact UTC `--until` at least a day away. Short date-only polling and
 dry-run attempts refuse before writes. A real scheduled appointment may use
@@ -463,6 +464,53 @@ original batch's time budget. It keeps both graphs and every evaluation field.
 A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
+
+Forge event waits use two registered generic kinds:
+
+- `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
+  observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
+- `resume_when: ci-terminal:<github|forgejo>/<owner>/<repo>@<full-sha>` wakes when
+  the observed workflows, checks and statuses for that exact commit are terminal,
+  including failure or cancellation. This is a prompt to inspect CI, never a
+  green result, review receipt or permission to merge.
+
+Both require an explicit backstop at least 24 hours away, including marker-only
+reasons and scheduled-window requests. They read only configured forge hosts;
+item text cannot choose a URL or command. Failed, missing, malformed or capped
+inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
+candidate phase and share a twelve-request budget. All fresh pre-release reads
+share a second twelve-request budget; even many rows waiting on the same fact
+cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
+next scheduled pass, with no immediate retries. Distinct forge facts rotate
+through the observation budget every five-minute slot; duplicate waiters share
+one read. A capacity-skipped observation keeps any prior failure count unchanged
+and never counts toward the three-pass error report. Attempted reads that fail
+still count. A complete workflow inventory with an active run proves the wait
+is unmet without fetching statuses or checks; terminal CI still requires all
+those inventories. Commit statuses paginate within the same request budget,
+and repeated or capped pages remain UNKNOWN. GitHub uses the existing
+`gh` credential lookup. Forgejo uses the deployment's configured
+`SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
+per-item `event:` producer registry and ASK visibility rules remain unchanged.
+
+Controller waits use `resume_when: ruling:<item>` or
+`resume_when: activation:<item>`, also with a mandatory backstop at least 24 hours
+away. They require a typed comment on that exact target item, for example:
+
+```text
+resume-event-v1: activation:example-123 outcome=granted authority=administrator at=2026-11-06T03:01:00Z
+```
+
+The authority must match the comment author and be the configured administrator
+or the target owner's lead from the crew card. Both the declared UTC timestamp
+and the stored comment creation timestamp must follow the current canonical
+deferral boundary. The comment must be recorded within five minutes of its
+declared timestamp and cannot be future-dated. Free prose and quoted old rulings
+do not satisfy a gate. Only `granted` meets it; a newer `denied` or `revoked`
+keeps it held. Missing authority, malformed/capped metadata and read failures
+remain UNKNOWN. A fresh read before release catches a later revocation. Existing
+ASK visibility, human/access labels, dependency and prose gates still apply;
+this event prompts lifecycle work and never runs a deployment or live writer.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -2807,6 +2855,11 @@ deadline) in the notes; missing or mismatched provenance does not qualify.
 An item touch is not a substitute for the defer's set time. This routing never
 releases a hold. The owner is nudged once per unchanged item and condition state;
 repeated scheduled observations do not escalate merely by count. A met event
+or lapsed backstop reaches the existing administrator route once it has been
+at least 72 hours since both the backstop and the last item update. A later
+deadline or item update starts that elapsed-time ceiling again; the existing
+administrator state key prevents repeated unchanged digests. This does not
+release the hold or change ASK routing. A met event
 can prompt the owner before the backstop, while its future date and all existing
 release gates remain intact. An unmet event at the owner backstop requests an
 owner recheck, never release. A new deferral archives old setter envelopes as
@@ -3062,6 +3115,22 @@ it deliberately, read back the item, preserve its evidence and use
 `--notes-file FILE --replace-text`. The same option applies to
 `--description-file`; it is refused without a text file. It affects only the
 explicit update and does not weaken ordinary tracker or deferral writes.
+
+On Seeds, `st work item show ITEM` includes its `revision` (unknown backends
+report null). The native exact-item display reads the typed version in its
+existing bounded observation, without a second request. Malformed or contradictory
+native tokens refuse; missing tokens remain unknown. Carry the token into the edit:
+`st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
+The token is passed unchanged through any admission reread. A stale edit refuses
+and retains Seeds' structured conflict metadata; it never refreshes the token or
+retries the write. An indeterminate Seeds outcome also retains its operation
+identity and readback metadata, rather than truncating it into a generic error.
+Guarded Seeds failures emit JSON on stderr with exit 4 (conflict) or 8
+(indeterminate); bearer strings remain redacted. The option refuses every
+non-update verb before it can write.
+Independent fields still share one item revision: explicitly
+reread and rebase even when another writer changed a different field. Other
+backends refuse `--if-revision` rather than silently dropping the guard.
 
 The command writes once and verifies the exact new text. A timeout or failed
 read-back can follow a committed write: inspect the item before deciding on any

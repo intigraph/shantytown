@@ -17,7 +17,21 @@ import uuid
 
 # A body is finished when it was submitted, its pointer was read, or a newer
 # notice from the same owner replaced it. A superseded body is never resent.
-TERMINAL = ('delivered', 'acknowledged', 'superseded')
+#
+# aegis-u2s adds two END-OF-CUSTODY states, both decided on evidence, never on
+# elapsed time. Measured 2026-11-02: 7,539 'queued' records, none visible on any
+# screen, and 8,324 non-terminal records belonged to sessions that no longer
+# exist. Nothing could ever act on them (every action needs a session match),
+# yet they kept the backlog non-empty, so the backlog watch latched fleet-wide.
+#   orphaned  the record's session is not the pane's current session: the body
+#             cannot be in this composer. Its durable inbox pointer, if any,
+#             still carries the message.
+#   dequeued  a queued body that the pane, observed idle with an empty composer,
+#             no longer shows in any queue preview. It was submitted or
+#             discarded; st cannot tell which, and an unread pointer still
+#             counts as backlog either way.
+END_OF_CUSTODY = ('orphaned', 'dequeued')
+TERMINAL = ('delivered', 'acknowledged', 'superseded') + END_OF_CUSTODY
 
 
 class Custody:
@@ -262,6 +276,102 @@ def clear_superseded(root, card, panes):
     return clear_stalled_owned(root, card, panes, states=('superseded',))
 
 
+def _end_custody(custody, records, panes, pane, screen, *, phase,
+                 card=None, box=None, messages=(), readable=False):
+    """Mark records nothing can act on any more; see END_OF_CUSTODY.
+
+    phase 'orphan' runs BEFORE the per-record pointer loop and phase 'dequeue'
+    AFTER receipts are read, so a body known to be read is 'acknowledged',
+    the more exact end, never 'dequeued'.
+
+    ORPHANING NEVER LOSES A NOTICE (Dearing's review of #445). A dead-session
+    body that already has a pointer is orphaned; its pointer carries it. One
+    with no pointer is first matched against the unread inbox, as the pointer
+    loop would (an inbox delivery's own item IS its pointer). The rest get ONE
+    consolidated pointer per agent per pass, not one each (about 4,000 were
+    pointerless when this landed), and only then become 'orphaned'. An
+    unreadable inbox, or a pointer write whose outcome is unknown, leaves them
+    non-terminal; no pointer is ever minted blindly a second time.
+
+    Session identity is read once. An unreadable one decides nothing, and a
+    record with no recorded session is left alone. 'dequeued' needs all three
+    observations at once: not busy, an empty or placeholder composer, and no
+    queue preview carrying this body. A composer holding text decides nothing,
+    because joined bodies (aegis-fu2) can hide there.
+    """
+    from . import triage
+    from .tmux import _codex_queued
+    try:
+        current = panes.session_created(pane)
+    except Exception:
+        return
+    if current is None:
+        return
+    if phase == 'orphan':
+        _orphan(custody, [r for r in records if r['state'] not in TERMINAL
+                          and r.get('session') is not None and r['session'] != current],
+                card=card, box=box, messages=messages, readable=readable)
+        return
+    idle_and_empty = (not triage.mid_flight(screen) and triage.input_state(screen)
+                      in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER))
+    for record in records:
+        if (record['state'] == 'queued' and record.get('session') == current
+                and idle_and_empty and not _codex_queued(screen, record['text'])):
+            record['state'] = 'dequeued'
+            custody.save(record)
+
+
+ORPHAN_MARKER = '[st delivery orphans '
+
+
+def _orphan(custody, dead, *, card, box, messages, readable):
+    """Dead-session records: end custody only once a pointer carries each."""
+    if not dead:
+        return
+    needs = []
+    for record in dead:
+        state = record.get('pointer_state')
+        marker = record.get('receipt_marker') or ('[st delivery ' + record['id'] + ']')
+        if state in ('recorded', 'ambiguous'):
+            record['state'] = 'orphaned'
+            custody.save(record)
+            continue
+        if not readable:
+            continue                       # UNKNOWN inbox: decide nothing
+        matches = [m for m in messages if m.body == record['text'] or marker in m.body]
+        if state == 'attempting':
+            # A write whose outcome was unknown: accept only proof it landed.
+            if len(matches) == 1:
+                record.update(pointer=matches[0].id, pointer_state='recorded', state='orphaned')
+                custody.save(record)
+            continue
+        if len(matches) >= 1:
+            record['pointer_state'] = 'recorded' if len(matches) == 1 else 'ambiguous'
+            if len(matches) == 1:
+                record['pointer'] = matches[0].id
+            record['receipt_marker'] = marker if marker in matches[0].body else record['text'].rsplit(' ', 1)[0]
+            record['state'] = 'orphaned'
+            custody.save(record)
+            continue
+        needs.append(record)
+    if not needs or card is None or box is None:
+        return
+    group = ORPHAN_MARKER + uuid.uuid4().hex + ']'
+    for record in needs:                   # persist intent before the board call
+        record.update(pointer_state='attempting', receipt_marker=group)
+        custody.save(record)
+    first = min(needs, key=lambda r: r['created'])
+    body = (f'{group} {len(needs)} notice(s) from a previous session of {card.name} were '
+            f'never confirmed submitted. Retained bodies under this deployment root, '
+            f'e.g. delivery/{first["id"]}.json. Inspect with `st agent input {card.name} --show`.')
+    item = box.deliver(card.name, body, frm='st tend')
+    if isinstance(messages, list):
+        messages.append(item)   # this pass already counts it as unread backlog
+    for record in needs:
+        record.update(pointer=item.id, pointer_state='recorded', state='orphaned')
+        custody.save(record)
+
+
 def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
     """One bounded existing-tend observation; no agent is woken to poll mail."""
     from . import triage
@@ -280,6 +390,8 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
     pending = []
     with Custody(root, card.pane, socket) as custody:
         observed = list(custody.records())
+        _end_custody(custody, observed, panes, card.pane, screen, phase='orphan',
+                     card=card, box=box, messages=messages, readable=readable)
         for record in observed:
             if record['state'] in TERMINAL:
                 continue
@@ -321,11 +433,17 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
                                    'submitted. Retained body: delivery/' + record['id'] +
                                    '.json under this deployment root. Inspect with '
                                    '`st agent input ' + card.name + ' --show`.', frm='st tend')
+                # A terminal custody transition below does not read its notice.
+                # Count this new unread pointer in the same pass's backlog.
+                messages.append(item)
                 record['pointer'] = item.id
                 record['receipt_marker'] = marker
                 record['pointer_state'] = 'recorded'
                 custody.save(record)
             pending.append(record)
+        # After receipts: a queue the idle pane no longer shows ends custody.
+        _end_custody(custody, pending, panes, card.pane, screen, phase='dequeue')
+        pending = [r for r in pending if r['state'] not in TERMINAL]
 
     # ONE recovery attempt per retained body; never type into a queued, busy,
     # foreign, reused-session or unreadable composer. Release the custody lock
@@ -452,7 +570,8 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now, *, bac
     owned = None
     busy = triage.mid_flight(screen)
     if not busy:
-        owned = next((r for r in records if r['state'] not in ('delivered', 'acknowledged')
+        owned = next((r for r in records
+                      if r['state'] not in ('delivered', 'acknowledged') + END_OF_CUSTODY
                       and _codex_owned_input(screen, r['text'])), None)
     occupied = (owned is None and not busy and backlog
                 and triage.input_state(screen) == triage.INPUT_QUEUED)
@@ -460,8 +579,10 @@ def _stranded_watch(root, reg, card, panes, socket, screen, records, now, *, bac
                    if r['state'] in ('delivered', 'acknowledged')), default=-1)
     # Queued input has been accepted for a later turn. Its idle backlog is
     # watched above; it is not evidence of consecutive failed submissions.
+    # End-of-custody records (aegis-u2s) were never a failed submission to THIS
+    # session's pane: a dead session's body, or a queue the pane drained.
     failing = [r for r in records[last_ok + 1:]
-               if r['state'] not in ('delivered', 'acknowledged', 'queued')]
+               if r['state'] not in ('delivered', 'acknowledged', 'queued') + END_OF_CUSTODY]
     with Custody(root, card.pane, socket) as custody:
         name = 'strand-' + hashlib.sha256(card.name.encode()).hexdigest()
         path = custody.root / (name + '.json')

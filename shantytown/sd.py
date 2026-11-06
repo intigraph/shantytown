@@ -66,6 +66,50 @@ class SdTracker(BrTracker):
 
     _tool = "sd"
 
+    def defer_read(self, item_id):
+        """Deferral needs exact fields, not comments or reverse dependencies."""
+        if not self.quipu:
+            return self.get(item_id)
+        from .seeds_item import read_item
+        return read_item(self, item_id)
+
+    def stranded_read(self, item_id):
+        """Exact SDK revision, never the revision-less plate projection."""
+        result = self._bd_for(item_id, 'show', item_id, '--json')
+        if result.returncode != 0:
+            raise RuntimeError('stranded item read refused')
+        rows = json.loads(result.stdout)
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ValueError('stranded item read incomplete')
+        row = rows[0]
+        if (row.get('id') != item_id or type(row.get('revision')) is not int
+                or row['revision'] < 1):
+            raise ValueError('stranded item revision unproven')
+        return row
+
+    def release_stranded(self, row, comment):
+        """One CAS transaction includes its preservation comment; no fallback."""
+        from .stranded_work import eligible
+        if (not eligible(row) or row.get('status') != 'open'
+                or type(row.get('revision')) is not int or row['revision'] < 1):
+            raise ValueError('stranded release requires eligible revision-bound row')
+        result = self._bd_for(row['id'], 'update', row['id'], '--status=open',
+            '--assignee=', f'--if-revision={row["revision"]}',
+            '--transition-comment=' + comment, '--json')
+        if result.returncode == 4:
+            return 'conflict'  # SDK guarantees nothing was committed.
+        if result.returncode != 0:
+            raise RuntimeError('stranded release outcome UNKNOWN; reconcile before retry')
+        # A successful process exit alone does not prove the committed fields.
+        current = self.stranded_read(row['id'])
+        comments = current.get('comments')
+        if (current.get('status') != 'open' or current.get('assignee')
+                or current['revision'] <= row['revision']
+                or not isinstance(comments, list)
+                or not any(c.get('text') == comment for c in comments if isinstance(c, dict))):
+            raise RuntimeError('stranded release read-back UNKNOWN')
+        return 'released'
+
     def __init__(self, repo: "str | None" = None, timeout: int = 30, *,
                  store: "str | None" = None, quipu: "str | None" = None,
                  prefix: "str | None" = None):
@@ -102,8 +146,10 @@ class SdTracker(BrTracker):
             raise RuntimeError("sd msg send receipt identity UNKNOWN") from error
         return Answer.complete_read(value, how="sd msg send: validated delivery receipt")
 
-    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2) -> Answer[list[dict]]:
-        args = ["msg", "list", "--to", to, "--weeks", str(weeks), "--json"]
+    def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2,
+                      all_windows: bool = False) -> Answer[list[dict]]:
+        scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
+        args = ["msg", "list", "--to", to, *scope, "--json"]
         if unread:
             args.append("--unread")
         result = self._bd(*args)
@@ -112,10 +158,13 @@ class SdTracker(BrTracker):
         value = json.loads(result.stdout)
         if not isinstance(value, list) or not all(isinstance(v, dict) and v.get("id") for v in value):
             raise RuntimeError("sd msg list answer unreadable")
-        return Answer.complete_read(value, how=f"sd msg list: complete requested {weeks}-week recipient window")
+        scope_name = "all registered live recipient windows" if all_windows else f"requested {weeks}-week recipient window"
+        return Answer.complete_read(value, how=f"sd msg list: complete {scope_name}")
 
-    def read_messages(self, ids: list[str], *, weeks: int = 2) -> Answer[list[dict]]:
-        result = self._bd("msg", "read", *ids, "--weeks", str(weeks), "--json")
+    def read_messages(self, ids: list[str], *, weeks: int = 2,
+                      all_windows: bool = False) -> Answer[list[dict]]:
+        scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
+        result = self._bd("msg", "read", *ids, *scope, "--json")
         if result.returncode:
             raise RuntimeError(f"sd msg read failed: {_failure_reason(result)}")
         value = json.loads(result.stdout)
