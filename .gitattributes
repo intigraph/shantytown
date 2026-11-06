@@ -32,6 +32,7 @@ docs/demos/remote-discovery/timing.log -whitespace
 
 # Preserve metrics renderer PTY bytes and matching replay timings.
 docs/demos/dp-metrics/output.log -text whitespace=cr-at-eol
+docs/demos/cold-launch-resume/output.log -text whitespace=cr-at-eol
 
 # Preserve the version-context terminal recording for timed replay.
 docs/pr-demos/version-context/output.log -text whitespace=cr-at-eol

@@ -44,7 +44,7 @@ _CONDITION = re.compile(
     r"resume[_ -]?when\s*[:=]\s*([a-z-]+)\s*:\s*(\S+)", re.IGNORECASE)
 
 #: Condition kinds this module can actually decide.
-SUPPORTED = ("closed", "date", "event", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation")
+SUPPORTED = ("closed", "date", "event", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch")
 #: Kinds the vocabulary defines and this module cannot yet test. Reported as
 #: UNTESTABLE, never as unmet — "we did not look" and "we looked and it is not
 #: met" must not render the same, which is the whole defect this bead is about.
@@ -314,7 +314,7 @@ class Finding:
                 f"{' — ' + self.title if self.title else ''}")
 
 
-def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_reader=None) -> list:
+def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_reader=None, *, root=None) -> list:
     """Findings for `rows`, newest-lapse last. Reads only; mutates nothing.
 
     `is_closed(bead_id) -> bool | None` decides a `closed:` condition. **None
@@ -470,6 +470,17 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
                         read_deferred = why == BUDGET_DEFERRED
                 else:
                     met = answer
+            elif cond.kind == "cold-launch":
+                from .resume_launch import evaluate as launch_evaluate
+                key = (cond.kind, cond.arg)
+                if key not in event_answers:
+                    event_answers[key] = launch_evaluate(cond.arg, root, now)
+                answer, why = event_answers[key]
+                if answer is None:
+                    untestable = f"{cond.render()} (UNKNOWN: {why})"
+                    read_error = True
+                else:
+                    met = answer
             else:
                 untestable = cond.render()
 
@@ -620,7 +631,7 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     # A definite closed/released/installed fact can satisfy its external hold.
     # A review date is not that fact; human/access labels remain independent.
     if (finding.met is True and finding.condition is not None
-            and finding.condition.kind in ("closed", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation")):
+            and finding.condition.kind in ("closed", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch")):
         mechanical_labels.add("blocked:external")
     if any(HOLDING_LABEL.match(l) and l not in mechanical_labels and l not in TOPIC_LABELS
            for l in labels):
@@ -633,7 +644,9 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     raw = row.get("defer_until")
     if raw is not None:
         stamp = parse_stamp(raw)
-        if stamp is None or stamp > now:
+        cold_ready = (finding.met is True and finding.condition is not None
+                      and finding.condition.kind == "cold-launch")
+        if stamp is None or (stamp > now and not cold_ready):
             return False
     notes = str(row.get("notes") or "")
     markers = list(_CONDITION.finditer(notes))

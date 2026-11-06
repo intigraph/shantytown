@@ -1801,7 +1801,7 @@ class DeferralAlerter:
                 show=show, comments=backend().ruling_comments, registry=self._reg)
         from .resume_forge_events import Reader as ForgeEventReader
         findings = pol.evaluate(rows, now, is_closed=is_closed, ruling_reader=ruling_reader,
-                                forge_reader=ForgeEventReader())
+                                forge_reader=ForgeEventReader(), root=self._root)
         fresh_forge_reader = ForgeEventReader()
         # Reserve a distinct bounded budget for fresh pre-write checks; consuming
         # the candidate budget must not starve every admitted release forever.
@@ -1862,7 +1862,9 @@ class DeferralAlerter:
                 # A future date still gates release. Only a proven owner-set
                 # reminder may be prompted early by a completed event.
                 from .deferral_pacing import owner_window
-                if not owner_window(row, now, event_ready=bool(finding.met)):
+                cold_ready = (finding.met and finding.condition is not None
+                              and finding.condition.kind == "cold-launch")
+                if not cold_ready and not owner_window(row, now, event_ready=bool(finding.met)):
                     continue
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
@@ -1876,7 +1878,7 @@ class DeferralAlerter:
                     continue
                 cache.clear()
                 fresh = pol.evaluate([detail], now, is_closed=is_closed, ruling_reader=ruling_reader,
-                                     forge_reader=fresh_forge_reader)
+                                     forge_reader=fresh_forge_reader, root=self._root)
                 if not fresh:
                     continue  # re-deferred, closed or already released
                 current = fresh[0]

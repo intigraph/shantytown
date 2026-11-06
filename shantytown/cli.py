@@ -4751,6 +4751,19 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         from . import ephemeral as _eph
         if verified == OK:
             a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+            # x8b1: observe the ordinary cold launch that happened anyway. A
+            # receipt must never create a launch or turn a cycle/dry-run into
+            # natural acceptance, and a writer failure cannot alter admission.
+            if administrator and ledger_ok and not reuse_session and not window_restore:
+                try:
+                    from .resume_launch import record as record_resume_launch
+                    record_resume_launch(a.root, card, administrator=True,
+                        harness=harness_mod.name_for(card, root=a.root), session=session,
+                        cold=True, ordinary=not _despite_hold(a), live=True, hooks=True,
+                        inbox=a._startup_delivered)
+                except (OSError, ValueError, TypeError):
+                    print("  cold-launch resume receipt UNKNOWN; launch result unchanged",
+                          file=sys.stderr)
         elif verified == CANNOT_TELL and _eph.is_ephemeral_name(card.name):
             # ON macOS HOOKS ARE UNREADABLE, NOT ABSENT (no /proc), so
             # verification is CANNOT_TELL for every launch there. Withholding an
