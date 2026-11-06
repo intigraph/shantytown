@@ -1,0 +1,12 @@
+Script started on 2026-11-06 09:53:51-05:00 [COMMAND="python3 -B docs/pr-demos/typed-gate-budget/record.py" <not executed on terminal>]
+SYNTHETIC FIXTURE: 15 held gates, capacity 12, prior failure count 2
+BEFORE fa4d7e08e1ae25c9da160553b463afeb99a1baa2
+first pass: admitted=12 skipped=3 prior failure count=2 -> 3; admin alerts=1
+four passes: distinct gates observed=12/15; reads/pass=12
+all gates held; no activation, network request or live-state change
+AFTER 3562ccbfedd1f9109a419f8b9adc0a47fe5b79ac
+first pass: admitted=12 skipped=3 prior failure count=2 -> 2; admin alerts=0
+four passes: distinct gates observed=15/15; reads/pass=12
+all gates held; no activation, network request or live-state change
+
+Script done on 2026-11-06 09:53:51-05:00 [COMMAND_EXIT_CODE="0"]
