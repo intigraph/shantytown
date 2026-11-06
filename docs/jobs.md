@@ -357,3 +357,8 @@ Before installing a delivery change, coordinate an observed installed smoke,
 a test silence and a separate reader receipt. Preserve the job state, event
 files (including consumed records), scheduler ledgers and canonical config
 backup across rollback. Use an isolated tmux socket for source verification.
+
+Manual Antigravity advisory reviews use `[action.agy_review]`; see
+[the agy harness reference](harnesses.md#attended-advisory-review-jobs) for the
+schema, private credential lifetime, exact-head result contract and limitations.
+They have no automatic retry or unattended scheduling lane.

@@ -173,7 +173,7 @@ FIVE_HOUR, SEVEN_DAY = "five_hour", "seven_day"
 WINDOW_LENGTH_S: dict[str, int] = {FIVE_HOUR: 5 * 3600, SEVEN_DAY: 7 * 86400}
 
 SOURCES = ("prometheus", "textfile", "codex_sessions",
-           "codex_app_server", "stub")
+           "codex_app_server", "agy_usage", "stub")
 WARN, FREEZE = "warn", "freeze"
 ON_SIGNAL_LOST = (WARN, FREEZE)
 
@@ -1680,6 +1680,11 @@ def reader_for(policy: Policy, *, now=time.time):
             raise GovernorError("source = \"codex_sessions\" needs `path` — the "
                                 "Codex settings root containing role sessions")
         return CodexSessionReader(policy.path, policy.window, policy.limit_id)
+    if policy.source == "agy_usage":
+        from .agy_usage import AgyUsageReader
+        if not policy.limit_id:
+            raise GovernorError("agy_usage needs an explicit group limit_id")
+        return AgyUsageReader(policy.window, policy.limit_id, now=now)
     if policy.source == "codex_app_server":
         # No `path`: this source asks the codex CLI, which finds its own home and
         # holds its own auth. Requiring a path here would invite someone to point
