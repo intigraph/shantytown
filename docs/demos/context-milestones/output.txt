@@ -1,0 +1,16 @@
+previous settings: first=35% step=None
+tokens=249999: quiet
+tokens=250000: quiet
+tokens=260801: quiet
+tokens=261046: quiet
+tokens=349999: quiet
+tokens=350000: NUDGE
+tokens=450000: NUDGE
+administrator settings: first=25% step=10
+tokens=249999: quiet
+tokens=250000: NUDGE
+tokens=260801: quiet
+tokens=261046: quiet
+tokens=349999: quiet
+tokens=350000: NUDGE
+tokens=450000: NUDGE
