@@ -1648,6 +1648,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
+    wi.add_argument("--if-revision", type=int,
+                    help="Seeds only: refuse unless the item still has this revision; reread and rebase on conflict")
     wi.add_argument("--replace-text", action="store_true",
                     help="explicitly replace non-empty notes/description from the supplied file; read back first")
     wi.add_argument("--file", type=Path)
@@ -1700,6 +1702,8 @@ def build_parser() -> argparse.ArgumentParser:
                          "the structured defer_until field. Otherwise a testable "
                          "resume_when marker or existing defer_until is required.")
     df.add_argument("--dependency-reason", default="", help="one-line technical reason for a closed gate; queue order is not a dependency")
+    df.add_argument("--window", action="store_true",
+                    help="explicit real scheduled window; permits a short date instead of an event backstop")
     df.add_argument("--sattler-reason", default="", help="Sattler rationale for a Steve ask behind lower priority")
     df.add_argument("-n", "--dry-run", action="store_true")
 
@@ -1858,7 +1862,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="convert an agent to another harness, one command")
     hz.add_argument("agent")
     hz.add_argument("target", nargs="?", default=None,
-                    help="claude | codex | opencode. Omitted: report what this card runs")
+                    help="claude | codex | opencode | agy. Omitted: report what this card runs")
     hz.add_argument("--model", default=None,
                     help="also set the model this agent runs")
     _add_despite_hold(hz)
@@ -1941,6 +1945,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--after-turn", action="store_true",
                     help="hold all automatic feeds now; stop at the next Stop hook")
+    st.add_argument('--resume-at', default=None, metavar='ISO8601',
+                    help='dated stopped-owner ownership exemption (timezone required)')
     st.add_argument("--reason", default="", metavar="TEXT",
                     help="why, recorded with the stop (GitHub #29). A deliberate "
                          "stop is INTENT, not a fault: `st crew` and the "
@@ -2754,11 +2760,23 @@ def _run_command(a) -> int:
     if a.cmd == "repool":
         return _cmd_repool(a)
     if a.cmd == "item":
-        from .br import NothingWritten
+        from .br import NothingWritten, TrackerUpdateError, redact_cause
         from .work_item import command
         try:
             print(json.dumps(command(a, _tracker(a)), indent=2))
             return 0
+        except TrackerUpdateError as exc:
+            # These are bounded SDK diagnostics, not arbitrary exception text.
+            # Preserve their recovery identity and JSON structure while keeping
+            # the existing bearer-redaction rule for every string value.
+            def redacted(value):
+                if isinstance(value, dict):
+                    return {key: redacted(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [redacted(item) for item in value]
+                return redact_cause(value) if isinstance(value, str) else value
+            print(json.dumps({"error": redacted(exc.error)}, ensure_ascii=False), file=sys.stderr)
+            return {"CONFLICT": 4, "INDETERMINATE": 8}.get(exc.code, 2)
         except ValueError as exc:
             print(f"work item refused: {exc}", file=sys.stderr)
             return 2
@@ -4304,7 +4322,7 @@ def _account_switch_sweep(a, agents, cfg, verdicts, panes, *, governors=None):
 def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
                             owner_count=None, budget=None, gaming=None,
                             log=None):
-    """Move work held by an agent at a ceiling to a claude agent with headroom.
+    """Move ceiling-held work to another harness with active-plate headroom.
 
     Stiwi, 2026-10-14 (aegis-qbl): "Don't wait on usage ceilings move to
     claude". The decisions live in `ceiling_transfer`; this binds the reads and
@@ -4356,7 +4374,8 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             continue
         item = plate(card.name)
         if item is not None and (item.status or "") != "closed":
-            holders.append(ct.Holder(card.name, item.id, why, evidence))
+            holders.append(ct.Holder(card.name, item.id, why, evidence,
+                                     harness=harness_mod.name_for(card, root=a.root)))
     if not holders:
         capture.record("no_holders", budgets=budgets, findings=findings,
                        holders=holders, candidates_observed=False)
@@ -4372,9 +4391,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
             answer = reader(name)
             if not answer.complete:
                 return None
-            return sum(1 for row in answer.exact()
-                       if (row.get("status") or "") != "closed")
+            return ct.active_plate_count(answer.exact(), name)
 
+    target_harnesses = {ct.receiver_harness(h.harness) for h in holders} - {None}
     candidates = []
     counts = {}
     for card in agents:
@@ -4388,9 +4407,9 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
         elif agent_hold.reason(a.root, card.name):
             unavailable = "held"
         count = None
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             unavailable = ct.receiver_budget(*_budget(card.name))
-        if not unavailable and harness == ct.TARGET_HARNESS:
+        if not unavailable and harness in target_harnesses:
             count = owner_count(card.name)
             counts[card.name] = count
             if count is None:
@@ -4485,6 +4504,35 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
 
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False, reuse_session: bool = False) -> int:
+    # Preserve the early quiet-time refusal even for callers without a card.
+    # No identity-dependent lifecycle work may precede that refusal.
+    gaming = quiet_time_mod.read(Path(a.root))
+    if gaming.held and not _administrator_launch(a, card) and not _despite_hold(a):
+        return _refuse_gaming(a, gaming)
+    if card is None:
+        return REFUSED
+    if dry_run:
+        return _launch_locked(a, card, panes, runtime, dry_run=True,
+            window_restore=window_restore, reuse_session=reuse_session)
+    # Match cycle's lock order: lifecycle BEFORE fleet admission. Taking it
+    # only inside _launch_admitted would deadlock against a concurrent cycle.
+    with cycle_mod.lifecycle_lock(a.root, card.name):
+        return _launch_locked(a, card, panes, runtime, dry_run=False,
+            window_restore=window_restore, reuse_session=reuse_session)
+
+
+def _launch_locked(a, card, panes, runtime, *, dry_run: bool = False,
+            window_restore: bool = False, reuse_session: bool = False) -> int:
+    if not dry_run:
+        from .stranded_work import StrandedWork
+        try:
+            pending = StrandedWork(a.root).unresolved_release(card.name)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pending = True
+        if pending:
+            print('  refused: stopped-owner release outcome UNKNOWN; reconcile its '
+                  'retained revision/marker before launching this owner', file=sys.stderr)
+            return REFUSED
     from . import fleet_governor as fg
     cfg, err = config.load_or_default(Path(a.root))
     if err:
@@ -4703,6 +4751,19 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         from . import ephemeral as _eph
         if verified == OK:
             a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+            # x8b1: observe the ordinary cold launch that happened anyway. A
+            # receipt must never create a launch or turn a cycle/dry-run into
+            # natural acceptance, and a writer failure cannot alter admission.
+            if administrator and ledger_ok and not reuse_session and not window_restore:
+                try:
+                    from .resume_launch import record as record_resume_launch
+                    record_resume_launch(a.root, card, administrator=True,
+                        harness=harness_mod.name_for(card, root=a.root), session=session,
+                        cold=True, ordinary=not _despite_hold(a), live=True, hooks=True,
+                        inbox=a._startup_delivered)
+                except (OSError, ValueError, TypeError):
+                    print("  cold-launch resume receipt UNKNOWN; launch result unchanged",
+                          file=sys.stderr)
         elif verified == CANNOT_TELL and _eph.is_ephemeral_name(card.name):
             # ON macOS HOOKS ARE UNREADABLE, NOT ABSENT (no /proc), so
             # verification is CANNOT_TELL for every launch there. Withholding an
@@ -5535,6 +5596,18 @@ def _foreign_session_refusal(a, agent_name: str, session: str, panes) -> str:
 
 
 def _cmd_stop(a) -> int:
+    resume_at = getattr(a, 'resume_at', None)
+    if resume_at is not None:
+        from datetime import datetime
+        try:
+            stamp = datetime.fromisoformat(resume_at.replace('Z', '+00:00'))
+            if stamp.tzinfo is None or stamp.timestamp() <= time.time():
+                raise ValueError('resume date must be in the future with a timezone')
+            if getattr(a, 'after_turn', False):
+                raise ValueError('dated stop requires an immediate stop')
+        except ValueError as exc:
+            print(f'refusing stop: {exc}', file=sys.stderr)
+            return 2
     # The cycle fallback already owns this lock and must retain its request if
     # launch fails. This is an internal flag, never inferred from user prose.
     if a.dry_run or getattr(a, "_cycle_internal_stop", False):
@@ -5548,6 +5621,23 @@ def _cancel_cycle_for_stop(a) -> None:
         cycle_mod.Requests(a.root).clear(a.agent)
         from .account_switch import Requests
         Requests(a.root).clear(a.agent)
+
+
+def _record_dated_stop(a):
+    stamp = getattr(a, 'resume_at', None)
+    if stamp is None:
+        return True
+    try:
+        store = _stops(a)
+        store.record(a.agent, time.time(), by=_actor(),
+                     reason=getattr(a, 'reason', '') or '', resume_at=stamp)
+        record = store.get(a.agent)
+        if record is None or record.resume_at != stamp:
+            raise ValueError('dated stop read-back unproven')
+        return True
+    except (OSError, ValueError):
+        print('  refused: dated stop intent could not be persisted; no stop mutation', file=sys.stderr)
+        return False
 
 
 def _stop_locked(a) -> int:
@@ -5568,11 +5658,14 @@ def _stop_locked(a) -> int:
     session = agent.pane      # the address; None/absent = not running
     if not session or not panes.exists(session):
         if not a.dry_run:
+            if not _record_dated_stop(a):
+                return REFUSED
             # An already-down pane can still have a queued self-cycle.
             if getattr(a, "after_turn", False):
                 agent_hold.hold(a.root, a.agent, _actor(), getattr(a, "reason", ""))
             _launches(a).forget(a.agent)
-            _stops(a).record(a.agent, time.time(), by=_actor(),
+            if getattr(a, 'resume_at', None) is None:
+                _stops(a).record(a.agent, time.time(), by=_actor(),
                              reason="stop requested while already down: "
                              + (getattr(a, "reason", "") or ""))
             _cancel_cycle_for_stop(a)
@@ -5604,6 +5697,8 @@ def _stop_locked(a) -> int:
     if a.dry_run:
         print(f"  would: kill-session {session}")
         return OK
+    if not _record_dated_stop(a):
+        return REFUSED
     if harness_mod.name_for(agent, root=a.root) == "codex":
         from . import codex_daemon
         fixed = codex_daemon.repair(agent.name)
@@ -5632,7 +5727,8 @@ def _stop_locked(a) -> int:
     # read a deliberate shutdown and a crash identically, and the measured
     # consequence was nine agents an operator had just been told to stop coming
     # back as `re-dispatch <agent> — STOPPED`.
-    _stops(a).record(a.agent, time.time(),
+    if getattr(a, 'resume_at', None) is None:
+        _stops(a).record(a.agent, time.time(),
                      by=os.environ.get("SHANTY_AGENT", ""),
                      reason=getattr(a, "reason", "") or "")
     _cancel_cycle_for_stop(a)
@@ -5921,6 +6017,21 @@ def _cmd_doctor(a) -> int:
                 code = _fold_generic(code, 1)
             else:
                 print("\n  CODEX DAEMON LAUNCH DEPTH\n  ✓ no proven per-card blockers")
+            from . import agy as agy_mod
+            try:
+                agy_rows = agy_mod.doctor_rows(_registry(a).all().exact(), Path(a.root))
+            except Exception:
+                agy_rows = [{"agent": "UNKNOWN", "ready": False}]
+            if agy_rows:
+                print("\n  AGY LIFECYCLE")
+                for row in agy_rows:
+                    print(f"  {'✓' if row['ready'] else '?'} {row['agent']}: "
+                          f"auth={row.get('auth_present', 'UNKNOWN')} "
+                          f"hooks={row.get('hooks_projected', 'UNKNOWN')} "
+                          f"native-receipt={row.get('native_receipt', 'UNKNOWN')}; "
+                          "quota: configured governor group")
+                if any(not row['ready'] for row in agy_rows):
+                    code = _fold_generic(code, 2)
             from . import provision as prov_mod
             try:
                 uniform, uniform_broken = prov_mod.uniformity_report(
@@ -7547,7 +7658,7 @@ def _cmd_defer(a) -> int:
                     until=getattr(a, "until", "") or "",
                     dependency_reason=getattr(a, "dependency_reason", ""),
                     sattler_reason=getattr(a, "sattler_reason", ""),
-                    gate_authority=_me(a) or "")
+                    gate_authority=_me(a) or "", window=getattr(a, "window", False))
     except (DeferRefused, LookupError) as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -7734,7 +7845,12 @@ def _priority_snapshot(a):
 def _priority_go_note(a):
     from . import priority_advisory as pa
     try:
-        ready, active = _priority_snapshot(a)
+        tracker = _tracker(a)
+        projection = getattr(tracker, "priority_rows", None)
+        # SdTracker inherits BrTracker: the legacy snapshot hydrates every
+        # READY body even though this advisory only needs ranking fields.
+        snapshot = projection() if callable(projection) else None
+        ready, active = snapshot if snapshot is not None else _priority_snapshot(a)
         row = next((r for r in ready + active if r.get("id") == a.item), None)
         if row is None:
             row = vars(_tracker(a).get(a.item))
@@ -8197,7 +8313,7 @@ def _cmd_crew(a) -> int:
 
     capacity_tracker = _tracker(a)
     from .seeds_plate import RenderShapeReads
-    capacity_tracker.render_shape_reads = RenderShapeReads()
+    capacity_tracker.render_shape_reads = RenderShapeReads(inline_roster=True)
     try:
         plate = _plate(a, snapshot=True, require_complete=True,
                        owners=[ag.name for ag in agents], tracker=capacity_tracker)
@@ -11359,8 +11475,10 @@ def _automatic_cycle_refusal(card, session: str, panes, runtime, root=None,
         if refusal := pane_refusal(screen):
             return refusal
         name = harness_mod.name_for(card, root)
+        from . import claude_shells
         refusal = notify_mod.unattended_shell_block(
-            triage_mod.strip_attrs(screen), name, agent=card.name, root=root)
+            triage_mod.strip_attrs(screen), name, agent=card.name, root=root,
+            process_shells=claude_shells.counter(panes, session))
         if refusal or name != "codex":
             return refusal
         # The native read may wait on IPC. Recheck busy/input before mutation.
@@ -12551,7 +12669,8 @@ def _open_prs_for(dest) -> "tuple[list[str] | None, str | None]":
         return None, str(e)
 
 
-def _refresh_worktree(dest, base: str | None = None) -> str | None:
+def _refresh_worktree(dest, base: str | None = None, *,
+                      retire_topics: bool = True) -> str | None:
     """Refresh a project worktree, retiring proved merged topics first.
 
     The keep-current sibling _refresh_clone ff-pulls a clone on `main`. A worktree
@@ -12594,7 +12713,8 @@ def _refresh_worktree(dest, base: str | None = None) -> str | None:
             return "worktree fetch failed — no checkout, pruning or rebase attempted"
         from .workspace import publication_remotes, _git
         from .landed import retire_and_prune
-        if retired := retire_and_prune(dest, publication_remotes(dest, _git), _git):
+        if retire_topics and (retired := retire_and_prune(
+                dest, publication_remotes(dest, _git), _git)):
             return retired
         stale = tree_staleness(dest)
         extra = f" {note}" if note else ""
@@ -14271,14 +14391,25 @@ def _tend_once(a, quiet: bool = False) -> int:
         # this agent's NEXT crash reads as somebody's decision.
         _stops(a).forget(card.name)
 
+    # Recovery must not hold account admission through every project's remote
+    # landing-proof scan. Optional refreshes share one start budget; an in-flight
+    # fetch/rebase finishes under its existing timeout, never a pass-wide kill.
+    refresh_deadline = time.monotonic() + 30
+
+    def _tend_refresh(path):
+        if time.monotonic() >= refresh_deadline:
+            return "tend source refresh budget exhausted; explicit refresh deferred"
+        return _refresh_clone(path)
+
     tender = tend_mod.Tender(
         panes, runtime, _launches(a),
         spawn=None if a.dry_run else _respawn,
-        refresh=None if a.dry_run else _refresh_clone,
+        refresh=None if a.dry_run else _tend_refresh,
         # Decision 7: worktrees too, at the same safe moment. Dry run
         # touches nothing, exactly like the clone refresh above.
         refresh_trees=(None if a.dry_run
-                       else lambda card: _refresh_agent_worktrees(a, card)),
+                       else lambda card: _refresh_agent_worktrees(
+                           a, card, deadline=refresh_deadline)),
         gaps=lambda card: prov_mod.missing_kit(card, Path(a.root)),
         # USAGE-LIMIT FAILOVER. Both resolvers walk the same card -> role ->
         # fleet ladder, bound HERE because this is the only layer that holds the
@@ -14404,9 +14535,15 @@ def _tend_once(a, quiet: bool = False) -> int:
         # considered — the budget can only ever shed the best-effort layer the
         # comment above calls "on top".
         sweep_deadline = time.monotonic() + _TEND_SWEEP_BUDGET_S
+        from .sweep_rotation import SweepRotation
+        sweep_rotation = SweepRotation(Path(a.root), dry_run=a.dry_run, log=_log)
 
         def _sweep(label, fn):
-            if time.monotonic() > sweep_deadline:
+            admission = sweep_rotation.admission(
+                label, within_budget=time.monotonic() <= sweep_deadline)
+            if admission == "rotation":
+                return []
+            if admission == "budget":
                 # Collected, not printed per sweep: a pass that blows the budget
                 # skips most of what follows, and one line each would bury the
                 # summary in its own noise.
@@ -14463,6 +14600,16 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
+        def _stranded_owner_work():
+            from .stranded_adapter import mode, sweep
+            if mode() == 'off':
+                return []
+            findings = sweep(a.root, reg, _tracker(a), panes, _inbox(a))
+            for identity, finding in findings:
+                _log(f'stranded-owner {identity}: {finding}')
+            _owned_work_publish(a)
+            return []
+        _fleet_sweep('stranded-owner-work', _stranded_owner_work)
         _fleet_sweep("priority-advisory", _priority_report)
         def _role_ranking_report():
             from . import ranking_check
@@ -14814,6 +14961,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         for line in _sweep("governor-wake",
                            lambda: _governor_wake_sweep(a, verdict)):
             print(f"  {line}", file=sys.stderr)
+        sweep_rotation.finish()
     if not quiet:
         print()
         if verdict is not None:
@@ -15349,7 +15497,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
-def _refresh_agent_worktrees(a, card) -> list:
+def _refresh_agent_worktrees(a, card, *, deadline=None) -> list:
     """Bring this agent's PROJECT WORKTREES current; return warnings.
 
     The tend-side counterpart to `_keep_current` (aegis-ib65p decision 7). Only
@@ -15358,7 +15506,14 @@ def _refresh_agent_worktrees(a, card) -> list:
     out = []
     try:
         for wt in agent_worktrees(card.name):
-            if warn := _refresh_worktree(wt):
+            if deadline is not None and time.monotonic() >= deadline:
+                out.append("tend source refresh budget exhausted; remaining worktrees deferred")
+                break
+            # Remote landing proofs and branch pruning are explicit maintenance,
+            # not a prerequisite for self-heal while account admission is locked.
+            warn = (_refresh_worktree(wt) if deadline is None else
+                    _refresh_worktree(wt, retire_topics=False))
+            if warn:
                 out.append(f"{_tree_label(wt)}: {warn}")
     except Exception as e:
         out.append(f"could not sweep worktrees: {e}")

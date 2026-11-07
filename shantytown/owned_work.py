@@ -40,6 +40,15 @@ def _agent(name):
     return name
 
 
+def _delivery_receipt(inbox, recipient, marker, receipt_id=None):
+    # Older adapters retain their declared marker reader. A failed exact reader
+    # never falls back to history or licenses a second delivery.
+    exact = getattr(inbox, "find_delivery_receipt", None)
+    if receipt_id is not None and callable(exact):
+        return exact(recipient, marker, receipt_id)
+    return inbox.find_delivery(recipient, marker)
+
+
 class OwnedWork:
     def __init__(self, root):
         self.root = Path(root) / "owned-work"
@@ -141,6 +150,37 @@ class OwnedWork:
         path = self.root / "state.json"
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def confirmed_down(self, agent, *, now, reason='confirmed process absence; stranded work'):
+        """Refresh checked process absence for the existing held-work reader.
+
+        Separate from stop intent and expired leases. It creates no legacy
+        notice, and only a checked subsequent live observation clears it.
+        """
+        agent, now = _agent(agent), _time(now)
+        with self.locked() as data:
+            old = data.get(agent, {})
+            if old.get('state') in {'stopped', 'ceiling'} and not old.get('process_observation'):
+                # Operator intent and its existing outbox retain their semantics.
+                old.update(graph_observed_at=now, graph_revision=self._graph_revision(data))
+                return
+            data[agent] = dict(old, generation=old.get('generation', 'no-launch-record'),
+                state='stopped', observed_at=old.get('observed_at', now),
+                expires_at=now, graph_observed_at=now,
+                graph_revision=self._graph_revision(data),
+                reason=reason,
+                notice='delivered', process_observation=True)
+
+    def confirmed_live(self, agent, *, now):
+        # Do not turn a process observation into authority to undo operator intent.
+        old = self.snapshot().get(agent, {})
+        if old.get('process_observation'):
+            with self.locked() as data:
+                current = data.get(agent)
+                if current == old:
+                    data[agent] = dict(generation=uuid.uuid4().hex, state='live',
+                        observed_at=now, expires_at=now + LEASE, launched_at=None,
+                        graph_observed_at=now, graph_revision=self._graph_revision(data))
+
     def pending(self, *, now=None):
         """Fair local scheduling order; no remote reads or liveness inference."""
         now = _time(time.time() if now is None else now)
@@ -210,7 +250,7 @@ class OwnedWork:
             marker = "stopped-owner:" + hashlib.sha256(
                 (name + ":" + state["event"]).encode()).hexdigest()
             if state.get("notice") in ("attempting", "unknown"):
-                receipt = inbox.find_delivery(state["recipient"], marker)
+                receipt = _delivery_receipt(inbox, state["recipient"], marker, state.get("receipt"))
                 matched = receipt is not None and receipt.body == state["body"]
                 if self._finish(name, state, "delivered" if matched else "unknown",
                                 receipt if matched else None):
@@ -281,7 +321,13 @@ class OwnedWork:
             try:
                 write_json_atomic(report_path, report)
                 receipt = inbox.deliver(recipient, body, frm="st stopped-owner")
-                observed = inbox.find_delivery(recipient, marker)
+                if not isinstance(receipt.id, str) or not receipt.id:
+                    raise RuntimeError("stopped-owner receipt identity unproven")
+                # Persist the point-read key before any follow-up metadata I/O.
+                # A process crash leaves attempting+id, not a history scan.
+                if not self._finish(name, attempt, "attempting", receipt):
+                    continue
+                observed = _delivery_receipt(inbox, recipient, marker, receipt.id)
                 if observed is None or observed.id != receipt.id or observed.body != body:
                     raise RuntimeError("stopped-owner receipt read-back unproven")
             except Exception:

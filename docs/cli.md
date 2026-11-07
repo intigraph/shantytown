@@ -216,6 +216,12 @@ context_hard_pct = 70
 context_nudge_pct = 35
 context_nudge_repeat_seconds = 120
 
+# Administrator incident policy: first reminder at 250k of the declared 1M,
+# then at 350k, 450k, etc. Workers retain the global cadence.
+[session_budget.context_by_role.administrator]
+context_nudge_pct = 25
+context_nudge_step_pct = 10
+
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
 
@@ -238,7 +244,14 @@ long turns for every role, including administrators. `context_nudge_pct` default
 to 15 percentage points below the hint (or half the hint for thresholds below 30%).
 Reminders repeat every `context_nudge_repeat_seconds` (default 120, range 1–3600),
 or after another five percentage points. Explicit nudge percentages must be below
-the hint. Session changes, compaction below the nudge and threshold crossings re-arm
+the hint. Optional `context_nudge_step_pct` (finite, greater than zero and below
+100) replaces timed preparation repeats with milestones anchored at the nudge:
+25 with step 10 means 25%, 35%, 45%, and onward. A late first observation at 26%
+still repeats at 35%. Elapsed time alone does not repeat this preparation advice.
+Stop's soft/hard decisions and bounded exceptions retain their existing cadence.
+Omit the step to retain the existing worker behavior. This setting inherits
+through role and agent overrides like the other context settings.
+Session changes, compaction below the nudge and threshold crossings re-arm
 feedback; busy observations do not postpone the next reminder. Unknown or invalid
 capacity never becomes a percentage.
 
@@ -351,7 +364,10 @@ at the terminal width. `st crew --wide` (also `--no-truncate`) prints the comple
 title, suitable for piping or terminal scrollback. Control characters in titles
 are rendered as spaces so tracker text cannot move the terminal cursor. The
 bead-backed roster shares one store/readiness snapshot across its assigned rows;
-a new invocation reads fresh work.
+a new invocation reads fresh work. Seeds roster membership and status validation
+share one candidate observation, and capacity reuses the same render. Missing,
+unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
+a failed read never means an empty roster.
 
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
@@ -432,6 +448,17 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
+CI, review, merge and install waits require a non-date `resume_when` condition
+and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
+required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
+existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
+per-item event name is not a registration.
+For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
+with an exact UTC `--until` at least a day away. Short date-only polling and
+dry-run attempts refuse before writes. A real scheduled appointment may use
+`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
+This exception does not bypass human decisions, dependency checks or resume gates.
+
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
 command's exact scope flag are informational metadata; they do not turn that
@@ -453,6 +480,63 @@ original batch's time budget. It keeps both graphs and every evaluation field.
 A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
+
+Forge event waits use two registered generic kinds:
+
+- `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
+  observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
+- `resume_when: ci-terminal:<github|forgejo>/<owner>/<repo>@<full-sha>` wakes when
+  the observed workflows, checks and statuses for that exact commit are terminal,
+  including failure or cancellation. This is a prompt to inspect CI, never a
+  green result, review receipt or permission to merge.
+
+Both require an explicit backstop at least 24 hours away, including marker-only
+reasons and scheduled-window requests. They read only configured forge hosts;
+item text cannot choose a URL or command. Failed, missing, malformed or capped
+inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
+candidate phase and share a twelve-request budget. All fresh pre-release reads
+share a second twelve-request budget; even many rows waiting on the same fact
+cannot amplify reads past those phase bounds. Exhaustion is UNKNOWN until the
+next scheduled pass, with no immediate retries. Distinct forge facts rotate
+through the observation budget every five-minute slot; duplicate waiters share
+one read. A capacity-skipped observation keeps any prior failure count unchanged
+and never counts toward the three-pass error report. Attempted reads that fail
+still count. A complete workflow inventory with an active run proves the wait
+is unmet without fetching statuses or checks; terminal CI still requires all
+those inventories. Commit statuses paginate within the same request budget,
+and repeated or capped pages remain UNKNOWN. GitHub uses the existing
+`gh` credential lookup. Forgejo uses the deployment's configured
+`SHANTY_FORGEJO_URL`/`FORGEJO_URL` and existing token configuration. The legacy
+per-item `event:` producer registry and ASK visibility rules remain unchanged.
+
+Controller waits use `resume_when: ruling:<item>` or
+`resume_when: activation:<item>`, also with a mandatory backstop at least 24 hours
+away. They require a typed comment on that exact target item, for example:
+
+```text
+resume-event-v1: activation:example-123 outcome=granted authority=administrator at=2026-11-06T03:01:00Z
+```
+
+The authority must match the comment author and be the configured administrator
+or the target owner's lead from the crew card. Both the declared UTC timestamp
+and the stored comment creation timestamp must follow the current canonical
+deferral boundary. The comment must be recorded within five minutes of its
+declared timestamp and cannot be future-dated. Free prose and quoted old rulings
+do not satisfy a gate. Only `granted` meets it; a newer `denied` or `revoked`
+keeps it held. Missing authority, malformed/capped metadata and read failures
+remain UNKNOWN. A fresh read before release catches a later revocation. Existing
+ASK visibility, human/access labels, dependency and prose gates still apply;
+this event prompts lifecycle work and never runs a deployment or live writer.
+
+Typed ruling/activation observations have their own unchanged limits of twelve
+candidate reads and twelve fresh release checks per pass. Waiting-item identities
+rotate every five-minute slot so a fixed prefix cannot starve later gates.
+Different waiters for one target keep separate evidence because their deferral
+boundaries may differ. A skipped observation stays UNKNOWN and preserves its
+previous failure count without incrementing or clearing it. An admitted read
+that fails still counts toward the three-pass report. Logs expose only a finite
+failure stage (`binding`, `target`, `registry`, `comments`, or `markers`), never
+private comment contents or transport exception text.
 
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
@@ -556,6 +640,14 @@ worker diagnostics go to the private raw archive's `worker.log`. A successful
 launch is not archival acceptance. The worker retains the scrub residual check
 and never publishes raw history. `--worker` runs the same work in the foreground
 for diagnostics and tests; no additional timer is installed.
+
+Capture and scrub preserve citation symlinks when cold archives are relocated.
+Unchanged captures inspect the target size; growing captures and regenerated
+derivatives publish atomically beside the private archive target. Relocated
+files must retain the agent directory and filename, be owner-only, and have a
+private parent directory owned by the same user. Dangling or mismatched links
+are refused rather than replaced. Derivative links into the raw archive are
+refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
@@ -2804,19 +2896,29 @@ and indeterminate writes retry on the next pass. Three consecutive failures
 produce one UNTESTABLE finding for the administrator; continued failure stays
 silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
-mechanical conditions remain quiet even after a separate timestamp lapses;
+mechanical conditions without verified owner timer provenance remain quiet even after a separate timestamp lapses;
 unsupported conditions request judgement even with a future timestamp.
 
-Short owner-set deferrals use an owner reminder instead of an administrator
+Owner-set deferrals use an owner reminder instead of an administrator
 ruling when their recorded setter matches the assignee, the original window
-is positive and at most 60 minutes, and the owner has a live runtime with no
+is positive, and the owner has a live runtime with no
 deliberate stop record. ASK-class items retain the administrator path. The
 normal `st work defer` writer retains `defer_provenance` (actor, set time and
 deadline) in the notes; missing or mismatched provenance does not qualify.
 An item touch is not a substitute for the defer's set time. This routing never
-releases a hold. The owner is nudged once per unchanged item; on the third
-unchanged scheduled observation it returns to the administrator path. An item
-update resets that budget. Failed owner delivery also retains the admin path.
+releases a hold. The owner is nudged once per unchanged item and condition state;
+repeated scheduled observations do not escalate merely by count. A met event
+or lapsed backstop reaches the existing administrator route once it has been
+at least 72 hours since both the backstop and the last item update. A later
+deadline or item update starts that elapsed-time ceiling again; the existing
+administrator state key prevents repeated unchanged digests. This does not
+release the hold or change ASK routing. A met event
+can prompt the owner before the backstop, while its future date and all existing
+release gates remain intact. An unmet event at the owner backstop requests an
+owner recheck, never release. A new deferral archives old setter envelopes as
+history. Down, deliberately stopped or unreadable owners, and failed owner
+delivery retain the administrator fallback. Missing or ambiguous provenance and
+ASK-class items retain their existing judgement route.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
@@ -3058,6 +3160,17 @@ trusted peer, equivalent to `st-push-allowed=true`. Any other role value refuses
 before any remote is contacted, and so does a remote set in which every remote
 is a mirror. Advance a mirror only through its own reviewed mirror sync.
 
+### Close failure diagnostics
+
+A failed `st work item close` emits a structured `CLOSE_FAILED` error with the
+actual tracker backend, child exit code, stdout and stderr. An observe warning
+does not replace a later blocker refusal or a JSON reason on stdout. Each output
+channel is bearer-redacted first. Outputs longer than 2,048 characters retain
+the first 768 and last 1,280 characters, with an omission marker. A nonzero child
+outcome remains unproven: read back the
+item before deciding whether to retry. The command never retries or changes the
+principal, blocker checks or close reason to get past a failure.
+
 ### Replacing work-item text
 
 `st work item update ITEM --notes-file FILE` fills empty notes or verifies an
@@ -3066,6 +3179,22 @@ it deliberately, read back the item, preserve its evidence and use
 `--notes-file FILE --replace-text`. The same option applies to
 `--description-file`; it is refused without a text file. It affects only the
 explicit update and does not weaken ordinary tracker or deferral writes.
+
+On Seeds, `st work item show ITEM` includes its `revision` (unknown backends
+report null). The native exact-item display reads the typed version in its
+existing bounded observation, without a second request. Malformed or contradictory
+native tokens refuse; missing tokens remain unknown. Carry the token into the edit:
+`st work item update ITEM --notes-file FILE --replace-text --if-revision N`.
+The token is passed unchanged through any admission reread. A stale edit refuses
+and retains Seeds' structured conflict metadata; it never refreshes the token or
+retries the write. An indeterminate Seeds outcome also retains its operation
+identity and readback metadata, rather than truncating it into a generic error.
+Guarded Seeds failures emit JSON on stderr with exit 4 (conflict) or 8
+(indeterminate); bearer strings remain redacted. The option refuses every
+non-update verb before it can write.
+Independent fields still share one item revision: explicitly
+reread and rebase even when another writer changed a different field. Other
+backends refuse `--if-revision` rather than silently dropping the guard.
 
 The command writes once and verifies the exact new text. A timeout or failed
 read-back can follow a committed write: inspect the item before deciding on any
@@ -3457,6 +3586,13 @@ owner statuses, duplicate receipts across graphs, legacy format uncertainty and
 transport failures remain UNKNOWN. These bounds never authorize bulk draining
 an operator’s inbox; reading and acknowledging stay separate actions.
 
+Successful administrator deferral digests emit
+`deferral-sweep: ADMIN-DIGEST delivered count=N digest=HASH` in the tend log.
+Quiet `deferral log:` reports, owner reminders, duplicate suppression and failed
+administrator delivery do not emit this marker. Measure the 24-hour acceptance
+window only after verifying the installed source and a scheduled tend pass;
+count delivered digest markers, rather than quiet report headings or item counts.
+
 Rank proposals distinguish `reowner` (a positively observed down owner) from
 `needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
 `in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
@@ -3487,3 +3623,29 @@ normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
 a zero count. Native snapshots use bounded candidate-edge and exact endpoint
 status projections; missing or shadowed endpoints refuse the run. These bands
 and flags do not change lifecycle status, clear a hold, or authorize dispatch.
+
+### Recovery source maintenance
+
+A normal tend pass gives optional clone and project-worktree refreshes one shared
+30-second start budget. It lets an in-flight operation finish under its existing
+timeout, then defers remaining refreshes rather than interrupting Git mutations.
+Tend does not run merged-topic retirement, remote landing-proof scans or branch
+pruning; those remain on explicit worktree refresh commands. A stale intact
+checkout must not prevent crew recovery. The account admission lock still covers
+the census, governor decisions and session creation; capacity, holds and duplicate
+launch checks remain in force. This budget bounds maintenance starts, not total
+pass duration or the duration of runtime startup and notification sweeps.
+
+### Observed cold-launch resume condition
+
+`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
+agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+in this deployment root and host. The normal launcher records a private receipt
+only after observing the live process, verifying hooks and acknowledging startup
+inbox delivery. Dry runs, cycles, window restores, hold overrides, other
+harnesses and unverified starts cannot produce it. The sweep observes receipts;
+it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
+before its reminder date while independent human and dependency holds remain.
+It does not prove provider responses or bypass launch admission. Existing
+`pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
+and budgets.

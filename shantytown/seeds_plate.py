@@ -7,6 +7,7 @@ shapes are UNKNOWN; a failed projection must not trigger full-board hydration.
 from __future__ import annotations
 
 import json
+from functools import wraps
 from datetime import datetime, timezone
 import re
 import time
@@ -41,6 +42,18 @@ FIELDS = {
     "http://www.w3.org/2002/12/cal/ical#due": "due_at",
 }
 
+# Only changes to the candidate/guard relation require full selection again.
+# Priority, rank and defer fields do not select subjects here: changed selected
+# subjects reload their fields, while unselected scheduling changes cannot add
+# a candidate. Keep identity, status and guard dependencies global.
+OWNER_MEMBERSHIP = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    SCHEMA + "agent", SCHEMA + "name",
+    *(SEEDS + "ontology/" + name for name in (
+        "status", "issueType", "specVersion", "blockedOn", "revision")),
+    "https://scbrown.github.io/quechua/ns#blockedOn",
+})
+
 
 def _iri(value: str) -> str:
     parsed = urlsplit(value)
@@ -50,6 +63,7 @@ def _iri(value: str) -> str:
 
 
 def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
+    timeout = seeds_read_cache.projection_timeout(timeout)
     if not seeds_read_cache.primary_reads_required() and seeds_push_read.enabled():
         if verbose:
             raise ValueError("push read cannot provide primary profiling evidence")
@@ -231,7 +245,7 @@ def _unsupported_owner_branches(proof, agent):
         for clause in clauses:
             # Restrict the candidate relation before joining owners and types.
             # Missing status and unknown-only status retain the original refusal.
-            for candidate, type_clause in (
+            for candidate, _type_clause in (
                 (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
                  f"?s a <{SCHEMA}Action> . "),
@@ -243,16 +257,24 @@ def _unsupported_owner_branches(proof, agent):
                  f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
                  f"?s a <{SCHEMA}Action> . "),
             ):
-                branches.append(f"{{ GRAPH {_iri(graph)} {{ {{ {candidate} }} "
-                                f"{clause} {type_clause} }} }}")
+                # Keep the bound owner and status test in one relation. A
+                # type BGP or nested candidate group may materialize the whole
+                # Action class before applying that owner restriction.
+                candidate = candidate.replace(f"?s a <{SCHEMA}Action> . ", "")
+                branches.append(f"{{ GRAPH {_iri(graph)} {{ {clause} "
+                                f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                                f"{candidate} }} }}")
     return branches
 
 
 class RenderShapeReads:
     """Positive shape observations scoped to one render and one proven store."""
 
-    def __init__(self):
+    def __init__(self, *, inline_roster=False):
         self.supported = []
+        # Crew keeps the render marker for frozen capacity reuse, while its
+        # candidate query can prove the same shape without a separate ASK.
+        self.inline_roster = inline_roster
 
     def check(self, proof, scope, *, timeout):
         names = frozenset(a.split("/")[-1] for a in scope) if isinstance(scope, tuple) else None
@@ -268,7 +290,39 @@ class RenderShapeReads:
         return result
 
 
+def _retry_owner_projection(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        budget = {"remaining": 3,
+                  "deadline": time.monotonic() + 3 * kwargs.get("timeout", 30)}
+        error = "projection changed"
+        while budget["remaining"]:
+            budget["remaining"] -= 1
+            try:
+                with seeds_read_cache.projection_reads(budget):
+                    return function(*args, **kwargs)
+            except seeds_read_cache.WatermarkMoved as changed:
+                error = str(changed)
+                if isinstance(changed, seeds_read_cache.StoreChanged):
+                    budget["store_changed"] = True
+                    admission = kwargs.get("shape_reads")
+                    if isinstance(admission, RenderShapeReads):
+                        admission.supported.clear()
+                    # Explicit/render-scoped admission belongs to the old
+                    # store. The restarted candidate pass must prove shape
+                    # on the replacement, and later owners cannot reuse it.
+                    kwargs = {**kwargs, "shape_reads": None}
+                if budget["remaining"] and not seeds_read_cache.projection_pause(budget):
+                    budget["remaining"] = 0
+                    error = "owner projection total time budget reached"
+        return Answer.capped(
+            [], how="Seeds owner projection; shared and ephemeral graphs",
+            caveat=f"owner plate unreadable within shared retry/time budget: {error}")
+    return read
+
+
 @declared_read_operation("owner-rows")
+@_retry_owner_projection
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
@@ -287,6 +341,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
     if include_deferred:
         how = "Seeds owner-scoped waiting-work metadata; shared and ephemeral graphs"
     try:
+        if seeds_read_cache.store_admission_required():
+            if not uses_native_schema(proof, timeout=timeout):
+                raise ValueError("seeds store changed to unsupported schema")
         if (include_closed and not messages_only) or (messages_only and (
                 agent is None or feed_owners is not None or plate_owners is not None
                 or active_only or capacity or decision)):
@@ -301,12 +358,15 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         if include_deferred and scope is None:
             raise ValueError("waiting-work metadata requires an owner scope")
         shape_check = shape_reads.check if shape_reads is not None else owner_shape_supported
-        # A single owner's guard shares the candidate observation, as inbox
-        # reads already do. Keep explicitly shared roster observations intact.
+        # Default owner/roster guards share the candidate observation. Keep
+        # explicitly shared render-scoped observations intact.
         # No cross-read cache or failed-read fallback: every invocation checks
         # the same counterexample relation before hydrating any fields.
         inline_owner_guard = messages_only or (
-            isinstance(scope, str) and shape_reads is None
+            (isinstance(scope, str) or isinstance(scope, tuple) and bool(scope))
+            and (shape_reads is None or (plate_owners is not None
+                 and isinstance(shape_reads, RenderShapeReads)
+                 and shape_reads.inline_roster))
         )
         if scope is not None and not inline_owner_guard and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")
@@ -366,24 +426,13 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 owner_clause = (_feed_owner_clause(feed_owners)
                                 if feed_owners is not None
                                 else (f"?s <{SCHEMA}agent> {term} . " if term else ""))
-                # Keep owner terms constant for indexed selection. Collapse only
-                # this exact-owner path; roster/feed projections retain their
-                # separately validated query shapes.
-                combine_statuses = agent is not None and feed_owners is None
-                status_terms = (
-                    ("?wanted_status",) if combine_statuses
-                    else tuple(json.dumps(status) for status in statuses)
-                )
-                status_filter = (
-                    "FILTER(?wanted_status IN ("
-                    + ", ".join(json.dumps(status) for status in statuses)
-                    + ")) " if combine_statuses else ""
-                )
+                # Fixed status leaves and an owner-driven type EXISTS keep
+                # the broad Action class out of the candidate join.
+                status_terms = tuple(json.dumps(status) for status in statuses)
                 for status_term in status_terms:
                     branches.append(
-                        f"{{ GRAPH {_iri(g)} {{ {owner_clause}?s a <{SCHEMA}Action> ; "
-                        f"<{SEEDS}ontology/status> {status_term} . "
-                        + status_filter
+                        f"{{ GRAPH {_iri(g)} {{ ?s <{SEEDS}ontology/status> {status_term} . "
+                        f"{owner_clause}FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
                         + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
                         + (f"?s <{SCHEMA}name> ?title . "
                            f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
@@ -420,7 +469,39 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if subject in selected and selected[subject] != graph:
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
-        grouped = _project_fields(proof, selected, graphs, timeout)
+        grouped = _project_fields(proof, selected, graphs, timeout, batch_size=1000)
+        while True:
+            try:
+                seeds_read_cache.certify_projection(
+                    proof.quipu_url, graphs, set(selected), OWNER_MEMBERSHIP, timeout, urlopen)
+                break
+            except seeds_read_cache.UnselectedMembershipChanges as change:
+                # Only the fused candidate/guard relation can prove that a
+                # foreign subject is still irrelevant. Custom admission keeps
+                # the original complete restart, as do selected membership
+                # changes and oversized affected sets.
+                if not inline_owner_guard:
+                    raise seeds_read_cache.WatermarkMoved("owner membership needs full admission")
+                seeds_read_cache.repair_entities(change)
+                values = "VALUES ?s { " + " ".join(_iri(s) for s in sorted(change.membership)) + " } "
+                scoped = query
+                for graph in graphs:
+                    # This is our fixed query compiler output, not arbitrary
+                    # SPARQL. Bind within every candidate AND guard branch;
+                    # factoring the UNION changes the refusal relation.
+                    anchor = f"GRAPH {_iri(graph)} {{ "
+                    if anchor not in scoped:
+                        raise ValueError("owner membership query cannot be scoped")
+                    scoped = scoped.replace(anchor, anchor + values)
+                if _query(proof, scoped, timeout)["rows"]:
+                    raise seeds_read_cache.WatermarkMoved("owner candidate or guard relation changed")
+                subset = {subject: selected[subject] for subject in change.entities}
+                if subset:
+                    grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
+            except seeds_read_cache.EntityChanges as change:
+                seeds_read_cache.repair_entities(change)
+                subset = {subject: selected[subject] for subject in change.entities}
+                grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
         rows = []
         for subject, row in grouped.items():
             from .protocols import rank_order
@@ -463,6 +544,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
         return Answer.complete_read(rows, how=how)
+    except seeds_read_cache.WatermarkMoved:
+        raise  # The outer owner projection must restart, not just this query.
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"owner plate unreadable: {error}")
 
@@ -554,7 +637,7 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
-def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
@@ -563,9 +646,11 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000):
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
-    # This follows the SDK's indexed query shapes without hydration.
-    for offset in range(0, len(pairs), 500):
-        chunk = pairs[offset : offset + 500]
+    # Owner rosters explicitly use 1,000 subjects to avoid a round trip.
+    # Ranking retains 500: its larger aggregate budget admits dense answers
+    # that must still fit each individual response. No field/byte cap grows.
+    for offset in range(0, len(pairs), batch_size):
+        chunk = pairs[offset : offset + batch_size]
         # Keep graph and predicate constant in each indexed branch.
         # A variable GRAPH/predicate pattern can scan the whole store
         # before joining VALUES on deployed engines.

@@ -389,3 +389,53 @@ refused on the projection path rather than presenting local timing as primary
 performance. The default `0` retains existing reads. Invalid setting values
 refuse. Live activation and measured acceptance require the upstream admission
 packet and normal deployment; enabling this flag alone cannot establish either.
+
+### Owner-read cache consistency
+
+The optional Seeds read cache holds its file locks only while checking or
+publishing local entries. HTTP watermark and query requests run outside those
+locks. Concurrent misses may execute independently. An ordinary single query
+refuses a store replacement or a moving watermark rather than returning a
+mixed result.
+
+Owner projections additionally certify their queried graphs from the oldest
+consumed query/cache observation to a fixed post-read watermark using the bounded
+change feed. Query misses are published into the shared cache only after this
+whole-projection proof succeeds. Default roster status admission shares its
+candidate query; explicitly shared render observations retain their scope.
+Duplicate per-query watermark reads are not
+needed inside that fence. Field requests bind at most 1,000 subjects while
+retaining the aggregate 10,000-field ceiling. Unrelated writes do not invalidate an exact answer. A returned
+entity's payload change re-reads only that entity's lean fields, then re-fences
+**all** selected entities; a second change during repair must also be reconciled.
+Priority, rank and defer fields are selected-row payload in this reader. Their
+changes reload a selected subject, but do not restart selection when they belong
+to an unselected subject: they cannot change the candidate or status-guard relation.
+A membership-attribute change on a selected subject, including status or ownership,
+restarts candidate selection. For at most 128 unselected changed subjects, the
+reader first revalidates the same candidate and status-guard relation restricted
+to those subjects. An empty result retains other rows, repairs changed selected
+fields, and re-fences every selected subject within the same three-pass budget.
+A new candidate or refusal counterexample still restarts the complete projection;
+custom admission and larger changed sets also use the complete restart. A store replacement discards all retained rows and restarts the whole
+projection, rechecks native-schema admission, and invalidates render-scoped
+shape admission from the old store. A replacement using a legacy revision
+ledger is UNKNOWN for this native projection.
+A regressing watermark under the same store identity is UNKNOWN, not a restart.
+Missing, malformed, truncated or changed-history proof remains
+UNKNOWN, never permission to return retained rows.
+
+The initial projection, entity repairs, whole restarts and recovery from short
+watermark timeouts share three total attempts and one overall allowance of three
+times the caller's per-request timeout. Recovery backs off by 100ms, then 200ms;
+watermark requests retain their original `min(timeout, 2)` cap. Non-timeout proof
+failures and an exhausted budget remain UNKNOWN, without stale-row fallback. The
+request cap remains per request, not an end-to-end latency promise. Query-only
+admission keeps its existing direct transport and read budget. Cache hits retain
+the bounded one-second watermark observation; this is not an immutable server
+snapshot.
+
+Exact-owner candidate selection uses fixed status leaves and a correlated type
+check. Feed selection still includes the named workers' plates and unassigned
+open work, and excludes other owners. Unsupported or absent owner statuses still
+refuse the projection.

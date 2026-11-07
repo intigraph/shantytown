@@ -13,11 +13,11 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, edited, ready_for_review]
 
-# A second push while the first is still running should cancel the first: the
-# only result anyone acts on is the one for the current tip.
+# Superseded PR heads may stop. Main pushes retain complete verdicts for
+# exact-commit qualification and installation checks.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

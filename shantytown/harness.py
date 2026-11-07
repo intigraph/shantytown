@@ -559,9 +559,15 @@ class ClaudeHarness:
         # reason as codex.render's _apply_mcp_approval: `env` is a MERGED
         # container, so a carried key st has stopped emitting has nothing to
         # replace it and would latch at its old value (aegis-936dop).
-        from .runtime import apply_carried_env   # call-time: runtime imports us
+        from .runtime import apply_carried_env, check_dp_metrics_migration
+        previous = _load_json(existing)
+        previous_env = previous.get("env")
+        requested_env = settings.get("env")
+        check_dp_metrics_migration(
+            previous_env if isinstance(previous_env, dict) else {},
+            requested_env if isinstance(requested_env, dict) else {})
         return json.dumps(
-            apply_carried_env(merge_one_level(_load_json(existing), settings),
+            apply_carried_env(merge_one_level(previous, settings),
                               settings),
             indent=2, sort_keys=True)
 
@@ -676,6 +682,9 @@ class ClaudeHarness:
         return ""
 
     def settings_in_cmdline(self, cmdline: str) -> "str | None":
+        from .agy import is_agy_command
+        if is_agy_command(cmdline):
+            return None
         toks = cmdline.split()
         for i, t in enumerate(toks):
             if t == "--settings" and i + 1 < len(toks):
@@ -995,8 +1004,19 @@ class CodexHarness:
         # name the same declared selection, even if configuration later changes.
         model = resolve_model(card, root)
         model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
+        # Capture the physical hostname before a private UTS boundary. Keep an
+        # inherited pin when a launch is composed from an existing tool shell;
+        # recapturing there would turn a display label into lifecycle identity.
+        from .host_identity import ENV as physical_host_env, physical_hostname
+        physical_host = physical_hostname()
+        # Other stack CLIs inherit standard Quipu attribution, not this
+        # Python module. Pin its existing fallback before UTS as well, while
+        # retaining an explicit declaration (including invalid/UNKNOWN).
+        quipu_host = os.environ.get("QUIPU_HOST", physical_host)
+        physical_env = (f"{physical_host_env}={shlex.quote(physical_host)} "
+                        f"QUIPU_HOST={shlex.quote(quipu_host)} ")
         identity_env = (
-            f"{carried_env}{credential_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
+            f"{carried_env}{credential_env}{root_env}{physical_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
             f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
@@ -1012,10 +1032,19 @@ class CodexHarness:
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
         daemon_start = ""
+        from .session_storage import configured, Storage
+        try:
+            session_storage = configured(root)
+        except ValueError as error:
+            raise Unsupported(str(error)) from error
         remote_control = self._remote_control(root)
+        if session_storage is not None and not remote_control:
+            raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
         if remote_control:
             managed = codex_standalone_binary(home)
             if not managed.is_file():
+                if session_storage is not None:
+                    raise Unsupported("mount-required session storage needs an installed managed remote-control daemon; refusing local fallback")
                 # A copied relay preference is not a standalone installation.
                 # A fresh host must still be able to start its first worker;
                 # leave its config intact so installing the payload enables
@@ -1085,6 +1114,17 @@ class CodexHarness:
                 "XDG_STATE_HOME", Path.home() / ".local" / "state"))
             durable_sessions = (state_base / "shantytown" / "codex"
                                 / card.name / "sessions")
+            session_preflight = ""
+            if session_storage is not None:
+                if not card.name or Path(card.name).name != card.name or card.name in {".", ".."}:
+                    raise Unsupported("session storage requires a single-component agent name")
+                session_storage = Storage(
+                    session_storage.root / card.name / "sessions", session_storage.mount,
+                    session_storage.device, session_storage.minimum_free)
+                durable_sessions = session_storage.root
+                # A missing/wrong mount must refuse BEFORE stopping the old daemon.
+                # This opt-in is a capacity boundary, unlike best-effort durability.
+                session_preflight = session_storage.command() + " && "
             data_base = Path(os.environ.get(
                 "XDG_DATA_HOME", Path.home() / ".local" / "share"))
             # Share the daemon package INCLUDING its native installer lock.
@@ -1193,6 +1233,10 @@ class CodexHarness:
             # (sessions/sessions), and rollouts would keep going to tmpfs with
             # nothing to show anything was wrong. Hence the explicit migrate.
             sessions_setup = codex_sessions_setup(daemon_home, durable_sessions)
+            if session_storage is not None:
+                # Never run the legacy copy/remove helper against fleet histories.
+                # Existing directories/other links require a separate cold cutover.
+                sessions_setup = session_storage.command(home=daemon_home)
             # Only a sanctioned normal launch reaches this stop/start path.
             # Existing package custody is verified after stop; no live cleanup.
             # The measured runtime-tmpfs failure and /proc custody proof are
@@ -1201,7 +1245,7 @@ class CodexHarness:
                 f"{package_setup} --migrate-stopped && "
                 if sys.platform.startswith("linux") else ""
             )
-            daemon_start = (f"{bootstrap} && {stop} && "
+            daemon_start = (f"{session_preflight}{bootstrap} && {stop} && "
                             f"{packages_after_stop}{sessions_setup} && "
                             f"{ready}{repair_after_start} && "
                             f"{path_shim_setup} && ")
@@ -1529,9 +1573,11 @@ def _load_json(text: str) -> dict:
 
 
 from .opencode import make_harness as _opencode_harness
+from .agy import make_harness as _agy_harness
 
 _HARNESSES = {h.name: h for h in
-              (ClaudeHarness(), CodexHarness(), _opencode_harness(ClaudeHarness))}
+              (ClaudeHarness(), CodexHarness(), _opencode_harness(ClaudeHarness),
+               _agy_harness(ClaudeHarness))}
 
 
 def all_harnesses() -> tuple[Harness, ...]:

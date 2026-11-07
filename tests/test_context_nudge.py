@@ -152,3 +152,73 @@ def test_concurrent_tool_observation_never_waits_or_loses_stop_exception(tmp_pat
     assert ch._load(ch._path(tmp_path, card)) == saved
     assert ch.tool_feedback(tmp_path, card.name, payload)
     assert ch._load(ch._path(tmp_path, card))["exception"] == saved["exception"]
+
+
+def admin_milestones(tmp_path):
+    card, payload = world(tmp_path, "administrator")
+    (tmp_path / "shantytown.toml").write_text(
+        '[session_budget]\ncontext_window=1000000\n'
+        '[session_budget.context_by_role.administrator]\n'
+        'context_nudge_pct=25\ncontext_nudge_step_pct=10\n')
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "crew/reader.json").write_text('{"role":"administrator"}')
+    payload["hook_event_name"] = "PostToolUse"
+    return card, payload
+
+
+def test_admin_original_incident_boundary_and_milestones(tmp_path, monkeypatch, capsys):
+    card, payload = admin_milestones(tmp_path)
+    clock = [1000]
+    monkeypatch.setattr(ch.time, "time", lambda: clock[0])
+    monkeypatch.setattr(ch, "_decide", lambda *a: (_ for _ in ()).throw(
+        AssertionError("tool feedback must not call Jev")))
+    # Scoped boundary controls, not a fabricated replay of all 430 source points.
+    for tokens, expected in [
+        (249999, False), (250000, True), (260801, False), (261046, False),
+        (349999, False), (350000, True), (450000, True),
+        (500000, False), (549999, False), (550000, True),
+        (650000, True), (750000, True),
+    ]:
+        turn(payload["transcript_path"], tokens)
+        clock[0] += 1000  # time alone never substitutes for the +10% milestone
+        assert ch.tool_feedback(tmp_path, card.name, payload) is expected
+        capsys.readouterr()
+    assert not (tmp_path / "notify/cycle-requests.json").exists()
+    assert not (tmp_path / "context-decisions.jsonl").exists()
+
+
+def test_admin_late_sample_reset_and_stop_independence(tmp_path, monkeypatch, capsys):
+    card, payload = admin_milestones(tmp_path)
+    monkeypatch.setattr(ch.time, "time", lambda: 1000)
+    for tokens, expected in [(260801, True), (349999, False), (350000, True),
+                             (15134, False), (250000, True)]:
+        turn(payload["transcript_path"], tokens)
+        assert ch.tool_feedback(tmp_path, card.name, payload) is expected
+        capsys.readouterr()
+    # Tool feedback does not consume the separate Stop preparation milestone.
+    assert ch.emit(tmp_path, card, payload)
+    capsys.readouterr()
+    assert not ch.emit(tmp_path, card, payload)
+    turn(payload["transcript_path"], 350000)
+    assert ch.emit(tmp_path, card, payload)
+    capsys.readouterr()
+    payload["session_id"] = "next-session"
+    assert ch.tool_feedback(tmp_path, card.name, payload)
+
+
+def test_admin_step_validation_inheritance_and_worker_policy():
+    import pytest
+    from shantytown import session_budget as sb
+    cfg = sb.parse({"context_window": 1000000, "context_by_role": {
+        "administrator": {"context_nudge_pct": 25, "context_nudge_step_pct": 10}}})
+    assert cfg.context_for("administrator").nudge_step_pct == 10
+    assert cfg.context_for("administrator").nudge_at == 25
+    worker = cfg.context_for("worker")
+    assert worker.nudge_step_pct is None
+    assert worker.nudge_at == 35
+    assert worker.repeat_seconds == 120
+    assert sb.parse({"context_by_agent": {"reader": {
+        "context_nudge_step_pct": 10}}}).context_for("worker", "reader").window is None
+    for value in (True, 0, -1, 100, float("nan"), float("inf"), "10"):
+        with pytest.raises(sb.BudgetError, match="context_nudge_step_pct"):
+            sb.parse({"context_nudge_step_pct": value})

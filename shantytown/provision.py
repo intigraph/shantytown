@@ -298,7 +298,7 @@ def link_instructions(ws, harness: str | None) -> bool:
     source = ws / "CLAUDE.md"
     if not source.is_file():
         return False
-    if harness not in ("codex", "opencode"):
+    if harness not in ("codex", "opencode", "agy"):
         return True
     target = ws / "AGENTS.md"
     if target.exists() and source.resolve() == target.resolve():
@@ -503,6 +503,14 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
             have = None
         if have != want:
             gaps.append("codex-mcp(Quipu drift)")
+    elif card.harness == "agy":
+        from .agy import translate_servers
+        try:
+            have = json.loads((ws / ".agents/mcp_config.json").read_text())
+            if have != translate_servers(json.dumps(rendered)):
+                gaps.append("agy-mcp(Quipu drift)")
+        except (OSError, ValueError):
+            gaps.append("agy-mcp(unreadable)")
     elif card.harness == "opencode":
         from .opencode import config_path, translate_servers
         try:
@@ -529,6 +537,9 @@ def missing_kit(card: Agent, root, *, manifest=_UNREAD) -> list[str]:
     Cheap enough to run on every supervision pass, which is the point: nothing in
     the tier reported this difference, so five agents carried it for a night.
     """
+    from .harness import name_for
+    from dataclasses import replace as replace_card
+    card = replace_card(card, harness=name_for(card, root))
     if not card.workspace:
         return []                                  # no workspace: not our claim
     ws = Path(card.workspace).expanduser()
@@ -546,7 +557,7 @@ def missing_kit(card: Agent, root, *, manifest=_UNREAD) -> list[str]:
     have = servers_in(ws / ".mcp.json")
     if want and sorted(have) != sorted(want):
         gaps.append(f"mcp({','.join(sorted(set(want) - set(have))) or 'mismatch'})")
-    if card.harness not in ("codex", "opencode") and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
+    if card.harness not in ("codex", "opencode", "agy") and not (ws / ".claude" / CONSENT_TEMPLATE).is_file():
         gaps.append("mcp-consent")
     # SKILLS ARE KIT TOO — and this is the "wire the detector to something that
     # runs" half of aegis-qvxd. The standing guard for skill drift was a shell
@@ -1077,6 +1088,9 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     same bytes. It is safe on an already-provisioned agent, which matters because
     the caller is a launcher that runs every time an agent starts.
     """
+    from .harness import name_for
+    from dataclasses import replace as replace_card
+    card = replace_card(card, harness=name_for(card, root))
     if not card.workspace:
         _refresh_opencode_bridge(card, root, settings_path)
         return []                       # no workspace elected — no workspace kit
@@ -1136,7 +1150,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         consent_path = provision_dir(root) / CONSENT_TEMPLATE
         if consent_path.is_file():
             canonical_consent = _manifest_consent(consent_path.read_text(), manifest)
-        elif card.harness not in ("codex", "opencode"):
+        elif card.harness not in ("codex", "opencode", "agy"):
             raise ProvisionError("canonical MCP consent template is missing")
         rendered = json.dumps(_render_manifest(manifest, secrets if secrets is not None else load_secrets(root, template, agent=card.name)))
         try:
@@ -1174,6 +1188,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             link.unlink()
         (ws / tooling.RECEIPT).write_text(json.dumps({"skills": {
             name: str(src) for name, src in manifest.sources(ws)}}) + "\n")
+
+    if card.harness == "agy":
+        from .agy import project_hooks, selected_config
+        project_hooks(ws, settings_path or selected_config(card, root))
 
     # SKILLS FIRST, and outside every early return below: a store that defines no
     # MCP template still has a workspace full of skills the runtime cannot see,
@@ -1268,6 +1286,9 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         finally:
             temporary.unlink(missing_ok=True)
     _project_codex_mcp(card, root, rendered, template)
+    if card.harness == "agy":
+        from .agy import project_mcp
+        project_mcp(card, root, rendered, replace=template is not None)
     if card.harness == "opencode":
         from .opencode import project_mcp
         project_mcp(card, root, rendered, replace=template is not None)

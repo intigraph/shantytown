@@ -428,3 +428,111 @@ def test_claude_result_mirror_is_removed_alongside_the_content_block(tmp_path, m
     assert "dialogue control" in text
     assert (raw / "tester/a.jsonl").read_text() == body
     assert "2 tool result(s) omitted" in result.stdout
+
+
+def _relocate(path, tmp_path):
+    target = tmp_path / 'cold' / path.parent.name / path.name
+    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.write_bytes(path.read_bytes())
+    target.chmod(0o600)
+    path.unlink()
+    path.symlink_to(target)
+    return target
+
+
+def test_relocated_raw_capture_skips_then_updates_archive_without_replacing_link(tmp_path):
+    raw, _, env = _archive(tmp_path)
+    src = tmp_path / 'empty_codex/tester/sessions/rollout-linked.jsonl'
+    src.parent.mkdir(parents=True)
+    src.write_text('{"t":"' + 'benign ' * 40 + '"}\n')
+    dst = raw / 'tester' / src.name
+    dst.write_bytes(src.read_bytes())
+    target = _relocate(dst, tmp_path)
+    inode = target.stat().st_ino
+    result = _run(CAPTURE, '--agent', 'tester', env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'captured=0 skipped_unchanged=1' in result.stdout
+    assert dst.is_symlink() and target.stat().st_ino == inode
+    src.write_text(src.read_text() + '{"t":"appended"}\n')
+    result = _run(CAPTURE, '--agent', 'tester', env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert dst.is_symlink()
+    assert target.read_bytes() == src.read_bytes()
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+def test_full_scrub_preserves_relocated_derivative_and_redaction(tmp_path):
+    raw, out, env = _archive(tmp_path, body=json.dumps({'t': FAKE_TOKEN}) + '\n')
+    assert _run(SCRUB, '--agent', 'tester', env=env).returncode == 0
+    dst = out / 'tester/a.jsonl'
+    target = _relocate(dst, tmp_path)
+    source_bytes = (raw / 'tester/a.jsonl').read_bytes()
+    result = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert dst.is_symlink()
+    assert FAKE_TOKEN.encode() not in target.read_bytes()
+    assert b'REDACTED' in target.read_bytes()
+    assert (raw / 'tester/a.jsonl').read_bytes() == source_bytes
+
+
+@pytest.mark.parametrize('kind', ['dangling', 'wrong-name', 'public-file', 'public-parent'])
+def test_capture_refuses_unsafe_relocation_without_changing_link_or_target(tmp_path, kind):
+    raw, _, env = _archive(tmp_path)
+    src = tmp_path / 'empty_codex/tester/sessions/rollout-guard.jsonl'
+    src.parent.mkdir(parents=True)
+    src.write_text('{"t":"' + 'source ' * 80 + '"}\n')
+    dst = raw / 'tester' / src.name
+    dst.write_bytes(b'old')
+    target = _relocate(dst, tmp_path)
+    if kind == 'dangling':
+        target.unlink()
+    elif kind == 'wrong-name':
+        other = target.with_name('unrelated.jsonl')
+        target.rename(other)
+        dst.unlink()
+        dst.symlink_to(other)
+        target = other
+    elif kind == 'public-file':
+        target.chmod(0o644)
+    else:
+        target.parent.chmod(0o755)
+    link = os.readlink(dst)
+    result = _run(CAPTURE, '--agent', 'tester', env=env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'FAILED archive publication' in result.stderr
+    assert dst.is_symlink() and os.readlink(dst) == link
+    if kind == 'dangling':
+        assert not target.exists()
+    else:
+        assert target.read_bytes() == b'old'
+    assert 'source ' in src.read_text()
+    assert not list(target.parent.glob('.history-*'))
+
+
+def test_scrub_refuses_mismatched_relocation_without_touching_raw(tmp_path):
+    raw, out, env = _archive(tmp_path)
+    dst = out / 'tester/a.jsonl'
+    dst.parent.mkdir()
+    target = tmp_path / 'unrelated.jsonl'
+    target.write_bytes(b'untouched')
+    dst.symlink_to(target)
+    before = (raw / 'tester/a.jsonl').read_bytes()
+    result = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert result.returncode != 0
+    assert dst.is_symlink() and target.read_bytes() == b'untouched'
+    assert (raw / 'tester/a.jsonl').read_bytes() == before
+
+
+def test_scrub_refuses_relocated_derivative_pointing_into_raw_archive(tmp_path):
+    raw, out, env = _archive(tmp_path, body=json.dumps({'t': FAKE_TOKEN}) + '\n')
+    source = raw / 'tester/a.jsonl'
+    source.parent.chmod(0o700)
+    source.chmod(0o600)
+    before = source.read_bytes()
+    dst = out / 'tester/a.jsonl'
+    dst.parent.mkdir()
+    dst.symlink_to(source)
+    result = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert result.returncode != 0
+    assert 'inside raw archive' in result.stderr
+    assert dst.is_symlink() and source.read_bytes() == before
