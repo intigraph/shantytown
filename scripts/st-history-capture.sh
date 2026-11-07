@@ -57,14 +57,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-copied=0; skipped=0; bytes=0
+copied=0; skipped=0; bytes=0; failed=0
+ARCHIVE_HELPER="$(dirname "${BASH_SOURCE[0]}")/history_archive.py"
 
 capture() {   # <agent> <harness> <src>
   local agent="$1" harness="$2" src="$3"
   [ -n "$ONLY_AGENT" ] && [ "$agent" != "$ONLY_AGENT" ] && return
   local base; base="$(basename "$src")"
   local dir="$DEST/$agent"; local dst="$dir/$base"
-  if [ -f "$dst" ] && [ "$(stat -c %s "$dst" 2>/dev/null)" -ge "$(stat -c %s "$src" 2>/dev/null)" ]; then
+  if [ -f "$dst" ] && [ "$(stat -L -c %s "$dst" 2>/dev/null)" -ge "$(stat -c %s "$src" 2>/dev/null)" ]; then
     skipped=$((skipped+1)); return
   fi
   [ "$DRY" = 1 ] && { say "WOULD capture $agent/$harness/$base"; copied=$((copied+1)); return; }
@@ -75,17 +76,12 @@ capture() {   # <agent> <harness> <src>
   # Enforced HERE rather than by a one-shot chmod, because every future capture
   # would otherwise land at the default umask and silently undo the lock.
   chmod 700 "$DEST" "$dir" 2>/dev/null || true
-  # The staging name carries THIS PROCESS'S pid. Two capturers can legitimately
-  # target the same live jsonl at once — the Stop hook and the interim timer
-  # overlap by design until the timer is retired — and a SHARED .part is two
-  # writers interleaving into one file that is then published as if whole. With
-  # a per-pid stage the worst case is last-writer-wins between two COMPLETE
-  # copies, which is the same outcome as running them a second apart.
-  local part="$dst.$$.part"
-  cp -p "$src" "$part" 2>/dev/null || { say "FAILED $src"; rm -f "$part"; return; }
-  chmod 600 "$part" 2>/dev/null || true
-  mv -f "$part" "$dst"
-  local sz; sz="$(stat -c %s "$dst" 2>/dev/null || echo 0)"
+  # Publish beside the resolved private archive, preserving citation symlinks.
+  # Replacing the citation itself recreates relocated cold history on root.
+  if ! python3 "$ARCHIVE_HELPER" "$src" "$dst"; then
+    failed=$((failed+1)); return
+  fi
+  local sz; sz="$(stat -L -c %s "$dst" 2>/dev/null || echo 0)"
   bytes=$((bytes+sz)); copied=$((copied+1))
   # One manifest line per capture. Append-only: the history of a session's growth
   # is itself evidence, and rewriting it would lose when a session was first seen.
@@ -133,4 +129,4 @@ fi
 
 say "captured=$copied skipped_unchanged=$skipped bytes=$bytes${ONLY_AGENT:+ agent=$ONLY_AGENT} dest=$DEST"
 [ "$DRY" = 1 ] && say "(dry run — nothing written)"
-exit 0
+[ "$failed" -eq 0 ]

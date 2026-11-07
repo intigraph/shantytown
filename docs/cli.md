@@ -216,6 +216,12 @@ context_hard_pct = 70
 context_nudge_pct = 35
 context_nudge_repeat_seconds = 120
 
+# Administrator incident policy: first reminder at 250k of the declared 1M,
+# then at 350k, 450k, etc. Workers retain the global cadence.
+[session_budget.context_by_role.administrator]
+context_nudge_pct = 25
+context_nudge_step_pct = 10
+
 [session_budget.context_by_role.lead]
 context_threshold_pct = 60
 
@@ -238,7 +244,14 @@ long turns for every role, including administrators. `context_nudge_pct` default
 to 15 percentage points below the hint (or half the hint for thresholds below 30%).
 Reminders repeat every `context_nudge_repeat_seconds` (default 120, range 1–3600),
 or after another five percentage points. Explicit nudge percentages must be below
-the hint. Session changes, compaction below the nudge and threshold crossings re-arm
+the hint. Optional `context_nudge_step_pct` (finite, greater than zero and below
+100) replaces timed preparation repeats with milestones anchored at the nudge:
+25 with step 10 means 25%, 35%, 45%, and onward. A late first observation at 26%
+still repeats at 35%. Elapsed time alone does not repeat this preparation advice.
+Stop's soft/hard decisions and bounded exceptions retain their existing cadence.
+Omit the step to retain the existing worker behavior. This setting inherits
+through role and agent overrides like the other context settings.
+Session changes, compaction below the nudge and threshold crossings re-arm
 feedback; busy observations do not postpone the next reminder. Unknown or invalid
 capacity never becomes a percentage.
 
@@ -351,7 +364,10 @@ at the terminal width. `st crew --wide` (also `--no-truncate`) prints the comple
 title, suitable for piping or terminal scrollback. Control characters in titles
 are rendered as spaces so tracker text cannot move the terminal cursor. The
 bead-backed roster shares one store/readiness snapshot across its assigned rows;
-a new invocation reads fresh work.
+a new invocation reads fresh work. Seeds roster membership and status validation
+share one candidate observation, and capacity reuses the same render. Missing,
+unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
+a failed read never means an empty roster.
 
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
@@ -512,6 +528,16 @@ remain UNKNOWN. A fresh read before release catches a later revocation. Existing
 ASK visibility, human/access labels, dependency and prose gates still apply;
 this event prompts lifecycle work and never runs a deployment or live writer.
 
+Typed ruling/activation observations have their own unchanged limits of twelve
+candidate reads and twelve fresh release checks per pass. Waiting-item identities
+rotate every five-minute slot so a fixed prefix cannot starve later gates.
+Different waiters for one target keep separate evidence because their deferral
+boundaries may differ. A skipped observation stays UNKNOWN and preserves its
+previous failure count without incrementing or clearing it. An admitted read
+that fails still counts toward the three-pass report. Logs expose only a finite
+failure stage (`binding`, `target`, `registry`, `comments`, or `markers`), never
+private comment contents or transport exception text.
+
 Natural-event conditions use `resume_when: event:<binding-id>`. Bindings live in
 the reviewed `shantytown.resume_events.REGISTRY`; the marker cannot supply a
 command, path, URL or query. Each binding names one item, producer, host, unit,
@@ -614,6 +640,14 @@ worker diagnostics go to the private raw archive's `worker.log`. A successful
 launch is not archival acceptance. The worker retains the scrub residual check
 and never publishes raw history. `--worker` runs the same work in the foreground
 for diagnostics and tests; no additional timer is installed.
+
+Capture and scrub preserve citation symlinks when cold archives are relocated.
+Unchanged captures inspect the target size; growing captures and regenerated
+derivatives publish atomically beside the private archive target. Relocated
+files must retain the agent directory and filename, be owner-only, and have a
+private parent directory owned by the same user. Dangling or mismatched links
+are refused rather than replaced. Derivative links into the raw archive are
+refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
 creates a separate derivative: it omits supported harness tool-result objects
@@ -3107,6 +3141,17 @@ trusted peer, equivalent to `st-push-allowed=true`. Any other role value refuses
 before any remote is contacted, and so does a remote set in which every remote
 is a mirror. Advance a mirror only through its own reviewed mirror sync.
 
+### Close failure diagnostics
+
+A failed `st work item close` emits a structured `CLOSE_FAILED` error with the
+actual tracker backend, child exit code, stdout and stderr. An observe warning
+does not replace a later blocker refusal or a JSON reason on stdout. Each output
+channel is bearer-redacted first. Outputs longer than 2,048 characters retain
+the first 768 and last 1,280 characters, with an omission marker. A nonzero child
+outcome remains unproven: read back the
+item before deciding whether to retry. The command never retries or changes the
+principal, blocker checks or close reason to get past a failure.
+
 ### Replacing work-item text
 
 `st work item update ITEM --notes-file FILE` fills empty notes or verifies an
@@ -3559,3 +3604,29 @@ normal and P3–P4 work is later. Missing blocker evidence yields UNKNOWN, never
 a zero count. Native snapshots use bounded candidate-edge and exact endpoint
 status projections; missing or shadowed endpoints refuse the run. These bands
 and flags do not change lifecycle status, clear a hold, or authorize dispatch.
+
+### Recovery source maintenance
+
+A normal tend pass gives optional clone and project-worktree refreshes one shared
+30-second start budget. It lets an in-flight operation finish under its existing
+timeout, then defers remaining refreshes rather than interrupting Git mutations.
+Tend does not run merged-topic retirement, remote landing-proof scans or branch
+pruning; those remain on explicit worktree refresh commands. A stale intact
+checkout must not prevent crew recovery. The account admission lock still covers
+the census, governor decisions and session creation; capacity, holds and duplicate
+launch checks remain in force. This budget bounds maintenance starts, not total
+pass duration or the duration of runtime startup and notification sweeps.
+
+### Observed cold-launch resume condition
+
+`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
+agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+in this deployment root and host. The normal launcher records a private receipt
+only after observing the live process, verifying hooks and acknowledging startup
+inbox delivery. Dry runs, cycles, window restores, hold overrides, other
+harnesses and unverified starts cannot produce it. The sweep observes receipts;
+it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
+before its reminder date while independent human and dependency holds remain.
+It does not prove provider responses or bypass launch admission. Existing
+`pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
+and budgets.
