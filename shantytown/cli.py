@@ -7347,8 +7347,12 @@ def _cmd_task(a) -> int:
             from .create_advisory import advise
             try:
                 from .br import BrTracker
+                from .sd import SdTracker
                 message = advise(dict(title=title, source="st-task",
                     cwd=tracker.repo if isinstance(tracker, BrTracker) else None,
+                    tracker=dict(backend="seeds", store=tracker.store,
+                                 quipu=tracker.quipu, prefix=tracker.prefix)
+                        if isinstance(tracker, SdTracker) else None,
                     skip=None if isinstance(tracker, BrTracker) else "advisory requires br tracker",
                     server=_deployment_default(a, "BOBBIN_SERVER"),
                     jev_command=_deployment_default(a, "SHANTY_CREATE_JEV_COMMAND")))

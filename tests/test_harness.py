@@ -84,27 +84,27 @@ _CARDS = [
 # Any OTHER change to these strings is drift, which is what the test below is for.
 _BEFORE = {
     (None, "ellie"):
-        "env -u SHANTY_MODEL SHANTY_AGENT=ellie BOBBIN_ROLE=worker BEADS_ACTOR=ellie ST_ROLES=worker claude "
+        "env -u SHANTY_MODEL SHANTY_AGENT=ellie BOBBIN_ROLE=worker BEADS_ACTOR=ellie SEEDS_ACTOR=ellie ST_ROLES=worker claude "
         "--no-chrome --remote-control ellie --settings /s/worker.json",
     (None, "malcolm"):
-        "cd /home/w && env -u SHANTY_MODEL SHANTY_AGENT=malcolm BOBBIN_ROLE=lead BEADS_ACTOR=malcolm "
+        "cd /home/w && env -u SHANTY_MODEL SHANTY_AGENT=malcolm BOBBIN_ROLE=lead BEADS_ACTOR=malcolm SEEDS_ACTOR=malcolm "
         "ST_ROLES=lead claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
     (None, "arnold"):
         "cd /x && env -u SHANTY_MODEL SHANTY_AGENT=arnold BOBBIN_ROLE=administrator "
-        "BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome --remote-control arnold "
+        "BEADS_ACTOR=arnold SEEDS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome --remote-control arnold "
         "--settings /s/administrator.json",
     ("/store/r", "ellie"):
         "env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=ellie BOBBIN_ROLE=worker "
-        "BEADS_ACTOR=ellie ST_ROLES=worker claude --no-chrome --remote-control ellie "
+        "BEADS_ACTOR=ellie SEEDS_ACTOR=ellie ST_ROLES=worker claude --no-chrome --remote-control ellie "
         "--settings /s/worker.json",
     ("/store/r", "malcolm"):
         "cd /home/w && env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=malcolm BOBBIN_ROLE=lead "
-        "BEADS_ACTOR=malcolm ST_ROLES=lead claude --no-chrome --remote-control malcolm "
+        "BEADS_ACTOR=malcolm SEEDS_ACTOR=malcolm ST_ROLES=lead claude --no-chrome --remote-control malcolm "
         "--dangerously-skip-permissions --settings /s/lead.json",
     ("/store/r", "arnold"):
         "cd /x && env -u SHANTY_MODEL SHANTY_ROOT=/store/r SHANTY_AGENT=arnold "
-        "BOBBIN_ROLE=administrator BEADS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome "
+        "BOBBIN_ROLE=administrator BEADS_ACTOR=arnold SEEDS_ACTOR=arnold ST_ROLES=administrator claude --no-chrome "
         "--remote-control arnold --settings /s/administrator.json",
 }
 

@@ -499,6 +499,8 @@ class ClaudeHarness:
             for key, value in _settings_env(card.role, root).items()
             if key != "BOBBIN_ROLE" and (not credential_env or key != "QUIPU_AUTH_TOKEN"))
         root_env = f"SHANTY_ROOT={Path(root).resolve()} " if root else ""
+        # Carry the same declared actor for Seeds and the legacy tracker.
+        # This is attribution, not an authenticated signing identity.
         # BEADS_ACTOR is WHO the tracker records for a create/close/reassign
         # (GitHub #24). Without it every agent's bd events are written as $USER —
         # `ubuntu` for the whole fleet — so an assignment that flipped between two
@@ -520,7 +522,7 @@ class ClaudeHarness:
         st_reports = f"ST_REPORTS_TO={card.reports_to} " if card.reports_to else ""
         launch = (
             f"env -u SHANTY_MODEL {credential_options}{carried_env}{credential_env}{root_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
+            f"BEADS_ACTOR={card.name} SEEDS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
             f"claude {flags} --settings {settings_path}"
         )
         # Launch IN the agent's workspace so Claude Code auto-loads its .mcp.json +
@@ -1017,7 +1019,7 @@ class CodexHarness:
                         f"QUIPU_HOST={shlex.quote(quipu_host)} ")
         identity_env = (
             f"{carried_env}{credential_env}{root_env}{physical_env}SHANTY_AGENT={card.name} BOBBIN_ROLE={card.role} "
-            f"BEADS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
+            f"BEADS_ACTOR={card.name} SEEDS_ACTOR={card.name} {st_roles}{st_domain}{st_reports}{model_env}"
         )
         # --dangerously-bypass-hook-trust IS A DEFAULT HERE, and it is the one
         # `dangerously-` flag in this repo that is not opt-in per card. The
