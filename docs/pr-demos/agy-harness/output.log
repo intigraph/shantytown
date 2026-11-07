@@ -1,0 +1,18 @@
+Script started on 2026-11-04 20:02:07-05:00 [COMMAND="sh .work/fd1/demo.sh" <not executed on terminal>]
+BASE b06d1ec5, offline source fixture
+Input: worker card selects agy; no live process or model request.
+Result: agy unsupported; launch refused.
+
+CANDIDATE, offline source fixture
+Input: worker card selects agy; no live process or model request.
+Result: adapter = agy
+Sandbox carried = True
+Paid credit fallback = False
+Stop routing = ['send']
+Missing native receipt remains UNKNOWN = True
+Unproved lead admission = REFUSED
+Quota FIXTURE: general used = 0
+Quota FIXTURE: Argon used = 100
+Unspecified quota group remains UNKNOWN = True
+
+Script done on 2026-11-04 20:02:09-05:00 [COMMAND_EXIT_CODE="0"]

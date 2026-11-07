@@ -196,6 +196,7 @@ def brief(text: str, live: dict) -> str:
                               if summary["crew"] is not None else "unknown."),
                   "My anchor: " + json.dumps(summary["anchor"]) + ".",
                   "Lead: " + json.dumps(summary["lead"]) + "."]
+    lines.append("Camayoc (`cy`): governed agent memory; read `cy prime --static` where installed.")
     lines.append("Run `st prime` for the full primer.")
     return "\n".join(lines)
 

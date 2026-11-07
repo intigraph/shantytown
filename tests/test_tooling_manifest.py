@@ -334,3 +334,88 @@ def test_retiring_a_skill_still_refuses_a_foreign_link(kit, tmp_path):
     assert "skills(receipt or retired link unreadable)" in P.missing_kit(card(ws), root)
     with pytest.raises(P.ProvisionError, match="personal changes"):
         P.provision(card(ws), root)
+
+
+def test_host_roots_project_all_skills_and_preserve_legacy_projection(kit, tmp_path, monkeypatch):
+    root, ws, _, data, _ = kit
+    roots = {key: tmp_path / key.lower() for key in T.SKILL_ROOTS}
+    monkeypatch.setenv("SHANTY_SKILL_SOURCE_ROOT", str(tmp_path / "wrong-ambient-root"))
+    sources = {f"skill{i:02}": f"${{SHANTY_SKILL_SOURCE_ROOT}}/skills/skill{i:02}"
+               for i in range(26)}
+    sources["camayoc"] = "${CAMAYOC_SRC}/camayoc/skills/camayoc"
+    absolute = {}
+    with (root / "shantytown.toml").open("a") as stream:
+        for key, path in roots.items():
+            stream.write(f'{key} = {json.dumps(str(path))}\n')
+    for name, source in sources.items():
+        key, suffix = source[2:].split("}/", 1)
+        target = roots[key] / suffix
+        target.mkdir(parents=True)
+        (target / "SKILL.md").write_text(f"# {name}\n")
+        absolute[name] = str(target)
+    data["skills"] = {name: str(tmp_path / "foreign-host" / name) for name in sources}
+    assert sum(not (path / "SKILL.md").is_file()
+               for _, path in T.load(root).sources(ws)) == 27
+    with pytest.raises(P.ProvisionError, match="canonical skill source unavailable"):
+        P.provision(card(ws, "claude"), root)
+    assert not (ws / T.RECEIPT).exists()
+    print("foreign-host baseline: 27/27 unavailable; projection refused")
+    data["skills"] = absolute
+    assert P.provision(card(ws, "claude"), root) == ["search"]
+    assert len(list((ws / ".claude/skills").iterdir())) == 27
+    before = {p.relative_to(ws): p.read_bytes() for p in
+              [ws / T.RECEIPT, ws / ".mcp.json", ws / "CLAUDE.md", ws / "AGENTS.md"]}
+    data["skills"] = sources
+    assert P.provision(card(ws, "claude"), root) == ["search"]
+    assert len(list((ws / ".claude/skills").iterdir())) == 27
+    assert P.missing_kit(card(ws, "claude"), root) == []
+    assert all(p.read_bytes() == before[p.relative_to(ws)] for p in
+               [ws / T.RECEIPT, ws / ".mcp.json", ws / "CLAUDE.md", ws / "AGENTS.md"])
+    print("first host: 27/27 projected; receipt, MCP and instructions byte-identical")
+    # A second host binds the SAME governed JSON to its own source trees.
+    with (root / "shantytown.toml").open("w") as stream:
+        stream.write(f'[env]\nSHANTY_TOOLING_MANIFEST = "{IRI}"\n')
+        for key in roots:
+            path = tmp_path / "second-host" / key.lower()
+            stream.write(f'{key} = {json.dumps(str(path))}\n')
+            for source in sources.values():
+                if source.startswith('${' + key + '}/'):
+                    target = path / source.split('}/', 1)[1]
+                    target.mkdir(parents=True)
+                    (target / "SKILL.md").write_text("# local source\n")
+    assert P.provision(card(ws, "claude"), root) == ["search"]
+    assert len(list((ws / ".claude/skills").iterdir())) == 27
+    assert P.missing_kit(card(ws, "claude"), root) == []
+    assert all("second-host" in str(link.resolve())
+               for link in (ws / ".claude/skills").iterdir())
+    print("second host: 27/27 projected from local roots; same safety check")
+    missing = next((ws / ".claude/skills").iterdir()).resolve() / "SKILL.md"
+    missing.unlink()
+    before = (ws / T.RECEIPT).read_bytes()
+    with pytest.raises(P.ProvisionError, match="canonical skill source unavailable"):
+        P.provision(card(ws, "claude"), root)
+    assert (ws / T.RECEIPT).read_bytes() == before
+
+
+@pytest.mark.parametrize("path", ["${HOME}/skill", "$HOME/skill", "${CAMAYOC_SRC}/../skill",
+                                 "${CAMAYOC_SRC}//absolute", "${CAMAYOC_SRC}/${OTHER}"])
+def test_skill_root_references_refuse_unknown_expansion_and_escape(path):
+    data = copy.deepcopy(DATA)
+    data["skills"] = {"skill": path}
+    with pytest.raises(T.ToolingError):
+        T.parse(json.dumps(data), IRI)
+
+
+@pytest.mark.parametrize("value", [None, "relative/root", "/tmp/../elsewhere", "${OTHER}/root"])
+def test_invalid_or_missing_host_root_refuses_before_projection(kit, monkeypatch, value):
+    root, ws, _, data, _ = kit
+    monkeypatch.delenv("SHANTY_SKILL_SOURCE_ROOT", raising=False)
+    if value is not None:
+        with (root / "shantytown.toml").open("a") as stream:
+            stream.write(f'SHANTY_SKILL_SOURCE_ROOT = {json.dumps(value)}\n')
+    data["skills"] = {"skill": "${SHANTY_SKILL_SOURCE_ROOT}/skills/skill"}
+    before = (ws / "CLAUDE.md").read_bytes()
+    with pytest.raises(P.ProvisionError):
+        P.provision(card(ws, "claude"), root)
+    assert (ws / "CLAUDE.md").read_bytes() == before
+    assert not (ws / T.RECEIPT).exists()

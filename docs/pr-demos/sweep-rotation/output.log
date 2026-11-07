@@ -1,0 +1,10 @@
+Script started on 2026-11-06 07:08:46-05:00 [COMMAND="/usr/bin/python3 -B docs/pr-demos/sweep-rotation/demo.py" <not executed on terminal>]
+Input: four real tend calls; simulated inbox cost130s; budget120s; respawn-first asserted
+BASE=0489a18d5e7ad914d1d0339e1e7dca7248b626b9
+base: cumulative deferral-sweep executions [0, 0, 0, 0]; test exit 1 (expected baseline failure)
+CANDIDATE_SHA256 shantytown/cli.py 0614d7f4a895fe57addba46080c7dbe6af4fa703cb7cc6d2bc0ffc491a8e4c7f
+CANDIDATE_SHA256 shantytown/sweep_rotation.py e78a524ec2b65f5e5b6468a6bfa1754bb0972b97fb61cdfbf49bfdbd559937f2
+candidate: cumulative deferral-sweep executions [0, 1, 1, 2]; test exit 0
+DEMO PASS: same fixture0/4 ->2/4 executions; synthetic source proof, not installed acceptance
+
+Script done on 2026-11-06 07:08:49-05:00 [COMMAND_EXIT_CODE="0"]

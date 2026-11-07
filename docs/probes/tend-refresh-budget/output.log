@@ -1,0 +1,11 @@
+Script started on 2026-11-04 16:01:27-05:00 [COMMAND="python3 docs/probes/tend-refresh-budget/compare.py origin/main && python3 docs/probes/tend-refresh-budget/compare.py HEAD" <not executed on terminal>]
+Source revision: 00aeb887d5ec2f8575283bd1c8eca5bbf09aa795
+Refreshed trees and remote-retirement setting: [('first', True), ('second', True), ('third', True)]
+Warnings: []
+Synthetic elapsed seconds: 93.0
+Source revision: ab0f0f356fc417189890f50e7b97b99f43470d50
+Refreshed trees and remote-retirement setting: [('first', False)]
+Warnings: ['tend source refresh budget exhausted; remaining worktrees deferred']
+Synthetic elapsed seconds: 31.0
+
+Script done on 2026-11-04 16:01:28-05:00 [COMMAND_EXIT_CODE="0"]

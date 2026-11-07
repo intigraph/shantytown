@@ -23,6 +23,66 @@ same item. The ordinary tracker, delivery custody and turn receipts must be
 reconciled before an operator resolves that reservation. Time alone never
 authorizes another send. `refill/observations.jsonl` retains natural observations.
 
+### Reconcile a recorded Codex delivery
+
+When an operator has proved that an uncertain dispatch reached the recipient,
+the installed module can qualify that existing receipt without another send:
+
+```sh
+python -m shantytown.refill_reconcile --root /path/to/deployment --receipt receipt.json
+# Only after the read-only result is qualified:
+python -m shantytown.refill_reconcile --root /path/to/deployment --receipt receipt.json --apply
+```
+
+Use the deployment's normally installed interpreter and source. This is an
+explicit reconciliation operation, not a new scheduler or a forced tend tick.
+Native metadata and the target receipt remain limited to 2 MiB each. Unrelated
+preceding events are skipped in bounded chunks, preserving physical line numbers;
+the archive and traversal remain limited to 256 MiB.
+
+The receipt is a JSON object with exactly these fields:
+
+```json
+{
+  "version": 1,
+  "worker": "worker",
+  "item": "work-1",
+  "pending_at": 1000,
+  "custody": "send-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "history": "rollout-session-id.jsonl",
+  "line": 2,
+  "event_sha256": "SHA256_OF_THE_COMPLETE_ORIGINAL_JSONL_LINE_INCLUDING_NEWLINE"
+}
+```
+
+The operator reads these values from the existing reservation, delivery custody
+and normal archived harness history. The example hash is a placeholder, not an
+admissible receipt. The module reads only `history/<worker>/<history>` beneath
+that deployment. It binds the card's Codex harness, pane and workspace, native
+session ID, exact dispatch item and serve footer, reservation/send/receive times,
+and the complete accepted **user** message. A quotation, compaction summary,
+assistant message, wrong hash, conflicting audit or changed reservation refuses.
+Other harnesses have no implicit compatibility fallback.
+
+Apply takes the existing refill lock followed by the normal composer-custody
+lock. It durably appends a prepared audit with the original UNKNOWN custody and
+reservation before recording the proven delivery and removing only its matching
+reservation. `refill/reconciliations.jsonl` remains append-only. The original
+observation journal and other workers' reservations remain unchanged. Repeating
+the same receipt is idempotent; an interrupted operation resumes only against
+its matching prepared audit and original evidence. It never clears a new
+reservation for the same worker. A truncated audit refuses rather than resetting.
+
+Reconciliation does not change observation timestamps, coverage, errors or
+waiting records, and cannot certify scheduled health. Retain the source revision,
+receipt, audit and rollback. After normal source qualification and installation,
+read back the exact reconciliation, then observe the original scheduled publisher
+and tend cadence for pending count and known coverage. A surviving read error
+keeps coverage unknown. Do not manufacture a new acceptance epoch or invoke a
+tick to clear it. Rollback reverts source through the normal lane and preserves
+the audit and proven delivered state; it does not re-add a delivered reservation
+or replay its message.
+
 The existing changed-digest administrator alert reports unknown coverage,
 refused or uncertain dispatches, exhausted observation budgets and owned queues
 that remain idle for 15 minutes. It does not repeatedly type the same alert.

@@ -71,6 +71,7 @@ def test_snapshot_excludes_open_dependency_and_retains_labels(tmp_path):
 
 
 def test_failed_snapshot_is_unknown_without_refusing_dispatch(monkeypatch):
+    monkeypatch.setattr(cli, '_tracker', lambda a: SimpleNamespace())
     def fail(_):
         raise OSError('tracker down')
     monkeypatch.setattr(cli, '_priority_snapshot', fail)
@@ -102,6 +103,7 @@ def test_liveness_exception_is_not_a_down_owner():
 
 
 def test_dispatch_advisory_uses_the_deployments_pane_adapter(monkeypatch):
+    monkeypatch.setattr(cli, '_tracker', lambda a: SimpleNamespace())
     from shantytown.answer import Answer
     from shantytown.protocols import Agent
     reg = SimpleNamespace(all=lambda: Answer.complete_read(
@@ -128,3 +130,63 @@ def test_readiness_probe_candidates_exclude_live_owned_and_decision_work():
     candidates=pa.fleet_waiters(ready,active,reg,panes)
     assert {r['id'] for r in candidates}=={'unassigned','down-owned'}
     assert pa.fleet_advice(candidates,active,reg,panes)==pa.fleet_advice(ready,active,reg,panes)
+
+
+def _native_advisory(monkeypatch, projection):
+    """A real inherited SdTracker; broad SDK hydration is forbidden here."""
+    from shantytown.answer import Answer
+    from shantytown.protocols import Agent
+    from shantytown.sd import SdTracker
+    tracker = object.__new__(SdTracker)
+    monkeypatch.setattr(tracker, 'priority_rows', projection)
+    monkeypatch.setattr(cli, '_tracker', lambda a: tracker)
+    reg = SimpleNamespace(all=lambda: Answer.complete_read([
+        Agent(name='live', pane='live-pane'),
+        Agent(name='down', pane='missing-pane'),
+    ], how='fixture registry'))
+    monkeypatch.setattr(cli, '_registry', lambda a: reg)
+    monkeypatch.setattr(cli, '_panes', lambda a: SimpleNamespace(
+        exists=lambda pane: pane == 'live-pane'))
+    broad_calls = []
+    def broad_snapshot(_):
+        broad_calls.append('SDK snapshot')
+        raise AssertionError('native advisory must not hydrate the SDK READY set')
+    monkeypatch.setattr(cli, '_priority_snapshot', broad_snapshot)
+    note = cli._priority_go_note(SimpleNamespace(item='low'))
+    # The advisory catches exceptions: the final UNKNOWN text alone cannot
+    # prove a refused projection did not first attempt the expensive fallback.
+    assert broad_calls == []
+    return note
+
+
+def test_native_dispatch_advisory_preserves_waiters_without_sdk_hydration(monkeypatch):
+    rows = [HIGH | {'id': 'unassigned'},
+            HIGH | {'id': 'down-owned', 'assignee': 'crew/down'},
+            HIGH | {'id': 'live-owned', 'assignee': 'live'},
+            HIGH | {'id': 'blocked', 'labels': ['blocked:bead']},
+            HIGH | {'id': 'decision', 'labels': ['decision-needed']},
+            HIGH | {'id': 'message', 'title': 'inbox: message'},
+            HIGH | {'id': 'parked', 'defer_until': '2999-01-01T00:00:00Z'}]
+    expected = pa.advice(rows, LOW, {'down'})
+    assert '2 higher-priority' in expected
+    assert _native_advisory(monkeypatch, lambda: (rows, [LOW])) == expected
+
+
+def test_refused_native_advisory_is_unknown_without_snapshot_fallback(monkeypatch):
+    def incomplete():
+        raise RuntimeError('native field observation incomplete')
+    note = _native_advisory(monkeypatch, incomplete)
+    assert note == 'governor: higher-priority advisory unavailable; dispatch continues.'
+
+
+def test_unsupported_projection_retains_non_native_snapshot(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, '_tracker', lambda a: SimpleNamespace(
+        priority_rows=lambda: None))
+    monkeypatch.setattr(cli, '_priority_snapshot', lambda a: (
+        calls.append('legacy snapshot') or [HIGH], [LOW]))
+    monkeypatch.setattr(cli, '_registry', lambda a: SimpleNamespace(
+        all=lambda: SimpleNamespace(exact=lambda: [])))
+    monkeypatch.setattr(cli, '_panes', lambda a: NullPanes())
+    assert cli._priority_go_note(SimpleNamespace(item='low')) == pa.advice([HIGH], LOW)
+    assert calls == ['legacy snapshot']

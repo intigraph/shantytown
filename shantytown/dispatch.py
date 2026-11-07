@@ -919,7 +919,10 @@ class Dispatcher:
         reason = reason.strip()
         if not reason:
             raise DeferRefused("a defer reason is required")
-        item = self.tracker.get(item_id)
+        # Remote Seeds can read these fields without hydrating every comment.
+        # Use the same observation for preconditions AND every write read-back.
+        read = getattr(self.tracker, "defer_read", self.tracker.get)
+        item = read(item_id)
         if item.status == "closed":
             raise DeferRefused(f"{item_id} is closed — deferring it would resurrect terminal work")
         from .ask_visibility import refuse_deferral
@@ -968,7 +971,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> / pr-merged:<forge>/<owner>/<repo>#<n> / ci-terminal:<forge>/<owner>/<repo>@<sha>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -978,17 +981,23 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> or installed:<tool><op><version>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
         if active.kind == "event":
             from .resume_events import binding_for
             try:
                 binding_for(active.arg, item_id)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
-        if active.kind in ("release", "installed"):
+        if active.kind in ("release", "installed", "pr-merged", "ci-terminal", "ruling", "activation"):
             from .resume_kinds import validate as validate_kind
             try:
                 validate_kind(active.kind, active.arg)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
+        if active.kind == "cold-launch":
+            from .resume_launch import validate as validate_launch
+            try:
+                validate_launch(active.arg)
             except ValueError as exc:
                 raise DeferRefused(str(exc)) from exc
         gate_target = None
@@ -997,7 +1006,7 @@ class Dispatcher:
             from .gate_backstop import validate_gate, scope
             if not dependency_reason.strip() or "\n" in dependency_reason.strip() or "\r" in dependency_reason.strip():
                 raise DeferRefused("closed gate requires --dependency-reason: one-line technical dependency; queue order is not a gate")
-            gate_target = self.tracker.get(active.arg)
+            gate_target = read(active.arg)
             if gate_target.id != active.arg:
                 raise DeferRefused("gate lookup returned a different target ID")
             try:
@@ -1087,7 +1096,7 @@ class Dispatcher:
             except Exception as exc:
                 error = exc
             try:
-                current = self.tracker.get(item_id)
+                current = read(item_id)
             except Exception as exc:
                 raise DeferUnconfirmed(f"{item_id}: defer read-back failed: {exc}") from exc
             absent = missing(current, final)
@@ -1101,7 +1110,7 @@ class Dispatcher:
         if gate_target is not None and inherited_priority < gate_target.priority:
             try:
                 self.tracker.update(gate_target.id, priority=inherited_priority)
-                after_target = self.tracker.get(gate_target.id)
+                after_target = read(gate_target.id)
                 if after_target.priority != inherited_priority:
                     raise ValueError("priority inheritance readback failed")
             except Exception as exc:

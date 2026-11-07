@@ -303,8 +303,9 @@ def codex_composer(screen: str) -> str | None:
         r'\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+[·.]\s+(?:~|/)',
         strip_attrs(lines[footer]))
     if not any('shortcuts' in strip_attrs(row)
-               or (warning_footer and re.search(r'⚠\s+\d+\s+warnings?\s+·\s+f2 to view',
-                                                strip_attrs(row)))
+               or (warning_footer and (
+                   re.search(r'⚠\s+\d+\s+warnings?\s+·\s+f2 to view', strip_attrs(row))
+                   or strip_attrs(row).strip().lower() == 'tab to queue message'))
                for row in lines[footer + 1:]):
         return None
     for start in range(footer - 1, max(-1, len(lines) - 81), -1):

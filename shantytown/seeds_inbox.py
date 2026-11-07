@@ -169,3 +169,57 @@ def _decode(wire, graphs, owners, identifiers, include_closed):
     if identifiers is not None and {r["id"] for r in result} != set(identifiers):
         raise ValueError("exact inbox receipt missing")
     return result
+
+
+def marker_ids(proof, agent, marker, *, timeout=30):
+    """Select at most one opaque delivery identity, including closed receipts.
+
+    Two matches are ambiguity, never a license to resend. Metadata is obtained
+    separately by the existing bounded exact-ID reader; no history is hydrated.
+    """
+    from .seeds_inbox_window import _scopes
+    from .query_identity import declared_read_operation
+    how = "Seeds bounded delivery marker identities including closed"
+    try:
+        if not isinstance(marker, str) or not marker or len(marker.encode()) > 512:
+            raise ValueError("invalid delivery marker")
+        branches = []
+        # Match the same leading-prefix/whitespace semantics as _body_of.
+        pattern = json.dumps(r"^\s*(inbox:|mail:)\s*")
+        for graph, scope in _scopes(proof, agent):
+            branches.append('{ GRAPH ' + sp._iri(graph) + ' { ' + scope
+                            + f'?s <{sp.SCHEMA}name> ?message . '
+                            + f'FILTER(REGEX(STR(?message), {sp.MESSAGE_PATTERN})) '
+                            + f'FILTER(STRSTARTS(REPLACE(STR(?message), {pattern}, ""), '
+                            + json.dumps(marker + " ") + ')) } '
+                            + f'BIND({json.dumps(graph)} AS ?graph) }}')
+        graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        for graph in graphs:
+            branches.append(f'{{ GRAPH {sp._iri(graph)} {{ ?legacy '
+                            f'<{sp.SEEDS}ontology/revision> ?revision }} '
+                            'BIND("legacy-schema" AS ?problem) }')
+        query = ('SELECT DISTINCT (STR(?s) AS ?subject) ?graph ?problem WHERE { '
+                 + ' UNION '.join(branches) + ' } LIMIT 3')
+        with declared_read_operation("owner-rows"):
+            rows = sp._query(proof, query, timeout)["rows"]
+        if any(row.get("problem") == "legacy-schema" for row in rows):
+            raise LegacyInboxSchema("positive legacy revision marker")
+        if len(rows) >= 3:
+            raise ValueError("delivery marker identity budget reached")
+        matches = set()
+        for row in rows:
+            subject, graph = row.get("subject"), row.get("graph")
+            if ("problem" in row or graph not in graphs or not isinstance(subject, str)
+                    or not subject.startswith(sp.SEEDS + "item/")):
+                raise ValueError("invalid delivery marker identity")
+            ident = unquote(subject[len(sp.SEEDS + "item/"):])
+            if not ident or subject != sp.SEEDS + "item/" + quote(ident, safe=""):
+                raise ValueError("invalid delivery receipt ID")
+            matches.add((ident, graph))
+        if len(matches) > 1:
+            raise ValueError("ambiguous durable delivery: multiple receipts")
+        return Answer.complete_read([ident for ident, _ in matches], how=how)
+    except LegacyInboxSchema:
+        raise
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped([], how=how, caveat=f"delivery marker unreadable: {error}")

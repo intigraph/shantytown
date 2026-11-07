@@ -1790,11 +1790,35 @@ class DeferralAlerter:
                 except Exception as e:
                     self._log(f"deferral-sweep: condition batch unreadable ({e!r}); retry next pass")
                     cache.update(dict.fromkeys(targets))
-        findings = pol.evaluate(rows, now, is_closed=is_closed)
+        ruling_budget = 12
+        def ruling_reader(condition, waiting):
+            nonlocal ruling_budget
+            from .resume_rulings import BUDGET_DEFERRED, evaluate
+            if ruling_budget <= 0:
+                return None, BUDGET_DEFERRED
+            ruling_budget -= 1
+            return evaluate(condition.kind, condition.arg, waiting, now,
+                show=show, comments=backend().ruling_comments, registry=self._reg)
+        from .resume_forge_events import Reader as ForgeEventReader
+        findings = pol.evaluate(rows, now, is_closed=is_closed, ruling_reader=ruling_reader,
+                                forge_reader=ForgeEventReader(), root=self._root)
+        fresh_forge_reader = ForgeEventReader()
+        # Reserve a distinct bounded budget for fresh pre-write checks; consuming
+        # the candidate budget must not starve every admitted release forever.
+        ruling_budget = 12
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
         reports, retry, persistent_failures = [], set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
+            if finding.read_deferred:
+                # No read was admitted (or the bounded inventory was unfinished).
+                # Keep UNKNOWN and every existing failure count, without
+                # pretending capacity exhaustion was a third transport failure.
+                retry.add(finding.bead)
+                if finding.bead in budget.previous:
+                    budget.current[finding.bead] = budget.previous[finding.bead]
+                self._log(f"deferral-sweep: {finding.bead} observation budget deferred; retains hold")
+                return
             if budget.failed(finding.bead):
                 persistent_failures.add(finding.bead)
                 from dataclasses import replace
@@ -1804,6 +1828,13 @@ class DeferralAlerter:
                         + "; inspect deferral-sweep logs"))
             else:
                 retry.add(finding.bead)
+            if finding.condition and finding.condition.kind in ('ruling', 'activation'):
+                # Only finite reader stage codes, never raw comments,
+                # exception text, transport bodies or headers.
+                reason = re.search(r'reason=(binding|target|registry|comments|markers)\)',
+                                   finding.untestable or '')
+                code = reason.group(1) if reason else 'unknown'
+                self._log(f"deferral-sweep: {finding.bead} typed evidence UNKNOWN reason={code}")
             self._log(f"deferral-sweep: {finding.bead} read/release retry pending")
 
         if store_error:
@@ -1831,7 +1862,9 @@ class DeferralAlerter:
                 # A future date still gates release. Only a proven owner-set
                 # reminder may be prompted early by a completed event.
                 from .deferral_pacing import owner_window
-                if not owner_window(row, now, event_ready=bool(finding.met)):
+                cold_ready = (finding.met and finding.condition is not None
+                              and finding.condition.kind == "cold-launch")
+                if not cold_ready and not owner_window(row, now, event_ready=bool(finding.met)):
                     continue
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
@@ -1844,7 +1877,8 @@ class DeferralAlerter:
                         or (detail.get("status") == "open" and not detail.get("defer_until"))):
                     continue
                 cache.clear()
-                fresh = pol.evaluate([detail], now, is_closed=is_closed)
+                fresh = pol.evaluate([detail], now, is_closed=is_closed, ruling_reader=ruling_reader,
+                                     forge_reader=fresh_forge_reader, root=self._root)
                 if not fresh:
                     continue  # re-deferred, closed or already released
                 current = fresh[0]
@@ -2262,8 +2296,14 @@ def _visible_shell_block(plain: str) -> str:
     return ""
 
 
-def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None) -> str:
-    """An unattended cycle needs fresh runtime-owned zero on Codex."""
+def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", root=None,
+                           process_shells=None) -> str:
+    """An unattended cycle needs fresh runtime-owned zero on Codex.
+
+    `process_shells` (optional, zero-arg -> int | None) reads Claude's shell
+    count from the process tree (claude_shells). It is consulted only when the
+    footer is truncated, so a narrow pane no longer refuses forever; None from
+    it still refuses."""
     if visible := _visible_shell_block(plain):
         return visible
     if harness_name == "codex":
@@ -2276,6 +2316,9 @@ def unattended_shell_block(plain: str, harness_name: "str | None", *, agent="", 
     if n is None and harness_name in _SHELL_COUNT_COMPLETE:
         footer = triage_mod._tail(plain).splitlines()
         if footer and footer[-1].rstrip().endswith(("…", "...")):
+            counted = process_shells() if process_shells is not None else None
+            if type(counted) is int and counted >= 0:
+                return f"{counted} background shell(s) still running" if counted else ""
             return "background shells cannot be read from a truncated footer, so zero is not visible"
     if n is None and (harness_name or "") not in _SHELL_COUNT_COMPLETE:
         return (f"background shells cannot be read on the "
@@ -2359,7 +2402,10 @@ class AutoCycler:
         try:
             card = next(c for c in self._agents if c.name == agent)
             plain = triage_mod.strip_attrs(self._panes.capture(card.pane, attrs=True))
-            return unattended_shell_block(plain, self._harness(card), agent=card.name, root=self._root)
+            from . import claude_shells
+            return unattended_shell_block(
+                plain, self._harness(card), agent=card.name, root=self._root,
+                process_shells=claude_shells.counter(self._panes, card.pane))
         except Exception as e:  # noqa: BLE001 — cannot tell is not clear
             return f"background shells unreadable ({e})"
 

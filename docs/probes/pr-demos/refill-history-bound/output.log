@@ -1,0 +1,8 @@
+Script started on 2026-11-06 14:12:28-05:00 [COMMAND="python3 docs/probes/pr-demos/refill-history-bound/reproduce.py" <not executed on terminal>]
+Isolated fixture: >2 MiB unrelated event before exact native receipt at line 3
+base 44b46a28ed6a49cab4a8406b8b372625e2c60862: REFUSED: native line missing or exceeds bound
+candidate source: qualified
+Wrong-hash control: REFUSED: native event hash changed
+Read-only probe: all deployment fixture bytes unchanged
+
+Script done on 2026-11-06 14:12:29-05:00 [COMMAND_EXIT_CODE="0"]

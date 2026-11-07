@@ -1,0 +1,14 @@
+Script started on 2026-11-05 20:59:15-05:00 [COMMAND="python3 docs/pr-demos/version-context/demo.py" <not executed on terminal>]
+TARGET=source-fixture BASE=39f4bf93a956c57a1b7a7ec7f42be3a46cb4a076 HEAD=c21443fb96ad9f88696c4fe8fd9a8653bdb0f785
+BEFORE exit=1 context_passes=1 elapsed=0.914s source_sha256=46d5511438152b94219abf5adec5d99758d1be0c6f822653d93f9df700a5abf1
+BEFORE FAIL version/address context: other_repo (rc=1) ✗ REFUSED: this push would add internal identifiers to a PUBLIC remote.
+AFTER exit=0 context_passes=36 elapsed=3.686s source_sha256=ff070dc17bd3d16cb9391aaac3236a484aa532bf78bfed9f6c26c397a16eb011
+AFTER: version cases pass; private addresses, authorities, adjacent leaks, ambiguous contexts, parser failure and commit-message leaks still refuse
+AFTER ok   version/address context: other_repo (hook_exit=0)
+AFTER ok   version/address context: address_path (hook_exit=1)
+AFTER ok   version/address context: private_host (hook_exit=1)
+AFTER ok   version/address context: query (hook_exit=1)
+AFTER ok   version/address context: named_host (hook_exit=1)
+AFTER: chained refusal retained
+
+Script done on 2026-11-05 20:59:20-05:00 [COMMAND_EXIT_CODE="0"]

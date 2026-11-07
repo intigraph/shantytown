@@ -1,0 +1,8 @@
+Target: private source fixture; existing uncertain dispatch, not installed acceptance
+before: pending= 1 known= 0
+read-only qualification: exact native user receipt accepted, reservation retained
+wrong receipt: REFUSED; pending still 1
+after: pending= 0 known= 0 (original PartialAnswer preserved)
+same receipt again: already-reconciled; no dispatch or second audit transition
+separate private ordinary-observation fixture: known= 1
+No production state, schedule, message, or harness was changed.

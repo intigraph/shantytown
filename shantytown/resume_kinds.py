@@ -19,7 +19,7 @@ import re
 import shutil
 import subprocess
 
-#: Stack tools whose own `--version` may be read. Nothing else is executed.
+#: Stack tools whose fixed native version command may be read. Nothing else is executed.
 TOOLS = ("sd", "st", "quipu", "bobbin", "yupana", "camayoc", "tambo", "dp")
 TIMEOUT = 15
 
@@ -33,7 +33,13 @@ _VERSION = re.compile(r"(?<![\w.])v?(\d+)\.(\d+)(?:\.(\d+))?(-[0-9A-Za-z.-]+)?(?
 
 def validate(kind: str, arg: str) -> None:
     """Refuse a malformed argument at write time, so it is never stored untestable."""
-    if kind == "release":
+    if kind in ('ruling', 'activation'):
+        from .resume_rulings import validate as validate_ruling
+        validate_ruling(kind, arg)
+    elif kind in ("pr-merged", "ci-terminal"):
+        from .resume_forge_events import validate as validate_event
+        validate_event(kind, arg)
+    elif kind == "release":
         repo, sep, tag = arg.rpartition("@")
         if not sep or not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
             raise ValueError("release:<owner>/<repo>@<tag> needs a GitHub repository and a tag")
@@ -98,13 +104,14 @@ def installed(arg: str, run=_run, which=shutil.which):
     path = which(tool)
     if not path:
         return None, f"{tool} is not on PATH"
+    argument = "version" if tool == "dp" else "--version"
     try:
-        out = run([path, "--version"])
+        out = run([path, argument])
     except (OSError, subprocess.SubprocessError) as exc:
-        return None, f"{tool} --version failed ({type(exc).__name__})"
+        return None, f"{tool} {argument} failed ({type(exc).__name__})"
     have = _parse(out.stdout) if out.returncode == 0 else None
     if have is None:
-        return None, f"{tool} --version gave no version"
+        return None, f"{tool} {argument} gave no version"
     need = _wanted(want)
     ok = {"@": have >= need, ">=": have >= need, ">": have > need, "==": have == need}[op]
     shown = ".".join(map(str, have[:3])) + ("" if have[3] else " (pre-release)")
@@ -113,6 +120,9 @@ def installed(arg: str, run=_run, which=shutil.which):
 
 def evaluate(kind: str, arg: str, run=_run, which=shutil.which):
     try:
+        if kind in ("pr-merged", "ci-terminal"):
+            from .resume_forge_events import evaluate as evaluate_event
+            return evaluate_event(kind, arg)
         if kind == "release":
             return release(arg, run)
         if kind == "installed":
