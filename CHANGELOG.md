@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.13.0](https://github.com/intigraph/shantytown/compare/v0.12.0...v0.13.0) (2026-11-07)
+
+
+### Features
+
+* **context:** run exact item retrieval before semantic search ([#516](https://github.com/intigraph/shantytown/issues/516)) ([57c1637](https://github.com/intigraph/shantytown/commit/57c16376c0decb37b5033ec611495eb85e428af3))
+
+
+### Bug Fixes
+
+* **advisory:** keep the selected tracker for create advisories and report coverage ([#479](https://github.com/intigraph/shantytown/issues/479)) ([4b8f8d5](https://github.com/intigraph/shantytown/commit/4b8f8d5a37c8b53f9221674a6fb19ade031887b6))
+* **cycle:** use bounded cache evidence for handoff advice ([#477](https://github.com/intigraph/shantytown/issues/477)) ([d0e9b05](https://github.com/intigraph/shantytown/commit/d0e9b05cc3ada1e32e4d48b100e60316500f9abd))
+* **harness:** carry the declared Seeds actor to child tools ([#505](https://github.com/intigraph/shantytown/issues/505)) ([bfaab42](https://github.com/intigraph/shantytown/commit/bfaab425342122f629f1c1d1b7d983e8599b329d))
+* **history:** preserve relocated archive citation links ([#497](https://github.com/intigraph/shantytown/issues/497)) ([8181b7f](https://github.com/intigraph/shantytown/commit/8181b7f8e8575b703f5efc8b34b83d53e706d0bf))
+* use lean priority rows for dispatch advice ([#503](https://github.com/intigraph/shantytown/issues/503)) ([4d24384](https://github.com/intigraph/shantytown/commit/4d2438471b199564080818c360f8652ab44035db))
+
+
+### Continuous Integration
+
+* cancel superseded installer and identity PR runs ([#499](https://github.com/intigraph/shantytown/issues/499)) ([c8275f4](https://github.com/intigraph/shantytown/commit/c8275f4dcedd2bfd20789f1baffcd78e25793f62))
+
 ## [0.12.0](https://github.com/intigraph/shantytown/compare/v0.11.1...v0.12.0) (2026-11-07)
 
 
