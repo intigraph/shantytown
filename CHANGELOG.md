@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/intigraph/shantytown/compare/v0.13.0...v0.13.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **test:** declare YAML parser in test extra ([#517](https://github.com/intigraph/shantytown/issues/517)) ([c70195d](https://github.com/intigraph/shantytown/commit/c70195d384eb552ce09cdebb67bc7e1d3cb2182d))
+
 ## [0.13.0](https://github.com/intigraph/shantytown/compare/v0.12.0...v0.13.0) (2026-11-07)
 
 
