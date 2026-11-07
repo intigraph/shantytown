@@ -586,6 +586,14 @@ def _cycle_advice(path: Path, tbl: dict) -> CycleAdvicePolicy:
     out = {}
     for key, default in vars(CycleAdvicePolicy()).items():
         value = tbl.get(key, default)
+        if key == 'model_cache_ttl_seconds':
+            if (not isinstance(value, dict) or any(
+                    not isinstance(pattern, str) or not pattern.strip()
+                    or type(seconds) is not int or seconds <= 0
+                    for pattern, seconds in value.items())):
+                raise ConfigError(f"{path}: cycle_advice.{key} needs model-pattern = positive integer seconds")
+            out[key] = dict(value)
+            continue
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ConfigError(f"{path}: cycle_advice.{key} must be a non-negative number")
         if isinstance(default, int) and not isinstance(value, int):

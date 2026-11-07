@@ -1,60 +1,24 @@
-"""cycle_advice — at a handoff, is this session worth KEEPING, or cheaper to cycle?
+"""Keep-or-cycle advice from depth, bounded cache evidence and work overlap.
 
-Stiwi, 2026-09-25: *"when needing to handoff there is decision to maintain the
-current session or run /clear ... if the current session and handoff and
-potentially next task are related enough to keep the session or clear it"* — and,
-the second axis, *"has the cache window lapsed for the model in use? ... sometimes
-it may be cheaper to rebuild some of that context vs keeping it all and paying for
-the cache miss"*.
+Normal dispatch previews deterministic repository/file/scope overlap against the
+previous verified handoff, then records a signal only after delivery and custody
+readback. Missing prior facts stay UNKNOWN. Explicit caller judgements override
+fresh automatic overlap. The hard context ceilings remain authoritative.
 
-Before this, the only input to "cycle or not" was DEPTH (the pre-handoff and
-cycle lines in triage). Depth answers "can this session continue", never "should
-it". A 450k session about to start the next bead in the same module is cycled
-anyway; a 250k session that has sat past its cache TTL carries its whole
-transcript into unrelated work and pays a full-prefix cache WRITE to do it.
+Claude cache writes name their observed five-minute or one-hour TTL. Codex usage
+names request timing and counters; per-model policy windows are explicit
+assumptions, not cache-eviction observations or account entitlement claims.
 
-## Why st does not call a model here
-
-Stiwi, same day: *"for my tools i typically dont code in an agent, but allow a
-way for an agent, or process, to call /in/ ... people can leave it unconfigured
-without really effecting anything and thats one less dependency and key to
-setup"*. So relatedness is a SIGNAL that something outside st posts —
-`st agent advise <agent> --related P --by <who>` — and st owns only the parts it
-can measure (depth, idle time, the cache TTL the transcript records) and the
-arithmetic. Jev, the agent itself at its checkpoint, a cron script, a human: all
-the same call. Nobody calling in is the supported default, and it decides
-nothing (`DEFAULT`), which is today's behaviour exactly.
-
-## What code owns, whatever the signal says
-
-  * past the cycle line the answer is CYCLE. A signal can make st cycle EARLIER,
-    never later: a saturated context cannot be kept however related the work.
-  * a signal about a different next task than the one on the plate is not about
-    this handoff, and a signal older than `signal_max_age_minutes` is not about
-    this moment. Both are ignored, and said so.
-  * cannot-tell is never a verdict: unmeasured idle time does not count as a
-    lapsed cache (that direction would cycle on missing data).
-
-## The cost model, and what it is not
-
-Per turn, a kept context is re-read from cache (`read_multiplier`, 0.1x base
-input) — or, once the TTL has lapsed, re-WRITTEN on the first turn at
-`write_multiplier` (1.25x for the 5m TTL, 2x for 1h). A cycled session writes a
-fresh floor (`fresh_floor_k`: system prompt + resume brief) and then rebuilds
-what the next task needs from the old context, estimated as
-`related * rebuild_fraction * (depth - floor)`. The multipliers are Anthropic's
-list multipliers; on a subscription seat the real currency is the governor's
-five_hour/seven_day budget, whose accounting of cache reads st cannot see — so
-every number is config, not a constant.
-
-Tokens are not the only thing a kept context buys: the model also keeps the
-REASONING behind decisions in flight, which no rebuild recovers. The arithmetic
-cannot price that, so a strong relatedness signal (`keep_at`) keeps the session
-without consulting it.
+The configurable cost model estimates input-equivalent work. It cannot price
+reasoning retained in context or measure a subscription's actual consumption.
 """
 from __future__ import annotations
 
 import json
+import fnmatch
+import fcntl
+import re
+from contextlib import contextmanager
 import os
 import tempfile
 import time
@@ -74,7 +38,7 @@ TTL_SCAN_RECORDS = 50
 @dataclass(frozen=True)
 class Policy:
     """[cycle_advice] in shantytown.toml. Every field has a default, so the table
-    is optional; with no signal posted none of it is consulted."""
+    is optional. Automatic overlap is local; external judges remain optional."""
     # THE FLOOR UNDER EVERYTHING (Stiwi: "there needs to be a configurable
     # threshold where we always decide to just clear context"). At or above it the
     # answer is CYCLE and nobody is asked: `--json` says ask=false, so a caller
@@ -97,6 +61,12 @@ class Policy:
     fresh_floor_k: int = 40
     rebuild_fraction: float = 0.3
     expected_turns: int = 10
+    # Advisory windows, not cache-eviction measurements. Explicit transcript
+    # TTLs win. API defaults need not describe a Codex subscription's routing.
+    model_cache_ttl_seconds: dict[str, int] = field(default_factory=lambda: {
+        'gpt-6*': 1800, 'gpt-5.6*': 1800, 'gpt-5.5*': 1800,
+        'gpt-5*': 300, 'claude-*': 300,
+    })
 
 
 @dataclass(frozen=True)
@@ -119,6 +89,11 @@ class Cache:
     """The transcript's last usage record, read for TIMING, not occupancy."""
     last_at: float | None = None
     ttl_seconds: int | None = None
+    provider: str | None = None
+    model: str | None = None
+    ttl_source: str | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +135,8 @@ def cache_lapsed(sit: Situation, policy: Policy) -> bool | None:
     idle = sit.idle_seconds
     if idle is None:
         return None
+    if sit.cache.ttl_source is not None and sit.cache.ttl_seconds is None:
+        return None  # An identified but unsupported model is not the legacy fallback.
     return idle >= (sit.cache.ttl_seconds or policy.cache_ttl_seconds)
 
 
@@ -243,6 +220,8 @@ def _decide_context(sit: Situation, signal: Signal | None, policy: Policy = Poli
                       cache_lapsed=lapsed)
     keep, cycle = costs(sit, p, policy)
     state = {True: "cache lapsed", False: "cache warm", None: "cache state unknown"}[lapsed]
+    if sit.cache.ttl_source and sit.cache.ttl_source.startswith('assumed'):
+        state += ' (model-window estimate; eviction unmeasured)'
     if cycle < keep:
         return Advice(CYCLE, f"{signal.by} rates relatedness {p:.2f}; {state}; "
                              "cycling is cheaper", keep, cycle, lapsed)
@@ -294,23 +273,44 @@ def _load(root) -> dict:
         return {}
 
 
-def post(root, agent: str, signal: Signal) -> None:
+@contextmanager
+def _signal_lock(root):
+    parent = _signals_path(root).parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with (parent / 'cycle_signals.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def _write_signals(root, data):
+    path = _signals_path(root)
+    with tempfile.NamedTemporaryFile('w', dir=path.parent, delete=False) as fh:
+        json.dump(data, fh, indent=1)
+        tmp = fh.name
+    try:
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
+def post(root, agent: str, signal: Signal, *, allow_unknown=False, preserve_after=None) -> None:
     if signal.related is not None and not 0.0 <= signal.related <= 1.0:
-        raise ValueError("related must be between 0 and 1")
+        raise ValueError('related must be between 0 and 1')
     if signal.decision is not None and signal.decision not in DECISIONS:
         raise ValueError(f"decision must be one of {', '.join(DECISIONS)}")
     if signal.next_need_k is not None and signal.next_need_k < 0:
-        raise ValueError("next_need_k must be non-negative")
-    if signal.related is None and signal.decision is None and signal.next_need_k is None:
-        raise ValueError("a signal needs --related, --decision or --next-need-k")
-    path = _signals_path(root)
-    data = _load(root)
-    data[agent] = asdict(signal)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as fh:
-        json.dump(data, fh, indent=1)
-        tmp = fh.name
-    os.replace(tmp, path)
+        raise ValueError('next_need_k must be non-negative')
+    if signal.related is None and signal.decision is None and signal.next_need_k is None and not allow_unknown:
+        raise ValueError('a signal needs --related, --decision or --next-need-k')
+    with _signal_lock(root):
+        data = _load(root)
+        old = data.get(agent)
+        if (preserve_after is not None and isinstance(old, dict)
+                and old.get('by') != signal.by and old.get('next_task') in ('', signal.next_task)
+                and type(old.get('at')) in (int, float) and old['at'] >= preserve_after):
+            return  # A fresh explicit human/caller judgement wins over automatic overlap.
+        data[agent] = asdict(signal)
+        _write_signals(root, data)
 
 
 def latest(root, agent: str) -> Signal | None:
@@ -324,56 +324,213 @@ def latest(root, agent: str) -> Signal | None:
 
 
 def clear(root, agent: str) -> None:
-    """A cycle consumes the signal: it was about the session that just ended."""
-    data = _load(root)
-    if data.pop(agent, None) is not None:
-        path = _signals_path(root)
-        path.write_text(json.dumps(data, indent=1))
+    """A cycle consumes its signal; concurrent handoffs retain theirs."""
+    with _signal_lock(root):
+        data = _load(root)
+        if data.pop(agent, None) is not None:
+            _write_signals(root, data)
 
 
-def read_cache(transcript: str | Path | None) -> Cache:
-    """When the last model request landed, and which TTL its cache write used.
+def _cache_window(model, policy):
+    if not isinstance(model, str):
+        return None
+    # More specific configured patterns win, independently of TOML key order.
+    matches = [(len(key.replace('*', '').replace('?', '')), key, value)
+               for key, value in policy.model_cache_ttl_seconds.items()
+               if fnmatch.fnmatchcase(model, key)]
+    return max(matches)[2] if matches else None
 
-    Claude Code transcripts carry `usage.cache_creation.ephemeral_{5m,1h}_input_tokens`
-    per request, so the TTL is MEASURED per session, not assumed: the harness
-    switches TTLs (a subscription session can drop from 1h to 5m in overage).
-    Unreadable is `Cache()` — every field None — never a guess.
+
+def read_cache(transcript: str | Path | None, *, policy: Policy | None = None,
+               model: str | None = None) -> Cache:
+    """Read measured request timing; name every unmeasured retention estimate.
+
+    Claude TTL writes are direct evidence. Codex token_count records describe
+    usage, not retention; configured model windows are labelled assumptions.
+    Reference: https://developers.openai.com/api/docs/guides/prompt-caching
+    A minimum API lifetime is not an eviction deadline or subscription promise.
     """
     if not transcript:
         return Cache()
     from .context_spend import _reverse_lines
-    last = ttl = None
-    seen = 0
+    policy = policy or Policy()
+    last = ttl = provider = observed_model = cached = written = None
+    seen = scanned = byte_count = 0
+
+    def count(value):
+        return value if type(value) is int and value >= 0 else None
+
     try:
-        with Path(transcript).open("rb") as fh:
-            for line in _reverse_lines(fh):
+        with Path(transcript).open('rb') as fh:
+            for line in _reverse_lines(fh, max_bytes=2 * 1024 * 1024):
+                scanned += 1
+                byte_count += len(line)
+                if scanned > 2000 or byte_count > 2 * 1024 * 1024:
+                    break
                 try:
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if not isinstance(rec, dict) or rec.get("isSidechain"):
+                if not isinstance(rec, dict) or rec.get('isSidechain'):
                     continue
-                msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
-                usage = msg.get("usage")
-                if not isinstance(usage, dict):
+                payload = rec.get('payload')
+                payload = payload if isinstance(payload, dict) else {}
+                if provider == 'codex' and rec.get('type') == 'turn_context':
+                    candidate = payload.get('model')
+                    if isinstance(candidate, str) and candidate:
+                        observed_model = candidate
+                        break
+                msg = rec.get('message')
+                msg = msg if isinstance(msg, dict) else {}
+                usage = msg.get('usage')
+                kind = 'claude'
+                if (rec.get('type') == 'event_msg' and payload.get('type') == 'token_count'):
+                    info = payload.get('info')
+                    usage = info.get('last_token_usage') if isinstance(info, dict) else None
+                    kind = 'codex'
+                if not isinstance(usage, dict) or count(usage.get('input_tokens')) is None:
                     continue
-                if seen == 0:
+                if provider is None:
+                    provider = kind
+                    candidate = msg.get('model') if kind == 'claude' else payload.get('model')
+                    observed_model = candidate if isinstance(candidate, str) and candidate else None
                     try:
-                        last = datetime.fromisoformat(
-                            rec["timestamp"].replace("Z", "+00:00")).timestamp()
-                    except (KeyError, AttributeError, ValueError):
+                        stamp = datetime.fromisoformat(rec['timestamp'].replace('Z', '+00:00'))
+                        last = stamp.timestamp() if stamp.tzinfo is not None else None
+                    except (KeyError, AttributeError, ValueError, OverflowError):
                         pass
+                    cached = count(usage.get('cached_input_tokens' if kind == 'codex' else 'cache_read_input_tokens'))
+                    written = count(usage.get('cache_write_input_tokens' if kind == 'codex' else 'cache_creation_input_tokens'))
+                if kind != provider:
+                    break
+                if provider == 'codex':
+                    if observed_model:
+                        break
+                    continue  # Only the context preceding the newest usage names its model.
+                candidate = msg.get('model')
+                if observed_model and candidate and candidate != observed_model:
+                    break  # Never borrow a different model's older cache-write TTL.
                 seen += 1
-                # A fully cached turn writes nothing and so names no TTL; the
-                # newest turn that DID write says which TTL the session is on.
-                split = usage.get("cache_creation")
+                split = usage.get('cache_creation')
                 if isinstance(split, dict):
-                    if split.get("ephemeral_1h_input_tokens"):
+                    if (count(split.get('ephemeral_1h_input_tokens')) or 0) > 0:
                         ttl = 3600
-                    elif split.get("ephemeral_5m_input_tokens"):
+                    elif (count(split.get('ephemeral_5m_input_tokens')) or 0) > 0:
                         ttl = 300
                 if ttl is not None or seen >= TTL_SCAN_RECORDS:
                     break
     except OSError:
         return Cache()
-    return Cache(last, ttl)
+    if provider is None:
+        return Cache()
+    resolved_model = observed_model or (model if isinstance(model, str) and model else None)
+    basis = 'observed cache-write TTL' if ttl is not None else 'unknown'
+    if ttl is None:
+        ttl = _cache_window(resolved_model, policy)
+        if ttl is not None:
+            origin = 'transcript model' if observed_model else 'configured model'
+            basis = 'assumed model policy (' + origin + '); eviction unmeasured'
+    return Cache(last, ttl, provider, resolved_model, basis, cached, written)
+
+
+# Only structured work evidence goes here; never compare whole conversations.
+_WORK_PATH = re.compile(r'(?<![\w/])(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:py|rs|go|js|ts|tsx|sh|toml|yaml|yml|json|md)\b')
+
+
+def work_facts(item):
+    def get(key, default=None):
+        return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
+    labels = get('labels', ())
+    labels = [v for v in labels if isinstance(v, str)] if isinstance(labels, (list,tuple,set)) else []
+    repos = [v.split(':',1)[1] for v in labels if v.startswith(('repo:', 'project:'))]
+    for key in ('repo', 'repository'):
+        if isinstance(get(key), str) and get(key):
+            repos.append(get(key))
+    text = re.sub(r'https?://\S+', '', str(get('description', '') or '')[:16000])
+    paths = {v for v in _WORK_PATH.findall(text)
+             if v.split('/')[0] not in {'home','tmp','run','etc','var'}}
+    files = get('files', ())
+    if isinstance(files, (list,tuple)):
+        paths.update(v for v in files if isinstance(v,str) and _WORK_PATH.fullmatch(v))
+    return dict(item=str(get('id','')), repos=sorted(set(repos))[:32],
+                paths=sorted(paths)[:64], labels=sorted(set(labels))[:64])
+
+
+def _facts_path(root, agent):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', agent):
+        raise ValueError('invalid work-facts agent')
+    return Path(root) / 'notify' / 'work_facts' / (agent + '.json')
+
+
+def previous_work(root, agent):
+    try:
+        path = _facts_path(root, agent)
+        if path.stat().st_size > 32768:
+            return None
+        value = json.loads(path.read_text())
+        if (not isinstance(value,dict) or not isinstance(value.get('item'),str)
+                or not all(isinstance(value.get(k),list) and all(isinstance(v,str) for v in value[k])
+                           for k in ('repos','paths','labels'))):
+            return None
+        return value
+    except (OSError, ValueError):
+        return None
+
+
+def overlap(previous, current):
+    """An overlap score, not a calibrated probability or semantic verdict."""
+    if not previous:
+        return None, 'previous verified work facts unavailable'
+    if previous['item'] and previous['item'] == current['item']:
+        return 1.0, 'same work item'
+    shared_repos = set(previous['repos']) & set(current['repos'])
+    if previous['repos'] and current['repos'] and not shared_repos:
+        return 0.2, 'different explicit repositories'
+    shared_paths = set(previous['paths']) & set(current['paths'])
+    if shared_paths:
+        return 0.9, 'shared files: ' + ', '.join(sorted(shared_paths)[:3])
+    if shared_repos:
+        return 0.5, 'shared repository; file overlap unmeasured'
+    scopes = lambda facts: {v for v in facts['labels'] if v.startswith(('area:', 'b:', 'scope:'))}
+    if scopes(previous) & scopes(current):
+        return 0.5, 'shared named work scope; file overlap unmeasured'
+    roots = lambda facts: {p.split('/')[0] for p in facts['paths']} - {'src','lib','docs','tests','scripts','ansible','include'}
+    if roots(previous) & roots(current):
+        return 0.5, 'shared named source package; exact file overlap absent'
+    return None, 'insufficient repository/file facts; absence is not unrelatedness'
+
+
+def handoff_preview(root, item, sit, policy):
+    facts = work_facts(item)
+    sit = replace(sit, next_task=facts['item'])
+    related, reason = overlap(previous_work(root, sit.agent), facts)
+    signal = Signal('st-handoff-overlap', sit.now, facts['item'], related=related, reason=reason)
+    explicit = latest(root, sit.agent)
+    if (explicit and explicit.by != signal.by and explicit.next_task in ('', facts['item'])
+            and 0 <= sit.now-explicit.at <= policy.signal_max_age_minutes*60):
+        signal = explicit
+    advice = decide(sit, signal, policy)
+    score = 'UNKNOWN' if signal.related is None else f'{signal.related:.2f}'
+    idle = 'UNKNOWN' if sit.idle_seconds is None else f'{sit.idle_seconds:.0f}s'
+    ttl = 'UNKNOWN' if sit.cache.ttl_seconds is None else f'{sit.cache.ttl_seconds}s'
+    basis = sit.cache.ttl_source or 'legacy configured window'
+    notice = (f'cycle advice {advice.decision}: relatedness={score}, idle={idle}, '
+              f'TTL={ttl} ({basis}); {signal.reason}; {advice.why}')
+    return dict(signal=signal, facts=facts, advice=advice, notice=notice,
+                preserve_after=sit.now-policy.signal_max_age_minutes*60)
+
+
+def record_handoff(root, agent, preview):
+    """Only called after a verified dispatch and assignment readback."""
+    path = _facts_path(root, agent)
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.NamedTemporaryFile('w',dir=path.parent,delete=False) as f:
+        json.dump(preview['facts'], f)
+        temp = f.name
+    try:
+        os.replace(temp,path)
+    finally:
+        Path(temp).unlink(missing_ok=True)
+    if preview['signal'].by == 'st-handoff-overlap':
+        post(root, agent, preview['signal'], allow_unknown=True,
+             preserve_after=preview['preserve_after'])

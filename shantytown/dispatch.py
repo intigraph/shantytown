@@ -460,6 +460,9 @@ class Plan:
                                # and this is the only place in the fleet that sees
                                # one happen.
 
+    handoff_preview: dict | None = field(default=None, repr=False, compare=False)
+    handoff_warning: str = ''
+
     def render(self) -> str:
         lines = [
             f"  would: tracker.update({self.item_id}, "
@@ -525,10 +528,11 @@ class Plan:
 
 class Dispatcher:
     def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
-                 governor=None, sender: str | None = None, audit=None):
+                 governor=None, sender: str | None = None, audit=None, handoff=None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
+        self.handoff = handoff
         # WHO IS DISPATCHING (aegis-5vxmz). None means "could not establish", and
         # that stays BARE — see attribution.attribute. Injected rather than read
         # from the environment here because a Dispatcher constructed in a test or
@@ -548,7 +552,7 @@ class Dispatcher:
 
     def plan(self, item_id: str, agent_name: str, note: str | None = None,
              quipu_nodes: list | None = None,
-             reassign: bool = False) -> Plan:
+             reassign: bool = False, include_handoff: bool = False) -> Plan:
         """Resolve only. No writes. This is what --dry-run shows.
 
         Every refusal here is a precondition failure -> exit 1, and it happens
@@ -646,6 +650,13 @@ class Dispatcher:
             refusal = self.governor(item, agent_name)
             if refusal:
                 raise GovernorRefused(refusal)
+        preview = None
+        warning = ''
+        if include_handoff and self.handoff is not None:
+            try:
+                preview = self.handoff.preview(item, agent)
+            except Exception as error:  # advice cannot revoke an otherwise valid dispatch
+                warning = 'cycle advice UNKNOWN (' + type(error).__name__ + ')'
         from .task_order import instruction
         text = f"Work is on your hook: {item_id} — {item.title}"
         text += " — " + instruction(item_id)
@@ -676,6 +687,10 @@ class Dispatcher:
         nodes = [n.strip() for n in (quipu_nodes or []) if n and n.strip()]
         if nodes:
             text += f" — GRAPH: {', '.join(nodes)} (quipu_search these first)"
+        if preview is not None:
+            text += ' — ' + flatten_note(preview['notice'])
+        elif warning:
+            text += ' — ' + warning
         flat = flatten_note(note) if note else ""
         if flat:
             # The note goes AFTER the id and title on purpose: verify() looks for
@@ -734,6 +749,7 @@ class Dispatcher:
             # CAN go look. If that trade is ever re-ruled, this is the line.
             unreadable_deps=int(getattr(item, "unreadable_deps", 0) or 0),
             orphaned_in_progress=orphaned,
+            handoff_preview=preview, handoff_warning=warning,
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None,
@@ -756,7 +772,7 @@ class Dispatcher:
            note: str | None = None, reassign: bool = False,
            quipu_nodes: list | None = None) -> Plan:
         p = self.plan(item_id, agent_name, note, quipu_nodes=quipu_nodes,
-                      reassign=reassign)
+                      reassign=reassign, include_handoff=True)
         if dry_run:
             return p
         # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means
@@ -809,6 +825,11 @@ class Dispatcher:
                                item=item_id, attempted=True, acted_on=True,
                                serve_id=p.serve_id, state="input_sent",
                                reason="pane send verified before tracker update")
+        if self.handoff is not None and p.handoff_preview is not None:
+            try:
+                self.handoff.record(agent_name, p.handoff_preview)
+            except Exception as error:
+                p.handoff_warning = 'cycle signal persistence UNKNOWN (' + type(error).__name__ + ')'
         return p
 
     def _track(self, item_id: str, updates: dict) -> int:
