@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 packages = ["shantytown"]
 
 [project.optional-dependencies]
-test = ["pytest", "rdflib>=7.1,<8"]
+test = ["pytest", "rdflib>=7.1,<8", "PyYAML>=6,<7"]
 
 [project.scripts]
 st = "shantytown.cli:main"
