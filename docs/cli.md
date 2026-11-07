@@ -2770,7 +2770,7 @@ provisioned can leave that earlier card updated; rerunning converges.
 
 When `SHANTY_AGENT` is set, `st task` checks up to three indexed open candidates
 from Bobbin's `search_beads` HTTP endpoint (`GET /beads`) and verifies each against
-the selected `br` store before asking Camayoc's `jev_noul` whether it describes the
+the selected tracker store before asking Camayoc's `jev_noul` whether it describes the
 same concrete work and acceptance outcome. A probability of at least 0.90 warns;
 creation still proceeds. Verdicts remain inferred and are never published to the
 board or knowledge graph. No warning is evidence of exhaustive duplicate absence:
@@ -2799,6 +2799,12 @@ text. Compound creates, substitutions and unsupported options produce a skip.
 Quoted mentions and heredoc bodies are not creates. Producer scripts are not
 instrumented, and the tracker backend itself is unchanged.
 
+For Seeds-backed `st task` creates, candidate verification retains the selected
+Quipu, graph and prefix and proves that store before reading the exact candidate.
+An unavailable or unproven store skips the advisory; it never falls back to a
+legacy local board. Search, candidate-store and judgment failures use distinct,
+bounded reasons without recording private exception text.
+
 Every considered advisory appends `fired`, `skipped` or `no-match` and elapsed
 milliseconds to `~/.local/state/shantytown/create-advisory.jsonl` (override with
 `SHANTY_CREATE_ADVISORY_LOG`). It includes event IDs, candidate IDs, probabilities,
@@ -2816,6 +2822,19 @@ The report counts unlabelled warnings and returns null precision when nothing ha
 been judged. This is distinct from the frozen synthetic 30-pair smoke evaluation
 in `tests/fixtures/create_advisory_pairs.jsonl`; synthetic precision is not measured
 precision on real creates. Neither report enables blocking.
+
+A separate report-only command measures the retained seven-day population:
+
+```sh
+python -m shantytown.create_advisory --coverage /path/events.jsonl
+```
+
+It reports skipped and evaluated events separately, with bounded skip-reason
+codes. Missing, malformed, duplicate or oversized logs return an unknown report
+and exit 2. An empty population has null skip ratio. This command does not create
+items, query the tracker or invoke a model. Coverage is not precision, and retained
+logs alone do not prove that every create was instrumented.
+
 
 
 ### Configured pace in the Creel advisory

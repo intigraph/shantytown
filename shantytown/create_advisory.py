@@ -36,6 +36,39 @@ def same_work(first, second, client):
         state=json.dumps(dict(first=first, second=second)), instructions=QUESTION))
 
 
+def _candidate(request, item_id):
+    """Read the selected store; a Seeds invocation must never fall back to br."""
+    selected = request.get('tracker')
+    try:
+        if selected is not None:
+            if not isinstance(selected, dict) or selected.get('backend') != 'seeds':
+                raise ValueError('invalid selected tracker')
+            if request.get('store_args'):
+                raise ValueError('mixed tracker scopes')
+            from .sd import SdTracker
+            tracker = SdTracker(repo=request.get('cwd'), timeout=.5,
+                                store=selected.get('store'), quipu=selected.get('quipu'),
+                                prefix=selected.get('prefix'))
+            # The adapter proves the configured store before its exact read.
+            result = tracker._bd('show', item_id, '--json')
+        else:
+            args = [os.environ.get('SHANTY_BR_BIN', 'br'), *request.get('store_args', []),
+                    '--no-auto-import', '--no-auto-flush', 'show', item_id, '--json']
+            result = subprocess.run(args, cwd=request.get('cwd'), capture_output=True,
+                                    text=True, timeout=.5)
+        if result.returncode:
+            raise ValueError('candidate read failed')
+        data = json.loads(result.stdout)
+        if isinstance(data, list) and len(data) == 1:
+            data = data[0]
+        if not isinstance(data, dict) or data.get('id') != item_id or 'status' not in data:
+            raise ValueError('invalid candidate')
+        return data
+    except Exception:
+        # Never expose URLs, credentials, response bodies or a different board.
+        raise TriageError('candidate store unavailable or unproven') from None
+
+
 def evaluate(request):
     """Worker only: validate indexed candidates against the create's live store."""
     if request.get('skip'):
@@ -46,8 +79,11 @@ def evaluate(request):
         raise TriageError('configure BOBBIN_SERVER and SHANTY_CREATE_JEV_COMMAND')
     query = urllib.parse.urlencode(dict(q=request['title'], status='open', limit=3,
                                        enrich='false', compact='true'))
-    with urllib.request.urlopen(server.rstrip('/') + '/beads?' + query, timeout=1) as r:
-        payload = json.load(r)
+    try:
+        with urllib.request.urlopen(server.rstrip('/') + '/beads?' + query, timeout=1) as r:
+            payload = json.load(r)
+    except Exception:
+        raise TriageError('search unavailable') from None
     if (not isinstance(payload, dict) or not isinstance(payload.get('results'), list)
             or payload.get('count') != len(payload['results']) or 'error' in payload):
         raise TriageError('invalid Bobbin response')
@@ -59,27 +95,21 @@ def evaluate(request):
         item_id = row.get('bead_id')
         if not isinstance(item_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', item_id):
             raise TriageError('invalid candidate id')
-        args = [os.environ.get('SHANTY_BR_BIN', 'br'), *request.get('store_args', []),
-                '--no-auto-import', '--no-auto-flush', 'show', item_id, '--json']
-        r = subprocess.run(args, cwd=request.get('cwd'), capture_output=True, text=True, timeout=.5)
-        if r.returncode:
-            raise TriageError('candidate store read failed')
-        data = json.loads(r.stdout)
-        if isinstance(data, list) and len(data) == 1:
-            data = data[0]
-        if not isinstance(data, dict) or data.get('id') != item_id or 'status' not in data:
-            raise TriageError('invalid candidate store response')
+        data = _candidate(request, item_id)
         if data['status'] in ('open', 'in_progress', 'hooked', 'blocked'):
             checked.append(data)
     results = []
     if checked:
-        with JevMCP(command, timeout=1) as client:
-            for row in checked:
-                out = same_work(dict(title=request['title'], description=request.get('description', '')),
-                                {k: row.get(k, '') for k in ('title', 'description')}, client)
-                results.append(dict(id=row['id'], probability=out['answer']['noul'],
-                                    model=out['model'], request_hash=digest(out['request']),
-                                    usage=out['usage']))
+        try:
+            with JevMCP(command, timeout=1) as client:
+                for row in checked:
+                    out = same_work(dict(title=request['title'], description=request.get('description', '')),
+                                    {k: row.get(k, '') for k in ('title', 'description')}, client)
+                    results.append(dict(id=row['id'], probability=out['answer']['noul'],
+                                        model=out['model'], request_hash=digest(out['request']),
+                                        usage=out['usage']))
+        except Exception:
+            raise TriageError('Jev unavailable or invalid judgment') from None
     return dict(outcome='fired' if any(r['probability'] >= THRESHOLD for r in results) else 'no-match',
                 candidates=results)
 
@@ -263,6 +293,15 @@ def precision_report(log_path, labels_path=None):
 
 
 def main():
+    if '--coverage' in sys.argv:
+        import argparse
+        from .create_advisory_metrics import coverage_report
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--coverage', required=True)
+        args = parser.parse_args()
+        report = coverage_report(args.coverage)
+        print(json.dumps(report))
+        return 0 if report['log_read_ok'] else 2
     if '--report' in sys.argv:
         import argparse
         parser = argparse.ArgumentParser()
