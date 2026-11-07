@@ -68,7 +68,7 @@ fi
 mkdir -p "$OUT"; chmod 700 "$OUT"
 
 python3 - "$RAW" "$OUT" "$ONLY_AGENT" "$FULL" "$0" <<'PY'
-import hashlib, json, os, pathlib, re, sys, tempfile
+import hashlib, json, os, pathlib, re, sys
 raw, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 only_agent, full = sys.argv[3], sys.argv[4] == "1"
 # Each derivative records the exact policy that produced it. A new exclusion or
@@ -157,16 +157,17 @@ def strip_results(data):
     return b"\n".join(lines) + (b"\n" if lines else b""), omitted, malformed, private_keys
 
 
+# Share the publication guard with raw capture: a full/policy re-scrub must
+# update the relocated derivative rather than replacing its citation symlink.
+sys.path.insert(0, str(pathlib.Path(sys.argv[5]).resolve().parent))
+from history_archive import atomic_write as publish_derivative, destination
+
+
 def atomic_write(path, data):
-    # A reader must never see a partially scrubbed file, nor a world-readable
-    # output between write and chmod. The raw archive is never opened for write.
-    fd, temporary = tempfile.mkstemp(prefix=".scrub-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            fh.write(data)
-        os.replace(temporary, path)
-    finally:
-        pathlib.Path(temporary).unlink(missing_ok=True)
+    target, _ = destination(path)
+    if target.resolve().is_relative_to(raw.resolve()):
+        raise ValueError(f"refused derivative destination inside raw archive: {path}")
+    publish_derivative(path, data)
 
 
 # gitleaks-shaped credential classes. Add here, never weaken: a smaller number
