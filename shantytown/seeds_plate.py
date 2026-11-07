@@ -270,8 +270,11 @@ def _unsupported_owner_branches(proof, agent):
 class RenderShapeReads:
     """Positive shape observations scoped to one render and one proven store."""
 
-    def __init__(self):
+    def __init__(self, *, inline_roster=False):
         self.supported = []
+        # Crew keeps the render marker for frozen capacity reuse, while its
+        # candidate query can prove the same shape without a separate ASK.
+        self.inline_roster = inline_roster
 
     def check(self, proof, scope, *, timeout):
         names = frozenset(a.split("/")[-1] for a in scope) if isinstance(scope, tuple) else None
@@ -361,7 +364,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # the same counterexample relation before hydrating any fields.
         inline_owner_guard = messages_only or (
             (isinstance(scope, str) or isinstance(scope, tuple) and bool(scope))
-            and shape_reads is None
+            and (shape_reads is None or (plate_owners is not None
+                 and isinstance(shape_reads, RenderShapeReads)
+                 and shape_reads.inline_roster))
         )
         if scope is not None and not inline_owner_guard and not shape_check(proof, scope, timeout=timeout):
             raise ValueError("owner has an unsupported or absent status")

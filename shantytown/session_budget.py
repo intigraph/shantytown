@@ -101,6 +101,7 @@ class ContextLimits:
     hard_pct: float = 75.0
     nudge_pct: float | None = None
     repeat_seconds: int = 120
+    nudge_step_pct: float | None = None
 
     @property
     def nudge_at(self):
@@ -209,7 +210,7 @@ def parse(tbl: dict) -> Limits:
     if not tbl:
         return Limits()
     known = {"max_hours", "max_items", "max_risk", "on_signal_lost",
-             "context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds", "context_by_role", "context_by_agent"}
+             "context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds", "context_nudge_step_pct", "context_by_role", "context_by_agent"}
     for k in tbl:
         if k not in known:
             raise BudgetError(
@@ -251,10 +252,14 @@ def parse(tbl: dict) -> Limits:
             raise BudgetError("[session_budget] context_nudge_pct must be finite, positive and below context_threshold_pct")
         if type(repeat) is not int or not 1 <= repeat <= 3600:
             raise BudgetError("[session_budget] context_nudge_repeat_seconds must be an integer from 1 to 3600")
-        return ContextLimits(window, float(pct), float(hard), nudge, repeat)
+        step = values.get("context_nudge_step_pct", inherited.nudge_step_pct if inherited else None)
+        if step is not None and (type(step) not in (int, float)
+                                 or not math.isfinite(step) or not 0 < step < 100):
+            raise BudgetError("[session_budget] context_nudge_step_pct must be finite and between 0 and 100")
+        return ContextLimits(window, float(pct), float(hard), nudge, repeat, step)
 
     base = (context(tbl) if any(k in tbl for k in
-            ("context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds")) else None)
+            ("context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds", "context_nudge_step_pct")) else None)
     def overrides(key):
         entries = tbl.get(key, {})
         if not isinstance(entries, dict):
@@ -262,7 +267,7 @@ def parse(tbl: dict) -> Limits:
         result = {}
         for name, values in entries.items():
             if (not isinstance(values, dict) or not values
-                    or set(values) - {"context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds"}):
+                    or set(values) - {"context_window", "context_threshold_pct", "context_hard_pct", "context_nudge_pct", "context_nudge_repeat_seconds", "context_nudge_step_pct"}):
                 raise BudgetError(f"[session_budget.{key}.{name}] expected context_window/context_threshold_pct")
             result[name] = context(values, base)
         return result

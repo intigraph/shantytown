@@ -113,8 +113,17 @@ class BrTracker(BeadsTracker):
                 close_args.extend(["--reason", close_reason])
             r = self._bd_for(item_id, *close_args)
             if r.returncode != 0:
-                raise RuntimeError(
-                    f"br close {item_id} failed: {r.stderr.strip()[:120]}")
+                # An observe warning can precede the real refusal, while the
+                # JSON reason may be on stdout. Keep both through the CLI's
+                # structured-error path rather than truncating the warning.
+                raise TrackerUpdateError({
+                    "code": "CLOSE_FAILED",
+                    "message": (f"{self._tool} close {item_id} failed; outcome unproven, "
+                                "read back before retry"),
+                    "details": {"backend": self._tool, "exit_code": r.returncode,
+                                "stdout": _close_diagnostic(r.stdout),
+                                "stderr": _close_diagnostic(r.stderr)},
+                })
             if not fields and selected is None and reason is None:
                 return
 
@@ -208,6 +217,15 @@ def redact_cause(text: str) -> str:
     from .stats import _redact_bearer_output
     text = _redact_bearer_output(text.encode())[0].decode(errors="replace")
     return _BEARER_ANY.sub(lambda m: m.group(1) + "[REDACTED]", text)
+
+
+def _close_diagnostic(text: str) -> str:
+    """Redact before bounding; retain the final refusal after leading warnings."""
+    text = redact_cause(text.strip())
+    if len(text) <= 2048:
+        return text
+    omitted = len(text) - 2048
+    return text[:768] + f"\n[{omitted} characters omitted]\n" + text[-1280:]
 
 
 def _failure_reason(r) -> str:

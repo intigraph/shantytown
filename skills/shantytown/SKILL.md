@@ -18,6 +18,24 @@ Quipu supplies graph knowledge, Seeds tracks items, and Bobbin and Yupana supply
 Tambo installs the stack; `tambo prime` combines each tool's brief orientation.
 `st anchor` is session startup context; `st prime` adds this tool primer around the same read.
 
+#### Stack orientation
+Quipu stores governed knowledge; Seeds (`sd`) tracks work items. Camayoc (`cy`)
+provides typed agent memory: recall decisions and directives before acting, and
+record authorized rulings and handoffs through the deployment's governed path.
+Read the provisioned Camayoc skill, `cy prime --static` and
+`cy record <entity> --help` where installed. Its selected Jev MCP tools are
+`jev_noul`, `jev_choice`, `jev_score`, `map_question` and `jev_dry_run`.
+MCP configuration and permissions come from the deployment's tooling manifest.
+An absent command or unavailable schema is UNKNOWN; refused writes retain their
+gate. Orientation grants no write permission and does not provision `cy mcp`.
+
+Bobbin searches code by meaning; Yupana traces structural impact. Tambo installs
+the stack; `tambo prime` combines its tool primers (`stack-prime/1`). Chaski handles
+reactions, Shuttle runs signed workflows, Rikuy presents the live brief, and
+Desire Path records failed tool calls. Run `st prime` for the full primer and a
+bounded crew/anchor summary. Startup uses this packaged section without invoking
+other tools or contacting services.
+
 #### Agent workflow
 1. Run `st anchor` to read your identity, current work and reporting route.
 2. Query Quipu for existing facts and the deployment's process rules before acting.

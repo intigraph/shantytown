@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "st manages work, crew, repositories and jobs. Governed roles and advisory ranks preserve UNKNOWN. Protected mailboxes/reviews bind scopes. Cycle needs clean branches and full-history custody; checkpoint advice needs fresh proof. Chaski delegation refuses local execution. Administrators accept quarantined ranks. Harness conversion preserves validated model/browser choices. Semantic benchmarks admit automation and personal needs, never ranks. Pipeline waits require an event and backstop; --window is an appointment. Owner reminders retain gates. Ceiling transfer observes source harnesses and complete non-held receiver plates, chooses the other known harness, and preserves budget/ownership gates. Explicit Seeds revision fences pass unchanged; structured conflicts retain operation identity without retry. AGY diagnostics distinguish projected hooks from verified native SessionStart; missing proof remains UNKNOWN. Best-effort sweeps resume at the first budget skip; skipped work is UNKNOWN.",
-      "source_sha256": "40267dd06dbcf45ca6d7248f8dcefb6eb733f797ca24165154ebb026f18352d5",
+      "summary": "st manages work, crew, repositories and jobs. Governed roles and advisory ranks preserve UNKNOWN. Protected mailboxes/reviews bind scopes. Cycle needs clean branches and full-history custody; checkpoint advice needs fresh proof. Chaski delegation refuses local execution. Administrators accept quarantined ranks. Harness conversion validates model/browser choices. Semantic benchmarks never admit ranks. Pipeline waits need events/backstops; --window is an appointment. Owner reminders retain gates. Ceiling transfer checks source harness, complete non-held receiver plate, alternate harness, budget and ownership. Seeds revision fences and structured conflicts preserve operation identity without retry. AGY hook projection is not native SessionStart proof; missing evidence is UNKNOWN. Sweeps resume at the first budget skip. Verified ordinary administrator/Codex cold-launch receipts may resume work without causing a launch; independent holds remain.",
+      "source_sha256": "776324d7fdfdbd206032ba57a09080ddf22b2a4e93d755c93e9619d51f88d0f5",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "389e857d2b917098152c183de3f75c0ac9cdef4f01cc309f80592cc7a584e86f",
+      "source_sha256": "a035f058ebfe138a08a11f64884dadde08a3172951cb008c9606e32d598ad4f7",
       "properties": {
         "startHereOrder": 2
       }

@@ -32,7 +32,12 @@ reads skip deployment configuration, actor admission and live adapters.
 The packaged `shantytown/primer.md` is the source for runtime text and both copies
 below and in the skill. Run `python3 scripts/sync-primer.py` to regenerate them;
 normal pytest checks fail if they drift. `st anchor` keeps its existing startup
-render and task-context schema.
+render and task-context schema. Session-start hook output and verified launch
+delivery also include the packaged Stack orientation section, even when the
+anchor is unreadable. This local section names the stack, Camayoc skill, selected
+Jev tools and `cy` CLI without running external primers, querying services or
+changing MCP configuration. A damaged primer reports UNKNOWN while retaining
+startup context. Memory write/schema gates remain enforced by the deployment.
 
 <!-- BEGIN st prime -->
 ## Shantytown agent primer
@@ -43,6 +48,24 @@ Crew cards define identity, role, lead and host; the selected tracker owns work.
 Quipu supplies graph knowledge, Seeds tracks items, and Bobbin and Yupana supply code context.
 Tambo installs the stack; `tambo prime` combines each tool's brief orientation.
 `st anchor` is session startup context; `st prime` adds this tool primer around the same read.
+
+### Stack orientation
+Quipu stores governed knowledge; Seeds (`sd`) tracks work items. Camayoc (`cy`)
+provides typed agent memory: recall decisions and directives before acting, and
+record authorized rulings and handoffs through the deployment's governed path.
+Read the provisioned Camayoc skill, `cy prime --static` and
+`cy record <entity> --help` where installed. Its selected Jev MCP tools are
+`jev_noul`, `jev_choice`, `jev_score`, `map_question` and `jev_dry_run`.
+MCP configuration and permissions come from the deployment's tooling manifest.
+An absent command or unavailable schema is UNKNOWN; refused writes retain their
+gate. Orientation grants no write permission and does not provision `cy mcp`.
+
+Bobbin searches code by meaning; Yupana traces structural impact. Tambo installs
+the stack; `tambo prime` combines its tool primers (`stack-prime/1`). Chaski handles
+reactions, Shuttle runs signed workflows, Rikuy presents the live brief, and
+Desire Path records failed tool calls. Run `st prime` for the full primer and a
+bounded crew/anchor summary. Startup uses this packaged section without invoking
+other tools or contacting services.
 
 ### Agent workflow
 1. Run `st anchor` to read your identity, current work and reporting route.

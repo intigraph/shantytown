@@ -179,7 +179,7 @@ def _emit(root, card, payload=None) -> bool:
         old = _load(path)
         key = [payload.get("session_id"), payload.get("transcript_path"),
                category, limits.window, limits.threshold_pct, limits.hard_pct, error,
-               limits.nudge_at, limits.repeat_seconds]
+               limits.nudge_at, limits.repeat_seconds, limits.nudge_step_pct]
         # A below-threshold observation resets the crossing. Session/config
         # changes also re-arm; a stale marker must not silence a new session.
         early = category == "low" and reading.state == cs.MEASURED and reading.pct >= limits.nudge_at
@@ -187,7 +187,12 @@ def _emit(root, card, payload=None) -> bool:
             category = "nudge"
             key[2] = category
         due = category != "low" and old.get("reported") != key
-        if category == "nudge" and not due:
+        if category == "nudge" and limits.nudge_step_pct is not None:
+            # Anchor milestones to the configured boundary, not the last sample:
+            # observing 26% first must still remind at 35%, rather than 36%.
+            key.append(int((reading.pct - limits.nudge_at) // limits.nudge_step_pct))
+            due = old.get("reported") != key
+        elif category == "nudge" and not due:
             due = time.time() - (old.get("emitted_at") or 0) >= limits.repeat_seconds
         if category == "high" and not due and not old.get("exception"):
             due = time.time() - (old.get("emitted_at") or 0) >= limits.repeat_seconds
@@ -318,15 +323,26 @@ def tool_feedback(root, agent, payload):
             mark = old.get("tool_nudge") or {}
             key = [payload.get("session_id"), payload.get("transcript_path"),
                    _category(reading, limits), limits.window, limits.nudge_at,
-                   limits.threshold_pct, limits.hard_pct, limits.repeat_seconds]
+                   limits.threshold_pct, limits.hard_pct, limits.repeat_seconds,
+                   limits.nudge_step_pct]
+            if limits.nudge_step_pct is not None:
+                # A soft-hint crossing is not another preparation milestone;
+                # hard handoff remains independently visible.
+                key[2] = "hard" if reading.over(limits.hard_pct) else "preparation"
             now = time.time()
             due = reading.pct >= limits.nudge_at and (
                 mark.get("key") != key or now - mark.get("at", 0) >= limits.repeat_seconds
                 or reading.pct >= mark.get("pct", 0) + 5)
+            if limits.nudge_step_pct is not None:
+                milestone = int((reading.pct - limits.nudge_at) // limits.nudge_step_pct)
+                due = reading.pct >= limits.nudge_at and (
+                    mark.get("key") != key or milestone > mark.get("milestone", -1))
+            else:
+                milestone = None
             if reading.pct < limits.nudge_at:
                 old.pop("tool_nudge", None)
             elif due:
-                old["tool_nudge"] = dict(key=key, at=now, pct=reading.pct)
+                old["tool_nudge"] = dict(key=key, at=now, pct=reading.pct, milestone=milestone)
             _save(path, old)
         if not due:
             return False
