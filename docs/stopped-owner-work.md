@@ -72,3 +72,24 @@ and revert its source through the reviewed lane. Existing attention/audit files
 and preservation comments remain evidence. Reassigning any already released
 item is a separate explicit, revision-aware decision; rollback never guesses
 an old owner or deletes a worktree.
+
+## Local stopped-owner delivery receipts
+
+The local owned-work outbox saves a returned receipt ID in its existing
+`attempting` record before reading metadata. A later process recovers that ID
+with an exact receipt read, including a receipt already closed by its recipient.
+Failure of that point read stays UNKNOWN; it never falls back to history or
+permits a second send.
+
+If a delivery reply was lost before its ID could be saved, the native Seeds
+reader selects only identities matching that event's opaque marker. The query
+has a three-row ceiling; multiple matches, reaching the ceiling, malformed
+metadata, or incomplete transport refuse reconciliation. A unique result then
+uses the same exact metadata reader. Closed receipts remain eligible. Other
+receipts' descriptions and comments are never hydrated for this lookup.
+A positively selected legacy store uses its SDK recipient-and-marker filter
+with the same three-row ceiling and explicit completeness checks. An unavailable
+reader remains UNKNOWN rather than enumerating all recipient history. Adapters without the optional point-reader capability
+retain their declared adapter behavior; no cross-adapter cost claim is implied.
+This source change does not enable a lifecycle publisher or admit a runtime
+measurement cohort.

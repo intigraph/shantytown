@@ -1,0 +1,8 @@
+Script started on 2026-11-06 00:55:06-05:00 [COMMAND="python3 -B docs/demos/dp-installed-version/demo.py" <not executed on terminal>]
+Target: source library; fixed native CLI fixture, no installed-state changes
+Base: 2bd929f85aaedc9afcb28ebdb0c9cc73e3bae1dc Candidate behavior: 801b2b0d
+0.12.1 before: (None, 'dp --version gave no version') after: (False, 'dp 0.12.1 does not satisfy >=0.12.2')
+0.12.2 before: (None, 'dp --version gave no version') after: (True, 'dp 0.12.2 satisfies >=0.12.2')
+Missing binary remains UNKNOWN: (None, 'dp is not on PATH')
+
+Script done on 2026-11-06 00:55:07-05:00 [COMMAND_EXIT_CODE="0"]

@@ -1,0 +1,9 @@
+Script started on 2026-11-06 03:08:22-05:00 [COMMAND="python3 docs/demos/host-skill-roots/probe.py" <not executed on terminal>]
+Base 3e5aa098 / candidate runtime ccc2cd2b; isolated fixture
+Same portable manifest, before: 0/27 available
+Same portable manifest, after:  27/27 available
+Legacy host projection byte-identical: yes
+Projection digest: c18ddec9d24dc31f71b1bfe36f0aa5f8473257ed68bc50560fb8dd6bea5edc03
+Missing local SKILL.md positive control: 26/27 available; unchanged availability gate refuses
+
+Script done on 2026-11-06 03:08:22-05:00 [COMMAND_EXIT_CODE="0"]

@@ -51,7 +51,28 @@ def _object(pairs):
     return out
 
 
-def parse(text: str, entity: str) -> Manifest:
+SKILL_ROOTS = {"SHANTY_SKILL_SOURCE_ROOT", "CAMAYOC_SRC"}
+
+
+def _skill_path(path: str, root) -> str:
+    """Bind only declared source roots; never expand arbitrary environment values."""
+    if "$" not in path:
+        return path
+    match = re.fullmatch(r"\$\{([A-Z_]+)\}/(.+)", path)
+    if (match is None or match[1] not in SKILL_ROOTS
+            or "$" in match[2] or ".." in Path(match[2]).parts
+            or Path(match[2]).is_absolute()):
+        raise ToolingError("invalid skill source root reference")
+    value = deployment_default(root, match[1])
+    if not isinstance(value, str) or not value.strip() or "\x00" in value:
+        raise ToolingError("skill source root is not configured")
+    base = Path(value).expanduser()
+    if not base.is_absolute() or ".." in base.parts or "$" in value:
+        raise ToolingError("skill source root must be an absolute local path")
+    return str(base / match[2])
+
+
+def parse(text: str, entity: str, *, root=None) -> Manifest:
     try:
         data = json.loads(text, object_pairs_hook=_object)
     except (ValueError, TypeError):
@@ -83,7 +104,9 @@ def parse(text: str, entity: str) -> Manifest:
     if (not isinstance(instructions, str) or not instructions.strip()
             or BEGIN in instructions or END in instructions):
         raise ToolingError("instructions must be nonempty text without projection markers")
-    return Manifest(entity, servers, skills, instructions)
+    return Manifest(entity, servers,
+                    {name: _skill_path(path, root) for name, path in skills.items()},
+                    instructions)
 
 
 def load(root, *, last_good=False) -> Manifest | None:
@@ -112,7 +135,7 @@ def load(root, *, last_good=False) -> Manifest | None:
     except (CouldNotLook, PartialAnswer, QuipuQueryRejected):
         if cache is not None:
             try:
-                manifest = parse(cache.read_text(), entity)
+                manifest = parse(cache.read_text(), entity, root=root)
             except (OSError, ToolingError):
                 pass
             else:
@@ -124,7 +147,7 @@ def load(root, *, last_good=False) -> Manifest | None:
     if len(rows) != 1 or not isinstance(rows[0], dict) or not isinstance(rows[0].get("value"), str):
         raise ToolingError("Quipu tooling source must have exactly one JSON rdf:value")
     text = rows[0]["value"]
-    manifest = parse(text, entity)
+    manifest = parse(text, entity, root=root)
     if cache is not None:
         from .config_source import _store
         try:
