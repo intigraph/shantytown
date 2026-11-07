@@ -1,0 +1,19 @@
+Script started on 2026-11-06 23:43:30-05:00 [COMMAND="python3 docs/demos/exact-context-consumer/demo.py" <not executed on terminal>]
+Target: source checkout; synthetic tracker and evidence, no network
+Same console-entry probe on base and candidate:
+before st-context: ABSENT
+after  st-context: shantytown.work_context_command:main
+
+Candidate console main: st-context fixture-123
+EXACT CONTEXT for fixture-123 (read by ID first; semantic search is second)
+  episodes (1):
+    exact read: 
+    - 2026-01-01T00:00:00Z fixture ruling: Preserve the exact blocker.
+      record: urn:fixture:evidence-1; source: urn:fixture:reviewer
+  rulings: UNKNOWN (TimeoutError: fixture timeout); this is not an empty answer
+  then: quipu_search for related history. A NO CONTEXT search answer is not absence; the exact reads above are the authority.
+
+Negative control: unavailable deployment tracker
+exact context UNKNOWN (OSError); not an empty answer
+
+Script done on 2026-11-06 23:43:30-05:00 [COMMAND_EXIT_CODE="0"]

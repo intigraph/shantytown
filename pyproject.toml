@@ -28,6 +28,7 @@ test = ["pytest", "rdflib>=7.1,<8"]
 
 [project.scripts]
 st = "shantytown.cli:main"
+st-context = "shantytown.work_context_command:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
