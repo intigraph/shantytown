@@ -3597,6 +3597,18 @@ a zero count. Native snapshots use bounded candidate-edge and exact endpoint
 status projections; missing or shadowed endpoints refuse the run. These bands
 and flags do not change lifecycle status, clear a hold, or authorize dispatch.
 
+### Recovery source maintenance
+
+A normal tend pass gives optional clone and project-worktree refreshes one shared
+30-second start budget. It lets an in-flight operation finish under its existing
+timeout, then defers remaining refreshes rather than interrupting Git mutations.
+Tend does not run merged-topic retirement, remote landing-proof scans or branch
+pruning; those remain on explicit worktree refresh commands. A stale intact
+checkout must not prevent crew recovery. The account admission lock still covers
+the census, governor decisions and session creation; capacity, holds and duplicate
+launch checks remain in force. This budget bounds maintenance starts, not total
+pass duration or the duration of runtime startup and notification sweeps.
+
 ### Observed cold-launch resume condition
 
 `resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
