@@ -245,7 +245,8 @@ def make_harness(base):
             if credentials:
                 env.pop('QUIPU_AUTH_TOKEN', None)
             env.update(SHANTY_AGENT=card.name, BOBBIN_ROLE=card.role,
-                       BEADS_ACTOR=card.name, ST_ROLES=','.join(card.effective_roles()))
+                       BEADS_ACTOR=card.name, SEEDS_ACTOR=card.name,
+                       ST_ROLES=','.join(card.effective_roles()))
             if root:
                 env['SHANTY_AGY_RECEIPT'] = str(receipt_path(root, card.name).resolve())
                 env['SHANTY_ROOT'] = str(Path(root).resolve())
