@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from shantytown import tmux
+from shantytown import tmux, triage
 
 FOOTER = '  gpt-6 high · /workspace'
 READY = '\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\n' + FOOTER
@@ -14,13 +14,22 @@ QUEUED = ('Working (1s • esc to interrupt)\n'
           'Messages to be submitted after next tool call\n  ↳ ' + BODY + '\n' + READY)
 
 
-def transport(monkeypatch, frames, foreground='codex'):
+def transport(monkeypatch, frames, foreground='codex', typed_frame=None):
     panes = tmux.Tmux()
     calls = []
+    initial = frames[0]
     frames = iter(frames)
     last = ['']
+    fresh_typed = [False]
 
     def capture(_pane, **_kw):
+        if not fresh_typed[0] and any('send-keys' in c and '-l' in c for c in calls):
+            fresh_typed[0] = True
+            current = typed_frame if typed_frame is not None else (
+                ('Working (1s • esc to interrupt)\n' if triage.mid_flight(initial) else '') + OWNED)
+            if isinstance(current, Exception):
+                raise current
+            return current
         last[0] = next(frames, last[0])
         if isinstance(last[0], Exception):
             raise last[0]
@@ -44,7 +53,7 @@ def test_live_turn_is_observed_after_a_separate_settle(monkeypatch):
     panes, calls = transport(monkeypatch, [READY, BUSY])
     panes.send('worker', BODY)
     first_enter = next(i for i, c in enumerate(calls) if c[-1] == 'Enter')
-    assert calls[first_enter - 1] == ('sleep', tmux._CODEX_SETTLE_S)
+    assert ('sleep', tmux._CODEX_SETTLE_S) in calls[:first_enter]
     assert len(keys(calls)) == 2
 
 
@@ -59,7 +68,7 @@ def test_one_enter_retry_recovers_only_our_pending_body(monkeypatch):
 @pytest.mark.parametrize('retry_foreground', [None, 'bash', 'claude', 'unrecognized', 'node'])
 def test_retry_requires_positive_codex_identity(monkeypatch, retry_foreground):
     panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, OWNED, BUSY])
-    foregrounds = iter(['codex', retry_foreground])
+    foregrounds = iter(['codex', 'codex', retry_foreground])
     monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
     monkeypatch.setattr(panes, 'cmdline', lambda _: None)
     with pytest.raises(tmux.PaneSubmissionUnverified):
@@ -69,7 +78,7 @@ def test_retry_requires_positive_codex_identity(monkeypatch, retry_foreground):
 
 def test_retry_accepts_node_only_with_live_codex_identity(monkeypatch):
     panes, calls = transport(monkeypatch, [READY, OWNED, OWNED, OWNED, BUSY])
-    foregrounds = iter(['codex', 'node'])
+    foregrounds = iter(['codex', 'codex', 'node'])
     monkeypatch.setattr(panes, 'foreground', lambda _: next(foregrounds))
     monkeypatch.setattr(panes, 'cmdline', lambda _: 'CODEX_HOME=/tmp/probe node /opt/codex')
     panes.send('worker', BODY)
@@ -122,7 +131,7 @@ def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
-    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
 
 
 def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
@@ -225,3 +234,49 @@ def test_slow_hook_gets_rechecked_until_submission_without_retyping(monkeypatch)
     panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
     assert sum(c[-1] == 'Enter' for c in keys(calls)) == 3
+
+
+def test_initial_busy_send_queues_even_when_UI_wraps_inside_a_word(monkeypatch):
+    # Real 8mcb shape: Codex paints wrapped paths as separate terminal rows.
+    # Exact ownership correctly refuses that rendering, so waiting for a retry
+    # ownership match cannot be the first mechanism that selects the queue key.
+    wrapped = 'Working (3h • esc to interrupt)\n' + OWNED.replace('assigned', 'assi\n  gned')
+    assert not tmux._codex_owned_input(wrapped, BODY)
+    panes, calls = transport(monkeypatch, [BUSY, QUEUED], typed_frame=wrapped)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+
+
+def test_initial_key_uses_fresh_busy_state_not_the_pretyping_state(monkeypatch):
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [READY, QUEUED], typed_frame=busy_owned)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+
+
+def test_finished_old_turn_gets_enter_and_new_turn_can_be_observed(monkeypatch):
+    panes, calls = transport(monkeypatch, [BUSY, BUSY], typed_frame=OWNED)
+    assert panes.send('worker', BODY).pane == 'worker'
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Enter']
+
+
+@pytest.mark.parametrize('frame', [READY, 'unreadable frame', subprocess.TimeoutExpired('tmux', 2)])
+def test_unreadable_or_untyped_initial_frame_withholds_submission(monkeypatch, frame):
+    panes, calls = transport(monkeypatch, [READY], typed_frame=frame)
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == []
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+
+
+@pytest.mark.parametrize('foreground', [None, 'bash', 'claude', 'unrecognized'])
+def test_initial_submission_rechecks_positive_codex_identity(monkeypatch, foreground):
+    panes, calls = transport(monkeypatch, [READY])
+    observed = iter(['codex', foreground])
+    monkeypatch.setattr(panes, 'foreground', lambda _: next(observed))
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == []
