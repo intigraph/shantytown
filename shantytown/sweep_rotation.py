@@ -43,10 +43,13 @@ class SweepRotation:
     def admission(self, label: str, *, within_budget: bool):
         """None admits work; rotation/budget means UNKNOWN with no invocation."""
         if self.waiting:
-            if label != self.cursor:
+            if label == self.cursor:
+                self.waiting = False
+            elif label != "overdue-sweep":
                 self.rotated.append(label)
                 return "rotation"
-            self.waiting = False
+            # The shared notifier runs first after supervision (crs7). Keep a
+            # different saved cursor intact for all other best-effort work.
         if not within_budget:
             if self.next_cursor is None:
                 self.next_cursor = self._cursor(label)
