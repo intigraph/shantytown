@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/intigraph/shantytown/compare/v0.13.1...v0.14.0) (2026-11-08)
+
+
+### Features
+
+* **backlog:** rank completed-anchor worker pickup ([#522](https://github.com/intigraph/shantytown/issues/522)) ([895d653](https://github.com/intigraph/shantytown/commit/895d653b26ca3a7a89016c6f9786b34d9dcc6c33))
+
+
+### Bug Fixes
+
+* **haul:** keep deployment operations out of ordinary claims ([#521](https://github.com/intigraph/shantytown/issues/521)) ([aa70e7a](https://github.com/intigraph/shantytown/commit/aa70e7a09c4cd84de03fc45866f93e777e20f809))
+* **launch:** require observed startup delivery before success ([#520](https://github.com/intigraph/shantytown/issues/520)) ([d0e8899](https://github.com/intigraph/shantytown/commit/d0e8899ae8bf8553637e9859baae6bb4bb918338))
+* **notify:** route ordinary deferral events to owners first ([#519](https://github.com/intigraph/shantytown/issues/519)) ([9690692](https://github.com/intigraph/shantytown/commit/9690692238091e1488ad11dc3a03df6df373059b))
+
 ## [0.13.1](https://github.com/intigraph/shantytown/compare/v0.13.0...v0.13.1) (2026-11-07)
 
 
