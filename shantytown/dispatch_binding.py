@@ -83,7 +83,8 @@ class Binding:
             if pending and pending['state'] == 'prepared' and self.store._scope(pending) == scope:
                 from .delivery import observed_submission
                 observed = observed_submission(self.store.root.parent, pending['pane'],
-                    getattr(self.panes, 'socket', None), pending['text'], pending['session'], pending['created'])
+                    getattr(self.panes, 'socket', None), pending['text'], pending['session'], pending['created'],
+                    self.request(plan, plan.binding_agent)['runtime'])
                 if observed is not None:
                     self.store.submitted(pending['id'], observed)
                     pending = self.store.read(pending['id'])

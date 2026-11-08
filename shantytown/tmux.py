@@ -662,7 +662,12 @@ class Tmux:
         try:
             with Custody(self.delivery_root, pane, self.socket) as custody:
                 try:
+                    runtime = self.runtime_identity(pane)
                     observed = self._send(pane, text, custody=custody)
+                    if (isinstance(observed, SubmissionObserved)
+                            and observed.matches(pane, text)
+                            and runtime and self.runtime_identity(pane) == runtime):
+                        custody.submitted(observed, runtime)
                 except Exception:
                     # A failed observation must not discard the original failure
                     # or its durable ownership record.

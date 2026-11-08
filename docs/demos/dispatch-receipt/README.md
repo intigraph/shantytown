@@ -28,3 +28,28 @@ to that directory and `DEMO_CANDIDATE` to the candidate checkout, then run
 `bash docs/demos/dispatch-receipt/run.sh` with the project's dependencies
 available. Both runs execute the same [probe.py](probe.py). On installations
 requiring a HOME escape guard, wrap that command with the normal guard.
+
+
+## Transport custody recovery repair
+
+On source parent `0d23416cbe16329a17e0a9d40104abe00454d2e8`, an actual
+`Tmux.send` returning `None` wrote terminal custody state `delivered`; a second
+`Dispatcher.go` assigned and authorized the worker despite no submission
+observation. The repair requires durable positive exact-body/pane evidence
+and the same runtime identity before and after the transport call. Legacy
+`delivered` records alone cannot authorize recovery.
+
+The [paired recording](custody-output.log) and [timing](custody-timing.log)
+show the same negative input and positive interrupted-coordinator control on
+both source versions. The negative now remains unassigned and unauthorized;
+the genuinely observed positive still recovers. Both use one send. This uses
+the actual transport wrapper, dispatcher, file tracker and receipt coordinator;
+only `_send` and runtime discovery are substituted. It proves source behavior,
+not installation or a natural harness arrival.
+
+Replay with `scriptreplay --log-out custody-output.log --log-timing custody-timing.log`.
+Repeat the [probe](custody_probe.py) against an extracted source using
+`python3 custody_probe.py --source SOURCE --expect before` for the parent or
+`--expect after` for the repaired revision containing this recording. Pytest
+is needed for the shared isolated fixture. These artifacts use the same
+repository retention policy as the original demonstration.

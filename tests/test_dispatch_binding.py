@@ -177,7 +177,7 @@ def test_reconcile_cli_is_read_only_even_for_interrupted_assignment(world, monke
 
 
 @pytest.mark.parametrize('state', ['delivered', 'queued', 'dequeued', 'acknowledged', 'superseded'])
-def test_pending_recovery_uses_only_exact_delivered_custody_without_second_send(world, state):
+def test_pending_recovery_refuses_terminal_state_without_submission_witness(world, state):
     from shantytown.delivery import Custody
     root, d, binding, tracker, panes = world
     panes._drops = True
@@ -187,14 +187,9 @@ def test_pending_recovery_uses_only_exact_delivered_custody_without_second_send(
     with Custody(root, '%5') as custody:
         custody.begin(row['text'], 123)
         custody.finish(state)
-    if state == 'delivered':
-        p = d.go('work-1', 'worker')
-        assert p.receipt_id == row['id'] and p.replayed
-        assert binding.reconcile(p.receipt_id)['execution_authorized']
-    else:
-        with pytest.raises(ReceiptConflict, match='pending'):
-            d.go('work-1', 'worker')
-        assert tracker.get('work-1').assignee is None
+    with pytest.raises(ReceiptConflict, match='pending'):
+        d.go('work-1', 'worker')
+    assert tracker.get('work-1').assignee is None
     assert len(panes.sent) == 1
 
 
@@ -230,4 +225,65 @@ def test_cas_conflict_after_submission_never_claims_or_retries(world, monkeypatc
     assert tracker.get('work-1').assignee is None
     with pytest.raises(ReceiptConflict):
         d.go('work-1', 'worker')
+    assert len(panes.sent) == 1
+
+
+@pytest.mark.parametrize('observed,stable_runtime', [(False, True), (True, True), (True, False)])
+def test_actual_tmux_wrapper_recovery_requires_positive_observation(world, observed, stable_runtime):
+    from shantytown.tmux import Tmux
+    root, d, binding, tracker, panes = world
+    transport = Tmux(root=root)
+    identities = iter([panes.process_identity, panes.process_identity if stable_runtime else 'changed'])
+    transport.runtime_identity = lambda _: next(identities)
+    calls = []
+
+    def send(pane, text, *, custody=None):
+        calls.append(text)
+        custody.begin(text, 123)
+        return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest()) if observed else None
+
+    transport._send = send
+    # Simulate coordinator interruption after the real transport returns,
+    # before its observation reaches the dispatch ledger.
+    def interrupted(pane, text):
+        transport.send(pane, text)
+        return None
+    panes.send = interrupted
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    assert tracker.get('work-1').assignee is None
+    if observed and stable_runtime:
+        replay = d.go('work-1', 'worker')
+        assert replay.replayed and replay.receipt_id == row['id']
+        assert binding.reconcile(row['id'])['execution_authorized']
+    else:
+        with pytest.raises(ReceiptConflict, match='pending'):
+            d.go('work-1', 'worker')
+        assert tracker.get('work-1').assignee is None
+        assert not binding.reconcile(row['id'])['execution_authorized']
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('field,value', [
+    ('runtime', 'another-process'), ('runtime', None),
+    ('pane', '%99'), ('body_sha256', '0' * 64),
+])
+def test_pending_recovery_refuses_mismatched_submission_witness(world, field, value):
+    from shantytown.delivery import Custody
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    with Custody(root, '%5') as custody:
+        custody.begin(row['text'], 123)
+        custody.submitted(SubmissionObserved('%5', hashlib.sha256(row['text'].encode()).hexdigest()),
+                          panes.process_identity)
+        custody.record['submission'][field] = value
+        custody.finish('delivered')
+    with pytest.raises(ReceiptConflict, match='pending'):
+        d.go('work-1', 'worker')
+    assert tracker.get('work-1').assignee is None
+    assert not binding.reconcile(row['id'])['execution_authorized']
     assert len(panes.sent) == 1

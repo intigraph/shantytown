@@ -34,8 +34,8 @@ END_OF_CUSTODY = ('orphaned', 'dequeued')
 TERMINAL = ('delivered', 'acknowledged', 'superseded') + END_OF_CUSTODY
 
 
-def observed_submission(root, pane, socket, text, session, created):
-    """Read-only exact delivered proof; queued/dequeued/acknowledged do not count.
+def observed_submission(root, pane, socket, text, session, created, runtime):
+    """Read-only explicit submission proof; transport terminal states do not count.
 
     This repairs the crash between the transport's existing custody commit and
     the dispatch ledger's observation. It never enters Custody or edits input.
@@ -64,6 +64,9 @@ def observed_submission(root, pane, socket, text, session, created):
         if (row.get('pane') == pane and row.get('socket') == socket
                 and row.get('text') == text and row.get('session') == session
                 and row.get('state') == 'delivered'
+                and row.get('submission') == dict(pane=pane,
+                    body_sha256=hashlib.sha256(text.encode()).hexdigest(), runtime=runtime)
+                and isinstance(runtime, str) and bool(runtime)
                 and isinstance(row.get('created'), (int, float)) and row['created'] >= created):
             matches.append(row)
     if len(matches) > 1:
@@ -126,8 +129,19 @@ class Custody:
             id='send-' + uuid.uuid4().hex, pane=self.pane, socket=self.socket,
             text=text, session=session, created=time.time(), state='prepared',
             recovery_attempted=False)
+        self.record.pop('submission', None)
         self.record['state'] = 'prepared'
         self.save(self.record)
+
+    def submitted(self, observed, runtime):
+        """Persist only positive adapter evidence for this owned body/runtime."""
+        from .protocols import SubmissionObserved
+        if (self.record is not None and isinstance(observed, SubmissionObserved)
+                and observed.matches(self.pane, self.record['text'])
+                and isinstance(runtime, str) and runtime):
+            self.record['submission'] = dict(pane=observed.pane,
+                body_sha256=observed.body_sha256, runtime=runtime)
+            self.save(self.record)
 
     def finish(self, state):
         if self.record is not None:
