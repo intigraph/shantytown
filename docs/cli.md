@@ -2906,7 +2906,11 @@ Urgent read/release failures and tracker-store errors retain their existing
 administrator routing, retry budgets and deduplication. Unknown reachability or
 failed delivery cannot count as successful owner notification.
 
-Each recipient is nudged once per unchanged item and finding state. A met event
+Each recipient is nudged once per unchanged item and finding state. Successful
+receipts survive owner/lead reachability changes and process restarts, including
+a period when both are unreachable. Failed deliveries remain retryable; a genuine
+item or finding-state change rearms reminders. Existing single-recipient receipts
+are retained when upgrading the ledger. A met event
 can notify its owner before a future backstop; it does not clear that backstop.
 Human/access/dependency holds, ASK visibility, ambiguous provenance and prose
 judgement gates still prevent automatic release. The notification grants no

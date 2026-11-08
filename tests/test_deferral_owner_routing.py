@@ -184,3 +184,62 @@ def test_administrator_is_not_a_quiet_lead_fallback(tmp_path, monkeypatch):
     assert h.alerter.sweep() == [h.row['id']]
     assert not h.sent and len(h.admins) == 1
     assert any('owner-lead-unreachable' in line for line in h.logs)
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_recipient_history_survives_flaps_and_restarts(tmp_path, monkeypatch, legacy):
+    evaluate, can_release = deferrals.evaluate, deferrals.can_release
+    live = {"worker", "lead"}
+    h = harness(tmp_path, monkeypatch, live=live)
+    monkeypatch.setattr(deferrals, "evaluate", evaluate)
+    monkeypatch.setattr(deferrals, "can_release", can_release)
+    h.row["notes"] = "resume_when: date:" + h.row["defer_until"]
+    h.row["labels"] = ["blocked:external"]
+
+    def sweep():
+        # Recreate the consumer every time: suppression must survive restart.
+        h.alerter = DeferralAlerter(
+            tmp_path, SimpleNamespace(get=h.cards.__getitem__),
+            h.alerter._panes, read=lambda: [h.row], show=lambda _: h.row,
+            now=lambda: NOW, push=lambda *args: h.admins.append(args[-1]) or "admin",
+            log=h.logs.append)
+        h.alerter.sweep()
+        assert h.row["status"] == "deferred"
+
+    sweep()
+    ledger = tmp_path / "notify" / "deferral-owner-pacing.json"
+    if legacy:
+        state = json.loads(ledger.read_text())[h.row["id"]]
+        ledger.write_text(json.dumps({h.row["id"]: {
+            "key": state["key"], "recipient": "worker", "nudged": True}}))
+    for reachable in ({"lead"}, {"worker", "lead"}, {"lead"}, {"worker", "lead"}):
+        live.clear()
+        live.update(reachable)
+        sweep()
+    assert [pane for pane, _ in h.sent] == ["worker", "lead"]
+    assert not h.admins
+    live.clear()
+    sweep()
+    assert len(h.admins) == 1
+    live.update({"worker", "lead"})
+    sweep()
+    assert [pane for pane, _ in h.sent] == ["worker", "lead"]
+    # A genuine item update rearms notification for each recipient.
+    h.row["updated_at"] = NOW.isoformat()
+    sweep()
+    live.remove("worker")
+    sweep()
+    assert [pane for pane, _ in h.sent] == ["worker", "lead", "worker", "lead"]
+
+
+def test_failed_owner_is_retried_without_repeating_successful_lead(tmp_path, monkeypatch):
+    failed = {"worker"}
+    h = harness(tmp_path, monkeypatch, failed=failed)
+    for _ in range(3):
+        h.alerter.sweep()
+    assert [pane for pane, _ in h.sent] == ["lead"]
+    failed.clear()
+    for _ in range(3):
+        h.alerter.sweep()
+    assert [pane for pane, _ in h.sent] == ["lead", "worker"]
+    assert not h.admins and h.row["status"] == "deferred"

@@ -55,6 +55,16 @@ class OwnerPacing:
         old = self.previous.get(row["id"], {})
         if not isinstance(old, dict) or old.get("key") != key:
             old = {}
+        history = old.get("recipients", [])
+        notified = ({name for name in history if isinstance(name, str) and name}
+                    if isinstance(history, list) else set())
+        # Migrate the single-recipient ledger without forgetting its receipt.
+        if (old.get("nudged") is True
+                and isinstance(old.get("recipient"), str) and old["recipient"]):
+            notified.add(old["recipient"])
+        state = {"key": key, "recipients": sorted(notified)}
+        # Preserve receipts even while every route is temporarily unreachable.
+        self.current[row["id"]] = state
         owner = row.get("assignee")
         recipients = [(owner, "owner")]
         lead = lead_for(owner)
@@ -63,9 +73,7 @@ class OwnerPacing:
         for recipient, reason in recipients:
             if not recipient or not live(recipient):
                 continue
-            state = {"key": key, "recipient": recipient, "nudged": True}
-            if old.get("nudged") and old.get("recipient") == recipient:
-                self.current[row["id"]] = state
+            if recipient in notified:
                 return recipient, reason, "suppressed"
             try:
                 sent = deliver(recipient,
@@ -75,7 +83,8 @@ class OwnerPacing:
             except Exception:
                 sent = None
             if sent:
-                self.current[row["id"]] = state
+                notified.add(recipient)
+                state["recipients"] = sorted(notified)
                 return recipient, reason, "delivered"
         return None, "owner-lead-unreachable", "pending"
 
