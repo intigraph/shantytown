@@ -14667,11 +14667,17 @@ def _tend_once(a, quiet: bool = False) -> int:
         _fleet_sweep("priority-advisory", _priority_report)
         def _role_ranking_report():
             from . import ranking_check
+            rank_store = []
             def snapshot():
                 trk = _tracker(a)
                 projection = getattr(trk, "ranking_rows", None)
                 packet = projection() if callable(projection) else None
                 if packet is not None:
+                    # Retain this selected adapter. The optional observer reads
+                    # its cached proof only behind its own OFF/rate gates.
+                    from .sd import SdTracker
+                    if isinstance(trk, SdTracker):
+                        rank_store.append(trk)
                     return packet
                 if not isinstance(trk, FilesTracker):
                     raise ValueError("selected backend lacks a bounded ranking projection")
@@ -14691,7 +14697,8 @@ def _tend_once(a, quiet: bool = False) -> int:
                     if current.id != ident or label not in current.labels:
                         raise CouldNotLook('ranker preference label did not read back')
             return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log,
-                                       label_item=label_item)
+                                       label_item=label_item,
+                                       rank_store=lambda: rank_store[0].prove_store())
         _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
