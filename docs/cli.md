@@ -3586,7 +3586,9 @@ comparison per agent. One shared list shows at most five unowned witnesses in
 priority/rank order, followed by `+N more`. It covers unowned READY work plus
 unowned P0 items in the complete active/deferred metadata projection; P0 items
 outside READY are explicitly labelled. Blocked work is not
-promoted to READY, and owned work is not relabeled unowned. No assignment,
+promoted to READY, and owned work is not relabeled unowned. Priority comparisons
+exclude ASK-class decisions, including title-only `ASK Stiwi` items, and items
+with `blocked:*` or `parked:*` labels. No assignment,
 priority or rank changes automatically.
 
 The digest includes P0 work created/closed counts for seven UTC calendar dates,

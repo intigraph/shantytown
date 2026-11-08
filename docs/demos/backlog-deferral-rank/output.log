@@ -1,0 +1,6 @@
+Script started on 2026-11-08 08:06:28-05:00 [COMMAND="python3 demo.py "$NATIVE_SEEDS"" <not executed on terminal>]
+{"profile": "v1", "order": ["older", "observed"]}
+{"profile": "v2", "order": ["observed", "older"], "observed_lower_bound": 4, "historical_state": "UNKNOWN"}
+native SDK revision/priority/status/owner witnesses matched; candidates unchanged; zero dispatches
+
+Script done on 2026-11-08 08:06:31-05:00 [COMMAND_EXIT_CODE="0"]

@@ -32,7 +32,7 @@ def test_completed_anchor_claims_unowned_p1_before_owned_p2(monkeypatch, capsys)
     monkeypatch.setattr(feed_check, "startable_here", lambda root, reg, rows: rows)
     monkeypatch.setattr(feed_check, "haul_governor_verdict", lambda *args: None)
     monkeypatch.setattr(backlog_rank, "ask", lambda root, name, params, **kw:
-                        [dict(row, sampled_at=params["now"]) for row in (high, low)])
+                        [dict(row, sampled_at=params["now"], deferral_observation="UNKNOWN") for row in (high, low)])
     legacy_claims = []
     rc, block = _run(monkeypatch, capsys, ready=[low, high], claims=legacy_claims)
     assert rc == 0 and "high" in block["reason"]
