@@ -452,6 +452,10 @@ class Plan:
     quipu_nodes: list = field(default_factory=list)  # graph context (aegis-x6yoq)
     sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
     serve_id: str = ""
+    receipt_id: str = ''
+    replayed: bool = False
+    binding_item: object = field(default=None, repr=False, compare=False)
+    binding_agent: object = field(default=None, repr=False, compare=False)
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
                                # (aegis-kt7jr)
@@ -538,11 +542,13 @@ class Plan:
 
 class Dispatcher:
     def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
-                 governor=None, sender: str | None = None, audit=None, handoff=None):
+                 governor=None, sender: str | None = None, audit=None, handoff=None,
+                 binding=None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
         self.handoff = handoff
+        self.binding = binding
         # WHO IS DISPATCHING (aegis-5vxmz). None means "could not establish", and
         # that stays BARE — see attribution.attribute. Injected rather than read
         # from the environment here because a Dispatcher constructed in a test or
@@ -763,6 +769,7 @@ class Dispatcher:
             unreadable_deps=int(getattr(item, "unreadable_deps", 0) or 0),
             orphaned_in_progress=orphaned,
             handoff_preview=preview, handoff_warning=warning,
+            binding_item=item, binding_agent=agent,
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None,
@@ -794,6 +801,11 @@ class Dispatcher:
         decision = triage(self.panes, p.pane, p.text)
         if decision.action is not Action.NUDGE:
             raise TriageRefused(decision)
+        if self.binding is not None and not self.binding.prepare(p):
+            # A confirmed submission can finish its one claim; an assigned
+            # receipt is a read-back replay. Neither case types work again.
+            self.binding.assign(p)
+            return p
         # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
         # write moved AFTER a confirmed send so a dropped send never marks work
         # in_progress. verify reads the pane back for this attempt witness — the thing we
@@ -808,6 +820,10 @@ class Dispatcher:
                                serve_id=p.serve_id, state="dispatch_pending",
                                reason="submission and assignment not yet confirmed")
         observed = self.panes.send(p.pane, p.text)    # 1 send
+        if self.binding is not None:
+            if not isinstance(observed, SubmissionObserved) or not observed.matches(p.pane, p.text):
+                raise SendUnverified(item_id, p.pane)
+            self.binding.submitted(p, observed)
         # Codex submission already observes idle -> working with an empty,
         # unqueued composer. Do not discard that stronger exact-body evidence
         # merely because its echoed item ID has left the scrollback window.
@@ -835,7 +851,11 @@ class Dispatcher:
         # prevent, arriving underneath it. Verify by reading the row, never by the
         # tool's success message.
         try:
-            p.track_attempts = self._track(item_id, p.updates)
+            if self.binding is not None:
+                self.binding.assign(p)
+                p.track_attempts = 1
+            else:
+                p.track_attempts = self._track(item_id, p.updates)
         except Exception as e:                         # noqa: BLE001 — any store failure
             raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
         if self._audit_record is not None:

@@ -696,6 +696,8 @@ class Tmux:
         # and greppable, so the exception stays visible instead of becoming the
         # rule.
         codex = False
+        claude_before = None
+        claude_birth = None
         if not allow_shell:
             from .stop_failure import pane_state
             if pane_state(self.delivery_root, pane) == "safeguard-blocked":
@@ -710,6 +712,9 @@ class Tmux:
             before = self.capture(pane, attrs=True)
             _refuse_task_list(pane, before)
             codex = self._confirmed_codex(pane, fg)
+            if not codex and self._confirmed_claude(pane, fg):
+                claude_before = self._claude_history(pane)
+                claude_birth = self.session_created(pane)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
                 if _codex_owned_input(before, text):
@@ -807,6 +812,35 @@ class Tmux:
         if codex:
             self._verify_codex_submission(pane, text, before)
             return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
+        if claude_before is not None and claude_birth is not None:
+            from .triage import input_state, strip_attrs, INPUT_EMPTY, INPUT_PLACEHOLDER
+            for attempt in range(3):
+                after = self._claude_history(pane)
+                if (after is not None and text not in strip_attrs(claude_before)
+                        and text in strip_attrs(after)
+                        and input_state(after) in (INPUT_EMPTY, INPUT_PLACEHOLDER)
+                        and self.session_created(pane) == claude_birth):
+                    return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
+                if attempt < 2:
+                    time.sleep(0.1)
+
+    def _confirmed_claude(self, pane, foreground):
+        if foreground == 'claude':
+            return True
+        if foreground == 'node':
+            from .harness import running_name
+            return running_name(self.cmdline(pane)) == 'claude'
+        return False
+
+    def _claude_history(self, pane):
+        # -J joins only terminal soft wraps. Never normalize body whitespace:
+        # a similar quote or an unsubmitted composer is not exact-body proof.
+        try:
+            result = subprocess.run(self._cmd('capture-pane', '-p', '-J', '-e',
+                '-t', pane, '-S', '-200'), capture_output=True, text=True, timeout=2)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return result.stdout if result.returncode == 0 else None
 
     def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
         """Recover an existing body without ever appending or replacing input."""

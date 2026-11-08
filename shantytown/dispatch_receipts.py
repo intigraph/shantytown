@@ -32,7 +32,10 @@ def assignment_comment(receipt):
     ident = receipt.get('id')
     if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{32}', ident):
         raise ReceiptConflict('invalid dispatch receipt ID')
-    return 'Dispatch receipt: ' + json.dumps(dict(scope, receipt=ident),
+    body = receipt.get('body_sha256')
+    if not isinstance(body, str) or not re.fullmatch(r'[0-9a-f]{64}', body):
+        raise ReceiptConflict('dispatch receipt body digest UNKNOWN')
+    return 'Dispatch receipt: ' + json.dumps(dict(scope, receipt=ident, body_sha256=body),
                                              sort_keys=True, separators=(',', ':'))
 
 
@@ -149,12 +152,34 @@ class ReceiptStore:
             raise ReceiptConflict('dispatch task revision, scope or runtime identity UNKNOWN')
         return {key: value[key] for key in FIELDS}
 
-    def prepare(self, scope, text):
+    def prepare(self, scope, text, *, ident=None):
         scope = self._scope(scope)
         with self.lock(scope['item']):
-            return self._prepare(scope, text)
+            return self._prepare(scope, text, ident=ident)
 
-    def _prepare(self, scope, text):
+    def find(self, scope):
+        """Read-only lookup, bounded identically to preparation."""
+        scope = self._scope(scope)
+        paths = list(self.root.glob('*.json'))
+        if len(paths) > 4096:
+            raise ReceiptConflict('dispatch receipt coverage bound exceeded')
+        rows = [self.read(path.stem) for path in paths]
+        matches = [r for r in rows if self._scope(r) == scope or self._assigned_scope(r, scope)]
+        if len(matches) > 1:
+            raise ReceiptConflict('ambiguous dispatch receipts')
+        return matches[0] if matches else None
+
+    def pending(self, item):
+        paths = list(self.root.glob('*.json'))
+        if len(paths) > 4096:
+            raise ReceiptConflict('dispatch receipt coverage bound exceeded')
+        rows = [self.read(path.stem) for path in paths]
+        matches = [r for r in rows if r['item'] == item and r['state'] != 'assigned']
+        if len(matches) > 1:
+            raise ReceiptConflict('ambiguous pending dispatch receipts')
+        return matches[0] if matches else None
+
+    def _prepare(self, scope, text, *, ident=None):
         """Caller holds the item lock; return the original attempt on replay.
 
         No pending attempt can be replaced by a changed task, worker or note.
@@ -176,7 +201,10 @@ class ReceiptStore:
                 return row, False
             if row in pending:
                 raise ReceiptConflict('pending dispatch has a different scope; reconcile receipt')
-        row = dict(scope, id=uuid.uuid4().hex, text=text,
+        ident = ident or uuid.uuid4().hex
+        if self._path(ident).exists():
+            raise ReceiptConflict('dispatch receipt ID collision')
+        row = dict(scope, id=ident, text=text,
                    body_sha256=hashlib.sha256(text.encode()).hexdigest(),
                    created=time.time(), state='prepared', submission=None, assignment=None)
         return self._save(row), True
