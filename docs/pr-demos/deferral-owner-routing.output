@@ -1,0 +1,17 @@
+Script started on 2026-11-08 00:22:43-05:00 [COMMAND="bash /tmp/uta-demo/run.sh" <not executed on terminal>]
+BEFORE: base 6bb4694988539c60fbc1a4060a9ecb75fe9c8bcf
+$ python deferral-owner-routing.py before
+Synthetic P0 date wait: overdue 10 days; external hold; no setter envelope.
+owner reachable: recipients=['admin']; second pass adds=[]; reasons=['not instrumented']; hold=deferred; releases=0
+owner down, lead reachable: recipients=['admin']; second pass adds=[]; reasons=['not instrumented']; hold=deferred; releases=0
+both unreachable: recipients=['admin']; second pass adds=[]; reasons=['not instrumented']; hold=deferred; releases=0
+
+AFTER: source 7a64a5900bed0415de4ce914660327361b8ffb8c
+
+$ python deferral-owner-routing.py after
+Synthetic P0 date wait: overdue 10 days; external hold; no setter envelope.
+owner reachable: recipients=['worker']; second pass adds=[]; reasons=['owner']; hold=deferred; releases=0
+owner down, lead reachable: recipients=['lead']; second pass adds=[]; reasons=['lead']; hold=deferred; releases=0
+both unreachable: recipients=['admin']; second pass adds=[]; reasons=['owner-lead-unreachable']; hold=deferred; releases=0
+
+Script done on 2026-11-08 00:22:43-05:00 [COMMAND_EXIT_CODE="0"]

@@ -1,5 +1,6 @@
 """Routing notifications cannot grant release or hide urgent read failures."""
 from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 import json
 from types import SimpleNamespace
 
@@ -179,7 +180,7 @@ def test_owner_and_stopped_lead_escalate_without_delivery_claim(tmp_path, monkey
 
 def test_administrator_is_not_a_quiet_lead_fallback(tmp_path, monkeypatch):
     h = harness(tmp_path, monkeypatch, live=('admin',))
-    h.cards['worker'].reports_to = 'admin'
+    h.cards['worker'] = replace(h.cards['worker'], reports_to='admin')
     assert h.alerter.sweep() == [h.row['id']]
     assert not h.sent and len(h.admins) == 1
     assert any('owner-lead-unreachable' in line for line in h.logs)
