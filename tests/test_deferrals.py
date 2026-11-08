@@ -611,18 +611,20 @@ def test_indeterminate_release_is_read_next_pass_not_reposted(tmp_path):
     assert h.releases == ['aegis-1'] and h.sent == []
 
 
-def test_unmet_mechanical_condition_does_not_request_a_ruling(tmp_path):
+def test_lapsed_unmet_condition_never_releases_and_unreachable_owner_is_reported(tmp_path):
     h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker',
         defer_until=_iso(timedelta(days=-2))), is_closed=lambda _: False)
     h.alerter.sweep()
-    assert h.releases == h.sent == []
+    assert not h.releases and len(h.sent) == 1
+    assert 'LAPSED' in h.sent[0] and 'CONDITION MET' not in h.sent[0]
 
 
-def test_met_condition_waits_for_future_timestamp_without_a_ruling(tmp_path):
+def test_met_condition_can_notify_but_never_clear_future_timestamp(tmp_path):
     h = MechanicalHarness(tmp_path, _row(notes='resume_when: closed:aegis-blocker',
         defer_until=_iso(timedelta(days=2))), is_closed=lambda _: True)
     h.alerter.sweep()
-    assert h.releases == h.sent == []
+    assert not h.releases and len(h.sent) == 1
+    assert 'CONDITION MET' in h.sent[0]
 
 
 def test_incomplete_condition_read_is_retried_not_treated_as_open(tmp_path):
@@ -736,11 +738,11 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert set(a.sweep()) == {'urgent', 'unknown'}
     assert 'routine' not in sent[0]
     assert 'urgent' in sent[0] and 'unknown' in sent[0]
-    assert len(logs) == 2 and 'routine' in logs[0]
+    assert len(logs) == 4 and 'routine' in logs[0]
     assert logs[0].startswith('deferral log:')
     assert logs[1].startswith('deferral-sweep: ADMIN-DIGEST delivered count=2 digest=')
     assert a.sweep() == []
-    assert len(sent) == 1 and len(logs) == 2
+    assert len(sent) == 1 and len(logs) == 4
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

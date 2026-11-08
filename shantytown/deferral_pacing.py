@@ -1,6 +1,6 @@
 """Owner pacing changes the reminder recipient, never the resume gate."""
 import json
-from datetime import timedelta
+import hashlib
 from pathlib import Path
 
 from .ask_visibility import is_ask
@@ -8,10 +8,8 @@ from .deferrals import parse_stamp
 from .deferral_notes import PROVENANCE_PREFIX as PREFIX, provenance, parse_provenance
 from .files import write_json_atomic
 
-OWNER_ONLY_CEILING = timedelta(hours=72)
-
 def owner_window(row, now, *, event_ready=False):
-    """Unknown/legacy provenance cannot earn the owner-only route."""
+    """Validate the legacy setter envelope; notification routing is independent."""
     if is_ask(row):
         return False
     lines = [line for line in str(row.get("notes") or "").splitlines()
@@ -35,7 +33,11 @@ def owner_window(row, now, *, event_ready=False):
 
 
 class OwnerPacing:
-    """A live owner gets 72 hours without progress; sweep count is not evidence."""
+    """Notification custody is owner-first; it never grants resume authority.
+
+    Old or ambiguous defer provenance still prevents release. It must not make
+    ordinary deadline/event notifications administrator work by itself.
+    """
     def __init__(self, root):
         self.path = Path(root) / "notify" / "deferral-owner-pacing.json"
         try:
@@ -46,37 +48,48 @@ class OwnerPacing:
             self.previous = {}
         self.current = {}
 
-    def route(self, row, now, live, deliver, *, event_ready=False):
-        if not owner_window(row, now, event_ready=event_ready) or not live(row["assignee"]):
-            return False
-        key = [row.get("updated_at"), row.get("notes"), row.get("defer_until"), event_ready]
-        # Without a touch identity we cannot detect lack of item progress.
-        touched = parse_stamp(row.get("updated_at"))
-        if touched is None or touched > now:
-            return False
-        deadline = parse_stamp(row.get("defer_until"))
-        # Neither an old item with a fresh deadline nor a freshly updated item
-        # with an old deadline has been neglected for the full ceiling.
-        if now - max(deadline, touched) >= OWNER_ONLY_CEILING:
-            return False  # existing administrator ledger deduplicates this state
+    def route(self, row, finding, live, deliver, lead_for):
+        key = hashlib.sha256(json.dumps(
+            [finding.key(), row.get("updated_at"), row.get("defer_until")],
+            sort_keys=True).encode()).hexdigest()
         old = self.previous.get(row["id"], {})
         if not isinstance(old, dict) or old.get("key") != key:
             old = {}
-        state = {"key": key, "nudged": old.get("nudged") is True}
+        history = old.get("recipients", [])
+        notified = ({name for name in history if isinstance(name, str) and name}
+                    if isinstance(history, list) else set())
+        # Migrate the single-recipient ledger without forgetting its receipt.
+        if (old.get("nudged") is True
+                and isinstance(old.get("recipient"), str) and old["recipient"]):
+            notified.add(old["recipient"])
+        state = {"key": key, "recipients": sorted(notified)}
+        # Preserve receipts even while every route is temporarily unreachable.
         self.current[row["id"]] = state
-        if not state["nudged"]:
+        owner = row.get("assignee")
+        recipients = [(owner, "owner")]
+        lead = lead_for(owner)
+        if lead and lead != owner:
+            recipients.append((lead, "lead"))
+        for recipient, reason in recipients:
+            if not recipient or not live(recipient):
+                continue
+            if recipient in notified:
+                return recipient, reason, "suppressed"
             try:
-                sent = deliver(row["assignee"],
-                               f"OWNER-PACING: {row['id']} owner-set defer "
-                               + ("event is ready" if event_ready else "backstop lapsed")
+                sent = deliver(recipient,
+                               f"OWNER-PACING: {row['id']} deferred work "
+                               + ("event is ready" if finding.met or finding.prose_gate else "backstop lapsed")
                                + "; check the current gate and update the item. No gate released.")
             except Exception:
                 sent = None
-            if not sent:
-                return False
-            state["nudged"] = True
-        return True
+            if sent:
+                notified.add(recipient)
+                state["recipients"] = sorted(notified)
+                return recipient, reason, "delivered"
+        return None, "owner-lead-unreachable", "pending"
 
-    def save(self):
+    def save(self, preserve=()):
+        self.current.update({key: self.previous[key] for key in preserve
+                             if key in self.previous and key not in self.current})
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, self.current)
