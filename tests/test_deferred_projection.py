@@ -376,18 +376,24 @@ def test_split_fields_share_original_batch_wall_budget(monkeypatch):
 def test_later_half_failure_never_returns_partial_candidates(monkeypatch):
     import io
     from urllib.error import HTTPError
-    # A limit below the default batch's cost (16 x 2 x 20 x 6 + 4 = 3844)
-    # forces the split this test is about (aegis-6c4 moved the batch from 25).
-    calls = structural_fixture(monkeypatch, limit=2000)
+    # Refuse the full batch, admit its left half, then fail the right half.
+    # Derive the limit from the real projection: adding a governed field must
+    # not cause extra splits that silently bypass the injected failure.
+    batch = seeds_plate.DEFERRED_FIELD_BATCH
+    half = batch // 2
+    fields = len(seeds_plate.FIELDS) + 1  # deferred_rows adds notes
+    limit = half * 2 * fields * 6 + 4
+    expected = [batch, half, batch - half]
+    calls = structural_fixture(monkeypatch, limit=limit)
     original = seeds_plate._query
     observed = []
     def query(proof, text, timeout):
         if 'AS ?predicate' in text:
-            # Original 16 refuses; left half completes; right half fails.
+            # Full batch refuses; left half completes; right half fails.
             import re
             ids = set(re.findall(r'<https://seeds.local/item/(test-\d+)>', text))
             observed.append(len(ids))
-            if observed == [16, 8, 8]:
+            if observed == expected:
                 raise HTTPError(PROOF.quipu_url, 500, 'fixture failure', {}, io.BytesIO(b'{}'))
         return original(proof, text, timeout)
     monkeypatch.setattr(seeds_plate, '_query', query)
@@ -395,7 +401,7 @@ def test_later_half_failure_never_returns_partial_candidates(monkeypatch):
     with pytest.raises(PartialAnswer):
         result.exact()
     assert not result.complete and result.at_least() == []
-    assert observed == [16, 8, 8]
+    assert observed == expected
 
 
 def test_slow_success_still_respects_original_field_wall_budget(monkeypatch):

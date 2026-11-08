@@ -1208,6 +1208,12 @@ class IdleFleetAlerter:
                                        attempted=True, acted_on=True,
                                        serve_id=serve_id, state="claim_committed",
                                        reason="claim command completed")
+                except feed_check.OperationClaimRefused as exc:
+                    self._audit.record(window_id, leg="claim", backend=backend,
+                                       worker=worker, item=nid, eligible=False,
+                                       attempted=True, refused=True,
+                                       reason=f"operation claim refused: {exc}")
+                    continue
                 except Exception as exc:
                     self._audit.record(window_id, leg="claim", backend=backend,
                                        worker=worker, item=nid, eligible=True,
@@ -1807,7 +1813,7 @@ class DeferralAlerter:
         # the candidate budget must not starve every admitted release forever.
         ruling_budget = 12
         by_id = {r["id"]: r for r in rows if isinstance(r, dict) and r.get("id")}
-        reports, retry, persistent_failures = [], set(), set()
+        reports, retry, persistent_failures, binding_failures = [], set(), set(), set()
         budget = pol.RetryBudget(self._root)
         def failed(finding):
             if finding.read_deferred:
@@ -1834,6 +1840,8 @@ class DeferralAlerter:
                 reason = re.search(r'reason=(binding|target|registry|comments|markers)\)',
                                    finding.untestable or '')
                 code = reason.group(1) if reason else 'unknown'
+                if code == 'binding':
+                    binding_failures.add(finding.bead)
                 self._log(f"deferral-sweep: {finding.bead} typed evidence UNKNOWN reason={code}")
             self._log(f"deferral-sweep: {finding.bead} read/release retry pending")
 
@@ -1852,20 +1860,13 @@ class DeferralAlerter:
                 continue
             if (finding.condition and finding.condition.testable()
                     and not finding.met and not finding.untestable):
-                from .deferral_pacing import owner_window
-                if not finding.lapsed_at or not owner_window(row, now):
-                    continue  # an unmet legacy gate needs no ruling
+                if not finding.lapsed_at:
+                    continue
             stamp = pol.parse_stamp(row.get("defer_until"))
             if stamp is not None and stamp > now and not finding.untestable and not finding.met:
                 continue  # neither the event nor its backstop is ready
-            if stamp is not None and stamp > now and not finding.untestable:
-                # A future date still gates release. Only a proven owner-set
-                # reminder may be prompted early by a completed event.
-                from .deferral_pacing import owner_window
-                cold_ready = (finding.met and finding.condition is not None
-                              and finding.condition.kind == "cold-launch")
-                if not cold_ready and not owner_window(row, now, event_ready=bool(finding.met)):
-                    continue
+            # A met event may notify its owner before the backstop. The separate
+            # can_release check still retains future dates and judgement gates.
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
                 continue
@@ -1917,26 +1918,68 @@ class DeferralAlerter:
                 card = self._reg.get(name)
                 # A surviving shell is not a live runtime. Missing process
                 # evidence retains the existing administrator route.
-                return bool(not card.retired and card.pane
+                return bool(card.name == name and not card.retired and card.pane
                             and not (Path(self._root) / "stopped" / f"{name}.json").exists()
                             and self._panes.exists(card.pane)
                             and harness_mod.running_name(self._panes.cmdline(card.pane)))
             except Exception:
                 return False
 
+        def lead_for(name):
+            try:
+                card = self._reg.get(name)
+                lead = self._reg.get(card.reports_to)
+                if card.name == name and lead.name == card.reports_to and lead.role == 'lead':
+                    return lead.name
+            except Exception:
+                pass
+            return None
+
+        # Fixed fields only: no raw notes, exception messages, or message bodies.
+        # This is the observed source-file identity, not proof that a process
+        # imported those same bytes before an on-disk update.
+        import hashlib
+        import json
+        try:
+            source_sha = hashlib.sha256(b''.join(
+                (Path(__file__).with_name(name)).read_bytes()
+                for name in ('notify.py', 'deferral_pacing.py'))).hexdigest()
+        except OSError:
+            source_sha = 'UNKNOWN'  # telemetry cannot prevent an urgent delivery
+        routes = {}
+        def log_route(finding, reason, recipient, outcome, digest=None):
+            self._log('deferral-route: ' + json.dumps({
+                'item': finding.bead[:96], 'state_key': finding.key(),
+                'reason': reason, 'recipient': str(recipient or '')[:64],
+                'outcome': outcome, 'digest': digest,
+                'source_sha256': source_sha}, sort_keys=True))
+
         routed = []
         for finding in reports:
             row = by_id.get(finding.bead)
-            event_ready = bool(finding.met and finding.condition
-                               and finding.condition.kind != "date")
-            if (row and (finding.lapsed_at or event_ready) and not finding.read_error
-                    and not finding.untestable and not finding.prose_gate
-                    and pacing.route(row, now, live_owner, deliver_backstop,
-                                     event_ready=event_ready)):
-                self._log(f"deferral-sweep: OWNER-PACING {finding.bead}; no admin ruling")
+            kind = finding.condition.kind if finding.condition else None
+            if finding.bead in binding_failures:
+                reason = 'binding-failure'
+            elif (finding.read_error or finding.bead == 'tracker-store'
+                    or finding.bead in persistent_failures):
+                reason = 'urgent-read-error'
+            elif kind in ('ruling', 'activation'):
+                reason = 'authority-' + kind
+            elif row and (finding.lapsed_at or finding.met or finding.prose_gate):
+                recipient, reason, outcome = pacing.route(
+                    row, finding, live_owner, deliver_backstop, lead_for)
+                if recipient:
+                    if outcome == 'delivered':
+                        log_route(finding, reason, recipient, outcome)
+                    self._log(f"deferral-sweep: OWNER-PACING {finding.bead}; no admin ruling")
+                    continue
             else:
-                routed.append(finding)
-        pacing.save()
+                # Existing unsupported/malformed findings remain errors, not
+                # ordinary gate transitions that can earn a quiet owner route.
+                reason = 'urgent-read-error'
+            routes[finding.bead] = reason
+            routed.append(finding)
+        pacing.save(preserve=retry)
         reports = routed
         findings = reports
         seen = pol.Reported(self._root)
@@ -1969,10 +2012,15 @@ class DeferralAlerter:
                 # A changed/reset finding ledger can still render the identical
                 # delivered summary. Record its state, without another LLM turn.
                 self._log("deferral-sweep: identical delivered summary suppressed")
+                for finding in loud:
+                    log_route(finding, routes[finding.bead], None, 'suppressed', digest)
                 loud = []
             else:
                 # Failed delivery consumes neither the summary nor finding state.
-                if self._push(self._reg, self._panes, text) is None:
+                recipient = self._push(self._reg, self._panes, text)
+                if recipient is None:
+                    for finding in loud:
+                        log_route(finding, routes[finding.bead], None, 'pending', digest)
                     seen.record([f for f in findings if f not in loud],
                                 preserve=retry | {f.bead for f in loud})
                     self._log("deferral-sweep: no admin pane — failures remain pending; "
@@ -1981,6 +2029,8 @@ class DeferralAlerter:
                 # Count actual administrator digests in the tend journal,
                 # separately from quiet reports and owner-only reminders.
                 self._log(f"deferral-sweep: ADMIN-DIGEST delivered count={len(loud)} digest={digest}")
+                for finding in loud:
+                    log_route(finding, routes[finding.bead], recipient, 'delivered', digest)
                 write_json_atomic(summary_path, {"digest": digest})
         elif not any(is_loud(f) for f in findings) and not retry and not store_error:
             # Quiet findings do not prevent a positively read urgent resolution

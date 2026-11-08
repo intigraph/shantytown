@@ -33,6 +33,7 @@ FIELDS = {
     SCHEMA + "dateModified": "updated_at",
     SCHEMA + "dateCreated": "created_at",
     SCHEMA + "keywords": "labels",
+    SEEDS + "ontology/agentContext": "agent_context",
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
     SEEDS + "ontology/rank": "rank",

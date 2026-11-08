@@ -11,7 +11,7 @@ import tempfile
 from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
                     ready_ids_or_none, name_the_blocker)
 from .protocols import is_blocked
-from .inbox import drop_parked, is_message, is_unworkable
+from .inbox import OperationClaimRefused, is_deploy_operation, drop_parked, is_message, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
 from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
@@ -558,6 +558,8 @@ def claim(tracker: BrTracker, bead_id: str) -> None:
         # different bead with rc 0 (sattler measured `show aegis-krkdd` -> krkddi),
         # so a blind update could claim someone else's work.
         raise RuntimeError(f"br update {bead_id} refused: no store holds exactly {bead_id}")
+    if is_deploy_operation(found[1]):
+        raise OperationClaimRefused(f"claim {bead_id} refused: deployment operation requires its phase-CAS runner")
     repo = found[0]
     run = tracker._bd if repo == tracker.repo else (lambda *a: tracker._bd_in(repo, *a))
     r = run("update", bead_id, "--status", "in_progress")

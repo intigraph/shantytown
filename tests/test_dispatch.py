@@ -646,3 +646,18 @@ def test_advisory_failure_is_unknown_and_does_not_break_verified_dispatch(world)
     p=d.go('item-1','ellie')
     assert tracker.updates==1 and 'cycle advice UNKNOWN (OSError)' in p.text
     assert 'sensitive detail' not in p.text
+
+
+@pytest.mark.parametrize('marker', [
+    {'labels': ('deploy-operation',)},
+    {'agent_context': json.dumps({'deploy_admission': {}})},
+])
+def test_operation_dispatch_refuses_without_tracker_or_pane_mutation(world, monkeypatch, marker):
+    from shantytown.dispatch import DeploymentOperation
+    d, tracker, panes = world
+    original = tracker.get('item-1')
+    monkeypatch.setattr(tracker, 'get', lambda _: replace(original, **marker))
+    with pytest.raises(DeploymentOperation):
+        d.go('item-1', 'ellie', reassign=True)
+    assert tracker.updates == 0
+    assert panes.sent == []

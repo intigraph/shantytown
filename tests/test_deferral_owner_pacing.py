@@ -86,13 +86,18 @@ def test_nine_owner_waits_stay_with_live_owner_after_three_passes(tmp_path):
 
 @pytest.mark.parametrize("change", [
     {"title": "ASK Stiwi: decide"}, {"labels": ["desk"]},
-    {"assignee": "other"}, {"notes": "CI wait"},
+    {"notes": "CI wait"},
     {"updated_at": None}, {"updated_at": (NOW + timedelta(seconds=1)).isoformat()},
     {"defer_until": (NOW - timedelta(minutes=2)).isoformat()},
 ])
-def test_ineligible_or_unknown_evidence_retains_admin_ruling(tmp_path, change):
+def test_notification_does_not_require_release_provenance(tmp_path, change):
     sent, admin, result = sweep(tmp_path, [row(**change)])
-    assert sent == [] and admin and result == ["test-ci"]
+    assert len(sent) == 1 and admin == result == []
+
+
+def test_unknown_owner_identity_retains_admin_route(tmp_path):
+    sent, admin, result = sweep(tmp_path, [row(assignee="other")])
+    assert not sent and admin and result == ["test-ci"]
 
 
 @pytest.mark.parametrize("options", [{"live": False}, {"stopped": True}, {"send_error": True}])
@@ -160,7 +165,7 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
 
 @pytest.mark.parametrize("extra", ["duplicate", "other-setter", "malformed", "indented", "missing-space"])
 @pytest.mark.parametrize("position", ["before", "after"])
-def test_ambiguous_envelopes_keep_admin_route_end_to_end(tmp_path, extra, position):
+def test_ambiguous_envelopes_keep_hold_but_notify_owner(tmp_path, extra, position):
     item = row()
     valid = item["notes"].splitlines()[-1]
     candidate = {
@@ -174,7 +179,7 @@ def test_ambiguous_envelopes_keep_admin_route_end_to_end(tmp_path, extra, positi
                      else item["notes"] + "\n" + candidate)
     assert not owner_window(item, NOW)
     sent, admin, result = sweep(tmp_path, [item])
-    assert sent == [] and admin and result == ["test-ci"]
+    assert len(sent) == 1 and admin == result == []
     assert item["status"] == "deferred"
 
 
@@ -196,10 +201,10 @@ def aged_row(hours, **changes):
 
 
 @pytest.mark.parametrize("hours", [72, 73])
-def test_unchanged_lapsed_owner_timer_reaches_admin_once_at_ceiling(tmp_path, hours):
+def test_age_alone_does_not_change_notification_custody(tmp_path, hours):
     item = aged_row(hours)
     sent, admin, result = sweep(tmp_path, [item])
-    assert not sent and len(admin) == 1 and result == [item["id"]]
+    assert len(sent) == 1 and admin == result == []
     assert sweep(tmp_path, [item]) == ([], [], [])
     assert item["status"] == "deferred"  # escalation never releases the gate
 
@@ -217,10 +222,10 @@ def test_recent_touch_resets_elapsed_ceiling_for_old_deadline(tmp_path):
     assert sent and not admin and not result
 
 
-def test_already_nudged_owner_escalates_when_elapsed_ceiling_crosses(tmp_path):
+def test_already_nudged_owner_does_not_escalate_only_for_elapsed_time(tmp_path):
     item = aged_row(71)
     assert sweep(tmp_path, [item])[0]
     later = NOW + timedelta(hours=2)
     sent, admin, result = sweep(tmp_path, [item], now=later)
-    assert not sent and len(admin) == 1 and result == [item["id"]]
+    assert not sent and admin == result == []
     assert sweep(tmp_path, [item], now=later) == ([], [], [])
