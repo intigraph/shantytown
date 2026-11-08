@@ -44,7 +44,7 @@ _CONDITION = re.compile(
     r"resume[_ -]?when\s*[:=]\s*([a-z-]+)\s*:\s*(\S+)", re.IGNORECASE)
 
 #: Condition kinds this module can actually decide.
-SUPPORTED = ("closed", "date", "event", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch")
+SUPPORTED = ("closed", "date", "event", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch", "recurring-quiet", "evidence-count")
 #: Kinds the vocabulary defines and this module cannot yet test. Reported as
 #: UNTESTABLE, never as unmet — "we did not look" and "we looked and it is not
 #: met" must not render the same, which is the whole defect this bead is about.
@@ -356,6 +356,7 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
         for index, row in zip(slots, ordered):
             rows[index] = row
     event_answers = {}  # bounded reads, only within this candidate pass
+    producer_snapshots = {}  # shared recurring state is read once, never across passes
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -422,6 +423,17 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
                     read_error = True
                 else:
                     met = bool(verdict)
+            elif cond.kind in ('recurring-quiet', 'evidence-count'):
+                from .resume_producers import evaluate as producer_evaluate
+                key = (cond.kind, cond.arg, bead)
+                if key not in event_answers:
+                    event_answers[key] = producer_evaluate(
+                        cond.kind, cond.arg, row, now, snapshots=producer_snapshots)
+                verdict = event_answers[key]
+                met = verdict.state == 'MET'
+                if verdict.state == 'UNKNOWN':
+                    untestable = f'{cond.render()} (UNKNOWN: {verdict.reason})'
+                    read_error = True
             elif cond.kind == "event":
                 from .resume_events import evaluate as event_evaluate
                 key = (cond.arg, bead)
@@ -631,7 +643,7 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     # A definite closed/released/installed fact can satisfy its external hold.
     # A review date is not that fact; human/access labels remain independent.
     if (finding.met is True and finding.condition is not None
-            and finding.condition.kind in ("closed", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch")):
+            and finding.condition.kind in ("closed", "release", "installed", "pr-merged", "ci-terminal", "ruling", "activation", "cold-launch", "recurring-quiet", "evidence-count")):
         mechanical_labels.add("blocked:external")
     if any(HOLDING_LABEL.match(l) and l not in mechanical_labels and l not in TOPIC_LABELS
            for l in labels):
@@ -645,7 +657,7 @@ def can_release(row: dict, finding: Finding, now: datetime) -> bool:
     if raw is not None:
         stamp = parse_stamp(raw)
         cold_ready = (finding.met is True and finding.condition is not None
-                      and finding.condition.kind == "cold-launch")
+                      and finding.condition.kind in ("cold-launch", "recurring-quiet", "evidence-count"))
         if stamp is None or (stamp > now and not cold_ready):
             return False
     notes = str(row.get("notes") or "")
