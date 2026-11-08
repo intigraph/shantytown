@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 
 from .crew_rules import ask
 from .priority_advisory import priority, workable
+from .protocols import time_order
 
-QUERY = "seeds_work_rank_v1"
+QUERY = "seeds_work_rank_v2"
 MAX_CANDIDATES = 64
 
 
@@ -25,6 +26,24 @@ def ordinary(row):
             and not any(str(label).strip().lower() == "deploy-operation" for label in labels)
             and row.get("agent_context") in (None, ""))
 
+
+
+def deferral_observation(proof, *, now):
+    """Validate additive graph evidence, never infer a historical total.
+
+    The v2 profile always names the observation state, even when history is
+    unknown. UNKNOWN is not zero. A missing or partial proof aborts this attempt.
+    """
+    fields = ("deferral_observation", "observed_deferral_writes", "deferral_observed_since")
+    state, count, since = (proof.get(field) for field in fields)
+    if state == "UNKNOWN" and count is None and since is None:
+        return None
+    if (state != "OBSERVED" or type(count) is not int
+            or not 1 <= count <= 9223372036854775807 or not isinstance(since, str)):
+        raise ValueError("rank deferral observation UNKNOWN or malformed")
+    if time_order(since) > time_order(now.astimezone(timezone.utc).isoformat()):
+        raise ValueError("rank deferral observation is in the future")
+    return count
 
 def ordered(root, candidates, *, owner, board, reader=None, now=None):
     """Reorder an exact candidate set using a fresh, bounded stored-query proof.
@@ -67,6 +86,7 @@ def ordered(root, candidates, *, owner, board, reader=None, now=None):
                 raise ValueError("pickup rank witness changed")
         if proof.get("sampled_at") != params["now"]:
             raise ValueError("pickup rank freshness UNKNOWN")
+        deferral_observation(proof, now=now)
         seen.add(ident)
         result.append(original)
     return result
