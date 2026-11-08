@@ -7,6 +7,8 @@ leaked into the core. If this is hard to write, the interface is wrong.
 from __future__ import annotations
 import json
 import os
+import fcntl
+from contextlib import contextmanager
 from pathlib import Path
 
 from .answer import Answer
@@ -313,6 +315,15 @@ class FilesTracker:
     def _path(self, item_id: str) -> Path:
         return self.root / f"{item_id}.json"
 
+    @contextmanager
+    def _item_lock(self, item_id):
+        self.root.mkdir(parents=True, exist_ok=True)
+        import hashlib
+        name = hashlib.sha256(item_id.encode()).hexdigest()
+        with (self.root / ('.item-' + name + '.lock')).open('a') as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            yield
+
     def get(self, item_id: str) -> WorkItem:
         p = self._path(item_id)
         if not p.is_file():
@@ -337,12 +348,26 @@ class FilesTracker:
             defer_until=(d.get("defer_until") or None),
             notes=(d.get("notes") or None),
             updated_at=d.get("updated_at"),
+            # The unversioned files format is revision one. Every cooperating
+            # writer now increments it under the same item lock.
+            revision=d.get('revision', 1),
         )
 
     def update(self, item_id: str, **fields) -> None:
+        with self._item_lock(item_id):
+            self._update_locked(item_id, **fields)
+
+    def _update_locked(self, item_id: str, **fields) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         p = self._path(item_id)
         d = json.loads(p.read_text()) if p.is_file() else {}
+        revision = d.get('revision', 1) if p.is_file() else 0
+        expected = fields.pop('if_revision', None)
+        if expected is not None and expected != revision:
+            from .br import UpdateConflict
+            raise UpdateConflict(dict(code='CONFLICT', message='item revision changed',
+                                      details=dict(expected=expected, actual=revision)))
+        comment = fields.pop('transition_comment', None)
         selected = fields.pop("blocker_kind", None)
         reason = fields.pop("defer_reason", None)
         if selected is not None:
@@ -355,7 +380,10 @@ class FilesTracker:
             d["notes"] = (merge_deferral_notes(notes, reason)[0]
                           if MARKER_PREFIX.search(reason) else f"{notes}\n{reason}".strip())
         d.update({k: v for k, v in fields.items() if v is not None})
-        p.write_text(json.dumps(d, indent=2, sort_keys=True))
+        if comment is not None:
+            d.setdefault('comments', []).append(dict(text=comment))
+        d['revision'] = revision + 1
+        write_json_atomic(p, d)
 
 
     def create(self, title: str, **fields) -> WorkItem:
@@ -369,11 +397,10 @@ class FilesTracker:
             default=0,
         )
         item_id = f"st-{n}"
-        d = {"title": title, "status": "open"}
+        d = {"title": title, "status": "open", "revision": 1}
         d.update({k: v for k, v in fields.items() if v is not None})
-        self._path(item_id).write_text(json.dumps(d, indent=2, sort_keys=True))
-        return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"),
-                        due_at=d.get("due_at"))
+        write_json_atomic(self._path(item_id), d)
+        return self.get(item_id)
 
 
 # Plate precedence is now ONE definition in protocols, imported by every backend

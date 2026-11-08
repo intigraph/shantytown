@@ -15,6 +15,7 @@ IDLE_QUEUE = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
 def local(monkeypatch, tmp_path, frames):
     panes, calls = transport(monkeypatch, frames)
     panes.delivery_root = tmp_path
+    monkeypatch.setattr(panes, 'runtime_identity', lambda _: 'fixture-runtime')
     monkeypatch.setattr(panes, 'session_created', lambda _: 17.0)
     return panes, calls
 

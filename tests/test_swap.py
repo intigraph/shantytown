@@ -53,6 +53,7 @@ def _outside_dispatch_protocol(source):
         "tracker": {"get", "update"},
         "panes": {"send", "exists", "capture"},
         "handoff": {"preview", "record"},
+        "binding": {"prepare", "submitted", "assign"},
         "updates": {"items"},  # staged field dictionary, not a backend
     }
     invalid = []
