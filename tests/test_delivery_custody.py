@@ -802,6 +802,16 @@ def test_modern_busy_queue_does_not_surface_as_idle(tmp_path, monkeypatch):
     assert keys(f[1]) == []
 
 
+def test_short_historical_queue_does_not_retain_custody_or_emit_idle_stall(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, messages=[BODY])
+    screen = MODERN_QUEUE + '\nAssistant completed the earlier turn.\n' + READY
+    observe(tmp_path, f, screen, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'dequeued'}
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    assert len(f[-1].unread('worker')) == 1
+    assert keys(f[1]) == []
+
+
 def test_clipped_foreign_queue_prevents_false_dequeue_without_authorizing_keys(tmp_path, monkeypatch):
     f = fixtures(tmp_path, monkeypatch, messages=[BODY])
     screen = MODERN_QUEUE.replace(BODY, 'Some clipped foreign queue …')

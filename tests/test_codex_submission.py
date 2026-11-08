@@ -296,6 +296,19 @@ def test_quoted_queue_in_transcript_is_not_current_queue():
     assert not tmux._codex_queue(READY + '\nDiscuss Queued follow-up inputs ↳ ' + BODY)
 
 
+@pytest.mark.parametrize('heading', ['Messages to be submitted after next tool call',
+                                    '• Queued follow-up inputs'])
+def test_short_historical_queue_ends_at_previous_composer(heading):
+    historical = heading + '\n  ↳ ' + BODY + '\n' + READY
+    screen = historical + '\nAssistant completed the earlier turn.\n' + READY
+    assert not tmux._codex_queue(screen)
+    assert not tmux._codex_queued(screen, BODY)
+    current = heading + '\n  ↳ Current pending receipt\n' + READY
+    assert tmux._codex_queued(historical + '\nReply\n' + current,
+                              'Current pending receipt')
+    assert not tmux._codex_queued(historical + '\nReply\n' + current, BODY)
+
+
 def test_modern_busy_queue_never_claims_delivery(monkeypatch):
     modern = QUEUED.replace('Messages to be submitted after next tool call',
                             '• Queued follow-up inputs')

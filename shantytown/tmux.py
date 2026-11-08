@@ -123,6 +123,8 @@ def _codex_queue(screen: str) -> str:
     headings = ('Messages to be submitted after next tool call',
                 'Queued follow-up inputs', '• Queued follow-up inputs')
     for start in range(end - 1, max(-1, end - 81), -1):
+        if lines[start].lstrip().startswith('›'):
+            break
         if lines[start].strip() not in headings:
             continue
         queue = '\n'.join(lines[start + 1:end])
