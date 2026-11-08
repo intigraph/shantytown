@@ -146,6 +146,18 @@ def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=Non
                         break
         text, key, actionable = report(root, ready, rows, reg, panes, counts_reader=counts_reader)
         _log_digest(root, text, key, log)
+        try:
+            from .backlog_hygiene import stale_review
+            hygiene = stale_review(ready)
+            # A separate log ledger cannot change the P0 page text or its key.
+            if hygiene is not None or (Path(root) / "notify/backlog_hygiene_log.json").exists():
+                hygiene = hygiene or "stale-work review: no eligible records in supplied READY scope"
+                _log_digest(root, hygiene, hashlib.sha256(hygiene.encode()).hexdigest(), log,
+                            ledger="backlog_hygiene_log.json")
+        except Exception as exc:
+            # Review metadata or its local ledger is not an admission gate for
+            # independently established P0 advice. Preserve UNKNOWN separately.
+            log(f"stale-work review UNKNOWN ({type(exc).__name__}); no lifecycle action")
         from .creel_advisory import Advice, Alerter
         return Alerter(root, reg, panes, push=push, filename="role_ranking.json",
                        label="administrator ranking").sweep(
@@ -157,13 +169,13 @@ def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=Non
         return []
 
 
-def _log_digest(root, text, key, log):
+def _log_digest(root, text, key, log, *, ledger="role_ranking_log.json"):
     """Changed content logs immediately; an unchanged digest at most hourly.
 
     This ledger controls only verbose tend output. Alerter still owns paging,
     including retrying a failed push and preserving the P0-only risk contract.
     """
-    path = Path(root) / "notify" / "role_ranking_log.json"
+    path = Path(root) / "notify" / ledger
     try:
         previous = json.loads(path.read_text())
         if not isinstance(previous, dict):
