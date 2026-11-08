@@ -115,8 +115,10 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
         start=lambda *a: None, settings_path=lambda *a: None, waiting_for_human=lambda *a: True)
     panes = SimpleNamespace(new_session=lambda *a, **kw: None, respawn=lambda *a, **kw: None,
                             capture=lambda *a: "consent")
-    cli._launch_admitted(a, card, panes, runtime, dry_run=mode == "dry-run",
+    result = cli._launch_admitted(a, card, panes, runtime, dry_run=mode == "dry-run",
                         reuse_session=mode == "cycle", window_restore=mode == "restore")
+    if mode == "inbox-unacked":
+        assert result == cli.CANNOT_TELL
     path = launch._path(tmp_path, card.name)
     assert path.exists() is expected
 
