@@ -1361,3 +1361,64 @@ def test_tend_pass_invokes_inbox_recovery_but_dry_run_does_not(tmp_path, monkeyp
     assert calls == [] and routine_calls == []
     assert cli._cmd_tend(_Args(root)) == cli.OK
     assert calls == [['ellie']] and routine_calls == [['ellie']]
+
+
+def test_overdue_has_service_before_slow_cycle_and_recovery(tmp_path, monkeypatch):
+    """crs7: observed 39.4s recovery + 98.6s cycle must not skip overdue."""
+    from shantytown import cycle, inbox_recovery, overdue
+
+    crew = tmp_path / "crew"
+    crew.mkdir()
+    (crew / "w.json").write_text(json.dumps({"role": "worker", "pane": "p-w"}))
+    (tmp_path / "shantytown.toml").write_text("[overdue]\nenabled = true\n")
+    monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: _Panes(screens={"p-w": IDLE}))
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(cli, "_TEND_SWEEP_BUDGET_S", 120.0)
+    events = []
+    original_pass = tend_mod.Tender.pass_over
+
+    def respawn(self, *args, **kwargs):
+        events.append("respawn")
+        return original_pass(self, *args, **kwargs)
+
+    monkeypatch.setattr(tend_mod.Tender, "pass_over", respawn)
+
+    def recovery(*args, **kwargs):
+        events.append("recovery")
+        clock["t"] += 39.4
+        return []
+
+    monkeypatch.setattr(inbox_recovery, "sweep", recovery)
+    requests = cycle.Requests(tmp_path)
+    requests.request("w", "private cycle fixture")
+    before = requests.pending()
+
+    def slow_cycle(*args):
+        events.append("cycle")
+        clock["t"] += 98.6
+        return cli.CANNOT_TELL
+
+    monkeypatch.setattr(cli, "_serve_cycle_request", slow_cycle)
+
+    class Reminders:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def sweep(self):
+            events.append("overdue")
+            clock["t"] += 1
+            return []
+
+    monkeypatch.setattr(overdue, "OverdueAlerter", Reminders)
+    args = type("A", (), {"root": tmp_path, "dry_run": False,
+                         "backend": "files", "repo": None, "registry": "files"})()
+    counts = []
+    for _ in range(3):
+        start = len(events)
+        assert cli._tend_once(args) in (cli.OK, cli.CANNOT_TELL)
+        assert events[start:start + 2] == ["respawn", "overdue"]
+        counts.append(events.count("overdue"))
+    assert counts == [1, 2, 3]
+    assert "cycle" in events and "recovery" in events
+    assert requests.pending() == before  # failed cycle custody is never dropped
