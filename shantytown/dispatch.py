@@ -129,8 +129,9 @@ class DispatchedButUntracked(Exception):
     would either refuse (already assigned) or send it twice.
     """
 
-    def __init__(self, item_id: str, agent: str, pane: str, cause: Exception):
+    def __init__(self, item_id: str, agent: str, pane: str, cause: Exception, receipt_id=''):
         self.item_id, self.agent, self.pane, self.cause = item_id, agent, pane, cause
+        self.receipt_id = receipt_id
         super().__init__(
             f"{item_id} WAS DELIVERED to {agent} ({pane}) and verified on the "
             f"pane, but the tracker write FAILED "
@@ -143,7 +144,9 @@ class DispatchedButUntracked(Exception):
             f"({type(cause).__name__}: {str(cause)[:400]}). The agent has the work "
             f"and the tracker does not know it. Do NOT re-run `st go` — that would "
             f"deliver it twice. Reconcile the retained dispatch evidence; "
-            f"this error does not authorize a manual claim.")
+            f"this error does not authorize a manual claim."
+            + (f' Receipt {receipt_id}; inspect with st go {item_id} {agent} '
+               f'--reconcile --receipt {receipt_id}.' if receipt_id else ''))
 
 
 class TrackerWriteLost(Exception):
@@ -857,7 +860,7 @@ class Dispatcher:
             else:
                 p.track_attempts = self._track(item_id, p.updates)
         except Exception as e:                         # noqa: BLE001 — any store failure
-            raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
+            raise DispatchedButUntracked(item_id, agent_name, p.pane, e, receipt_id=p.receipt_id) from e
         if self._audit_record is not None:
             window_id = f"dispatch-{p.serve_id}"
             self._audit_record(window_id, leg="claim", worker=agent_name,

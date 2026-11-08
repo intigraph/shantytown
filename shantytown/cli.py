@@ -7919,6 +7919,10 @@ def _cmd_go(a) -> int:
             if not getattr(a, 'receipt', None):
                 raise ValueError('--reconcile requires --receipt')
             tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
+            from .deployment import local_host
+            agent = registry.get(a.agent)
+            if agent.host and agent.host != local_host(a.root):
+                raise ValueError('reconcile on the worker declared host; no remote dispatch was attempted')
             binding = binding_for(a.root, tracker, registry, panes)
             if binding is None:
                 raise ValueError('selected tracker has no bound dispatch receipt contract')

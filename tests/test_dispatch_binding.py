@@ -17,7 +17,12 @@ from shantytown.tmux import NullPanes
 
 class ReceivingPanes(NullPanes):
     def __init__(self, **kw):
-        super().__init__(created={'%5': 123}, **kw)
+        kw.setdefault('created', {'%5': 123})
+        super().__init__(**kw)
+        self.process_identity = 'fixture-process-1'
+
+    def runtime_identity(self, pane):
+        return self.process_identity
 
     def send(self, pane, text, **kw):
         super().send(pane, text, **kw)
@@ -47,6 +52,7 @@ def test_real_go_exact_body_single_assignment_and_replay(world):
     root, d, binding, tracker, panes = world
     p = d.go('work-1', 'worker', note='scope qualifier', quipu_nodes=['context'])
     assert p.receipt_id and not p.replayed
+    assert p.serve_id == p.receipt_id and 'proceed only when execution_authorized is true' in p.text
     current = tracker.get('work-1')
     assert current.revision == 2 and current.assignee == 'worker'
     before = snapshot(root)
@@ -107,7 +113,7 @@ def test_interrupt_after_native_commit_recovers_from_actual_proof_without_second
     assert binding.reconcile(row['id'])['execution_authorized']
 
 
-@pytest.mark.parametrize('change', ['task', 'session', 'card', 'note', 'worker'])
+@pytest.mark.parametrize('change', ['task', 'session', 'process', 'card', 'note', 'worker'])
 def test_changed_scope_cannot_replay_pending(world, change):
     root, d, binding, tracker, panes = world
     panes._drops = True
@@ -119,6 +125,8 @@ def test_changed_scope_cannot_replay_pending(world, change):
         tracker.update('work-1', title='changed task')
     elif change == 'session':
         panes._created['%5'] = 124
+    elif change == 'process':
+        panes.process_identity = 'fixture-process-2'
     elif change == 'card':
         path = root / 'crew/worker.json'
         path.write_text(json.dumps(dict(pane='%5', harness='claude')))
@@ -166,3 +174,60 @@ def test_reconcile_cli_is_read_only_even_for_interrupted_assignment(world, monke
     assert cli.main(['--root', str(root), 'go', 'work-1', 'worker', '--reconcile', '--receipt', p.receipt_id]) == 0
     assert json.loads(capsys.readouterr().out)['execution_authorized']
     assert before == snapshot(root) and len(panes.sent) == 1
+
+
+@pytest.mark.parametrize('state', ['delivered', 'queued', 'dequeued', 'acknowledged', 'superseded'])
+def test_pending_recovery_uses_only_exact_delivered_custody_without_second_send(world, state):
+    from shantytown.delivery import Custody
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    with Custody(root, '%5') as custody:
+        custody.begin(row['text'], 123)
+        custody.finish(state)
+    if state == 'delivered':
+        p = d.go('work-1', 'worker')
+        assert p.receipt_id == row['id'] and p.replayed
+        assert binding.reconcile(p.receipt_id)['execution_authorized']
+    else:
+        with pytest.raises(ReceiptConflict, match='pending'):
+            d.go('work-1', 'worker')
+        assert tracker.get('work-1').assignee is None
+    assert len(panes.sent) == 1
+
+
+def test_unknown_process_identity_refuses_before_any_intent_or_send(world):
+    root, d, binding, tracker, panes = world
+    panes.process_identity = None
+    with pytest.raises(ReceiptConflict, match='process identity UNKNOWN'):
+        d.go('work-1', 'worker')
+    assert not binding.store.root.exists() and not panes.sent
+
+
+def test_reconcile_changed_process_is_stale_and_read_only(world):
+    root, d, binding, tracker, panes = world
+    p = d.go('work-1', 'worker')
+    panes.process_identity = 'replacement-process'
+    before = snapshot(root)
+    status = binding.reconcile(p.receipt_id)
+    assert status['state'] == 'stale' and not status['execution_authorized']
+    assert snapshot(root) == before
+
+
+def test_cas_conflict_after_submission_never_claims_or_retries(world, monkeypatch):
+    root, d, binding, tracker, panes = world
+    claim = binding.assignments.claim
+    def race(row, updates):
+        tracker.update(row['item'], notes='another legitimate write')
+        return claim(row, updates)
+    monkeypatch.setattr(binding.assignments, 'claim', race)
+    with pytest.raises(DispatchedButUntracked):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    assert row['assignment_error']['native']['code'] == 'CONFLICT'
+    assert tracker.get('work-1').assignee is None
+    with pytest.raises(ReceiptConflict):
+        d.go('work-1', 'worker')
+    assert len(panes.sent) == 1

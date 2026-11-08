@@ -28,6 +28,10 @@ class FilesAssignments:
         self.tracker = tracker
 
     def claim(self, row, updates):
+        if (updates.get('status') != 'in_progress' or updates.get('assignee') != row['worker']
+                or updates.get('defer_until') not in (None, '')
+                or set(updates) - {'status', 'assignee', 'defer_until'}):
+            raise ReceiptConflict('dispatch assignment fields differ from receipt')
         self.tracker.update(row['item'], **updates, if_revision=row['revision'],
                             transition_comment=assignment_comment(row))
         return self.read(row)
@@ -55,10 +59,12 @@ class Binding:
         self.tracker, self.registry, self.panes = tracker, registry, panes
         self.assignments = assignments
 
-    @staticmethod
-    def request(plan, agent):
+    def request(self, plan, agent):
+        runtime = self.panes.runtime_identity(plan.pane)
+        if not runtime:
+            raise ReceiptConflict('dispatch runtime process identity UNKNOWN')
         return dict(note=plan.note, store=plan.store, nodes=plan.quipu_nodes,
-                    sender=plan.sender, worker_sha256=digest(asdict(agent)))
+                    sender=plan.sender, worker_sha256=digest(asdict(agent)), runtime=runtime)
 
     def scope(self, plan, *, current=False):
         item = self.tracker.get(plan.item_id) if current else plan.binding_item
@@ -74,8 +80,18 @@ class Binding:
         scope = self.scope(plan)
         with self.store.lock(plan.item_id):
             pending = self.store.pending(plan.item_id)
+            if pending and pending['state'] == 'prepared' and self.store._scope(pending) == scope:
+                from .delivery import observed_submission
+                observed = observed_submission(self.store.root.parent, pending['pane'],
+                    getattr(self.panes, 'socket', None), pending['text'], pending['session'], pending['created'])
+                if observed is not None:
+                    self.store.submitted(pending['id'], observed)
+                    pending = self.store.read(pending['id'])
             if pending and pending['state'] == 'assigning':
-                proof = self.assignments.read(pending)
+                try:
+                    proof = self.assignments.read(pending)
+                except Exception as error:
+                    raise ReceiptConflict('native assignment outcome UNKNOWN; reconcile before retry') from error
                 expected = dict(ReceiptStore._scope(pending), revision=proof['revision'])
                 if scope != expected:
                     raise ReceiptConflict('native receipt exists for a stale scope')
@@ -110,7 +126,16 @@ class Binding:
         self.store.submitted(plan.receipt_id, observed)
 
     def assign(self, plan):
-        return self.store.assign(plan.receipt_id, self.scope(plan, current=True),
+        row = self.store.read(plan.receipt_id)
+        current = self.scope(plan, current=True)
+        if row['state'] == 'assigned':
+            try:
+                proof = self.assignments.read(row)
+            except Exception as error:
+                raise ReceiptConflict('native assignment read-back UNKNOWN') from error
+            if current != dict(self.store._scope(row), revision=proof['revision']):
+                raise ReceiptConflict('assigned receipt scope is stale')
+        return self.store.assign(plan.receipt_id, current,
                                  lambda row: self.assignments.claim(row, plan.updates))
 
     def reconcile(self, ident):
@@ -123,7 +148,8 @@ class Binding:
             raise ReceiptConflict('receipt request metadata UNKNOWN')
         scope = dict(row, revision=current.revision, pane=agent.pane,
                      session=self.panes.session_created(agent.pane), task_sha256=task_digest(current))
-        scope['scope_sha256'] = digest(dict(request, worker_sha256=digest(asdict(agent))))
+        scope['scope_sha256'] = digest(dict(request, worker_sha256=digest(asdict(agent)),
+                                          runtime=self.panes.runtime_identity(agent.pane)))
         # Reconstruct the original request from the stored public scope inputs.
         # A fresh registry identity must still agree; status never guesses that
         # a changed card is the same assignment.

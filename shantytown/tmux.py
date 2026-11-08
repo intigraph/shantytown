@@ -404,6 +404,34 @@ class Tmux:
         return name or None
 
     def cmdline(self, pane: str) -> str | None:
+        found = self._runtime_process(pane)
+        return found[1] if found else None
+
+    def runtime_identity(self, pane: str) -> str | None:
+        """Process generation, independent of the enclosing tmux session."""
+        found = self._runtime_process(pane)
+        if not found:
+            return None
+        pid, line = found
+        try:
+            if sys.platform == 'darwin':
+                result = subprocess.run(['ps', '-o', 'lstart=', '-p', pid],
+                    capture_output=True, text=True, timeout=2)
+                started = result.stdout.strip() if result.returncode == 0 else ''
+            else:
+                # Parenthesized process names can contain spaces or ')'.
+                raw = Path(f'/proc/{pid}/stat').read_text()
+                boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+                if not re.fullmatch(r'[0-9a-f-]{36}', boot):
+                    return None
+                started = boot + ':' + raw.rsplit(')', 1)[1].split()[19]
+            if not started:
+                return None
+        except (OSError, IndexError, subprocess.SubprocessError):
+            return None
+        return hashlib.sha256(f'{pid}:{started}:{line}'.encode()).hexdigest()
+
+    def _runtime_process(self, pane):
         """The launch command line of the AGENT PROCESS running in `pane`.
 
         Used to ask what a live agent is ACTUALLY wired with, rather than what
@@ -446,7 +474,7 @@ class Tmux:
         """
         try:
             r = subprocess.run(
-                self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name}"),
+                self._cmd("list-panes", "-a", "-F", "#{pane_pid} #{session_name} #{pane_id}"),
                 capture_output=True, text=True, timeout=2,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -454,7 +482,7 @@ class Tmux:
         if r.returncode != 0:
             return None
         pids = [ln.split()[0] for ln in r.stdout.splitlines()
-                if len(ln.split()) > 1 and ln.split()[1] == pane]
+                if len(ln.split()) > 1 and pane in ln.split()[1:3]]
         if not pids:
             return None
         root = pids[0]
@@ -516,10 +544,10 @@ class Tmux:
                 continue
             line = self._launch_line(pid, args)
             if fallback is None:
-                fallback = line
+                fallback = (pid, line)
             if _carries_settings_pointer(line):
                 if age > best_age:
-                    best, best_age = line, age
+                    best, best_age = (pid, line), age
         # No pointer anywhere is a REAL answer (the hookless zombie), so return
         # the process we found rather than None, which means "could not look".
         # That distinction is the whole contract of the callers.
@@ -714,7 +742,8 @@ class Tmux:
             codex = self._confirmed_codex(pane, fg)
             if not codex and self._confirmed_claude(pane, fg):
                 claude_before = self._claude_history(pane)
-                claude_birth = self.session_created(pane)
+                if claude_before is not None:
+                    claude_birth = self.session_created(pane)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
                 if _codex_owned_input(before, text):
@@ -840,7 +869,7 @@ class Tmux:
                 '-t', pane, '-S', '-200'), capture_output=True, text=True, timeout=2)
         except (OSError, subprocess.SubprocessError):
             return None
-        return result.stdout if result.returncode == 0 else None
+        return result.stdout if getattr(result, 'returncode', None) == 0 else None
 
     def submit_owned(self, pane: str, text: str, *, deadline=None) -> None:
         """Recover an existing body without ever appending or replacing input."""
@@ -1464,6 +1493,11 @@ class NullPanes:
 
     def session_created(self, name: str) -> float | None:
         return self._created.get(name)
+
+    def runtime_identity(self, pane: str) -> str | None:
+        # A fixture must explicitly model a running process. A visible empty
+        # pane or a session birthday alone cannot manufacture that proof.
+        return None
 
     def sessions(self) -> list[str] | None:
         """The seeded `live` set, or None in ambient mode.

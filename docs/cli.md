@@ -49,7 +49,7 @@ composer input.
 ## Dispatch receipts
 
 Seeds and file-backed `st go` persist a pending receipt before sending. The
-receipt binds the task revision, worker card, pane/session, note, graph context,
+receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
 store and exact body. The payload names that receipt and asks the recipient to
 check its acknowledgement before executing. Planning or typing alone grants
 no assignment: exact-body submission must be observed, followed by one
@@ -68,7 +68,9 @@ unreadable native proof remains UNKNOWN. A native commit whose local receipt
 write was interrupted can still be proven by read-back. Repeating the original
 `go` then repairs local persistence without a second send or claim. A pending
 unverified send refuses replay until its retained transport evidence is
-reconciled; never resend or claim manually. Changed revisions, workers, notes,
+reconciled. An exact delivered record in existing transport custody can repair
+the local observation on normal replay, without another send; queued or merely
+acknowledged custody does not qualify. Never resend or claim manually. Changed revisions, workers, notes,
 cards or sessions cannot reuse the receipt. Older tracker adapters retain the
 legacy path and do not emit bound execution receipts.
 

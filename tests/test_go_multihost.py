@@ -8,7 +8,7 @@ import subprocess
 import pytest
 
 from shantytown import cli
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def fleet(tmp_path, monkeypatch):
     roots = [tmp_path / name for name in ('desktop', 'laptop')]
     board = tmp_path / 'board'; board.mkdir()
     (board / 'work-1.json').write_text(json.dumps({'title': 'A shared task', 'status': 'open'}))
-    panes = {name: NullPanes(screen='') for name in ('desktop', 'laptop')}
+    panes = {name: NullPanes(screen='', created={'%1': 123}) for name in ('desktop', 'laptop')}
     for root, other in zip(roots, reversed(roots)):
         (root / 'crew').mkdir(parents=True)
         (root / 'items').symlink_to(board, target_is_directory=True)

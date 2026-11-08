@@ -34,6 +34,43 @@ END_OF_CUSTODY = ('orphaned', 'dequeued')
 TERMINAL = ('delivered', 'acknowledged', 'superseded') + END_OF_CUSTODY
 
 
+def observed_submission(root, pane, socket, text, session, created):
+    """Read-only exact delivered proof; queued/dequeued/acknowledged do not count.
+
+    This repairs the crash between the transport's existing custody commit and
+    the dispatch ledger's observation. It never enters Custody or edits input.
+    """
+    from .protocols import SubmissionObserved
+    folder = Path(root) / 'delivery'
+    if not folder.exists():
+        return None
+    if folder.is_symlink() or folder.stat().st_uid != os.getuid():
+        raise OSError('delivery custody ownership UNKNOWN')
+    recent = []
+    for path in folder.glob('send-*.json'):
+        if path.is_symlink():
+            raise OSError('delivery custody record is a symlink')
+        info = path.stat()
+        if info.st_mtime + 1 < created:
+            continue
+        if info.st_uid != os.getuid() or info.st_size > 262144:
+            raise OSError('delivery custody record unproven')
+        recent.append(path)
+        if len(recent) > 4096:
+            raise OSError('recent delivery custody coverage bound exceeded')
+    matches = []
+    for path in recent:
+        row = json.loads(path.read_text())
+        if (row.get('pane') == pane and row.get('socket') == socket
+                and row.get('text') == text and row.get('session') == session
+                and row.get('state') == 'delivered'
+                and isinstance(row.get('created'), (int, float)) and row['created'] >= created):
+            matches.append(row)
+    if len(matches) > 1:
+        raise OSError('ambiguous exact delivered custody proof')
+    return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest()) if matches else None
+
+
 class Custody:
     def __init__(self, root, pane, socket=None):
         self.root = Path(root) / 'delivery'
