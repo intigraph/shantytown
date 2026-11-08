@@ -13,8 +13,8 @@ invoke a live cycle, start or kill any runtime, or prove installed recovery.
 
 Download output.txt and timing.txt and replay with:
 `scriptreplay --log-out output.txt --log-timing timing.txt --divisor 100`.
-The recording prints the exact baseline. The sender source is the implementation
-commit preceding this caption. Runtime projection and a naturally requested
+The recording prints the exact baseline. The demonstrated candidate verifier source is implementation `84fe8104`.
+The later source-witness correction changes no verifier code. Runtime projection and a naturally requested
 cycle remain separate acceptance gates.
 
 Rollback is a normal source revert and projection. Retain any pending clear
