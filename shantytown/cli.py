@@ -4579,7 +4579,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
                      window_restore: bool = False,
                      reuse_session: bool = False) -> int:
     """LAUNCH ONE AGENT. The whole seam: refuse-first, then workspace, then kit,
-    then session, then verify. Returns 0 (up + hooks verified) / 1 (refused) /
+    then session, then verify. Returns 0 (live + hooks + startup verified) / 1 (refused) /
     2 (launched but not verified).
 
     new_session (empty pane) -> Runtime.start (compose w/ --settings, send) ->
@@ -4793,6 +4793,14 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             print(f"  ephemeral {card.name}: hooks unverifiable here; delivering the "
                   "job anyway (tend enforces its deadline).", file=sys.stderr)
             a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+        # Process hooks are a separate fact from the first submitted turn.
+        # A stranded startup body must not inherit the earlier hooks' success.
+        if verified == OK and not getattr(a, '_startup_delivered', False):
+            print(f"  startup UNVERIFIED for {card.name}: first turn not confirmed; "
+                  "runtime remains live, inspect input before retrying.", file=sys.stderr)
+            return CANNOT_TELL
+        if verified == OK and ledger_ok:
+            print(f"  started {card.name} ({session}) — startup delivery verified.")
         return verified if ledger_ok else CANNOT_TELL
     # Not observed live. Distinguish "waiting for a human" (a first-run consent
     # prompt) from "unknown" — both are could-not-tell (2), but they need
@@ -4893,8 +4901,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     Only the snapshot whose complete marker is visible is acknowledged; every
     failure is loud and leaves the durable pointers open for ``st inbox``.
 
-    Best-effort by design.  Inbox trouble must not turn a healthy agent launch into
-    a failed launch, because the open pointers are precisely the recovery path.
+    Failure preserves the live process and open pointers, but the caller must
+    report an unverified launch rather than crediting process liveness as delivery.
     """
     # Codex Remote Control sessions have been observed to omit SessionStart
     # context despite configured hooks. Use the verified initial-input rail,
@@ -4979,7 +4987,14 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
         return True
 
     try:
-        panes.send(session, attribute(prompt, "st startup"))
+        submitted = panes.send(session, attribute(prompt, "st startup"))
+        if harness_mod.name_for(card, root=a.root) == "codex":
+            from .protocols import SubmissionObserved
+            if (not isinstance(submitted, SubmissionObserved)
+                    or not submitted.matches(session, attribute(prompt, "st startup"))):
+                # Echoed text and an empty-looking composer cannot prove a turn
+                # started when runtime identification skipped Codex's send rail.
+                raise RuntimeError("Codex first-turn submission not observed")
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
         # A few patient looks, not one: a long block (an ephemeral job prompt)
@@ -5136,7 +5151,7 @@ def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
     if failure is not None:
         return failure
     verified = sorted(need) if need else "none required by the graph"
-    print(f"  started {card.name} ({session}) — runtime live, stop hooks VERIFIED "
+    print(f"  {card.name} ({session}) — runtime live, stop hooks VERIFIED "
           f"on the live process: {verified}.")
     return OK
 

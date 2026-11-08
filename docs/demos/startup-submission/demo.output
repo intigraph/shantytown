@@ -1,0 +1,10 @@
+Script started on 2026-11-08 01:14:38-05:00 [COMMAND="python3 docs/demos/startup-submission/demo.py" <not executed on terminal>]
+Synthetic fixture: live process + verified hooks; startup delivery varies.
+No crew launch, keystrokes, tracker mutation or network.
+before 6bb46949: startup_delivered=False -> exit 0
+before 6bb46949: startup_delivered=True -> exit 0
+candidate: startup_delivered=False -> exit 2
+candidate: startup_delivered=True -> exit 0
+PASS: failed startup is unverified; successful control remains exit 0.
+
+Script done on 2026-11-08 01:14:38-05:00 [COMMAND_EXIT_CODE="0"]
