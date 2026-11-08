@@ -92,6 +92,14 @@ SELECT ?id ?revision ?priority ?status ?assignee ?due_at ?created_at ?sampled_at
     BIND(EXISTS { ?item schema:keywords 'stiwi-directive' } AS ?directive)
     OPTIONAL { ?item s:observedDeferralWriteCount ?deferral_count_term }
     OPTIONAL { ?item s:observedDeferralWriteCountSince ?deferral_since_term }
+    FILTER NOT EXISTS {
+      ?item s:observedDeferralWriteCount ?other_deferral_count .
+      FILTER(!sameTerm(?deferral_count_term, ?other_deferral_count))
+    }
+    FILTER NOT EXISTS {
+      ?item s:observedDeferralWriteCountSince ?other_deferral_since .
+      FILTER(!sameTerm(?deferral_since_term, ?other_deferral_since))
+    }
     BIND(IF(!BOUND(?deferral_count_term) && !BOUND(?deferral_since_term), 'UNKNOWN',
          IF(BOUND(?deferral_count_term) && BOUND(?deferral_since_term)
             && DATATYPE(?deferral_count_term) = xsd:integer

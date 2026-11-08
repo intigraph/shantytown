@@ -105,7 +105,9 @@ def test_actual_query_uses_only_observed_pair_and_omits_invalid_coverage(count, 
     ("cap", ["older", "observed"]),
     ("priority", ["older", "observed"]),
     ("due", ["older", "observed"]),
-    ("duplicate", ["observed", "observed", "older"]),
+    ("duplicate", ["older"]),
+    ("mixed_duplicate", ["older"]),
+    ("mixed_origin", ["older"]),
 ])
 def test_v2_weight_is_capped_and_never_overrides_declared_priority_or_due(mode, expected):
     q = Namespace("https://quipu.dev/ontology/")
@@ -136,7 +138,12 @@ def test_v2_weight_is_capped_and_never_overrides_declared_priority_or_due(mode, 
             graph.add((item, ical.due, Literal("2026-11-07", datatype=XSD.date)))
     if mode == "duplicate":
         graph.add((URIRef("urn:item:observed"), seeds.observedDeferralWriteCount, Literal(4)))
+    if mode == "mixed_duplicate":
+        graph.add((URIRef("urn:item:observed"), seeds.observedDeferralWriteCount, Literal(0)))
+    if mode == "mixed_origin":
+        graph.add((URIRef("urn:item:observed"), seeds.observedDeferralWriteCountSince,
+                   Literal("2026-11-09T00:00:00Z", datatype=XSD.dateTime)))
     rows = list(data.query(template))
     assert [str(row.id) for row in rows] == expected
-    # Duplicate functional facts stay visible as duplicate coverage, never hidden
-    # by DISTINCT into an apparently complete admission proof.
+    # Conflicting functional facts must make exact candidate coverage incomplete,
+    # even when only one of their values would otherwise pass validation.
