@@ -135,7 +135,7 @@ def test_startup_inbox_keeps_every_pointer_when_complete_context_is_not_observed
     panes = NullPanes(screen=READY, drops=True, live=set())
     monkeypatch.setattr(cli, "Tmux", lambda *_a, **_k: panes)
 
-    assert cli._cmd_new(_Args(root=root)) == cli.OK
+    assert cli._cmd_new(_Args(root=root)) == cli.CANNOT_TELL
 
     assert {m.id for m in box.unread("ellie")} == {first.id, second.id}
     err = capsys.readouterr().err
@@ -861,7 +861,7 @@ def test_codex_dropped_context_keeps_mail_unread(codex_startup, capsys):
     panes = NullPanes(screen=READY, drops=True)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert [m.id for m in box.unread("ellie")] == [msg.id]
-    assert "not verified" in capsys.readouterr().err
+    assert "submission not observed" in capsys.readouterr().err
 
 
 def test_codex_empty_mail_marker_cannot_match_an_old_delivery(codex_startup):
@@ -902,3 +902,27 @@ def test_codex_marker_without_anchor_cannot_ack_mail(codex_startup):
     panes = TailOnlyPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert [m.id for m in box.unread("ellie")] == [msg.id]
+
+
+@pytest.mark.parametrize("evidence", ["missing", "wrong-pane", "wrong-body", "exception"])
+def test_codex_echoed_startup_without_exact_submission_keeps_mail(
+        codex_startup, evidence, capsys):
+    from shantytown.protocols import SubmissionObserved
+    args, card, box = codex_startup
+    msg = box.deliver("ellie", "must survive echoed unsubmitted input")
+
+    class EchoOnlyPanes(NullPanes):
+        def send(self, pane, text, **kwargs):
+            super().send(pane, text, **kwargs)
+            if evidence == "exception":
+                from shantytown.tmux import PaneSubmissionUnverified
+                raise PaneSubmissionUnverified("stranded input remains")
+            if evidence == "wrong-pane":
+                return SubmissionObserved("other", "irrelevant")
+            if evidence == "wrong-body":
+                return SubmissionObserved(pane, "irrelevant")
+            return None
+
+    assert not cli._deliver_startup_inbox(args, card, EchoOnlyPanes(), card.pane)
+    assert [m.id for m in box.unread("ellie")] == [msg.id]
+    assert "delivery failed" in capsys.readouterr().err
