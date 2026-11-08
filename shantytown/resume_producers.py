@@ -52,7 +52,7 @@ def validate(kind: str, arg: str):
         return arg
     if kind == 'evidence-count':
         match = re.fullmatch(r'([a-z][a-z0-9-]{0,63})>=([1-9][0-9]{0,6})', arg)
-        if not match or match[1] not in COUNTERS:
+        if not match or match[1] not in COUNTERS or int(match[2]) > 10000:
             raise ValueError('evidence-count requires a registered producer ID>=N')
         return match[1], int(match[2])
     raise ValueError('unsupported producer event')
@@ -76,10 +76,21 @@ def _deferred_at(row, now):
     return start.timestamp()
 
 
-def _recurring(identifier, row, now):
-    path = Path.home() / '.local/state/recurring-alarms/state.json'
-    raw = read_producer_file(path, 4 * 1024 * 1024)
-    data = json.loads(raw, object_pairs_hook=_unique)
+def _recurring(identifier, row, now, snapshots):
+    # Hundreds of waiters share one processor file. Memoize only within this
+    # sweep, including read failures; the next scheduled pass starts fresh.
+    if 'recurring' not in snapshots:
+        try:
+            path = Path.home() / '.local/state/recurring-alarms/state.json'
+            raw = read_producer_file(path, 4 * 1024 * 1024)
+            snapshots['recurring'] = (json.loads(raw, object_pairs_hook=_unique),
+                                      hashlib.sha256(raw).hexdigest())
+        except Exception as exc:
+            snapshots['recurring'] = exc
+    snapshot = snapshots['recurring']
+    if isinstance(snapshot, Exception):
+        raise snapshot
+    data, digest = snapshot
     if type(data['version']) is not int or data['version'] != 1:
         raise ValueError('unsupported recurring producer version')
     stamp = now.timestamp()
@@ -94,7 +105,7 @@ def _recurring(identifier, row, now):
         raise ValueError('recurring firing is newer than census')
     start = _deferred_at(row, now)
     if fired > start:
-        return Verdict('MET', 'producer reports refire after deferral')
+        return Verdict('MET', 'producer reports refire after deferral', digest)
     if source['active']:
         return Verdict('NOT_MET', 'class still active; no new firing after deferral')
     quiet = _number(source['quiet_since'])
@@ -103,16 +114,16 @@ def _recurring(identifier, row, now):
     # Use the last authoritative observation, not wall time since a dead poller.
     ready = census - quiet >= timedelta(days=14).total_seconds()
     return Verdict('MET' if ready else 'NOT_MET',
-                   'producer quiet interval', hashlib.sha256(raw).hexdigest())
+                   'producer quiet interval', digest)
 
 
-def evaluate(kind: str, arg: str, row: dict, now: datetime) -> Verdict:
+def evaluate(kind: str, arg: str, row: dict, now: datetime, *, snapshots=None) -> Verdict:
     try:
         if now.tzinfo is None:
             raise ValueError('evaluation time must be timezone aware')
         parsed = validate(kind, arg)
         if kind == 'recurring-quiet':
-            return _recurring(parsed, row, now)
+            return _recurring(parsed, row, now, snapshots if snapshots is not None else {})
         identifier, threshold = parsed
         binding = COUNTERS[identifier]
         if binding.item != row['id'] or not binding.identity:

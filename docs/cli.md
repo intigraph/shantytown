@@ -597,6 +597,8 @@ than the writer's recorded deferral boundary. A stale/missing census, an
 unreadable state file or an ambiguous deferral boundary is UNKNOWN. The
 processor still owns quiet-interval resets and recurring closure. This reader
 does not poll alerts, start a collector or rewrite the processor's state.
+All recurring waiters share one bounded file snapshot per sweep; the next
+scheduled sweep reads again, including after a failed read.
 
 `evidence-count:` accepts only a source-reviewed entry in
 `shantytown.resume_producers.COUNTERS`. The reader must deliver a complete,
@@ -606,6 +608,8 @@ identity, missing data and read failures are UNKNOWN; insufficient count or
 required coverage is not met. No production counter is registered initially:
 the policy49/50 producer is a separate reviewed change. Item text cannot select
 a query, command, path or URL, and retained stderr is not a counter source.
+The bounded contract permits at most 10,000 candidate IDs per observation;
+larger thresholds are refused before deferral writes.
 
 Version conditions need no binding, because they test a public fact rather than
 one item's producer:

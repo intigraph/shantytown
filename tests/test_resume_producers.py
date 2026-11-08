@@ -99,6 +99,29 @@ def test_no_registered_counter_never_turns_into_zero_or_ready():
     assert result.state == 'UNKNOWN'
 
 
+def test_one_snapshot_per_pass_and_fresh_read_after_unavailability(state, monkeypatch):
+    path, data, write = state
+    other = '1' * 24
+    data['classes'][other] = dict(data['classes'][CLASS], bead='item-2')
+    write()
+    second = row(arg=other); second['id'] = 'item-2'
+    rows = [row(), second]
+    reads = []
+    original = events.read_producer_file
+    def counted(*args):
+        reads.append(args[0])
+        return original(*args)
+    monkeypatch.setattr(events, 'read_producer_file', counted)
+    assert all(f.met for f in deferrals.evaluate(rows, NOW))
+    assert len(reads) == 1
+    path.unlink()
+    assert all(f.read_error for f in deferrals.evaluate(rows, NOW))
+    assert len(reads) == 2
+    write()
+    assert all(f.met for f in deferrals.evaluate(rows, NOW))
+    assert len(reads) == 3
+
+
 @pytest.fixture
 def counter(monkeypatch):
     observation = events.CountObservation(tuple(map(str, range(19))), 'window-v2', NOW, True, True)
@@ -132,6 +155,17 @@ def test_counter_incomplete_or_stale_is_unknown(counter, field, value):
 def test_enough_candidates_without_required_coverage_stays_parked(counter):
     from dataclasses import replace
     counter[0] = replace(counter[0], candidate_ids=tuple(map(str, range(20))), required_coverage=False)
+    assert events.evaluate('evidence-count', 'fixture>=20', row(), NOW).state == 'NOT_MET'
+
+
+def test_registered_counter_cannot_write_an_unreachable_threshold(counter):
+    with pytest.raises(ValueError):
+        events.validate('evidence-count', 'fixture>=10001')
+
+
+def test_complete_empty_inventory_is_unmet_not_an_unknown_read(counter):
+    from dataclasses import replace
+    counter[0] = replace(counter[0], candidate_ids=(), required_coverage=False)
     assert events.evaluate('evidence-count', 'fixture>=20', row(), NOW).state == 'NOT_MET'
 
 
