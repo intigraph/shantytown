@@ -123,7 +123,7 @@ pending dispatch custody and the journal across rollback.
 ## Stored-query order in the tend log
 
 When the deployment enables `SHANTY_BACKLOG_PICKUP=1`, the fleet-owner ranking
-sweep also observes `seeds_work_rank_v1`. The default remains OFF. Publish the
+sweep also observes `seeds_work_rank_v2`. The default remains OFF. Publish the
 reviewed query and qualify its registry readback before enabling the consumer.
 This observer does not claim, dispatch, reassign, close, defer or reprioritize
 work, and does not change the administrator's P0 notification text or key.
