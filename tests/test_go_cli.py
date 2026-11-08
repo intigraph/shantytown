@@ -12,7 +12,7 @@ from pathlib import Path
 
 import shantytown.cli as cli
 from shantytown.cli import main, OK, REFUSED, CANNOT_TELL
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 
 
 def _root(tmp_path: Path) -> Path:

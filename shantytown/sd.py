@@ -110,6 +110,30 @@ class SdTracker(BrTracker):
             raise RuntimeError('stranded release read-back UNKNOWN')
         return 'released'
 
+    def dispatch_assignment(self, receipt, updates):
+        """One native CAS, retaining the SDK's conflict/indeterminate error.
+
+        Called only after submission proof by the receipt coordinator. Reuse
+        update(), including its installed capacity guard; never a raw write or
+        a second claim after a timeout. Read-back can repair an interrupted
+        coordinator later without writing another transition.
+        """
+        from .dispatch_receipts import assignment_comment, ReceiptConflict
+        if (updates.get('status') != 'in_progress'
+                or updates.get('assignee') != receipt.get('worker')
+                or updates.get('defer_until') not in (None, '')
+                or set(updates) - {'status', 'assignee', 'defer_until'}):
+            raise ReceiptConflict('dispatch assignment fields differ from receipt')
+        comment = assignment_comment(receipt)
+        self.update(receipt['item'], **updates, if_revision=receipt['revision'],
+                    transition_comment=comment)
+        return self.dispatch_assignment_read(receipt)
+
+    def dispatch_assignment_read(self, receipt):
+        """Read only: owner/status without the exact receipt is insufficient."""
+        from .dispatch_receipts import assignment_proof
+        return assignment_proof(receipt, self.stranded_read(receipt['item']))
+
     def claim_ranked_pickup(self, row, owner):
         """One revision-guarded unowned claim, after a fresh readiness proof."""
         from .priority_advisory import workable

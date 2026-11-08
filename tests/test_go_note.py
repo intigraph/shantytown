@@ -25,7 +25,7 @@ import pytest
 import shantytown.cli as cli
 from shantytown.cli import main, OK, REFUSED
 from shantytown.dispatch import Dispatcher, TriageRefused, flatten_note
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 from shantytown.files import FilesRegistry, FilesTracker
 
 
