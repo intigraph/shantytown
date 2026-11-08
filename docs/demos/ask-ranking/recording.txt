@@ -1,0 +1,9 @@
+Script started on 2026-11-08 07:45:40-05:00 [COMMAND="/usr/bin/python3 docs/demos/ask-ranking/run.py" <not executed on terminal>]
+Base: 5e5057dde583169d611d02956d80604c3c9cef88
+Candidate predicate SHA256: 4f66edb251c0723dce3ce211f134276e3ef91fc9924f2bc01d2c153c0da18fc0
+BEFORE: 'ASK Stiwi: choose an account' -> advisory=True
+BEFORE: 'Fix a parser' -> advisory=True
+AFTER: 'ASK Stiwi: choose an account' -> advisory=False
+AFTER: 'Fix a parser' -> advisory=True
+
+Script done on 2026-11-08 07:45:40-05:00 [COMMAND_EXIT_CODE="0"]

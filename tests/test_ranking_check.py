@@ -35,6 +35,27 @@ def test_equal_priority_and_owned_waiters_never_invent_priority_violation():
     assert "no proven live-agent priority mismatch" in text
 
 
+@pytest.mark.parametrize("change", [
+    {"title": "ASK Stiwi: choose an account"},
+    {"labels": ["needs-stiwi"]}, {"labels": ["desk"]},
+    {"labels": ["decision-needed"]}, {"labels": ["blocked:bead"]},
+    {"labels": ["blocked:external"]}, {"labels": ["parked:by-design"]},
+])
+def test_ranking_only_compares_feedable_unowned_work(change):
+    held = work("held", 2, assignee="worker", status="in_progress")
+    gated = work("gated", **change)
+    cards = [Agent(name="worker")]
+    text, page = ranking.digest([gated], [held, gated], cards, {"worker"}, counts="counts")
+    assert "no proven live-agent priority mismatch" in text
+    assert "unowned: 0 READY" in text and not page
+    # Excluding a human decision must not suppress a real priority mismatch.
+    real = work("real")
+    text, page = ranking.digest([gated, real], [held, gated, real], cards,
+                                {"worker"}, counts="counts")
+    assert "worker: held P2 < 1 unowned P1 READY" in text
+    assert "real P1" in text and "gated P1" not in text and not page
+
+
 def controls():
     return [{"metric":"coverage","value":1},{"metric":"aggregation_control","value":1}]
 
