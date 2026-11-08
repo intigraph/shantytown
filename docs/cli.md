@@ -1052,6 +1052,16 @@ This is still a heuristic on somebody else's TUI rendering, and it is the *cheap
 The better one is for a worker's own hook to report `idle`/`running`/`queued` into `.shanty` so the
 tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (aegis-w9z1).
 
+For a new Codex message, the sender first establishes an empty composer and
+writes its own body. After the paste settles, it reads fresh attributed chrome:
+a busy pane gets Tab to queue that body; an idle pane gets Enter. Missing typed
+input, an unreadable frame or a changed runtime withholds the first submission.
+This avoids depending on a later ownership retry when Codex visually wraps
+inside a word. The retry matcher remains strict and never removes word boundaries.
+A visible queue is still not delivery: the durable pointer remains unread until
+independent delivery or acknowledgement. This initial send does not authorize
+clearing or submitting an already occupied composer.
+
 ## `auth-dead` — login expired, and the pane lies `idle` (aegis-arma)
 
 Measured 2026-07-22: an operator re-login rotated the shared credential and **all 9 live crew went

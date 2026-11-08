@@ -795,15 +795,33 @@ class Tmux:
                            check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
-        # Before the settle, so the settle stays the last thing before Enter.
+        # Refuse copy-mode before settling or returning an unsubmitted body.
         self._refuse_in_mode(pane, sent=len(chunks))
         if not submit:
             return None
+        submit_key = "Enter"
         if codex:
             # A key inside the terminal's paste burst can become text instead
-            # of a submit. Chunking alone does not separate the final Enter.
+            # of a submit. Read the settled chrome before choosing its key.
             time.sleep(_CODEX_SETTLE_S)
-        subprocess.run(self._cmd("send-keys", "-t", pane, "Enter"), check=True)
+            from . import triage
+            try:
+                current = self.capture(pane, attrs=True, timeout=2)
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise PaneSubmissionUnverified(
+                    "UNVERIFIED: cannot observe Codex before initial submission") from exc
+            if (not self._confirmed_codex(pane, self.foreground(pane))
+                    or triage.input_state(current) != triage.INPUT_QUEUED):
+                raise PaneSubmissionUnverified(
+                    "UNVERIFIED: typed Codex input not observed before initial submission")
+            # The first key submits the body just typed into the empty composer.
+            # Enter leaves busy Codex text stranded; a later ownership retry can
+            # correctly refuse when the UI wraps inside a word (aegis-8mcb).
+            # Keep that strict retry matcher; select Tab on the initial send.
+            submit_key = "Tab" if triage.mid_flight(current) else "Enter"
+            before = current
+            self._refuse_in_mode(pane, sent=len(chunks))
+        subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
         if codex:
             self._verify_codex_submission(pane, text, before)
             return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
