@@ -1,0 +1,14 @@
+Actual tend/rotation, synthetic 39.4s recovery + 98.6s cycle; no service, network or notification actions.
+
+base: same three scheduling controls
+FF.                                                                      [100%]
+=========================== short test summary info ============================
+FAILED tests/test_tend.py::test_overdue_has_service_before_slow_cycle_and_recovery
+FAILED tests/test_sweep_rotation.py::test_overdue_service_preserves_the_other_sweeps_cursor
+2 failed, 1 passed in 0.51s
+
+candidate: same three scheduling controls
+...                                                                      [100%]
+3 passed, 1 warning in 0.73s
+PASS: overdue runs after supervision, without resetting the other sweeps' cursor or bypassing the budget.
+Source fixture only; scheduled delivery, bytes and latency remain separate acceptance.

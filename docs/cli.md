@@ -3720,3 +3720,18 @@ before its reminder date while independent human and dependency holds remain.
 It does not prove provider responses or bypass launch admission. Existing
 `pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
 and budgets.
+
+
+## Scheduled reminders in `st fleet tend`
+
+When enabled, the shared overdue/spec/unlock notifier gets the first best-effort
+slot after supervision and fleet-owner admission. A slow inbox recovery or
+requested cycle cannot consume that pass's budget before reminders are admitted.
+The remaining sweeps keep their saved rotation cursor; reminder admission does
+not reset their progress. The existing 120-second admission budget still applies,
+and no sweep already in flight is interrupted. Disabled reminders and non-owner
+hosts retain their existing behavior. This adds no second schedule or resend.
+
+A completed pass is not a delivery receipt. Check the actual notifier outcome,
+recipient and delivery ID, measured body bytes, and phase latency before claiming
+scheduled-delivery acceptance.

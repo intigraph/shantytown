@@ -85,3 +85,22 @@ def test_bad_ledger_and_write_failure_do_not_stop_supervision(tmp_path, monkeypa
     rotation.finish()
     assert any("state UNKNOWN" in line for line in messages)
     assert any("persistence UNKNOWN" in line for line in messages)
+
+
+def test_overdue_service_preserves_the_other_sweeps_cursor(tmp_path):
+    path = tmp_path / "notify" / "tend-sweep-rotation.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"version": 1, "next": "late"}))
+    rotation = SweepRotation(tmp_path)
+    assert rotation.admission("overdue-sweep", within_budget=True) is None
+    assert rotation.admission("early", within_budget=True) == "rotation"
+    assert rotation.admission("late", within_budget=True) is None
+    assert rotation.admission("tail", within_budget=False) == "budget"
+    rotation.finish()
+    assert json.loads(path.read_text())["next"] == "tail"
+
+
+def test_overdue_does_not_bypass_the_time_budget(tmp_path):
+    rotation = SweepRotation(tmp_path)
+    assert rotation.admission("overdue-sweep", within_budget=False) == "budget"
+    assert rotation.started == []
