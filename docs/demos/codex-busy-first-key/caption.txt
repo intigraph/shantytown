@@ -1,0 +1,29 @@
+Busy Codex first-send key: before/after source and protocol fixture.
+
+Trigger: a busy Codex composer visually wraps the just-typed body inside a word.
+Base895d653b26ca3a7a89016c6f9786b34d9dcc6c33 sends Enter first; the modeled
+busy TUI leaves the body typed and the strict retry matcher refuses it.
+Source da57af49e0eda87a5031c128fdec608cd4725e0f reads the settled chrome and
+sends Tab first: the modeled TUI clears the composer into its queue. Both type
+one body. A queue is UNVERIFIED delivery, preserving the durable pointer.
+Idle sends still use Enter; a pre-existing foreign draft gets no text or key.
+
+This executes the actual base and candidate sender code against a deterministic
+terminal protocol model. It does not launch Codex, send to a real pane, clear an
+incident, emit a production alert or prove receiver arrival. Runtime adoption and
+natural incident/refusal counts remain separate acceptance gates.
+
+From the repository root, with development pytest installed, run through the
+HOME-escape guard:
+python3 docs/demos/codex-busy-first-key/probe.py
+
+The probe explicitly removes inherited deployment root/socket settings before
+constructing its fake transport; both are asserted absent. All terminal calls
+are mocked. Exact source refs and observed results appear in output.txt.
+
+Download output.txt and timing.txt, then replay:
+scriptreplay --log-out output.txt --log-timing timing.txt
+Output-only recording; PTY newline expansion disabled before the probe.
+Playback checked at divisor100. Retain these small artifacts in this repository;
+no external host or video embed is required. Later artifact commits do not change
+the demonstrated sender implementation.

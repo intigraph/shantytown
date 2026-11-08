@@ -16,12 +16,13 @@ def test_actual_codex_submission_survives_missing_scrollback(tmp_path, monkeypat
     monkeypatch.setattr(tmux.subprocess,'run',lambda argv,**kw:calls.append(argv))
     adapter=tmux.Tmux(root=tmp_path/'runtime')
     monkeypatch.setattr(adapter,'session_created',lambda _:1)
-    frames=iter([ready,busy])
-    monkeypatch.setattr(adapter,'capture',lambda *a,**kw:next(frames,busy))
     monkeypatch.setattr(adapter,'foreground',lambda _:'codex')
     class Panes(NullPanes):
         def send(self,pane,text):
             self.screen=busy
+            typed='\x1b[1m›\x1b[0m '+text+'\n gpt-6 high · /workspace'
+            frames=iter([ready,typed,busy])
+            monkeypatch.setattr(adapter,'capture',lambda *a,**kw:next(frames,busy))
             return adapter.send(pane,text)
     panes=Panes(screen=ready)
     Dispatcher(FilesRegistry(crew),tracker,panes).go('item-1','worker')

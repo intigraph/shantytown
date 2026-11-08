@@ -247,6 +247,9 @@ def test_known_failed_notice_can_unblock_a_later_sender_without_losing_old_body(
     def capture(*a, **kw):
         if any(c[-1] == 'Enter' for c in keys(calls)):
             return BUSY
+        typed = [c[-1] for c in keys(calls) if '-l' in c]
+        if typed:
+            return OWNED.replace(BODY, typed[-1])
         if any(c[-1] == 'C-u' for c in keys(calls)):
             return READY
         return OWNED
@@ -325,6 +328,9 @@ def test_queued_body_restored_to_idle_composer_unblocks_the_next_sender(tmp_path
     def capture(*a, **kw):
         if any(c[-1] == 'Enter' for c in keys(calls)):
             return BUSY
+        typed = [c[-1] for c in keys(calls) if '-l' in c]
+        if typed:
+            return OWNED.replace(BODY, typed[-1])
         if any(c[-1] == 'C-u' for c in keys(calls)):
             return READY
         return OWNED
@@ -356,6 +362,9 @@ def test_superseded_notice_is_cleared_but_never_resent_or_pointed(tmp_path, monk
     def capture(*a, **kw):
         if any(c[-1] == 'Enter' for c in keys(calls)):
             return BUSY
+        typed = [c[-1] for c in keys(calls) if '-l' in c]
+        if typed:
+            return OWNED.replace(BODY, typed[-1])
         if any(c[-1] == 'C-u' for c in keys(calls)):
             return READY
         return OWNED
