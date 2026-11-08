@@ -93,6 +93,28 @@ def test_newly_held_candidate_never_reaches_query_or_claim():
                           reader=forbidden, now=NOW)
 
 
+@pytest.mark.parametrize("marker", [
+    {"labels": ["deploy-operation"]},
+    {"agent_context": '{"deploy_admission": {"phase": "PLANNED"}}'},
+    {"agent_context": {"deploy_admission": {"phase": "DRAINED"}}},
+    {"agent_context": "unreadable context"},
+])
+def test_operation_or_unknown_context_never_reaches_query_or_native_claim(marker):
+    from shantytown.backlog_rank import next_after_anchor
+    from shantytown.sd import SdTracker
+    low = dict(item("owned"), priority=2, assignee="ada")
+    operation = dict(item("operation"), **marker)
+    def forbidden(*args, **kwargs):
+        raise AssertionError("no query, capacity check or write permitted")
+    with pytest.raises(ValueError):
+        next_after_anchor(None, [low, operation], [low], owner="ada", board="urn:board",
+                          read_current=lambda ident: low if ident == "owned" else operation,
+                          claim=forbidden, admit=forbidden, reader=forbidden, now=NOW)
+    tracker = object.__new__(SdTracker)
+    with pytest.raises(ValueError):
+        tracker.claim_ranked_pickup(operation, "ada")
+
+
 @pytest.mark.parametrize("room, sdk_code", [(False, 0), (True, 4), (True, 8), (True, 0)])
 def test_native_claim_retains_capacity_cas_and_verified_readback(monkeypatch, room, sdk_code):
     from contextlib import nullcontext

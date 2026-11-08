@@ -13,6 +13,19 @@ QUERY = "seeds_work_rank_v1"
 MAX_CANDIDATES = 64
 
 
+def ordinary(row):
+    """This new claim lane admits no context-bearing operation records.
+
+    Exact SDK reads carry agent_context even before the ordinary-haul guard's
+    lean projections do. Reserve all nonempty contexts here rather than infer
+    phase authority from them. Native operation owners retain their CAS lane.
+    """
+    labels = row.get("labels") or ()
+    return (isinstance(labels, (list, tuple, set))
+            and not any(str(label).strip().lower() == "deploy-operation" for label in labels)
+            and row.get("agent_context") in (None, ""))
+
+
 def ordered(root, candidates, *, owner, board, reader=None, now=None):
     """Reorder an exact candidate set using a fresh, bounded stored-query proof.
 
@@ -86,7 +99,7 @@ def next_after_anchor(root, ready, mine, *, owner, board, read_current,
         if (previous is None or row.get("status") != "open"
                 or row.get("priority") != previous.get("priority")
                 or row.get("assignee") != previous.get("assignee")
-                or not workable(row)):
+                or not workable(row) or not ordinary(row)):
             raise ValueError("pickup candidate changed before ranking")
         if row.get("defer_until"):
             until = datetime.fromisoformat(row["defer_until"].replace("Z", "+00:00"))

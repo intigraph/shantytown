@@ -56,6 +56,8 @@ preempted, no other live owner's item is taken, and background or unreadable
 process custody prevents the switch. Governor, feed holds, host scope,
 session ceilings and context handoff still apply. Leads and keepers retain
 their existing selection behavior in this first slice.
+Deployment-operation labels and all nonempty native agent contexts are refused
+by this claim lane; their phase-CAS controller remains the only owner.
 
 This is an opt-in pickup slice, not the complete backlog policy. It does not
 promote dependency priorities, cull deferred work, manufacture due dates or

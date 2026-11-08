@@ -113,11 +113,12 @@ class SdTracker(BrTracker):
     def claim_ranked_pickup(self, row, owner):
         """One revision-guarded unowned claim, after a fresh readiness proof."""
         from .priority_advisory import workable
+        from .backlog_rank import ordinary
         from .seeds_plate import unblocked_ids
         if (not isinstance(owner, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', owner)
                 or row.get('status') != 'open' or row.get('assignee')
                 or type(row.get('revision')) is not int or row['revision'] < 1
-                or not workable(row)):
+                or not workable(row) or not ordinary(row)):
             raise ValueError('ranked pickup requires an exact unowned open revision')
         from .plate_capacity import assignment_lock, ensure_room
         with assignment_lock(self, owner):
