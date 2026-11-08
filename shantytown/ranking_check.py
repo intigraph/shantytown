@@ -124,7 +124,7 @@ def report(root, ready, rows, reg, panes, *, counts_reader=None):
 
 
 def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=None,
-          label_item=None):
+          label_item=None, rank_store=None):
     """Reuse the existing administrator notifier and changed-digest ledger."""
     try:
         ready, rows = snapshot()
@@ -146,6 +146,11 @@ def sweep(root, reg, panes, *, snapshot, log=print, counts_reader=None, push=Non
                         break
         text, key, actionable = report(root, ready, rows, reg, panes, counts_reader=counts_reader)
         _log_digest(root, text, key, log)
+        try:
+            from . import backlog_rank_report
+            backlog_rank_report.sweep(root, ready, rank_store, log=log)
+        except Exception as exc:
+            log(f"graph rank observation UNKNOWN ({type(exc).__name__}); no admission")
         from .creel_advisory import Advice, Alerter
         return Alerter(root, reg, panes, push=push, filename="role_ranking.json",
                        label="administrator ranking").sweep(

@@ -66,11 +66,16 @@ admitted creates; a skipped or capped advisory is not proof of no duplicate.
 ### Graph-ranked pickup after an anchor ends
 
 Deployments may enable `SHANTY_BACKLOG_PICKUP=1` after registering the reviewed
-`queries/seeds-work-rank-v1.ttl` stored query. At a worker's completed-anchor
-stop, the hook compares its assigned queue with strictly higher-priority READY
-unowned work. The query orders up to 64 exact candidates by declared priority,
-due/overdue date, explicit directive and age. Current revisions, owners, dates
-and statuses must match the query witnesses before selection.
+`queries/seeds-work-rank-v2.ttl` stored query as `seeds_work_rank_v2` and verifying
+that the installed consumer selects that exact version. The original v1 query
+belongs to the earlier v1 consumer; v2 never falls back to it. Registration and
+enablement remain separate admitted deployment steps, and pickup defaults off.
+At a worker's completed-anchor stop, the hook compares its assigned queue with
+strictly higher-priority READY unowned work. The query orders up to 64 exact
+candidates by declared priority, due/overdue date, explicit directive, capped
+observed deferral lower bound and age. Missing historical deferral observations
+remain UNKNOWN, not zero. Current revisions, owners, dates and statuses must
+match the query witnesses before selection.
 
 The selected unowned item is claimed with a revision guard, the ordinary plate
 capacity lock/check, fresh dependency readiness and verified owner read-back.
