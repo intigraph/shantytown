@@ -31,10 +31,11 @@ def item(ident, **fields):
 def reader_for(candidates, calls, transform=lambda rows: rows):
     def reader(root, name, params, **bounds):
         calls.append((name, params, bounds))
-        assert name == "seeds_work_rank_v1" and params["owner"] == ""
+        assert name == "seeds_work_rank_v2" and params["owner"] == ""
         assert params["board"] == PROOF.graph and bounds == dict(limit=65, timeout=2)
         # Intentionally DIFFERENT from the local candidate order.
-        rows = [dict(r, revision=7, sampled_at=params["now"]) for r in reversed(candidates)]
+        rows = [dict(r, revision=7, sampled_at=params["now"],
+                     deferral_observation="UNKNOWN") for r in reversed(candidates)]
         return transform(rows)
     return reader
 
@@ -218,8 +219,8 @@ def test_shipped_query_matches_actual_lean_projection_on_native_rdf(tmp_path, mo
     from shantytown import seeds_plate
     q, schema = Namespace("https://quipu.dev/ontology/"), Namespace("https://schema.org/")
     seeds, ical = Namespace("https://seeds.local/ontology/"), Namespace("http://www.w3.org/2002/12/cal/ical#")
-    source = Graph().parse(Path(__file__).parents[1] / "queries/seeds-work-rank-v1.ttl")
-    template = str(source.value(URIRef("urn:quipu:query:seeds_work_rank_v1"), q.sparqlTemplate))
+    source = Graph().parse(Path(__file__).parents[1] / "queries/seeds-work-rank-v2.ttl")
+    template = str(source.value(URIRef("urn:quipu:query:seeds_work_rank_v2"), q.sparqlTemplate))
     data = Dataset()
     graph = data.graph(URIRef(PROOF.graph))
     rows = [item("old", created_at="2026-10-01T00:00:00Z"),
@@ -251,3 +252,45 @@ def test_shipped_query_matches_actual_lean_projection_on_native_rdf(tmp_path, mo
     logs = []
     report.sweep(tmp_path, actual_snapshot, lambda: PROOF, now=NOW, log=logs.append, reader=reader)
     assert "due P1, old P1" in logs[0]
+
+
+@pytest.mark.parametrize("metadata", [
+    {},
+    {"deferral_observation": "OBSERVED"},
+    {"deferral_observation": "UNKNOWN", "observed_deferral_writes": 1},
+    {"deferral_observation": "OBSERVED", "observed_deferral_writes": True,
+     "deferral_observed_since": "2026-11-01T00:00:00Z"},
+    {"deferral_observation": "OBSERVED", "observed_deferral_writes": 0,
+     "deferral_observed_since": "2026-11-01T00:00:00Z"},
+    {"deferral_observation": "OBSERVED", "observed_deferral_writes": 9223372036854775808,
+     "deferral_observed_since": "2026-11-01T00:00:00Z"},
+    {"deferral_observation": "OBSERVED", "observed_deferral_writes": 1,
+     "deferral_observed_since": "unreadable"},
+    {"deferral_observation": "OBSERVED", "observed_deferral_writes": 1,
+     "deferral_observed_since": "2027-01-01T00:00:00Z"},
+])
+def test_v2_deferral_metadata_refuses_incomplete_or_invalid_observation(metadata, tmp_path):
+    candidates, calls, logs = [item("a")], [], []
+    def replace_metadata(rows):
+        row = rows[0]
+        for key in ("deferral_observation", "observed_deferral_writes", "deferral_observed_since"):
+            row.pop(key, None)
+        row.update(metadata)
+        return rows
+    with pytest.raises(ValueError):
+        report.sweep(tmp_path, candidates, lambda: PROOF, now=NOW, log=logs.append,
+                     reader=reader_for(candidates, calls, replace_metadata))
+    assert len(calls) == 1 and logs == []
+
+
+def test_v2_observed_lower_bound_retains_the_same_read_only_report(tmp_path):
+    candidates, calls, logs = [item("a")], [], []
+    before = deepcopy(candidates)
+    def observed(rows):
+        rows[0].update(deferral_observation="OBSERVED", observed_deferral_writes=4,
+                       deferral_observed_since="2026-11-01T00:00:00Z")
+        return rows
+    report.sweep(tmp_path, candidates, lambda: PROOF, now=NOW, log=logs.append,
+                 reader=reader_for(candidates, calls, observed))
+    assert len(calls) == 1 and len(logs) == 1 and candidates == before
+    assert "no dispatch/admission or global-order claim" in logs[0]

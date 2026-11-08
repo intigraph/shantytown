@@ -44,8 +44,10 @@ def main():
         for label, module in (("BEFORE", before), ("AFTER", ranking_check)):
             calls, logs = [], []
             def reader(root, name, params, **bounds):
+                assert name == "seeds_work_rank_v2"
                 calls.append(name)
-                return [dict(row, revision=3, sampled_at=params["now"]) for row in reversed(ready)]
+                return [dict(row, revision=3, sampled_at=params["now"],
+                             deferral_observation="UNKNOWN") for row in reversed(ready)]
             with patch.object(backlog_rank_report, "deployment_default", return_value="1"), \
                  patch.object(backlog_rank_report, "resolve_server", return_value=proof.quipu_url), \
                  patch.object(backlog_rank_report, "ask", side_effect=reader):

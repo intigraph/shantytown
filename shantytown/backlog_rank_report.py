@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 
 from .ask_visibility import is_ask
-from .backlog_rank import MAX_CANDIDATES, QUERY, ordinary
+from .backlog_rank import MAX_CANDIDATES, QUERY, deferral_observation, ordinary
 from .crew_rules import ask
 from .deployment import deployment_default
 from .deferrals import parse_stamp
@@ -78,6 +78,7 @@ def observation(root, selected, total, proof, *, now, reader=None):
         if any(row.get(field) != by_id[ident].get(field) for field in (
                 "priority", "status", "assignee", "created_at", "due_at")):
             raise ValueError("rank observation snapshot changed")
+        deferral_observation(row, now=now)
         seen.add(ident)
         if len(names) < 5:
             names.append(f"{ident} P{row['priority']}")

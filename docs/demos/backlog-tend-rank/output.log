@@ -1,8 +1,8 @@
-Script started on 2026-11-08 06:13:48-05:00 [COMMAND="PYTHONPATH=. python3 docs/demos/backlog-tend-rank/demo.py" <not executed on terminal>]
+Script started on 2026-11-08 09:43:42-05:00 [COMMAND="stty -onlcr && env PYTHONPATH=. python3 docs/demos/backlog-tend-rank/demo.py" <not executed on terminal>]
 Isolated actual ranking sweeps; same READY input, fixture graph order.
 BASE d0e8899ae8bf8553637e9859baae6bb4bb918338 ranking source sha256 abbeed822077f8e069bebc6b1ed3c5087cc6646b3836d610e43f03770060fe07
 HEAD ranking source sha256 055ca765feaba2d2058256620f7e75aaa3eed9f9fe1011a4d8d641305c17d7d0
-HEAD observer source sha256 d3dd69b111f24ed4c9e8798fba8846aef4b8bc9b4d9161393795018146958b54
+HEAD observer source sha256 51a1ccec910e7441a58720cf20b466b198e09006344cd25087c58641c0954c5b
   advisory log: administrator ranking [fleet]: ranking check recorded in tend log; no unowned P0 in complete active snapshot
 BEFORE named-query reads 0 graph observations 0
   advisory log: administrator ranking [fleet]: ranking check recorded in tend log; no unowned P0 in complete active snapshot
@@ -11,4 +11,4 @@ graph rank observation: 2/2 eligible ordinary unowned READY (complete supplied R
 CONTROL input unchanged; zero tracker actions and external notifications.
 LIMIT fixture graph order; no live query, deployment, admission or global ranking proof.
 
-Script done on 2026-11-08 06:13:48-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-08 09:43:42-05:00 [COMMAND_EXIT_CODE="0"]

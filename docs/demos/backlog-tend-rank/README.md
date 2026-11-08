@@ -2,7 +2,7 @@
 
 With the same two unowned READY items and the pickup flag enabled in an isolated
 fixture, the actual base ranking sweep makes zero named-query reads. The candidate
-sweep consumes the graph-order fixture once and logs `due` before `old`, with its
+sweep consumes the exact v2 graph-order fixture once and logs `due` before `old`, with its
 scope and read-only boundary. Neither sweep sends a notification or changes input.
 
 The before source is `shantytown/ranking_check.py` at exact base
@@ -10,7 +10,7 @@ The before source is `shantytown/ranking_check.py` at exact base
 this demo. The recording prints the actual before/after ranking-source hashes.
 The module and query controls separately execute the shipped SPARQL and actual
 lean projection over the same native-schema RDF fixture, and test missing,
-changed, duplicate, malformed and stale proofs, wrong store identity, query and
+changed, duplicate, malformed and stale proofs, v2 deferral metadata, wrong store identity, query and
 ledger failure, five-minute attempt pacing and preserved P0 notification keys.
 
 From a checkout retaining that base object:
@@ -27,3 +27,9 @@ The demo uses a disposable local state directory and a fixture query response,
 not the native Quipu engine or a production endpoint. It establishes source
 behavior, not live parser/load acceptance, an installed consumer, dispatch
 authority, global board ordering or the parent item's seven-day outcomes.
+
+The refreshed observer selects the same v2 query as pickup and applies its shared
+deferral-evidence validator. Missing history is explicitly UNKNOWN, not zero;
+missing metadata, partial pairs, invalid counts/dates and future origins refuse
+the observation. The demo supplies an explicit UNKNOWN history fixture. These
+controls do not grant rank or dispatch authority.
