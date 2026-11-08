@@ -39,6 +39,31 @@ request and writes nothing.
 
 ## Assignment capacity
 
+### Graph-ranked pickup after an anchor ends
+
+Deployments may enable `SHANTY_BACKLOG_PICKUP=1` after registering the reviewed
+`queries/seeds-work-rank-v1.ttl` stored query. At a worker's completed-anchor
+stop, the hook compares its assigned queue with strictly higher-priority READY
+unowned work. The query orders up to 64 exact candidates by declared priority,
+due/overdue date, explicit directive and age. Current revisions, owners, dates
+and statuses must match the query witnesses before selection.
+
+The selected unowned item is claimed with a revision guard, the ordinary plate
+capacity lock/check, fresh dependency readiness and verified owner read-back.
+The old assigned queue remains intact. A conflict retains admitted old work;
+an indeterminate claim stops pickup for reconciliation. No active anchor is
+preempted, no other live owner's item is taken, and background or unreadable
+process custody prevents the switch. Governor, feed holds, host scope,
+session ceilings and context handoff still apply. Leads and keepers retain
+their existing selection behavior in this first slice.
+Deployment-operation labels and all nonempty native agent contexts are refused
+by this claim lane; their phase-CAS controller remains the only owner.
+
+This is an opt-in pickup slice, not the complete backlog policy. It does not
+promote dependency priorities, cull deferred work, manufacture due dates or
+switch an unfinished active anchor. Those decisions remain visible work.
+The default path and non-Seeds deployments retain their existing behavior.
+
 Ordinary assignments are capped at ten active work items per crew member. Open, hooked,
 in-progress and blocked tasks count; closed, tombstoned and deferred work,
 future-dated deferrals, messages and permanent records do not. `st crew`

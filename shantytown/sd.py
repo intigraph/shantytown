@@ -110,6 +110,35 @@ class SdTracker(BrTracker):
             raise RuntimeError('stranded release read-back UNKNOWN')
         return 'released'
 
+    def claim_ranked_pickup(self, row, owner):
+        """One revision-guarded unowned claim, after a fresh readiness proof."""
+        from .priority_advisory import workable
+        from .backlog_rank import ordinary
+        from .seeds_plate import unblocked_ids
+        if (not isinstance(owner, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', owner)
+                or row.get('status') != 'open' or row.get('assignee')
+                or type(row.get('revision')) is not int or row['revision'] < 1
+                or not workable(row) or not ordinary(row)):
+            raise ValueError('ranked pickup requires an exact unowned open revision')
+        from .plate_capacity import assignment_lock, ensure_room
+        with assignment_lock(self, owner):
+            ensure_room(self, owner, candidate=row)
+            if row['id'] not in unblocked_ids(self.prove_store(), [row], timeout=self.timeout):
+                return False
+            comment = 'Backlog rank pickup at completed-anchor stop; previous queue retained.'
+            result = self._bd_for(row['id'], 'update', row['id'], '--status=in_progress',
+                '--assignee=' + owner, f'--if-revision={row["revision"]}',
+                '--transition-comment=' + comment, '--json')
+            if result.returncode == 4:
+                return False
+            if result.returncode != 0:
+                raise RuntimeError('ranked pickup outcome UNKNOWN; reconcile before retry')
+            current = self.stranded_read(row['id'])
+            if (current.get('status') != 'in_progress' or current.get('assignee') != owner
+                    or current['revision'] <= row['revision']):
+                raise RuntimeError('ranked pickup read-back UNKNOWN')
+            return True
+
     def __init__(self, repo: "str | None" = None, timeout: int = 30, *,
                  store: "str | None" = None, quipu: "str | None" = None,
                  prefix: "str | None" = None):

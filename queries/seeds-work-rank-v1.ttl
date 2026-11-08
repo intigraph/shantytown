@@ -1,0 +1,103 @@
+@prefix q: <https://quipu.dev/ontology/> .
+@prefix dct: <http://purl.org/dc/terms/> .
+
+<urn:quipu:query:seeds_work_rank_v1> a q:StoredQuery ;
+  q:queryName "seeds_work_rank_v1" ;
+  q:queryForm "SELECT" ;
+  dct:description "Exact candidate pickup order: declared priority, due/overdue, explicit directive and age. Revision witnesses required; missing/changed/capped answers cannot authorize pickup. Read-only first slice of backlog ranking; no dependency promotion or authority inferred from labels." ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "board" ; q:parameterIndex 0 ; q:parameterKind "iri" ; q:required true ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "owner" ; q:parameterIndex 1 ; q:parameterKind "text" ; q:required true ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "now" ; q:parameterIndex 2 ; q:parameterKind "text" ; q:required true ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id00" ; q:parameterIndex 3 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id01" ; q:parameterIndex 4 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id02" ; q:parameterIndex 5 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id03" ; q:parameterIndex 6 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id04" ; q:parameterIndex 7 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id05" ; q:parameterIndex 8 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id06" ; q:parameterIndex 9 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id07" ; q:parameterIndex 10 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id08" ; q:parameterIndex 11 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id09" ; q:parameterIndex 12 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id10" ; q:parameterIndex 13 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id11" ; q:parameterIndex 14 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id12" ; q:parameterIndex 15 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id13" ; q:parameterIndex 16 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id14" ; q:parameterIndex 17 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id15" ; q:parameterIndex 18 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id16" ; q:parameterIndex 19 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id17" ; q:parameterIndex 20 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id18" ; q:parameterIndex 21 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id19" ; q:parameterIndex 22 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id20" ; q:parameterIndex 23 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id21" ; q:parameterIndex 24 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id22" ; q:parameterIndex 25 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id23" ; q:parameterIndex 26 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id24" ; q:parameterIndex 27 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id25" ; q:parameterIndex 28 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id26" ; q:parameterIndex 29 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id27" ; q:parameterIndex 30 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id28" ; q:parameterIndex 31 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id29" ; q:parameterIndex 32 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id30" ; q:parameterIndex 33 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id31" ; q:parameterIndex 34 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id32" ; q:parameterIndex 35 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id33" ; q:parameterIndex 36 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id34" ; q:parameterIndex 37 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id35" ; q:parameterIndex 38 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id36" ; q:parameterIndex 39 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id37" ; q:parameterIndex 40 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id38" ; q:parameterIndex 41 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id39" ; q:parameterIndex 42 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id40" ; q:parameterIndex 43 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id41" ; q:parameterIndex 44 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id42" ; q:parameterIndex 45 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id43" ; q:parameterIndex 46 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id44" ; q:parameterIndex 47 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id45" ; q:parameterIndex 48 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id46" ; q:parameterIndex 49 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id47" ; q:parameterIndex 50 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id48" ; q:parameterIndex 51 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id49" ; q:parameterIndex 52 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id50" ; q:parameterIndex 53 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id51" ; q:parameterIndex 54 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id52" ; q:parameterIndex 55 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id53" ; q:parameterIndex 56 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id54" ; q:parameterIndex 57 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id55" ; q:parameterIndex 58 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id56" ; q:parameterIndex 59 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id57" ; q:parameterIndex 60 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id58" ; q:parameterIndex 61 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id59" ; q:parameterIndex 62 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id60" ; q:parameterIndex 63 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id61" ; q:parameterIndex 64 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id62" ; q:parameterIndex 65 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:parameter [ a q:QueryParameter ; q:parameterName "id63" ; q:parameterIndex 66 ; q:parameterKind "text" ; q:required false ; q:defaultValue "" ] ;
+  q:sparqlTemplate """PREFIX schema: <https://schema.org/>
+PREFIX s: <https://seeds.local/ontology/>
+PREFIX ical: <http://www.w3.org/2002/12/cal/ical#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?id ?revision ?priority ?status ?assignee ?due_at ?created_at ?sampled_at WHERE {
+  VALUES ?id { '{id00}' '{id01}' '{id02}' '{id03}' '{id04}' '{id05}' '{id06}' '{id07}' '{id08}' '{id09}' '{id10}' '{id11}' '{id12}' '{id13}' '{id14}' '{id15}' '{id16}' '{id17}' '{id18}' '{id19}' '{id20}' '{id21}' '{id22}' '{id23}' '{id24}' '{id25}' '{id26}' '{id27}' '{id28}' '{id29}' '{id30}' '{id31}' '{id32}' '{id33}' '{id34}' '{id35}' '{id36}' '{id37}' '{id38}' '{id39}' '{id40}' '{id41}' '{id42}' '{id43}' '{id44}' '{id45}' '{id46}' '{id47}' '{id48}' '{id49}' '{id50}' '{id51}' '{id52}' '{id53}' '{id54}' '{id55}' '{id56}' '{id57}' '{id58}' '{id59}' '{id60}' '{id61}' '{id62}' '{id63}' }
+  FILTER (?id != '')
+  GRAPH <{board}> {
+    ?item schema:identifier ?id ; schema:version ?revision ; s:priority ?priority ;
+          s:status ?status ; schema:dateCreated ?created_term .
+    BIND(STR(?created_term) AS ?created_at)
+    OPTIONAL { ?item schema:agent ?assignee_term .
+      BIND(IF(isIRI(?assignee_term) && STR(?assignee_term) = CONCAT('https://seeds.local/principal/', '{owner}'),
+           '{owner}', STR(?assignee_term)) AS ?assignee)
+    }
+    OPTIONAL { ?item ical:due ?due_term . BIND(STR(?due_term) AS ?due_at) }
+    BIND(EXISTS { ?item schema:keywords 'stiwi-directive' } AS ?directive)
+  }
+  FILTER (!BOUND(?assignee) || STR(?assignee) = '' || STR(?assignee) = '{owner}' || STRENDS(STR(?assignee), CONCAT('/', '{owner}')))
+  BIND('{now}' AS ?sampled_at)
+  BIND(xsd:dateTime(?created_at) AS ?created_time)
+  BIND(IF(DATATYPE(?due_term) = xsd:date || STRLEN(?due_at) = 10,
+       xsd:dateTime(CONCAT(SUBSTR(?due_at, 1, 10), 'T00:00:00', IF(STRLEN(?due_at) = 10, 'Z', SUBSTR(?due_at, 11)))),
+       xsd:dateTime(?due_at)) AS ?due_time)
+  FILTER(BOUND(?created_time) && (!BOUND(?due_term) || BOUND(?due_time)))
+  BIND(IF(BOUND(?due_term), IF(?due_time <= xsd:dateTime('{now}'), 0, 1), 2) AS ?due_band)
+}
+ORDER BY ?priority ?due_band ?due_time DESC(?directive) ?created_time ?id
+LIMIT 65""" .

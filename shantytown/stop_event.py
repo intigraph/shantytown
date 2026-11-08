@@ -813,11 +813,14 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             # Filter before claiming, spending a session item, or requesting a
             # context cycle. In-flight anchors above retain continuation semantics.
             from .feed_check import admitted_haul, haul_governor_verdict
-            mine = admitted_haul(
-                mine, card, haul_governor_verdict(root, card),
-                lambda msg: print(msg, file=sys.stderr), root=root)
-            if not mine:
-                return 0
+            rank_pickup = (card.role == "worker"
+                           and deployment_default(root, "SHANTY_BACKLOG_PICKUP") == "1")
+            if not rank_pickup:
+                mine = admitted_haul(
+                    mine, card, haul_governor_verdict(root, card),
+                    lambda msg: print(msg, file=sys.stderr), root=root)
+                if not mine:
+                    return 0
 
         # THE SESSION CEILING, ASKED BEFORE THE CONTEXT HANDOFF (aegis-xxae9).
         # Order matters and this is the deliberate one: the handoff is a RECYCLE
@@ -847,6 +850,35 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
             return 0
 
         nxt = mine[0]
+        claimed_by_rank = False
+        # aegis-n1z9: the first automatic slice runs only AFTER the old anchor
+        # ended and all session/context gates passed. It never preempts an
+        # active anchor, keeper scope, or a background process. Deployment
+        # enables it only after publishing the versioned stored query.
+        if (card.role == "worker"
+                and deployment_default(root, "SHANTY_BACKLOG_PICKUP") == "1"):
+            if _my_shells(reg, panes, me) == 0:
+                from .backlog_rank import next_after_anchor
+                from .feed_check import _br_tracker, startable_here
+                from .sd import SdTracker
+                tracker = _br_tracker(root, reg)
+                if not isinstance(tracker, SdTracker):
+                    raise RuntimeError("ranked pickup requires a proven Seeds adapter")
+                verdict = haul_governor_verdict(root, card)
+                def admit_ranked(rows):
+                    return admitted_haul(startable_here(root, reg, rows), card, verdict,
+                        lambda msg: print(msg, file=sys.stderr), root=root)
+                choice, claimed_by_rank = next_after_anchor(
+                    root, all_ready, mine, owner=me, board=tracker.prove_store().graph,
+                    read_current=tracker.stranded_read, claim=tracker.claim_ranked_pickup,
+                    admit=admit_ranked)
+                if choice is None:
+                    return 0
+                nxt = choice
+            else:
+                print("haul rank: background custody UNKNOWN/active; existing queue retained",
+                      file=sys.stderr)
+                return 0
         from . import priority_advisory as pa
         try:
             advisory = pa.advice(all_ready, nxt, pa.down_agents(reg, panes))
@@ -864,10 +896,11 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
         # the next stop sees an active anchor. Best-effort: a failed claim
         # still feeds — the agent claims by hand per the instruction. The
         # message is feed_check's — ONE voice for both advance triggers.
-        try:
-            _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
-        except Exception:
-            pass
+        if not claimed_by_rank:
+            try:
+                _bd_json(["update", nid, "--status", "in_progress"], cwd, root=root, reg=reg)
+            except Exception:
+                pass
         from .tracker_examples import for_deployment
         examples = for_deployment(root, reg)
         print(json.dumps({"decision": "block",

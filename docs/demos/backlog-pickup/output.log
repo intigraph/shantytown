@@ -1,0 +1,9 @@
+Script started on 2026-11-08 02:19:17-05:00 [COMMAND="PYTHONPATH=. python3 docs/demos/backlog-pickup/demo.py" <not executed on terminal>]
+Target: local library; graph order, native claim and admission are fixtures.
+Input: completed anchor; owned P2 queue plus unowned ready P1.
+Before (existing own-queue selection): owned-p2
+After (graph-ranked pickup): ready-p1
+Claim: ready-p1, observed revision 5; original owned-p2 retained.
+Negative control: refused query -> zero claims; no fallback authority.
+
+Script done on 2026-11-08 02:19:17-05:00 [COMMAND_EXIT_CODE="0"]
