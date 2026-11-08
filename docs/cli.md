@@ -840,6 +840,13 @@ confirmed, together with the verified active assignment. A dry run, refusal, or
 unverified delivery leaves the deferral intact. Dependency and governor gates
 still apply; activation does not remove the item's notes or review conditions.
 
+The normal audited dispatch retains a pending attempt before sending. A bare
+item ID left in scrollback cannot confirm a new attempt: confirmation uses the
+unique serve/worker witness or the adapter's evidence for the exact body.
+An unverified send leaves assignment unchanged and retains pending evidence.
+A delivery or tracker error does not authorize a manual claim or another send;
+reconcile the retained attempt with actual delivery and tracker state first.
+
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before
 any write*. Underneath, dispatch is `tmux send-keys`.

@@ -142,8 +142,8 @@ class DispatchedButUntracked(Exception):
             # the length of the least informative failure it can carry.
             f"({type(cause).__name__}: {str(cause)[:400]}). The agent has the work "
             f"and the tracker does not know it. Do NOT re-run `st go` — that would "
-            f"deliver it twice. Record it by hand instead, then confirm with "
-            f"`st anchor {agent}`.")
+            f"deliver it twice. Reconcile the retained dispatch evidence; "
+            f"this error does not authorize a manual claim.")
 
 
 class TrackerWriteLost(Exception):
@@ -796,16 +796,26 @@ class Dispatcher:
             raise TriageRefused(decision)
         # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
         # write moved AFTER a confirmed send so a dropped send never marks work
-        # in_progress. verify reads the pane back for the item id — the thing we
+        # in_progress. verify reads the pane back for this attempt witness — the thing we
         # just sent must have positive submission or pane evidence. If neither
-        # is available, raise SendUnverified (exit 2) and write NOTHING.
+        # is available, raise SendUnverified (exit 2), retain pending evidence,
+        # and never write an assignment.
+        # Persist intent before the process can disappear inside send(). The
+        # existing FeedAudit owns correlation; this is not another inbox.
+        if self._audit_record is not None:
+            self._audit_record(f"dispatch-{p.serve_id}", leg="delivery",
+                               worker=agent_name, item=item_id, attempted=True,
+                               serve_id=p.serve_id, state="dispatch_pending",
+                               reason="submission and assignment not yet confirmed")
         observed = self.panes.send(p.pane, p.text)    # 1 send
         # Codex submission already observes idle -> working with an empty,
         # unqueued composer. Do not discard that stronger exact-body evidence
         # merely because its echoed item ID has left the scrollback window.
         submitted = (isinstance(observed, SubmissionObserved)
                      and observed.matches(p.pane, p.text))
-        if not submitted and not self.verify(p.pane, item_id):
+        witness = (f"[st serve:{p.serve_id} worker:{agent_name}]"
+                   if p.serve_id else p.text)
+        if not submitted and not self.verify(p.pane, witness):
             raise SendUnverified(item_id, p.pane)
         # THE OTHER HALF OF THE WINDOW (GitHub #20). send-then-update is the right
         # order — a dropped send must never mark work in_progress — but it leaves
@@ -1139,7 +1149,7 @@ class Dispatcher:
         return result
 
     def verify(self, pane: str, item_id: str) -> bool:
-        """Did the send land? Read the pane back and look for the item id.
+        """Read back the exact attempt witness supplied by the caller.
 
         design.md: "verify reads the pane back. Send-and-assume is how you
         believe work was assigned when it wasn't." A false negative (the agent
