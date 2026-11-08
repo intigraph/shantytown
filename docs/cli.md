@@ -585,6 +585,28 @@ must be accepted before the binding can be used. The initial protected-recycle
 binding is **disabled**: this release does not change an existing review date or
 start an evidence collector.
 
+Producer-owned waits also support `recurring-quiet:<class-hash>` and
+`evidence-count:<registered-producer>>=N`, with a backstop at least 24 hours
+away. A met event can wake before that reminder; an expired reminder cannot
+substitute for the event. Neither condition closes work or changes policy.
+
+`recurring-quiet:` reads the existing recurring-alarm processor's private
+state, matching its 24-character class hash and linked item. A fresh
+authoritative census must prove 14 continuous quiet days, or a firing newer
+than the writer's recorded deferral boundary. A stale/missing census, an
+unreadable state file or an ambiguous deferral boundary is UNKNOWN. The
+processor still owns quiet-interval resets and recurring closure. This reader
+does not poll alerts, start a collector or rewrite the processor's state.
+
+`evidence-count:` accepts only a source-reviewed entry in
+`shantytown.resume_producers.COUNTERS`. The reader must deliver a complete,
+fresh observation for the registered item and corpus identity, with distinct
+candidate IDs and explicit required-case coverage. Duplicate IDs, mixed
+identity, missing data and read failures are UNKNOWN; insufficient count or
+required coverage is not met. No production counter is registered initially:
+the policy49/50 producer is a separate reviewed change. Item text cannot select
+a query, command, path or URL, and retained stderr is not a counter source.
+
 Version conditions need no binding, because they test a public fact rather than
 one item's producer:
 
