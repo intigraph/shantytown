@@ -107,17 +107,37 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     return bool(rows) and " ".join("\n".join(rows).split()) == " ".join(text.split())
 
 
-def _codex_queued(screen: str, text: str) -> bool:
-    """Measured queue chrome, paired with this message's preview."""
+def _codex_queue(screen: str) -> str:
+    """Visible queue chrome only; a preview never authorizes a keystroke.
+
+    Nov8 Codex renamed the queue and can keep it visible after a turn ends.
+    Bound it to the current composer so quoted queue labels in scrollback do
+    not count. Clipped previews still prove a queue exists, not body identity.
+    """
     from .triage import strip_attrs
-    plain = strip_attrs(screen)
-    marker = "Messages to be submitted after next tool call"
-    if marker not in plain or not text.strip():
+    lines = strip_attrs(screen).rstrip().splitlines()
+    prompts = [i for i, row in enumerate(lines) if row.lstrip().startswith('›')]
+    if not prompts:
+        return ''
+    end = prompts[-1]
+    headings = ('Messages to be submitted after next tool call',
+                'Queued follow-up inputs', '• Queued follow-up inputs')
+    for start in range(end - 1, max(-1, end - 81), -1):
+        if lines[start].strip() not in headings:
+            continue
+        queue = '\n'.join(lines[start + 1:end])
+        if '↳' in queue:
+            return queue
+    return ''
+
+
+def _codex_queued(screen: str, text: str) -> bool:
+    """Queue preview matching is pending evidence, never submission proof."""
+    if not text.strip():
         return False
-    queue = plain.split(marker)[-1].split("›")[0]
-    preview = " ".join(queue.split()).split("↳", 1)
-    prefix = " ".join(text.split())[:64]
-    return len(preview) == 2 and preview[1].lstrip().startswith(prefix)
+    prefix = ' '.join(text.split())[:64]
+    return any(' '.join(preview.split()).startswith(prefix)
+               for preview in _codex_queue(screen).split('↳')[1:])
 
 
 def _journal_send(pane: str, text: str) -> None:

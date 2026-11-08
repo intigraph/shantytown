@@ -280,3 +280,26 @@ def test_initial_submission_rechecks_positive_codex_identity(monkeypatch, foregr
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' not in c] == []
+
+
+@pytest.mark.parametrize('heading', ['Messages to be submitted after next tool call',
+                                    '• Queued follow-up inputs'])
+def test_queue_reader_matches_later_previews(heading):
+    screen = heading + '\n  ↳ Other message\n  ↳ ' + BODY + '\n' + READY
+    assert tmux._codex_queued(screen, BODY)
+    assert not tmux._codex_queued(screen, 'Unrelated receipt')
+
+
+def test_quoted_queue_in_transcript_is_not_current_queue():
+    transcript = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    assert not tmux._codex_queue(transcript + '\nAssistant reply\n' * 45 + READY)
+    assert not tmux._codex_queue(READY + '\nDiscuss Queued follow-up inputs ↳ ' + BODY)
+
+
+def test_modern_busy_queue_never_claims_delivery(monkeypatch):
+    modern = QUEUED.replace('Messages to be submitted after next tool call',
+                            '• Queued follow-up inputs')
+    panes, calls = transport(monkeypatch, [BUSY, modern])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']

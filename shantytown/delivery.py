@@ -300,7 +300,7 @@ def _end_custody(custody, records, panes, pane, screen, *, phase,
     because joined bodies (aegis-fu2) can hide there.
     """
     from . import triage
-    from .tmux import _codex_queued
+    from .tmux import _codex_queue
     try:
         current = panes.session_created(pane)
     except Exception:
@@ -316,7 +316,7 @@ def _end_custody(custody, records, panes, pane, screen, *, phase,
                       in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER))
     for record in records:
         if (record['state'] == 'queued' and record.get('session') == current
-                and idle_and_empty and not _codex_queued(screen, record['text'])):
+                and idle_and_empty and not _codex_queue(screen)):
             record['state'] = 'dequeued'
             custody.save(record)
 
@@ -513,15 +513,18 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         else:
             watch.pop('idle_since', None)
         custody.save(watch)
+        from .tmux import _codex_queue
+        idle_queue = idle and bool(_codex_queue(screen))
         absolute = now - watch['since'] >= MAX_PENDING_SECONDS
         idle_expired = idle and now - watch['idle_since'] >= STALL_SECONDS
-        if watch.get('alerted') or not (absolute or idle_expired) or reg is None:
+        if watch.get('alerted') or not (idle_queue or absolute or idle_expired) or reg is None:
             return
         catalog = deployment_catalog(root)
         recipient = route_stop(reg, card.name, catalog=catalog).to
         observation = ('cannot-tell' if state in (triage.INPUT_ABSENT, triage.INPUT_UNKNOWN)
                        else 'busy' if busy else 'idle' if idle else 'occupied')
-        reason = ('absolute pending ceiling' if absolute else 'idle grace expired')
+        reason = ('idle Codex queue remains unsubmitted' if idle_queue else
+                  'absolute pending ceiling' if absolute else 'idle grace expired')
         detail = (f'{card.name}: undelivered inbox/custody: {reason}; '
                   f'observed unresolved for {int(now - watch["since"])}s; box={state}; '
                   f'busy={busy}; observation={observation}; retained={len(pending)}; '

@@ -1891,7 +1891,16 @@ Legacy inbox rows without custody may trigger an alert but never authorize
 editing somebody's composer.
 
 Accepted Codex queued input remains pending while a turn is busy; it is not a
-failed submission, and pointers stay retained. The backlog timer starts after
+failed submission, and pointers stay retained. Both the older “Messages to be
+submitted after next tool call” and newer “Queued follow-up inputs” chrome are
+recognized. If tend observes a queue still visible with an idle composer, it
+immediately persists the existing `delivery-stalled` event to the lead/admin
+and attempts one coordinator wake. A clipped preview cannot authorize submitting
+an entire queue, so no Enter is sent and its unread pointer stays open. Any
+visible queue prevents falsely retiring custody as dequeued. The same event
+latches for the continuing backlog, avoiding repeated wakes.
+
+For other unresolved input, the backlog timer starts after
 tend observes idle input and resets on a busy or unreadable/no-box observation.
 After 300 seconds unresolved while observed idle, the next tend observation persists
 one `delivery-stalled` event to the configured lead/admin and attempts one
