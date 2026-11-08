@@ -26,6 +26,35 @@ from .protocols import SubmissionObserved
 FIELDS = ('item', 'revision', 'worker', 'pane', 'session', 'task_sha256', 'scope_sha256')
 
 
+def assignment_comment(receipt):
+    """The native transition carries the whole binding, not just an owner."""
+    scope = ReceiptStore._scope(receipt)
+    ident = receipt.get('id')
+    if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{32}', ident):
+        raise ReceiptConflict('invalid dispatch receipt ID')
+    return 'Dispatch receipt: ' + json.dumps(dict(scope, receipt=ident),
+                                             sort_keys=True, separators=(',', ':'))
+
+
+def assignment_proof(receipt, current):
+    """Only an exact native transition comment can witness this assignment."""
+    comment = assignment_comment(receipt)
+    if (not isinstance(current, dict) or current.get('id') != receipt['item']
+            or current.get('assignee') != receipt['worker']
+            or current.get('status') != 'in_progress'
+            or current.get('defer_until') not in (None, '')
+            or type(current.get('revision')) is not int
+            # This coordinator supports a single-revision CAS transition only.
+            # An older receipt comment surviving a later edit is historical
+            # evidence, not permission to adopt that later revision as scope.
+            or current['revision'] != receipt['revision'] + 1
+            or not isinstance(current.get('comments'), list)
+            or not any(isinstance(c, dict) and c.get('text') == comment
+                       for c in current['comments'])):
+        raise ReceiptConflict('native dispatch assignment read-back UNKNOWN')
+    return dict(receipt=receipt['id'], revision=current['revision'])
+
+
 class ReceiptConflict(ValueError):
     """No submission, assignment or replay is authorized by this receipt."""
 
@@ -182,7 +211,16 @@ class ReceiptStore:
             raise ReceiptConflict('submission unconfirmed; no assignment authorized')
         row['state'] = 'assigning'
         self._save(row)  # An interrupt after this point cannot repeat the claim.
-        proof = claim(copy.deepcopy(row))
+        try:
+            proof = claim(copy.deepcopy(row))
+        except Exception as error:
+            # Keep native operation IDs across a process exit. Do not replace
+            # UNKNOWN with a retry, or serialize arbitrary exception text.
+            row['assignment_error'] = dict(kind=type(error).__name__)
+            if isinstance(getattr(error, 'error', None), dict):
+                row['assignment_error']['native'] = copy.deepcopy(error.error)
+            self._save(row)
+            raise
         return self.recover_assignment(ident, proof)
 
     @serialized_receipt
