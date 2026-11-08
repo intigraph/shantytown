@@ -37,6 +37,15 @@ an expiry and reason; hiding it on a crew read or using the stop command would
 change what an operator's existing command means. `--dry-run` validates the
 request and writes nothing.
 
+## Launch verification
+
+A live process with verified stop hooks is only the first launch check. Startup
+context must also be delivered; Codex requires the adapter's observation that
+this exact startup body began a turn. A stranded, queued or unobserved startup
+reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
+inbox pointers open. Inspect the pane before retrying; do not submit unrelated
+composer input.
+
 ## Assignment capacity
 
 ### Graph-ranked pickup after an anchor ends
@@ -3567,7 +3576,9 @@ comparison per agent. One shared list shows at most five unowned witnesses in
 priority/rank order, followed by `+N more`. It covers unowned READY work plus
 unowned P0 items in the complete active/deferred metadata projection; P0 items
 outside READY are explicitly labelled. Blocked work is not
-promoted to READY, and owned work is not relabeled unowned. No assignment,
+promoted to READY, and owned work is not relabeled unowned. Priority comparisons
+exclude ASK-class decisions, including title-only `ASK Stiwi` items, and items
+with `blocked:*` or `parked:*` labels. No assignment,
 priority or rank changes automatically.
 
 The digest includes P0 work created/closed counts for seven UTC calendar dates,

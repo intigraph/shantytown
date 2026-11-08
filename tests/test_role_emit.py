@@ -268,6 +268,8 @@ def test_role_set_then_new_no_longer_refuses_for_missing_settings(tmp_path, monk
     verify. We only assert it got PAST the settings refusal — the pane shows the
     ready banner so verify returns 0."""
     root = _world(tmp_path)
+    from shantytown.inbox import FilesInbox
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: FilesInbox(root / "inbox"))
     assert main(["--root", str(root), "roles", "set", "ellie", "worker"]) == OK
     # st agent new: a live pane with the ready banner -> verify 0. If settings were still
     # missing, compose would REFUSE (exit 1) before ever creating a session.
@@ -278,7 +280,7 @@ def test_role_set_then_new_no_longer_refuses_for_missing_settings(tmp_path, monk
     rc = main(["--root", str(root), "new", "ellie"])
     assert rc == OK, "role set emitted settings but st agent new still refused"
     assert panes.sent, "st agent new should have launched now that settings exist"
-    _, launch = panes.sent[-1]
+    launch = next(text for _, text in panes.sent if "--settings" in text)
     assert "--settings" in launch and "worker.settings.json" in launch
 
 

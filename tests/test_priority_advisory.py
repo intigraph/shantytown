@@ -18,6 +18,7 @@ LOW = {'id': 'low', 'title': 'low work', 'priority': 2, 'status': 'open'}
     {'defer_until': '2999-01-01T00:00:00Z'}, {'blocked_by': ['other']},
     {'assignee': 'live'}, {'assignee': 'unknown'}, {'priority': 2},
     {'priority': None}, {'priority': True}, {'title': 'inbox: a message'},
+    {'title': 'ASK Stiwi: choose an account'},
 ])
 def test_handled_or_unavailable_work_never_warns(change):
     assert pa.advice([HIGH | change], LOW, {'down'}) == ''
