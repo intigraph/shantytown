@@ -284,6 +284,16 @@ class Blocked(Exception):
         )
 
 
+class DeploymentOperation(Blocked):
+    """Only the operation runner may advance a deployment record."""
+
+    def __init__(self, item_id: str, requested: str):
+        self.item_id, self.requested = item_id, requested
+        Exception.__init__(self,
+            f"{item_id} is a deployment operation; refusing ordinary dispatch to {requested}. "
+            "Use the operation owner's normal phase-CAS path.")
+
+
 class HumanDecision(Blocked):
     """An ASK can stay open without becoming executable crew work."""
 
@@ -586,6 +596,9 @@ class Dispatcher:
         # payload, so a refusal does no work at all.
         if item.status == "blocked":
             raise Blocked(item_id, agent_name)
+        from .inbox import is_deploy_operation
+        if is_deploy_operation(item):
+            raise DeploymentOperation(item_id, agent_name)
         from .ask_visibility import is_ask
         if is_ask(item):
             raise HumanDecision(item_id, agent_name)

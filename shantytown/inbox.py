@@ -119,6 +119,32 @@ def is_decision(labels) -> bool:
                for lbl in (labels or []))
 
 
+class OperationClaimRefused(RuntimeError):
+    """An exact operation/metadata refusal must also stop pane delivery."""
+
+
+def is_deploy_operation(item) -> bool:
+    """Exclude phase-CAS operation records from ordinary dispatch and claims.
+
+    Labels survive lean projections; agent_context covers native admission
+    records without that label. Unreadable context cannot prove ordinary work.
+    This is a read-only discriminator, never a change to operation state.
+    """
+    get = item.get if isinstance(item, dict) else lambda key, default=None: getattr(item, key, default)
+    if any(str(label).strip().lower() == "deploy-operation"
+           for label in (get("labels") or ())):
+        return True
+    context = get("agent_context")
+    if context is None or context == "":
+        return False
+    if isinstance(context, str):
+        try:
+            context = json.loads(context)
+        except (ValueError, RecursionError):
+            return True
+    return not isinstance(context, dict) or "deploy_admission" in context
+
+
 def is_anchor(labels) -> bool:
     """A permanent referent record has no completion state; it is not work.
 

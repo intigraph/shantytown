@@ -299,6 +299,8 @@ class WorkItem:
     labels: tuple = ()
     # Exact tracker CAS token; absence is UNKNOWN, never zero or a fresh read.
     revision: int | None = None
+    # Same-read discriminator for native operation admission; never mutated here.
+    agent_context: str | None = None
 
 
 @runtime_checkable

@@ -1,0 +1,8 @@
+Script started on 2026-11-08 01:38:59-05:00 [COMMAND="python3 docs/pr-demos/operation-haul/reproduce.py" <not executed on terminal>]
+Synthetic records; no tracker, pane, deployment or network mutation.
+Base: 6bb4694988539c60fbc1a4060a9ecb75fe9c8bcf
+before {"queue": {"worker": ["op-1", "work-1"]}, "resume_ids": ["op-1", "work-1"]}
+after {"queue": {"worker": ["work-1"]}, "resume_ids": ["work-1"]}
+Ordinary work retained; operation state unchanged.
+
+Script done on 2026-11-08 01:38:59-05:00 [COMMAND_EXIT_CODE="0"]
