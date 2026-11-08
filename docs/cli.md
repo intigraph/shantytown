@@ -37,6 +37,15 @@ an expiry and reason; hiding it on a crew read or using the stop command would
 change what an operator's existing command means. `--dry-run` validates the
 request and writes nothing.
 
+## Launch verification
+
+A live process with verified stop hooks is only the first launch check. Startup
+context must also be delivered; Codex requires the adapter's observation that
+this exact startup body began a turn. A stranded, queued or unobserved startup
+reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
+inbox pointers open. Inspect the pane before retrying; do not submit unrelated
+composer input.
+
 ## Assignment capacity
 
 ### Graph-ranked pickup after an anchor ends
