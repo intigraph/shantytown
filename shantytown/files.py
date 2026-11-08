@@ -372,7 +372,8 @@ class FilesTracker:
         d = {"title": title, "status": "open"}
         d.update({k: v for k, v in fields.items() if v is not None})
         self._path(item_id).write_text(json.dumps(d, indent=2, sort_keys=True))
-        return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"))
+        return WorkItem(id=item_id, title=title, status="open", assignee=d.get("assignee"),
+                        due_at=d.get("due_at"))
 
 
 # Plate precedence is now ONE definition in protocols, imported by every backend

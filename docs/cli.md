@@ -39,6 +39,21 @@ request and writes nothing.
 
 ## Assignment capacity
 
+### Explicit intake deadlines
+
+`st task --due 2026-12-01 "review the draft"` creates the item with a due date
+in the same tracker transaction. Date-only values mean midnight UTC; an ISO
+instant must include its timezone and is normalized to UTC. Relative dates and
+timezone-free instants refuse rather than depend on the host's clock settings.
+`--dry-run` validates and prints the deadline without creating an item.
+
+Deployments may set `SHANTY_TASK_DUE_REQUIRED=1` to refuse missing deadlines
+before tracker reads, duplicate advice, capacity checks or writes. The default
+remains optional for other deployments; the command never invents a deadline
+from priority or owner. This affects `st task`, not direct SDK creation or
+internal message records. The existing agent duplicate advisory still runs on
+admitted creates; a skipped or capped advisory is not proof of no duplicate.
+
 Ordinary assignments are capped at ten active work items per crew member. Open, hooked,
 in-progress and blocked tasks count; closed, tombstoned and deferred work,
 future-dated deferrals, messages and permanent records do not. `st crew`
