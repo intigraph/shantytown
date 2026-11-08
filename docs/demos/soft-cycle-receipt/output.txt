@@ -1,0 +1,5 @@
+Script started on 2026-11-08 14:03:21-05:00 [COMMAND="python3 docs/demos/soft-cycle-receipt/probe.py" <not executed on terminal>]
+{"after": {"clear_sends": 1, "initial_verified": false, "late_session_verified": true, "request_retained": true}, "base": "908bf707f92a8da00ca2affb85788f8f73274179", "before": {"clear_sends": 1, "initial_verified": true, "late_session_verified": null, "request_retained": false}, "target": "isolated actual verifier, no live pane"}
+PASS: Stop continuation withheld; request retained; no duplicate clear; actual new session accepted
+
+Script done on 2026-11-08 14:03:21-05:00 [COMMAND_EXIT_CODE="0"]

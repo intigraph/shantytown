@@ -3720,3 +3720,14 @@ hosts retain their existing behavior. This adds no second schedule or resend.
 A completed pass is not a delivery receipt. Check the actual notifier outcome,
 recipient and delivery ID, measured body bytes, and phase latency before claiming
 scheduled-delivery acceptance.
+
+## Soft-cycle completion evidence
+
+Soft-cycle completion requires a fresh hook-reported session ID and transcript
+path, plus settled ready UI and the existing permission check. A missing token
+footer does not prove a reset. If the clear times out, the command reports
+failure and retains the request, handoff and in-flight intent. Later passes
+observe that attempt without sending another clear or restarting the continuing
+turn. Missing or stale session evidence withholds a new soft clear. A delayed
+clear can still execute when the turn ends; inspect the retained evidence before
+any operator recovery. No active cycle is exercised by the fixture tests.
