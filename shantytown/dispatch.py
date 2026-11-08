@@ -995,6 +995,12 @@ class Dispatcher:
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
             raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
+        if active.kind in ('recurring-quiet', 'evidence-count'):
+            from .resume_producers import validate as validate_producer
+            try:
+                validate_producer(active.kind, active.arg)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
         if active.kind == "event":
             from .resume_events import binding_for
             try:

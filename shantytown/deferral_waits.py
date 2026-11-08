@@ -9,7 +9,8 @@ def validate(reason, dependency_reason, condition, deadline, now, *, window=Fals
     from .deferrals import _CONDITION
     # A tool named "ci" or the installed: marker is an identifier, not prose
     # declaring a polling wait. Preserve marker-only mechanical deferrals.
-    if condition.kind in ('pr-merged', 'ci-terminal', 'ruling', 'activation'):
+    if condition.kind in ('pr-merged', 'ci-terminal', 'ruling', 'activation',
+                          'recurring-quiet', 'evidence-count'):
         if deadline is None or deadline - now < timedelta(hours=24):
             raise ValueError('registered event waits require a backstop of at least 24 hours')
         return
