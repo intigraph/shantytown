@@ -18,7 +18,7 @@ import pytest
 
 import shantytown.cli as cli
 from shantytown.cli import main, OK, REFUSED
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 
 
 def _git(cwd, *args):

@@ -46,6 +46,39 @@ reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
 composer input.
 
+## Dispatch receipts
+
+Seeds and file-backed `st go` persist a pending receipt before sending. The
+receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
+store and exact body. The payload names that receipt and asks the recipient to
+check its acknowledgement before executing. Planning or typing alone grants
+no assignment: exact-body submission must be observed, followed by one
+revision-guarded tracker transition carrying the same receipt and body digest.
+
+Read its current state without sending, claiming, changing the ledger, or
+forcing input:
+
+```sh
+st go project-item ada --reconcile --receipt RECEIPT_ID
+```
+
+`execution_authorized` requires current scope and native assignment proof.
+Missing submission, assignment, or local persistence is named separately; an
+unreadable native proof remains UNKNOWN. A native commit whose local receipt
+write was interrupted can still be proven by read-back. Repeating the original
+`go` then repairs local persistence without a second send or claim. A pending
+unverified send refuses replay until its retained transport evidence is
+reconciled. An exact delivered record in existing transport custody can repair
+the local observation on normal replay, without another send; queued or merely
+acknowledged custody does not qualify. Never resend or claim manually. Changed revisions, workers, notes,
+cards or sessions cannot reuse the receipt. Older tracker adapters retain the
+legacy path and do not emit bound execution receipts.
+
+File-backed tracker updates now serialize per item and increment a revision
+with the assignment and transition comment in one atomic file replacement.
+Existing unversioned files occupy revision one. Reads and dry runs do not
+migrate or rewrite them.
+
 ## Assignment capacity
 
 ### Graph-ranked pickup after an anchor ends
@@ -865,6 +898,13 @@ Explicitly dispatching deferred work clears its old deadline after delivery is
 confirmed, together with the verified active assignment. A dry run, refusal, or
 unverified delivery leaves the deferral intact. Dependency and governor gates
 still apply; activation does not remove the item's notes or review conditions.
+
+The normal audited dispatch retains a pending attempt before sending. A bare
+item ID left in scrollback cannot confirm a new attempt: confirmation uses the
+unique serve/worker witness or the adapter's evidence for the exact body.
+An unverified send leaves assignment unchanged and retains pending evidence.
+A delivery or tracker error does not authorize a manual claim or another send;
+reconcile the retained attempt with actual delivery and tracker state first.
 
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before

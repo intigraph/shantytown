@@ -90,8 +90,8 @@ def test_production_dispatch_records_claim_send_and_correlation(world, tmp_path)
     d = Dispatcher(_d.registry, tracker, panes, audit=audit)
     plan = d.go("item-1", "ellie")
     rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
-    assert [r["state"] for r in rows] == ["claim_committed", "input_sent"]
-    assert rows[0]["serve_id"] == rows[1]["serve_id"] == plan.serve_id
+    assert [r["state"] for r in rows] == ["dispatch_pending", "claim_committed", "input_sent"]
+    assert all(r["serve_id"] == plan.serve_id for r in rows)
     assert f"[st serve:{plan.serve_id} worker:ellie]" in panes.sent[0][1]
 
 
@@ -661,3 +661,39 @@ def test_operation_dispatch_refuses_without_tracker_or_pane_mutation(world, monk
         d.go('item-1', 'ellie', reassign=True)
     assert tracker.updates == 0
     assert panes.sent == []
+
+
+def test_old_item_echo_cannot_acknowledge_a_new_dispatch(world, tmp_path, monkeypatch):
+    from shantytown.dispatch import SendUnverified
+    import shantytown.dispatch as dispatch
+    d, tracker, panes = world
+    audit = FeedAudit(tmp_path)
+    d = Dispatcher(d.registry, tracker, panes, audit=audit)
+    panes.screen = 'old item-1 [st serve:previous worker:ellie]'
+    panes._drops = True
+    # The double's capture remains a stale item echo even after the dropped send.
+    monkeypatch.setattr(panes, 'capture',
+                        lambda *a, **kw: panes.screen if kw.get('history') else '')
+    monkeypatch.setattr(dispatch.time, 'sleep', lambda _: None)
+    with pytest.raises(SendUnverified):
+        d.go('item-1', 'ellie')
+    assert tracker.get('item-1').assignee is None
+    assert tracker.updates == 0
+    rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+    assert [r['state'] for r in rows] == ['dispatch_pending']
+    assert rows[0]['serve_id'] != 'previous'
+
+
+def test_send_interruption_retains_pending_attempt_before_any_assignment(world, tmp_path, monkeypatch):
+    d, tracker, panes = world
+    audit = FeedAudit(tmp_path)
+    d = Dispatcher(d.registry, tracker, panes, audit=audit)
+    def interrupted(*_):
+        rows = [json.loads(line) for line in audit.path.read_text().splitlines()]
+        assert rows[-1]['state'] == 'dispatch_pending'
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(panes, 'send', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        d.go('item-1', 'ellie')
+    assert tracker.updates == 0
+    assert tracker.get('item-1').assignee is None

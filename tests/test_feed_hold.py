@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 from shantytown import agent_hold, cli, feed_check, feed_hold, stop_event
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 from test_go_cli import _root
 
 
