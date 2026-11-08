@@ -463,6 +463,7 @@ class Panes(Protocol):
     # unreadable must stay None so the caller fails toward RESURRECTED, never a
     # flattering survivor verdict built from missing evidence.
     def session_created(self, name: str) -> float | None: ...
+    def runtime_identity(self, pane: str) -> str | None: ...
     # ENUMERATION, as opposed to every other verb here, which needs the name
     # first. That asymmetry is a blind spot with a cost attached: a fleet running
     # under a retired naming scheme is invisible to name-addressed checks, and

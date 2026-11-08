@@ -323,7 +323,9 @@ def test_gh20_a_failed_tracker_write_after_a_LANDED_send_is_named(tmp_path):
             return "st-1 >"
 
         def send(self, p, t):
-            pass
+            import hashlib
+            from shantytown.protocols import SubmissionObserved
+            return SubmissionObserved(p, hashlib.sha256(t.encode()).hexdigest())
 
     class _Reg:
         def get(self, n):

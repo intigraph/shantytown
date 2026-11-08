@@ -77,3 +77,56 @@
 - 🔁 **Convert a harness in one command.** `st agent harness <agent> codex` rewrites the card and its
   hooks; codex workers get the deployment's MCP servers pre-approved so their writes are not refused
   as a lost permission.
+
+## Work scope and budget controls
+
+A deployment can assign a capped plate, default due dates by priority, and a
+shared brief showing top-priority and coming-due work. Scheduled overdue reminders
+use the same capped notification path as retained specification-change intents.
+
+With the Seeds backend, `st work item rescope` replaces the specification and
+records its version and the requester's words. Empty, layered or oversized
+specifications refuse before replacement. The owner's and administrator's anchors
+show an unacknowledged change; `st work item ack` records the current owner's
+acknowledgement. Seeds retains the history in its Quipu store.
+
+Scheduled specification notices require `[overdue]` settings `enabled = true`
+and `spec_changes = true`. The latter defaults to false. A notifier receipt
+records delivery; it does not acknowledge the specification for its owner.
+The portable `sd spec-query-definition` emits the `seed_spec_awareness` query;
+its definition must be registered in the receiving Quipu before named queries
+can use it. Missing start-generation evidence remains UNKNOWN.
+
+### Observed qualification
+
+On 2026-11-08, an isolated fixture using the installed Seeds 0.11.1 binary and
+Shantytown source `20555332` demonstrated a replacement at version 1, visible
+unacknowledged notices in both owner and administrator anchors, then a native
+ACK readback with `unacked = false`. Layered, empty and oversized replacement
+attempts refused with the prior version and description unchanged. Sixteen
+notification and brief controls also passed, including the 400-byte display cap,
+wrong-owner acknowledgement and four- and seven-change notification queues.
+These are fixture results; a deployment still needs to enable and observe its
+scheduled specification notices.
+
+### Read the governor's measurements
+
+`st crew --governor` reports provider-window utilization, next thresholds,
+seconds until reset, live agent counts and the active priority floor. Policies
+can differ between Claude and Codex. Session budgets separately limit elapsed
+hours, completed items and admitted actions. Gaming holds pause launches,
+dispatch and respawns until the hold clears; current work is not killed.
+
+One configured deployment's read-only snapshot on 2026-11-08 reported:
+
+| Provider window | Utilization | Next threshold | Live agents / configured cap | Priority floor |
+|---|---:|---:|---:|---|
+| Claude seven-day | 84% | 85% | 2 / 15 | P1 and above |
+| Codex seven-day | 100% | no higher tier | 10 / 12 | P4 and above |
+
+The percentages and counts came from that command's provider and fleet readings.
+They describe the configured policy at that observation, not a default policy
+for a new installation. Five-hour readings were unavailable in this snapshot.
+Spend savings and cumulative shed/resume counts were not measured. Re-run the
+command for the current window and policy rather than treating these figures as
+a forecast. See [the CLI reference](cli.md) for configuration and hold commands.

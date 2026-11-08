@@ -88,6 +88,11 @@ def _read(identifier):
     # refuse FIFOs/devices and writable-by-others evidence before reading it.
     root = Path.home() / ".local/state/shantytown/resume-events"
     path = root / (identifier + ".json")
+    return read_producer_file(path, MAX_BYTES)
+
+
+def read_producer_file(path: Path, limit: int) -> bytes:
+    """Read a source-selected producer file, never an item-selected path."""
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
         for component in path.parts[1:-1]:
@@ -106,11 +111,11 @@ def _read(identifier):
         before = os.fstat(fd)
         if (not stat.S_ISREG(before.st_mode) or before.st_mode & 0o022
                 or before.st_uid not in (0, os.geteuid())
-                or before.st_size > MAX_BYTES):
+                or before.st_size > limit):
             raise ValueError("untrusted or oversized event evidence")
-        raw = os.read(fd, MAX_BYTES + 1)
+        raw = os.read(fd, limit + 1)
         after = os.fstat(fd)
-        if (len(raw) > MAX_BYTES or len(raw) != before.st_size
+        if (len(raw) > limit or len(raw) != before.st_size
                 or (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
                 != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
             raise ValueError("event evidence changed during read")

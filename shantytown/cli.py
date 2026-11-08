@@ -562,9 +562,12 @@ def _wire(a) -> Dispatcher:
     # not be one name on a message and another on the work it hands out.
     from .feed_audit import FeedAudit
     from .actor_identity import authenticated_actor
-    return Dispatcher(_registry(a), _tracker(a), _panes(a),
+    from .dispatch_binding import binding_for
+    registry, tracker, panes = _registry(a), _tracker(a), _panes(a)
+    return Dispatcher(registry, tracker, panes,
                       governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
-                      audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a))
+                      audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a),
+                      binding=binding_for(a.root, tracker, registry, panes))
 
 
 
@@ -1610,6 +1613,9 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
+    go.add_argument('--receipt', help='receipt ID for read-only reconciliation')
+    go.add_argument('--reconcile', '--status', action='store_true',
+                    help='read receipt, task/runtime and native assignment; never send or claim')
     note = go.add_mutually_exclusive_group()
     note.add_argument("--note", "--reason", dest="note", default=None,
                       help="a caveat delivered IN the same payload as the "
@@ -7907,6 +7913,27 @@ def _priority_fleet_notes(a, reg, panes):
 
 
 def _cmd_go(a) -> int:
+    if getattr(a, 'reconcile', False) or getattr(a, 'receipt', None):
+        from .dispatch_binding import binding_for
+        try:
+            if not getattr(a, 'receipt', None):
+                raise ValueError('--reconcile requires --receipt')
+            tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
+            from .deployment import local_host
+            agent = registry.get(a.agent)
+            if agent.host and agent.host != local_host(a.root):
+                raise ValueError('reconcile on the worker declared host; no remote dispatch was attempted')
+            binding = binding_for(a.root, tracker, registry, panes)
+            if binding is None:
+                raise ValueError('selected tracker has no bound dispatch receipt contract')
+            row = binding.store.read(a.receipt)
+            if row['item'] != a.item or row['worker'] != a.agent:
+                raise ValueError('receipt names a different task or worker')
+            print(json.dumps(binding.reconcile(a.receipt), indent=2))
+            return OK
+        except (OSError, ValueError, LookupError) as error:
+            print(f'  could not tell: {error}', file=sys.stderr)
+            return CANNOT_TELL
     try:
         note = _read_note(a)
     except OSError as e:
@@ -8100,13 +8127,16 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # write, so assignment was not recorded. Pending evidence survives. Reconcile
         # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
+        print(f"  could not tell: {e} — assignment not recorded; check delivery and custody before retrying (including pending dispatch evidence).",
               file=sys.stderr)
         return CANNOT_TELL
+    except ValueError as e:
+        print(f'  refused: {e}', file=sys.stderr)
+        return REFUSED
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -8144,7 +8174,9 @@ def _cmd_go(a) -> int:
     if p.handoff_warning:
         print('  ' + p.handoff_warning, file=sys.stderr)
     print(f"  {p.item_id} -> {p.agent}          in progress")
-    print(f"  sent to pane {p.pane}")
+    print(f"  {'replayed receipt for' if p.replayed else 'sent to'} pane {p.pane}")
+    if p.receipt_id:
+        print(f'  dispatch receipt: {p.receipt_id}')
     print(f"  {gctx.render()}")
     if suggestion is not None:
         print(f"  {suggestion.render()}")

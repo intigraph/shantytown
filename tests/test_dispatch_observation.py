@@ -15,6 +15,7 @@ def test_actual_codex_submission_survives_missing_scrollback(tmp_path, monkeypat
     monkeypatch.setattr(tmux.time,'sleep',lambda _:None)
     monkeypatch.setattr(tmux.subprocess,'run',lambda argv,**kw:calls.append(argv))
     adapter=tmux.Tmux(root=tmp_path/'runtime')
+    monkeypatch.setattr(adapter,'runtime_identity',lambda _:'fixture-runtime')
     monkeypatch.setattr(adapter,'session_created',lambda _:1)
     monkeypatch.setattr(adapter,'foreground',lambda _:'codex')
     class Panes(NullPanes):
