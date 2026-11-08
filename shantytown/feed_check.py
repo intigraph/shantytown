@@ -46,7 +46,7 @@ import sys
 from pathlib import Path
 
 from .answer import Answer
-from .inbox import is_anchor, is_decision, is_message, is_unfeedable
+from .inbox import OperationClaimRefused, is_deploy_operation, is_anchor, is_decision, is_message, is_unfeedable
 from .ask_visibility import is_ask
 from . import handoff_text
 
@@ -426,7 +426,7 @@ def dispatchable(free: set, ready_beads) -> list[tuple[str, str]]:
         # also the single-predicate discipline is_message exists for — the haul
         # advance, hauls() and this function are meant to agree about what a
         # worker may be handed, and this one was the odd path out.
-        if (b.get("assignee")
+        if (is_deploy_operation(b) or b.get("assignee")
                 or b.get("issue_type") == "epic"
                 or any(str(label).strip().lower().startswith("parked:")
                        or str(label).strip().lower() == "feed:manual"
@@ -475,7 +475,7 @@ def hauls(ready_beads, in_progress_beads=()) -> dict[str, list[str]]:
         # whose only ready item is a decision-needed bead has NO real queue, so
         # it must stay on the coordinator's feedable free list rather than read
         # as self-feeding (aegis-2og7d) — the same reasoning as messages above.
-        if (not assignee or is_message(b.get("title", ""))
+        if (is_deploy_operation(b) or not assignee or is_message(b.get("title", ""))
                 or is_ask(b) or is_decision(b.get("labels")) or is_anchor(b.get("labels"))):
             continue
         name = assignee.split("/")[-1]
@@ -957,6 +957,12 @@ class TrackerAdapter:
         if self.tracker is not None:
             from .br import claim
             return claim(self.tracker, item)
+        try:
+            row = self.show(item).exact()
+        except Exception as exc:
+            raise OperationClaimRefused("claim refused: exact item unreadable") from exc
+        if not isinstance(row, dict) or row.get("id") != item or is_deploy_operation(row):
+            raise OperationClaimRefused(f"claim {item} refused: operation or unreadable exact item")
         self._legacy("bd", "update", item, "--status", "in_progress", "--json")
 
 
@@ -1243,6 +1249,17 @@ def bd_claim(cwd: str | None, bead_id: str, root=None, reg=None) -> None:
     # about who holds what — silently.
     if root is not None:
         return backend_adapter(root, reg, cwd=cwd).claim(bead_id)
+    observed = subprocess.run(["bd", "show", bead_id, "--json"],
+                              capture_output=True, text=True, timeout=20, cwd=cwd)
+    if observed.returncode:
+        raise OperationClaimRefused("claim refused: exact item read failed")
+    try:
+        rows = json.loads(observed.stdout)
+    except ValueError as exc:
+        raise OperationClaimRefused("claim refused: exact item malformed") from exc
+    row = rows[0] if isinstance(rows, list) and len(rows) == 1 else rows
+    if not isinstance(row, dict) or row.get("id") != bead_id or is_deploy_operation(row):
+        raise OperationClaimRefused(f"claim {bead_id} refused: operation or unreadable exact item")
     r = subprocess.run(["bd", "update", bead_id, "--status", "in_progress",
                         "--json"],
                        capture_output=True, text=True, timeout=20, cwd=cwd)

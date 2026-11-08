@@ -23,7 +23,7 @@ FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SCHEMA + "agent", SCHEMA + "dateModified", SCHEMA + "keywords",
           SCHEMA + "version",
           SEEDS + "ontology/status", SEEDS + "ontology/priority",
-          SCHEMA + "description", SEEDS + "ontology/notes",
+          SCHEMA + "description", SEEDS + "ontology/notes", SEEDS + "ontology/agentContext",
           SCHEMA + "scheduledTime", SCHEMA + "result",
           SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due",
           SEEDS + "ontology/rank", *EDGES)
@@ -252,4 +252,5 @@ def read_item(tracker, identifier):
         due_at=_one(facts, "http://www.w3.org/2002/12/cal/ical#due"),
         created_at=_one(facts, SCHEMA + "dateCreated"),
         labels=tuple(sorted(facts.get(SCHEMA + "keywords", set()))),
+        agent_context=_one(facts, SEEDS + "ontology/agentContext"),
     )

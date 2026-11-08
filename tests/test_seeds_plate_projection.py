@@ -897,3 +897,16 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
     else:
         assert result.exact()[0]["id"] == "test-held"
         assert observed["queries"] == (4 if motion == "settles" else 2)
+
+
+@pytest.mark.parametrize('marker', [
+    {'labels': 'deploy-operation'},
+    {'agent_context': json.dumps({'deploy_admission': {'phase': 'prepared'}})},
+])
+def test_operation_marker_survives_native_owner_projection(monkeypatch, marker):
+    from shantytown.feed_check import hauls
+    from shantytown.stop_event import _assigned_to
+    monkeypatch.setattr(seeds_plate, '_query', lambda *a, **k: answer(fields(**marker)))
+    row = seeds_plate.owner_rows(PROOF, 'worker').exact()[0]
+    assert hauls([row]) == {}
+    assert _assigned_to('worker', [row]) == []

@@ -67,7 +67,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "unreadable_deps": 0, "description": "body preserved",
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
         "rank": None, "due_at": None, "created_at": None,
-        "labels": ("blocked:external",), "revision": None,
+        "labels": ("blocked:external",), "revision": None, "agent_context": None,
     }
     assert len(calls) == 1
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]
@@ -282,3 +282,14 @@ def test_native_revision_rejects_unproved_tokens(monkeypatch, text, kind):
     value, _ = tracker(monkeypatch, payload)
     with pytest.raises(ValueError, match='revision'):
         seeds_item.read_item(value, 'test-one')
+
+
+def test_native_admission_context_is_preserved_for_dispatch(monkeypatch):
+    from shantytown.inbox import is_deploy_operation
+    context = json.dumps({"deploy_admission": {"phase": "prepared"}})
+    value, _ = tracker(monkeypatch, rows(**{
+        seeds_item.SEEDS + "ontology/agentContext": context,
+    }))
+    item = seeds_item.read_item(value, "test-one")
+    assert item.agent_context == context
+    assert is_deploy_operation(item)

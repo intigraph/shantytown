@@ -1208,6 +1208,12 @@ class IdleFleetAlerter:
                                        attempted=True, acted_on=True,
                                        serve_id=serve_id, state="claim_committed",
                                        reason="claim command completed")
+                except feed_check.OperationClaimRefused as exc:
+                    self._audit.record(window_id, leg="claim", backend=backend,
+                                       worker=worker, item=nid, eligible=False,
+                                       attempted=True, refused=True,
+                                       reason=f"operation claim refused: {exc}")
+                    continue
                 except Exception as exc:
                     self._audit.record(window_id, leg="claim", backend=backend,
                                        worker=worker, item=nid, eligible=True,
