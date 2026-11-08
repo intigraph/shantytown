@@ -2894,29 +2894,28 @@ and indeterminate writes retry on the next pass. Three consecutive failures
 produce one UNTESTABLE finding for the administrator; continued failure stays
 silent after successful notification. The budget survives process restarts and
 resets on recovery. An already released item is not written again. Known unmet
-mechanical conditions without verified owner timer provenance remain quiet even after a separate timestamp lapses;
-unsupported conditions request judgement even with a future timestamp.
+mechanical conditions stay held; a lapsed backstop requests an owner recheck.
+Unsupported conditions request judgement even with a future timestamp.
 
-Owner-set deferrals use an owner reminder instead of an administrator
-ruling when their recorded setter matches the assignee, the original window
-is positive, and the owner has a live runtime with no
-deliberate stop record. ASK-class items retain the administrator path. The
-normal `st work defer` writer retains `defer_provenance` (actor, set time and
-deadline) in the notes; missing or mismatched provenance does not qualify.
-An item touch is not a substitute for the defer's set time. This routing never
-releases a hold. The owner is nudged once per unchanged item and condition state;
-repeated scheduled observations do not escalate merely by count. A met event
-or lapsed backstop reaches the existing administrator route once it has been
-at least 72 hours since both the backstop and the last item update. A later
-deadline or item update starts that elapsed-time ceiling again; the existing
-administrator state key prevents repeated unchanged digests. This does not
-release the hold or change ASK routing. A met event
-can prompt the owner before the backstop, while its future date and all existing
-release gates remain intact. An unmet event at the owner backstop requests an
-owner recheck, never release. A new deferral archives old setter envelopes as
-history. Down, deliberately stopped or unreadable owners, and failed owner
-delivery retain the administrator fallback. Missing or ambiguous provenance and
-ASK-class items retain their existing judgement route.
+Lapsed and condition-met deferrals notify the live item owner first, then the
+owner's live lead if the owner cannot be reached. Old or missing defer provenance
+and a long-overdue deadline do not by themselves escalate this notification to
+the administrator. Authority gates (`ruling:` and `activation:`), binding failures,
+and items whose owner and lead cannot be reached retain the administrator route.
+Urgent read/release failures and tracker-store errors retain their existing
+administrator routing, retry budgets and deduplication. Unknown reachability or
+failed delivery cannot count as successful owner notification.
+
+Each recipient is nudged once per unchanged item and finding state. Successful
+receipts survive owner/lead reachability changes and process restarts, including
+a period when both are unreachable. Failed deliveries remain retryable; a genuine
+item or finding-state change rearms reminders. Existing single-recipient receipts
+are retained when upgrading the ledger. A met event
+can notify its owner before a future backstop; it does not clear that backstop.
+Human/access/dependency holds, ASK visibility, ambiguous provenance and prose
+judgement gates still prevent automatic release. The notification grants no
+authority to resume, approve or mutate work. New deferrals still archive older
+setter envelopes as history.
 
 Each tend pass also writes notify/deferred-reading-list.json from the same
 admitted deferred snapshot. It retains items whose updated_at is at least30days
@@ -3590,6 +3589,14 @@ Quiet `deferral log:` reports, owner reminders, duplicate suppression and failed
 administrator delivery do not emit this marker. Measure the 24-hour acceptance
 window only after verifying the installed source and a scheduled tend pass;
 count delivered digest markers, rather than quiet report headings or item counts.
+Each delivered digest finding also has a `deferral-route:` JSON record binding
+the item, finding state key, finite routing reason, recipient, delivery outcome
+and digest hash. Owner/lead deliveries have the same fields with a null digest.
+No notes, exception bodies or credentials enter these records. `source_sha256`
+identifies the two observed routing source files; `UNKNOWN` retains a source-read
+failure without blocking notification. It does not certify the bytes imported
+before an on-disk source update. A failed administrator delivery is `pending`,
+not `delivered`; a suppressed identical summary is `suppressed`.
 
 Rank proposals distinguish `reowner` (a positively observed down owner) from
 `needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
