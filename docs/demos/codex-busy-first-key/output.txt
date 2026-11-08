@@ -1,0 +1,8 @@
+Script started on 2026-11-08 05:02:29-05:00 [COMMAND="stty -onlcr; python3 docs/demos/codex-busy-first-key/probe.py" <not executed on terminal>]
+{"target": "isolated source/protocol fixture", "base": "895d653b26ca3a7a89016c6f9786b34d9dcc6c33", "source": "da57af49e0eda87a5031c128fdec608cd4725e0f"}
+{"case": "busy-word-wrap", "before": {"key": ["Enter"], "literal_writes": 1, "outcome": "unverified", "composer_typed": true}, "after": {"key": ["Tab"], "literal_writes": 1, "outcome": "unverified-queued", "composer_typed": false}}
+{"case": "idle", "before": {"key": ["Enter"], "literal_writes": 1, "outcome": "observed-submission", "composer_typed": false}, "after": {"key": ["Enter"], "literal_writes": 1, "outcome": "observed-submission", "composer_typed": false}}
+{"case": "foreign-draft", "before": {"key": [], "literal_writes": 0, "outcome": "unverified", "composer_typed": true}, "after": {"key": [], "literal_writes": 0, "outcome": "unverified", "composer_typed": true}}
+PASS: busy first key changes; queue is not delivery; strict retry and foreign-draft guards retained
+
+Script done on 2026-11-08 05:02:29-05:00 [COMMAND_EXIT_CODE="0"]
