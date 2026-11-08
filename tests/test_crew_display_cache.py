@@ -117,3 +117,30 @@ def test_partial_and_oversized_producers_are_not_published(isolated):
             read(build)
         assert not list(isolated.glob('*.json'))
         for path in isolated.glob('*.failure'): path.unlink()
+
+
+@pytest.mark.parametrize('kind', ['absolute', 'traversal'])
+def test_cache_key_cannot_overwrite_file_outside_root(isolated, tmp_path, kind):
+    sentinel = tmp_path / 'sentinel.json'
+    sentinel.write_text('untouched')
+    sentinel.chmod(0o600)
+    before = sentinel.stat()
+    key = str(tmp_path / 'sentinel') if kind == 'absolute' else '../sentinel'
+    with pytest.raises(ValueError, match='UNKNOWN'):
+        read(key=key)
+    after = sentinel.stat()
+    assert sentinel.read_text() == 'untouched'
+    assert (after.st_ino, after.st_mtime_ns, after.st_mode) == (before.st_ino, before.st_mtime_ns, before.st_mode)
+    assert {p.name for p in tmp_path.iterdir()} == {'cache', 'sentinel.json'}
+
+
+@pytest.mark.parametrize('key', [
+    '', 'a' * 63, 'a' * 65, 'A' * 64, 'g' * 64,
+    '/' + 'a' * 63, '../' + 'a' * 61, 'a' * 31 + '\\' + 'a' * 32,
+    '\uff41' * 64, None, b'a' * 64, 1,
+])
+def test_malformed_key_refuses_before_filesystem_or_producer(monkeypatch, key):
+    monkeypatch.setattr(cache, 'directory', lambda: pytest.fail('invalid key reached filesystem'))
+    monkeypatch.setattr(cache, 'boot_id', lambda: pytest.fail('invalid key read boot identity'))
+    with pytest.raises(ValueError, match='UNKNOWN'):
+        read(lambda: pytest.fail('invalid key reached producer'), key=key)

@@ -82,6 +82,11 @@ def read(key, build, *, validate):
     on HTTP: a fresh observation is returned, otherwise they get UNKNOWN.
     """
     try:
+        # Keys are canonical SHA256 digests, never filesystem paths. Refuse
+        # before creating a directory or touching a lease/snapshot/backoff file.
+        if (type(key) is not str or len(key) != 64
+                or any(char not in "0123456789abcdef" for char in key)):
+            raise ValueError("invalid display cache key")
         folder, boot = directory(), boot_id()
         path, failure = folder / (key + '.json'), folder / (key + '.failure')
 
