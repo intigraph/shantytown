@@ -52,6 +52,8 @@ def workspace(tmp_path):
 
 def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     root = workspace
+    from shantytown.inbox import FilesInbox
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: FilesInbox(root / "inbox"))
     live: set[str] = set()                     # nobody up yet
     panes = _CrewPanes(live)
     monkeypatch.setattr(cli, "Tmux", lambda *a, **k: panes)
@@ -85,7 +87,7 @@ def test_full_crew_cycle_on_st_zero_gt(workspace, monkeypatch, capsys):
     # 5. new — bring ellie up: session created, --settings composed, verify live
     assert run("new", "ellie") == OK
     assert panes.exists("crew-ellie"), "new did not create the session"
-    _, launch = panes.sent[-1]
+    launch = next(text for _, text in panes.sent if "--settings" in text)
     assert "SHANTY_AGENT=ellie" in launch and "--settings" in launch
 
     # 6. go — dispatch the item to the live pane; verify it landed -> in_progress

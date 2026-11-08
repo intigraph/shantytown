@@ -1316,7 +1316,7 @@ class NullPanes:
         # answer UNKNOWN for, not idle).
         return self.screen
 
-    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> SubmissionObserved | None:
+    def send(self, pane: str, text: str, *, allow_shell: bool = False) -> None:
         # SAME REFUSAL AS THE REAL ADAPTER, and duplicated for the same reason
         # control()'s allowlist is: a double that delivered where the shipped
         # path refuses would let a test prove messages reach a dead pane safely
@@ -1336,7 +1336,6 @@ class NullPanes:
         # eats every message, which is not a pane. Unless drops=True.
         if not self._drops:
             self.screen += ("\n" if self.screen else "") + text
-            return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
 
     def type_text(self, pane: str, text: str) -> None:
         """Tmux.type_text's double: the text lands, no Enter is recorded."""

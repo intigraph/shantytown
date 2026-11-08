@@ -782,6 +782,16 @@ def test_launch_provisions_capture_against_selected_agent_settings(tmp_path, mon
     assert not any("shantytown.stats capture" in h["command"]
                    for g in local["hooks"]["PostToolUse"] for h in g["hooks"])
 
+class CodexStartupPanes(NullPanes):
+    """Only these startup fixtures model an adapter that observed a new turn."""
+    def send(self, pane, text, **kwargs):
+        import hashlib
+        from shantytown.protocols import SubmissionObserved
+        super().send(pane, text, **kwargs)
+        if not self._drops:
+            return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
+
+
 # Codex Remote Control can omit SessionStart context. Launch-time delivery
 # must work without mail and combine with mail into exactly one verified turn.
 @pytest.fixture
@@ -798,7 +808,7 @@ def codex_startup(tmp_path, monkeypatch):
 
 def test_codex_gets_verified_anchor_even_with_no_unread_mail(codex_startup, capsys):
     args, card, box = codex_startup
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert len(panes.sent) == 1
     prompt = panes.sent[0][1]
@@ -819,7 +829,7 @@ def test_claude_empty_inbox_gets_one_verified_first_turn(
     from dataclasses import replace
     args, original, box = codex_startup
     card = replace(original, harness="claude", role=role, reports_to=None)
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert len(panes.sent) == 1
     prompt = panes.sent[0][1]
@@ -835,7 +845,7 @@ def test_administrator_anchor_and_mail_share_one_turn(codex_startup):
     args, original, box = codex_startup
     card = replace(original, harness="claude", role="administrator", reports_to=None)
     msg = box.deliver("ellie", "administrator queued work")
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert len(panes.sent) == 1
     prompt = panes.sent[0][1]
@@ -846,7 +856,7 @@ def test_administrator_anchor_and_mail_share_one_turn(codex_startup):
 def test_codex_anchor_and_mail_are_one_turn_with_verified_ack(codex_startup):
     args, card, box = codex_startup
     msg = box.deliver("ellie", "offline facts")
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert len(panes.sent) == 1
     prompt = panes.sent[0][1]
@@ -858,7 +868,7 @@ def test_codex_anchor_and_mail_are_one_turn_with_verified_ack(codex_startup):
 def test_codex_dropped_context_keeps_mail_unread(codex_startup, capsys):
     args, card, box = codex_startup
     msg = box.deliver("ellie", "must survive failed delivery")
-    panes = NullPanes(screen=READY, drops=True)
+    panes = CodexStartupPanes(screen=READY, drops=True)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert [m.id for m in box.unread("ellie")] == [msg.id]
     assert "submission not observed" in capsys.readouterr().err
@@ -866,7 +876,7 @@ def test_codex_dropped_context_keeps_mail_unread(codex_startup, capsys):
 
 def test_codex_empty_mail_marker_cannot_match_an_old_delivery(codex_startup):
     args, card, _ = codex_startup
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert panes.sent[0][1].splitlines()[-1] != panes.sent[1][1].splitlines()[-1]
@@ -876,7 +886,7 @@ def test_codex_failed_anchor_lookup_delivers_visible_recovery(codex_startup, mon
     from shantytown import session_anchor
     args, card, _ = codex_startup
     monkeypatch.setattr(session_anchor, "_run_anchor", lambda r, a: (2, ""))
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert "could not read your plate" in panes.sent[0][1]
     assert "Run `st anchor`" in panes.sent[0][1]
@@ -885,7 +895,7 @@ def test_codex_failed_anchor_lookup_delivers_visible_recovery(codex_startup, mon
 def test_codex_inbox_unread_failure_still_delivers_anchor(codex_startup, monkeypatch):
     args, card, _ = codex_startup
     monkeypatch.setattr(cli, "_inbox", lambda *_a, **_k: (_ for _ in ()).throw(OSError("unread unavailable")))
-    panes = NullPanes(screen=READY)
+    panes = CodexStartupPanes(screen=READY)
     cli._deliver_startup_inbox(args, card, panes, card.pane)
     assert len(panes.sent) == 1
     assert "ON YOUR PLATE" in panes.sent[0][1]
@@ -895,7 +905,7 @@ def test_codex_marker_without_anchor_cannot_ack_mail(codex_startup):
     args, card, box = codex_startup
     msg = box.deliver("ellie", "preserve if context is incomplete")
 
-    class TailOnlyPanes(NullPanes):
+    class TailOnlyPanes(CodexStartupPanes):
         def capture(self, session, history=None):
             return self.sent[-1][1].splitlines()[-1]
 
@@ -911,7 +921,7 @@ def test_codex_echoed_startup_without_exact_submission_keeps_mail(
     args, card, box = codex_startup
     msg = box.deliver("ellie", "must survive echoed unsubmitted input")
 
-    class EchoOnlyPanes(NullPanes):
+    class EchoOnlyPanes(CodexStartupPanes):
         def send(self, pane, text, **kwargs):
             super().send(pane, text, **kwargs)
             if evidence == "exception":
