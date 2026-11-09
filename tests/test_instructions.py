@@ -49,6 +49,23 @@ def test_no_graph_document_keeps_existing_files(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
+@pytest.mark.parametrize("mode", ["compare", "apply"])
+def test_report_composes_graph_body_with_tooling_without_writes(tmp_path, mode):
+    import hashlib
+    from shantytown import tooling
+    (tmp_path / "CLAUDE.md").write_text("old body\n")
+    (tmp_path / "AGENTS.md").symlink_to("CLAUDE.md")
+    manifest = tooling.Manifest("urn:test:tools", {}, {}, "Canonical tools.")
+    expected = tooling.instruction_text("new body\n", manifest.instructions).encode()
+    comparisons = instructions.report(tmp_path, Agent("alice"),
+                                       cfg("new body\n", mode), manifest)
+    assert set(comparisons) == {"CLAUDE.md", "AGENTS.md"}
+    assert all(c["after_sha256"] == hashlib.sha256(expected).hexdigest()
+               and not c["equal"] for c in comparisons.values())
+    assert (tmp_path / "CLAUDE.md").read_text() == "old body\n"
+    assert (tmp_path / "AGENTS.md").is_symlink()
+
+
 def test_effective_harness_selector_comes_from_canonical_caller(tmp_path):
     doc = cfg("fleet").source_document
     doc["fragments"].append({"id": "urn:test:codex", "scope": "harness",
