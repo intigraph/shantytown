@@ -23,8 +23,8 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "Mailboxes/reviews bind scope. Cycles need clean branches/full-history/checkpoints and fresh session/transcript; pending forbids resend/restart. Chaski delegation bars local runs. Admins accept quarantined ranks. Harness conversion validates model/browser. Semantic benchmarks never admit ranks. Pipeline waits need events/backstops; --window is an appointment. Owner reminders retain gates; precede sweeps. Ceiling transfer checks source/harness, full non-held plate, budget/owner. Seeds revision fences and structured conflicts retain operation identity without retry. AGY projection is not SessionStart proof; missing evidence is UNKNOWN. Sweeps resume at first budget skip. Admin/Codex cold-launch receipts resume work without launches; independent holds remain. Native priority: lean rows or UNKNOWN. Create advice proves store; skips separate. Cache advice bounded. Startup needs exact Codex submission; unverified exits 2. Go receipts bind scope/submission/assignment; reconcile is read-only.",
-      "source_sha256": "004e76267f3292787852a85d978c04fb21b300b181752275633a8b7f6aab7c9b",
+      "summary": "Mailboxes/reviews bind scope. Cycles need clean branches, full history/checkpoints and fresh session/transcript; pending forbids resend/restart. Chaski bars local runs. Admins accept quarantined ranks; semantic benchmarks never admit. Harness changes validate model/browser. Intake needs cause and explicit due/no-due. Pipeline waits need events/backstops; --window is an appointment. Owner reminders retain gates and precede sweeps. Ceiling transfer checks source/harness, non-held plate, budget/owner. Seeds revision fences retain operation identity without retry. AGY projection is not SessionStart proof; missing evidence is UNKNOWN. Sweeps resume at first budget skip. Admin/Codex cold-launch receipts resume without launches; independent holds remain. Native priority: lean rows or UNKNOWN. Create advice proves store; skips separate. Cache advice is bounded. Startup needs exact Codex submission; unverified exits2. Go receipts bind scope/submission/assignment; reconcile is read-only.",
+      "source_sha256": "05252584a2bc55d5c81f1d0d0ed8dc0ff7a5b48f5167bb31100e703c6d45a125",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "b03db375a38f64931bbe630b94987ef7920854357f6143480cea5e99986e8443",
+      "source_sha256": "d24ba0d254c354506781dd8485ae56a253571abfb406d517e288136e17c16a34",
       "properties": {
         "startHereOrder": 2
       }
