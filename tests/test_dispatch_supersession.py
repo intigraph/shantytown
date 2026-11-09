@@ -101,3 +101,41 @@ def test_explicit_cli_supersession_never_sends_claims_or_authorizes(world, monke
     assert snapshot(root) == before
     assert tracker.get('work-1') == before_item and len(panes.sent) == 1
     assert cli.main(argv + ['--reconcile']) != 0
+
+
+@pytest.mark.parametrize('flag', ['--dry-run', '-n'])
+def test_cli_supersession_dry_run_preserves_receipt_fence(world, monkeypatch, capsys, flag):
+    import json
+    root, dispatcher, binding, tracker, panes = world
+    old = interrupted(world, monkeypatch)
+    tracker.update('work-1', status='open', assignee='')
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: dispatcher.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('dry-run dispatched'))
+    before = snapshot(root)
+    sent = list(panes.sent)
+    argv = ['--root', str(root), 'go', 'work-1', 'worker',
+            '--supersede', '--receipt', old['id'], flag]
+    assert cli.main(argv) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert binding.store.read(old['id'])['state'] == 'assigning'
+    assert snapshot(root) == before and panes.sent == sent
+    assert output['dry_run'] and not output['execution_authorized']
+    assert output['state'] == 'assigning' and output['would_supersede']
+
+
+@pytest.mark.parametrize('flag', ['--dry-run', '-n'])
+def test_cli_supersession_dry_run_refuses_unproven_release(world, monkeypatch, capsys, flag):
+    root, dispatcher, binding, tracker, panes = world
+    old = interrupted(world, monkeypatch)
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: dispatcher.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('dry-run dispatched'))
+    before = snapshot(root)
+    sent = list(panes.sent)
+    assert cli.main(['--root', str(root), 'go', 'work-1', 'worker',
+                     '--supersede', '--receipt', old['id'], flag]) != 0
+    assert snapshot(root) == before and panes.sent == sent
+    assert binding.store.read(old['id'])['state'] == 'assigning'

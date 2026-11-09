@@ -147,9 +147,19 @@ class Binding:
         return self.store.assign(plan.receipt_id, current,
                                  lambda row: self.assignments.claim(row, plan.updates))
 
-    def supersede(self, ident):
+    def supersede(self, ident, *, dry_run=False):
         """Explicitly retire a fenced attempt; never send, claim or authorize work."""
         row = self.store.read(ident)
+        if dry_run:
+            # A preview must not acquire a writable ledger lock or remove the
+            # interrupted-assignment fence. Native release evidence is still
+            # required; this read never authorizes a later transition.
+            if row['state'] not in ('assigning', 'superseded'):
+                raise ReceiptConflict('only a fenced assignment can be superseded')
+            if row['state'] == 'assigning':
+                self.assignments.supersession(row)
+            return dict(id=ident, state=row['state'], dry_run=True,
+                        would_supersede=row['state'] == 'assigning', execution_authorized=False)
         with self.store.lock(row['item']):
             if row['state'] == 'superseded':
                 return dict(id=ident, state='superseded', execution_authorized=False)

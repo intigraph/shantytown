@@ -28,12 +28,15 @@ For a real supported recovery, after an independently verified newer native
 open/unassigned release, use:
 
 ```sh
+st go ITEM WORKER --supersede --receipt OLD_RECEIPT --dry-run
+# Preview validates the native release; the retained receipt stays fenced.
 st go ITEM WORKER --supersede --receipt OLD_RECEIPT
 # This returns execution_authorized=false and never sends or claims.
 # A separately authorized fresh dispatch remains a separate st go command.
 ```
 
-`--reconcile` remains read-only. Equal/older revisions, an assigned owner,
+`--dry-run` (or `-n`) changes no receipt or tracker state and authorizes no
+execution. `--reconcile` remains read-only. Equal/older revisions, an assigned owner,
 non-open state, deferral and unreadable native state refuse supersession.
 Seeds must also commit a revision-guarded non-empty transition comment for a
 same-owner rebind; that SDK correction is a separate change.

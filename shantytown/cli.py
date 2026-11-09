@@ -7941,8 +7941,9 @@ def _cmd_go(a) -> int:
             row = binding.store.read(a.receipt)
             if row['item'] != a.item or row['worker'] != a.agent:
                 raise ValueError('receipt names a different task or worker')
-            action = binding.supersede if getattr(a, 'supersede', False) else binding.reconcile
-            print(json.dumps(action(a.receipt), indent=2))
+            result = (binding.supersede(a.receipt, dry_run=getattr(a, 'dry_run', False))
+                      if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
+            print(json.dumps(result, indent=2))
             return OK
         except (OSError, ValueError, LookupError) as error:
             print(f'  could not tell: {error}', file=sys.stderr)
