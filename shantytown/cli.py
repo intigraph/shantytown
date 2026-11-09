@@ -1664,6 +1664,7 @@ def build_parser() -> argparse.ArgumentParser:
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
     wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
     wi.add_argument("item")
+    wi.add_argument("--result-json", action="store_true", help="stable result envelope, including failures")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
     wi.add_argument("--priority", type=int, choices=range(5))
@@ -2757,9 +2758,25 @@ def _main(a, argv: list[str] | None = None) -> int:
             a.registry = _registry_choice(a)
             return _run_command(a)
         except IdentityError as e:
+            if a.cmd == "item" and getattr(a, "result_json", False):
+                from .tracker_result import Operation
+                with Operation(a) as operation:
+                    operation.original_category = "POLICY"
+                    result = operation.result(error=e)
+                    result["exit_code"] = REFUSED
+                    print(json.dumps(result))
+                return REFUSED
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
         except NamespaceUnconfigured as e:
+            if a.cmd == "item" and getattr(a, "result_json", False):
+                from .tracker_result import Operation
+                with Operation(a) as operation:
+                    operation.original_category = "CONFIG"
+                    result = operation.result(error=e)
+                    result["exit_code"] = REFUSED
+                    print(json.dumps(result))
+                return REFUSED
             print(f"  {e}", file=sys.stderr)
             return REFUSED
 
@@ -2790,6 +2807,24 @@ def _run_command(a) -> int:
     if a.cmd == "item":
         from .br import NothingWritten, TrackerUpdateError, redact_cause
         from .work_item import command
+        if getattr(a, "result_json", False):
+            from .tracker_result import Operation
+            with Operation(a) as operation:
+                tracker = None
+                try:
+                    tracker = _tracker(a)
+                    proof = getattr(tracker, "_proof", None)
+                    operation.graph = getattr(proof, "graph", None)
+                    result = operation.result(data=command(a, tracker))
+                    proof = getattr(tracker, "_proof", None)
+                    result["graph"] = getattr(proof, "graph", None)
+                except Exception as exc:
+                    result = operation.result(error=exc)
+                from .tracker_result import safe_graph
+                proof = getattr(tracker, "_proof", None)
+                result["graph"] = safe_graph(getattr(proof, "graph", None))
+                print(json.dumps(result))
+                return result["exit_code"]
         try:
             print(json.dumps(command(a, _tracker(a)), indent=2))
             return 0

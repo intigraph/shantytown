@@ -1058,7 +1058,11 @@ class SdTracker(BrTracker):
         actor = authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip()
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
-        cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
+        translated = list(self._translate(args))
+        from .tracker_result import active
+        if active() and "--json" not in translated:
+            translated.append("--json")
+        cmd = [self._bin, *self._location(), *identity, *translated]
         options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
@@ -1079,10 +1083,14 @@ class SdTracker(BrTracker):
                     asserted = arg.partition('=')[2]
                 elif arg == '--actor' and i + 1 < len(args):
                     asserted = args[i + 1]
-            return run(cmd, actor=actor, asserted_actor=asserted,
+            result = run(cmd, actor=actor, asserted_actor=asserted,
                        identity_command=[self._bin, *self._location(), 'identity', '--json'],
                        options=options, runner=subprocess.run)
-        return subprocess.run(cmd, **options)
+        else:
+            result = subprocess.run(cmd, **options)
+        from .tracker_result import observe
+        observe(result)
+        return result
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

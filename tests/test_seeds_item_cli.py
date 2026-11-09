@@ -31,7 +31,7 @@ def compact(iri):
     return iri
 
 
-def exercise(tmp_path, *, actual_sd=None, honor_verbose=True):
+def exercise(tmp_path, *, actual_sd=None, honor_verbose=True, result_json=False):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -105,6 +105,8 @@ def exercise(tmp_path, *, actual_sd=None, honor_verbose=True):
     command = [sys.executable, "-c", "from shantytown.cli import main; raise SystemExit(main())",
                "--root", str(tmp_path / "state"), "--backend", "seeds", "--repo", str(tmp_path),
                "work", "item", "show", "test-one"]
+    if result_json:
+        command.append("--result-json")
     try:
         result = subprocess.run(command, env=env, cwd=tmp_path, capture_output=True,
                                 text=True, timeout=30, check=False)
@@ -113,6 +115,20 @@ def exercise(tmp_path, *, actual_sd=None, honor_verbose=True):
         server.server_close()
         thread.join(timeout=2)
     return result, requests
+
+
+def test_real_result_envelope_cli_populated_and_unreadable_wire(tmp_path):
+    good, _ = exercise(tmp_path, result_json=True)
+    value = json.loads(good.stdout)
+    assert good.returncode == 0 and value["ok"] is True
+    assert value["data"]["title"] == "wire positive"
+    assert value["graph"] == GRAPH
+    other = tmp_path / "bad-envelope"; other.mkdir()
+    bad, _ = exercise(other, result_json=True, honor_verbose=False)
+    value = json.loads(bad.stdout)
+    assert bad.returncode != 0 and value["ok"] is False
+    assert value["data"] is None
+    assert "Traceback" not in bad.stderr
 
 
 def test_real_show_cli_requests_verbose_and_refuses_wrong_wire(tmp_path):
