@@ -3868,3 +3868,13 @@ A non-null `recovery` preserves a recognized native write-operation witness,
 provenance graph and exact item IDs. It excludes private field differences and
 bodies. Use this persisted identity, when available, to reconcile the SDK write;
 the new per-invocation operation ID is only a diagnostic correlation key.
+
+
+Ready-work utilization counts and board triage exclude both `inbox:` and legacy
+`mail:` title markers, including leading whitespace, using the plate message
+predicate. An `inbox` label on a real work item does not exclude that work.
+Native ready counts apply the title exclusion before fetching metadata, and
+legacy ready-list utilization applies the same rule. Unreadable readiness
+remains unknown rather than zero. Listing an inbox remains a pure read;
+explicit ACK closes tracker pointers and the scheduled retention sweep retires
+old pointers while preserving their records and verified related links.

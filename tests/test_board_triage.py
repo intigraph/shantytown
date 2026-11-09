@@ -156,3 +156,16 @@ def test_partial_domain_query_cannot_look_like_absence():
            _query_answer=lambda q:Answer.capped([],how=q,caveat='truncated'))
     with pytest.raises(Exception):
         bt.graph_agents(reg)
+
+
+@pytest.mark.parametrize("prefix", ["mail:", " inbox:", "  mail:"])
+def test_message_marker_is_shared_by_triage_candidates_and_selection(monkeypatch, prefix):
+    message = dict(row("pointer"), title=prefix + " repair backup")
+    work = dict(row("work"), labels=["inbox"])
+    assert [r["id"] for r in bt.candidates(row(), [message, work])] == ["work"]
+    args, tracker, registry = setup(monkeypatch, [message, work])
+    args.dry_run = True
+    assert bt.run(args, tracker, registry)["items"] == ["work"]
+    args.items = ["pointer"]
+    with pytest.raises(bt.TriageError, match="not inbox pointers"):
+        bt.run(args, tracker, registry)

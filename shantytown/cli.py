@@ -9827,7 +9827,7 @@ def _ready_count(root, reg):
             projected = count()
             if projected is not None:
                 return projected
-        return len(adapter.ready().exact())
+        return sum(not is_message(row.get("title", "")) for row in adapter.ready().exact())
     except Exception:
         return None
 

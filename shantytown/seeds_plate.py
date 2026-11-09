@@ -1021,10 +1021,10 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
 
 @declared_read_operation("ready-count")
 def ready_count(proof, *, timeout: int = 30, now=None) -> int:
-    """Count SDK-ready rows with only IDs and deferral dates.
+    """Count ready work, excluding message titles before metadata hydration.
 
-    Unlike work/plate selection, this existing utilization metric includes
-    messages. Preserve its semantics while avoiding payload hydration.
+    Mail cannot justify crew growth. Use the same title markers as plates;
+    labels alone never turn an actual work item into a message.
     """
     now = datetime.now(timezone.utc) if now is None else now
     branches = []
@@ -1035,6 +1035,8 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             f'a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . '
             f'OPTIONAL {{ ?s <{SCHEMA}scheduledTime> ?due }} '
             f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
+            f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?message . '
+            f'FILTER(REGEX(STR(?message), {MESSAGE_PATTERN})) }} '
             'FILTER NOT EXISTS { ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . '
             f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
             'FILTER(?bs != "closed" && ?bs != "tombstone") } } '
