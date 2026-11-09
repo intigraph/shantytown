@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+from .tracker_result import phase
 
 
 def exact(tracker, item_id):
@@ -20,6 +21,7 @@ def exact(tracker, item_id):
 
 
 def _body(path):
+    phase("INPUT")
     if path is None:
         raise ValueError("operation requires its body/reason file")
     text = Path(path).read_text()
@@ -29,6 +31,7 @@ def _body(path):
 
 
 def _comments(tracker, item_id, body=None):
+    phase("SUBMIT" if body is not None else "READBACK")
     from .br import BrTracker, append_comment, comments
     from .files import FilesTracker, write_json_atomic
     if isinstance(tracker, BrTracker):
@@ -124,7 +127,9 @@ def command(args, tracker):
             if not session and getattr(args,"root",None):
                 from .session_budget import current_session
                 session = current_session(Path(args.root),actor)
+            phase("SUBMIT")
             tracker.ack_spec(args.item, state["version"],session=session)
+            phase("READBACK")
             after = tracker.spec_state(args.item)
             if after["version"] != state["version"] or after["unacked"]:
                 raise RuntimeError("spec ACK readback unproven; do not retry")
@@ -141,11 +146,13 @@ def command(args, tracker):
         if not session:
             raise ValueError("current session UNKNOWN; supply explicit --session provenance")
         summary = getattr(args, "summary", None) or "consolidated specification"
+        phase("SUBMIT")
         result = tracker.rescope(args.item, args.spec_file, quote=quote,
             requester=getattr(args, "requester", None) or actor, summary=summary,
             urgent=getattr(args, "urgent", False), session=session,
             dry_run=getattr(args, "dry_run", False))
         if not args.dry_run:
+            phase("READBACK")
             state = tracker.spec_state(args.item)
             if state["version"] != result["version"] or not state["unacked"]:
                 raise RuntimeError("rescope readback unproven; write may have landed, do not retry")
@@ -167,6 +174,8 @@ def command(args, tracker):
             try:
                 _comments(tracker, item.id, body)
             except subprocess.TimeoutExpired as timed_out:
+                from .tracker_result import timed_out as record_timeout
+                record_timeout()
                 # The child was killed, but its write may already have committed
                 # (aegis-epi: a contended comment landed after st's 30s limit and
                 # st printed "unproven"). Read back once; never re-send.
@@ -254,7 +263,9 @@ def command(args, tracker):
                     session = current_session(Path(args.root),os.environ.get("SHANTY_AGENT", ""))
                 if session:
                     options["session"] = session
+            phase("SUBMIT")
             tracker.update(item.id, **options, **fields)
+            phase("READBACK")
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
                 raise RuntimeError("update readback unproven; write may have landed; verify exact readback before retrying")

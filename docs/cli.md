@@ -3810,3 +3810,28 @@ observe that attempt without sending another clear or restarting the continuing
 turn. Missing or stale session evidence withholds a new soft clear. A delayed
 clear can still execute when the turn ends; inspect the retained evidence before
 any operator recovery. No active cycle is exercised by the fixture tests.
+
+### Tracker result envelopes
+
+`st work item show ITEM --result-json` and the corresponding update, comment,
+close, rescope and ack operations opt into `tracker-result/v1`. Legacy output
+is unchanged. Check the process status and `ok`; failed reads have null `data`,
+never a successful empty board.
+
+The envelope includes a per-invocation operation ID, task, known graph, phase,
+mutation outcome, exit code, safe error category and reconciliation advice.
+INPUT and precondition READ failures prove this invocation did not submit.
+SUBMIT timeouts and READBACK failures preserve UNKNOWN. Verified operations
+report COMMITTED, including already satisfied state; this does not promise a
+new transaction. Dry runs have NOT_APPLICABLE mutation outcome. The operation
+ID correlates diagnostics and does not replace native idempotence or CAS.
+
+Known SDK exit codes and categories survive wrapping. HTTP auth, policy and
+timeout responses, missing input, malformed JSON, conflicts and indeterminate
+commits remain distinct; unknown classifications remain UNKNOWN. Errors omit
+raw server bodies, private arguments and credentials. Normal command admission
+still applies; this option grants no authority or retry.
+
+For ambiguous comments, the existing bounded exact readback can establish that
+the original attempt landed; it never resubmits automatically. Missing or
+unreadable evidence keeps UNKNOWN.
