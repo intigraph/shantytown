@@ -9,7 +9,8 @@ import json
 import re
 import uuid
 
-from .dispatch_receipts import ReceiptConflict, ReceiptStore, assignment_comment, assignment_proof
+from .dispatch_receipts import (ReceiptConflict, ReceiptStore, assignment_comment,
+                                assignment_proof, assignment_supersession)
 
 
 def digest(value):
@@ -41,6 +42,10 @@ class FilesAssignments:
         current = json.loads(self.tracker._path(row['item']).read_text())
         return assignment_proof(row, dict(current, id=row['item']))
 
+    def supersession(self, row):
+        current = json.loads(self.tracker._path(row['item']).read_text())
+        return assignment_supersession(row, dict(current, id=row['item']))
+
 
 class SeedsAssignments:
     def __init__(self, tracker):
@@ -51,6 +56,9 @@ class SeedsAssignments:
 
     def read(self, row):
         return self.tracker.dispatch_assignment_read(row)
+
+    def supersession(self, row):
+        return assignment_supersession(row, self.tracker.stranded_read(row['item']))
 
 
 class Binding:
@@ -139,6 +147,26 @@ class Binding:
         return self.store.assign(plan.receipt_id, current,
                                  lambda row: self.assignments.claim(row, plan.updates))
 
+    def supersede(self, ident, *, dry_run=False):
+        """Explicitly retire a fenced attempt; never send, claim or authorize work."""
+        row = self.store.read(ident)
+        if dry_run:
+            # A preview must not acquire a writable ledger lock or remove the
+            # interrupted-assignment fence. Native release evidence is still
+            # required; this read never authorizes a later transition.
+            if row['state'] not in ('assigning', 'superseded'):
+                raise ReceiptConflict('only a fenced assignment can be superseded')
+            if row['state'] == 'assigning':
+                self.assignments.supersession(row)
+            return dict(id=ident, state=row['state'], dry_run=True,
+                        would_supersede=row['state'] == 'assigning', execution_authorized=False)
+        with self.store.lock(row['item']):
+            if row['state'] == 'superseded':
+                return dict(id=ident, state='superseded', execution_authorized=False)
+            proof = self.assignments.supersession(row)
+            self.store.supersede_assignment(ident, proof)
+        return dict(id=ident, state='superseded', execution_authorized=False)
+
     def reconcile(self, ident):
         """Read-only, including when local assignment persistence was interrupted."""
         row = self.store.read(ident)
@@ -157,6 +185,8 @@ class Binding:
         status = self.store.status(ident, scope)
         status.update(item=row['item'], worker=row['worker'], native_assignment='UNKNOWN')
         status['execution_authorized'] = False
+        if row['state'] == 'superseded':
+            return status
         try:
             proof = self.assignments.read(row)
         except Exception as error:

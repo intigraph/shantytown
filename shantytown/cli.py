@@ -1613,7 +1613,9 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
-    go.add_argument('--receipt', help='receipt ID for read-only reconciliation')
+    go.add_argument('--receipt', help='receipt ID for read-only reconciliation or explicit supersession')
+    go.add_argument('--supersede', action='store_true',
+                    help='retain and retire an uncertain receipt after a newer native open/unassigned release; never send or claim')
     go.add_argument('--reconcile', '--status', action='store_true',
                     help='read receipt, task/runtime and native assignment; never send or claim')
     note = go.add_mutually_exclusive_group()
@@ -2083,6 +2085,7 @@ def build_parser() -> argparse.ArgumentParser:
     tk = sub.add_parser("task", help="create a work item")
     tk.add_argument("title", nargs="+")
     tk.add_argument("-a", "--assignee")
+    tk.add_argument("--due", help="explicit due date (YYYY-MM-DD) or timezone-qualified instant")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
     dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
@@ -7392,6 +7395,13 @@ def _cmd_task(a) -> int:
     reason step 2 has anything to say.
     """
     title = " ".join(a.title)
+    from .task_intake import deadline
+    try:
+        due = deadline(getattr(a, "due", None),
+                       _deployment_default(a, "SHANTY_TASK_DUE_REQUIRED"))
+    except ValueError as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return REFUSED
     from .plate_capacity import (ensure_room, assignment_lock, PlateFull,
                                  CapacityUnknown)
     if a.dry_run:
@@ -7401,7 +7411,8 @@ def _cmd_task(a) -> int:
             except (PlateFull, CapacityUnknown) as error:
                 print(f"  refused: {error}", file=sys.stderr)
                 return REFUSED
-        print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else ""))
+        print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else "")
+              + (f" due={due}" if due else ""))
         print("\n  0 writes.")
         return OK
     try:
@@ -7434,7 +7445,10 @@ def _cmd_task(a) -> int:
                 except CapacityUnknown as error:
                     print(f"  refused: {error}", file=sys.stderr)
                     return REFUSED
-            item = tracker.create(title, assignee=None if refused else a.assignee)
+            fields = {"assignee": None if refused else a.assignee}
+            if due:
+                fields["due_at"] = due
+            item = tracker.create(title, **fields)
     except Exception as e:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -7956,11 +7970,13 @@ def _priority_fleet_notes(a, reg, panes):
 
 
 def _cmd_go(a) -> int:
-    if getattr(a, 'reconcile', False) or getattr(a, 'receipt', None):
+    if getattr(a, 'reconcile', False) or getattr(a, 'supersede', False) or getattr(a, 'receipt', None):
         from .dispatch_binding import binding_for
         try:
             if not getattr(a, 'receipt', None):
-                raise ValueError('--reconcile requires --receipt')
+                raise ValueError('--reconcile or --supersede requires --receipt')
+            if getattr(a, 'reconcile', False) and getattr(a, 'supersede', False):
+                raise ValueError('choose read-only --reconcile or explicit --supersede')
             tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
             from .deployment import local_host
             agent = registry.get(a.agent)
@@ -7972,7 +7988,9 @@ def _cmd_go(a) -> int:
             row = binding.store.read(a.receipt)
             if row['item'] != a.item or row['worker'] != a.agent:
                 raise ValueError('receipt names a different task or worker')
-            print(json.dumps(binding.reconcile(a.receipt), indent=2))
+            result = (binding.supersede(a.receipt, dry_run=getattr(a, 'dry_run', False))
+                      if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
+            print(json.dumps(result, indent=2))
             return OK
         except (OSError, ValueError, LookupError) as error:
             print(f'  could not tell: {error}', file=sys.stderr)

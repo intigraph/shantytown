@@ -88,3 +88,16 @@ def test_native_uncertainty_keeps_operation_diagnostics_and_is_never_retried(tmp
     assert len(calls) == 1
     assert store.read(receipt['id'])['state'] == 'assigning'
     assert store.read(receipt['id'])['assignment_error']['native'] == payload
+
+
+def test_native_supersession_reads_exact_revision_and_never_claims(tmp_path):
+    from shantytown.dispatch_binding import SeedsAssignments
+    store, scope, receipt, current, tracker, calls = fixture(tmp_path)
+    current.update(status='open', assignee=None)
+    proof = SeedsAssignments(tracker).supersession(receipt)
+    assert proof == dict(receipt=receipt['id'], item='work-1', revision=5,
+                         status='open', assignee=None)
+    assert calls == [('work-1', ('show', 'work-1', '--json'))]
+    current['revision'] = receipt['revision']
+    with pytest.raises(ReceiptConflict):
+        SeedsAssignments(tracker).supersession(receipt)
