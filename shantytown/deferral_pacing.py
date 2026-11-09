@@ -48,7 +48,16 @@ class OwnerPacing:
             self.previous = {}
         self.current = {}
 
-    def route(self, row, finding, live, deliver, lead_for):
+    def route(self, row, finding, live, deliver, lead_for, *, observe=None):
+        # Diagnostics must never consume a reminder or change its recipient.
+        def report(recipient, role, outcome, error=None):
+            if observe is not None:
+                try:
+                    observe(dict(recipient=recipient, role=role, outcome=outcome,
+                                 exception_type=type(error).__name__[:64] if error else None))
+                except Exception:
+                    pass
+
         key = hashlib.sha256(json.dumps(
             [finding.key(), row.get("updated_at"), row.get("defer_until")],
             sort_keys=True).encode()).hexdigest()
@@ -71,17 +80,25 @@ class OwnerPacing:
         if lead and lead != owner:
             recipients.append((lead, "lead"))
         for recipient, reason in recipients:
-            if not recipient or not live(recipient):
+            if not recipient:
+                report(recipient, reason, "recipient-absent")
+                continue
+            if not live(recipient):
+                report(recipient, reason, "live-absence")
                 continue
             if recipient in notified:
+                report(recipient, reason, "suppressed")
                 return recipient, reason, "suppressed"
             try:
                 sent = deliver(recipient,
                                f"OWNER-PACING: {row['id']} deferred work "
                                + ("event is ready" if finding.met or finding.prose_gate else "backstop lapsed")
                                + "; check the current gate and update the item. No gate released.")
-            except Exception:
+            except Exception as error:
+                report(recipient, reason, "send-failure", error)
                 sent = None
+            else:
+                report(recipient, reason, "delivered" if sent else "send-unconfirmed")
             if sent:
                 notified.add(recipient)
                 state["recipients"] = sorted(notified)

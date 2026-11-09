@@ -46,6 +46,21 @@ def validate_gate(item, target, reason, sattler_reason='', authority=''):
     if (steve_ask(notes) or field(notes, 'steve_quote')) and target.priority > item.priority:
         if authority != 'sattler' or not sattler_reason.strip() or '\n' in sattler_reason.strip():
             raise ValueError('Steve ask behind lower priority requires Sattler --sattler-reason before inheritance')
+    # A dependency may wait on an exclusive operation without editing its
+    # admitted item. Such a write invalidates existing BEGIN/CAS custody.
+    raw = getattr(target, 'agent_context', None)
+    if raw is not None:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(value, dict):
+            raise ValueError('gate target agent context is UNKNOWN')
+        if 'deploy_admission' in value:
+            admission = value['deploy_admission']
+            if (not isinstance(admission, dict)
+                    or admission.get('schema') != 'aegis.deploy-admission/v1'
+                    or admission.get('phase') not in {'planned', 'inflight', 'drained', 'cancelled'}):
+                raise ValueError('gate target deploy admission is UNKNOWN')
+            if admission['phase'] in {'planned', 'inflight'}:
+                return target.priority
     return min(item.priority, target.priority)
 
 
