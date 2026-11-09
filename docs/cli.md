@@ -44,7 +44,8 @@ context must also be delivered; Codex requires the adapter's observation that
 this exact startup body began a turn. A stranded, queued or unobserved startup
 reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
-composer input.
+composer input. Once the exact-body Codex receipt confirms a new turn, later
+terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
@@ -1946,7 +1947,16 @@ Legacy inbox rows without custody may trigger an alert but never authorize
 editing somebody's composer.
 
 Accepted Codex queued input remains pending while a turn is busy; it is not a
-failed submission, and pointers stay retained. The backlog timer starts after
+failed submission, and pointers stay retained. Both the older “Messages to be
+submitted after next tool call” and newer “Queued follow-up inputs” chrome are
+recognized. If tend observes a queue still visible with an idle composer, it
+immediately persists the existing `delivery-stalled` event to the lead/admin
+and attempts one coordinator wake. A clipped preview cannot authorize submitting
+an entire queue, so no Enter is sent and its unread pointer stays open. Any
+visible queue prevents falsely retiring custody as dequeued. The same event
+latches for the continuing backlog, avoiding repeated wakes.
+
+For other unresolved input, the backlog timer starts after
 tend observes idle input and resets on a busy or unreadable/no-box observation.
 After 300 seconds unresolved while observed idle, the next tend observation persists
 one `delivery-stalled` event to the configured lead/admin and attempts one
@@ -1990,9 +2000,12 @@ not truncated to 15. `--dry-run` reports the selection and performs no closes.
 drains that offline case without turning startup into an acknowledgment. After the
 runtime and its hooks are verified, the launcher snapshots the recipient's unread
 messages and injects one marked startup-context block. It closes exactly those IDs
-only when a scrollback read-back contains the block's complete end marker and the
-input is not stranded. A failed send, missing/truncated marker, unreadable inbox, or
-aborted startup leaves every pointer open. Plain list and `--count` remain pure reads;
+when Codex returns an exact-body first-turn receipt. Other adapters require a
+scrollback read-back containing the complete end marker without stranded input.
+A Codex marker echo without that receipt does not acknowledge anything; a marker
+that scrolls away after a confirmed turn does not invalidate its receipt. A failed
+send, missing required evidence, unreadable inbox or aborted startup preserves
+unacknowledged pointers. Plain list and `--count` remain pure reads;
 age is never treated as evidence of delivery.
 
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
@@ -3801,3 +3814,14 @@ hosts retain their existing behavior. This adds no second schedule or resend.
 A completed pass is not a delivery receipt. Check the actual notifier outcome,
 recipient and delivery ID, measured body bytes, and phase latency before claiming
 scheduled-delivery acceptance.
+
+## Soft-cycle completion evidence
+
+Soft-cycle completion requires a fresh hook-reported session ID and transcript
+path, plus settled ready UI and the existing permission check. A missing token
+footer does not prove a reset. If the clear times out, the command reports
+failure and retains the request, handoff and in-flight intent. Later passes
+observe that attempt without sending another clear or restarting the continuing
+turn. Missing or stale session evidence withholds a new soft clear. A delayed
+clear can still execute when the turn ends; inspect the retained evidence before
+any operator recovery. No active cycle is exercised by the fixture tests.

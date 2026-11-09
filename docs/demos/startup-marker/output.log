@@ -1,0 +1,17 @@
+Script started on 2026-11-08 19:17:21-05:00 [COMMAND="python3 docs/demos/startup-marker/pair.py" <not executed on terminal>]
+Before
+  ⚠ startup inbox delivery not verified for ellie (complete marker absent or input stranded); 1 pointer(s) remain open.
+Exact-body adapter receipt: observed
+Startup marker in subsequent terminal history: absent
+Startup accepted: False
+Unread startup mail: 1
+Sends: 1
+After
+  startup inbox: delivered and closed 1 verified pointer(s) for ellie.
+Exact-body adapter receipt: observed
+Startup marker in subsequent terminal history: absent
+Startup accepted: True
+Unread startup mail: 0
+Sends: 1
+
+Script done on 2026-11-08 19:17:24-05:00 [COMMAND_EXIT_CODE="0"]
