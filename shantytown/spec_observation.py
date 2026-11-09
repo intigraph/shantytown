@@ -197,8 +197,10 @@ def _records(root):
             else:
                 receiver = record.get("receiver")
                 if (not isinstance(receiver, dict)
-                        or set(receiver) != {"source", "turn_id", "record_ordinal", "record_sha256"}
+                        or set(receiver) != {"source", "event_id", "turn_id", "record_ordinal", "record_sha256"}
                         or receiver["source"] != "codex-native-archive"
+                        or not isinstance(receiver["event_id"], str) or not receiver["event_id"]
+                        or len(receiver["event_id"].encode()) > 256
                         or not isinstance(receiver["turn_id"], str) or not receiver["turn_id"]
                         or len(receiver["turn_id"].encode()) > 256
                         or type(receiver["record_ordinal"]) is not int or receiver["record_ordinal"] < 1
@@ -215,9 +217,8 @@ def _records(root):
 def observe(root, agent, payload):
     """Observe bounded Codex native accepted inputs, never stdout or ACKs.
 
-    Only complete, session-bound archives with native turn IDs qualify. The
-    reader event identity is the archive record ordinal plus its exact digest;
-    this is an archive identity, never claimed to be a native event UUID.
+    Only complete, session-bound archives with native message/turn IDs qualify.
+    Archive ordinal/digest supplement those native IDs, never replace them.
     Other harness schemas remain unsupported/UNKNOWN until separately qualified.
     """
     session = payload.get("session_id")
@@ -258,8 +259,13 @@ def observe(root, agent, payload):
             turn = row.get("turn_id")
             continue
         if (entry.get("type") != "response_item" or row.get("type") != "message"
-                or row.get("role") != "developer" or not isinstance(turn, str) or not turn
+                or row.get("role") != "user" or not isinstance(turn, str) or not turn
                 or len(turn.encode()) > 256):
+            continue
+        event = row.get("id")
+        metadata = row.get("internal_chat_message_metadata_passthrough")
+        if (not isinstance(event, str) or not event or len(event.encode()) > 256
+                or not isinstance(metadata, dict) or metadata.get("turn_id") != turn):
             continue
         content = row.get("content")
         if (not isinstance(content, list) or len(content) != 1
@@ -275,7 +281,7 @@ def observe(root, agent, payload):
         for identity in matches:
             _publish(root, {"state": "HARNESS_OBSERVED", "identity": identity,
                             "receiver": {"source": "codex-native-archive",
-                                         "turn_id": turn, "record_ordinal": ordinal,
+                                         "event_id": event, "turn_id": turn, "record_ordinal": ordinal,
                                          "record_sha256": _digest(line)}})
 
 

@@ -22,13 +22,17 @@ identical. Stored evidence contains identities and digests, never notice bodies.
 The existing stats Stop capture is the optional receiver observer. Its conservative
 Codex archive adapter accepts only a session-bound, complete JSONL capture containing
 a native `turn_context.payload.turn_id` followed by a `response_item` of type
-`message`, role `developer`, with exactly one `input_text` block equal to the emitted
-wire text. Tool output, user/assistant messages, diagnostic events, wrapping or
+`message`, role `user`, with a native message `id`, matching native message turn
+metadata, and exactly one `input_text` block equal to the emitted wire text. This
+adapter follows the accepted Stop-input structure observed in preserved archives;
+matching the exact new notice envelope remains a separately qualified live gate.
+Tool output, developer/assistant messages, diagnostic events, wrapping or
 ambiguous text, missing turn identity, unsupported schemas and partial captures do
 not qualify. The source's accepted input record proves observation; generator stdout
 and successful subprocess exit do not. The receiver identity explicitly names the
-native turn plus the archive record ordinal and record digest; an ordinal is not
-claimed to be a native event UUID. Other harness schemas remain UNKNOWN.
+native message ID and native turn, supplemented by archive ordinal and record digest.
+Missing or disagreeing native message/turn identity stays UNKNOWN. Other harness
+schemas remain UNKNOWN.
 
 Evidence is private (0600 files, newly created directories 0700), immutable, and
 published atomically without replacement under `notify/spec-observation`. Directory

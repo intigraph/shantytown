@@ -38,7 +38,8 @@ with tempfile.TemporaryDirectory() as temporary:
         archive = root / "receiver.jsonl"
         header = {"type": "session_meta", "payload": {"id": "demo-session"}}
         turn = {"type": "turn_context", "payload": {"turn_id": "demo-turn"}}
-        message = {"type": "response_item", "payload": {"type": "message", "role": "developer",
+        message = {"type": "response_item", "payload": {"type": "message", "role": "user",
+                   "id": "demo-event", "internal_chat_message_metadata_passthrough": {"turn_id": "demo-turn"},
                    "content": [{"type": "input_text", "text": notice}]}}
         payload = {"session_id": "demo-session", "transcript_path": str(archive)}
         # Same wire bytes, wrong recipient session: must stay UNKNOWN.

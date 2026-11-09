@@ -22,13 +22,15 @@ def emission(root, **overrides):
                             [{"id": "work-spec", "version": 2}], BODY)
 
 
-def archive(root, wire, *, session="session", turn="turn-1", role="developer",
-            kind="message", trailing=b"", content_type="input_text"):
+def archive(root, wire, *, session="session", turn="turn-1", role="user",
+            kind="message", trailing=b"", content_type="input_text", event="event-1",
+            message_turn="turn-1"):
     path = root / "archive.jsonl"
     entries = [{"type": "session_meta", "payload": {"id": session}},
                {"type": "turn_context", "payload": {"turn_id": turn}},
                {"type": "response_item", "payload": {
-                   "type": kind, "role": role,
+                   "type": kind, "role": role, "id": event,
+                   "internal_chat_message_metadata_passthrough": {"turn_id": message_turn},
                    "content": [{"type": content_type, "text": wire}]}}]
     path.write_bytes(b"".join(json.dumps(row).encode() + b"\n" for row in entries) + trailing)
     return {"session_id": "session", "transcript_path": str(path), "hook_event_name": "Stop"}
@@ -61,9 +63,10 @@ def test_same_native_event_emission_drop_then_accept_through_exact_reader(tmp_pa
 
 
 @pytest.mark.parametrize("change", [
-    {"session": "foreign"}, {"turn": None}, {"role": "user"}, {"role": "assistant"},
+    {"session": "foreign"}, {"turn": None}, {"role": "developer"}, {"role": "assistant"},
     {"role": "tool"}, {"kind": "custom_tool_call_output"}, {"kind": "function_call_output"},
     {"content_type": "output_text"}, {"trailing": b'{"partial":'},
+    {"event": None}, {"message_turn": None}, {"message_turn": "foreign-turn"},
 ])
 def test_wrong_or_partial_native_event_never_observed(tmp_path, change):
     wire, [identity] = emission(tmp_path)
@@ -115,7 +118,7 @@ def test_new_native_turn_remains_distinct_and_replay_idempotent(tmp_path):
     wire, [identity] = emission(tmp_path)
     payload = archive(tmp_path, wire)
     observe(tmp_path, payload)
-    observe(tmp_path, archive(tmp_path, wire, turn="turn-2"))
+    observe(tmp_path, archive(tmp_path, wire, turn="turn-2", message_turn="turn-2"))
     assert {r["turn_id"] for r in evidence.show(tmp_path, identity)["receivers"]} == {"turn-1", "turn-2"}
 
 
@@ -167,7 +170,7 @@ def test_unsafe_sources_and_corrupt_evidence_remain_unknown(tmp_path):
 
 
 @pytest.mark.parametrize("key,value", [
-    ("source", "sender-output"), ("turn_id", "foreign-turn"),
+    ("source", "sender-output"), ("turn_id", "foreign-turn"), ("event_id", "foreign-event"),
     ("record_ordinal", 99), ("record_sha256", "0" * 64),
 ])
 def test_exact_receiver_identity_cannot_borrow_another_event(tmp_path, key, value):
