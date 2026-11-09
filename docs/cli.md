@@ -857,6 +857,11 @@ silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
 
+If no store directory resolves, `st ops hooks check` reports CANNOT TELL and
+exits 2 instead of treating zero inspected bundles as a pass. Its JSON report
+retains schema `st.hook-check/1` and includes `store_error: "no store found"`.
+A real, existing store with an empty registry can still pass with exit 0.
+
 Codex and administrator launches also deliver the same anchor render through the
 verified startup input, together with any unread mail in one message. Any other
 launch with an empty inbox submits this initial anchor turn too: SessionStart
