@@ -901,11 +901,12 @@ def test_codex_inbox_unread_failure_still_delivers_anchor(codex_startup, monkeyp
     assert "ON YOUR PLATE" in panes.sent[0][1]
 
 
-def test_codex_marker_without_anchor_cannot_ack_mail(codex_startup):
+def test_codex_marker_without_anchor_or_submission_cannot_ack_mail(codex_startup):
     args, card, box = codex_startup
     msg = box.deliver("ellie", "preserve if context is incomplete")
 
-    class TailOnlyPanes(CodexStartupPanes):
+    class TailOnlyPanes(NullPanes):
+        # A marker echo without the exact-body turn receipt is not delivery.
         def capture(self, session, history=None):
             return self.sent[-1][1].splitlines()[-1]
 
@@ -936,3 +937,38 @@ def test_codex_echoed_startup_without_exact_submission_keeps_mail(
     assert not cli._deliver_startup_inbox(args, card, EchoOnlyPanes(), card.pane)
     assert [m.id for m in box.unread("ellie")] == [msg.id]
     assert "delivery failed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("mail", [False, True])
+def test_codex_exact_startup_submission_survives_marker_scrolling_off(
+        codex_startup, mail, capsys):
+    args, card, box = codex_startup
+    if mail:
+        box.deliver(card.name, "startup mail must be acknowledged once")
+
+    class WorkingTurnPanes(CodexStartupPanes):
+        def capture(self, session, history=None):
+            # Natural launch: the complete 37k body reached its user turn,
+            # then ordinary work displaced the marker from history=200.
+            return "• Working on the requested task (esc to interrupt)\n›"
+
+    panes = WorkingTurnPanes(screen=READY)
+    assert cli._deliver_startup_inbox(args, card, panes, card.pane) is True
+    assert len(panes.sent) == 1
+    assert box.unread(card.name) == []
+    assert "not verified" not in capsys.readouterr().err
+
+
+def test_other_adapter_still_requires_visible_complete_startup_marker(codex_startup):
+    from dataclasses import replace
+    args, original, box = codex_startup
+    card = replace(original, harness="claude")
+    msg = box.deliver(card.name, "keep until the adapter-specific check passes")
+
+    class HiddenMarkerPanes(CodexStartupPanes):
+        def capture(self, session, history=None):
+            return "ordinary work without the complete startup marker"
+
+    assert not cli._deliver_startup_inbox(
+        args, card, HiddenMarkerPanes(screen=READY), card.pane)
+    assert [m.id for m in box.unread(card.name)] == [msg.id]

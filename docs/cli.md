@@ -44,18 +44,57 @@ context must also be delivered; Codex requires the adapter's observation that
 this exact startup body began a turn. A stranded, queued or unobserved startup
 reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
-composer input.
+composer input. Once the exact-body Codex receipt confirms a new turn, later
+terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
+
+## Dispatch receipts
+
+Seeds and file-backed `st go` persist a pending receipt before sending. The
+receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
+store and exact body. The payload names that receipt and asks the recipient to
+check its acknowledgement before executing. Planning or typing alone grants
+no assignment: exact-body submission must be observed, followed by one
+revision-guarded tracker transition carrying the same receipt and body digest.
+
+Read its current state without sending, claiming, changing the ledger, or
+forcing input:
+
+```sh
+st go project-item ada --reconcile --receipt RECEIPT_ID
+```
+
+`execution_authorized` requires current scope and native assignment proof.
+Missing submission, assignment, or local persistence is named separately; an
+unreadable native proof remains UNKNOWN. A native commit whose local receipt
+write was interrupted can still be proven by read-back. Repeating the original
+`go` then repairs local persistence without a second send or claim. A pending
+unverified send refuses replay until its retained transport evidence is
+reconciled. An exact delivered record in existing transport custody can repair
+the local observation on normal replay, without another send; queued or merely
+acknowledged custody does not qualify. Never resend or claim manually. Changed revisions, workers, notes,
+cards or sessions cannot reuse the receipt. Older tracker adapters retain the
+legacy path and do not emit bound execution receipts.
+
+File-backed tracker updates now serialize per item and increment a revision
+with the assignment and transition comment in one atomic file replacement.
+Existing unversioned files occupy revision one. Reads and dry runs do not
+migrate or rewrite them.
 
 ## Assignment capacity
 
 ### Graph-ranked pickup after an anchor ends
 
 Deployments may enable `SHANTY_BACKLOG_PICKUP=1` after registering the reviewed
-`queries/seeds-work-rank-v1.ttl` stored query. At a worker's completed-anchor
-stop, the hook compares its assigned queue with strictly higher-priority READY
-unowned work. The query orders up to 64 exact candidates by declared priority,
-due/overdue date, explicit directive and age. Current revisions, owners, dates
-and statuses must match the query witnesses before selection.
+`queries/seeds-work-rank-v2.ttl` stored query as `seeds_work_rank_v2` and verifying
+that the installed consumer selects that exact version. The original v1 query
+belongs to the earlier v1 consumer; v2 never falls back to it. Registration and
+enablement remain separate admitted deployment steps, and pickup defaults off.
+At a worker's completed-anchor stop, the hook compares its assigned queue with
+strictly higher-priority READY unowned work. The query orders up to 64 exact
+candidates by declared priority, due/overdue date, explicit directive, capped
+observed deferral lower bound and age. Missing historical deferral observations
+remain UNKNOWN, not zero. Current revisions, owners, dates and statuses must
+match the query witnesses before selection.
 
 The selected unowned item is claimed with a revision guard, the ordinary plate
 capacity lock/check, fresh dependency readiness and verified owner read-back.
@@ -580,6 +619,32 @@ must be accepted before the binding can be used. The initial protected-recycle
 binding is **disabled**: this release does not change an existing review date or
 start an evidence collector.
 
+Producer-owned waits also support `recurring-quiet:<class-hash>` and
+`evidence-count:<registered-producer>>=N`, with a backstop at least 24 hours
+away. A met event can wake before that reminder; an expired reminder cannot
+substitute for the event. Neither condition closes work or changes policy.
+
+`recurring-quiet:` reads the existing recurring-alarm processor's private
+state, matching its 24-character class hash and linked item. A fresh
+authoritative census must prove 14 continuous quiet days, or a firing newer
+than the writer's recorded deferral boundary. A stale/missing census, an
+unreadable state file or an ambiguous deferral boundary is UNKNOWN. The
+processor still owns quiet-interval resets and recurring closure. This reader
+does not poll alerts, start a collector or rewrite the processor's state.
+All recurring waiters share one bounded file snapshot per sweep; the next
+scheduled sweep reads again, including after a failed read.
+
+`evidence-count:` accepts only a source-reviewed entry in
+`shantytown.resume_producers.COUNTERS`. The reader must deliver a complete,
+fresh observation for the registered item and corpus identity, with distinct
+candidate IDs and explicit required-case coverage. Duplicate IDs, mixed
+identity, missing data and read failures are UNKNOWN; insufficient count or
+required coverage is not met. No production counter is registered initially:
+the policy49/50 producer is a separate reviewed change. Item text cannot select
+a query, command, path or URL, and retained stderr is not a counter source.
+The bounded contract permits at most 10,000 candidate IDs per observation;
+larger thresholds are refused before deferral writes.
+
 Version conditions need no binding, because they test a public fact rather than
 one item's producer:
 
@@ -835,6 +900,13 @@ confirmed, together with the verified active assignment. A dry run, refusal, or
 unverified delivery leaves the deferral intact. Dependency and governor gates
 still apply; activation does not remove the item's notes or review conditions.
 
+The normal audited dispatch retains a pending attempt before sending. A bare
+item ID left in scrollback cannot confirm a new attempt: confirmation uses the
+unique serve/worker witness or the adapter's evidence for the exact body.
+An unverified send leaves assignment unchanged and retains pending evidence.
+A delivery or tracker error does not authorize a manual claim or another send;
+reconcile the retained attempt with actual delivery and tracker state first.
+
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before
 any write*. Underneath, dispatch is `tmux send-keys`.
@@ -1031,6 +1103,16 @@ Two rules fall out, and they are the load-bearing part:
 This is still a heuristic on somebody else's TUI rendering, and it is the *cheap* tier of the fix.
 The better one is for a worker's own hook to report `idle`/`running`/`queued` into `.shanty` so the
 tier reads a **fact instead of a rendering** — the Stop event is the natural carrier (aegis-w9z1).
+
+For a new Codex message, the sender first establishes an empty composer and
+writes its own body. After the paste settles, it reads fresh attributed chrome:
+a busy pane gets Tab to queue that body; an idle pane gets Enter. Missing typed
+input, an unreadable frame or a changed runtime withholds the first submission.
+This avoids depending on a later ownership retry when Codex visually wraps
+inside a word. The retry matcher remains strict and never removes word boundaries.
+A visible queue is still not delivery: the durable pointer remains unread until
+independent delivery or acknowledgement. This initial send does not authorize
+clearing or submitting an already occupied composer.
 
 ## `auth-dead` — login expired, and the pane lies `idle` (aegis-arma)
 
@@ -1850,7 +1932,16 @@ Legacy inbox rows without custody may trigger an alert but never authorize
 editing somebody's composer.
 
 Accepted Codex queued input remains pending while a turn is busy; it is not a
-failed submission, and pointers stay retained. The backlog timer starts after
+failed submission, and pointers stay retained. Both the older “Messages to be
+submitted after next tool call” and newer “Queued follow-up inputs” chrome are
+recognized. If tend observes a queue still visible with an idle composer, it
+immediately persists the existing `delivery-stalled` event to the lead/admin
+and attempts one coordinator wake. A clipped preview cannot authorize submitting
+an entire queue, so no Enter is sent and its unread pointer stays open. Any
+visible queue prevents falsely retiring custody as dequeued. The same event
+latches for the continuing backlog, avoiding repeated wakes.
+
+For other unresolved input, the backlog timer starts after
 tend observes idle input and resets on a busy or unreadable/no-box observation.
 After 300 seconds unresolved while observed idle, the next tend observation persists
 one `delivery-stalled` event to the configured lead/admin and attempts one
@@ -1894,9 +1985,12 @@ not truncated to 15. `--dry-run` reports the selection and performs no closes.
 drains that offline case without turning startup into an acknowledgment. After the
 runtime and its hooks are verified, the launcher snapshots the recipient's unread
 messages and injects one marked startup-context block. It closes exactly those IDs
-only when a scrollback read-back contains the block's complete end marker and the
-input is not stranded. A failed send, missing/truncated marker, unreadable inbox, or
-aborted startup leaves every pointer open. Plain list and `--count` remain pure reads;
+when Codex returns an exact-body first-turn receipt. Other adapters require a
+scrollback read-back containing the complete end marker without stranded input.
+A Codex marker echo without that receipt does not acknowledge anything; a marker
+that scrolls away after a confirmed turn does not invalidate its receipt. A failed
+send, missing required evidence, unreadable inbox or aborted startup preserves
+unacknowledged pointers. Plain list and `--count` remain pure reads;
 age is never treated as evidence of delivery.
 
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
@@ -3690,3 +3784,29 @@ before its reminder date while independent human and dependency holds remain.
 It does not prove provider responses or bypass launch admission. Existing
 `pr-merged:`, `ci-terminal:` and typed controller events retain their own readers
 and budgets.
+
+
+## Scheduled reminders in `st fleet tend`
+
+When enabled, the shared overdue/spec/unlock notifier gets the first best-effort
+slot after supervision and fleet-owner admission. A slow inbox recovery or
+requested cycle cannot consume that pass's budget before reminders are admitted.
+The remaining sweeps keep their saved rotation cursor; reminder admission does
+not reset their progress. The existing 120-second admission budget still applies,
+and no sweep already in flight is interrupted. Disabled reminders and non-owner
+hosts retain their existing behavior. This adds no second schedule or resend.
+
+A completed pass is not a delivery receipt. Check the actual notifier outcome,
+recipient and delivery ID, measured body bytes, and phase latency before claiming
+scheduled-delivery acceptance.
+
+## Soft-cycle completion evidence
+
+Soft-cycle completion requires a fresh hook-reported session ID and transcript
+path, plus settled ready UI and the existing permission check. A missing token
+footer does not prove a reset. If the clear times out, the command reports
+failure and retains the request, handoff and in-flight intent. Later passes
+observe that attempt without sending another clear or restarting the continuing
+turn. Missing or stale session evidence withholds a new soft clear. A delayed
+clear can still execute when the turn ends; inspect the retained evidence before
+any operator recovery. No active cycle is exercised by the fixture tests.

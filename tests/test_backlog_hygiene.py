@@ -138,3 +138,44 @@ def test_hygiene_ledger_permission_failure_cannot_suppress_p0_page(tmp_path, mon
         push=lambda *args: sent.append(args) or True, log=logs.append)
     assert result == ["fleet"] and len(sent) == 1
     assert any("stale-work review UNKNOWN" in line for line in logs)
+
+
+@pytest.mark.parametrize("failures", [set(), {"graph"}, {"hygiene"}, {"graph", "hygiene"}])
+def test_both_advisories_survive_integration_and_fail_independently(tmp_path, monkeypatch, failures):
+    from shantytown import backlog_hygiene, backlog_rank_report
+
+    rows = [work("urgent", priority=0), work("stale", updated_at="2020-01-01T00:00:00Z")]
+    reg = SimpleNamespace(all=lambda: Answer.complete_read([], how="fixture"))
+    panes = SimpleNamespace(exists=lambda p: True)
+    calls, logs, sent = [], [], []
+    real_review = stale_review
+
+    def graph(root, ready, store, *, log):
+        calls.append("graph")
+        assert ready is rows
+        if "graph" in failures:
+            raise PermissionError("fixture graph unavailable")
+
+    def hygiene(ready):
+        calls.append("hygiene")
+        assert ready is rows
+        if "hygiene" in failures:
+            raise ValueError("fixture metadata unavailable")
+        return real_review(ready)
+
+    monkeypatch.setattr(backlog_rank_report, "sweep", graph)
+    monkeypatch.setattr(backlog_hygiene, "stale_review", hygiene)
+    expected_key = ranking_check.report(
+        tmp_path, rows, rows, reg, panes, counts_reader=lambda root: "counts")[1]
+    result = ranking_check.sweep(
+        tmp_path, reg, panes, snapshot=lambda: (rows, rows),
+        counts_reader=lambda root: "counts", log=logs.append,
+        push=lambda *args: sent.append(args) or True)
+
+    assert calls == ["graph", "hygiene"]
+    assert result == ["fleet"] and len(sent) == 1
+    assert ranking_check.report(
+        tmp_path, rows, rows, reg, panes, counts_reader=lambda root: "counts")[1] == expected_key
+    assert all("stale-work review" not in str(call) for call in sent)
+    assert any("graph rank observation UNKNOWN" in line for line in logs) == ("graph" in failures)
+    assert any("stale-work review UNKNOWN" in line for line in logs) == ("hygiene" in failures)

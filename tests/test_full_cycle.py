@@ -22,7 +22,7 @@ import pytest
 from shantytown import cli, stop_event
 from shantytown.cli import main, OK, CANNOT_TELL
 from shantytown.events import FilesEvents
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes as NullPanes
 
 
 READY = " ▐▛███▜▌   Claude Code v2.1.214\n  ⏸ manual mode on · ? for shortcuts"

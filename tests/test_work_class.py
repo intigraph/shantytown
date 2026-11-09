@@ -7,7 +7,7 @@ import pytest
 from shantytown import cli, config, feed_check, governor as gov, work_class
 from shantytown.files import FilesRegistry, FilesTracker
 from shantytown.protocols import Agent
-from shantytown.tmux import NullPanes
+from test_dispatch_binding import ReceivingPanes
 
 
 @pytest.mark.parametrize('labels,expected', [
@@ -28,7 +28,7 @@ def world(tmp_path, monkeypatch, enabled=True):
     reg = FilesRegistry(tmp_path / 'crew')
     for name, lane in [('writer', 'claude'), ('coder', 'codex')]:
         reg.set(Agent(name, pane='%' + name, harness=lane))
-    panes = NullPanes()
+    panes = ReceivingPanes(created={'%writer': 123, '%coder': 123})
     monkeypatch.setattr(cli, '_panes', lambda a: panes)
     # These controls concern the real dispatch path, not transport or graph access.
     monkeypatch.setattr(cli, '_go_on_host', lambda *a, **kw: None)

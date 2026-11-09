@@ -41,8 +41,7 @@ def _comments(tracker, item_id, body=None):
         rows = value.get("comments", [])
         if body is not None:
             rows.append({"body": body})
-            value["comments"] = rows
-            write_json_atomic(path, value)
+            tracker.update(item_id, comments=rows)
         return rows
     raise ValueError("selected tracker does not support comments")
 

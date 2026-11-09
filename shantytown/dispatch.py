@@ -129,8 +129,9 @@ class DispatchedButUntracked(Exception):
     would either refuse (already assigned) or send it twice.
     """
 
-    def __init__(self, item_id: str, agent: str, pane: str, cause: Exception):
+    def __init__(self, item_id: str, agent: str, pane: str, cause: Exception, receipt_id=''):
         self.item_id, self.agent, self.pane, self.cause = item_id, agent, pane, cause
+        self.receipt_id = receipt_id
         super().__init__(
             f"{item_id} WAS DELIVERED to {agent} ({pane}) and verified on the "
             f"pane, but the tracker write FAILED "
@@ -142,8 +143,10 @@ class DispatchedButUntracked(Exception):
             # the length of the least informative failure it can carry.
             f"({type(cause).__name__}: {str(cause)[:400]}). The agent has the work "
             f"and the tracker does not know it. Do NOT re-run `st go` — that would "
-            f"deliver it twice. Record it by hand instead, then confirm with "
-            f"`st anchor {agent}`.")
+            f"deliver it twice. Reconcile the retained dispatch evidence; "
+            f"this error does not authorize a manual claim."
+            + (f' Receipt {receipt_id}; inspect with st go {item_id} {agent} '
+               f'--reconcile --receipt {receipt_id}.' if receipt_id else ''))
 
 
 class TrackerWriteLost(Exception):
@@ -452,6 +455,10 @@ class Plan:
     quipu_nodes: list = field(default_factory=list)  # graph context (aegis-x6yoq)
     sender: str = ""  # who the payload is signed as, "" = unsigned (aegis-5vxmz)
     serve_id: str = ""
+    receipt_id: str = ''
+    replayed: bool = False
+    binding_item: object = field(default=None, repr=False, compare=False)
+    binding_agent: object = field(default=None, repr=False, compare=False)
     unreadable_deps: int = 0   # dependency rows the tracker counted but could
                                # not resolve, so we cannot tell if they block
                                # (aegis-kt7jr)
@@ -538,11 +545,13 @@ class Plan:
 
 class Dispatcher:
     def __init__(self, registry: Registry, tracker: Tracker, panes: Panes,
-                 governor=None, sender: str | None = None, audit=None, handoff=None):
+                 governor=None, sender: str | None = None, audit=None, handoff=None,
+                 binding=None):
         self.registry = registry
         self.tracker = tracker
         self.panes = panes
         self.handoff = handoff
+        self.binding = binding
         # WHO IS DISPATCHING (aegis-5vxmz). None means "could not establish", and
         # that stays BARE — see attribution.attribute. Injected rather than read
         # from the environment here because a Dispatcher constructed in a test or
@@ -763,6 +772,7 @@ class Dispatcher:
             unreadable_deps=int(getattr(item, "unreadable_deps", 0) or 0),
             orphaned_in_progress=orphaned,
             handoff_preview=preview, handoff_warning=warning,
+            binding_item=item, binding_agent=agent,
         )
 
     def triage(self, item_id: str, agent_name: str, note: str | None = None,
@@ -794,18 +804,37 @@ class Dispatcher:
         decision = triage(self.panes, p.pane, p.text)
         if decision.action is not Action.NUDGE:
             raise TriageRefused(decision)
+        if self.binding is not None and not self.binding.prepare(p):
+            # A confirmed submission can finish its one claim; an assigned
+            # receipt is a read-back replay. Neither case types work again.
+            self.binding.assign(p)
+            return p
         # #2: SEND -> VERIFY -> UPDATE, in that order, on purpose. The tracker
         # write moved AFTER a confirmed send so a dropped send never marks work
-        # in_progress. verify reads the pane back for the item id — the thing we
+        # in_progress. verify reads the pane back for this attempt witness — the thing we
         # just sent must have positive submission or pane evidence. If neither
-        # is available, raise SendUnverified (exit 2) and write NOTHING.
+        # is available, raise SendUnverified (exit 2), retain pending evidence,
+        # and never write an assignment.
+        # Persist intent before the process can disappear inside send(). The
+        # existing FeedAudit owns correlation; this is not another inbox.
+        if self._audit_record is not None:
+            self._audit_record(f"dispatch-{p.serve_id}", leg="delivery",
+                               worker=agent_name, item=item_id, attempted=True,
+                               serve_id=p.serve_id, state="dispatch_pending",
+                               reason="submission and assignment not yet confirmed")
         observed = self.panes.send(p.pane, p.text)    # 1 send
+        if self.binding is not None:
+            if not isinstance(observed, SubmissionObserved) or not observed.matches(p.pane, p.text):
+                raise SendUnverified(item_id, p.pane)
+            self.binding.submitted(p, observed)
         # Codex submission already observes idle -> working with an empty,
         # unqueued composer. Do not discard that stronger exact-body evidence
         # merely because its echoed item ID has left the scrollback window.
         submitted = (isinstance(observed, SubmissionObserved)
                      and observed.matches(p.pane, p.text))
-        if not submitted and not self.verify(p.pane, item_id):
+        witness = (f"[st serve:{p.serve_id} worker:{agent_name}]"
+                   if p.serve_id else p.text)
+        if not submitted and not self.verify(p.pane, witness):
             raise SendUnverified(item_id, p.pane)
         # THE OTHER HALF OF THE WINDOW (GitHub #20). send-then-update is the right
         # order — a dropped send must never mark work in_progress — but it leaves
@@ -825,9 +854,13 @@ class Dispatcher:
         # prevent, arriving underneath it. Verify by reading the row, never by the
         # tool's success message.
         try:
-            p.track_attempts = self._track(item_id, p.updates)
+            if self.binding is not None:
+                self.binding.assign(p)
+                p.track_attempts = 1
+            else:
+                p.track_attempts = self._track(item_id, p.updates)
         except Exception as e:                         # noqa: BLE001 — any store failure
-            raise DispatchedButUntracked(item_id, agent_name, p.pane, e) from e
+            raise DispatchedButUntracked(item_id, agent_name, p.pane, e, receipt_id=p.receipt_id) from e
         if self._audit_record is not None:
             window_id = f"dispatch-{p.serve_id}"
             self._audit_record(window_id, leg="claim", worker=agent_name,
@@ -995,6 +1028,12 @@ class Dispatcher:
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
             raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
+        if active.kind in ('recurring-quiet', 'evidence-count'):
+            from .resume_producers import validate as validate_producer
+            try:
+                validate_producer(active.kind, active.arg)
+            except ValueError as exc:
+                raise DeferRefused(str(exc)) from exc
         if active.kind == "event":
             from .resume_events import binding_for
             try:
@@ -1139,7 +1178,7 @@ class Dispatcher:
         return result
 
     def verify(self, pane: str, item_id: str) -> bool:
-        """Did the send land? Read the pane back and look for the item id.
+        """Read back the exact attempt witness supplied by the caller.
 
         design.md: "verify reads the pane back. Send-and-assume is how you
         believe work was assigned when it wasn't." A false negative (the agent
