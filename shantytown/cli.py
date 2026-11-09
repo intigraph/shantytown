@@ -1742,7 +1742,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="read only this host; do not contact configured peers")
     cr.add_argument("--json", action="store_true",
                     help="versioned crew snapshot (use --local for a peer read)")
-    cr.add_argument("--review-routing", action="store_true",
+    display_mode = cr.add_mutually_exclusive_group()
+    display_mode.add_argument("--display-snapshot", action="store_true",
+                    help="display-only 15s shared snapshot; never decision evidence")
+    display_mode.add_argument("--review-routing", action="store_true",
                     help="bounded local identity/pane observation; no full crew census")
     cr.add_argument("--no-priority-advice", action="store_true",
                     help="local JSON observation without optional board-wide priority advice")
@@ -8357,6 +8360,9 @@ def _cmd_crew(a) -> int:
     answered: a stamp records WHICH BYTES an agent launched with, and one we did
     not observe would be a fabricated measurement, which is worse than a blank.
     """
+    if getattr(a, "display_snapshot", False):
+        from .crew_display import command
+        return command(a)
     if getattr(a, "no_priority_advice", False) and (
             not getattr(a, "local", False) or not getattr(a, "json", False)
             or any(getattr(a, name, False) for name in ("pane_state", "count", "governor"))):
