@@ -59,6 +59,34 @@ def test_gate_priority_and_technical_reason(tmp_path):
  assert tr.get('code').priority==0
  assert 'dependency_reason: Paper executes code' in tr.get('paper').notes
  assert 'sattler_gate_reason:' in tr.get('paper').notes
+
+@pytest.mark.parametrize('phase',['planned','inflight'])
+def test_dependency_keeps_admitted_operation_priority_unchanged(tmp_path,monkeypatch,phase):
+ from dataclasses import replace
+ import json
+ tr=FilesTracker(tmp_path/'items');reg=FilesRegistry(tmp_path/'crew');d=Dispatcher(reg,tr,NullPanes())
+ tr.update('paper',status='open',priority=0)
+ tr.update('code',status='open',priority=2)
+ original=tr.get
+ context=json.dumps({'deploy_admission':{'schema':'aegis.deploy-admission/v1','phase':phase}})
+ monkeypatch.setattr(tr,'get',lambda ident:replace(original(ident),agent_context=context) if ident=='code' else original(ident))
+ d.defer('paper','bead','resume_when: closed:code',dependency_reason='Exclusive deploy operation must END first')
+ assert tr.get('paper').status=='deferred'
+ assert tr.get('code').priority==2
+@pytest.mark.parametrize('raw',['{', '[]', '{"deploy_admission":null}',
+                             '{"deploy_admission":{"schema":"foreign","phase":"inflight"}}'])
+def test_unknown_operation_context_refuses_inheritance(raw):
+ item=SimpleNamespace(id='paper',priority=0,notes='')
+ target=SimpleNamespace(id='code',priority=2,agent_context=raw)
+ with pytest.raises(ValueError):validate_gate(item,target,'Exclusive operation')
+
+@pytest.mark.parametrize('phase',['drained','cancelled'])
+def test_terminal_operation_does_not_exempt_ordinary_inheritance(phase):
+ import json
+ item=SimpleNamespace(id='paper',priority=0,notes='')
+ target=SimpleNamespace(id='code',priority=2,agent_context=json.dumps({'deploy_admission':
+     {'schema':'aegis.deploy-admission/v1','phase':phase}}))
+ assert validate_gate(item,target,'Actual dependency')==0
 @pytest.mark.parametrize('reason',['','two\nlines'])
 def test_invalid_reason(reason):
  with pytest.raises(ValueError):validate_gate(SimpleNamespace(id='a',priority=1,notes=''),SimpleNamespace(id='b',priority=2),reason)
