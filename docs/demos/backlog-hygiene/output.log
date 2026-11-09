@@ -1,0 +1,20 @@
+Script started on 2026-11-08 04:30:08-05:00 [COMMAND="python3 docs/demos/backlog-hygiene/demo.py" <not executed on terminal>]
+Target: source library, isolated READY fixture; no live board, claims or sends.
+Input: stale unowned P3, protected ASK, protected native operation.
+Before:
+  advisory log: administrator ranking [fleet]: ranking check recorded in tend log; no unowned P0 in complete active snapshot
+ranking check (advisory; no auto-reassignment)
+no proven live-agent priority mismatch
+unowned: 3 READY; 0 P0 active; ASK Stiwi retain decision P3, native-operation P3, stale-work P3
+cohort counts: fixture
+After:
+  advisory log: administrator ranking [fleet]: ranking check recorded in tend log; no unowned P0 in complete active snapshot
+ranking check (advisory; no auto-reassignment)
+no proven live-agent priority mismatch
+unowned: 3 READY; 0 P0 active; ASK Stiwi retain decision P3, native-operation P3, stale-work P3
+cohort counts: fixture
+stale-work review (supplied READY scope only): 1 unowned P3/P4 with metadata >= 30 days old; 0 freshness UNKNOWN; stale-work. Review comments, dependents, due dates and current custody before proposing close or renewal; no automatic closure. Inbox/deferred cull coverage not measured.
+Control: ASK and native operation excluded from review; no administrator page.
+Both input snapshots unchanged; closure still requires an independent current read.
+
+Script done on 2026-11-08 04:30:09-05:00 [COMMAND_EXIT_CODE="0"]
