@@ -1,7 +1,7 @@
 # Spec-notice observation demo
 
 Private source fixture, base `eafa6b46d151aa4338f555eabd1f8d5c3b9a160e`
-and implementation `1f8baa53495fef63edf014c81e0538ef52ba5217`.
+and implementation `14a1bbe59feb600644274fb1f09c0e314ae2e255`.
 
 The same generated spec notice remains deduplicated on both revisions. Base has
 no observation reader. The candidate reports EMITTED with arrival UNKNOWN until
