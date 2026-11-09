@@ -47,3 +47,5 @@ docs/pr-demos/operation-haul/output.log -text whitespace=cr-at-eol
 docs/demos/startup-marker/output.log -text whitespace=cr-at-eol
 # Preserve runtime-roll terminal bytes and paired replay timing.
 docs/demos/runtime-roll/demo.txt -text whitespace=cr-at-eol
+
+docs/demos/runtime-roll/peer-ledger.txt -text whitespace=cr-at-eol

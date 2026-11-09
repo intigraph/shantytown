@@ -35,3 +35,23 @@ DEMO_BASE_SOURCE="$demo_base" sh docs/demos/runtime-roll/run.sh
 
 These small text artifacts follow the existing `docs/demos` retention convention
 and remain in Git with the implementation. No hosted video player is required.
+
+
+## Peer-ledger failure repair
+
+The same two-host fixture injects a failure on the first version-ledger write.
+At exact prior head `677c4e238f439c085f1611202031bff62eda763c`, the first
+request remains pending while its published row says current; the second host
+also admits a request (two pending hosts). Candidate runtime revision
+`28beeb4eca2ff46102eb1caaf66544f6a5d620f2` persists the reservation first:
+the same failure creates no first request and only the second host admits.
+A second candidate control fails the final write after request commit; the
+published reservation remains requested and blocks the second host.
+
+[Recorded output](peer-ledger.txt) and [timing](peer-ledger.timing) are retained
+here. Playback with `scriptreplay --log-out peer-ledger.txt --log-timing
+peer-ledger.timing` was verified. Repeat by extracting the prior head's
+`shantytown` directory into an isolated directory, setting `DEMO_BASE_SOURCE`
+to it, and running `sh docs/demos/runtime-roll/peer-ledger-run.sh`.
+This is a synthetic local library fixture, not deployed fleet acceptance or a
+proof against simultaneous peer censuses during a network partition.
