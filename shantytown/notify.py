@@ -423,6 +423,8 @@ class CycleDriver:
             self._log("cycle: pending requests UNKNOWN; no competing prompts this pass")
             pending = dict.fromkeys(states)
         update_candidates, advice_by_agent = set(), {}
+        from .runtime_roll import ledger as runtime_ledger
+        owned_updates = runtime_ledger(self._root)
         for agent, read in sorted(states.items()):
             if read.state not in (triage_mod.IDLE, triage_mod.SATURATED) or read.shells != 0:
                 continue
@@ -432,6 +434,8 @@ class CycleDriver:
                     or not getattr(advice, "restart_required", False)):
                 continue
             update_candidates.add(agent)
+            if owned_updates.get(agent, {}).get("phase") not in (None, "unknown", "current"):
+                continue  # tend owns this update; do not ask for a competing command
             if agent in pending:
                 continue
             key = getattr(advice, "runtime_version_key", "")
@@ -2486,7 +2490,8 @@ class AutoCycler:
                 continue                       # cannot tell: keep the episode
             if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
                 del book[agent]
-                if pending.get(agent, {}).get("auto"):
+                if (pending.get(agent, {}).get("auto")
+                        and not pending[agent].get("runtime_update")):
                     self._requests.clear(agent)
                     self._log(f"auto-cycle: {agent} is back under the line at "
                               f"{int(read.depth_k)}k; withdrew its auto request")

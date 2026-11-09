@@ -68,7 +68,8 @@ STALE_AFTER_S = 24 * 60 * 60
 
 
 def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
-            quipu_nodes=(), item: str = "", docs=(), suggested: str = "") -> str:
+            quipu_nodes=(), item: str = "", docs=(), suggested: str = "",
+            process_replaced=False) -> str:
     """The brief itself. Pure text from facts the cycle already holds.
 
     ORDER IS THE POINT. The first line says what just happened, because a session
@@ -85,13 +86,18 @@ def compose(agent: str, checkpoint: str = "", checkpoint_bead: str = "",
     was to have a small one — and it would be a SNAPSHOT, stale the moment
     anything moved, competing with the live source it was copied from.
     """
-    lines = [f"{BANNER} Your context was just cleared by `st agent cycle`. The "
-             f"runtime, your tools and your permissions are unchanged; only the "
-             f"conversation is gone. You are still {agent}."]
+    if process_replaced:
+        intro = (f"{BANNER} Your process was replaced by `st agent cycle` to load "
+                 f"an installed runtime update. Verify the running version; a "
+                 f"successful launch alone is not a version receipt. You are still {agent}.")
+    else:
+        intro = (f"{BANNER} Your context was just cleared by `st agent cycle`. The "
+                 f"runtime, your tools and your permissions are unchanged; only the "
+                 f"conversation is gone. You are still {agent}.")
+    lines = [intro]
     if checkpoint:
         lines.append("")
-        lines.append("WHERE YOU WERE (your own checkpoint, written just before "
-                     "the clear):")
+        lines.append("WHERE YOU WERE (checkpoint recorded before the cycle):")
         lines.append(f"  {checkpoint}")
     pointers = []
     if checkpoint_bead:
