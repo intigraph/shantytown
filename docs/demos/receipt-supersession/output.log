@@ -1,4 +1,4 @@
-Script started on 2026-11-08 22:15:10-05:00 [COMMAND="python3 probe.py --source base && python3 probe.py --source head" <not executed on terminal>]
+Script started on 2026-11-08 22:21:20-05:00 [COMMAND="stty -onlcr && python3 probe.py --source base && python3 probe.py --source head" <not executed on terminal>]
 Interrupted claim, followed by a newer native release.
 Ordinary redispatch: refused; no second submission.
 Explicit supersession: unavailable on this source.
@@ -10,4 +10,4 @@ Fresh receipt authorized: True
 Old receipt authorized: False
 Submissions: 2 (original + fresh; no replay)
 
-Script done on 2026-11-08 22:15:11-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-08 22:21:21-05:00 [COMMAND_EXIT_CODE="0"]
