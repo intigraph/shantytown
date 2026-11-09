@@ -1,0 +1,17 @@
+Script started on 2026-11-08 03:38:17-05:00 [COMMAND="python3 docs/demos/intake-deadline/demo.py --before "$INTAKE_DEMO_BEFORE"" <not executed on terminal>]
+before: required policy, missing deadline
+would: create 'example work'
+
+  0 writes.
+exit: 0
+after: required policy, missing deadline
+refused: task intake requires --due (date or timezone-qualified instant)
+exit: 1
+after: explicit deadline
+would: create 'example work' due=2026-12-01T00:00:00Z
+
+  0 writes.
+exit: 0
+All three are dry runs; no tracker item, live message or deadline policy changed.
+
+Script done on 2026-11-08 03:38:18-05:00 [COMMAND_EXIT_CODE="0"]

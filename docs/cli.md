@@ -82,6 +82,21 @@ migrate or rewrite them.
 
 ## Assignment capacity
 
+### Explicit intake deadlines
+
+`st task --due 2026-12-01 "review the draft"` creates the item with a due date
+in the same tracker transaction. Date-only values mean midnight UTC; an ISO
+instant must include its timezone and is normalized to UTC. Relative dates and
+timezone-free instants refuse rather than depend on the host's clock settings.
+`--dry-run` validates and prints the deadline without creating an item.
+
+Deployments may set `SHANTY_TASK_DUE_REQUIRED=1` to refuse missing deadlines
+before tracker reads, duplicate advice, capacity checks or writes. The default
+remains optional for other deployments; the command never invents a deadline
+from priority or owner. This affects `st task`, not direct SDK creation or
+internal message records. The existing agent duplicate advisory still runs on
+admitted creates; a skipped or capped advisory is not proof of no duplicate.
+
 ### Graph-ranked pickup after an anchor ends
 
 Deployments may enable `SHANTY_BACKLOG_PICKUP=1` after registering the reviewed
