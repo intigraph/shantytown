@@ -46,6 +46,39 @@ reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
 composer input.
 
+## Dispatch receipts
+
+Seeds and file-backed `st go` persist a pending receipt before sending. The
+receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
+store and exact body. The payload names that receipt and asks the recipient to
+check its acknowledgement before executing. Planning or typing alone grants
+no assignment: exact-body submission must be observed, followed by one
+revision-guarded tracker transition carrying the same receipt and body digest.
+
+Read its current state without sending, claiming, changing the ledger, or
+forcing input:
+
+```sh
+st go project-item ada --reconcile --receipt RECEIPT_ID
+```
+
+`execution_authorized` requires current scope and native assignment proof.
+Missing submission, assignment, or local persistence is named separately; an
+unreadable native proof remains UNKNOWN. A native commit whose local receipt
+write was interrupted can still be proven by read-back. Repeating the original
+`go` then repairs local persistence without a second send or claim. A pending
+unverified send refuses replay until its retained transport evidence is
+reconciled. An exact delivered record in existing transport custody can repair
+the local observation on normal replay, without another send; queued or merely
+acknowledged custody does not qualify. Never resend or claim manually. Changed revisions, workers, notes,
+cards or sessions cannot reuse the receipt. Older tracker adapters retain the
+legacy path and do not emit bound execution receipts.
+
+File-backed tracker updates now serialize per item and increment a revision
+with the assignment and transition comment in one atomic file replacement.
+Existing unversioned files occupy revision one. Reads and dry runs do not
+migrate or rewrite them.
+
 ## Assignment capacity
 
 ### Graph-ranked pickup after an anchor ends
@@ -585,6 +618,32 @@ must be accepted before the binding can be used. The initial protected-recycle
 binding is **disabled**: this release does not change an existing review date or
 start an evidence collector.
 
+Producer-owned waits also support `recurring-quiet:<class-hash>` and
+`evidence-count:<registered-producer>>=N`, with a backstop at least 24 hours
+away. A met event can wake before that reminder; an expired reminder cannot
+substitute for the event. Neither condition closes work or changes policy.
+
+`recurring-quiet:` reads the existing recurring-alarm processor's private
+state, matching its 24-character class hash and linked item. A fresh
+authoritative census must prove 14 continuous quiet days, or a firing newer
+than the writer's recorded deferral boundary. A stale/missing census, an
+unreadable state file or an ambiguous deferral boundary is UNKNOWN. The
+processor still owns quiet-interval resets and recurring closure. This reader
+does not poll alerts, start a collector or rewrite the processor's state.
+All recurring waiters share one bounded file snapshot per sweep; the next
+scheduled sweep reads again, including after a failed read.
+
+`evidence-count:` accepts only a source-reviewed entry in
+`shantytown.resume_producers.COUNTERS`. The reader must deliver a complete,
+fresh observation for the registered item and corpus identity, with distinct
+candidate IDs and explicit required-case coverage. Duplicate IDs, mixed
+identity, missing data and read failures are UNKNOWN; insufficient count or
+required coverage is not met. No production counter is registered initially:
+the policy49/50 producer is a separate reviewed change. Item text cannot select
+a query, command, path or URL, and retained stderr is not a counter source.
+The bounded contract permits at most 10,000 candidate IDs per observation;
+larger thresholds are refused before deferral writes.
+
 Version conditions need no binding, because they test a public fact rather than
 one item's producer:
 
@@ -839,6 +898,13 @@ Explicitly dispatching deferred work clears its old deadline after delivery is
 confirmed, together with the verified active assignment. A dry run, refusal, or
 unverified delivery leaves the deferral intact. Dependency and governor gates
 still apply; activation does not remove the item's notes or review conditions.
+
+The normal audited dispatch retains a pending attempt before sending. A bare
+item ID left in scrollback cannot confirm a new attempt: confirmation uses the
+unique serve/worker witness or the adapter's evidence for the exact body.
+An unverified send leaves assignment unchanged and retains pending evidence.
+A delivery or tracker error does not authorize a manual claim or another send;
+reconcile the retained attempt with actual delivery and tracker state first.
 
 This is the command the repo exists for. `gt sling` takes >120 seconds; `--dry-run` alone takes 51s
 and **writes nothing**, because the cost is 63 sequential Dolt connections during *resolution, before
@@ -1865,7 +1931,16 @@ Legacy inbox rows without custody may trigger an alert but never authorize
 editing somebody's composer.
 
 Accepted Codex queued input remains pending while a turn is busy; it is not a
-failed submission, and pointers stay retained. The backlog timer starts after
+failed submission, and pointers stay retained. Both the older “Messages to be
+submitted after next tool call” and newer “Queued follow-up inputs” chrome are
+recognized. If tend observes a queue still visible with an idle composer, it
+immediately persists the existing `delivery-stalled` event to the lead/admin
+and attempts one coordinator wake. A clipped preview cannot authorize submitting
+an entire queue, so no Enter is sent and its unread pointer stays open. Any
+visible queue prevents falsely retiring custody as dequeued. The same event
+latches for the continuing backlog, avoiding repeated wakes.
+
+For other unresolved input, the backlog timer starts after
 tend observes idle input and resets on a busy or unreadable/no-box observation.
 After 300 seconds unresolved while observed idle, the next tend observation persists
 one `delivery-stalled` event to the configured lead/admin and attempts one
@@ -3720,3 +3795,14 @@ hosts retain their existing behavior. This adds no second schedule or resend.
 A completed pass is not a delivery receipt. Check the actual notifier outcome,
 recipient and delivery ID, measured body bytes, and phase latency before claiming
 scheduled-delivery acceptance.
+
+## Soft-cycle completion evidence
+
+Soft-cycle completion requires a fresh hook-reported session ID and transcript
+path, plus settled ready UI and the existing permission check. A missing token
+footer does not prove a reset. If the clear times out, the command reports
+failure and retains the request, handoff and in-flight intent. Later passes
+observe that attempt without sending another clear or restarting the continuing
+turn. Missing or stale session evidence withholds a new soft clear. A delayed
+clear can still execute when the turn ends; inspect the retained evidence before
+any operator recovery. No active cycle is exercised by the fixture tests.

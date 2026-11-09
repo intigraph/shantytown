@@ -15,6 +15,7 @@ IDLE_QUEUE = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
 def local(monkeypatch, tmp_path, frames):
     panes, calls = transport(monkeypatch, frames)
     panes.delivery_root = tmp_path
+    monkeypatch.setattr(panes, 'runtime_identity', lambda _: 'fixture-runtime')
     monkeypatch.setattr(panes, 'session_created', lambda _: 17.0)
     return panes, calls
 
@@ -484,7 +485,7 @@ def test_capture_error_while_clearing_keeps_a_superseded_body_terminal(tmp_path,
 
 
 @pytest.mark.parametrize('screen', [QUEUED, BUSY])
-def test_busy_codex_queue_is_pending_and_idle_time_starts_after_busy(tmp_path, monkeypatch, screen):
+def test_busy_codex_queue_is_pending_and_idle_queue_surfaces_after_busy(tmp_path, monkeypatch, screen):
     f, wakes = stranded(tmp_path, monkeypatch)
     for n in range(delivery.FAILED_SENDS):
         with delivery.Custody(tmp_path, 'worker') as custody:
@@ -500,8 +501,8 @@ def test_busy_codex_queue_is_pending_and_idle_time_starts_after_busy(tmp_path, m
     # A queue preview remains, but the runtime is no longer in flight.
     idle_queue = QUEUED.replace('Working (1s • esc to interrupt)\n', '')
     observe(tmp_path, f, idle_queue, t + 1801)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
     observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS - 1)
-    assert FilesEvents(tmp_path / 'events').pending('lead') == []
     observe(tmp_path, f, idle_queue, t + 1801 + delivery.STALL_SECONDS)
     [event] = FilesEvents(tmp_path / 'events').pending('lead')
     assert event.reason == 'delivery-stalled' and 'busy=False' in event.detail
@@ -773,3 +774,50 @@ def test_new_unread_pointer_keeps_latched_watch_when_queue_drains(tmp_path, monk
     observe(tmp_path, f, READY, 1100)
     assert len(f[-1].unread('worker')) == 1
     assert json.loads(path.read_text())['since'] == 1
+
+# aegis-6wr: actual Nov8 queue chrome was invisible to the old custody reader.
+MODERN_QUEUE = IDLE_QUEUE.replace('Messages to be submitted after next tool call',
+                                  '• Queued follow-up inputs').replace(
+    '\n' + READY, '\n    shift+← edit last queued message\n' + READY)
+
+
+def test_modern_idle_queue_retains_custody_and_surfaces_on_first_tend(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, messages=[BODY])
+    observe(tmp_path, f, MODERN_QUEUE, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+    [event] = FilesEvents(tmp_path / 'events').pending('lead')
+    assert event.reason == 'delivery-stalled'
+    assert 'idle Codex queue' in event.detail
+    assert BODY not in event.detail
+    assert len(f[-1].unread('worker')) == 1
+    observe(tmp_path, f, MODERN_QUEUE, 1001)
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+    assert keys(f[1]) == []
+
+
+def test_modern_busy_queue_does_not_surface_as_idle(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, messages=[BODY])
+    observe(tmp_path, f, 'Working (1s • esc to interrupt)\n' + MODERN_QUEUE, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    assert keys(f[1]) == []
+
+
+def test_short_historical_queue_does_not_retain_custody_or_emit_idle_stall(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, messages=[BODY])
+    screen = MODERN_QUEUE + '\nAssistant completed the earlier turn.\n' + READY
+    observe(tmp_path, f, screen, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'dequeued'}
+    assert FilesEvents(tmp_path / 'events').pending('lead') == []
+    assert len(f[-1].unread('worker')) == 1
+    assert keys(f[1]) == []
+
+
+def test_clipped_foreign_queue_prevents_false_dequeue_without_authorizing_keys(tmp_path, monkeypatch):
+    f = fixtures(tmp_path, monkeypatch, messages=[BODY])
+    screen = MODERN_QUEUE.replace(BODY, 'Some clipped foreign queue …')
+    observe(tmp_path, f, screen, 1000)
+    assert {r['state'] for r in records(tmp_path)} == {'queued'}
+    assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
+    assert len(f[-1].unread('worker')) == 1
+    assert keys(f[1]) == []

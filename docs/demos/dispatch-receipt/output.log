@@ -1,0 +1,16 @@
+Script started on 2026-11-08 13:07:20-05:00 [COMMAND="bash run.sh" <not executed on terminal>]
+Isolated library fixture; actual Dispatcher and file tracker; substituted terminal.
+Base: 9b08512c078632eb54406fd1d6027aeb9f800fc1
+$ PYTHONPATH="$DEMO_BASE" python3 probe.py --expect base
+{"assigned": true, "input": "stale", "outcome": "accepted", "receipt_files": 0, "sends": 1}
+{"assigned": false, "input": "unobserved", "outcome": "unverified", "receipt_files": 0, "sends": 1}
+{"assigned": true, "input": "observed", "outcome": "accepted", "receipt_files": 0, "sends": 1, "sends_after_replay": 2}
+Expected measurements verified; source fixture only, no live pane or model call.
+Candidate behavior: b5dca181 (dispatch receipt integration and runtime binding)
+$ PYTHONPATH="$DEMO_CANDIDATE" python3 probe.py --expect candidate
+{"assigned": false, "input": "stale", "outcome": "unverified", "receipt_files": 1, "sends": 1}
+{"assigned": false, "input": "unobserved", "outcome": "unverified", "receipt_files": 1, "sends": 1}
+{"assigned": true, "execution_authorized": true, "input": "observed", "outcome": "accepted", "receipt_files": 1, "reconciliation_read_only": true, "same_receipt": true, "sends": 1, "sends_after_replay": 1}
+Expected measurements verified; source fixture only, no live pane or model call.
+
+Script done on 2026-11-08 13:07:22-05:00 [COMMAND_EXIT_CODE="0"]

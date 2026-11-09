@@ -55,6 +55,26 @@ def _tracker(proj, store, prefix="aegis"):
     return SdTracker(repo=str(proj), store=str(store), prefix=prefix)
 
 
+def test_dispatch_receipt_single_revision_transition_in_real_scratch_store(tmp_path):
+    from shantytown.dispatch_receipts import ReceiptStore, ReceiptConflict
+    from shantytown.protocols import SubmissionObserved
+    proj, board = _project(tmp_path)
+    item = json.loads(_sd(proj, board, 'create', 'receipt control', '--json'))
+    tracker = _tracker(proj, board)
+    before = tracker.stranded_read(item['id'])
+    receipts = ReceiptStore(tmp_path / 'receipt-state')
+    scope = dict(item=item['id'], revision=before['revision'], worker='worker',
+                 pane='%5', session=123, task_sha256='task', scope_sha256='scope')
+    receipt, _ = receipts.prepare(scope, 'exact scope control')
+    receipts.submitted(receipt['id'], SubmissionObserved('%5', receipt['body_sha256']))
+    result = receipts.assign(receipt['id'], scope, lambda row:
+        tracker.dispatch_assignment(row, dict(status='in_progress', assignee='worker')))
+    assert result['assignment']['revision'] == before['revision'] + 1
+    tracker.update(item['id'], title='changed after dispatch')
+    with pytest.raises(ReceiptConflict, match='read-back UNKNOWN'):
+        tracker.dispatch_assignment_read(receipt)
+
+
 def test_explicit_notes_replacement_in_real_scratch_seeds_store(tmp_path):
     from argparse import Namespace
     from shantytown.work_item import command
