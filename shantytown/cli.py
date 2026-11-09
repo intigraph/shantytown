@@ -4902,9 +4902,9 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
 
     This is deliberately after process + hook verification.  A session existing is
     not delivery, and a successful ``send`` is not delivery either: the terminal
-    may absorb or truncate the prompt.  The final marker is therefore the receipt.
-    Only the snapshot whose complete marker is visible is acknowledged; every
-    failure is loud and leaves the durable pointers open for ``st inbox``.
+    may absorb or truncate the prompt. Codex must return the exact-body
+    first-turn receipt; other adapters retain the complete visible marker check.
+    Failure is loud and leaves the durable pointers open for ``st inbox``.
 
     Failure preserves the live process and open pointers, but the caller must
     report an unverified launch rather than crediting process liveness as delivery.
@@ -4991,6 +4991,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
         print(f"  ephemeral {card.name}: job delivered; {why}.")
         return True
 
+    codex_observed = False
+    screen = ""
     try:
         submitted = panes.send(session, attribute(prompt, "st startup"))
         if harness_mod.name_for(card, root=a.root) == "codex":
@@ -5000,22 +5002,28 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
                 # Echoed text and an empty-looking composer cannot prove a turn
                 # started when runtime identification skipped Codex's send rail.
                 raise RuntimeError("Codex first-turn submission not observed")
+            codex_observed = True
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
         # A few patient looks, not one: a long block (an ephemeral job prompt)
         # was still rendering at 0.35s on macOS and a delivered job read as
         # undelivered (live run, aegis-c01c.2). Stops at the first sighting.
-        for _look in range(_STARTUP_VERIFY_LOOKS):
-            time.sleep(0.35)
-            screen = panes.capture(session, history=200)
-            if marker in screen:
-                break
+        # An exact Codex receipt already proves this complete startup body
+        # started a turn. Its subsequent work can displace the marker from the
+        # bounded terminal history; rechecking it would falsely fail launch and
+        # could trigger fallback replacement of an agent already working.
+        if not codex_observed:
+            for _look in range(_STARTUP_VERIFY_LOOKS):
+                time.sleep(0.35)
+                screen = panes.capture(session, history=200)
+                if marker in screen:
+                    break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
-    if (marker not in screen or input_stranded(screen)
+    if not codex_observed and (marker not in screen or input_stranded(screen)
             or (anchor and job is None and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
