@@ -1,0 +1,33 @@
+Script started on 2026-11-09 01:42:05-05:00 [COMMAND="stty -onlcr; python3 docs/demos/tracker-result-demo.py" <not executed on terminal>]
+Preserved legacy mode
+operation: show fixture-1; simulated HTTP 408
+exit: 2
+stdout bytes: 0
+work item operation unproven: HTTPError: HTTP Error 408: fixture query timeout; check write readback, then retry transient failures if not applied
+Structured mode
+operation: show fixture-1; simulated HTTP 408
+exit: 2
+{
+  "schema": "tracker-result/v1",
+  "ok": false,
+  "operation_id": "9020e49e17ea4da786d2b7f132eb55cf",
+  "operation": "show",
+  "tasks": [
+    "fixture-1"
+  ],
+  "graph": null,
+  "phase": "READ",
+  "mutation_outcome": "NOT_APPLICABLE",
+  "exit_code": 2,
+  "data": null,
+  "error": {
+    "category": "TIMEOUT",
+    "code": "UNKNOWN",
+    "http_status": 408,
+    "message": "Operation failed; private diagnostics omitted"
+  },
+  "reconcile": "No automatic retry or store/credential change"
+}
+The fixture performs no mutation, network request, retry or credential action.
+
+Script done on 2026-11-09 01:42:05-05:00 [COMMAND_EXIT_CODE="0"]
