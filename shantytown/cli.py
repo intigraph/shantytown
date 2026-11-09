@@ -11887,9 +11887,9 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
     # credential sources before either replacement can destroy the old process.
     try:
         from .provision import preflight_credentials
-        preflight_credentials(card, a.root)
+        preflight_credentials(card, getattr(a, "root", None))
     except ProvisionError as exc:
-        _record_cycle_refusal(a.root, agent_name, str(exc), [])
+        _record_cycle_refusal(getattr(a, "root", None), agent_name, str(exc), [])
         print(f"  refused: {exc}; current process preserved", file=sys.stderr)
         return REFUSED, chosen.mode
     if chosen.mode == cycle_mod.RESPAWN:

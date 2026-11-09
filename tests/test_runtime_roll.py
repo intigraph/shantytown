@@ -128,6 +128,8 @@ def test_credential_preflight_resolves_existing_sources_without_projection(tmp_p
     provision.preflight_credentials(card, tmp_path)
     assert sorted(str(p) for p in tmp_path.rglob("*")) == before
     assert not (tmp_path / ".mcp.json").exists()
+    with pytest.raises(provision.ProvisionError, match="store root"):
+        provision.preflight_credentials(card, None)
 
 
 def test_runtime_request_is_not_withdrawn_by_shallow_context(tmp_path):

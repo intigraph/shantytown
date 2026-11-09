@@ -458,6 +458,8 @@ def preflight_credentials(card: Agent, root) -> None:
     """
     if not getattr(card, "workspace", None):
         return
+    if root is None:
+        raise ProvisionError("replacement credential preflight needs a store root")
     try:
         from . import config as config_mod
         cfg = config_mod.load(root, refresh_source=True)
