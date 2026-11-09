@@ -1,4 +1,4 @@
-Script started on 2026-11-09 01:42:05-05:00 [COMMAND="stty -onlcr; python3 docs/demos/tracker-result-demo.py" <not executed on terminal>]
+Script started on 2026-11-09 01:59:47-05:00 [COMMAND="stty -onlcr; python3 docs/demos/tracker-result-demo.py" <not executed on terminal>]
 Preserved legacy mode
 operation: show fixture-1; simulated HTTP 408
 exit: 2
@@ -10,7 +10,7 @@ exit: 2
 {
   "schema": "tracker-result/v1",
   "ok": false,
-  "operation_id": "9020e49e17ea4da786d2b7f132eb55cf",
+  "operation_id": "3ae2207a19e44308b3b913ef3275ef80",
   "operation": "show",
   "tasks": [
     "fixture-1"
@@ -19,6 +19,7 @@ exit: 2
   "phase": "READ",
   "mutation_outcome": "NOT_APPLICABLE",
   "exit_code": 2,
+  "recovery": null,
   "data": null,
   "error": {
     "category": "TIMEOUT",
@@ -30,4 +31,4 @@ exit: 2
 }
 The fixture performs no mutation, network request, retry or credential action.
 
-Script done on 2026-11-09 01:42:05-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-09 01:59:47-05:00 [COMMAND_EXIT_CODE="0"]

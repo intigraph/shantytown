@@ -4,7 +4,7 @@ A fixture returns HTTP 408 during an exact-item read. Preserved legacy mode
 exits 2 with zero stdout bytes; opting into `--result-json` keeps the failure
 status and reports TIMEOUT, READ and NOT_APPLICABLE, with null data.
 
-Recorded implementation: `3d396f7a` (base `ea5608bcaedd7405c7815b708b576e0f4d8f65ae`).
+Recorded implementation: `2e37f50f` (base `ea5608bcaedd7405c7815b708b576e0f4d8f65ae`).
 This compares two modes of the recorded implementation; it does not claim an
 independently executed base binary. The new option has no base equivalent.
 The fixture replaces only the tracker and calls the real item dispatcher. It
