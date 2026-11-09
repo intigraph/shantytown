@@ -1,0 +1,7 @@
+Script started on 2026-11-09 16:15:58-05:00 [COMMAND="python3 docs/probes/admitted-gate-priority/demo.py" <not executed on terminal>]
+ordinary: dependency priority before=0, after=0
+planned: dependency priority before=0, after=2
+inflight: dependency priority before=0, after=2
+PASS: ordinary inheritance retained; admitted operation priority preserved
+
+Script done on 2026-11-09 16:15:58-05:00 [COMMAND_EXIT_CODE="0"]
