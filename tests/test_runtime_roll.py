@@ -248,8 +248,13 @@ def test_request_generation_recovers_after_version_ledger_write_failed(tmp_path,
     _, versions, blocks, requests, snapshots, sweep = world(tmp_path)
     blocks.update(a="", b="")
     real_write = roll.write_json_atomic
+    calls = 0
     def fail(*args):
-        raise OSError("version ledger unavailable")
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("final version ledger unavailable")
+        real_write(*args)
     monkeypatch.setattr(roll, "write_json_atomic", fail)
     with pytest.raises(OSError):
         sweep()
@@ -277,3 +282,43 @@ def test_peer_unknown_and_inflight_generation_hold_new_local_roll(tmp_path):
     assert result == [] and not requests.pending()
     peer["agents"][0]["runtime_update"]["phase"] = "current"
     assert roll.peer_block([peer]) == ""
+
+
+@pytest.mark.parametrize("failed_write", [1, 2])
+def test_failed_ledger_write_never_admits_two_hosts(tmp_path, monkeypatch, failed_write):
+    roots = [tmp_path / "host-a", tmp_path / "host-b"]
+    cards = [Agent(name="a"), Agent(name="b")]
+    requests = [cycle.Requests(root) for root in roots]
+    monkeypatch.setattr(update, "_manual_keep", lambda *args: False)
+    def sweep(index, evidence, block=""):
+        return roll.sweep(roots[index], [cards[index]], requests=requests[index],
+            observe=lambda *args: evidence, boundary=lambda card: "",
+            preflight=lambda card: None,
+            checkpoint=lambda *args: dict(text="durable synthetic checkpoint"),
+            fleet_block=block)
+    # A peer can legitimately retain this previously published current row.
+    sweep(0, update.Evidence("a-old", "2.1.319", "2.1.319"))
+    real_write = roll.write_json_atomic
+    calls = 0
+    def fail(path, value):
+        nonlocal calls
+        calls += 1
+        if calls == failed_write:
+            raise OSError("injected ledger failure")
+        real_write(path, value)
+    with monkeypatch.context() as failure:
+        failure.setattr(roll, "write_json_atomic", fail)
+        with pytest.raises(OSError, match="injected ledger failure"):
+            sweep(0, update.Evidence("a-old", "2.1.319", "2.1.321"))
+    published = roll.ledger(roots[0])["a"]
+    block = roll.peer_block([dict(host="host-a", error=None,
+        agents=[dict(name="a", live=True, runtime_update=published)])])
+    admitted = sweep(1, update.Evidence("b-old", "2.1.319", "2.1.321"), block)
+    if failed_write == 1:
+        assert not requests[0].pending()
+        assert admitted == ["b"]  # no first request committed
+    else:
+        assert "a" in requests[0].pending()
+        assert published["phase"] == "requested" and block
+        assert admitted == [] and not requests[1].pending()
+    assert sum(bool(request.pending()) for request in requests) == 1

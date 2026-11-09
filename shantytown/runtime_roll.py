@@ -136,6 +136,13 @@ def _sweep(root, cards, *, requests, boundary, checkpoint, preflight,
                            reason=f"checkpoint unproven: {exc}")
                 log(f"runtime-roll: {card.name}: {row['reason']}; no request")
                 continue
+            # Publish the peer-visible reservation BEFORE committing a cycle.
+            # If either this write or the later final ledger write fails, a
+            # peer must never see "current" alongside an accepted request.
+            # An uncertain request outcome leaves this reservation fenced.
+            row.update(phase="requested", target=evidence.installed,
+                       previous=evidence.running, source_session=evidence.session)
+            write_json_atomic(Path(root) / "notify" / "runtime-roll.json", book)
             # Requests is durable, serialized and shared with manual/context
             # cycles. Never replace a request another caller just accepted.
             admitted = requests.request(

@@ -55,3 +55,9 @@ their usual behavior.
 Acceptance requires a real newer install, observed idle replacement on both a
 remote-controlled peer and a local agent, resume brief delivery and new-process
 version receipts. Unit tests do not establish that installed acceptance.
+
+
+The peer-visible requested generation is persisted before its cycle request.
+A failed reservation write admits no request; an uncertain request or failed
+final ledger write retains the published reservation, so another host remains
+fenced until the exact new-session version receipt resolves that generation.
