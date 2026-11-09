@@ -62,6 +62,22 @@ class ReceiptConflict(ValueError):
     """No submission, assignment or replay is authorized by this receipt."""
 
 
+def assignment_supersession(receipt, current):
+    """A newer native release fences this attempt's old revision-guarded CAS.
+
+    This does not prove whether the original claim committed. Its uncertainty
+    stays in the ledger; neither its old body nor its claim may be replayed.
+    """
+    if (not isinstance(current, dict) or current.get('id') != receipt['item']
+            or type(current.get('revision')) is not int
+            or current['revision'] <= receipt['revision']
+            or current.get('status') != 'open' or current.get('assignee') not in (None, '')
+            or current.get('defer_until') not in (None, '')):
+        raise ReceiptConflict('native release does not supersede this assignment')
+    return dict(receipt=receipt['id'], item=receipt['item'], revision=current['revision'],
+                status='open', assignee=None)
+
+
 def serialized_receipt(method):
     @wraps(method)
     def guarded(self, ident, *args, **kwargs):
@@ -116,7 +132,7 @@ class ReceiptStore:
             raise ReceiptConflict('dispatch receipt owner changed')
         row = json.loads(path.read_text())
         if (row.get('id') != ident or row.get('state') not in
-                {'prepared', 'submitted', 'assigning', 'assigned'}):
+                {'prepared', 'submitted', 'assigning', 'assigned', 'superseded'}):
             raise ReceiptConflict('dispatch receipt malformed')
         self._scope(row)
         if hashlib.sha256(row['text'].encode()).hexdigest() != row['body_sha256']:
@@ -164,7 +180,8 @@ class ReceiptStore:
         if len(paths) > 4096:
             raise ReceiptConflict('dispatch receipt coverage bound exceeded')
         rows = [self.read(path.stem) for path in paths]
-        matches = [r for r in rows if self._scope(r) == scope or self._assigned_scope(r, scope)]
+        matches = [r for r in rows if r['state'] != 'superseded'
+                   and (self._scope(r) == scope or self._assigned_scope(r, scope))]
         if len(matches) > 1:
             raise ReceiptConflict('ambiguous dispatch receipts')
         return matches[0] if matches else None
@@ -174,7 +191,8 @@ class ReceiptStore:
         if len(paths) > 4096:
             raise ReceiptConflict('dispatch receipt coverage bound exceeded')
         rows = [self.read(path.stem) for path in paths]
-        matches = [r for r in rows if r['item'] == item and r['state'] != 'assigned']
+        matches = [r for r in rows if r['item'] == item
+                   and r['state'] not in ('assigned', 'superseded')]
         if len(matches) > 1:
             raise ReceiptConflict('ambiguous pending dispatch receipts')
         return matches[0] if matches else None
@@ -191,10 +209,14 @@ class ReceiptStore:
             raise ReceiptConflict('dispatch receipt coverage bound exceeded')
         rows = [self.read(p.stem) for p in paths]
         rows = [r for r in rows if r['item'] == scope['item']]
-        pending = [r for r in rows if r['state'] != 'assigned']
+        pending = [r for r in rows if r['state'] not in ('assigned', 'superseded')]
         if len(pending) > 1:
             raise ReceiptConflict('ambiguous pending dispatch; reconcile receipts')
         for row in pending + sorted(rows, key=lambda r: r['created'], reverse=True):
+            if row['state'] == 'superseded':
+                if self._scope(row) == scope:
+                    raise ReceiptConflict('superseded dispatch cannot be replayed')
+                continue
             if self._scope(row) == scope or self._assigned_scope(row, scope):
                 if row['text'] != text:
                     raise ReceiptConflict('same scope has a different body; reconcile receipt')
@@ -212,6 +234,8 @@ class ReceiptStore:
     @serialized_receipt
     def submitted(self, ident, evidence):
         row = self.read(ident)
+        if row['state'] == 'superseded':
+            raise ReceiptConflict('superseded dispatch cannot be submitted')
         if not isinstance(evidence, SubmissionObserved) or not evidence.matches(row['pane'], row['text']):
             raise ReceiptConflict('submission proof does not match this receipt body and pane')
         if row['submission'] is not None:
@@ -229,6 +253,8 @@ class ReceiptStore:
         These are backend callbacks, never a CLI-supplied proof or manual claim.
         """
         row = self.read(ident)
+        if row['state'] == 'superseded':
+            raise ReceiptConflict('superseded dispatch cannot be assigned')
         if self._scope(row) != self._scope(current) and not self._assigned_scope(row, current):
             raise ReceiptConflict('stale task, worker, runtime or scope')
         if row['state'] == 'assigned':
@@ -250,6 +276,19 @@ class ReceiptStore:
             self._save(row)
             raise
         return self.recover_assignment(ident, proof)
+
+    @serialized_receipt
+    def supersede_assignment(self, ident, proof):
+        """Retain a fenced UNKNOWN attempt; only backend native release proof counts."""
+        row = self.read(ident)
+        if (row['state'] != 'assigning' or not isinstance(proof, dict)
+                or proof.get('receipt') != ident or proof.get('item') != row['item']
+                or type(proof.get('revision')) is not int
+                or proof['revision'] <= row['revision'] or proof.get('status') != 'open'
+                or proof.get('assignee') is not None):
+            raise ReceiptConflict('native supersession proof incomplete')
+        row['state'], row['supersession'] = 'superseded', copy.deepcopy(proof)
+        return self._save(row)
 
     @serialized_receipt
     def recover_assignment(self, ident, proof):
@@ -278,6 +317,9 @@ class ReceiptStore:
     def status(self, ident, current):
         """Read-only: report missing evidence without sending or claiming work."""
         row = self.read(ident)
+        if row['state'] == 'superseded':
+            return dict(id=ident, state='superseded', missing=['assignment'],
+                        execution_authorized=False)
         fresh = (self._assigned_scope(row, current) if row['state'] == 'assigned'
                  else self._scope(row) == self._scope(current))
         missing = ([] if row['submission'] else ['submission'])
