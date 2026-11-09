@@ -34,6 +34,46 @@ END_OF_CUSTODY = ('orphaned', 'dequeued')
 TERMINAL = ('delivered', 'acknowledged', 'superseded') + END_OF_CUSTODY
 
 
+def observed_submission(root, pane, socket, text, session, created, runtime):
+    """Read-only explicit submission proof; transport terminal states do not count.
+
+    This repairs the crash between the transport's existing custody commit and
+    the dispatch ledger's observation. It never enters Custody or edits input.
+    """
+    from .protocols import SubmissionObserved
+    folder = Path(root) / 'delivery'
+    if not folder.exists():
+        return None
+    if folder.is_symlink() or folder.stat().st_uid != os.getuid():
+        raise OSError('delivery custody ownership UNKNOWN')
+    recent = []
+    for path in folder.glob('send-*.json'):
+        if path.is_symlink():
+            raise OSError('delivery custody record is a symlink')
+        info = path.stat()
+        if info.st_mtime + 1 < created:
+            continue
+        if info.st_uid != os.getuid() or info.st_size > 262144:
+            raise OSError('delivery custody record unproven')
+        recent.append(path)
+        if len(recent) > 4096:
+            raise OSError('recent delivery custody coverage bound exceeded')
+    matches = []
+    for path in recent:
+        row = json.loads(path.read_text())
+        if (row.get('pane') == pane and row.get('socket') == socket
+                and row.get('text') == text and row.get('session') == session
+                and row.get('state') == 'delivered'
+                and row.get('submission') == dict(pane=pane,
+                    body_sha256=hashlib.sha256(text.encode()).hexdigest(), runtime=runtime)
+                and isinstance(runtime, str) and bool(runtime)
+                and isinstance(row.get('created'), (int, float)) and row['created'] >= created):
+            matches.append(row)
+    if len(matches) > 1:
+        raise OSError('ambiguous exact delivered custody proof')
+    return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest()) if matches else None
+
+
 class Custody:
     def __init__(self, root, pane, socket=None):
         self.root = Path(root) / 'delivery'
@@ -89,8 +129,19 @@ class Custody:
             id='send-' + uuid.uuid4().hex, pane=self.pane, socket=self.socket,
             text=text, session=session, created=time.time(), state='prepared',
             recovery_attempted=False)
+        self.record.pop('submission', None)
         self.record['state'] = 'prepared'
         self.save(self.record)
+
+    def submitted(self, observed, runtime):
+        """Persist only positive adapter evidence for this owned body/runtime."""
+        from .protocols import SubmissionObserved
+        if (self.record is not None and isinstance(observed, SubmissionObserved)
+                and observed.matches(self.pane, self.record['text'])
+                and isinstance(runtime, str) and runtime):
+            self.record['submission'] = dict(pane=observed.pane,
+                body_sha256=observed.body_sha256, runtime=runtime)
+            self.save(self.record)
 
     def finish(self, state):
         if self.record is not None:
@@ -300,7 +351,7 @@ def _end_custody(custody, records, panes, pane, screen, *, phase,
     because joined bodies (aegis-fu2) can hide there.
     """
     from . import triage
-    from .tmux import _codex_queued
+    from .tmux import _codex_queue
     try:
         current = panes.session_created(pane)
     except Exception:
@@ -316,7 +367,7 @@ def _end_custody(custody, records, panes, pane, screen, *, phase,
                       in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER))
     for record in records:
         if (record['state'] == 'queued' and record.get('session') == current
-                and idle_and_empty and not _codex_queued(screen, record['text'])):
+                and idle_and_empty and not _codex_queue(screen)):
             record['state'] = 'dequeued'
             custody.save(record)
 
@@ -513,15 +564,18 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         else:
             watch.pop('idle_since', None)
         custody.save(watch)
+        from .tmux import _codex_queue
+        idle_queue = idle and bool(_codex_queue(screen))
         absolute = now - watch['since'] >= MAX_PENDING_SECONDS
         idle_expired = idle and now - watch['idle_since'] >= STALL_SECONDS
-        if watch.get('alerted') or not (absolute or idle_expired) or reg is None:
+        if watch.get('alerted') or not (idle_queue or absolute or idle_expired) or reg is None:
             return
         catalog = deployment_catalog(root)
         recipient = route_stop(reg, card.name, catalog=catalog).to
         observation = ('cannot-tell' if state in (triage.INPUT_ABSENT, triage.INPUT_UNKNOWN)
                        else 'busy' if busy else 'idle' if idle else 'occupied')
-        reason = ('absolute pending ceiling' if absolute else 'idle grace expired')
+        reason = ('idle Codex queue remains unsubmitted' if idle_queue else
+                  'absolute pending ceiling' if absolute else 'idle grace expired')
         detail = (f'{card.name}: undelivered inbox/custody: {reason}; '
                   f'observed unresolved for {int(now - watch["since"])}s; box={state}; '
                   f'busy={busy}; observation={observation}; retained={len(pending)}; '

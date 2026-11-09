@@ -15,10 +15,10 @@ def item(ident, **fields):
 def test_graph_order_changes_pickup_without_mutating_source_rows():
     old, due = item("old"), item("due")
     def reader(root, name, params, **bounds):
-        assert name == "seeds_work_rank_v1"
+        assert name == "seeds_work_rank_v2"
         assert params["id00"] == "due" and params["id01"] == "old"
         assert bounds == dict(limit=65, timeout=8)
-        return [dict(row, sampled_at=params["now"]) for row in (due, old)]
+        return [dict(row, sampled_at=params["now"], deferral_observation="UNKNOWN") for row in (due, old)]
     assert ordered(None, [old, due], owner="ada", board="urn:board", reader=reader, now=NOW) == [due, old]
     assert old == item("old") and due == item("due")
 
@@ -35,7 +35,7 @@ def test_graph_order_changes_pickup_without_mutating_source_rows():
 def test_incomplete_changed_or_stale_query_cannot_authorize_pickup(change):
     candidates = [item("a"), item("b")]
     def reader(root, name, params, **bounds):
-        return change([dict(row, sampled_at=params["now"]) for row in candidates])
+        return change([dict(row, sampled_at=params["now"], deferral_observation="UNKNOWN") for row in candidates])
     with pytest.raises(ValueError):
         ordered(None, candidates, owner="ada", board="urn:board", reader=reader, now=NOW)
 
@@ -65,7 +65,7 @@ def test_ready_p1_beats_owned_p2_only_after_verified_claim(outcome):
         return outcome
     def reader(root, name, params, **bounds):
         assert "foreign" not in params.values()
-        return [dict(row, sampled_at=params["now"]) for row in (high, low)]
+        return [dict(row, sampled_at=params["now"], deferral_observation="UNKNOWN") for row in (high, low)]
     args = dict(owner="ada", board="urn:board", read_current=rows.__getitem__,
                 claim=claim, admit=lambda rows: rows, reader=reader, now=NOW)
     if outcome == "unknown":
@@ -150,3 +150,36 @@ def test_native_claim_retains_capacity_cas_and_verified_readback(monkeypatch, ro
         assert len(writes) == 1
         assert "--if-revision=2" in writes[0]
         assert "--assignee=ada" in writes[0]
+
+
+@pytest.mark.parametrize("fields, expected", [
+    ({"deferral_observation": "UNKNOWN"}, None),
+    ({"deferral_observation": "OBSERVED", "observed_deferral_writes": 4,
+      "deferral_observed_since": "2026-11-07T00:00:00Z"}, 4),
+    ({"deferral_observation": "OBSERVED", "observed_deferral_writes": 9223372036854775807,
+      "deferral_observed_since": "2026-11-07T00:00:00Z"}, 9223372036854775807),
+])
+def test_deferral_lower_bound_preserves_unknown_without_inventing_zero(fields, expected):
+    from shantytown.backlog_rank import deferral_observation
+    assert deferral_observation(fields, now=NOW) == expected
+
+
+@pytest.mark.parametrize("fields", [
+    {},
+    {"observed_deferral_writes": 1},
+    {"deferral_observation": "INVALID"},
+    {"deferral_observation": "UNKNOWN", "observed_deferral_writes": 1},
+    *({"deferral_observation": "OBSERVED", "observed_deferral_writes": count,
+       "deferral_observed_since": "2026-11-07T00:00:00Z"}
+      for count in [None, True, 0, -1, "4", 1.0, 9223372036854775808]),
+    *({"deferral_observation": "OBSERVED", "observed_deferral_writes": 4,
+       "deferral_observed_since": since}
+      for since in [None, "bad", "2026-11-07", "2026-11-07T00:00:00",
+                    "2026-11-09T00:00:00Z", "2026-11-08T06:30:00.000000001Z"]),
+])
+def test_invalid_deferral_evidence_stops_order_before_return_or_claim(fields):
+    candidates = [item("a")]
+    def reader(root, name, params, **bounds):
+        return [dict(candidates[0], sampled_at=params["now"], **fields)]
+    with pytest.raises(ValueError):
+        ordered(None, candidates, owner="ada", board="urn:board", reader=reader, now=NOW)

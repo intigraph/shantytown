@@ -41,7 +41,8 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     calls = []
     panes = tmux.Tmux()
     monkeypatch.setattr(panes, "foreground", lambda _: "codex")
-    monkeypatch.setattr(panes, "capture", lambda _, **kw: screen)
+    frames = iter([screen, screen.replace("› ", "\x1b[1m›\x1b[0m continue")])
+    monkeypatch.setattr(panes, "capture", lambda _, **kw: next(frames))
     # This case isolates task-list admission, not the submission observer.
     monkeypatch.setattr(panes, "_verify_codex_submission", lambda *_: None)
     monkeypatch.setattr(tmux, "_journal_send", lambda *_: None)
@@ -55,7 +56,7 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     else:
         panes.send("%1", "continue")
         assert any("send-keys" in c for c in calls)
-        assert calls[-1][-1] == "Enter"
+        assert calls[-1][-1] == "Tab"
 
 
 def _root(tmp_path):

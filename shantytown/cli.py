@@ -562,9 +562,12 @@ def _wire(a) -> Dispatcher:
     # not be one name on a message and another on the work it hands out.
     from .feed_audit import FeedAudit
     from .actor_identity import authenticated_actor
-    return Dispatcher(_registry(a), _tracker(a), _panes(a),
+    from .dispatch_binding import binding_for
+    registry, tracker, panes = _registry(a), _tracker(a), _panes(a)
+    return Dispatcher(registry, tracker, panes,
                       governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
-                      audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a))
+                      audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a),
+                      binding=binding_for(a.root, tracker, registry, panes))
 
 
 
@@ -1610,6 +1613,9 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
+    go.add_argument('--receipt', help='receipt ID for read-only reconciliation')
+    go.add_argument('--reconcile', '--status', action='store_true',
+                    help='read receipt, task/runtime and native assignment; never send or claim')
     note = go.add_mutually_exclusive_group()
     note.add_argument("--note", "--reason", dest="note", default=None,
                       help="a caveat delivered IN the same payload as the "
@@ -4896,9 +4902,9 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
 
     This is deliberately after process + hook verification.  A session existing is
     not delivery, and a successful ``send`` is not delivery either: the terminal
-    may absorb or truncate the prompt.  The final marker is therefore the receipt.
-    Only the snapshot whose complete marker is visible is acknowledged; every
-    failure is loud and leaves the durable pointers open for ``st inbox``.
+    may absorb or truncate the prompt. Codex must return the exact-body
+    first-turn receipt; other adapters retain the complete visible marker check.
+    Failure is loud and leaves the durable pointers open for ``st inbox``.
 
     Failure preserves the live process and open pointers, but the caller must
     report an unverified launch rather than crediting process liveness as delivery.
@@ -4985,6 +4991,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
         print(f"  ephemeral {card.name}: job delivered; {why}.")
         return True
 
+    codex_observed = False
+    screen = ""
     try:
         submitted = panes.send(session, attribute(prompt, "st startup"))
         if harness_mod.name_for(card, root=a.root) == "codex":
@@ -4994,22 +5002,28 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
                 # Echoed text and an empty-looking composer cannot prove a turn
                 # started when runtime identification skipped Codex's send rail.
                 raise RuntimeError("Codex first-turn submission not observed")
+            codex_observed = True
         # Capture scrollback as well as the visible tail.  The end marker proves
         # the complete block, not merely its prefix, reached the initial context.
         # A few patient looks, not one: a long block (an ephemeral job prompt)
         # was still rendering at 0.35s on macOS and a delivered job read as
         # undelivered (live run, aegis-c01c.2). Stops at the first sighting.
-        for _look in range(_STARTUP_VERIFY_LOOKS):
-            time.sleep(0.35)
-            screen = panes.capture(session, history=200)
-            if marker in screen:
-                break
+        # An exact Codex receipt already proves this complete startup body
+        # started a turn. Its subsequent work can displace the marker from the
+        # bounded terminal history; rechecking it would falsely fail launch and
+        # could trigger fallback replacement of an agent already working.
+        if not codex_observed:
+            for _look in range(_STARTUP_VERIFY_LOOKS):
+                time.sleep(0.35)
+                screen = panes.capture(session, history=200)
+                if marker in screen:
+                    break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
-    if (marker not in screen or input_stranded(screen)
+    if not codex_observed and (marker not in screen or input_stranded(screen)
             or (anchor and job is None and session_anchor.BANNER not in screen)):
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
@@ -7907,6 +7921,27 @@ def _priority_fleet_notes(a, reg, panes):
 
 
 def _cmd_go(a) -> int:
+    if getattr(a, 'reconcile', False) or getattr(a, 'receipt', None):
+        from .dispatch_binding import binding_for
+        try:
+            if not getattr(a, 'receipt', None):
+                raise ValueError('--reconcile requires --receipt')
+            tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
+            from .deployment import local_host
+            agent = registry.get(a.agent)
+            if agent.host and agent.host != local_host(a.root):
+                raise ValueError('reconcile on the worker declared host; no remote dispatch was attempted')
+            binding = binding_for(a.root, tracker, registry, panes)
+            if binding is None:
+                raise ValueError('selected tracker has no bound dispatch receipt contract')
+            row = binding.store.read(a.receipt)
+            if row['item'] != a.item or row['worker'] != a.agent:
+                raise ValueError('receipt names a different task or worker')
+            print(json.dumps(binding.reconcile(a.receipt), indent=2))
+            return OK
+        except (OSError, ValueError, LookupError) as error:
+            print(f'  could not tell: {error}', file=sys.stderr)
+            return CANNOT_TELL
     try:
         note = _read_note(a)
     except OSError as e:
@@ -8100,13 +8135,16 @@ def _cmd_go(a) -> int:
     except SendUnverified as e:
         # #2: we sent, but reading the pane back did NOT confirm it landed. Its
         # docstring pins this to exit 2, and go() ran verify BEFORE the tracker
-        # write, so NOTHING was recorded. Delivery may have succeeded; reconcile
+        # write, so assignment was not recorded. Pending evidence survives. Reconcile
         # its existing evidence before any retry. This must be
         # a clean could-not-tell, NOT an uncaught traceback (found by the
         # full-cycle validation against a real pane).
-        print(f"  could not tell: {e} — recorded nothing; check delivery and custody before retrying.",
+        print(f"  could not tell: {e} — assignment not recorded; check delivery and custody before retrying (including pending dispatch evidence).",
               file=sys.stderr)
         return CANNOT_TELL
+    except ValueError as e:
+        print(f'  refused: {e}', file=sys.stderr)
+        return REFUSED
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
@@ -8144,7 +8182,9 @@ def _cmd_go(a) -> int:
     if p.handoff_warning:
         print('  ' + p.handoff_warning, file=sys.stderr)
     print(f"  {p.item_id} -> {p.agent}          in progress")
-    print(f"  sent to pane {p.pane}")
+    print(f"  {'replayed receipt for' if p.replayed else 'sent to'} pane {p.pane}")
+    if p.receipt_id:
+        print(f'  dispatch receipt: {p.receipt_id}')
     print(f"  {gctx.render()}")
     if suggestion is not None:
         print(f"  {suggestion.render()}")
@@ -11240,7 +11280,9 @@ def _cmd_cycle(a) -> int:
         # happened. Leaving it would tell the agent's NEXT ordinary session start
         # that its context was cleared by a cycle — an authoritative statement,
         # in its own harness's voice, that is simply false.
-        resume_brief_mod.Briefs(a.root).drop(agent_name)
+        from . import soft_cycle
+        if performed != cycle_mod.SOFT or not soft_cycle.pending(a.root, agent_name):
+            resume_brief_mod.Briefs(a.root).drop(agent_name)
         return rc
 
     cycle_mod.Requests(a.root).clear(agent_name)   # only now: the cycle happened
@@ -11249,7 +11291,8 @@ def _cmd_cycle(a) -> int:
             "session kept (nothing detached); process relaunched"
             if performed == cycle_mod.RESPAWN else
             "session REPLACED — any attached client was detached")
-    print(f"  {agent_name}: CYCLED via {performed} — context cleared, {kept}.")
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    print(f"  {stamp} {agent_name}: CYCLED via {performed} — context cleared, {kept}.")
     if brief_path:
         print(f"  resume brief written — its SessionStart hook injects the "
               f"checkpoint, item and graph nodes into the fresh context.")
@@ -11391,6 +11434,9 @@ def _cycle_plan(a, card, session: str, panes, runtime):
     facts cannot be tested without a live fleet, and this is the decision that
     chooses between "type one command" and "kill the process tree".
     """
+    from . import soft_cycle
+    if soft_cycle.pending(a.root, card.name):
+        return cycle_mod.Plan(cycle_mod.SOFT, "observe the retained clear; no new send or restart")
     live = bool(session) and panes.exists(session)
     idle = input_empty = False
     if live:
@@ -11592,16 +11638,11 @@ def _perform_cycle_locked(a, card, agent_name, session, panes, runtime,
         print(f"  {agent_name}: {chosen.render()}")
         if _cycle_soft(a, card, agent_name, session, panes, runtime):
             return OK, cycle_mod.SOFT
-        # ESCALATE, ONCE. The clear was typed and did not verify, so the session
-        # is in a state nobody has confirmed — possibly cleared, possibly not,
-        # possibly out of bypass. Replacing the process resolves all three, and
-        # it is the mechanism the plan would have chosen had the soft path been
-        # ineligible in the first place.
-        print(f"  ⚠ the in-place clear did not verify — escalating to replacing "
-              f"the process. Nothing detaches; this is the slower path, not a "
-              f"broken one.", file=sys.stderr)
-        chosen = cycle_mod.Plan(cycle_mod.RESPAWN, "escalated from an unverified "
-                                                   "in-place clear")
+        # A clear can be queued behind a Stop-hook continuation. Unknown is
+        # not permission to kill that continuing turn or consume its request.
+        print(f"  FAILED: {agent_name}: clear completion unverified; request "
+              "retained, no restart or duplicate clear.", file=sys.stderr)
+        return CANNOT_TELL, cycle_mod.SOFT
 
     from . import fleet_governor as fg
     cfg, err = config.load_or_default(Path(a.root))
@@ -11742,67 +11783,50 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
 #: How long to wait for a pane to come back after a clear command, and how often
 #: to look. A clear is local work — no model call, no network — so it lands in
 #: well under a second on a healthy session; the ceiling is for a pane that is
-#: not going to come back at all, and reaching it means escalating rather than
-#: failing, so it is cheap to be patient.
+#: not going to come back at all. Reaching it retains the request and intent;
+#: an unverified queued clear never authorizes a process restart.
 _CLEAR_SETTLE_S = 12.0
 _CLEAR_POLL_S = 0.4
 
 
 def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
-    """Type the harness's clear command and VERIFY it landed. No process touched.
+    """Verify a fresh hook session AND transcript before consuming the request.
 
-    WHAT VERIFICATION MEANS HERE, and why it is not "we sent the keystrokes".
-    `st inbox` already paid for that distinction (aegis-wcjuz): keystrokes
-    reaching a pane and a command being EXECUTED are two facts, and reporting the
-    first as the second is how a message sat unread while its sender was told it
-    was delivered. The clear is worse than a message — an unexecuted clear leaves
-    a saturated agent that has been marked cycled.
-
-    So: the ready UI must be back AND the runtime's own context footer must have
-    let go of the number it was showing. That footer is Claude Code's own
-    accounting ("/clear to save 737.6k tokens"), it only renders when there is
-    enough context to be worth clearing, and the spinner replaces it mid-turn —
-    so ready-UI-up plus footer-gone is the cleared state and cannot be confused
-    with a turn in flight.
+    A ready-looking pane or missing footer is not a post-condition: Stop hooks
+    can resume a turn after either was painted. A timed-out attempt stays on
+    disk, so a later pass observes a delayed clear rather than sending another.
     """
     command = harness_mod.clear_command_for(card, a.root)
     if not command:
         return False
-    before_screen = triage_mod.strip_attrs(panes.capture(session))
-    before = triage_mod.context_tokens_k(before_screen)
-    # The rollout is about to be discarded by the clear exactly as a kill would
-    # discard it, so it is captured on the same rule and at the same moment.
-    _capture_history_before_kill(a, agent_name, "cycle-clear")
+    from . import soft_cycle
     try:
-        panes.send(session, command)
-    except Exception as e:  # noqa: BLE001 — a refused send escalates, never crashes
-        print(f"  ⚠ could not type {command!r} into {session} ({e}).",
+        attempt, send = soft_cycle.begin(a.root, agent_name)
+    except (OSError, ValueError) as exc:
+        print(f"  FAILED: clear session baseline unavailable ({type(exc).__name__}).",
               file=sys.stderr)
         return False
+    if send:
+        _capture_history_before_kill(a, agent_name, "cycle-clear")
+        try:
+            panes.send(session, command)
+        except Exception as exc:  # a failed send may already have typed its key
+            print(f"  FAILED: clear send unverified ({type(exc).__name__}); "
+                  "intent retained.", file=sys.stderr)
+            return False
+
     deadline = time.time() + _CLEAR_SETTLE_S
     while time.time() < deadline:
         time.sleep(_CLEAR_POLL_S)
-        plain = triage_mod.strip_attrs(panes.capture(session))
+        try:
+            plain = triage_mod.strip_attrs(panes.capture(session))
+        except Exception:  # a lost observation cannot authorize another action
+            continue
         if not runtime.shows_ready_ui(plain):
             continue          # still redrawing, or mid-turn — not an answer yet
-        after = triage_mod.context_tokens_k(plain)
-        # None = the footer is not showing. With the ready UI up that is not
-        # "unknown", it is "there is no longer enough context to be worth
-        # clearing" — which is the whole objective.
-        #
-        # THE WEAK BRANCH, GUARDED. When `before` was itself None — a session
-        # whose context was already too small for the runtime to offer a clear —
-        # "the footer is absent" is true before the command is sent as well as
-        # after, so on its own it would pass on the FIRST poll no matter what
-        # happened, including a clear that never landed. The screen is the tie
-        # breaker: a clear wipes the transcript, so the visible pane cannot come
-        # back byte-identical to the one we captured before typing. Requiring a
-        # change costs nothing when the clear worked and is the only thing
-        # standing between this and reporting success for a no-op.
-        landed = (after is None or (before is not None and after < before))
-        if landed and before is None and plain == before_screen:
+        if triage_mod.mid_flight(plain):
             continue
-        if landed:
+        if soft_cycle.confirmed(a.root, agent_name, attempt):
             # THE aegis-3laza QUESTION, asked rather than assumed. None means the
             # harness cannot tell us; plan() already refused the soft path for any
             # card that RUNS on bypass while that is so, which is why None is
@@ -11813,12 +11837,14 @@ def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
                 # public and this line is printed.
                 print(f"  ⚠ {agent_name} cleared but is NO LONGER on bypass — "
                       f"the measured clear-drops-bypass fault is still live on "
-                      f"this harness. Replacing the process instead.",
+                      f"this harness. Request retained for diagnosis.",
                       file=sys.stderr)
                 return False
-            if before is not None:
-                print(f"  cleared in place: {before:.1f}k -> "
-                      f"{'idle' if after is None else f'{after:.1f}k'}.")
+            try:
+                soft_cycle.finish(a.root, agent_name)
+            except OSError:
+                return False  # retain request if completion cannot be recorded
+            print("  cleared in place: fresh session and transcript observed.")
             return True
     print(f"  ⚠ {agent_name}'s pane did not settle into a cleared ready state "
           f"within {_CLEAR_SETTLE_S:.0f}s.", file=sys.stderr)
@@ -14632,6 +14658,80 @@ def _tend_once(a, quiet: bool = False) -> int:
                 return []
             return _sweep(label, fn)
 
+        # crs7: reserve the first best-effort slot for the shared notifier.
+        # Rotation alone eventually reached it, but a 98.6s cycle plus 39.4s
+        # inbox recovery still skipped an entire scheduled observation. Respawn
+        # and fleet ownership are already resolved; the same time budget and
+        # no-resend receipt fences still apply. The remaining sweeps retain their
+        # cursor, so this reservation cannot reset their progress each pass.
+        # aegis-873: one crossing reminder then daily, on this original schedule.
+        if cfg.overdue_enabled:
+            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
+            from .feed_check import backend_adapter
+            def verify_due_receipt(recipient, marker, identifier):
+                from .br import show
+                value = show(_tracker(a, default="beads"),identifier)
+                return verify_inbox_receipt(value,recipient,marker,identifier)
+            def find_due_receipt(recipient, marker, identifier=None):
+                if identifier is not None:
+                    return verify_due_receipt(recipient,marker,identifier)
+                item = _inbox(a, default="beads").find_delivery(recipient,marker)
+                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
+            def deliver_due(recipient, marker, body, *, boundary_only=False):
+                import re
+                from copy import copy
+                from contextlib import redirect_stdout
+                from io import StringIO
+                target = copy(a)
+                target.agent = recipient
+                target.dry_run = False
+                output = StringIO()
+                with redirect_stdout(output):
+                    code = _inbox_durable(target, _registry(a).get(recipient),
+                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
+                if code != OK:
+                    return None
+                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
+                if match is None:
+                    raise ValueError("known reminder receipt ID unavailable")
+                identifier = match.group(1)
+                try:
+                    return verify_due_receipt(recipient,marker,identifier)
+                except Exception:
+                    return PendingReceipt(identifier)
+            def deliver_spec(recipient, marker, body, *, urgent):
+                return deliver_due(recipient,marker,body,boundary_only=not urgent)
+            def run_due_reminders():
+                unlock_reader = None
+                spec_reader = None
+                if cfg.overdue_spec_changes:
+                    from .spec_reader import SpecReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("spec changes require the selected Seeds producer")
+                    spec_reader = SpecReader(selected)
+                if cfg.overdue_external_unlocks:
+                    from .unlock_reader import UnlockReader
+                    from .sd import SdTracker
+                    selected = _tracker(a, default="beads")
+                    if not isinstance(selected,SdTracker):
+                        raise ValueError("external unlocks require the selected Seeds producer")
+                    unlock_reader = UnlockReader(selected,Path(a.root))
+                return OverdueAlerter(
+                    Path(a.root), _registry(a),
+                    read=backend_adapter(Path(a.root), _registry(a)).due_rows,
+                    deliver=deliver_due,
+                    receipt=find_due_receipt,
+                    events=unlock_reader.events if unlock_reader is not None else None,
+                    ack=unlock_reader.ack if unlock_reader is not None else None,
+                    specs=spec_reader.events if spec_reader is not None else None,
+                    spec_ack=spec_reader.ack if spec_reader is not None else None,
+                    spec_deliver=deliver_spec if spec_reader is not None else None,
+                    log=_log).sweep()
+            overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
+            if overdue_sent:
+                print(f"  overdue digest delivered to {', '.join(overdue_sent)}", file=sys.stderr)
         def _priority_report():
             for note in _priority_fleet_notes(a, _registry(a), panes):
                 _log(note)
@@ -14667,11 +14767,17 @@ def _tend_once(a, quiet: bool = False) -> int:
         _fleet_sweep("priority-advisory", _priority_report)
         def _role_ranking_report():
             from . import ranking_check
+            rank_store = []
             def snapshot():
                 trk = _tracker(a)
                 projection = getattr(trk, "ranking_rows", None)
                 packet = projection() if callable(projection) else None
                 if packet is not None:
+                    # Retain this selected adapter. The optional observer reads
+                    # its cached proof only behind its own OFF/rate gates.
+                    from .sd import SdTracker
+                    if isinstance(trk, SdTracker):
+                        rank_store.append(trk)
                     return packet
                 if not isinstance(trk, FilesTracker):
                     raise ValueError("selected backend lacks a bounded ranking projection")
@@ -14691,7 +14797,8 @@ def _tend_once(a, quiet: bool = False) -> int:
                     if current.id != ident or label not in current.labels:
                         raise CouldNotLook('ranker preference label did not read back')
             return ranking_check.sweep(a.root, reg, panes, snapshot=snapshot, log=_log,
-                                       label_item=label_item)
+                                       label_item=label_item,
+                                       rank_store=lambda: rank_store[0].prove_store())
         _fleet_sweep("role-ranking", _role_ranking_report)
         # CEILING-HELD WORK MOVES TO CLAUDE (aegis-qbl, Stiwi 2026-10-14). A
         # fleet sweep: it reads the shared board and must run on one host only.
@@ -14853,74 +14960,6 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ re-surfaced {len(stale_blocked)} item(s) blocked "
                   f"long enough to be forgotten: {', '.join(stale_blocked)}",
                   file=sys.stderr)
-        # aegis-873: one crossing reminder then daily, on this original schedule.
-        if cfg.overdue_enabled:
-            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
-            from .feed_check import backend_adapter
-            def verify_due_receipt(recipient, marker, identifier):
-                from .br import show
-                value = show(_tracker(a, default="beads"),identifier)
-                return verify_inbox_receipt(value,recipient,marker,identifier)
-            def find_due_receipt(recipient, marker, identifier=None):
-                if identifier is not None:
-                    return verify_due_receipt(recipient,marker,identifier)
-                item = _inbox(a, default="beads").find_delivery(recipient,marker)
-                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body, *, boundary_only=False):
-                import re
-                from copy import copy
-                from contextlib import redirect_stdout
-                from io import StringIO
-                target = copy(a)
-                target.agent = recipient
-                target.dry_run = False
-                output = StringIO()
-                with redirect_stdout(output):
-                    code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
-                if code != OK:
-                    return None
-                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
-                if match is None:
-                    raise ValueError("known reminder receipt ID unavailable")
-                identifier = match.group(1)
-                try:
-                    return verify_due_receipt(recipient,marker,identifier)
-                except Exception:
-                    return PendingReceipt(identifier)
-            def deliver_spec(recipient, marker, body, *, urgent):
-                return deliver_due(recipient,marker,body,boundary_only=not urgent)
-            def run_due_reminders():
-                unlock_reader = None
-                spec_reader = None
-                if cfg.overdue_spec_changes:
-                    from .spec_reader import SpecReader
-                    from .sd import SdTracker
-                    selected = _tracker(a, default="beads")
-                    if not isinstance(selected,SdTracker):
-                        raise ValueError("spec changes require the selected Seeds producer")
-                    spec_reader = SpecReader(selected)
-                if cfg.overdue_external_unlocks:
-                    from .unlock_reader import UnlockReader
-                    from .sd import SdTracker
-                    selected = _tracker(a, default="beads")
-                    if not isinstance(selected,SdTracker):
-                        raise ValueError("external unlocks require the selected Seeds producer")
-                    unlock_reader = UnlockReader(selected,Path(a.root))
-                return OverdueAlerter(
-                    Path(a.root), _registry(a),
-                    read=backend_adapter(Path(a.root), _registry(a)).due_rows,
-                    deliver=deliver_due,
-                    receipt=find_due_receipt,
-                    events=unlock_reader.events if unlock_reader is not None else None,
-                    ack=unlock_reader.ack if unlock_reader is not None else None,
-                    specs=spec_reader.events if spec_reader is not None else None,
-                    spec_ack=spec_reader.ack if spec_reader is not None else None,
-                    spec_deliver=deliver_spec if spec_reader is not None else None,
-                    log=_log).sweep()
-            overdue_sent = _fleet_sweep("overdue-sweep",run_due_reminders)
-            if overdue_sent:
-                print(f"  overdue digest delivered to {', '.join(overdue_sent)}", file=sys.stderr)
         # DEFERRED (aegis-boj8a2): one step further out of sight than blocked.
         # A blocked bead at least appears in `br list --status blocked`; a
         # deferred one is excluded from `br ready` BY DESIGN, so hauls,

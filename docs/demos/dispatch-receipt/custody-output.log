@@ -1,0 +1,9 @@
+Script started on 2026-11-08 15:37:08-05:00 [COMMAND="bash /tmp/kelly-v9j-custody-demo.sh" <not executed on terminal>]
+Before: 0d23416c; actual Tmux.send, isolated tracker, substituted _send
+{"assignee": "worker", "execution_authorized": true, "sends": 1, "submission_observed": false}
+{"assignee": "worker", "execution_authorized": true, "sends": 1, "submission_observed": true}
+After: explicit submission witness; same inputs and actual wrapper/coordinator
+{"assignee": null, "execution_authorized": false, "sends": 1, "submission_observed": false}
+{"assignee": "worker", "execution_authorized": true, "sends": 1, "submission_observed": true}
+
+Script done on 2026-11-08 15:37:09-05:00 [COMMAND_EXIT_CODE="0"]

@@ -119,3 +119,33 @@ Do not backfill, reset an epoch or invoke a synthetic tick to certify the window
 
 Rollback is an ordinary source revert followed by normal projection. Preserve
 pending dispatch custody and the journal across rollback.
+
+## Stored-query order in the tend log
+
+When the deployment enables `SHANTY_BACKLOG_PICKUP=1`, the fleet-owner ranking
+sweep also observes `seeds_work_rank_v2`. The default remains OFF. Publish the
+reviewed query and qualify its registry readback before enabling the consumer.
+This observer does not claim, dispatch, reassign, close, defer or reprioritize
+work, and does not change the administrator's P0 notification text or key.
+
+It reuses the existing complete READY snapshot and that same Seeds adapter's
+cached store proof. The named-query endpoint must match the proven tracker
+endpoint. At most once per five minutes, it reads up to 64 ordinary unowned READY
+IDs with a two-second deadline. Declared priority and existing plate metadata
+select the deterministic window; the stored query chooses the displayed order.
+The log labels the selected/eligible counts and says when other IDs were omitted.
+It does not present a bounded window as the global board order.
+
+Every returned ID must be covered exactly once, match the observed scheduling
+metadata and sampled clock, and carry a positive native revision. The lean
+snapshot has no revision witness: this is an observation, never CAS or admission
+evidence. Native operations, active/owned/held work, ASK records and inbox
+pointers are excluded by the existing custody filters. Changed, missing,
+malformed or failed answers remain UNKNOWN without a fallback order or retry.
+The local `notify/backlog_rank_attempt.json` records attempts, not successful
+acceptance; a failed attempt waits for the next five-minute interval too.
+
+[The isolated before/after recording](demos/backlog-tend-rank/README.md) shows
+the existing ranking sweep consuming a fixture graph order while sending no
+notifications or tracker writes. Live query delivery and installed acceptance
+remain separate from that source demonstration.

@@ -17,11 +17,15 @@ ownership and controls organize both. Quipu integration is optional.
 
 ## Why you would want it
 
-- **Keep ownership visible:** give each agent a role and ranked work.
-- **Review a crew before launching it:** preview cards, hooks and approval settings.
-- **Resume durable work:** retain the queue and coordination state between sessions.
+- **Keep work visible:** give each agent a capped, ranked plate, priority-based due
+  dates, upcoming-work briefs and overdue reminders.
+- **Keep scope changes explicit:** replace a work item's specification, show the
+  owner the unacknowledged change and record their acknowledgement with Seeds.
+- **Budget the crew:** use provider readings, session limits and harness policies
+  to govern work; pause launches during gaming and resume after the hold clears.
 
-[The Shantytown book](https://intigraph.github.io/shantytown/) explains crew setup and operation.
+[Capabilities and measured examples](docs/features.md#work-scope-and-budget-controls)
+cover setup, opt-in features and the limits of the measurements.
 
 ## Install
 
