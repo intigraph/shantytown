@@ -1748,6 +1748,7 @@ class DeferralAlerter:
             return cache[bead]
 
         from .gate_backstop import Backstop
+        delivery_errors = {}
         def deliver_backstop(recipient, text):
             if recipient == "sattler":
                 return self._push(self._reg, self._panes, text)
@@ -1757,7 +1758,8 @@ class DeferralAlerter:
                     return None
                 self._panes.send(card.pane, attribute(text, ST_TEND))
                 return recipient
-            except (LookupError, PaneNotAgent):
+            except (LookupError, PaneNotAgent) as error:
+                delivery_errors[recipient] = type(error).__name__[:64]
                 return None
         try:
             backstop_reported = ([] if store_error else Backstop(
@@ -1913,26 +1915,53 @@ class DeferralAlerter:
         if store_error:
             pacing.current.update(pacing.previous)
 
+        recipient_snapshots = {}
         def live_owner(name):
+            snapshot = {"live": False}
+            recipient_snapshots[name] = snapshot
             try:
                 card = self._reg.get(name)
                 # A surviving shell is not a live runtime. Missing process
                 # evidence retains the existing administrator route.
-                return bool(card.name == name and not card.retired and card.pane
-                            and not (Path(self._root) / "stopped" / f"{name}.json").exists()
-                            and self._panes.exists(card.pane)
-                            and harness_mod.running_name(self._panes.cmdline(card.pane)))
-            except Exception:
+                snapshot.update(card_name=str(card.name)[:64], retired=bool(card.retired),
+                                pane=str(card.pane or '')[:96])
+                if card.name != name:
+                    snapshot['reason'] = 'identity-mismatch'
+                elif card.retired:
+                    snapshot['reason'] = 'retired'
+                elif not card.pane:
+                    snapshot['reason'] = 'missing-pane'
+                else:
+                    snapshot['stopped'] = (Path(self._root) / "stopped" / f"{name}.json").exists()
+                    if snapshot['stopped']:
+                        snapshot['reason'] = 'stopped'
+                    else:
+                        snapshot['pane_exists'] = bool(self._panes.exists(card.pane))
+                        if not snapshot['pane_exists']:
+                            snapshot['reason'] = 'pane-absent'
+                        else:
+                            runtime = harness_mod.running_name(self._panes.cmdline(card.pane))
+                            snapshot['runtime'] = str(runtime or '')[:32]
+                            snapshot['live'] = bool(runtime)
+                            snapshot['reason'] = 'live' if runtime else 'no-runtime'
+                return snapshot['live']
+            except Exception as error:
+                snapshot.update(reason='probe-error', exception_type=type(error).__name__[:64])
                 return False
 
+        lead_snapshot = {}
         def lead_for(name):
             try:
                 card = self._reg.get(name)
+                lead_snapshot['reports_to'] = str(card.reports_to or '')[:64]
                 lead = self._reg.get(card.reports_to)
+                lead_snapshot.update(name=str(lead.name)[:64], role=str(lead.role)[:32],
+                                     reason='ineligible')
                 if card.name == name and lead.name == card.reports_to and lead.role == 'lead':
+                    lead_snapshot['reason'] = 'eligible'
                     return lead.name
-            except Exception:
-                pass
+            except Exception as error:
+                lead_snapshot.update(reason='lookup-error', exception_type=type(error).__name__[:64])
             return None
 
         # Fixed fields only: no raw notes, exception messages, or message bodies.
@@ -1966,8 +1995,30 @@ class DeferralAlerter:
             elif kind in ('ruling', 'activation'):
                 reason = 'authority-' + kind
             elif row and (finding.lapsed_at or finding.met or finding.prose_gate):
+                recipient_snapshots.clear()
+                lead_snapshot.clear()
+                delivery_errors.clear()
+                def observe_recipient(event):
+                    # Capture the decision now: mutable delivery custody cannot
+                    # reconstruct why an earlier administrator fallback occurred.
+                    recipient = event['recipient']
+                    exception_type = event['exception_type'] or delivery_errors.get(recipient)
+                    outcome = event['outcome']
+                    if outcome == 'send-unconfirmed' and exception_type:
+                        outcome = 'send-failure'
+                    self._log('deferral-recipient: ' + json.dumps({
+                        'item': finding.bead[:96], 'state_key': finding.key(),
+                        'assignee': str(row.get('assignee') or '')[:64],
+                        'recipient': str(recipient or '')[:64],
+                        'role': event['role'], 'outcome': outcome,
+                        'exception_type': exception_type,
+                        'snapshot': recipient_snapshots.get(recipient, {}),
+                        'lead_lookup': lead_snapshot,
+                        'observed_at': datetime.now(timezone.utc).isoformat(),
+                        'source_sha256': source_sha}, sort_keys=True))
                 recipient, reason, outcome = pacing.route(
-                    row, finding, live_owner, deliver_backstop, lead_for)
+                    row, finding, live_owner, deliver_backstop, lead_for,
+                    observe=observe_recipient)
                 if recipient:
                     if outcome == 'delivered':
                         log_route(finding, reason, recipient, outcome)

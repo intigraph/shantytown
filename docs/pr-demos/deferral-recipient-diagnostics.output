@@ -1,0 +1,26 @@
+Script started on 2026-11-09 14:18:43-05:00 [COMMAND="sh docs/pr-demos/deferral-recipient-diagnostics.sh" <not executed on terminal>]
+BASE 195a7ef3: identical isolated routing inputs
+routing source sha256=e1fe5b8150a7580bb5857059529a854cea8a9db296ee2d5526b95adda168b5cb
+Synthetic P0 date wait: overdue 10 days; external hold; no setter envelope.
+owner reachable: recipients=['worker']; second pass adds=[]; reasons=['owner']; hold=deferred; releases=0
+  per-recipient=[]
+owner down, lead reachable: recipients=['lead']; second pass adds=[]; reasons=['lead']; hold=deferred; releases=0
+  per-recipient=[]
+both unreachable: recipients=['admin']; second pass adds=[]; reasons=['owner-lead-unreachable']; hold=deferred; releases=0
+  per-recipient=[]
+both send failures: recipients=['admin']; second pass adds=[]; reasons=['owner-lead-unreachable']; hold=deferred; releases=0
+  per-recipient=[]
+
+CANDIDATE: identical isolated routing inputs
+routing source sha256=111ec2140d0d81e77195b3a2a8bbc1343ddaeaaa24293310b7f5adcd03ec3c9d
+Synthetic P0 date wait: overdue 10 days; external hold; no setter envelope.
+owner reachable: recipients=['worker']; second pass adds=[]; reasons=['owner']; hold=deferred; releases=0
+  per-recipient=[{"exception_type": null, "outcome": "delivered", "recipient": "worker", "snapshot": {"card_name": "worker", "live": true, "pane": "worker", "pane_exists": true, "reason": "live", "retired": false, "runtime": "claude", "stopped": false}}]
+owner down, lead reachable: recipients=['lead']; second pass adds=[]; reasons=['lead']; hold=deferred; releases=0
+  per-recipient=[{"exception_type": null, "outcome": "live-absence", "recipient": "worker", "snapshot": {"card_name": "worker", "live": false, "pane": "worker", "pane_exists": false, "reason": "pane-absent", "retired": false, "stopped": false}}, {"exception_type": null, "outcome": "delivered", "recipient": "lead", "snapshot": {"card_name": "lead", "live": true, "pane": "lead", "pane_exists": true, "reason": "live", "retired": false, "runtime": "claude", "stopped": false}}]
+both unreachable: recipients=['admin']; second pass adds=[]; reasons=['owner-lead-unreachable']; hold=deferred; releases=0
+  per-recipient=[{"exception_type": null, "outcome": "live-absence", "recipient": "worker", "snapshot": {"card_name": "worker", "live": false, "pane": "worker", "pane_exists": false, "reason": "pane-absent", "retired": false, "stopped": false}}, {"exception_type": null, "outcome": "live-absence", "recipient": "lead", "snapshot": {"card_name": "lead", "live": false, "pane": "lead", "pane_exists": false, "reason": "pane-absent", "retired": false, "stopped": false}}]
+both send failures: recipients=['admin']; second pass adds=[]; reasons=['owner-lead-unreachable']; hold=deferred; releases=0
+  per-recipient=[{"exception_type": "OSError", "outcome": "send-failure", "recipient": "worker", "snapshot": {"card_name": "worker", "live": true, "pane": "worker", "pane_exists": true, "reason": "live", "retired": false, "runtime": "claude", "stopped": false}}, {"exception_type": "OSError", "outcome": "send-failure", "recipient": "lead", "snapshot": {"card_name": "lead", "live": true, "pane": "lead", "pane_exists": true, "reason": "live", "retired": false, "runtime": "claude", "stopped": false}}]
+
+Script done on 2026-11-09 14:18:43-05:00 [COMMAND_EXIT_CODE="0"]
