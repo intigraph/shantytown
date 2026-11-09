@@ -1347,7 +1347,8 @@ def _main(argv: list[str] | None = None) -> int:
                 if _ceiling_took_the_stop(root,me)[0]:
                     return 0
                 from .spec_boundary import at_boundary
-                notice = at_boundary(root,me,reg)
+                from .spec_observation import hook_input
+                notice = at_boundary(root,me,reg,hook=hook_input(sys.stdin))
                 if notice:
                     print(json.dumps({"decision":"block","reason":notice}))
                     return 0
