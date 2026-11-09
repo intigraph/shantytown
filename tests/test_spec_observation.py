@@ -122,6 +122,38 @@ def test_new_native_turn_remains_distinct_and_replay_idempotent(tmp_path):
     assert {r["turn_id"] for r in evidence.show(tmp_path, identity)["receivers"]} == {"turn-1", "turn-2"}
 
 
+def test_native_event_replay_at_another_archive_ordinal_preserves_first_witness(tmp_path):
+    wire, [identity] = emission(tmp_path)
+    payload = archive(tmp_path, wire)
+    source = Path(payload["transcript_path"])
+    lines = source.read_bytes().splitlines(keepends=True)
+    source.write_bytes(b"".join(lines + [lines[-1]]))
+    observe(tmp_path, payload)
+    before = evidence.show(tmp_path, identity)
+    assert len(before["receivers"]) == 1
+    # A recopied capture can change archive ordinal; native event identity does
+    # not. Preserve the original immutable ordinal/digest rather than rewriting.
+    source.write_bytes(lines[0] + b'{"type":"event_msg","payload":{}}\n' + b"".join(lines[1:]))
+    observe(tmp_path, payload)
+    assert evidence.show(tmp_path, identity) == before
+
+
+@pytest.mark.parametrize("conflict", ["session", "event"])
+def test_concatenated_or_conflicting_native_identity_is_unknown(tmp_path, conflict):
+    wire, [identity] = emission(tmp_path)
+    payload = archive(tmp_path, wire)
+    source = Path(payload["transcript_path"])
+    lines = source.read_bytes().splitlines(keepends=True)
+    if conflict == "session":
+        source.write_bytes(lines[0] + b'{"type":"session_meta","payload":{"id":"foreign"}}\n' + b"".join(lines[1:]))
+    else:
+        changed = json.loads(lines[-1])
+        changed["payload"]["content"][0]["text"] = "different event payload"
+        source.write_bytes(b"".join(lines) + json.dumps(changed).encode() + b"\n")
+    observe(tmp_path, payload)
+    assert evidence.show(tmp_path, identity)["arrival"] == "UNKNOWN"
+
+
 @pytest.mark.parametrize("hook", [{}, HOOK | {"session_id": None}, HOOK | {"hook_run_id": None}])
 def test_missing_native_identity_cannot_mint_emission(tmp_path, hook):
     try:

@@ -116,6 +116,19 @@ def _publish(root, value):
     try:
         fcntl.flock(folder, fcntl.LOCK_EX | fcntl.LOCK_NB)
         names = _names(folder)
+        if value["state"] == "HARNESS_OBSERVED":
+            for name in names:
+                if name.startswith(".staged-"):
+                    continue
+                raw = _read(name, 4096, dir_fd=folder)
+                previous = json.loads(raw)
+                if name != _digest(raw) + ".json":
+                    raise ValueError("spec observation evidence identity UNKNOWN")
+                if (previous.get("state") == "HARNESS_OBSERVED"
+                        and previous.get("identity") == value["identity"]
+                        and all(previous.get("receiver", {}).get(key) == value["receiver"][key]
+                                for key in ("event_id", "turn_id"))):
+                    return  # native event replay preserves the FIRST archive witness
         if target not in names and len(names) >= _ROWS:
             raise ValueError("spec observation evidence capped")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -250,6 +263,18 @@ def observe(root, agent, payload):
     meta = header.get("payload", {})
     if header.get("type") != "session_meta" or (meta.get("id") or meta.get("session_id")) != session:
         return
+    event_payloads = {}
+    for entry in entries[1:]:
+        row = entry.get("payload", {})
+        if entry.get("type") == "session_meta" or row.get("session_id", session) != session:
+            return  # concatenated/foreign capture is ambiguous, not an input proof
+        if entry.get("type") == "response_item" and row.get("type") == "message":
+            event = row.get("id")
+            if isinstance(event, str) and event:
+                digest = _digest(_encoded(row))
+                if event in event_payloads and event_payloads[event] != digest:
+                    return
+                event_payloads[event] = digest
     turn = None
     for ordinal, (line, entry) in enumerate(zip(lines, entries)):
         row = entry.get("payload", {})
