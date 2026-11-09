@@ -3743,6 +3743,19 @@ failure without blocking notification. It does not certify the bytes imported
 before an on-disk source update. A failed administrator delivery is `pending`,
 not `delivered`; a suppressed identical summary is `suppressed`.
 
+Ordinary owner/lead routing also emits one `deferral-recipient:` JSON record per
+recipient considered. It distinguishes `recipient-absent`, `live-absence`,
+`send-failure`, `send-unconfirmed`, `delivered` and `suppressed`. Records bind the
+item and finding state key, assignee, recipient role, observation time and source
+hash. A bounded snapshot records the card name, pane, retirement/stopped status,
+pane existence and recognized runtime as those checks are reached. Unreached
+checks remain absent. Lead lookup records the bounded declared lead, resolved
+card role and eligibility or lookup exception class. Probe failures retain only the exception class; send
+failures likewise retain the class without its message. Raw process commands,
+notes and message bodies are excluded. These observations do not prove later
+inbox consumption or reconstruct historical delivery custody. Diagnostic sink
+failure does not change routing or reminder suppression.
+
 Rank proposals distinguish `reowner` (a positively observed down owner) from
 `needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
 `in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
