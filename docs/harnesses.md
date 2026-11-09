@@ -399,6 +399,10 @@ repo said before; the evidence, and the cost of the reversal, are in
 `dangerous` (→ `--dangerously-bypass-approvals-and-sandbox`), `roles`/`domain` (carried as
 `ST_ROLES` / `ST_ROLE_DOMAIN`, opaquely).
 
+Spec-notice emission and accepted harness input are separate evidence states.
+See [Stop spec-notice evidence](spec-observation.md) for the conservative native
+archive adapter, exact identity reader, UNKNOWN states and live qualification gates.
+
 A legacy `chrome: true` preference, or `harness_options.codex.chrome`, is
 retained with an explicit unsupported-option notice. Codex receives neither
 `--chrome` nor `--no-chrome`; returning to Claude restores its own preference.
