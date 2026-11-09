@@ -1,0 +1,15 @@
+Script started on 2026-11-08 23:19:17-05:00 [COMMAND="bash run.sh" <not executed on terminal>]
+Private source fixture; no live harness delivery
+Base eafa6b46d151aa4338f555eabd1f8d5c3b9a160e
+Generated notice: work-example SPEC CHANGED v1 -> v2 (unacked). Read the consolidated spec and sd history <id>, then st work item ack <id>.
+Duplicate generation: None
+Observation reader: unavailable on this revision; the fence does not prove arrival.
+Candidate 1f8baa53495fef63edf014c81e0538ef52ba5217
+Generated notice: work-example SPEC CHANGED v1 -> v2 (unacked). Read the consolidated spec and sd history <id>, then st work item ack <id>. [spec-observation:03daad4665cbee0e0b7a2144523312b0b1a1931771056d7ca3e46eaf38784d9b]
+Duplicate generation: None
+Emission only: {"arrival": "UNKNOWN", "emission": "EMITTED", "receivers": []}
+Wrong session: {"arrival": "UNKNOWN", "emission": "EMITTED", "receivers": []}
+Accepted input fixture: {"arrival": "HARNESS_OBSERVED", "emission": "EMITTED", "receivers": [{"record_ordinal": 2, "record_sha256": "64095e86fbf099257218d20579def4c2099b39643cd82e19eaa2a9f752eca820", "source": "codex-native-archive", "turn_id": "demo-turn"}]}
+Replay receipt count: 1
+
+Script done on 2026-11-08 23:19:17-05:00 [COMMAND_EXIT_CODE="0"]
