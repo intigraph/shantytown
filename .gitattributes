@@ -45,3 +45,5 @@ docs/pr-demos/operation-haul/output.log -text whitespace=cr-at-eol
 
 # Preserve the paired startup-marker terminal replay bytes.
 docs/demos/startup-marker/output.log -text whitespace=cr-at-eol
+# Preserve missing-store probe PTY bytes and replay timing.
+docs/demos/hooks-no-store/output.log -text whitespace=cr-at-eol
