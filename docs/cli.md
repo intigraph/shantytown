@@ -44,7 +44,8 @@ context must also be delivered; Codex requires the adapter's observation that
 this exact startup body began a turn. A stranded, queued or unobserved startup
 reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
-composer input.
+composer input. Once the exact-body Codex receipt confirms a new turn, later
+terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
@@ -1984,9 +1985,12 @@ not truncated to 15. `--dry-run` reports the selection and performs no closes.
 drains that offline case without turning startup into an acknowledgment. After the
 runtime and its hooks are verified, the launcher snapshots the recipient's unread
 messages and injects one marked startup-context block. It closes exactly those IDs
-only when a scrollback read-back contains the block's complete end marker and the
-input is not stranded. A failed send, missing/truncated marker, unreadable inbox, or
-aborted startup leaves every pointer open. Plain list and `--count` remain pure reads;
+when Codex returns an exact-body first-turn receipt. Other adapters require a
+scrollback read-back containing the complete end marker without stranded input.
+A Codex marker echo without that receipt does not acknowledge anything; a marker
+that scrolls away after a confirmed turn does not invalidate its receipt. A failed
+send, missing required evidence, unreadable inbox or aborted startup preserves
+unacknowledged pointers. Plain list and `--count` remain pure reads;
 age is never treated as evidence of delivery.
 
 The default send is unchanged and is still one line of `tmux send-keys`. What is new is the **type**.
