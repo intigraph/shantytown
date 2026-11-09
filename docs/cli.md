@@ -3835,3 +3835,8 @@ still applies; this option grants no authority or retry.
 For ambiguous comments, the existing bounded exact readback can establish that
 the original attempt landed; it never resubmits automatically. Missing or
 unreadable evidence keeps UNKNOWN.
+
+A non-null `recovery` preserves a recognized native write-operation witness,
+provenance graph and exact item IDs. It excludes private field differences and
+bodies. Use this persisted identity, when available, to reconcile the SDK write;
+the new per-invocation operation ID is only a diagnostic correlation key.

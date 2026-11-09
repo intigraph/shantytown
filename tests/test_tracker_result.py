@@ -60,6 +60,23 @@ def test_timeout_cannot_justify_retry_even_if_commit_landed(monkeypatch,capsys,c
     assert "private arguments" not in json.dumps(v)
 
 
+def test_sdk_recovery_identity_survives_without_private_differences(monkeypatch,capsys):
+    native_id = "urn:seeds:write:" + "a" * 24
+    class Tracker:
+        def get(self,item): return WorkItem(item)
+        def update(self,*a,**kw):
+            error = {"code":"INDETERMINATE", "details":{"operation_id":native_id,
+                "provenance_graph":"https://example.org/project/test#provenance",
+                "item_ids":["exact-1"], "field_differences":[{"current":"private-body"}]}}
+            observe(subprocess.CompletedProcess([],8,json.dumps({"error":error}),""))
+            raise RuntimeError("private-body")
+    code,v = invoke(monkeypatch,capsys,Tracker(),"update",status="open")
+    assert code == 8 and v["recovery"]["operation_id"] == native_id
+    assert v["recovery"]["item_ids"] == ["exact-1"]
+    assert v["mutation_outcome"] == "UNKNOWN"
+    assert "private-body" not in json.dumps(v)
+
+
 def test_sdk_conflict_code_survives_wrapper(monkeypatch,capsys):
     class Tracker:
         def get(self,item): return WorkItem(item)

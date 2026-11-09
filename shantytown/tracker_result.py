@@ -27,6 +27,19 @@ def safe_graph(value):
         return None
 
 
+def safe_recovery(details):
+    if not isinstance(details, dict):
+        return None
+    identity = details.get("operation_id")
+    if not isinstance(identity, str) or not re.fullmatch(r"urn:seeds:write:[0-9a-fA-F]{24}", identity):
+        return None
+    items = details.get("item_ids")
+    return {"operation_id":identity,
+        "provenance_graph":safe_graph(details.get("provenance_graph")),
+        "item_ids":[item for item in items[:128] if isinstance(item,str)
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}",item)] if isinstance(items,list) else []}
+
+
 def phase(value):
     operation = _active.get()
     if operation is not None:
@@ -44,6 +57,7 @@ def observe(result):
                 operation.upstream_code = error.get("code")
                 details = error.get("details")
                 if isinstance(details, dict):
+                    operation.recovery = safe_recovery(details)
                     operation.http_status = details.get("http_status")
                     if details.get("category") in ("MALFORMED_RESPONSE", "PARTIAL", "TIMEOUT"):
                         operation.original_category = details["category"]
@@ -67,6 +81,7 @@ class Operation:
         self.http_status = None
         self.graph = None
         self.original_category = None
+        self.recovery = None
 
     def __enter__(self):
         self.token = _active.set(self)
@@ -84,6 +99,7 @@ class Operation:
         if error is not None:
             if native is None:
                 native = getattr(error, "code", None)
+            self.recovery = self.recovery or safe_recovery(getattr(error, "details", None))
             if not isinstance(native, str) or native not in {"FAILED", "USAGE", "NOT_FOUND", "CONFLICT", "REFUSED",
                     "CONFIG", "UNREACHABLE", "INDETERMINATE", "NOT_BUILT", "ELSEWHERE"}:
                 native = "UNKNOWN"
@@ -115,6 +131,7 @@ class Operation:
             "operation_id":self.operation_id, "operation":self.args.item_action,
             "tasks":[self.args.item] if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,255}", self.args.item) else [], "graph":safe_graph(self.graph),
             "phase":self.phase, "mutation_outcome":outcome, "exit_code":code,
+            "recovery":self.recovery,
             "data":data if error is None else None,
             "error":None if error is None else {"category":category,"code":native,
                 "http_status":status if isinstance(status,int) else None,
