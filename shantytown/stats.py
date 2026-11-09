@@ -565,6 +565,14 @@ def capture(root: Path, payload: dict) -> None:
         except Exception:
             # Optional trace observation must never alter tool/cost outcomes.
             pass
+        if hook == "Stop":
+            try:
+                from . import spec_observation
+                spec_observation.observe(root, agent, payload)
+            except Exception:
+                # Missing/partial native receiver evidence stays UNKNOWN.
+                # Never print private payloads or let diagnostics alter a Stop.
+                pass
         if hook in ("PreToolUse", "PostToolUseFailure"):
             conn.commit()
             return

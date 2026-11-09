@@ -35,7 +35,7 @@ def _read_receipt(path):
         os.close(fd)
 
 
-def consume(root, recipient, rows, *, now=None):
+def consume(root, recipient, rows, *, now=None, observation=None):
     folder = Path(root) / "notify"
     if folder.is_symlink():
         raise ValueError("unsafe spec boundary folder")
@@ -46,10 +46,10 @@ def consume(root, recipient, rows, *, now=None):
             fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:
             return None
-        return _consume(root,recipient,rows,now=now)
+        return _consume(root,recipient,rows,now=now,observation=observation)
 
 
-def _consume(root, recipient, rows, *, now=None):
+def _consume(root, recipient, rows, *, now=None, observation=None):
     root = Path(root)
     path = root / "notify" / ("spec-boundary-" + hashlib.sha256(recipient.encode()).hexdigest() + ".json")
     answer = rows()
@@ -96,14 +96,24 @@ def _consume(root, recipient, rows, *, now=None):
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
+    if observation is not None:
+        try:
+            from .spec_observation import emitted
+            harness, hook = observation
+            body, _identities = emitted(root, recipient, harness, hook, fresh, body)
+        except (OSError, ValueError, TypeError, KeyError):
+            # Diagnostic evidence cannot change the fence, repeat a notice, or
+            # suppress the existing pointer when native identity is missing.
+            pass
     return body
 
 
-def at_boundary(root, recipient, reg):
+def at_boundary(root, recipient, reg, *, hook=None):
     from .feed_check import _br_tracker
     tracker = _br_tracker(root,reg)
     from .sd import SdTracker
     if not isinstance(tracker,SdTracker):
         raise ValueError("spec boundary requires selected Seeds schema")
     owner = None if reg.get(recipient).role == "administrator" else recipient
-    return consume(root,recipient,lambda:tracker.spec_rows(owner))
+    return consume(root,recipient,lambda:tracker.spec_rows(owner),
+                   observation=(reg.get(recipient).harness, hook))
