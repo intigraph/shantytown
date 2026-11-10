@@ -52,5 +52,8 @@ docs/demos/runtime-roll/demo.txt -text whitespace=cr-at-eol
 docs/demos/runtime-roll/peer-ledger.txt -text whitespace=cr-at-eol
 # Preserve missing-store probe PTY bytes and replay timing.
 docs/demos/hooks-no-store/output.log -text whitespace=cr-at-eol
+# Preserve the private runtime-wrapper demonstration for terminal playback.
+docs/demos/runtime-peer-wrapper/output.log -text -whitespace
+docs/demos/runtime-peer-wrapper/timing.log -text -whitespace
 # Preserve full serving-SHA probe PTY bytes and replay timing.
 docs/demos/installed-serving-sha/output.log -text whitespace=cr-at-eol
