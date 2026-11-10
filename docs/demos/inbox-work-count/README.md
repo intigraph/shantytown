@@ -14,3 +14,9 @@ set `DEMO_BASE_SOURCE` to it, then run `sh docs/demos/inbox-work-count/run.sh`.
 The development fixture requires rdflib; it executes the actual generated
 SPARQL against a local dataset and uses an isolated legacy-adapter callback.
 It does not prove installed acceptance or retire any live message.
+
+The refresh `dc6b02c5d6e6e6be7bd1088406ad26b73663fea6` merges current main
+`0fb0cdc09135ee7492b2565cd1330bf89b58fc77`. The query/triage implementations
+and their controls are byte-identical to the prior branch; the ready-count
+function has an identical AST. The retained recording still demonstrates this
+candidate's filtering behavior. Runtime acceptance remains separate.
