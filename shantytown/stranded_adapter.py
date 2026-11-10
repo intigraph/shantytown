@@ -56,11 +56,11 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     cards = {card.name: card for card in cards_list}
     if len(cards) != len(cards_list):
         raise ValueError('duplicate crew cards')
-    projection = getattr(tracker, 'ranking_rows', None)
-    packet = projection() if callable(projection) else None
-    if packet is None:
-        raise ValueError('stranded work requires complete bounded owner projection')
-    _, rows = packet
+    projection = getattr(tracker, 'stranded_rows', None)
+    if not callable(projection):
+        raise ValueError('stranded work requires complete bounded assignee census')
+    local_owners = sorted(name for name, card in cards.items() if card.host == host)
+    rows = projection(local_owners)
     stop_store = FilesStops(Path(root) / 'stopped')
     service = OwnedWork(root)
     def observe(name, card):
@@ -76,6 +76,13 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
         stop = stop_store.all().exact().get(name)
         state = ('missing' if card is None else panes.owner_state(card.pane))
         generation = current.get('generation', 'no-launch-record')
+        # A recorded stop plus positive process absence is authoritative;
+        # an older cycle refusal must not hide this independently proven class.
+        if state == 'down' and stop is not None:
+            generation += ':operator-stop:' + hashlib.sha256(json.dumps(
+                [stop.at, stop.by, stop.reason, stop.resume_at]).encode()).hexdigest()
+            return dict(state='operator-stopped', generation=generation,
+                        resume_at=stop.resume_at, intentional_stop=stop.resume_at is None)
         # A refused cycle is a separate positive fact, not inferred from age or
         # a busy pane. Re-read at the CAS fence; changed/refused metadata resets
         # the measured interval. Malformed/unreadable input cannot prove absence.
@@ -109,12 +116,8 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
         local_cards = {n: c for n, c in current_cards.items() if c.host == host}
         target = recipient(name, local_cards)
         target_card = current_cards.get(target)
-        if target_card and target_card.role != 'administrator':
-            status = panes.owner_state(target_card.pane)
-            if status == 'down':
-                return recipient(target, local_cards)
-            if status != 'live':
-                raise ValueError('lead delivery liveness UNKNOWN')
+        if not target_card or panes.owner_state(target_card.pane) != 'live':
+            raise ValueError('administrator delivery liveness UNKNOWN')
         return target
     def notify(target, body, key):
         deliver = getattr(inbox, 'deliver_once', None)
@@ -133,12 +136,29 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
         notify=notify, read=read, release=release,
         checkpoint=lambda name, card: checkpoint(card),
         fence=lambda name: lifecycle_lock(root, name), now=now,
-        release_admitted=selected == 'release')
+        release_admitted=selected == 'release', operator_release_only=True)
     # The already deployed held-work reader joins these lifecycle observations
     # to assigned work. No second brief board scan or private checkpoint payload.
     import time
     measured = time.time() if now is None else now
     findings = detector.snapshot()
+    # The complete read includes inbox pointers for honest coverage accounting;
+    # their recipient assignments are never work-release candidates.
+    from .files import write_json_atomic
+    from .inbox import is_message
+    census = {}
+    for row in rows:
+        name = (row.get('assignee') or '').rsplit('/', 1)[-1]
+        counts = census.setdefault(name, dict(work=0, inbox=0, release_due=0))
+        message = is_message(row.get('title', ''))
+        counts['inbox' if message else 'work'] += 1
+        finding = findings.get(row['id'], {})
+        if (not message and finding.get('checked_at') == measured
+                and finding.get('evidence') == 'operator-stopped'
+                and finding.get('release_due')):
+            counts['release_due'] += 1
+    write_json_atomic(detector.root / 'census.json',
+                      dict(checked_at=measured, complete=True, owners=census))
     for name in {entry['owner'] for entry in findings.values()}:
         card = cards.get(name)
         evidence = observe(name, card)
