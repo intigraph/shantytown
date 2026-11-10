@@ -3844,6 +3844,10 @@ scheduled-delivery acceptance.
 
 ## Soft-cycle completion evidence
 
+Runtime updates use the same idle executor for automatic checkpointed process
+replacement. See [runtime update replacement](runtime-updates.md) for version
+evidence, credential preflight, input deferral and serialized roll receipts.
+
 Soft-cycle completion requires a fresh hook-reported session ID and transcript
 path, plus settled ready UI and the existing permission check. A missing token
 footer does not prove a reset. If the clear times out, the command reports
