@@ -10,7 +10,8 @@ import re
 import uuid
 
 from .dispatch_receipts import (ReceiptConflict, ReceiptStore, assignment_comment,
-                                assignment_proof, assignment_supersession)
+                                assignment_proof, assignment_supersession,
+                                prepared_supersession)
 
 
 def digest(value):
@@ -44,7 +45,8 @@ class FilesAssignments:
 
     def supersession(self, row):
         current = json.loads(self.tracker._path(row['item']).read_text())
-        return assignment_supersession(row, dict(current, id=row['item']))
+        prove = prepared_supersession if row['state'] == 'prepared' else assignment_supersession
+        return prove(row, dict(current, id=row['item']))
 
 
 class SeedsAssignments:
@@ -58,7 +60,8 @@ class SeedsAssignments:
         return self.tracker.dispatch_assignment_read(row)
 
     def supersession(self, row):
-        return assignment_supersession(row, self.tracker.stranded_read(row['item']))
+        prove = prepared_supersession if row['state'] == 'prepared' else assignment_supersession
+        return prove(row, self.tracker.stranded_read(row['item']))
 
 
 class Binding:
@@ -191,18 +194,18 @@ class Binding:
                                  lambda row: self.assignments.claim(row, plan.updates))
 
     def supersede(self, ident, *, dry_run=False):
-        """Explicitly retire a fenced attempt; never send, claim or authorize work."""
+        """Explicitly retire an attempt; never send, claim or authorize work."""
         row = self.store.read(ident)
         if dry_run:
             # A preview must not acquire a writable ledger lock or remove the
             # interrupted-assignment fence. Native release evidence is still
             # required; this read never authorizes a later transition.
-            if row['state'] not in ('assigning', 'superseded'):
-                raise ReceiptConflict('only a fenced assignment can be superseded')
-            if row['state'] == 'assigning':
+            if row['state'] not in ('prepared', 'assigning', 'superseded'):
+                raise ReceiptConflict('only a prepared intent or fenced assignment can be superseded')
+            if row['state'] in ('prepared', 'assigning'):
                 self.assignments.supersession(row)
             return dict(id=ident, state=row['state'], dry_run=True,
-                        would_supersede=row['state'] == 'assigning', execution_authorized=False)
+                        would_supersede=row['state'] != 'superseded', execution_authorized=False)
         with self.store.lock(row['item']):
             if row['state'] == 'superseded':
                 return dict(id=ident, state='superseded', execution_authorized=False)
