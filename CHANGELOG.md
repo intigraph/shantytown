@@ -1,5 +1,74 @@
 # Changelog
 
+## [0.15.0](https://github.com/intigraph/shantytown/compare/v0.14.0...v0.15.0) (2026-11-10)
+
+
+### Features
+
+* add producer-owned recurring and evidence resume gates ([#538](https://github.com/intigraph/shantytown/issues/538)) ([2055533](https://github.com/intigraph/shantytown/commit/20555332da22ddf5dc20b6b85caee6732119556a))
+* **backlog:** observe stored rank order in tend ([79442d8](https://github.com/intigraph/shantytown/commit/79442d890e54dd7b153508bc3560cee2a797a586))
+* **backlog:** propose bounded stale-work reviews ([#525](https://github.com/intigraph/shantytown/issues/525)) ([bc6f60b](https://github.com/intigraph/shantytown/commit/bc6f60bdce980330fb8f0ba18280920bff8f9d7a))
+* **backlog:** propose bounded stale-work reviews (aegis-n1z9) ([bc6f60b](https://github.com/intigraph/shantytown/commit/bc6f60bdce980330fb8f0ba18280920bff8f9d7a))
+* **backlog:** rank observed deferrals through a versioned query ([01f983b](https://github.com/intigraph/shantytown/commit/01f983b40f72292ded1420efe08b506499e32513))
+* **crew:** add isolated shared display cache primitive ([#530](https://github.com/intigraph/shantytown/issues/530)) ([f909de3](https://github.com/intigraph/shantytown/commit/f909de3e3ba445946545dd673f94edea1de2d0fd))
+* **crew:** expose explicit display snapshots on current protocol ([#554](https://github.com/intigraph/shantytown/issues/554)) ([87ae303](https://github.com/intigraph/shantytown/commit/87ae3033ff0ef6c209273df3a42e7a4972275e00))
+* **crew:** isolate display protocol on current main ([#553](https://github.com/intigraph/shantytown/issues/553)) ([1434678](https://github.com/intigraph/shantytown/commit/1434678d66dd2ff02d8c519097adbb721763e2b9))
+* **cycle:** own runtime update replacement at idle ([#550](https://github.com/intigraph/shantytown/issues/550)) ([8f792ab](https://github.com/intigraph/shantytown/commit/8f792ab7fadc9185b0737051b97b4c15a8edfc41))
+* **intake:** accept explicit task deadlines ([#524](https://github.com/intigraph/shantytown/issues/524)) ([897afef](https://github.com/intigraph/shantytown/commit/897afef9f8117dfa04c4c1cebdcf88bc0347969f))
+* rank observed deferral lower bounds through a v2 query (aegis-n1z9) ([d8fb8ab](https://github.com/intigraph/shantytown/commit/d8fb8ab139d9540598e3bff6936f5d7d301aba45))
+* **spec:** distinguish emitted notices from accepted harness input ([#545](https://github.com/intigraph/shantytown/issues/545)) ([ea5608b](https://github.com/intigraph/shantytown/commit/ea5608bcaedd7405c7815b708b576e0f4d8f65ae))
+* **tracker:** preserve UNKNOWN in structured operation results ([#546](https://github.com/intigraph/shantytown/issues/546)) ([195a7ef](https://github.com/intigraph/shantytown/commit/195a7ef3f8683353cfd5ea7b3357e4b1b50950fe))
+
+
+### Bug Fixes
+
+* **backlog:** validate v2 metadata in tend observations ([d8d6d8c](https://github.com/intigraph/shantytown/commit/d8d6d8c75c660dff6cac5d3ad502f9f3a595461a))
+* bind dispatch and assignment to one acknowledged receipt ([#539](https://github.com/intigraph/shantytown/issues/539)) ([0445180](https://github.com/intigraph/shantytown/commit/0445180151e1ef5117e1ccdccfeef4c194a5f71f))
+* **cycle:** import fleet census in runtime replacement sweep ([#560](https://github.com/intigraph/shantytown/issues/560)) ([6906320](https://github.com/intigraph/shantytown/commit/6906320da6e0b36a27cddacccafb37a9fbb42cd1))
+* **cycle:** verify new session evidence before completing a soft cycle ([#540](https://github.com/intigraph/shantytown/issues/540)) ([e3df411](https://github.com/intigraph/shantytown/commit/e3df4110a450c37f0f369cc4a306a969694e013b))
+* **defer:** match full commit targets to serving identity ([#559](https://github.com/intigraph/shantytown/issues/559)) ([1ccf046](https://github.com/intigraph/shantytown/commit/1ccf0463a726d6caab579f2d51b0556d68e9201c))
+* **defer:** preserve admitted operation priority ([#551](https://github.com/intigraph/shantytown/issues/551)) ([e12842d](https://github.com/intigraph/shantytown/commit/e12842d9b6bc36becbda133de4ae0cbd0b66edc4))
+* **defer:** preserve admitted operation priority (aegis-ai2) ([e12842d](https://github.com/intigraph/shantytown/commit/e12842d9b6bc36becbda133de4ae0cbd0b66edc4))
+* **deferrals:** exclude closed items before pacing gate reads ([ae6a2f1](https://github.com/intigraph/shantytown/commit/ae6a2f1d6bc79d2ae5c7aaa54af23726c4678927))
+* **deferrals:** retain per-recipient delivery diagnostics ([#549](https://github.com/intigraph/shantytown/issues/549)) ([2f889a2](https://github.com/intigraph/shantytown/commit/2f889a20bdda611609edeb6f7f2f0f0dc31ebfae))
+* **deferrals:** skip terminal items before pacing checks ([#563](https://github.com/intigraph/shantytown/issues/563)) ([ae6a2f1](https://github.com/intigraph/shantytown/commit/ae6a2f1d6bc79d2ae5c7aaa54af23726c4678927))
+* **delivery:** retain and surface idle Codex queues ([#542](https://github.com/intigraph/shantytown/issues/542)) ([dbdce03](https://github.com/intigraph/shantytown/commit/dbdce031b1f4f776251122eb69d265ecadc23bc2))
+* **dispatch:** complete retained native submission receipts without resend ([#552](https://github.com/intigraph/shantytown/issues/552)) ([0fb0cdc](https://github.com/intigraph/shantytown/commit/0fb0cdc09135ee7492b2565cd1330bf89b58fc77))
+* **dispatch:** explicitly supersede fenced uncertain receipts ([#544](https://github.com/intigraph/shantytown/issues/544)) ([5be80e0](https://github.com/intigraph/shantytown/commit/5be80e0d9351dad12eb8445f72c3d2b73da8d4a6))
+* **dispatch:** observe native submission on initial bound send ([#564](https://github.com/intigraph/shantytown/issues/564)) ([165e24e](https://github.com/intigraph/shantytown/commit/165e24e7379d23d76539920cb46bb6a24e6451b4))
+* **dispatch:** retire prepared receipts without replaying them ([#558](https://github.com/intigraph/shantytown/issues/558)) ([8e7bc12](https://github.com/intigraph/shantytown/commit/8e7bc12e2af426ce19d00461e0e61a7b80f0d764))
+* exclude ASK decisions from priority comparisons ([d373d2f](https://github.com/intigraph/shantytown/commit/d373d2f200beff125b62aeff4ce258596c74b0ef))
+* exclude ASK decisions from priority ranking advisories ([#529](https://github.com/intigraph/shantytown/issues/529)) ([d373d2f](https://github.com/intigraph/shantytown/commit/d373d2f200beff125b62aeff4ce258596c74b0ef))
+* **hooks:** report missing store as cannot tell ([#555](https://github.com/intigraph/shantytown/issues/555)) ([6c6da5c](https://github.com/intigraph/shantytown/commit/6c6da5cf96076bfe3e88c01e98a12fb1656735b9))
+* **launch:** keep confirmed startup delivery after terminal scrolling ([#543](https://github.com/intigraph/shantytown/issues/543)) ([eafa6b4](https://github.com/intigraph/shantytown/commit/eafa6b46d151aa4338f555eabd1f8d5c3b9a160e))
+* **launch:** retain exact startup receipt after terminal scrolling ([eafa6b4](https://github.com/intigraph/shantytown/commit/eafa6b46d151aa4338f555eabd1f8d5c3b9a160e))
+* queue the first message on busy Codex panes ([#526](https://github.com/intigraph/shantytown/issues/526)) ([dbf3ca8](https://github.com/intigraph/shantytown/commit/dbf3ca83495c66dabc2765eff7efae3b27877d22))
+* recognize busy Codex panes above queued inputs ([#565](https://github.com/intigraph/shantytown/issues/565)) ([2f3c720](https://github.com/intigraph/shantytown/commit/2f3c7207bc8880efb2d6f95931c80b85b0e5a67b))
+* refuse mixed-validity deferral fact conflicts (aegis-n1z9) ([b21dad8](https://github.com/intigraph/shantytown/commit/b21dad80114356857b30f7a5eeab7001992abeb4))
+* **stranded:** release work held by explicitly stopped owners ([#562](https://github.com/intigraph/shantytown/issues/562)) ([e525842](https://github.com/intigraph/shantytown/commit/e525842a0dc3c78d49ee07f839aa10d4cab0db5e))
+* **tend:** reserve reminder service before slow cycle work ([#536](https://github.com/intigraph/shantytown/issues/536)) ([908bf70](https://github.com/intigraph/shantytown/commit/908bf707f92a8da00ca2affb85788f8f73274179))
+
+
+### Documentation
+
+* align tend rank guidance with the v2 consumer ([#537](https://github.com/intigraph/shantytown/issues/537)) ([9b08512](https://github.com/intigraph/shantytown/commit/9b08512c078632eb54406fd1d6027aeb9f800fc1))
+* **backlog:** bind pickup instructions to the v2 query ([0010232](https://github.com/intigraph/shantytown/commit/00102325f5927b3459943af9efc005e7cf366384))
+* **backlog:** require the matching v2 query before pickup activation ([16c2c18](https://github.com/intigraph/shantytown/commit/16c2c1855485af64fc9816359c6014693f29bf44))
+* explain work scope and measured budget controls ([#541](https://github.com/intigraph/shantytown/issues/541)) ([b5571a9](https://github.com/intigraph/shantytown/commit/b5571a9c0ffe0f82010989ca8645d004db20f8a2))
+* name the v2 query in tend guidance ([9b08512](https://github.com/intigraph/shantytown/commit/9b08512c078632eb54406fd1d6027aeb9f800fc1))
+
+
+### Tests
+
+* **display:** handle process exit during proc stat read ([7852a0d](https://github.com/intigraph/shantytown/commit/7852a0dc84ce4c194cd6868d38064f65e409e9e9))
+* **display:** tolerate process exit during proc stat read ([#557](https://github.com/intigraph/shantytown/issues/557)) ([7852a0d](https://github.com/intigraph/shantytown/commit/7852a0dc84ce4c194cd6868d38064f65e409e9e9))
+
+
+### Continuous Integration
+
+* notify homebrew tap on published release ([#561](https://github.com/intigraph/shantytown/issues/561)) ([24473ab](https://github.com/intigraph/shantytown/commit/24473ab23f43c22c9049cc185cbd7dd1cf757fa6))
+* notify homebrew tap on published release (aegis-em2) ([24473ab](https://github.com/intigraph/shantytown/commit/24473ab23f43c22c9049cc185cbd7dd1cf757fa6))
+
 ## [0.14.0](https://github.com/intigraph/shantytown/compare/v0.13.1...v0.14.0) (2026-11-08)
 
 
