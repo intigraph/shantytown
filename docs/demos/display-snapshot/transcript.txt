@@ -1,0 +1,13 @@
+Script started on 2026-11-09 16:44:07-05:00 [COMMAND="python3 docs/demos/display-snapshot/run.py" <not executed on terminal>]
+Same new display request against base and candidate; PRIVATE FILE REGISTRY.
+Candidate revision: 5cc3881c622d3350f2a570236597d8571f2c249a
+BASE: d572d8c5088a exit 2
+st crew: error: unrecognized arguments: --display-snapshot
+CANDIDATE missing registry: {"exit": 3, "complete": false, "errors": ["display snapshot UNKNOWN"]}
+CANDIDATE valid empty registry: {"version": 2, "purpose": "display", "decision_eligible": false, "complete": true, "ttl_seconds": 15}
+CANDIDATE second presentation:
+0/0 (display; at most 15s old)
+Three presentations; actual local refresh producer calls: 1
+No live service, peer, credential, activation or performance result is demonstrated.
+
+Script done on 2026-11-09 16:44:09-05:00 [COMMAND_EXIT_CODE="0"]
