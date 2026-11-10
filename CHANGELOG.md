@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/intigraph/shantytown/compare/v0.15.0...v0.15.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **provision:** verify registered legacy capture hook bytes ([#548](https://github.com/intigraph/shantytown/issues/548)) ([452c3f8](https://github.com/intigraph/shantytown/commit/452c3f8ba4680a7a9c41c6f2e5d6de9b563a50b3))
+
 ## [0.15.0](https://github.com/intigraph/shantytown/compare/v0.14.0...v0.15.0) (2026-11-10)
 
 
