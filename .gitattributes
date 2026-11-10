@@ -57,3 +57,4 @@ docs/demos/runtime-peer-wrapper/output.log -text -whitespace
 docs/demos/runtime-peer-wrapper/timing.log -text -whitespace
 # Preserve full serving-SHA probe PTY bytes and replay timing.
 docs/demos/installed-serving-sha/output.log -text whitespace=cr-at-eol
+docs/demos/6wr-busy-queue/output.log -text whitespace=cr-at-eol
