@@ -113,7 +113,7 @@ def _codex_box(screen: str) -> tuple[str, str, str] | None:
 
 
 def _codex_busy(screen: str) -> bool:
-    rows = triage.strip_attrs(screen).splitlines()
+    rows = triage.strip_attrs(triage._without_codex_queue(screen)).splitlines()
     prompts = [i for i, row in enumerate(rows) if row.lstrip().startswith("›")]
     if not prompts:
         return True
