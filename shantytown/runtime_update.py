@@ -28,6 +28,7 @@ class Evidence:
     session: str = ""
     running: str | None = None
     installed: str | None = None
+    harness: str = "claude"
 
     @property
     def outdated(self):
@@ -39,7 +40,8 @@ class Evidence:
 
     @property
     def reason(self):
-        return f"Claude Code running {self.running}, installed {self.installed}"
+        label = "Codex" if self.harness == "codex" else "Claude Code"
+        return f"{label} running {self.running}, installed {self.installed}"
 
 
 def _load(path):
@@ -92,20 +94,20 @@ def running_version(path, session, *, not_before=None):
     return None
 
 
-def installed_version(root):
+def installed_version(root, *, binary=None, program="claude"):
     """Bounded local --version, cached by executable identity and five-minute age.
 
     Claude launch uses PATH's claude. No network/latest-release query and no
     updater runs here. Codex's selected standalone path needs its own evidence.
     """
     try:
-        binary = shutil.which("claude")
+        binary = binary or shutil.which(program)
         if not binary or not Path(binary).is_absolute():
             return None
         target = Path(binary).resolve()
         stat = target.stat()
         identity = [str(target), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]
-        path = Path(root) / "notify" / "installed_claude_version.json"
+        path = Path(root) / "notify" / f"installed_{program}_version.json"
         old = _load(path)
         age = time.time() - old.get("at", 0) if type(old.get("at")) in (int, float) else -1
         if old.get("identity") == identity and 0 <= age < 300:
@@ -119,7 +121,9 @@ def installed_version(root):
         other = after.stat()
         if [str(after), other.st_dev, other.st_ino, other.st_size, other.st_mtime_ns] != identity:
             return None
-        match = re.fullmatch(r"([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)\s*", result.stdout)
+        pattern = (r"codex-cli ([0-9]+\.[0-9]+\.[0-9]+)\s*" if program == "codex"
+                   else r"([0-9]+\.[0-9]+\.[0-9]+) \(Claude Code\)\s*")
+        match = re.fullmatch(pattern, result.stdout)
         value = match.group(1) if result.returncode == 0 and match else None
         from .files import write_json_atomic
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +158,12 @@ def for_agent(root, agent):
         if stamps.get(agent) is None:
             return Evidence()
         launched_at = (stamps.root / f"{agent}.json").stat().st_mtime
+        from .harness import name_for
+        if name_for(card, root) == "codex":
+            try:
+                return _codex_evidence(root, card, launched_at)
+            except Exception:
+                return Evidence(harness="codex")
         session = session_budget.current_session(Path(root), agent)
         if not card.workspace or not session:
             return Evidence()
@@ -165,13 +175,49 @@ def for_agent(root, agent):
         return Evidence()
 
 
+def _codex_evidence(root, card, launched_at):
+    """Use the existing owned-daemon/exact-thread binding, never newest history."""
+    from . import codex_shells
+    from .harness import CodexHarness
+    from .provision import _codex_config
+    binding = codex_shells._binding(card.name, root)
+    context, _ = codex_shells._json(Path(root) / "context_budget" / f"{card.name}.json")
+    payload = context["payload"]
+    if payload.get("session_id") != binding["thread"]:
+        return Evidence(harness="codex")
+    with codex_shells._regular(Path(payload["transcript_path"])) as stream:
+        first = stream.readline(65537)
+    if len(first) > 65536:
+        return Evidence(harness="codex")
+    header = codex_shells._decode(first)
+    meta = header.get("payload", {})
+    if header.get("type") != "session_meta" or meta.get("id") != binding["thread"]:
+        return Evidence(harness="codex")
+    at = datetime.fromisoformat(meta["timestamp"].replace("Z", "+00:00"))
+    if at.tzinfo is None or at.timestamp() < launched_at or version(meta.get("cli_version")) is None:
+        return Evidence(harness="codex")
+    if CodexHarness._remote_control(root):
+        selected = _codex_config(card, root)
+        if selected is None:
+            return Evidence(harness="codex")
+        # Reading the selected pointer is not permission to repair an updater.
+        binary = selected.resolve().parent / "packages" / "standalone" / "current" / "codex"
+        if not binary.is_file():
+            return Evidence(harness="codex")
+    else:
+        binary = shutil.which("codex")
+    installed = installed_version(root, binary=str(binary) if binary else None, program="codex")
+    return Evidence(binding["thread"], meta["cli_version"], installed, "codex")
+
+
 def message(evidence):
-    return (f"RUNTIME UPDATE: {evidence.reason}. Prefer process replacement at the "
-            "next safe handoff; do not interrupt active work. Checkpoint first, "
-            "then request `st agent cycle --self --no-in-place --checkpoint-file "
+    return (f"RUNTIME UPDATE: {evidence.reason}. st fleet tend owns checkpointing "
+            "and process replacement at the next safe idle boundary; "
+            "do not interrupt active work. You may add richer notes with "
+            "`st agent cycle --self --no-in-place --checkpoint-file "
             "<notes-file> --checkpoint-bead <id> --quipu-node <existing-node>`. "
             "An in-place context clear does not replace the running binary. "
-            "No cycle has been scheduled; the executor still requires an idle "
+            "This reminder schedules nothing; the executor still requires an idle "
             "pane with no running background work.")
 
 

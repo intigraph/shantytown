@@ -637,9 +637,12 @@ class Requests:
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
                 no_in_place: bool = False, auto: bool = False,
-                allow_loss: bool = False, bundle_custody_items=None) -> None:
+                allow_loss: bool = False, bundle_custody_items=None,
+                runtime_update=None, only_if_absent=False) -> bool:
         with self._locked():
             data = self._load()
+            if only_if_absent and agent in data:
+                return False
             data[agent] = {"checkpoint": checkpoint,
                            "checkpoint_bead": checkpoint_bead,
                            # aegis-x6yoq: graph references carried across the cycle, so
@@ -671,7 +674,10 @@ class Requests:
                 data[agent]["allow_loss"] = True
             if bundle_custody_items:
                 data[agent]["bundle_custody_items"] = list(bundle_custody_items)
+            if runtime_update is not None:
+                data[agent]["runtime_update"] = dict(runtime_update)
             self._save(data)
+            return True
 
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
         """Record WHY a pending cycle did not happen (aegis-7xptd5).

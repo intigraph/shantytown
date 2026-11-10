@@ -450,6 +450,33 @@ def _render_manifest(manifest: tooling.Manifest, secrets: dict) -> dict:
     return {"mcpServers": expand(manifest.mcp)}
 
 
+def preflight_credentials(card: Agent, root) -> None:
+    """Check launch credential sources before accepting a replacement request.
+
+    Resolve the same sources as provision(), without projecting kit or borrowing
+    a token from a rendered workspace or another agent's config.
+    """
+    if not getattr(card, "workspace", None):
+        return
+    if root is None:
+        raise ProvisionError("replacement credential preflight needs a store root")
+    try:
+        from . import config as config_mod
+        cfg = config_mod.load(root, refresh_source=True)
+        manifest = (tooling.load(root, last_good=True)
+                    if cfg.source_document is not None else tooling.load(root))
+        if manifest is not None:
+            template = json.dumps({"mcpServers": manifest.mcp})
+            _render_manifest(manifest, load_secrets(root, template, agent=card.name))
+        else:
+            path = provision_dir(root) / MCP_TEMPLATE
+            if path.is_file():
+                template = path.read_text()
+                render(template, load_secrets(root, template, agent=card.name))
+    except (tooling.ToolingError, config_mod.ConfigError, OSError, ValueError) as exc:
+        raise ProvisionError(str(exc)) from None
+
+
 def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) -> list[str]:
     ws = Path(card.workspace).expanduser()
     template = json.dumps({"mcpServers": manifest.mcp})
