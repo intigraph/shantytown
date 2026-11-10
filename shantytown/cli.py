@@ -1620,7 +1620,9 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
-    go.add_argument('--receipt', help='receipt ID for read-only reconciliation or explicit supersession')
+    go.add_argument('--receipt', help='receipt ID for reconciliation, completion or supersession')
+    go.add_argument('--complete', action='store_true',
+                    help='finish the original receipt from native submission proof; never resend or repeat an uncertain claim')
     go.add_argument('--supersede', action='store_true',
                     help='retain and retire an uncertain receipt after a newer native open/unassigned release; never send or claim')
     go.add_argument('--reconcile', '--status', action='store_true',
@@ -7980,13 +7982,15 @@ def _priority_fleet_notes(a, reg, panes):
 
 
 def _cmd_go(a) -> int:
-    if getattr(a, 'reconcile', False) or getattr(a, 'supersede', False) or getattr(a, 'receipt', None):
+    from .plate_capacity import PlateFull, CapacityUnknown
+    if (getattr(a, 'reconcile', False) or getattr(a, 'supersede', False)
+            or getattr(a, 'complete', False) or getattr(a, 'receipt', None)):
         from .dispatch_binding import binding_for
         try:
             if not getattr(a, 'receipt', None):
-                raise ValueError('--reconcile or --supersede requires --receipt')
-            if getattr(a, 'reconcile', False) and getattr(a, 'supersede', False):
-                raise ValueError('choose read-only --reconcile or explicit --supersede')
+                raise ValueError('--reconcile, --complete or --supersede requires --receipt')
+            if sum(bool(getattr(a, flag, False)) for flag in ('reconcile', 'supersede', 'complete')) > 1:
+                raise ValueError('choose --reconcile, --complete or --supersede')
             tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
             from .deployment import local_host
             agent = registry.get(a.agent)
@@ -7998,10 +8002,26 @@ def _cmd_go(a) -> int:
             row = binding.store.read(a.receipt)
             if row['item'] != a.item or row['worker'] != a.agent:
                 raise ValueError('receipt names a different task or worker')
+            if getattr(a, 'complete', False):
+                if (getattr(a, 'reassign', False) or getattr(a, 'note', None)
+                        or getattr(a, 'note_file', None) or getattr(a, 'quipu_node', None)
+                        or getattr(a, 'worktree', None)):
+                    raise ValueError('completion preserves the original scope; no new dispatch inputs allowed')
+                if held := agent_hold.reason(a.root, a.agent):
+                    print(f'  refused: {a.agent} {held}', file=sys.stderr)
+                    return REFUSED
+                result = _wire(a).complete(a.item, a.agent,
+                    dry_run=getattr(a, 'dry_run', False), receipt=a.receipt)
+                print(json.dumps(result, indent=2))
+                return OK
             result = (binding.supersede(a.receipt, dry_run=getattr(a, 'dry_run', False))
                       if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
             print(json.dumps(result, indent=2))
             return OK
+        except (Closed, Blocked, HasOpenBlocker, AlreadyAssigned, GovernorRefused,
+                PlateFull, CapacityUnknown) as error:
+            print(f'  refused: {error}', file=sys.stderr)
+            return REFUSED
         except (OSError, ValueError, LookupError) as error:
             print(f'  could not tell: {error}', file=sys.stderr)
             return CANNOT_TELL
@@ -8013,7 +8033,6 @@ def _cmd_go(a) -> int:
         # without it is the exact failure aegis-8013 is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
         return REFUSED
-    from .plate_capacity import PlateFull, CapacityUnknown
     relayed = _go_on_host(a, note)
     if relayed is not None:
         return relayed

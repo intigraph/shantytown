@@ -392,6 +392,7 @@ class SubmissionObserved:
     """Adapter evidence for this exact body, not merely send-keys success."""
     pane: str
     body_sha256: str
+    source: dict | None = None
 
     def matches(self, pane: str, text: str) -> bool:
         import hashlib

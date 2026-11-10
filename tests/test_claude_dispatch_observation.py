@@ -26,6 +26,14 @@ def test_new_exact_body_with_empty_composer_is_observed(monkeypatch):
     assert result.matches('%5', 'exact body [unique attempt]')
 
 
+def test_version_named_native_claude_requires_actual_launch_identity(monkeypatch):
+    panes = Tmux(socket='test-only')
+    monkeypatch.setattr(panes, 'cmdline', lambda _: 'claude --settings /fixture/worker.json')
+    assert panes._confirmed_claude('%5', '2.1.321')
+    monkeypatch.setattr(panes, 'cmdline', lambda _: 'unrelated-program --settings /fixture/worker.json')
+    assert not panes._confirmed_claude('%5', '2.1.321')
+
+
 @pytest.mark.parametrize('after,before,birth', [
     ('❯ exact body [unique attempt]', '\x1b[39m❯ ', 123),
     ('exact body [unique attempt]\n\x1b[39m❯ ', 'exact body [unique attempt]\n\x1b[39m❯ ', 123),
