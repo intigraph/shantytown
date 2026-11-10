@@ -82,6 +82,11 @@ class Report:
 
 def _codex_box(screen: str) -> tuple[str, str, str] | None:
     """Read only the bounded composer immediately above Codex's model footer."""
+    composer = triage.codex_composer(screen)
+    if composer is not None:
+        state = _FROM_TRIAGE.get(triage.input_state(screen), UNKNOWN)
+        text = triage.strip_attrs(composer).lstrip()[1:].strip()
+        return state, composer, '' if state == EMPTY else text
     rows = screen.splitlines()
     while rows and not triage.strip_attrs(rows[-1]).strip():
         rows.pop()

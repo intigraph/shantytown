@@ -31,6 +31,8 @@ import uuid
 #             discarded; st cannot tell which, and an unread pointer still
 #             counts as backlog either way.
 END_OF_CUSTODY = ('orphaned', 'dequeued')
+_UNBOUND_RUNTIME = object()
+
 TERMINAL = ('delivered', 'acknowledged', 'superseded') + END_OF_CUSTODY
 
 
@@ -118,7 +120,7 @@ class Custody:
             if record['pane'] == self.pane and record['socket'] == self.socket:
                 yield record
 
-    def begin(self, text, session):
+    def begin(self, text, session, *, runtime=_UNBOUND_RUNTIME):
         # A retry retains the first timestamp and the same recovery episode.
         matches = [r for r in self.records() if r['text'] == text
                    and r['session'] == session
@@ -129,6 +131,8 @@ class Custody:
             id='send-' + uuid.uuid4().hex, pane=self.pane, socket=self.socket,
             text=text, session=session, created=time.time(), state='prepared',
             recovery_attempted=False)
+        if runtime is not _UNBOUND_RUNTIME:
+            self.record['runtime'] = runtime
         self.record.pop('submission', None)
         self.record['state'] = 'prepared'
         self.save(self.record)
@@ -148,6 +152,14 @@ class Custody:
             self.record['state'] = state
             self.save(self.record)
 
+    def _runtime_matches(self, panes):
+        # Legacy custody retains its existing contract. New sends bind cleanup
+        # to the exact process generation observed before typing.
+        if 'runtime' not in self.record:
+            return True
+        runtime = self.record['runtime']
+        return bool(runtime) and panes.runtime_identity(self.pane) == runtime
+
     def failed(self, panes, *, multiline=False):
         if self.record is None:
             return
@@ -159,9 +171,10 @@ class Custody:
         if _codex_queued(screen, record['text']):
             self.finish('queued')
             return
-        # Unknown session identity, busy state, multiline buffers and changed
-        # text authorize no edits. Leave the body in custody and escalate.
-        if record['session'] is None or triage.mid_flight(screen):
+        # Unknown identity, busy state and unproved text authorize no edits.
+        # Multiline cleanup additionally requires exact visible owned text.
+        if (record['session'] is None or triage.mid_flight(screen)
+                or not self._runtime_matches(panes)):
             return
         if '\n' in record['text']:
             if multiline:
@@ -172,12 +185,15 @@ class Custody:
             if (not _codex_owned_input(screen, record['text'])
                     or triage.mid_flight(screen)
                     or not panes._confirmed_codex(self.pane, panes.foreground(self.pane))
-                    or panes.session_created(self.pane) != record['session']):
+                    or panes.session_created(self.pane) != record['session']
+                    or not self._runtime_matches(panes)):
                 return
             panes.control(self.pane, key)
         time.sleep(0.15)
         screen = panes.capture(self.pane, attrs=True, timeout=2)
-        if triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER):
+        if (self._runtime_matches(panes)
+                and panes.session_created(self.pane) == record['session']
+                and triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER)):
             self.finish('cleared')
 
     def _clear_multiline(self, panes, screen):
@@ -187,7 +203,10 @@ class Custody:
         record = self.record
         if not _codex_owned_input(screen, record['text']):
             return
-        expected = input_box._codex_box(screen)[2]
+        framed = input_box._codex_box(screen)
+        if framed is None:
+            return
+        expected = framed[2]
         for _ in range(81):
             before_length = len(expected)
             for key in ('C-e', 'C-u', 'BSpace'):
@@ -196,6 +215,7 @@ class Custody:
                 if (framed is None or triage.mid_flight(screen)
                         or input_box._codex_busy(screen)
                         or panes.session_created(self.pane) != record['session']
+                        or not self._runtime_matches(panes)
                         or not panes._confirmed_codex(self.pane, panes.foreground(self.pane))):
                     return
                 state, raw, current = framed
@@ -216,6 +236,9 @@ class Custody:
                     screen = panes.capture(self.pane, attrs=True, timeout=2)
                 after = input_box._codex_box(screen)
                 if after is None:
+                    return
+                if (not self._runtime_matches(panes)
+                        or panes.session_created(self.pane) != record['session']):
                     return
                 if after[0] in (input_box.EMPTY, input_box.GHOST):
                     self.finish('cleared')
