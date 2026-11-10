@@ -109,6 +109,29 @@ def test_real_producer_and_local_v2_cli_on_an_empty_private_registry(tmp_path, m
     assert '_received_at' not in wire
 
 
+def _process_running(pid):
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().split()[2] != 'Z'
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+@pytest.mark.parametrize('error', [FileNotFoundError, ProcessLookupError])
+def test_process_running_handles_vanished_process(monkeypatch, error):
+    def vanished(path):
+        raise error()
+    monkeypatch.setattr(Path, 'read_text', vanished)
+    assert _process_running(12345) is False
+
+
+def test_process_running_preserves_permission_error(monkeypatch):
+    def denied(path):
+        raise PermissionError()
+    monkeypatch.setattr(Path, 'read_text', denied)
+    with pytest.raises(PermissionError):
+        _process_running(12345)
+
+
 @pytest.mark.skipif(__import__('sys').platform != 'linux', reason='deployed Linux cancellation contract')
 def test_parent_death_cancels_producer_and_its_child(tmp_path):
     import os
@@ -134,23 +157,18 @@ time.sleep(30)
 '''
     parent = subprocess.Popen([sys.executable, '-c', wrapper], cwd=Path(display.__file__).parent.parent)
     pids = []
-    def running(pid):
-        try:
-            return Path(f'/proc/{pid}/stat').read_text().split()[2] != 'Z'
-        except FileNotFoundError:
-            return False
     try:
         deadline = time.monotonic() + 5
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(.02)
         pids = json.loads(ready.read_text())
-        assert all(running(pid) for pid in pids)
+        assert all(_process_running(pid) for pid in pids)
         parent.kill()
         parent.wait(timeout=3)
         deadline = time.monotonic() + 3
-        while any(running(pid) for pid in pids) and time.monotonic() < deadline:
+        while any(_process_running(pid) for pid in pids) and time.monotonic() < deadline:
             time.sleep(.02)
-        assert not any(running(pid) for pid in pids)
+        assert not any(_process_running(pid) for pid in pids)
     finally:
         if parent.poll() is None:
             parent.kill()
