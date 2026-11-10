@@ -162,7 +162,8 @@ def _served_sha(want):
             return None, "Quipu serving identity missing, malformed or dirty"
         have = data["git_sha"]
         return have == want, f"Quipu serving SHA {have} {'matches' if have == want else 'differs from'} {want}"
-    except (OSError, ValueError, TypeError, http.client.HTTPException, urllib.error.URLError):
+    except (OSError, ValueError, TypeError, RecursionError,
+            http.client.HTTPException, urllib.error.URLError):
         # Never echo remote bodies, URLs, exception strings or credentials.
         return None, "Quipu serving version read failed"
 

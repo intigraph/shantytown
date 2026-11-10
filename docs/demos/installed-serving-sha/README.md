@@ -8,7 +8,7 @@ identity -> UNKNOWN. Local CLI metadata cannot satisfy this event.
 
 This is a **source-checkout library demo with an isolated loopback server**,
 not installed-service acceptance. Candidate source digest recorded in the actual
-transcript: `5cfc174ad54c3ee53d2d91c08ffa70eee036ce7ae11ba3d26415da69a8824ce5`
+transcript: `f73976f0385cc7e83ea203378b84f6aed61bbbc7912f6512f4c3aedbfb0f781e`
 for `shantytown/resume_kinds.py`. The paired tests also store the marker through
 Dispatcher and evaluate it through the real deferral reader.
 

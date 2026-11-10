@@ -1,11 +1,11 @@
-Script started on 2026-11-09 21:45:32-05:00 [COMMAND="python3 docs/demos/installed-serving-sha/demo.py" <not executed on terminal>]
+Script started on 2026-11-09 21:51:18-05:00 [COMMAND="python3 docs/demos/installed-serving-sha/demo.py" <not executed on terminal>]
 target=source checkout + disposable loopback /version fixture
 base=6c6da5cf96076bfe3e88c01e98a12fb1656735b9
-candidate_resume_kinds_sha256=5cfc174ad54c3ee53d2d91c08ffa70eee036ce7ae11ba3d26415da69a8824ce5
+candidate_resume_kinds_sha256=f73976f0385cc7e83ea203378b84f6aed61bbbc7912f6512f4c3aedbfb0f781e
 trigger=installed:quipu@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 BEFORE: REFUSED full serving commit target
 AFTER clean exact serving SHA: True
 CONTROL same version, different serving SHA: False
 CONTROL dirty serving identity: UNKNOWN
 
-Script done on 2026-11-09 21:45:33-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-09 21:51:19-05:00 [COMMAND_EXIT_CODE="0"]

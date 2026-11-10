@@ -90,7 +90,7 @@ def test_unknown_identity_never_wakes(version_server, identity):
 
 @pytest.mark.parametrize('body', [b'not JSON', b'{', b'{"git_sha":"' + SHA.encode()
                                   + b'","git_sha":"' + SHA.encode() + b'","git_dirty":false}',
-                                  b' ' * 8193, b'{"git_sha":"' + SHA.encode()
+                                  b' ' * 8193, b'[' * 1100 + b']' * 1100, b'{"git_sha":"' + SHA.encode()
                                   + b'","git_dirty":false,"extra":NaN}'])
 def test_incomplete_duplicate_or_oversized_json_unknown(version_server, body):
     version_server['body'] = body
