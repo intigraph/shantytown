@@ -303,9 +303,12 @@ class CheckResult:
     and never counted as a verdict."""
     items: list[dict] = field(default_factory=list)
     registry_errors: list[dict] = field(default_factory=list)
+    store_error: str | None = None
 
     @property
     def exit_code(self) -> int:
+        if self.store_error:
+            return 2
         if self.registry_errors:
             return 1
         failing = {"configured": {"missing", "unsupported", "duplicate"}, "live": {"stale"},
@@ -333,7 +336,8 @@ class CheckResult:
                 "root": str(root) if root is not None else None,
                 "checked_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "exit": self.exit_code, "summary": self.summary(),
-                "registry_errors": self.registry_errors, "items": self.items}
+                "registry_errors": self.registry_errors, "items": self.items,
+                "store_error": self.store_error}
 
 
 def emitted_role_files(root, agent_roles: dict[str, str] | None = None
@@ -433,6 +437,10 @@ def check(root, agent_roles: dict[str, str] | None = None, other_layers=(),
     every source, so a bundle command that ALSO sits in one of them fires TWICE
     per tool call — reported as configured="duplicate" (exit 1)."""
     res = CheckResult()
+    if not Path(root).is_dir():
+        # No registry could be inspected: this is not an empty valid store.
+        res.store_error = "no store found"
+        return res
     reg = load(root)
     res.registry_errors = [{"file": f, "reason": why} for f, why in reg.errors]
     elsewhere = other_layer_commands(other_layers)
