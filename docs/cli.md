@@ -1945,12 +1945,14 @@ submission. Inspect the pane or read that pointer rather than blindly resending.
 
 With a deployment root, Codex sends first retain the full body in a private
 `delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
-declared tmux socket, pane and observed session creation time. If custody cannot
+declared tmux socket, pane, observed session creation time and process generation. If custody cannot
 be written, nothing is typed. After the single submission retry fails, st can
-clear only its exact single-line body in an idle, positively identified Codex
-session. It rechecks ownership and session identity before each editing key.
-Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
-authorize no automatic clear. A later sender can clear the same owned failed
+clear its exact visible typed body, including multiline text, in an idle, positively
+identified Codex session. It rechecks ownership, session and process identity before
+each editing key and verifies an empty composer afterward. Cleanup uses bounded
+line editing, never Escape or submission keys, and does not change the UNVERIFIED
+send result. Busy, changed, opaque paste placeholders, clipped, ghost,
+attribute-stripped and unknown input authorize no automatic clear. A later sender can clear the same owned failed
 notice before submitting its own message; the older body remains retained.
 Claude and explicit shell-launch sends keep their existing transport.
 
