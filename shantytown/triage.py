@@ -207,13 +207,26 @@ def _without_codex_queue(screen: str) -> str:
         return screen
     end = prompts[-1]
     lower = max(0, end - 80, prompts[-2] + 1 if len(prompts) > 1 else 0)
+    removed = set()
     for start in range(lower, end):
         heading = lines[start].strip().removeprefix('• ').strip()
         if (heading == 'Queued follow-up inputs'
                 or heading == 'Messages to be submitted after next tool call'
                 or heading.startswith('Messages to be submitted after next tool call (')):
-            if any(row.lstrip().startswith('↳') for row in lines[start + 1:end]):
-                return '\n'.join(lines[:start] + lines[end:])
+            stop = start + 1
+            arrow = False
+            # Only indented preview rows belong to this queue. A later status
+            # or output row can follow a quoted heading; preserve that suffix.
+            while stop < end:
+                row = lines[stop]
+                if row.strip() and not row[:1].isspace():
+                    break
+                arrow |= row.lstrip().startswith('↳')
+                stop += 1
+            if arrow:
+                removed.update(range(start, stop))
+    if removed:
+        return '\n'.join(row for i, row in enumerate(lines) if i not in removed)
     return screen
 
 

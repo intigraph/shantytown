@@ -19,3 +19,11 @@ scriptreplay --log-out docs/demos/6wr-busy-queue/output.log \
 
 The small terminal recording is retained beside the existing repository demos.
 It requires downloading and `scriptreplay`; no inline video playback is claimed.
+
+
+The review repair also preserves current status after a quoted queue heading.
+`queue-boundary.py` compares reviewed head `076e0d95` with the repair using
+`QUEUE_BOUNDARY_BASELINE=/path/to/reviewed-source`. The private NullPanes
+fixture changes from false idle with three editing controls to busy with zero
+controls. Replay `boundary-output.log` with `boundary-timing.log`; this uses no
+live pane or keystrokes.

@@ -64,3 +64,26 @@ def test_two_current_queue_sections_do_not_hide_work():
         '• Queued follow-up inputs\n  ↳ Another queued message.', 1)
     assert triage.mid_flight(screen)
     assert input_box._codex_busy(screen)
+
+
+@pytest.mark.parametrize('heading', [
+    'Queued follow-up inputs',
+    'Messages to be submitted after next tool call',
+])
+@pytest.mark.parametrize('between', ['', 'Ordinary output after the quoted sample.'])
+def test_quoted_queue_cannot_remove_later_current_status(heading, between):
+    screen = '\n'.join(['Quoted terminal sample follows:', heading,
+                        '  ↳ Example queued text.', '', between, WORKING,
+                        '› typed draft', '', '  gpt-6 high · /workspace'])
+    assert WORKING in triage._without_codex_queue(screen)
+    assert triage.mid_flight(screen)
+    assert input_box._codex_busy(screen)
+    panes = NullPanes(screen=screen)
+    assert input_box.clear(panes, 'worker').verdict == input_box.BUSY
+    assert panes.controls == []
+
+
+def test_queue_removal_preserves_every_row_after_indented_payload():
+    suffix = '\n'.join(['Current output.', WORKING, READY])
+    screen = 'Queued follow-up inputs\n  ↳ quoted message\n    wrapped payload\n' + suffix
+    assert triage._without_codex_queue(screen).endswith(suffix)
