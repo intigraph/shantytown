@@ -49,3 +49,5 @@ docs/demos/startup-marker/output.log -text whitespace=cr-at-eol
 docs/demos/runtime-roll/demo.txt -text whitespace=cr-at-eol
 
 docs/demos/runtime-roll/peer-ledger.txt -text whitespace=cr-at-eol
+# Preserve missing-store probe PTY bytes and replay timing.
+docs/demos/hooks-no-store/output.log -text whitespace=cr-at-eol
