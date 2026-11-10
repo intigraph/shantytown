@@ -1,0 +1,17 @@
+Script started on 2026-11-09 16:17:00-05:00 [COMMAND="bash docs/demos/dispatch-completion/run.sh" <not executed on terminal>]
+
+Source f909de3e3ba445946545dd673f94edea1de2d0fd — synthetic pane, real receipt ledger and file CAS
+Version-named Claude positively identified: False
+Interrupted observation: prepared authorized= False
+Receipt-only completion: unavailable on this source
+Total bodies sent: 1 task revision: 1
+
+Source 864c433c02a6557355f72a0d23aa404a18c849a7 — synthetic pane, real receipt ledger and file CAS
+Version-named Claude positively identified: True
+Interrupted observation: prepared authorized= False
+Without native proof: fenced; no send or claim
+With exact retained proof: assigned authorized= True
+Repeated completion: one original body, one native CAS, no resend
+Total bodies sent: 1 task revision: 2
+
+Script done on 2026-11-09 16:17:01-05:00 [COMMAND_EXIT_CODE="0"]
