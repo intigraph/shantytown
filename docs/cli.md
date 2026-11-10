@@ -86,6 +86,24 @@ acknowledged custody does not qualify. Never resend or claim manually. Changed r
 cards or sessions cannot reuse the receipt. Older tracker adapters retain the
 legacy path and do not emit bound execution receipts.
 
+If observation was interrupted, the dispatcher can explicitly complete the
+original receipt on the worker's declared host:
+
+```sh
+st go project-item ada --complete --receipt RECEIPT_ID
+```
+
+This sends no text or keys. Current ownership, blockers, capacity, governor and
+operator holds still apply. It preserves the original request and revision;
+it never accepts replacement notes or a caller-provided submission assertion.
+Claude proof can come from its exact native user record, or a consumed busy
+command whose exact body, session, command ID and delivery ID match both the
+native queued-command attachment and absorption acknowledgment. Queue custody,
+quoted output and discarded commands do not qualify. The current hook, stats,
+workspace transcript, pane session and runtime must agree. Missing or changed
+evidence leaves the receipt fenced. An uncertain native claim is read back;
+completion never repeats it. `--dry-run` and `--reconcile` remain read-only.
+
 File-backed tracker updates now serialize per item and increment a revision
 with the assignment and transition comment in one atomic file replacement.
 Existing unversioned files occupy revision one. Reads and dry runs do not

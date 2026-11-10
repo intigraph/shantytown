@@ -791,6 +791,16 @@ class Dispatcher:
         return triage(self.panes, p.pane, p.text)
 
     @serialized_dispatch
+    def complete(self, item_id: str, agent_name: str, dry_run: bool = False,
+                 *, receipt: str):
+        # plan retains ownership, blockers, capacity and governor checks. Busy
+        # triage guards typing; completion types nothing and cannot interrupt it.
+        p = self.plan(item_id, agent_name)
+        if self.binding is None:
+            raise ValueError('selected tracker has no bound dispatch receipt contract')
+        return self.binding.complete(p, receipt, dry_run=dry_run)
+
+    @serialized_dispatch
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
            note: str | None = None, reassign: bool = False,
            quipu_nodes: list | None = None) -> Plan:

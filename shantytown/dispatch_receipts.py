@@ -266,6 +266,8 @@ class ReceiptStore:
         if row['submission'] is not None:
             return row
         row['submission'] = dict(kind='adapter-exact-body', at=time.time())
+        if evidence.source is not None:
+            row['submission']['source'] = copy.deepcopy(evidence.source)
         row['state'] = 'submitted'
         return self._save(row)
 

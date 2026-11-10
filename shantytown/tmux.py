@@ -769,7 +769,7 @@ class Tmux:
             codex = self._confirmed_codex(pane, fg)
             if not codex and self._confirmed_claude(pane, fg):
                 claude_before = self._claude_history(pane)
-                if claude_before is not None:
+                if claude_before is not None or custody is not None:
                     claude_birth = self.session_created(pane)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
@@ -827,7 +827,7 @@ class Tmux:
         # — dispatch, escalations, tend prompts. The defect was found on inbox
         # and was never inbox's: it belongs to the one place st types into a pane.
         _journal_send(pane, text)
-        if codex and custody is not None:
+        if (codex or claude_birth is not None) and custody is not None:
             custody.begin(text, self.session_created(pane),
                           runtime=self.runtime_identity(pane))
         # `or [""]` keeps the empty-body case sending exactly one `-l ""`, which
@@ -905,7 +905,40 @@ class Tmux:
         if foreground == 'node':
             from .harness import running_name
             return running_name(self.cmdline(pane)) == 'claude'
+        if isinstance(foreground, str) and re.fullmatch(r'\d+\.\d+\.\d+', foreground):
+            import shlex
+            try:
+                argv = shlex.split(self.cmdline(pane) or '')
+            except ValueError:
+                return False
+            if not argv:
+                return False
+            executable = Path(argv[0])
+            # Native builds expose their version as the process command. The
+            # version alone, or another program carrying --settings, is no proof.
+            return (executable.name == 'claude' or
+                    (executable.name == foreground
+                     and executable.parent.name == 'versions'
+                     and executable.parent.parent.name == 'claude'))
         return False
+
+    def observed_submission(self, pane, text, session, created, runtime, worker):
+        """Read retained proof for this exact process; never type or claim."""
+        if (not self.delivery_root or not runtime or self.runtime_identity(pane) != runtime
+                or self.session_created(pane) != session):
+            return None
+        from .delivery import observed_submission
+        observed = observed_submission(self.delivery_root, pane, self.socket,
+                                       text, session, created, runtime)
+        if observed is None and self._confirmed_claude(pane, self.foreground(pane)):
+            from .claude_submission import observe
+            proof = observe(self.delivery_root, worker, text, created)
+            if proof:
+                observed = SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
+        if (self.runtime_identity(pane) != runtime
+                or self.session_created(pane) != session):
+            return None
+        return observed
 
     def _claude_history(self, pane):
         # -J joins only terminal soft wraps. Never normalize body whitespace:
