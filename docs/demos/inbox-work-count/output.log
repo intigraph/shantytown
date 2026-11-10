@@ -1,0 +1,8 @@
+Script started on 2026-11-09 18:36:19-05:00 [COMMAND="sh docs/demos/inbox-work-count/run.sh" <not executed on terminal>]
+Before 2f889a20bdda611609edeb6f7f2f0f0dc31ebfae: same two work rows and four message rows
+{"labelled_work_preserved": true, "legacy_ready_work": 6, "native_ready_work": 6, "triage_titles": ["repair backup", " mail: repair backup", "  inbox: repair backup", "mail: repair backup", "Inbox policy repair backup"]}
+
+Candidate 93b4d7a7b9b617c63674b2ad4deb9363fc8d2413: same rows, real work keeps its inbox label
+{"labelled_work_preserved": true, "legacy_ready_work": 2, "native_ready_work": 2, "triage_titles": ["repair backup", "Inbox policy repair backup"]}
+
+Script done on 2026-11-09 18:36:20-05:00 [COMMAND_EXIT_CODE="0"]
