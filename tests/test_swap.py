@@ -53,7 +53,8 @@ def _outside_dispatch_protocol(source):
         "tracker": {"get", "update"},
         "panes": {"send", "exists", "capture"},
         "handoff": {"preview", "record"},
-        "binding": {"prepare", "submitted", "assign"},
+        # Completion is the no-send recovery boundary, separate from Tracker.
+        "binding": {"prepare", "submitted", "assign", "complete"},
         "updates": {"items"},  # staged field dictionary, not a backend
     }
     invalid = []
@@ -75,11 +76,14 @@ def test_dispatch_calls_only_protocol_methods():
 
 def test_dispatch_protocol_guard_rejects_tracker_advisory_and_backend_leaks():
     for call in ("self.tracker.preview()", "self.tracker.record()",
-                 "self.tracker.query()", "self.handoff.update()",
+                 "self.tracker.query()", "self.tracker.complete()",
+                 "self.binding.query()", "self.binding.send()",
+                 "self.panes.complete()", "self.handoff.update()",
                  "self.unknown.get()"):
         assert _outside_dispatch_protocol(call), call
     assert _outside_dispatch_protocol("self.handoff.preview(item, agent)") == []
     assert _outside_dispatch_protocol("self.handoff.record(agent, preview)") == []
+    assert _outside_dispatch_protocol("self.binding.complete(plan, receipt)") == []
 
 
 def test_tracker_interface_is_three_functions():
