@@ -834,6 +834,7 @@ class Dispatcher:
                                reason="submission and assignment not yet confirmed")
         observed = self.panes.send(p.pane, p.text)    # 1 send
         if self.binding is not None:
+            observed = self.binding.confirm_submission(p, observed)
             if not isinstance(observed, SubmissionObserved) or not observed.matches(p.pane, p.text):
                 raise SendUnverified(item_id, p.pane)
             self.binding.submitted(p, observed)
