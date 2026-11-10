@@ -11423,7 +11423,7 @@ def _runtime_checkpoint(a, card, evidence):
 
 
 def _runtime_roll_sweep(a, agents, panes, runtime, log):
-    from . import runtime_roll, fleet_governor as fg
+    from . import runtime_roll, fleet_governor as fg, fleet as fleet_mod
     from .provision import preflight_credentials
 
     def boundary(card):
