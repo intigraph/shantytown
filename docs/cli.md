@@ -3908,3 +3908,42 @@ A non-null `recovery` preserves a recognized native write-operation witness,
 provenance graph and exact item IDs. It excludes private field differences and
 bodies. Use this persisted identity, when available, to reconcile the SDK write;
 the new per-invocation operation ID is only a diagnostic correlation key.
+
+## Display-only roster snapshots
+
+`st crew --display-snapshot --local --json` opts into a separate v2 display
+protocol. `--count` and plain rendering are also available. Without `--local`,
+the display command collects only v2 display peers; it never recurses. Ordinary
+`st crew`, v1 peer collection, governor reads, review routing and mutation
+admission keep their live paths.
+
+A private per-UID cache shares one complete local observation across display
+processes for at most 15 seconds, measured from the start of observation. One
+reader refreshes it; concurrent readers see a fresh completed observation or
+UNKNOWN. Expired, failed, incompatible, unsafe or oversized snapshots cannot
+supply a current count. Refresh failures have a five-second retry backoff.
+Different source versions, roots, registry cards, backends and board scopes use
+separate keys. Boot changes and backwards monotonic observations invalidate
+saved data. The cache is an observation, not a tracker or admission proof.
+
+V2 JSON declares `purpose="display"`, `decision_eligible=false`, observation age
+and completeness. A v1 reader rejects it. Fleet display envelopes retain each
+host's age and errors; slow collection can expire earlier observations rather
+than reporting them as current. The refresh producer currently uses Linux
+parent-death process-group cancellation; unsupported hosts return UNKNOWN.
+
+UI consumers must opt in explicitly and understand v2 freshness. Do not globally
+replace `crew --json --local`: the v1 peer path also supplies governor and
+operational decision consumers. Shanty's existing table parser expects name,
+role and verdict columns; migrate its display readers through the versioned
+JSON contract rather than feeding the new plain display format into that
+parser. Source availability does not activate consumer migration. Acceptance
+requires a comparable before/after caller and timeout window after the scoped
+consumer release is authorized.
+
+Shanty already has a cross-process disk cache: plain and count arguments use
+separate keys. The measured 45-second sample saw four full reads at expired
+entries (two per key), with bypass off; it did not show a per-process cache or
+a same-key stampede. Its deployed version also caches failures. A v2 adapter
+should share the canonical ST observation and avoid retaining it under another
+independent 15-second output TTL. Check age at final rendering.
