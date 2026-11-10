@@ -1615,7 +1615,7 @@ def build_parser() -> argparse.ArgumentParser:
     go.add_argument("agent")
     go.add_argument('--receipt', help='receipt ID for read-only reconciliation or explicit supersession')
     go.add_argument('--supersede', action='store_true',
-                    help='retain and retire an uncertain receipt after a newer native open/unassigned release; never send or claim')
+                    help='retire a prepared receipt on native open/unassigned proof; uncertain claims require a newer release; never send or claim')
     go.add_argument('--reconcile', '--status', action='store_true',
                     help='read receipt, task/runtime and native assignment; never send or claim')
     note = go.add_mutually_exclusive_group()

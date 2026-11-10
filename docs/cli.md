@@ -49,6 +49,17 @@ terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
+A dispatch that remains `prepared` can be explicitly retired with
+`st go ITEM WORKER --supersede --receipt RECEIPT_ID` after a fresh native read
+proves the item is open, unassigned and undeferred. This path requires that no
+submission or assignment witness was recorded and no native claim was started.
+It preserves the old body and evidence, sends nothing and claims nothing.
+It does **not** assert that the text was never delivered: even a late delivery
+of that old ID remains unauthorized. A later ordinary dispatch creates a new
+receipt and must pass the normal pane/composer gates. `--dry-run` only previews
+the retirement. A receipt at the uncertain assignment boundary still requires
+a **newer** native open/unassigned release; this recovery does not relax it.
+
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
 store and exact body. The payload names that receipt and asks the recipient to
