@@ -15087,6 +15087,12 @@ def _tend_once(a, quiet: bool = False) -> int:
                 continue
             rc_c = _sweep(f"cycle:{who}", lambda w=who, r=request:
                           _serve_cycle_request(a, w, r))
+            # Passive scheduled-path evidence. Neither requests another cycle nor
+            # promotes owner acceptance; skipped/failed cycles emit no receipt.
+            if request.get("auto") and rc_c == OK:
+                from . import resume_idle_cycle
+                _sweep("idle-cycle-receipt", lambda w=who, r=request, read=st_now:
+                       resume_idle_cycle.emit(r, w, read, rc_c))
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent
             # is retried next pass rather than silently dropped. That is the right
