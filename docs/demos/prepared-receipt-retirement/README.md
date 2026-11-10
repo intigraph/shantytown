@@ -6,8 +6,10 @@ retry, then explicit receipt retirement. Watch `retirement` change from
 retirement. The old receipt remains unauthorized. A later normal dispatch gets
 a new receipt and can become authorized after observed submission and assignment.
 
-Baseline source is `7852a0dc84ce4c194cd6868d38064f65e409e9e9`; candidate source
-is the checkout containing this demonstration. Both use the real dispatch
+Baseline source is `7852a0dc84ce4c194cd6868d38064f65e409e9e9`; candidate receipt implementation
+matches commit `7be17a82dbc2d94b147efdfa0ab65d0498bc3f52`, recorded from its
+working-tree source before that commit. Later base refreshes retain these receipt
+implementation bytes. Both use the real dispatch
 coordinator and file tracker. The pane adapter deliberately returns no submission
 witness for the first send. This is a library fixture, not a live Codex session,
 production tracker mutation or installed acceptance. The separate regression

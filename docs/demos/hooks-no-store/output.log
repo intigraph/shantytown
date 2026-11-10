@@ -1,0 +1,7 @@
+Script started on 2026-11-09 17:10:26-05:00 [COMMAND="python3 docs/demos/hooks-no-store/demo.py" <not executed on terminal>]
+{"cwd": "/", "existing_store": false, "exit": 0, "items": 0, "revision": "f909de3e", "store_error": null}
+{"cwd": "/", "existing_store": true, "exit": 0, "items": 0, "revision": "f909de3e", "store_error": null}
+{"cwd": "/", "existing_store": false, "exit": 2, "items": 0, "revision": "c2e9919e", "store_error": "no store found"}
+{"cwd": "/", "existing_store": true, "exit": 0, "items": 0, "revision": "c2e9919e", "store_error": null}
+
+Script done on 2026-11-09 17:10:27-05:00 [COMMAND_EXIT_CODE="0"]
