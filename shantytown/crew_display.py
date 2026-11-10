@@ -58,6 +58,9 @@ def _producer_code():
     return (
         'import ctypes,os,signal,sys; '
         'signal.signal(signal.SIGTERM, lambda *_: os.killpg(os.getpgrp(),signal.SIGKILL)); '
+        # exec preserves a caller's signal mask. Arm a deliverable parent-death
+        # signal, without unblocking unrelated signals the caller owns.
+        'signal.pthread_sigmask(signal.SIG_UNBLOCK,{signal.SIGTERM}); '
         'libc=ctypes.CDLL(None); '
         'ok=libc.prctl(1,signal.SIGTERM,0,0,0)==0; '
         f'parent=os.getppid()=={os.getpid()}; '

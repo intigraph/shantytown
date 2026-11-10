@@ -78,6 +78,26 @@ def assignment_supersession(receipt, current):
                 status='open', assignee=None)
 
 
+def prepared_supersession(receipt, current):
+    """Retire an unclaimed intent, without asserting its text was not delivered.
+
+    The durable assigning fence precedes every native claim. A prepared row
+    with neither witness therefore issued no claim; the item lock excludes a
+    concurrent claim while we invalidate its receipt. A late submission still
+    cannot authorize the retired ID. No newer native revision is needed here.
+    """
+    if (receipt.get('state') != 'prepared' or receipt.get('submission') is not None
+            or receipt.get('assignment') is not None
+            or not isinstance(current, dict) or current.get('id') != receipt['item']
+            or type(current.get('revision')) is not int
+            or current['revision'] < receipt['revision']
+            or current.get('status') != 'open' or current.get('assignee') not in (None, '')
+            or current.get('defer_until') not in (None, '')):
+        raise ReceiptConflict('native open/unassigned state for prepared retirement UNKNOWN')
+    return dict(receipt=receipt['id'], item=receipt['item'], revision=current['revision'],
+                status='open', assignee=None, kind='prepared-no-claim')
+
+
 def serialized_receipt(method):
     @wraps(method)
     def guarded(self, ident, *args, **kwargs):
@@ -215,7 +235,12 @@ class ReceiptStore:
         for row in pending + sorted(rows, key=lambda r: r['created'], reverse=True):
             if row['state'] == 'superseded':
                 if self._scope(row) == scope:
-                    raise ReceiptConflict('superseded dispatch cannot be replayed')
+                    # A retired pre-claim intent may be replaced by a NEW ID,
+                    # even when the native item never changed. Never replay
+                    # its immutable body or let it regain execution authority.
+                    if (row.get('supersession', {}).get('kind') != 'prepared-no-claim'
+                            or ident == row['id'] or text == row['text']):
+                        raise ReceiptConflict('superseded dispatch cannot be replayed')
                 continue
             if self._scope(row) == scope or self._assigned_scope(row, scope):
                 if row['text'] != text:
@@ -281,12 +306,19 @@ class ReceiptStore:
 
     @serialized_receipt
     def supersede_assignment(self, ident, proof):
-        """Retain a fenced UNKNOWN attempt; only backend native release proof counts."""
+        """Retain retired evidence; uncertain claims still need a newer release."""
         row = self.read(ident)
-        if (row['state'] != 'assigning' or not isinstance(proof, dict)
+        prepared = (row['state'] == 'prepared' and row['submission'] is None
+                    and row['assignment'] is None and isinstance(proof, dict)
+                    and proof.get('kind') == 'prepared-no-claim')
+        if (row['state'] not in ('prepared', 'assigning') or not isinstance(proof, dict)
+                or (row['state'] == 'prepared' and not prepared)
+                or (row['state'] == 'assigning' and proof.get('kind') is not None)
                 or proof.get('receipt') != ident or proof.get('item') != row['item']
                 or type(proof.get('revision')) is not int
-                or proof['revision'] <= row['revision'] or proof.get('status') != 'open'
+                or proof['revision'] < row['revision']
+                or (not prepared and proof['revision'] == row['revision'])
+                or proof.get('status') != 'open'
                 or proof.get('assignee') is not None):
             raise ReceiptConflict('native supersession proof incomplete')
         row['state'], row['supersession'] = 'superseded', copy.deepcopy(proof)

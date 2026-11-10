@@ -133,7 +133,8 @@ def test_process_running_preserves_permission_error(monkeypatch):
 
 
 @pytest.mark.skipif(__import__('sys').platform != 'linux', reason='deployed Linux cancellation contract')
-def test_parent_death_cancels_producer_and_its_child(tmp_path):
+@pytest.mark.parametrize('blocked_term', [False, True])
+def test_parent_death_cancels_producer_and_its_child(tmp_path, blocked_term):
     import os
     import signal
     import subprocess
@@ -141,17 +142,19 @@ def test_parent_death_cancels_producer_and_its_child(tmp_path):
     ready = tmp_path / 'ready.json'
     # Stub the child CLI, not the cancellation setup. The actual producer code
     # must kill this entire private group when its requesting process dies.
-    stub = f'''import sys,types,subprocess,pathlib,time,json,os
+    stub = f'''import sys,types,subprocess,pathlib,time,json,os,signal
 m=types.ModuleType('shantytown.cli')
 def main():
  child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(30)'])
- pathlib.Path({str(ready)!r}).write_text(json.dumps([os.getpid(),child.pid]))
+ mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+ pathlib.Path({str(ready)!r}).write_text(json.dumps(dict(pids=[os.getpid(),child.pid],mask=list(mask))))
  time.sleep(30)
 m.main=main
 sys.modules['shantytown.cli']=m
 '''
-    wrapper = f'''import subprocess,sys,time
+    wrapper = f'''import subprocess,sys,time,signal
 from shantytown.crew_display import _producer_code
+if {blocked_term!r}: signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGTERM,signal.SIGUSR1}})
 subprocess.Popen([sys.executable,'-c',{stub!r}+_producer_code()],start_new_session=True)
 time.sleep(30)
 '''
@@ -161,7 +164,11 @@ time.sleep(30)
         deadline = time.monotonic() + 5
         while not ready.exists() and time.monotonic() < deadline:
             time.sleep(.02)
-        pids = json.loads(ready.read_text())
+        observed = json.loads(ready.read_text())
+        pids = observed['pids']
+        assert signal.SIGTERM not in observed['mask']
+        if blocked_term:
+            assert signal.SIGUSR1 in observed['mask']
         assert all(_process_running(pid) for pid in pids)
         parent.kill()
         parent.wait(timeout=3)

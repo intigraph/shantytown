@@ -49,6 +49,17 @@ terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
+A dispatch that remains `prepared` can be explicitly retired with
+`st go ITEM WORKER --supersede --receipt RECEIPT_ID` after a fresh native read
+proves the item is open, unassigned and undeferred. This path requires that no
+submission or assignment witness was recorded and no native claim was started.
+It preserves the old body and evidence, sends nothing and claims nothing.
+It does **not** assert that the text was never delivered: even a late delivery
+of that old ID remains unauthorized. A later ordinary dispatch creates a new
+receipt and must pass the normal pane/composer gates. `--dry-run` only previews
+the retirement. A receipt at the uncertain assignment boundary still requires
+a **newer** native open/unassigned release; this recovery does not relax it.
+
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
 store and exact body. The payload names that receipt and asks the recipient to
@@ -687,6 +698,15 @@ one item's producer:
   `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
   tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
   with a fixed argv.
+- `resume_when: installed:quipu@<full40lowerhexSHA>` (also `==`) instead
+  checks the configured Quipu origin's `/version` serving identity. It requires
+  an exact full `git_sha` and explicit `git_dirty: false`; the local CLI,
+  checkout and release version cannot satisfy this condition. Only Quipu has
+  this served-SHA reader. No default origin, item-provided URL, redirect, short
+  prefix or SHA ordering operator is accepted. Missing/dirty/malformed identity,
+  incomplete responses and read failures stay UNKNOWN. A clean different SHA
+  is not met. Long bare digit targets (seven or more digits) are ambiguous
+  commit prefixes, not semver major numbers; use dotted versions for those.
 
 `st work defer` refuses a malformed argument before writing anything. A read
 that cannot answer cleanly (a network error, a tool not on PATH, a version that
@@ -1952,12 +1972,14 @@ submission. Inspect the pane or read that pointer rather than blindly resending.
 
 With a deployment root, Codex sends first retain the full body in a private
 `delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
-declared tmux socket, pane and observed session creation time. If custody cannot
+declared tmux socket, pane, observed session creation time and process generation. If custody cannot
 be written, nothing is typed. After the single submission retry fails, st can
-clear only its exact single-line body in an idle, positively identified Codex
-session. It rechecks ownership and session identity before each editing key.
-Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
-authorize no automatic clear. A later sender can clear the same owned failed
+clear its exact visible typed body, including multiline text, in an idle, positively
+identified Codex session. It rechecks ownership, session and process identity before
+each editing key and verifies an empty composer afterward. Cleanup uses bounded
+line editing, never Escape or submission keys, and does not change the UNVERIFIED
+send result. Busy, changed, opaque paste placeholders, clipped, ghost,
+attribute-stripped and unknown input authorize no automatic clear. A later sender can clear the same owned failed
 notice before submitting its own message; the older body remains retained.
 Claude and explicit shell-launch sends keep their existing transport.
 
