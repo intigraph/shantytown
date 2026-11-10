@@ -24,7 +24,7 @@
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
       "summary": "Mail/reviews bind scopes. Cycles require clean/full-history/checkpoint/fresh-session proof; pending bars resend/restart. Chaski bars local runs. Admins accept rank quarantine. Conversion checks model/browser. Benchmarks grant no ranks. Intake needs cause and due/no-due. Pipeline waits need events/backstops; --window is appointment. Reminders retain gates and precede sweeps. Ceilings check source/harness, non-held plate, budget/owner. Seeds CAS/results retain operation IDs, UNKNOWN and mutation outcomes; no retry. AGY lacks SessionStart proof. Sweeps resume at budget skip. Cold receipts resume without launches; holds remain. Native priority lean/UNKNOWN. Create/cache proves store/bounds; skips separate. Startup needs exact Codex submission; unverified exits 2. Go receipts bind scope/submission/assignment; read-only recovery. Supersession needs newer native open/unassigned release; old receipt grants nothing. Dry-run retains fence. Display v2 shares 15s observations; decisions stay live.",
-      "source_sha256": "a8cf47eb06225fb46bc3f4230a77b7bb0bf23fe447718e5d512452efa486ebaa",
+      "source_sha256": "b8c5ea11efbc3346381a12ac467feb4d335639777a91380ee4b8b18b1e543593",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"

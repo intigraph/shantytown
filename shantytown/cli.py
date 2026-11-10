@@ -1347,6 +1347,13 @@ def _cmd_hooks(a) -> int:
     from . import hook_bundles as hb
     from .deployment import local_host
     root = a.root
+    if a.hooks_cmd == "check" and not Path(root).is_dir():
+        res = hb.check(root)
+        if a.json:
+            print(json.dumps(res.to_json(root=root), indent=2))
+        else:
+            print(f"CANNOT TELL: {res.store_error}: {root}")
+        return res.exit_code
     if a.hooks_cmd == "register":
         try:
             name, outcome = hb.register(root, a.file)
