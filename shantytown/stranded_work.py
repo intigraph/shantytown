@@ -27,11 +27,15 @@ def owner(row):
     return (row.get('assignee') or '').rsplit('/', 1)[-1]
 
 
-def eligible(row):
+def eligible(row, *, operator_stopped=False):
     """Malformed parking metadata refuses release rather than ending a hold."""
     labels = row.get('labels') or []
     if not isinstance(labels, list):
         return False
+    if operator_stopped:
+        return (row.get('status') in {'open', 'hooked', 'in_progress', 'blocked', 'deferred'}
+                and bool(owner(row)) and not is_message(row.get('title', ''))
+                and type(row.get('priority')) is int and row['priority'] in range(5))
     return (row.get('status') in {'open', 'in_progress'}
             and bool(owner(row)) and not is_message(row.get('title', ''))
             and not row.get('title', '').lstrip().upper().startswith('ASK ')
@@ -74,7 +78,7 @@ class StrandedWork:
 
     def tick(self, rows, cards, *, observe, recipient, notify, read, release,
              checkpoint, fence, now=None, release_admitted=False, t1=T1, t2=T2,
-             budget=5, max_intents=4, clock=time.monotonic):
+             budget=5, max_intents=4, clock=time.monotonic, operator_release_only=False):
         """One complete, bounded snapshot; no retries or ownership guesses.
 
         read/release are revision-aware adapter seams, NOT generic update.
@@ -92,7 +96,8 @@ class StrandedWork:
         if len({r['id'] for r in rows}) != len(rows):
             raise ValueError('duplicate work identities')
         seen = {r['id']: r for r in rows}
-        active = {identity: r for identity, r in seen.items() if eligible(r)}
+        active = {identity: r for identity, r in seen.items()
+                  if eligible(r, operator_stopped=operator_release_only)}
         observations = {}
         result = []
         with self.locked() as data:
@@ -111,7 +116,7 @@ class StrandedWork:
             ordered = sorted(active.items(), key=lambda pair:
                 (data.get(pair[0], {}).get('checked_at', -1), pair[0]))
             for identity, row in ordered:
-                if clock() >= deadline:
+                if clock() >= deadline and not operator_release_only:
                     result.append((identity, 'pass budget exhausted; remaining evidence unchanged'))
                     break
                 name = _agent(owner(row))
@@ -119,19 +124,25 @@ class StrandedWork:
                     observations[name] = observe(name, cards.get(name))
                 observation = observations[name]
                 state = observation.get('state')
-                if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown'}:
+                if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown', 'operator-stopped'}:
                     raise ValueError('invalid owner observation')
+                operator_stopped = operator_release_only and state == 'operator-stopped'
+                if not operator_stopped and not eligible(row):
+                    if identity in data:
+                        data[identity].update(active=False, release_due=False, resolved_at=now)
+                    continue
                 previous = data.get(identity, {})
                 if previous and previous.get('owner') != name:
                     previous.update(active=False, resolved_at=now)
-                if (state == 'live' or observation.get('intentional_stop') is True
-                        or resume_exempt(observation.get('resume_at'), now)):
+                if (state == 'live' or not operator_stopped and (
+                        observation.get('intentional_stop') is True
+                        or resume_exempt(observation.get('resume_at'), now))):
                     if previous:
-                        previous.update(active=False, resolved_at=now)
+                        previous.update(active=False, release_due=False, resolved_at=now)
                     continue
                 if state == 'unknown':
                     if previous:
-                        previous.update(evidence='UNKNOWN', checked_at=now)
+                        previous.update(evidence='UNKNOWN', release_due=False, checked_at=now)
                     result.append((identity, 'owner liveness UNKNOWN'))
                     continue
                 generation = observation.get('generation')
@@ -151,20 +162,26 @@ class StrandedWork:
                     data[identity] = previous
                 previous.update(checked_at=now, evidence=state)
                 age = now - previous['down_since']
-                previous['attention'] = age > t1
-                previous['release_due'] = row['status'] == 'open' and age > t2
+                previous['attention'] = operator_stopped or age > t1
+                previous['release_due'] = (operator_stopped or row['status'] == 'open' and age > t2)
+                if operator_release_only and not operator_stopped:
+                    previous['release_due'] = False
                 if not previous['attention']:
                     continue
                 key = hashlib.sha256(json.dumps([identity, name, generation,
                       previous['down_since']], separators=(',', ':')).encode()).hexdigest()
                 marker = 'stranded-owner:' + key
                 previous['marker'] = marker
-                save()  # Attention survives even a refused/unknown lead route.
                 if previous['notice'] == 'pending':
                     if intents >= max_intents or clock() >= deadline:
                         result.append((identity, 'attention retained; intent budget exhausted'))
                         continue
-                    destination = recipient(name, cards)
+                    save()  # Attention survives even a refused/unknown lead route.
+                    try:
+                        destination = recipient(name, cards)
+                    except (ValueError, LookupError):
+                        result.append((identity, 'administrator route UNKNOWN; no release'))
+                        continue
                     body = (f'ERROR {marker} {identity}: owner {name} {state}; '
                             f'down since {previous["down_since"]}. Persistent attention '
                             f'{self.root / "attention.json"}; checkpoint/trees retained.')
@@ -205,8 +222,8 @@ class StrandedWork:
                         continue
                     current = read(identity)
                     fresh = observe(name, cards.get(name))
-                    if (fresh != observation or not eligible(current)
-                            or current['status'] != 'open' or owner(current) != name
+                    if (fresh != observation or not eligible(current, operator_stopped=operator_stopped)
+                            or current['status'] != row['status'] or owner(current) != name
                             or current['priority'] != row['priority']):
                         result.append((identity, 'changed evidence; no release'))
                         continue
@@ -222,7 +239,8 @@ class StrandedWork:
                     write_json_atomic(journal_path, journal)
                     intents += 1
                     try:
-                        outcome = release(current, comment)
+                        outcome = (release(current, comment, operator_stopped=True)
+                                   if operator_stopped else release(current, comment))
                         if outcome not in {'released', 'conflict'}:
                             raise ValueError('release outcome unproven')
                         previous['release'] = outcome

@@ -227,7 +227,7 @@ def test_sdk_release_has_revision_and_atomic_comment_and_exact_readback(monkeypa
     monkeypatch.setattr(tracker, '_bd_for', sdk)
     assert tracker.release_stranded(row, 'audit') == 'released'
     assert '--if-revision=7' in calls[0] and '--transition-comment=audit' in calls[0]
-    assert '--assignee=' in calls[0] and '--status=open' in calls[0]
+    assert '--assignee=' in calls[0] and not any(x.startswith('--status') for x in calls[0])
     assert calls[1] == ('show', 'work-1', '--json')
 
 
@@ -247,6 +247,82 @@ def test_sdk_conflict_or_failure_never_falls_back_to_generic_update(monkeypatch,
         with pytest.raises(RuntimeError, match='UNKNOWN'):
             tracker.release_stranded(row, 'audit')
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('status', ['open', 'hooked', 'in_progress', 'blocked', 'deferred'])
+def test_operator_release_preserves_parked_ask_status_and_all_fields(world, status, monkeypatch):
+    world.row.update(status=status, title='ASK operator: retained', labels=['needs-stiwi'],
+                     defer_until='2999-01-01T00:00:00Z', notes='resume_when: gate')
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    writes = []
+    def release(current, comment, *, operator_stopped=False):
+        assert operator_stopped is True
+        writes.append(copy.deepcopy(current))
+        world.row.update(assignee='', revision=world.row['revision'] + 1)
+        return 'released'
+    before = copy.deepcopy(world.row)
+    world.tick(10, operator_release_only=True, release=release)
+    assert len(writes) == 1
+    assert world.row == before | dict(assignee='', revision=before['revision'] + 1)
+
+
+def test_operator_release_rechecks_stop_under_lifecycle_fence(world):
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    def checkpoint(*_):
+        world.observation['state'] = 'live'
+        return dict(worktree='kept', branch='kept', checkpoint='kept')
+    world.tick(10, operator_release_only=True, checkpoint=checkpoint)
+    assert not world.writes
+
+
+@pytest.mark.parametrize('status', ['open', 'in_progress', 'blocked', 'deferred'])
+def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch, status):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status=status, assignee='worker', priority=1,
+               title='ASK operator: retained', labels=['desk'], revision=7,
+               notes='resume_when: gate', defer_until='2999-01-01T00:00:00Z')
+    calls = []
+    def sdk(identity, *args):
+        calls.append(args)
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(assignee='', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
+    assert calls[0] == ('update', 'work-1', '--assignee=', '--if-revision=7',
+                        '--transition-comment=audit', '--json')
+
+
+def test_operator_sdk_refuses_to_claim_release_when_parking_changed(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='deferred', assignee='worker', priority=1,
+               title='work', labels=[], revision=7, notes='retain')
+    def sdk(identity, *args):
+        result = [] if args[0] == 'update' else [row | dict(
+            assignee='', status='open', revision=8, comments=[dict(text='audit')])]
+        return SimpleNamespace(returncode=0, stdout=json.dumps(result))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    with pytest.raises(RuntimeError, match='UNKNOWN'):
+        tracker.release_stranded(row, 'audit', operator_stopped=True)
+
+
+def test_stranded_sdk_census_uses_owned_waiting_and_message_projection(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
+    monkeypatch.setattr(tracker, 'prove_store', lambda: 'proof')
+    calls = []
+    def read(proof, owner, **options):
+        from shantytown.answer import Answer
+        calls.append((proof, owner, options))
+        return Answer.complete_read([dict(id='work-1')], how='complete fixture')
+    monkeypatch.setattr('shantytown.seeds_plate.owner_rows', read)
+    assert tracker.stranded_rows(['worker']) == [dict(id='work-1')]
+    assert calls == [('proof', None, dict(timeout=tracker.timeout,
+        plate_owners=('worker',), capacity=True, include_deferred=True, include_messages=True))]
 
 
 def test_attention_not_cleared_by_unreadable_metadata(world):
