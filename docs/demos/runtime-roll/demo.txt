@@ -1,0 +1,21 @@
+Script started on 2026-11-09 15:31:07-05:00 [COMMAND="sh docs/demos/runtime-roll/run.sh" <not executed on terminal>]
+Base 195a7ef3: same installed-version fixture
+Fixture: two locally owned Claude sessions; running 2.1.319, installed 2.1.321
+No live panes, credentials, tracker writes or runtime processes are used.
+BASE: runtime update automatic roller is absent.
+Pending replacement requests: 0
+
+Candidate 2c0629ef7d5746951029151201e77884b677b50a: same installed-version fixture
+Fixture: two locally owned Claude sessions; running 2.1.319, installed 2.1.321
+No live panes, credentials, tracker writes or runtime processes are used.
+CANDIDATE: typed input / background tasks -> []
+First blocker: the input box is not empty
+Both idle -> requested: ['first']
+Checkpoint: Stored anchor and resume notes for first
+Process replacement required: True
+Launch only -> next requested: []
+First phase: awaiting-version
+Exact new-session version receipt -> next requested: ['second']
+Verified running version: 2.1.319 -> 2.1.321
+
+Script done on 2026-11-09 15:31:07-05:00 [COMMAND_EXIT_CODE="0"]
