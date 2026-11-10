@@ -669,6 +669,15 @@ one item's producer:
   `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
   tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
   with a fixed argv.
+- `resume_when: installed:quipu@<full40lowerhexSHA>` (also `==`) instead
+  checks the configured Quipu origin's `/version` serving identity. It requires
+  an exact full `git_sha` and explicit `git_dirty: false`; the local CLI,
+  checkout and release version cannot satisfy this condition. Only Quipu has
+  this served-SHA reader. No default origin, item-provided URL, redirect, short
+  prefix or SHA ordering operator is accepted. Missing/dirty/malformed identity,
+  incomplete responses and read failures stay UNKNOWN. A clean different SHA
+  is not met. Long bare digit targets (seven or more digits) are ambiguous
+  commit prefixes, not semver major numbers; use dotted versions for those.
 
 `st work defer` refuses a malformed argument before writing anything. A read
 that cannot answer cleanly (a network error, a tool not on PATH, a version that

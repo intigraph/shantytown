@@ -1017,7 +1017,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> / pr-merged:<forge>/<owner>/<repo>#<n> / ci-terminal:<forge>/<owner>/<repo>@<sha>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> or installed:quipu@<full40hexSHA> / pr-merged:<forge>/<owner>/<repo>#<n> / ci-terminal:<forge>/<owner>/<repo>@<sha>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -1027,7 +1027,7 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version> or installed:quipu@<full40hexSHA>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
         if active.kind in ('recurring-quiet', 'evidence-count'):
             from .resume_producers import validate as validate_producer
             try:
