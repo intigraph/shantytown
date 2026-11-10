@@ -87,13 +87,14 @@ class SdTracker(BrTracker):
             raise ValueError('stranded item revision unproven')
         return row
 
-    def release_stranded(self, row, comment):
+    def release_stranded(self, row, comment, *, operator_stopped=False):
         """One CAS transaction includes its preservation comment; no fallback."""
         from .stranded_work import eligible
-        if (not eligible(row) or row.get('status') != 'open'
+        if (not eligible(row, operator_stopped=operator_stopped)
+                or not operator_stopped and row.get('status') != 'open'
                 or type(row.get('revision')) is not int or row['revision'] < 1):
             raise ValueError('stranded release requires eligible revision-bound row')
-        result = self._bd_for(row['id'], 'update', row['id'], '--status=open',
+        result = self._bd_for(row['id'], 'update', row['id'],
             '--assignee=', f'--if-revision={row["revision"]}',
             '--transition-comment=' + comment, '--json')
         if result.returncode == 4:
@@ -103,7 +104,9 @@ class SdTracker(BrTracker):
         # A successful process exit alone does not prove the committed fields.
         current = self.stranded_read(row['id'])
         comments = current.get('comments')
-        if (current.get('status') != 'open' or current.get('assignee')
+        preserved = set(row) - {'assignee', 'revision', 'updated_at', 'comments'}
+        if (any(current.get(key) != row.get(key) for key in preserved)
+                or current.get('assignee')
                 or current['revision'] <= row['revision']
                 or not isinstance(comments, list)
                 or not any(c.get('text') == comment for c in comments if isinstance(c, dict))):
@@ -787,6 +790,17 @@ class SdTracker(BrTracker):
         candidates = ready_candidates(ready, active) if ready_candidates else ready
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
+
+    def stranded_rows(self, owners):
+        """Complete owner-scoped census, including parked work and messages."""
+        if not self._use_remote_projection():
+            raise ValueError('stranded owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stranded owner scope unproven')
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          plate_owners=tuple(owners), capacity=True,
+                          include_deferred=True, include_messages=True).exact()
 
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""

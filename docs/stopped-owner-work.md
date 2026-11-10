@@ -5,13 +5,18 @@ fleet-tend owner's bounded stopped-work sweep; `release` separately admits its
 revision-fenced releases. There is no new timer. Enabling either mode is an
 operator rollout decision, not an effect of installing this source change.
 Dry-run tend does not run these sweeps.
-Each pass starts at most four remote intents and starts no further work after
-five seconds. It does not interrupt an in-flight write. Oldest observations
-are served first; untouched evidence stays unchanged when the budget ends.
+Each pass starts at most four remote intents and starts no further remote intent
+after five seconds. It does not interrupt an in-flight write. Oldest observations
+are served first. Complete local coverage accounting continues after the intent
+budget ends, so a capped mutation pass cannot masquerade as an empty census.
 
 The sweep requires a complete crew census and the selected tracker's complete
-bounded active/deferred owner projection. It never falls back to an unbounded
-board listing. A card's explicit host must match the configured local host.
+bounded assignee projection, including owned blocked/deferred work. The ranking
+projection is insufficient because it omits owned waiting work. Inbox pointers
+are counted separately and never unassigned. Each pass writes the complete
+per-owner work, inbox and operator-stopped release-due counts to
+`<crew-root>/stranded-work/census.json`. A partial read refuses before mutation;
+there is no generic board-list fallback. A card's explicit host must match the configured local host.
 Remote or unscoped owners and failed/malformed process reads are UNKNOWN.
 A current durable cycle refusal is separately measured as cycle-blocked, even
 with a live pane; it is never described as process death. Malformed cycle
@@ -21,11 +26,18 @@ and busy foreground subprocesses do not establish down. A missing card uses the 
 
 The first confirmed down observation starts a one-hour clock. After more than
 one measured hour, every priority (including P0) raises persistent attention.
-Only OPEN items may be repooled; IN_PROGRESS items stay assigned for administrator
-attention. There is no P0 bypass. Unknown evidence
-or a new launch generation restarts the duration proof. Deferred items,
-decision/blocked/parked labels, unknown priority, and deliberate undated operator stops or stops carrying
-a future resume date are exempt. Malformed dates refuse release. A dated stop
+These inferred down/missing/cycle-blocked classes remain observe-only, including
+when release mode is selected. Unknown evidence or a new launch generation
+restarts the duration proof. Their deferred/decision/parked work stays untouched.
+
+Release mode applies only to a recorded operator stop plus a successful local
+process observation proving the owner down. A live or unreadable process cannot
+be overridden by a stop file. This authoritative class gets immediate attention
+and release-due accounting, including ordinary, ASK and parked work in open,
+hooked, in-progress, blocked and deferred states. Inbox recipient assignments
+remain unchanged. Stop-record identity is part of the generation rechecked
+under the lifecycle lock; relaunch or changed stop evidence prevents release.
+No status, title, notes, gate or deferral is changed by unassignment. A dated stop
 can be recorded with `st agent stop NAME --resume-at ISO8601`; this requires a
 future timestamp with timezone, and cannot be combined with `--after-turn`.
 Existing undated stop records remain readable.
@@ -33,7 +45,7 @@ Existing undated stop records remain readable.
 Attention persists in `<crew-root>/stranded-work/attention.json` until the item
 is parked, reassigned, closed or its owner is observed live. An acknowledged
 error message does not clear attention. Each episode has one keyed durable
-ERROR to the host's administrator (the deployment's attention lead).
+ERROR to the host's live administrator, even if the owner's lead is stopped.
 Missing/ambiguous lead routing refuses and leaves attention retained. Previous
 episodes are archived before replacement. Unknown delivery is never resent
 automatically and prevents release pending operator reconciliation.
@@ -50,7 +62,7 @@ Release takes the same per-owner lifecycle lock as launch, stop and cycle,
 then reads the exact item revision and rechecks process/intent evidence after
 checkpoint metadata acquisition. A sanctioned concurrent launch is serialized;
 an item change is fenced by the server revision. The Seeds adapter sends one
-`update --status=open --assignee= --if-revision=REV
+`update --assignee= --if-revision=REV
 --transition-comment=COMMENT` transaction. The comment names the original owner,
 first confirmed down time, retained workspace, branch or detached commit,
 and original item notes/comments as the checkpoint pointer. Trees, branches,
@@ -59,7 +71,8 @@ release. Unsupported trackers have no generic-update fallback.
 
 An exit-4 conflict means nothing was written. Other failed/indeterminate
 releases retain their intent on disk and cannot be automatically retried.
-Success requires exact item and atomic-comment read-back. Operator recovery
+Success requires exact item and atomic-comment read-back and preservation of
+every other original field except the revision and modification timestamp. Operator recovery
 must reconcile the retained marker against the selected board before admitting
 another write. No deletion, process launch, unassignment inventory or live
 sweep is performed by the offline tests.
