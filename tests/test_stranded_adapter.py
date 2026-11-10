@@ -28,7 +28,7 @@ def setup(tmp_path, monkeypatch):
     registry = SimpleNamespace(all=lambda: Answer.complete_read(list(cards.values()), how='fixture'),
                                get=lambda name: cards[name])
     row = dict(id='work-1', assignee='worker', status='in_progress', priority=0, title='work', labels=[])
-    tracker = SimpleNamespace(ranking_rows=lambda: ([], [dict(row)]))
+    tracker = SimpleNamespace(stranded_rows=lambda owners: [dict(row)])
     states = dict(worker='down', lead='down', admin='live', remote='down')
     panes = SimpleNamespace(owner_state=lambda pane: states[pane])
     inbox = FilesInbox(tmp_path / 'inbox')
@@ -68,8 +68,8 @@ def test_foreign_or_unscoped_owner_is_unknown_never_down(setup, host):
 
 def test_intent_resume_keeps_owner_and_no_brief_attention(setup):
     FilesStops(setup.root / 'stopped').record('worker', 0, resume_at='2999-01-01T00:00:00Z')
-    assert run(setup) == []
-    assert not setup.inbox.unread('admin')
+    assert ('work-1', 'needs attention') in run(setup)
+    assert len(setup.inbox.unread('admin')) == 1
     assert OwnedWork(setup.root).snapshot() == {}
 
 
@@ -146,11 +146,11 @@ def test_every_real_launch_takes_lifecycle_lock_before_admission(monkeypatch, tm
     assert events == ['admission']
 
 
-def test_undated_operator_stop_is_exempt(setup):
+def test_undated_operator_stop_has_immediate_attention_in_observe(setup):
     FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
-    assert run(setup) == []
-    assert run(setup, 100000) == []
-    assert not setup.inbox.unread('admin')
+    assert ('work-1', 'needs attention') in run(setup)
+    assert ('work-1', 'needs attention') in run(setup, 100000)
+    assert len(setup.inbox.unread('admin')) == 1
     assert OwnedWork(setup.root).snapshot() == {}
 
 
@@ -180,3 +180,81 @@ def test_malformed_cycle_ledger_is_unknown(setup):
     assert run(setup) == [('work-1', 'owner liveness UNKNOWN')]
     assert run(setup, 9000) == [('work-1', 'owner liveness UNKNOWN')]
     assert not setup.inbox.unread('admin')
+
+
+def test_complete_assignee_census_counts_300_parked_work_and_inbox_separately(setup):
+    rows = [dict(setup.row, id=f'work-{i}', status='deferred',
+                 defer_until='2999-01-01T00:00:00Z', labels=['blocked:external'],
+                 title='ASK operator: retained') for i in range(300)]
+    rows += [dict(setup.row, id=f'message-{i}', title='inbox: preserved') for i in range(241)]
+    scopes = []
+    def census(owners):
+        scopes.append(owners)
+        return copy.deepcopy(rows)
+    setup.tracker.stranded_rows = census
+    setup.tracker.ranking_rows = lambda: pytest.fail('ranking is not a complete assignee census')
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    run(setup, 10)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert len(findings) == 300
+    assert all(row['release_due'] and row['evidence'] == 'operator-stopped'
+               for row in findings.values())
+    proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert proof['complete'] is True
+    assert proof['owners']['worker'] == dict(work=300, inbox=241, release_due=300)
+    assert scopes == [['admin', 'lead', 'worker']]
+
+
+@pytest.mark.parametrize('state', ['live', 'unknown'])
+def test_stop_record_cannot_promote_live_or_unknown_process(setup, state):
+    setup.states['worker'] = state
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    run(setup, 10)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert not any(row.get('release_due') for row in findings.values())
+    assert not setup.inbox.unread('admin')
+
+
+def test_release_mode_keeps_non_operator_classes_observe(setup, monkeypatch):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    setup.row['status'] = 'open'
+    setup.tracker.stranded_read = lambda _: copy.deepcopy(setup.row)
+    setup.tracker.release_stranded = lambda *_: pytest.fail('unadmitted class released')
+    run(setup, 0)
+    run(setup, 3601)
+    assert len(setup.inbox.unread('admin')) == 1
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert findings['work-1']['attention']
+    assert findings['work-1']['release_due'] is False
+
+
+@pytest.mark.parametrize('ledger', ['{malformed', '{"worker":{"refused":{"reason":"old refusal","paths":[]}}}'])
+def test_operator_stop_and_process_absence_are_not_hidden_by_old_cycle_ledger(setup, ledger):
+    from shantytown.cycle import Requests
+    path = Requests(setup.root).path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ledger)
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    run(setup, 10)
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['evidence'] == 'operator-stopped' and finding['release_due']
+
+
+def test_stopped_administrator_cannot_receive_release_prerequisite(setup):
+    setup.states['admin'] = 'down'
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    result = run(setup, 10)
+    assert ('work-1', 'administrator route UNKNOWN; no release') in result
+    assert not setup.inbox.unread('admin')
+
+
+def test_natural_clock_census_matches_current_attention(setup):
+    """The scheduled caller omits now; its coverage count must still be honest."""
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    assert ('work-1', 'needs attention') in sweep(
+        setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert findings['work-1']['release_due'] is True
+    assert census['checked_at'] == findings['work-1']['checked_at']
+    assert census['owners']['worker'] == dict(work=1, inbox=0, release_due=1)
