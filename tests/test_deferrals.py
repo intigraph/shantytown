@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from shantytown import deferrals
 
 
@@ -44,6 +46,17 @@ def test_a_future_deferral_is_silent():
     must produce no line at all, or the channel is noise."""
     rows = [_row(defer_until=_iso(timedelta(days=+5)))]
     assert deferrals.evaluate(rows, NOW) == []
+
+
+@pytest.mark.parametrize("status", ["closed", "done"])
+@pytest.mark.parametrize("gate", ["closed:other", "ci-terminal:github/example/repo@" + "a" * 40])
+def test_terminal_rows_do_not_resolve_historical_gates(status, gate):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("terminal item spent a gate read")
+    item = _row(status=status, defer_until=_iso(timedelta(days=-3)),
+                notes="resume_when: " + gate)
+    assert deferrals.evaluate([item], NOW, is_closed=forbidden,
+                              forge_reader=forbidden) == []
 
 
 def test_same_day_recheck_lapses_at_the_full_timestamp_boundary():

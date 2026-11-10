@@ -324,7 +324,10 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
     still be open, which is worse than staying quiet.
     """
     out: list[Finding] = []
-    rows = list(rows)
+    # Closure can retain historical defer fields. Remove terminal rows before
+    # planning gate reads as well as before emitting any pacing findings.
+    rows = [row for row in rows if not isinstance(row, dict)
+            or row.get("status") not in ("closed", "done")]
     # A fixed prefix would consume every pass's bounded forge reads forever.
     # Rotate *facts*, not owners, once per natural five-minute slot; duplicate
     # waiters remain adjacent and share one observation. Non-forge gates retain
