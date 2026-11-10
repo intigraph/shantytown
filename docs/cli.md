@@ -75,6 +75,24 @@ acknowledged custody does not qualify. Never resend or claim manually. Changed r
 cards or sessions cannot reuse the receipt. Older tracker adapters retain the
 legacy path and do not emit bound execution receipts.
 
+If observation was interrupted, the dispatcher can explicitly complete the
+original receipt on the worker's declared host:
+
+```sh
+st go project-item ada --complete --receipt RECEIPT_ID
+```
+
+This sends no text or keys. Current ownership, blockers, capacity, governor and
+operator holds still apply. It preserves the original request and revision;
+it never accepts replacement notes or a caller-provided submission assertion.
+Claude proof can come from its exact native user record, or a consumed busy
+command whose exact body, session, command ID and delivery ID match both the
+native queued-command attachment and absorption acknowledgment. Queue custody,
+quoted output and discarded commands do not qualify. The current hook, stats,
+workspace transcript, pane session and runtime must agree. Missing or changed
+evidence leaves the receipt fenced. An uncertain native claim is read back;
+completion never repeats it. `--dry-run` and `--reconcile` remain read-only.
+
 File-backed tracker updates now serialize per item and increment a revision
 with the assignment and transition comment in one atomic file replacement.
 Existing unversioned files occupy revision one. Reads and dry runs do not
@@ -856,6 +874,11 @@ clear and compact, and a plate it could not read is stated in one line, never re
 silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's own
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
+
+If no store directory resolves, `st ops hooks check` reports CANNOT TELL and
+exits 2 instead of treating zero inspected bundles as a pass. Its JSON report
+retains schema `st.hook-check/1` and includes `store_error: "no store found"`.
+A real, existing store with an empty registry can still pass with exit 0.
 
 Codex and administrator launches also deliver the same anchor render through the
 verified startup input, together with any unread mail in one message. Any other
@@ -3829,6 +3852,10 @@ recipient and delivery ID, measured body bytes, and phase latency before claimin
 scheduled-delivery acceptance.
 
 ## Soft-cycle completion evidence
+
+Runtime updates use the same idle executor for automatic checkpointed process
+replacement. See [runtime update replacement](runtime-updates.md) for version
+evidence, credential preflight, input deferral and serialized roll receipts.
 
 Soft-cycle completion requires a fresh hook-reported session ID and transcript
 path, plus settled ready UI and the existing permission check. A missing token

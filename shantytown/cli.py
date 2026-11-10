@@ -1347,6 +1347,13 @@ def _cmd_hooks(a) -> int:
     from . import hook_bundles as hb
     from .deployment import local_host
     root = a.root
+    if a.hooks_cmd == "check" and not Path(root).is_dir():
+        res = hb.check(root)
+        if a.json:
+            print(json.dumps(res.to_json(root=root), indent=2))
+        else:
+            print(f"CANNOT TELL: {res.store_error}: {root}")
+        return res.exit_code
     if a.hooks_cmd == "register":
         try:
             name, outcome = hb.register(root, a.file)
@@ -1613,7 +1620,9 @@ def build_parser() -> argparse.ArgumentParser:
     go = sub.add_parser("go", help="dispatch an item to an agent")
     go.add_argument("item")
     go.add_argument("agent")
-    go.add_argument('--receipt', help='receipt ID for read-only reconciliation or explicit supersession')
+    go.add_argument('--receipt', help='receipt ID for reconciliation, completion or supersession')
+    go.add_argument('--complete', action='store_true',
+                    help='finish the original receipt from native submission proof; never resend or repeat an uncertain claim')
     go.add_argument('--supersede', action='store_true',
                     help='retain and retire an uncertain receipt after a newer native open/unassigned release; never send or claim')
     go.add_argument('--reconcile', '--status', action='store_true',
@@ -7970,13 +7979,15 @@ def _priority_fleet_notes(a, reg, panes):
 
 
 def _cmd_go(a) -> int:
-    if getattr(a, 'reconcile', False) or getattr(a, 'supersede', False) or getattr(a, 'receipt', None):
+    from .plate_capacity import PlateFull, CapacityUnknown
+    if (getattr(a, 'reconcile', False) or getattr(a, 'supersede', False)
+            or getattr(a, 'complete', False) or getattr(a, 'receipt', None)):
         from .dispatch_binding import binding_for
         try:
             if not getattr(a, 'receipt', None):
-                raise ValueError('--reconcile or --supersede requires --receipt')
-            if getattr(a, 'reconcile', False) and getattr(a, 'supersede', False):
-                raise ValueError('choose read-only --reconcile or explicit --supersede')
+                raise ValueError('--reconcile, --complete or --supersede requires --receipt')
+            if sum(bool(getattr(a, flag, False)) for flag in ('reconcile', 'supersede', 'complete')) > 1:
+                raise ValueError('choose --reconcile, --complete or --supersede')
             tracker, registry, panes = _tracker(a), _registry(a), _panes(a)
             from .deployment import local_host
             agent = registry.get(a.agent)
@@ -7988,10 +7999,26 @@ def _cmd_go(a) -> int:
             row = binding.store.read(a.receipt)
             if row['item'] != a.item or row['worker'] != a.agent:
                 raise ValueError('receipt names a different task or worker')
+            if getattr(a, 'complete', False):
+                if (getattr(a, 'reassign', False) or getattr(a, 'note', None)
+                        or getattr(a, 'note_file', None) or getattr(a, 'quipu_node', None)
+                        or getattr(a, 'worktree', None)):
+                    raise ValueError('completion preserves the original scope; no new dispatch inputs allowed')
+                if held := agent_hold.reason(a.root, a.agent):
+                    print(f'  refused: {a.agent} {held}', file=sys.stderr)
+                    return REFUSED
+                result = _wire(a).complete(a.item, a.agent,
+                    dry_run=getattr(a, 'dry_run', False), receipt=a.receipt)
+                print(json.dumps(result, indent=2))
+                return OK
             result = (binding.supersede(a.receipt, dry_run=getattr(a, 'dry_run', False))
                       if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
             print(json.dumps(result, indent=2))
             return OK
+        except (Closed, Blocked, HasOpenBlocker, AlreadyAssigned, GovernorRefused,
+                PlateFull, CapacityUnknown) as error:
+            print(f'  refused: {error}', file=sys.stderr)
+            return REFUSED
         except (OSError, ValueError, LookupError) as error:
             print(f'  could not tell: {error}', file=sys.stderr)
             return CANNOT_TELL
@@ -8003,7 +8030,6 @@ def _cmd_go(a) -> int:
         # without it is the exact failure aegis-8013 is about.
         print(f"  refused: could not read --note-file: {e}", file=sys.stderr)
         return REFUSED
-    from .plate_capacity import PlateFull, CapacityUnknown
     relayed = _go_on_host(a, note)
     if relayed is not None:
         return relayed
@@ -8455,6 +8481,8 @@ def _cmd_crew(a) -> int:
     plate_sizes = cache(lambda who: observed_size(capacity_tracker, who))
     if getattr(a, "json", False):
         launches = _launches(a)
+        from . import runtime_roll
+        runtime_versions = runtime_roll.ledger(a.root)
         from . import stats as _stats_mod
         last_active = _stats_mod.last_activity(Path(a.root))
         local_rows = []
@@ -8491,6 +8519,7 @@ def _cmd_crew(a) -> int:
                 role_sources=crew_role_sources(ag, cfg.roles),
                 state=state, work=work, posture=posture, pane=ag.pane or "—",
                 live=live, runtime_harness=actual,
+                runtime_update=runtime_versions.get(ag.name),
                 harness=actual or harness_mod.name_for(ag, root=a.root),
                 settings=_settings_verdict(launches, ag.name, state == "up"),
                 tree=_tree_staleness_cell(a, ag, sweep=False)[0]))
@@ -10711,6 +10740,20 @@ def _durable_checkpoint_gate(a, agent_name: str):
     pass: this is a gate on a saturated agent's only relief valve.
     """
     from . import cycle as cycle_mod
+    pending = cycle_mod.Requests(a.root).pending().get(agent_name, {})
+    if getattr(a, "_runtime_update", False):
+        from . import runtime_roll
+        item = pending.get("checkpoint_bead", "")
+        if (not pending.get("runtime_update")
+                or pending["runtime_update"].get("key") != getattr(a, "_runtime_update_key", None)):
+            return cycle_mod.DurableGate(agent_name, item, "automatic runtime checkpoint", False)
+        try:
+            from .br import comments
+            got = comments(_tracker(a), item) if item else []
+            return runtime_roll.checkpoint_gate(a.root, agent_name, pending, got)
+        except Exception:
+            return cycle_mod.DurableGate(agent_name, item, "automatic runtime checkpoint",
+                                         False, checkpoint="")
     try:
         since = _cycle_session_start(a.root, agent_name)
     except OSError as e:
@@ -11077,6 +11120,14 @@ def _cmd_cycle(a) -> int:
             print("  refused: --self needs " + ("; and ".join(missing)
                   if len(missing) > 1 else missing[0]), file=sys.stderr)
             return REFUSED
+        if getattr(a, "no_in_place", False):
+            try:
+                from .provision import preflight_credentials
+                preflight_credentials(_registry(a).get(agent_name), a.root)
+            except ProvisionError as exc:
+                print(f"  refused: {exc}; no replacement request recorded; "
+                      "the current process is unchanged", file=sys.stderr)
+                return REFUSED
         if a.dry_run:
             print(f"  would: request a cycle for {agent_name}")
             return OK
@@ -11211,6 +11262,7 @@ def _cmd_cycle(a) -> int:
         except Exception:  # noqa: BLE001 -- unreadable here: the locked check decides
             early = ""
         if early:
+            _record_cycle_refusal(a.root, agent_name, early, [])
             print(f"  refused: {agent_name}: {early}; the request stays "
                   f"pending for the next idle pass", file=sys.stderr)
             return REFUSED
@@ -11353,6 +11405,78 @@ def _cmd_cycle(a) -> int:
     return OK
 
 
+def _runtime_checkpoint(a, card, evidence):
+    """Save the observed anchor and last written notes, without inventing work.
+
+    The generated snapshot is st-authored. An agent may add richer reasoning
+    with a normal checkpoint; tend never impersonates its comment author.
+    """
+    trk = _tracker(a)
+    held = _tracker_plate(trk, card.name)
+    item = held.id if held is not None else ""
+    lines = [f"st automatic runtime checkpoint for {card.name}",
+             f"Exact session: {evidence.session}; {evidence.running} -> {evidence.installed}.",
+             "Snapshot of stored state; no claim to capture unwritten reasoning."]
+    if item:
+        from .br import comments, append_comment
+        detail = trk.get(item)
+        lines.extend([f"Anchor: {item}: {detail.title}",
+                      f"Stored resume notes:\n{getattr(detail, 'notes', '') or '(none)'}"])
+        own = [c for c in comments(trk, item) if c.get("author") == card.name
+               and c.get("text")]
+        if own:
+            lines.append(f"Last agent-written checkpoint ({own[-1].get('created_at', 'unknown')}):\n"
+                         + own[-1]["text"])
+    else:
+        lines.append("Anchor read succeeded: no current item. Re-read st anchor on resume.")
+    text = "\n".join(lines)
+    if len(text.encode()) > 65536:
+        raise ValueError("checkpoint exceeds 64 KiB; richer bounded checkpoint required")
+    import re
+    nodes = sorted(set(re.findall(r"https?://[^\s<>\"']+/ontology/[A-Za-z0-9_.-]+", text)))
+    if item:
+        append_comment(trk, item, text)
+        if not any(c.get("text") == text for c in comments(trk, item)):
+            raise ValueError("automatic checkpoint comment did not read back")
+    return dict(text=text, item=item, nodes=nodes)
+
+
+def _runtime_roll_sweep(a, agents, panes, runtime, log):
+    from . import runtime_roll, fleet_governor as fg
+    from .provision import preflight_credentials
+
+    def boundary(card):
+        session = card.pane or _session_for(card)
+        if not panes.exists(session):
+            return "no live owned pane"
+        return (_cycle_stop_refusal(a, card.name)
+                or _automatic_cycle_refusal(card, session, panes, runtime, a.root))
+
+    cfg = config.load(a.root)
+    peers = cfg.host_peers
+    # Runtime rolling needs strict serialization even for administrators.
+    # Unlike ordinary launch capacity, an unreachable owner cannot degrade to
+    # an independent local roll. Use one declared owner on every host.
+    owner = cfg.host_admission_owner
+    if peers and owner is None:
+        owner = min([cfg.host_name, *peers]) if cfg.host_name else None
+    try:
+        with fg.admission_lock(a.root, cfg.host_name, peers, owner=owner,
+                               local_required=True) as admission:
+            if admission.unreachable:
+                log("runtime-roll: shared admission owner unreachable; deferred")
+                return []
+            block = runtime_roll.peer_block(fleet_mod.collect(peers)) if peers else ""
+            return runtime_roll.sweep(
+                a.root, agents, requests=cycle_mod.Requests(a.root), boundary=boundary,
+                checkpoint=lambda card, evidence: _runtime_checkpoint(a, card, evidence),
+                preflight=lambda card: preflight_credentials(card, a.root), log=log,
+                fleet_block=block)
+    except fg.AdmissionUnavailable as exc:
+        log(f"runtime-roll: admission unavailable ({exc}); deferred")
+        return []
+
+
 def _serve_cycle_request(a, who: str, request: dict) -> int:
     """Perform ONE pending cycle request (tend's sweep and the --self waiter).
 
@@ -11366,6 +11490,8 @@ def _serve_cycle_request(a, who: str, request: dict) -> int:
         **vars(a), "cmd": "cycle", "agent": who,
         "reason": request.get("checkpoint", ""), "self_": False,
         "serve_request": False, "_automatic_cycle": True,
+        "_runtime_update": bool(request.get("runtime_update")),
+        "_runtime_update_key": (request.get("runtime_update") or {}).get("key"),
         "checkpoint_bead": request.get("checkpoint_bead", ""),
         "quipu_node": nodes,
         "no_graph_context": "" if nodes else
@@ -11560,7 +11686,8 @@ def _write_resume_brief(a, card, agent_name: str, checkpoint: str) -> str:
         text = resume_brief_mod.compose(
             agent_name, checkpoint=checkpoint,
             checkpoint_bead=getattr(a, "checkpoint_bead", "") or "",
-            quipu_nodes=nodes, item=item, docs=docs, suggested=suggested)
+            quipu_nodes=nodes, item=item, docs=docs, suggested=suggested,
+            process_replaced=bool(getattr(a, "no_in_place", False)))
         return str(resume_brief_mod.Briefs(a.root).put(
             agent_name, text, checkpoint=checkpoint, item=item))
     except Exception as e:  # noqa: BLE001
@@ -11659,9 +11786,16 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             opts = {'allow_limited': True} if getattr(a, '_account_card', None) else {}
             if refusal := _automatic_cycle_refusal(card, session, panes, runtime,
                                                    a.root, **opts):
+                _record_cycle_refusal(a.root, agent_name, refusal, [])
                 print(f"  refused: {agent_name}: {refusal}; the request stays "
                       f"pending for the next idle pass", file=sys.stderr)
                 return REFUSED, chosen.mode
+            if getattr(a, "_runtime_update", False):
+                gate = _durable_checkpoint_gate(a, agent_name)
+                if not gate.ok:
+                    _record_cycle_refusal(a.root, agent_name,
+                                          "runtime checkpoint/session no longer verified", [])
+                    return REFUSED, chosen.mode
             chosen = _cycle_plan(a, card, session, panes, runtime)
         rc, performed = _perform_cycle_locked(a, card, agent_name, session, panes,
                                               runtime, chosen, verdict)
@@ -11775,6 +11909,15 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
             account_state.record(a.root, running, cfg, panes)
         _registry(a).set(account_target)
         card = account_target
+    # dry_run launch admission does not render workspace kit. Recheck the real
+    # credential sources before either replacement can destroy the old process.
+    try:
+        from .provision import preflight_credentials
+        preflight_credentials(card, getattr(a, "root", None))
+    except ProvisionError as exc:
+        _record_cycle_refusal(getattr(a, "root", None), agent_name, str(exc), [])
+        print(f"  refused: {exc}; current process preserved", file=sys.stderr)
+        return REFUSED, chosen.mode
     if chosen.mode == cycle_mod.RESPAWN:
         print(f"  {agent_name}: {chosen.render()}")
         if refusal := _foreign_session_refusal(a, agent_name, session, panes):
@@ -14872,6 +15015,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         if woke:
             print(f"  ⚠ pushed {len(woke)} blocked worker(s) to their "
                   f"coordinator: {', '.join(woke)}", file=sys.stderr)
+        # Version updates enter the same idle executor as context/manual cycles.
+        # Local tend owns detection/checkpointing; no agent-composed command.
+        if notify_mod.auto_cycle_enabled():
+            _sweep("runtime-roll", lambda: _runtime_roll_sweep(
+                a, agents, panes, runtime, _log))
         # DRIVE THE CYCLE (aegis-bik9): a saturated IDLE agent is prompted to
         # checkpoint-then-/clear on its own pane, so it self-heals instead of
         # sitting idle-and-refused until a human raw-tmuxes it. Deduped once per

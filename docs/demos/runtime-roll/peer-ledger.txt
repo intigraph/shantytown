@@ -1,0 +1,11 @@
+Script started on 2026-11-09 18:17:43-05:00 [COMMAND="sh docs/demos/runtime-roll/peer-ledger-run.sh" <not executed on terminal>]
+Before 677c4e238f439c085f1611202031bff62eda763c: fail first ledger write
+{"failed_write": 1, "host_a_pending": true, "host_b_admitted": ["b"], "peer_blocked": false, "pending_hosts": 2, "published_phase": "current"}
+
+Candidate 28beeb4eca2ff46102eb1caaf66544f6a5d620f2: same first-write failure
+{"failed_write": 1, "host_a_pending": false, "host_b_admitted": ["b"], "peer_blocked": false, "pending_hosts": 1, "published_phase": "current"}
+
+Candidate: fail final ledger write after request
+{"failed_write": 2, "host_a_pending": true, "host_b_admitted": [], "peer_blocked": true, "pending_hosts": 1, "published_phase": "requested"}
+
+Script done on 2026-11-09 18:17:44-05:00 [COMMAND_EXIT_CODE="0"]

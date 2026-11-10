@@ -198,6 +198,40 @@ def test_check_empty_registry_is_ok_not_cannot_tell(root):
     assert res.items == [] and res.exit_code == 0
 
 
+def test_missing_store_is_unknown_not_a_valid_empty_registry(tmp_path):
+    absent = tmp_path / "absent"
+    res = hb.check(absent)
+    assert res.exit_code == 2
+    assert res.to_json(root=absent)["store_error"] == "no store found"
+    assert not absent.exists(), "a read must not create the missing store"
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_check_from_filesystem_root_without_store(tmp_path, json_output):
+    import os
+    import subprocess
+    import sys
+    repo = Path(__file__).resolve().parents[1]
+    env = {"HOME": str(tmp_path), "PATH": os.environ["PATH"], "PYTHONPATH": str(repo)}
+    command = [sys.executable, "-c", "from shantytown.cli import main; raise SystemExit(main())",
+               "ops", "hooks", "check"]
+    if json_output:
+        command.append("--json")
+    result = subprocess.run(command, cwd="/", env=env, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 2, result.stderr
+    if json_output:
+        doc = json.loads(result.stdout)
+        assert doc["exit"] == 2 and doc["store_error"] == "no store found"
+    else:
+        assert "CANNOT TELL: no store found" in result.stdout
+    # Same process environment, but an actual empty store is a valid pass.
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    positive = subprocess.run(command[:3] + ["--root", str(root)] + command[3:],
+        cwd="/", env=env, capture_output=True, text=True, timeout=20)
+    assert positive.returncode == 0, positive.stderr
+
+
 def test_check_json_schema_keys(root):
     register(root, bundle())
     emit(root, "claude", "worker")
