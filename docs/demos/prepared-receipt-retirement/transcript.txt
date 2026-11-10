@@ -5,4 +5,3 @@ BASE 7852a0dc84ce4c194cd6868d38064f65e409e9e9
 CANDIDATE source checkout
 {"fresh_execution_authorized": true, "fresh_receipt": true, "old_execution_authorized": false, "retirement": "superseded", "retirement_item_unchanged": true, "retirement_sends": 0}
 PASS: explicit retirement enables a new receipt; it never sends, claims, or revives the old ID.
-
