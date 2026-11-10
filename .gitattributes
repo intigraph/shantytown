@@ -45,6 +45,7 @@ docs/pr-demos/operation-haul/output.log -text whitespace=cr-at-eol
 
 # Preserve the paired startup-marker terminal replay bytes.
 docs/demos/startup-marker/output.log -text whitespace=cr-at-eol
+docs/demos/dispatch-completion/demo.txt -text whitespace=cr-at-eol
 # Preserve runtime-roll terminal bytes and paired replay timing.
 docs/demos/runtime-roll/demo.txt -text whitespace=cr-at-eol
 

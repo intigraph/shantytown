@@ -84,15 +84,58 @@ class Binding:
             worker=plan.agent, pane=plan.pane, session=self.panes.session_created(plan.pane),
             task_sha256=task_digest(item), scope_sha256=digest(request)))
 
+    def observed(self, row):
+        """Adapter-owned positive proof; absence leaves the original fence."""
+        observer = getattr(self.panes, 'observed_submission', None)
+        if callable(observer):
+            return observer(row['pane'], row['text'], row['session'], row['created'],
+                            row['request']['runtime'], row['worker'])
+        from .delivery import observed_submission
+        return observed_submission(self.store.root.parent, row['pane'],
+            getattr(self.panes, 'socket', None), row['text'], row['session'], row['created'],
+            row['request']['runtime'])
+
+    def complete(self, plan, ident, *, dry_run=False):
+        """Finish the original send/claim only; never compose or send another body."""
+        row = self.store.read(ident)
+        if row['item'] != plan.item_id or row['worker'] != plan.agent:
+            raise ReceiptConflict('receipt names a different task or worker')
+        request = row.get('request')
+        if not isinstance(request, dict) or digest(request) != row['scope_sha256']:
+            raise ReceiptConflict('receipt request metadata UNKNOWN')
+        plan.note, plan.store = request['note'], request['store']
+        plan.quipu_nodes, plan.sender = request['nodes'], request['sender']
+        plan.receipt_id, plan.text, plan.replayed = ident, row['text'], True
+        scope = self.scope(plan, current=True)
+        expected = self.store._scope(row)
+        if row['state'] in ('assigning', 'assigned'):
+            proof = self.assignments.read(row)
+            expected = dict(expected, revision=proof['revision'])
+        if scope != expected or row['state'] == 'superseded':
+            raise ReceiptConflict('stale task, worker, runtime or scope')
+        if dry_run:
+            return self.reconcile(ident)
+        with self.store.lock(row['item']):
+            # Lock and re-read before each write; no uncertain claim is repeated.
+            row = self.store.read(ident)
+            if self.scope(plan, current=True) != expected:
+                raise ReceiptConflict('scope changed before receipt completion')
+            if row['state'] == 'prepared':
+                observed = self.observed(row)
+                if observed is None:
+                    raise ReceiptConflict('submission unconfirmed; original receipt retained, no resend')
+                self.store.submitted(ident, observed)
+            elif row['state'] == 'assigning':
+                self.store.recover_assignment(ident, self.assignments.read(row))
+            self.assign(plan)
+        return self.reconcile(ident)
+
     def prepare(self, plan):
         scope = self.scope(plan)
         with self.store.lock(plan.item_id):
             pending = self.store.pending(plan.item_id)
             if pending and pending['state'] == 'prepared' and self.store._scope(pending) == scope:
-                from .delivery import observed_submission
-                observed = observed_submission(self.store.root.parent, pending['pane'],
-                    getattr(self.panes, 'socket', None), pending['text'], pending['session'], pending['created'],
-                    self.request(plan, plan.binding_agent)['runtime'])
+                observed = self.observed(pending)
                 if observed is not None:
                     self.store.submitted(pending['id'], observed)
                     pending = self.store.read(pending['id'])
