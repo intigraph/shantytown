@@ -7,11 +7,13 @@ from dataclasses import asdict
 import hashlib
 import json
 import re
+import time
 import uuid
 
 from .dispatch_receipts import (ReceiptConflict, ReceiptStore, assignment_comment,
                                 assignment_proof, assignment_supersession,
                                 prepared_supersession)
+from .protocols import SubmissionObserved
 
 
 def digest(value):
@@ -179,6 +181,36 @@ class Binding:
 
     def submitted(self, plan, observed):
         self.store.submitted(plan.receipt_id, observed)
+
+    def confirm_submission(self, plan, observed):
+        """Observe the one initial send; never type, complete or claim here."""
+        if isinstance(observed, SubmissionObserved) and observed.matches(plan.pane, plan.text):
+            return observed
+        if observed is not None or not callable(getattr(self.panes, 'observed_submission', None)):
+            return None
+        row = self.store.read(plan.receipt_id)
+        expected = self.store._scope(row)
+        if (row['state'] != 'prepared' or row['item'] != plan.item_id
+                or row['worker'] != plan.agent or row['text'] != plan.text):
+            raise ReceiptConflict('initial submission receipt differs from dispatch')
+        if self.scope(plan, current=True) != expected:
+            raise ReceiptConflict('scope changed before observing initial submission')
+        # A measured native Claude user record arrived 0.33s after preparation,
+        # while the echo-only path missed it. Poll the existing exact native reader,
+        # bounded by BOTH attempts and elapsed time; missing proof stays pending.
+        deadline = time.monotonic() + 5
+        for attempt in range(11):
+            if attempt and time.monotonic() >= deadline:
+                return None
+            proof = self.observed(row)
+            if isinstance(proof, SubmissionObserved) and proof.matches(plan.pane, plan.text):
+                if self.scope(plan, current=True) != expected:
+                    raise ReceiptConflict('scope changed while observing initial submission')
+                return proof
+            remaining = deadline - time.monotonic()
+            if attempt == 10 or remaining <= 0:
+                return None
+            time.sleep(min(0.5, remaining))
 
     def assign(self, plan):
         row = self.store.read(plan.receipt_id)
