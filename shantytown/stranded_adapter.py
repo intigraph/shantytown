@@ -132,15 +132,17 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     if selected == 'release' and (not callable(read) or not callable(release)):
         raise ValueError('revision-fenced stranded release unsupported')
     detector = StrandedWork(root)
+    # One sweep timestamp joins attention to coverage. Sampling again after
+    # tick made natural-clock runs report zero due work despite due findings.
+    import time
+    measured = time.time() if now is None else now
     result = detector.tick(rows, cards, observe=observe, recipient=destination,
         notify=notify, read=read, release=release,
         checkpoint=lambda name, card: checkpoint(card),
-        fence=lambda name: lifecycle_lock(root, name), now=now,
+        fence=lambda name: lifecycle_lock(root, name), now=measured,
         release_admitted=selected == 'release', operator_release_only=True)
     # The already deployed held-work reader joins these lifecycle observations
     # to assigned work. No second brief board scan or private checkpoint payload.
-    import time
-    measured = time.time() if now is None else now
     findings = detector.snapshot()
     # The complete read includes inbox pointers for honest coverage accounting;
     # their recipient assignments are never work-release candidates.

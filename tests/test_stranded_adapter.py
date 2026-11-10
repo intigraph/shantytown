@@ -246,3 +246,15 @@ def test_stopped_administrator_cannot_receive_release_prerequisite(setup):
     result = run(setup, 10)
     assert ('work-1', 'administrator route UNKNOWN; no release') in result
     assert not setup.inbox.unread('admin')
+
+
+def test_natural_clock_census_matches_current_attention(setup):
+    """The scheduled caller omits now; its coverage count must still be honest."""
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    assert ('work-1', 'needs attention') in sweep(
+        setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert findings['work-1']['release_due'] is True
+    assert census['checked_at'] == findings['work-1']['checked_at']
+    assert census['owners']['worker'] == dict(work=1, inbox=0, release_due=1)
