@@ -40,7 +40,13 @@ and release-due accounting for ordinary and parked work in open, hooked,
 in-progress, blocked and deferred states. ASK/desk-class items (an `ASK ` title,
 an ASK label such as `desk`, `needs-stiwi`, `decision-needed` or
 `blocked:human`, or a human blocker) are decisions held for a person, not
-capacity: they stay with their owner and stay visible. Inbox recipient assignments
+capacity: they stay with their owner and stay visible. A `DESK:` title prefix counts the
+same as `ASK `. Release read-back compares only the governed fields (status,
+priority, labels, deferral, title, notes and similar), never derived counters
+such as `comments_total`, which the release's own comment changes. An earlier
+release recorded as UNKNOWN fences its owner until an exact read-back proves it:
+no assignee, and this release's own preservation comment present. Only then is
+it settled as released. The release journal keeps one entry per item. Inbox recipient assignments
 remain unchanged. Stop-record identity is part of the generation rechecked
 under the lifecycle lock; relaunch or changed stop evidence prevents release.
 Unassignment changes no title, notes, gate or deferral. In-progress work also

@@ -364,3 +364,64 @@ def test_operator_release_serves_priority_first_under_the_pass_cap(setup, monkey
     run(setup, 10)
     assert all(store[f'zz-hot-{i}']['assignee'] == '' for i in range(5))
     assert sum(r['assignee'] == '' for r in store.values()) == 40  # the cap holds
+
+
+def test_two_items_per_stopped_owner_both_release_through_the_real_sd_readback(setup, monkeypatch):
+    """aegis-byt close fixture: the real SdTracker CAS + read-back, 2 items per owner.
+
+    The first live pass released one item per owner and fenced each owner on a
+    false UNKNOWN. Here both items of every owner release in ONE pass.
+    """
+    from shantytown.sd import SdTracker
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept/' + card.name, branch='kept', head='0' * 40, checkpoint='kept'))
+    owners = ['c1', 'c2', 'c3']
+    for name in owners:
+        setup.cards[name] = Agent(name, 'worker', reports_to='lead', pane=name, host='test-host')
+        setup.states[name] = 'down'
+        FilesStops(setup.root / 'stopped').record(name, 0)
+    store = {}
+    for i, name in enumerate(owners):
+        store[f'{name}-a'] = dict(id=f'{name}-a', assignee=name, status='open', priority=1,
+                                  title='work', labels=[], revision=3)
+        store[f'{name}-b'] = dict(id=f'{name}-b', assignee=name, status='deferred', priority=2,
+                                  title='parked', labels=['blocked:external'], revision=7,
+                                  defer_until='2999-01-01T00:00:00Z')
+    store['desk-1'] = dict(id='desk-1', assignee='c1', status='open', priority=1,
+                           title='DESK: publish release - needs GO', labels=[], revision=2)
+    comments = {k: [dict(text='older')] for k in store}
+    def full(identity):
+        r = dict(store[identity])
+        return dict(r, comments=list(comments[identity]), comments_total=len(comments[identity]),
+                    comments_folded=0, dependency_count=1, dependents=[], updated_at='t%d' % r['revision'])
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    def sdk(identity, *args):
+        if args[0] == 'show':
+            return SimpleNamespace(returncode=0, stdout=json.dumps([full(identity)]))
+        assert args[0] == 'update'
+        flags = dict(a.split('=', 1) for a in args[2:] if a.startswith('--') and '=' in a)
+        item = store[identity]
+        if int(flags['--if-revision']) != item['revision']:
+            return SimpleNamespace(returncode=4, stdout='')
+        item.update(assignee=None, revision=item['revision'] + 1)
+        if flags.get('--status'):
+            item['status'] = flags['--status']
+        comments[identity].append(dict(text=flags['--transition-comment']))
+        return SimpleNamespace(returncode=0, stdout='{}')
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
+    setup.tracker = SimpleNamespace(
+        stranded_rows=lambda names: [copy.deepcopy(r) for r in store.values() if r['assignee'] in names],
+        stranded_read=tracker.stranded_read, release_stranded=tracker.release_stranded)
+
+    result = run(setup, 10)
+
+    assert not any('UNKNOWN' in f or 'unknown' in f for _, f in result), result
+    for name in owners:
+        assert store[f'{name}-a']['assignee'] is None and store[f'{name}-a']['status'] == 'open'
+        assert store[f'{name}-b']['assignee'] is None and store[f'{name}-b']['status'] == 'deferred'
+        assert store[f'{name}-b']['defer_until'] == '2999-01-01T00:00:00Z'
+    assert store['desk-1']['assignee'] == 'c1'
+    journal = json.loads((setup.root / 'stranded-work/release-intents.json').read_text())
+    assert sorted(e['outcome'] for e in journal.values()) == ['released'] * 6

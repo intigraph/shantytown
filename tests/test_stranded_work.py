@@ -266,6 +266,25 @@ def test_operator_release_preserves_parked_status_and_all_fields(world, status, 
     assert world.row == before | dict(assignee='', revision=before['revision'] + 1)
 
 
+def _operator_release(world):
+    """A release fake that accepts the operator path's keyword (the shared
+    world fake does not, so operator-path assertions there pass vacuously)."""
+    def release(current, comment, *, operator_stopped=False):
+        assert operator_stopped is True
+        world.writes.append((copy.deepcopy(current), json.loads(comment)))
+        world.row.update(assignee='', revision=world.row['revision'] + 1)
+        return 'released'
+    return release
+
+
+def test_operator_release_fake_positive_control(world):
+    """Control for the exclusion tests below: an ordinary item IS released."""
+    world.row.update(status='open', title='work', labels=[])
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    world.tick(10, operator_release_only=True, release=_operator_release(world))
+    assert len(world.writes) == 1 and world.row['assignee'] == ''
+
+
 @pytest.mark.parametrize('ask', [dict(title='ASK Stiwi: decide'), dict(title='ASK operator: retained'),
     dict(labels=['desk']), dict(labels=['needs-stiwi']), dict(labels=['decision-needed']),
     dict(labels=['blocked:human']), dict(blocker_kind='blocked:human')])
@@ -273,7 +292,7 @@ def test_operator_release_never_takes_ask_or_desk_class_items(world, ask):
     """A decision held for a person is not capacity; it stays with its owner."""
     world.row.update(status='open', **ask)
     world.observation.update(state='operator-stopped', intentional_stop=True)
-    world.tick(10, operator_release_only=True)
+    world.tick(10, operator_release_only=True, release=_operator_release(world))
     assert not world.writes
     assert world.row['assignee'] == 'worker'
 
@@ -433,3 +452,86 @@ def test_open_to_in_progress_race_never_releases(world):
     world.tick(T1 + 1, read=read)
     assert not world.writes
     assert world.row['assignee'] == 'worker'
+
+
+def _real_sd_read_shape(row, **changes):
+    """The SDK full read: governed fields plus derived counters."""
+    full = dict(row, comments_total=46, comments_folded=0, dependency_count=14,
+                dependents=[dict(id='other', status='open', priority=1)],
+                comments=[dict(text='older')], updated_at='2026-11-11T20:00:00Z')
+    full.update(changes)
+    return full
+
+
+@pytest.mark.parametrize('status', ['deferred', 'in_progress', 'open', 'blocked'])
+def test_release_readback_ignores_derived_counters_the_release_itself_bumps(monkeypatch, status):
+    """aegis-byt live defect: comments_total 46 -> 47 made every release UNKNOWN."""
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = _real_sd_read_shape(dict(id='work-1', status=status, assignee='worker', priority=0,
+        title='work', labels=['blocked:external'], revision=40,
+        defer_until='2026-11-12T14:00:00Z' if status == 'deferred' else None))
+    def sdk(identity, *args):
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        after = _real_sd_read_shape(row, assignee=None, revision=41, comments_total=47,
+            dependents=[dict(id='other', status='closed', priority=1)],
+            updated_at='2026-11-11T20:03:02Z',
+            comments=[dict(text='older'), dict(text='audit')],
+            status='open' if status == 'in_progress' else status)
+        return SimpleNamespace(returncode=0, stdout=json.dumps([after]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
+
+
+def test_release_readback_still_refuses_a_changed_governed_field(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = _real_sd_read_shape(dict(id='work-1', status='deferred', assignee='worker',
+        priority=0, title='work', labels=[], revision=40, defer_until='2026-11-12T14:00:00Z'))
+    def sdk(identity, *args):
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([_real_sd_read_shape(
+            row, assignee=None, revision=41, defer_until=None,
+            comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    with pytest.raises(RuntimeError, match='UNKNOWN'):
+        tracker.release_stranded(row, 'audit', operator_stopped=True)
+
+
+@pytest.mark.parametrize('title', ['DESK: publish v0.17 - needs GO', 'desk - decide', 'ASK Stiwi: x'])
+def test_operator_release_never_takes_desk_titled_items(world, title):
+    world.row.update(status='open', title=title, labels=[])
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    world.tick(10, operator_release_only=True, release=_operator_release(world))
+    assert not world.writes and world.row['assignee'] == 'worker'
+
+
+def test_unknown_release_reconciles_only_on_exact_marker_comment(tmp_path):
+    from shantytown.stranded_work import StrandedWork
+    service = StrandedWork(tmp_path)
+    service.root.mkdir(parents=True)
+    journal = {
+        'stranded-owner:a': dict(owner='w', item='done-1', outcome='unknown', comment='C1'),
+        'stranded-owner:b': dict(owner='w', item='still-1', outcome='unknown', comment='C2'),
+        'stranded-owner:c': dict(owner='v', item='nocomment-1', outcome='unknown', comment='C3'),
+        'stranded-owner:d': dict(owner='u', item='claimed-1', outcome='unknown', comment='C4'),
+    }
+    (service.root / 'release-intents.json').write_text(json.dumps(journal))
+    items = {'done-1': dict(assignee=None, comments=[dict(text='C1')]),
+             'still-1': dict(assignee='w', comments=[dict(text='C2')]),
+             'nocomment-1': dict(assignee=None, comments=[dict(text='other')]),
+             # released, then claimed from the pool by a live agent before this tick
+             'claimed-1': dict(assignee='live-agent', comments=[dict(text='C4')])}
+    data = {}
+    settled = service._reconcile(data, lambda i: items[i], now=5)
+    assert sorted(settled) == [('claimed-1', 'release reconciled: released'),
+                               ('done-1', 'release reconciled: released')]
+    after = json.loads((service.root / 'release-intents.json').read_text())
+    assert after['stranded-owner:a']['outcome'] == 'released'
+    assert after['stranded-owner:b']['outcome'] == 'unknown'
+    assert after['stranded-owner:c']['outcome'] == 'unknown'
+    assert after['stranded-owner:d']['outcome'] == 'released'
+    assert not service.unresolved_release('u')  # a pool claim must never fence the owner
+    assert not service.unresolved_release('x') and service.unresolved_release('w')
