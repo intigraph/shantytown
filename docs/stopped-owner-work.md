@@ -49,7 +49,9 @@ in-progress work is on no plate and outside ready work. Open, blocked and
 deferred work keep their status (aegis-byt). This class has its own pass bounds:
 one keyed notice per stopped owner and stop generation (at most 10 per pass),
 and up to 40 releases within 60 seconds. A whole stopped harness therefore
-drains in one pass, not one item per two intents. Notice bodies start with
+drains in one pass, not one item per two intents. Within this class work is served in
+priority order (P0 first), so the cap never leaves ready P0/P1 work behind
+parked lower-priority work. Notice bodies start with
 their marker, which is what every receipt reader matches; a body that does not
 would read back UNKNOWN and permanently refuse release. A dated stop
 can be recorded with `st agent stop NAME --resume-at ISO8601`; this requires a
