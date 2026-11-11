@@ -516,16 +516,22 @@ def test_unknown_release_reconciles_only_on_exact_marker_comment(tmp_path):
         'stranded-owner:a': dict(owner='w', item='done-1', outcome='unknown', comment='C1'),
         'stranded-owner:b': dict(owner='w', item='still-1', outcome='unknown', comment='C2'),
         'stranded-owner:c': dict(owner='v', item='nocomment-1', outcome='unknown', comment='C3'),
+        'stranded-owner:d': dict(owner='u', item='claimed-1', outcome='unknown', comment='C4'),
     }
     (service.root / 'release-intents.json').write_text(json.dumps(journal))
     items = {'done-1': dict(assignee=None, comments=[dict(text='C1')]),
              'still-1': dict(assignee='w', comments=[dict(text='C2')]),
-             'nocomment-1': dict(assignee=None, comments=[dict(text='other')])}
+             'nocomment-1': dict(assignee=None, comments=[dict(text='other')]),
+             # released, then claimed from the pool by a live agent before this tick
+             'claimed-1': dict(assignee='live-agent', comments=[dict(text='C4')])}
     data = {}
     settled = service._reconcile(data, lambda i: items[i], now=5)
-    assert settled == [('done-1', 'release reconciled: released')]
+    assert sorted(settled) == [('claimed-1', 'release reconciled: released'),
+                               ('done-1', 'release reconciled: released')]
     after = json.loads((service.root / 'release-intents.json').read_text())
     assert after['stranded-owner:a']['outcome'] == 'released'
     assert after['stranded-owner:b']['outcome'] == 'unknown'
     assert after['stranded-owner:c']['outcome'] == 'unknown'
+    assert after['stranded-owner:d']['outcome'] == 'released'
+    assert not service.unresolved_release('u')  # a pool claim must never fence the owner
     assert not service.unresolved_release('x') and service.unresolved_release('w')

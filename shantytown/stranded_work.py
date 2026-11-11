@@ -318,10 +318,13 @@ class StrandedWork:
     def _reconcile(self, data, read, now, limit=20):
         """Settle earlier 'attempting'/'unknown' releases by exact read-back.
 
-        Only positive proof settles one: the item has no assignee AND carries
-        this release's own preservation comment, byte for byte. Anything else
-        (still assigned, comment absent, unreadable) stays unknown and keeps
-        fencing its owner. No write is made here (aegis-byt).
+        The release CAS writes its preservation comment atomically, so that
+        exact comment, byte for byte, proves the release committed. The item
+        must also no longer belong to the stopped owner. It may since have
+        been claimed by a live agent from the pool, which is the point of
+        releasing it, so "no assignee" is NOT required (Muldoon, aegis-byt).
+        Anything else (comment absent, still the stopped owner's, unreadable)
+        stays unknown and keeps fencing. No write is made here.
         """
         path = self.root / 'release-intents.json'
         journal = json.loads(path.read_text()) if path.exists() else {}
@@ -337,7 +340,7 @@ class StrandedWork:
             except Exception:
                 continue
             comments = current.get('comments')
-            if (not current.get('assignee') and isinstance(comments, list)
+            if (owner(current) != entry.get('owner') and isinstance(comments, list)
                     and any(isinstance(c, dict) and c.get('text') == entry.get('comment')
                             for c in comments)):
                 entry.update(outcome='released', reconciled_at=now)
