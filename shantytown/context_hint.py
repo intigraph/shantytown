@@ -222,13 +222,36 @@ def _emit(root, card, payload=None) -> bool:
                         tool_nudge=old.get("tool_nudge"),
                         state=reading.state, detail=reading.label(), exception=exception,
                         ceiling=({"measure": "context", "measured": reading.pct,
-                                  "limit": limits.threshold_pct} if category in ("high", "hard") else None))
+                                  "limit": limits.threshold_pct} if category in ("high", "hard") else None),
+                        request_told=old.get("request_told") if same_session else None)
+        pending = _pending_request(root, card.name) if due and category != "low" else None
+        told_now = False
+        if pending is not None:
+            # aegis-zxor: the agent already did what this hook asks. Blocking
+            # every stop for a cycle that only something outside the session can
+            # serve gave an agent a block it could not satisfy on every turn.
+            # Say so ONCE per request and session, then let stops through.
+            if snapshot["request_told"] == pending["key"]:
+                due = False
+            else:
+                snapshot["request_told"] = pending["key"]
+                told_now = True
         try:
             _save(path, snapshot)
         except OSError as exc:
             print(f"context hint: cannot retain observation ({type(exc).__name__})", file=sys.stderr)
         if not due:
             return False
+        if told_now:
+            message = (f"CONTEXT: {reading.label()}. Your cycle request is already "
+                       f"pending ({pending['state']}). Nothing more is needed from "
+                       "this session, and this hook will not block again for that "
+                       "request: keep to operations that leave work safe. A lead can "
+                       f"serve it with `st agent cycle {card.name} --no-in-place`; "
+                       f"`st agent cycle {card.name} --cancel` withdraws it.")
+            print(json.dumps({"decision": "block", "reason": message,
+                              "systemMessage": message}))
+            return True
         if category in ("high", "hard"):
             message = (f"CONTEXT HINT: {reading.label()}; configured hint at "
                        f"{limits.threshold_pct:g}%. Write "
@@ -264,6 +287,34 @@ def _emit(root, card, payload=None) -> bool:
     except Exception as exc:  # a reader failure must not prevent an agent stopping
         print(f"context UNKNOWN: hint reader failed ({type(exc).__name__})", file=sys.stderr)
         return False
+
+
+def _pending_request(root, agent):
+    """A pending request THIS session can do nothing more about; else None.
+
+    stop_policy already lets a fresh, unrefused request through silently. What
+    still blocked every stop was a request the agent cannot move (aegis-zxor):
+    an in-place clear sent and unverified, or a refusal naming no tree (a pane
+    state, a baseline). A refusal that names trees still blocks, because
+    committing them is the agent's to do; an automatic request never silences.
+    A read failure is None, so the ordinary hint still speaks.
+    """
+    try:
+        from . import cycle, soft_cycle
+        record = cycle.Requests(root).pending().get(agent)
+        if record is None or record.get("auto"):
+            return None
+        refused = record.get("refused") or {}
+        if soft_cycle.pending(root, agent):
+            state = "an in-place clear was sent and is not yet verified"
+        elif refused and not refused.get("paths"):
+            state = "not served yet: " + str(refused.get("reason") or "refused")[:160]
+        else:
+            return None
+        return dict(key=record.get("requested_at") or record.get("checkpoint"),
+                    state=state)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def crew_label(root, card) -> str | None:

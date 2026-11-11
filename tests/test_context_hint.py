@@ -303,7 +303,11 @@ def test_nonserving_cycle_does_not_silence_hard_context_hint(
     requests.request("someone-else" if kind == "other-agent" else card.name,
                      "checkpoint", auto=kind == "automatic")
     if kind == "refused":
-        requests.mark_refused(card.name, "tracked changes")
+        # A tree refusal names its tree; committing it is the agent's to do,
+        # so it keeps blocking (aegis-zxor silences only path-less refusals).
+        class Risk:
+            path = "/w/quipu-wt/reader"
+        requests.mark_refused(card.name, "tracked changes", [Risk()])
     if kind == "stale":
         monkeypatch.setattr(cycle.Requests, "age", lambda *_: cycle.stuck_after() + 1)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
