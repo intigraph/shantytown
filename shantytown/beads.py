@@ -558,7 +558,8 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     # not-started, then lowest id (deterministic across runs and across backends).
     mine.sort(key=lambda x: plate_key(x.get("status"), _priority(x),
                                       x.get("id", ""), ready_ids, rank=x.get("rank"),
-                                      due_at=x.get("due_at"), created_at=x.get("created_at")))
+                                      due_at=x.get("due_at"), created_at=x.get("created_at"),
+                                      lane=x.get("lane")))
     top = mine[0]
     item = WorkItem(
         id=top.get("id", ""),

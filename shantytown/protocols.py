@@ -630,9 +630,20 @@ def is_blocked(status: str | None, ident: str, ready_ids: "set[str] | None") -> 
     return ident not in ready_ids
 
 
+#: Capped Seeds lanes in serving order (aegis-6vto.4, Stiwi 2026-11-11 ruling:
+#: "Plates are served from Now, then Next by rank"; P0-P4 remains severity).
+#: Later, an absent lane (historical items) or any other value keeps the
+#: priority-first order below, unchanged.
+PLATE_LANES = {"now": 0, "next": 1}
+
+
+def lane_order(lane) -> int:
+    return PLATE_LANES.get(lane.lower(), 2) if isinstance(lane, str) else 2
+
+
 def plate_key(status: str | None, priority: "int | None", ident: str,
               ready_ids: "set[str] | None" = None, *, rank=None, due_at=None,
-              created_at=None) -> tuple:
+              created_at=None, lane=None) -> tuple:
     """The ONE plate ordering, shared by every backend (aegis-fxx3y).
 
     Lifecycle/readiness precede priority, explicit work rank, due and age:
@@ -646,6 +657,12 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     3. **priority**, stated ones first and in order. Unstated sorts last rather
        than defaulting: `_priority` refuses to invent a 2, and an item whose
        importance nobody stated must not outrank a stated P1 by accident.
+    2b. **lane** (aegis-6vto.4): among items in the same lifecycle and
+       readiness, a Now item precedes a Next item, which precedes everything
+       else. Within Now and Next, priority does NOT order (it is severity, not
+       sequence); work rank does, then due, then oldest. Later and unlaned
+       items fall through to keys 3-5 exactly as before, so a board with no
+       lanes set orders identically to the previous key.
     4. **work rank**, exact decimals, ranked before unranked within priority.
        Ties use due then creation time; unranked uses oldest first.
     5. **id**, last, purely as a deterministic tiebreak.
@@ -659,10 +676,12 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     a forked ordering means the same item can be plate for one caller and not for
     another, which is the divergence the two-implementation rule exists to catch.
     """
+    bucket = lane_order(lane)
     return (
         _PLATE_RANK.get(status, 2),
         1 if is_blocked(status, ident, ready_ids) else 0,
-        (1, 0) if priority is None else (0, priority),
+        bucket,
+        (0, 0) if bucket < 2 else (1, 0) if priority is None else (0, priority),
         *rank_order(rank, due_at, created_at),
         ident,
     )

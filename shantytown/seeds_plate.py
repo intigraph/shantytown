@@ -37,6 +37,7 @@ FIELDS = {
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
     SEEDS + "ontology/rank": "rank",
+    SEEDS + "ontology/lane": "lane",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -729,9 +730,12 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
 # per graph per field: measured on Quipu 0.16.x, 25 subjects cost 6004 against
 # the server's structural limit of 4096 (~240 each), so EVERY first attempt at
 # 25 was refused and halved: 25 wasted ~300KB requests per read, each a 400 in
-# the server log. 16 subjects cost ~3843. The halving below stays as the
-# fallback if the limit drops or fields are added.
-DEFERRED_FIELD_BATCH = 16
+# the server log. The halving below stays as the fallback if the limit drops.
+# Derived, not hand-set: cost = subjects x 2 graphs x (FIELDS + notes) x 6 + 4,
+# so adding a field (seeds:lane, aegis-6vto.4) cannot silently push the first
+# attempt over the limit again. 21 fields gave 16; 22 give 15.
+_STRUCTURAL_LIMIT = 4096
+DEFERRED_FIELD_BATCH = (_STRUCTURAL_LIMIT - 4) // (2 * (len(FIELDS) + 1) * 6)
 
 
 def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
