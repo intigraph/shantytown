@@ -28,7 +28,8 @@ def setup(tmp_path, monkeypatch):
     registry = SimpleNamespace(all=lambda: Answer.complete_read(list(cards.values()), how='fixture'),
                                get=lambda name: cards[name])
     row = dict(id='work-1', assignee='worker', status='in_progress', priority=0, title='work', labels=[])
-    tracker = SimpleNamespace(stranded_rows=lambda owners: [dict(row)])
+    # Owner-scoped like the real Seeds projection: only the named owners' rows.
+    tracker = SimpleNamespace(stranded_rows=lambda owners: [dict(row)] if row['assignee'] in owners else [])
     states = dict(worker='down', lead='down', admin='live', remote='down')
     panes = SimpleNamespace(owner_state=lambda pane: states[pane])
     inbox = FilesInbox(tmp_path / 'inbox')
@@ -61,6 +62,9 @@ def test_error_routes_past_down_lead_and_persistent_held_reader_fact(setup):
 @pytest.mark.parametrize('host', [None, 'other-host'])
 def test_foreign_or_unscoped_owner_is_unknown_never_down(setup, host):
     setup.cards['worker'] = replace(setup.cards['worker'], host=host)
+    # A row whose owner card moved off-host during the pass (another owner's
+    # scoped read still returned it) must be UNKNOWN, never down.
+    setup.tracker.stranded_rows = lambda owners: [dict(setup.row)] if owners == ['lead'] else []
     assert run(setup) == [('work-1', 'owner liveness UNKNOWN')]
     assert not setup.inbox.unread('admin')
     assert OwnedWork(setup.root).snapshot() == {}
@@ -190,7 +194,7 @@ def test_complete_assignee_census_counts_300_parked_work_and_inbox_separately(se
     scopes = []
     def census(owners):
         scopes.append(owners)
-        return copy.deepcopy(rows)
+        return copy.deepcopy(rows) if owners == ['worker'] else []
     setup.tracker.stranded_rows = census
     setup.tracker.ranking_rows = lambda: pytest.fail('ranking is not a complete assignee census')
     FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
@@ -202,7 +206,11 @@ def test_complete_assignee_census_counts_300_parked_work_and_inbox_separately(se
     proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
     assert proof['complete'] is True
     assert proof['owners']['worker'] == dict(work=300, inbox=241, release_due=300)
-    assert scopes == [['admin', 'lead', 'worker']]
+    assert proof['owners']['lead'] == dict(work=0, inbox=0, release_due=0)
+    # aegis-ljb: only owners not observed live are read, one per bounded read.
+    assert scopes == [['lead'], ['worker']]
+    assert proof['scope'] == 'local owners not observed live'
+    assert proof['live_unread'] == ['admin']
 
 
 @pytest.mark.parametrize('state', ['live', 'unknown'])
@@ -258,3 +266,44 @@ def test_natural_clock_census_matches_current_attention(setup):
     assert findings['work-1']['release_due'] is True
     assert census['checked_at'] == findings['work-1']['checked_at']
     assert census['owners']['worker'] == dict(work=1, inbox=0, release_due=1)
+
+
+def test_live_owner_inbox_is_never_read_so_census_fits_the_plate_budget(setup):
+    """aegis-ljb: the whole-roster read crashed on the plate field budget."""
+    scopes = []
+    def census(owners):
+        scopes.append(owners)
+        if owners != ['worker']:
+            pytest.fail(f'live owner read: {owners}')
+        return [dict(setup.row)]
+    setup.tracker.stranded_rows = census
+    setup.states['lead'] = 'live'
+    run(setup, 10)
+    assert scopes == [['worker']]
+    census_proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert set(census_proof['owners']) == {'worker'}
+    assert census_proof['live_unread'] == ['admin', 'lead']
+
+
+def test_all_live_roster_makes_no_tracker_read_and_resolves_prior_attention(setup):
+    run(setup, 0)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert findings['work-1']['active']
+    setup.states.update(worker='live', lead='live')
+    setup.tracker.stranded_rows = lambda owners: pytest.fail('no non-live owner to read')
+    assert run(setup, 10) == []
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert findings['work-1']['active'] is False
+    census_proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert census_proof['owners'] == {} and census_proof['complete'] is True
+
+
+def test_one_failed_owner_read_still_fails_the_whole_sweep(setup):
+    def census(owners):
+        if owners == ['worker']:
+            raise ValueError('owner plate unreadable: plate field budget reached')
+        return []
+    setup.tracker.stranded_rows = census
+    with pytest.raises(ValueError, match='plate field budget'):
+        run(setup, 10)
+    assert not (setup.root / 'stranded-work/census.json').exists()

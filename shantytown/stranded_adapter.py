@@ -60,7 +60,6 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     if not callable(projection):
         raise ValueError('stranded work requires complete bounded assignee census')
     local_owners = sorted(name for name, card in cards.items() if card.host == host)
-    rows = projection(local_owners)
     stop_store = FilesStops(Path(root) / 'stopped')
     service = OwnedWork(root)
     def observe(name, card):
@@ -131,6 +130,17 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     release = getattr(tracker, 'release_stranded', None)
     if selected == 'release' and (not callable(read) or not callable(release)):
         raise ValueError('revision-fenced stranded release unsupported')
+    # aegis-ljb: a live owner can produce no finding, and a missing row
+    # resolves prior attention exactly as an observed live owner does. So read
+    # only owners not observed live, one owner per bounded read. The
+    # whole-roster read needed ~64k field rows (6,285 items, mostly inbox
+    # pointers) against the fixed 10,000-row plate budget and crashed on
+    # every natural pass. Any failed owner read still fails the whole sweep.
+    scoped = [name for name in local_owners
+              if observe(name, cards[name])['state'] != 'live']
+    rows = []
+    for name in scoped:
+        rows.extend(projection([name]))
     detector = StrandedWork(root)
     # One sweep timestamp joins attention to coverage. Sampling again after
     # tick made natural-clock runs report zero due work despite due findings.
@@ -148,7 +158,7 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     # their recipient assignments are never work-release candidates.
     from .files import write_json_atomic
     from .inbox import is_message
-    census = {}
+    census = {name: dict(work=0, inbox=0, release_due=0) for name in scoped}
     for row in rows:
         name = (row.get('assignee') or '').rsplit('/', 1)[-1]
         counts = census.setdefault(name, dict(work=0, inbox=0, release_due=0))
@@ -160,7 +170,10 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
                 and finding.get('release_due')):
             counts['release_due'] += 1
     write_json_atomic(detector.root / 'census.json',
-                      dict(checked_at=measured, complete=True, owners=census))
+                      dict(checked_at=measured, complete=True,
+                           scope='local owners not observed live',
+                           owners=census,
+                           live_unread=sorted(set(local_owners) - set(scoped))))
     for name in {entry['owner'] for entry in findings.values()}:
         card = cards.get(name)
         evidence = observe(name, card)
