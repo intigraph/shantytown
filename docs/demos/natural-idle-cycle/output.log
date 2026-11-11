@@ -1,0 +1,13 @@
+Script started on 2026-11-10 04:41:54-05:00 [COMMAND="/usr/bin/python3 docs/demos/natural-idle-cycle/probe.py" <not executed on terminal>]
+base 165e24e7
+automatic idle success: registered=false receipt=false verdict=UNKNOWN
+refused cycle: registered=false receipt=false verdict=UNKNOWN
+manual cycle: registered=false receipt=false verdict=UNKNOWN
+foreign journal unit: registered=false receipt=false verdict=UNKNOWN
+candidate source
+automatic idle success: registered=true receipt=true verdict=MET
+refused cycle: registered=true receipt=false verdict=UNKNOWN
+manual cycle: registered=true receipt=false verdict=UNKNOWN
+foreign journal unit: registered=true receipt=true verdict=UNKNOWN
+
+Script done on 2026-11-10 04:41:54-05:00 [COMMAND_EXIT_CODE="0"]
