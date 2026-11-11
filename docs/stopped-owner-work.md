@@ -36,11 +36,22 @@ restarts the duration proof. Their deferred/decision/parked work stays untouched
 Release mode applies only to a recorded operator stop plus a successful local
 process observation proving the owner down. A live or unreadable process cannot
 be overridden by a stop file. This authoritative class gets immediate attention
-and release-due accounting, including ordinary, ASK and parked work in open,
-hooked, in-progress, blocked and deferred states. Inbox recipient assignments
+and release-due accounting for ordinary and parked work in open, hooked,
+in-progress, blocked and deferred states. ASK/desk-class items (an `ASK ` title,
+an ASK label such as `desk`, `needs-stiwi`, `decision-needed` or
+`blocked:human`, or a human blocker) are decisions held for a person, not
+capacity: they stay with their owner and stay visible. Inbox recipient assignments
 remain unchanged. Stop-record identity is part of the generation rechecked
 under the lifecycle lock; relaunch or changed stop evidence prevents release.
-No status, title, notes, gate or deferral is changed by unassignment. A dated stop
+Unassignment changes no title, notes, gate or deferral. In-progress work also
+returns to open in the same revision-fenced write, because unassigned
+in-progress work is on no plate and outside ready work. Open, blocked and
+deferred work keep their status (aegis-byt). This class has its own pass bounds:
+one keyed notice per stopped owner and stop generation (at most 10 per pass),
+and up to 40 releases within 60 seconds. A whole stopped harness therefore
+drains in one pass, not one item per two intents. Notice bodies start with
+their marker, which is what every receipt reader matches; a body that does not
+would read back UNKNOWN and permanently refuse release. A dated stop
 can be recorded with `st agent stop NAME --resume-at ISO8601`; this requires a
 future timestamp with timezone, and cannot be combined with `--after-turn`.
 Existing undated stop records remain readable.

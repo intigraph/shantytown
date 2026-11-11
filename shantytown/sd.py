@@ -94,8 +94,14 @@ class SdTracker(BrTracker):
                 or not operator_stopped and row.get('status') != 'open'
                 or type(row.get('revision')) is not int or row['revision'] < 1):
             raise ValueError('stranded release requires eligible revision-bound row')
+        # In-progress work with no assignee is in no plate and outside ready
+        # work: the orphan that dispatch.repool exists to prevent. It returns
+        # to open in the same CAS. Deferred/blocked/open keep their status:
+        # an assignee-only release never ends a deferral or a gate (aegis-byt).
+        reopen = operator_stopped and row.get('status') == 'in_progress'
         result = self._bd_for(row['id'], 'update', row['id'],
-            '--assignee=', f'--if-revision={row["revision"]}',
+            '--assignee=', *(['--status=open'] if reopen else []),
+            f'--if-revision={row["revision"]}',
             '--transition-comment=' + comment, '--json')
         if result.returncode == 4:
             return 'conflict'  # SDK guarantees nothing was committed.
@@ -105,7 +111,10 @@ class SdTracker(BrTracker):
         current = self.stranded_read(row['id'])
         comments = current.get('comments')
         preserved = set(row) - {'assignee', 'revision', 'updated_at', 'comments'}
+        if reopen:
+            preserved.discard('status')
         if (any(current.get(key) != row.get(key) for key in preserved)
+                or reopen and current.get('status') != 'open'
                 or current.get('assignee')
                 or current['revision'] <= row['revision']
                 or not isinstance(comments, list)

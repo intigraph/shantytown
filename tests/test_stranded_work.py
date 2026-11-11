@@ -250,8 +250,8 @@ def test_sdk_conflict_or_failure_never_falls_back_to_generic_update(monkeypatch,
 
 
 @pytest.mark.parametrize('status', ['open', 'hooked', 'in_progress', 'blocked', 'deferred'])
-def test_operator_release_preserves_parked_ask_status_and_all_fields(world, status, monkeypatch):
-    world.row.update(status=status, title='ASK operator: retained', labels=['needs-stiwi'],
+def test_operator_release_preserves_parked_status_and_all_fields(world, status, monkeypatch):
+    world.row.update(status=status, title='parked work', labels=['blocked:external'],
                      defer_until='2999-01-01T00:00:00Z', notes='resume_when: gate')
     world.observation.update(state='operator-stopped', intentional_stop=True)
     writes = []
@@ -266,6 +266,18 @@ def test_operator_release_preserves_parked_ask_status_and_all_fields(world, stat
     assert world.row == before | dict(assignee='', revision=before['revision'] + 1)
 
 
+@pytest.mark.parametrize('ask', [dict(title='ASK Stiwi: decide'), dict(title='ASK operator: retained'),
+    dict(labels=['desk']), dict(labels=['needs-stiwi']), dict(labels=['decision-needed']),
+    dict(labels=['blocked:human']), dict(blocker_kind='blocked:human')])
+def test_operator_release_never_takes_ask_or_desk_class_items(world, ask):
+    """A decision held for a person is not capacity; it stays with its owner."""
+    world.row.update(status='open', **ask)
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    world.tick(10, operator_release_only=True)
+    assert not world.writes
+    assert world.row['assignee'] == 'worker'
+
+
 def test_operator_release_rechecks_stop_under_lifecycle_fence(world):
     world.observation.update(state='operator-stopped', intentional_stop=True)
     def checkpoint(*_):
@@ -275,12 +287,12 @@ def test_operator_release_rechecks_stop_under_lifecycle_fence(world):
     assert not world.writes
 
 
-@pytest.mark.parametrize('status', ['open', 'in_progress', 'blocked', 'deferred'])
+@pytest.mark.parametrize('status', ['open', 'blocked', 'deferred'])
 def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch, status):
     from shantytown.sd import SdTracker
     tracker = SdTracker(store='/synthetic/store', prefix='work')
     row = dict(id='work-1', status=status, assignee='worker', priority=1,
-               title='ASK operator: retained', labels=['desk'], revision=7,
+               title='parked work', labels=['blocked:external'], revision=7,
                notes='resume_when: gate', defer_until='2999-01-01T00:00:00Z')
     calls = []
     def sdk(identity, *args):
@@ -293,6 +305,40 @@ def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch,
     assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
     assert calls[0] == ('update', 'work-1', '--assignee=', '--if-revision=7',
                         '--transition-comment=audit', '--json')
+
+
+def test_operator_sdk_returns_in_progress_work_to_open_in_the_same_cas(monkeypatch):
+    """An unassigned in_progress item is on no plate and outside ready work."""
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='in_progress', assignee='worker', priority=0,
+               title='work', labels=[], revision=7, notes='checkpoint')
+    calls = []
+    def sdk(identity, *args):
+        calls.append(args)
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(assignee='', status='open', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
+    assert calls[0] == ('update', 'work-1', '--assignee=', '--status=open',
+                        '--if-revision=7', '--transition-comment=audit', '--json')
+
+
+def test_operator_sdk_in_progress_readback_must_show_open(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='in_progress', assignee='worker', priority=0,
+               title='work', labels=[], revision=7)
+    def sdk(identity, *args):
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(assignee='', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    with pytest.raises(RuntimeError, match='UNKNOWN'):
+        tracker.release_stranded(row, 'audit', operator_stopped=True)
 
 
 def test_operator_sdk_refuses_to_claim_release_when_parking_changed(monkeypatch):
