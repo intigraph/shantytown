@@ -309,7 +309,7 @@ def test_operator_sdk_refuses_to_claim_release_when_parking_changed(monkeypatch)
         tracker.release_stranded(row, 'audit', operator_stopped=True)
 
 
-def test_stranded_sdk_census_uses_owned_waiting_and_message_projection(monkeypatch):
+def test_stranded_sdk_census_uses_owned_waiting_work_projection_without_messages(monkeypatch):
     from shantytown.sd import SdTracker
     tracker = SdTracker(store='/synthetic/store', prefix='work')
     monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
@@ -322,7 +322,7 @@ def test_stranded_sdk_census_uses_owned_waiting_and_message_projection(monkeypat
     monkeypatch.setattr('shantytown.seeds_plate.owner_rows', read)
     assert tracker.stranded_rows(['worker']) == [dict(id='work-1')]
     assert calls == [('proof', None, dict(timeout=tracker.timeout,
-        plate_owners=('worker',), capacity=True, include_deferred=True, include_messages=True))]
+        plate_owners=('worker',), capacity=True, include_deferred=True, include_messages=False))]
 
 
 def test_attention_not_cleared_by_unreadable_metadata(world):

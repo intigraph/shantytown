@@ -182,7 +182,7 @@ def test_malformed_cycle_ledger_is_unknown(setup):
     assert not setup.inbox.unread('admin')
 
 
-def test_complete_assignee_census_counts_300_parked_work_and_inbox_separately(setup):
+def test_complete_assignee_census_counts_300_parked_work_and_skips_inbox(setup):
     rows = [dict(setup.row, id=f'work-{i}', status='deferred',
                  defer_until='2999-01-01T00:00:00Z', labels=['blocked:external'],
                  title='ASK operator: retained') for i in range(300)]
@@ -201,7 +201,8 @@ def test_complete_assignee_census_counts_300_parked_work_and_inbox_separately(se
                for row in findings.values())
     proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
     assert proof['complete'] is True
-    assert proof['owners']['worker'] == dict(work=300, inbox=241, release_due=300)
+    assert proof['owners']['worker'] == dict(work=300, release_due=300)
+    assert proof['inbox_pointers'] == 'not read; never release candidates'
     assert scopes == [['admin', 'lead', 'worker']]
 
 
@@ -257,4 +258,4 @@ def test_natural_clock_census_matches_current_attention(setup):
     census = json.loads((setup.root / 'stranded-work/census.json').read_text())
     assert findings['work-1']['release_due'] is True
     assert census['checked_at'] == findings['work-1']['checked_at']
-    assert census['owners']['worker'] == dict(work=1, inbox=0, release_due=1)
+    assert census['owners']['worker'] == dict(work=1, release_due=1)

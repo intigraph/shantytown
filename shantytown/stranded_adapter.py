@@ -144,23 +144,26 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     # The already deployed held-work reader joins these lifecycle observations
     # to assigned work. No second brief board scan or private checkpoint payload.
     findings = detector.snapshot()
-    # The complete read includes inbox pointers for honest coverage accounting;
-    # their recipient assignments are never work-release candidates.
+    # Inbox pointers are not read: they are never work-release candidates, and
+    # hydrating thousands of them overflowed the bounded census (aegis-byt).
+    # The census says so rather than reporting a count of zero it never took.
     from .files import write_json_atomic
     from .inbox import is_message
     census = {}
     for row in rows:
+        if is_message(row.get('title', '')):
+            continue
         name = (row.get('assignee') or '').rsplit('/', 1)[-1]
-        counts = census.setdefault(name, dict(work=0, inbox=0, release_due=0))
-        message = is_message(row.get('title', ''))
-        counts['inbox' if message else 'work'] += 1
+        counts = census.setdefault(name, dict(work=0, release_due=0))
+        counts['work'] += 1
         finding = findings.get(row['id'], {})
-        if (not message and finding.get('checked_at') == measured
+        if (finding.get('checked_at') == measured
                 and finding.get('evidence') == 'operator-stopped'
                 and finding.get('release_due')):
             counts['release_due'] += 1
     write_json_atomic(detector.root / 'census.json',
-                      dict(checked_at=measured, complete=True, owners=census))
+                      dict(checked_at=measured, complete=True, owners=census,
+                           inbox_pointers='not read; never release candidates'))
     for name in {entry['owner'] for entry in findings.values()}:
         card = cards.get(name)
         evidence = observe(name, card)

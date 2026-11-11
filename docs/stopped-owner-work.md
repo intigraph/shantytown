@@ -13,8 +13,11 @@ budget ends, so a capped mutation pass cannot masquerade as an empty census.
 The sweep requires a complete crew census and the selected tracker's complete
 bounded assignee projection, including owned blocked/deferred work. The ranking
 projection is insufficient because it omits owned waiting work. Inbox pointers
-are counted separately and never unassigned. Each pass writes the complete
-per-owner work, inbox and operator-stopped release-due counts to
+are excluded from the query and never unassigned: with thousands of open
+pointers, hydrating them overflowed the bounded field budget and every pass
+refused (aegis-byt). The census records `inbox_pointers` as not read rather
+than a zero it never measured. Each pass writes the complete per-owner work and
+operator-stopped release-due counts to
 `<crew-root>/stranded-work/census.json`. A partial read refuses before mutation;
 there is no generic board-list fallback. A card's explicit host must match the configured local host.
 Remote or unscoped owners and failed/malformed process reads are UNKNOWN.

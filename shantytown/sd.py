@@ -792,7 +792,13 @@ class SdTracker(BrTracker):
         return [row for row in candidates if row["id"] in unblocked], active
 
     def stranded_rows(self, owners):
-        """Complete owner-scoped census, including parked work and messages."""
+        """Complete owner-scoped census of parked and active WORK.
+
+        Inbox pointers are excluded at the query. They are never release
+        candidates, and hydrating them overflowed the plate field budget once
+        open pointers reached the thousands: every pass then refused, so no
+        work was ever observed or released (aegis-byt).
+        """
         if not self._use_remote_projection():
             raise ValueError('stranded owner census requires native Seeds projection')
         if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
@@ -800,7 +806,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows
         return owner_rows(self.prove_store(), None, timeout=self.timeout,
                           plate_owners=tuple(owners), capacity=True,
-                          include_deferred=True, include_messages=True).exact()
+                          include_deferred=True, include_messages=False).exact()
 
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""
