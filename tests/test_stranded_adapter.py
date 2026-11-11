@@ -342,3 +342,25 @@ def test_attention_notice_reads_back_as_delivered(setup):
     assert finding['notice'] == 'delivered'
     message, = setup.inbox.unread('admin')
     assert message.body.startswith(finding['marker'] + ' ')
+
+
+def test_operator_release_serves_priority_first_under_the_pass_cap(setup, monkeypatch):
+    """With more release-due work than the cap, every P0/P1 item goes first."""
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept', branch='kept', head='0' * 40, checkpoint='kept'))
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    store = {f'work-{i:03d}': dict(id=f'work-{i:03d}', assignee='worker', status='deferred',
+             priority=4, title='parked', labels=[], revision=1) for i in range(60)}
+    store.update({f'zz-hot-{i}': dict(id=f'zz-hot-{i}', assignee='worker', status='open',
+                  priority=i % 2, title='work', labels=[], revision=1) for i in range(5)})
+    def release(row, comment, *, operator_stopped=False):
+        current = store[row['id']]
+        current.update(assignee='', revision=current['revision'] + 1)
+        return 'released'
+    setup.tracker.stranded_rows = lambda owners: [copy.deepcopy(r) for r in store.values()]
+    setup.tracker.stranded_read = lambda identity: copy.deepcopy(store[identity])
+    setup.tracker.release_stranded = release
+    run(setup, 10)
+    assert all(store[f'zz-hot-{i}']['assignee'] == '' for i in range(5))
+    assert sum(r['assignee'] == '' for r in store.values()) == 40  # the cap holds

@@ -130,8 +130,14 @@ class StrandedWork:
                         previous.update(evidence='UNKNOWN', checked_at=now)
                     else:
                         previous.update(active=False, resolved_at=now)
-            ordered = sorted(active.items(), key=lambda pair:
-                (data.get(pair[0], {}).get('checked_at', -1), pair[0]))
+            # Oldest observation first keeps coverage fair across capped passes.
+            # Operator-stop release serves priority first (P0 before P4), so the
+            # release cap can never leave ready P0/P1 work behind lower-priority
+            # parked work (aegis-byt metric: 0 within one pass).
+            ordered = sorted(active.items(), key=lambda pair: (
+                (pair[1]['priority'] if operator_release_only
+                 and type(pair[1].get('priority')) is int else 0),
+                data.get(pair[0], {}).get('checked_at', -1), pair[0]))
             for identity, row in ordered:
                 if clock() >= deadline and not operator_release_only:
                     result.append((identity, 'pass budget exhausted; remaining evidence unchanged'))
