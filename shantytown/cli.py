@@ -2422,6 +2422,13 @@ def build_parser() -> argparse.ArgumentParser:
     # GUARD before printing "would", or the preview an operator reads to authorise
     # a cycle would be silent about the work it is about to strand.
     cy.add_argument("-n", "--dry-run", action="store_true")
+    cy.add_argument("--cancel", action="store_true",
+                    help="WITHDRAW the agent's pending cycle request and any "
+                         "recorded in-place clear, and type nothing. The agent "
+                         "itself, a lead or an administrator may cancel; an "
+                         "operator shell with no $SHANTY_AGENT may too. Use it "
+                         "for a request a relaunch already served, or one that "
+                         "cannot complete, instead of editing the ledger")
     # Internal: the detached waiter a --self request starts (aegis-oj2z7m).
     cy.add_argument("--serve-request", action="store_true", help=argparse.SUPPRESS)
     cy.add_argument("--no-in-place", action="store_true",
@@ -11037,6 +11044,62 @@ def _record_cycle_refusal(root, agent, reason, risks):
               "cycle remains refused", file=sys.stderr)
 
 
+def _cancel_cycle_request(a) -> int:
+    """`st agent cycle <who> --cancel`: withdraw a request; never touch a pane.
+
+    aegis-zxor: a served or uncompletable request had no withdraw verb, so leads
+    removed entries from notify/cycle-requests.json by hand. This is the same
+    removal, under the same lifecycle lock the servers take, so a waiter or tend
+    pass mid-cycle finishes or stands down instead of racing the edit.
+    """
+    from . import cycle as cycle_mod, soft_cycle
+    caller = os.environ.get("SHANTY_AGENT", "").strip()
+    agent_name = (a.agent or caller).strip()
+    if not agent_name:
+        print("  refused: no agent. `st agent cycle <agent> --cancel`.", file=sys.stderr)
+        return REFUSED
+    if getattr(a, "self_", False) or getattr(a, "dry_run", False):
+        print("  refused: --cancel takes no --self or --dry-run; it only withdraws.",
+              file=sys.stderr)
+        return REFUSED
+    if caller and caller != agent_name:
+        try:
+            role = _registry(a).get(caller).role
+        except Exception as e:  # noqa: BLE001 — unknown authority is no authority
+            print(f"  refused: could not read {caller}'s role ({type(e).__name__}); "
+                  f"nothing was withdrawn.", file=sys.stderr)
+            return REFUSED
+        if role not in ("administrator", "lead"):
+            print(f"  refused: {caller} ({role}) may cancel only its own request; "
+                  f"ask {agent_name} or a lead.", file=sys.stderr)
+            return REFUSED
+    try:
+        soft_cycle._path(a.root, agent_name)  # the same name check every path uses
+    except ValueError:
+        print(f"  refused: {agent_name!r} is not a valid agent name.", file=sys.stderr)
+        return REFUSED
+    with cycle_mod.lifecycle_lock(a.root, agent_name):
+        requests = cycle_mod.Requests(a.root)
+        had = requests.pending().get(agent_name)
+        requests.clear(agent_name)
+        marker = soft_cycle.abandon(a.root, agent_name)
+        gone = agent_name not in requests.pending() and not soft_cycle.pending(
+            a.root, agent_name)
+    if not gone:
+        print(f"  could not tell: {agent_name}'s request or clear marker is still "
+              f"present after the withdraw.", file=sys.stderr)
+        return CANNOT_TELL
+    if had is None and not marker:
+        print(f"  {agent_name}: no pending cycle request; nothing withdrawn.")
+        return OK
+    what = [w for w, on in (("request", had is not None),
+                            ("recorded in-place clear", marker)) if on]
+    print(f"  {agent_name}: withdrew the pending cycle {' and '.join(what)}"
+          f"{f' (by {caller})' if caller and caller != agent_name else ''}; "
+          f"no pane was touched. Read back: absent.")
+    return OK
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -11054,6 +11117,8 @@ def _cmd_cycle(a) -> int:
     ORDER: assess -> stop -> launch -> re-dispatch. The guard runs first and to
     completion, because everything after it is irreversible from here.
     """
+    if getattr(a, "cancel", False):
+        return _cancel_cycle_request(a)
     gaming = quiet_time_mod.read(Path(a.root))
     if gaming.held and not _despite_hold(a) and not _administrator_launch(a):
         return _refuse_gaming(a, gaming)
@@ -11612,6 +11677,18 @@ def _cycle_input_empty(screen: str, card, root=None) -> bool:
     return prompt == "› Ask Codex to do anything"
 
 
+def _soft_marker_owned(root, agent: str) -> bool:
+    """A recorded clear belongs to the CURRENT request: made at or after it."""
+    from . import cycle as cycle_mod, soft_cycle
+    request = cycle_mod.Requests(root).pending().get(agent)
+    sent = soft_cycle.sent_at(root, agent)
+    if request is None or sent is None:
+        return False
+    asked = request.get("requested_at")
+    # A legacy request with no timestamp cannot be ordered: keep observing.
+    return not isinstance(asked, (int, float)) or sent >= asked
+
+
 def _cycle_plan(a, card, session: str, panes, runtime):
     """Observe the pane, then ask cycle.plan. Observation here, policy there.
 
@@ -11621,7 +11698,14 @@ def _cycle_plan(a, card, session: str, panes, runtime):
     """
     from . import soft_cycle
     if soft_cycle.pending(a.root, card.name):
-        return cycle_mod.Plan(cycle_mod.SOFT, "observe the retained clear; no new send or restart")
+        if _soft_marker_owned(a.root, card.name):
+            return cycle_mod.Plan(cycle_mod.SOFT, "observe the retained clear; no new send or restart")
+        # aegis-zxor: a marker that no pending request owns (the request was
+        # served by a relaunch, cancelled, or replaced) would "confirm" ANY later
+        # session change as this clear. Withdraw it and plan from the pane.
+        soft_cycle.abandon(a.root, card.name)
+        print(f"  {card.name}: withdrew a recorded clear that no pending request owns.",
+              file=sys.stderr)
     live = bool(session) and panes.exists(session)
     idle = input_empty = False
     if live:
@@ -11805,9 +11889,13 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             chosen = _cycle_plan(a, card, session, panes, runtime)
         rc, performed = _perform_cycle_locked(a, card, agent_name, session, panes,
                                               runtime, chosen, verdict)
-        if automatic and rc == OK:
+        if rc == OK:
             # Cleared INSIDE the lock, so a second server (tend and the --self
             # waiter) that was waiting on it sees no request and stands down.
+            # ANY performed cycle serves the request, including an operator's
+            # `st agent cycle <who> --no-in-place`: before aegis-zxor only an
+            # automatic one did, and tend kept nudging the fresh session about
+            # its predecessor's request.
             cycle_mod.Requests(a.root).clear(agent_name)
             if getattr(a, '_account_request_id', None):
                 from .account_switch import Requests
@@ -12005,14 +12093,26 @@ def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
     try:
         attempt, send = soft_cycle.begin(a.root, agent_name)
     except (OSError, ValueError) as exc:
-        print(f"  FAILED: clear session baseline unavailable ({type(exc).__name__}).",
-              file=sys.stderr)
+        # The reason, not only the type: "ValueError" alone left the Linux host logs
+        # unable to say which check refused (aegis-zxor).
+        print(f"  FAILED: clear session baseline unavailable ({type(exc).__name__}: "
+              f"{exc}).", file=sys.stderr)
         return False
     if send:
         _capture_history_before_kill(a, agent_name, "cycle-clear")
         try:
             panes.send(session, command)
         except Exception as exc:  # a failed send may already have typed its key
+            from .tmux import PaneInMode
+            if isinstance(exc, PaneInMode):
+                # Refused BEFORE any keystroke (tmux copy-mode), so no clear is
+                # queued. Retaining the marker made every later pass "observe"
+                # a clear that was never typed, forever (aegis-zxor).
+                soft_cycle.abandon(a.root, agent_name)
+                print(f"  NOT SENT: {agent_name}'s pane is in tmux copy-mode; "
+                      "nothing was typed. The request stays pending and the next "
+                      "pass sends the clear once the mode exits.", file=sys.stderr)
+                return False
             print(f"  FAILED: clear send unverified ({type(exc).__name__}); "
                   "intent retained.", file=sys.stderr)
             return False

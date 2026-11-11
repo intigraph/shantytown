@@ -96,6 +96,20 @@ def _run_anchor(root: str, agent: str) -> tuple[int, str]:
     return int(rc or 0), out.getvalue()
 
 
+def settle_cycle_request(root: str, agent: str, payload, now=None) -> bool:
+    """A newly STARTED process serves its predecessor's cycle request (aegis-zxor).
+
+    Only `source == "startup"`: a clear is settled by the cycle that typed it,
+    which still has to verify the fresh session, and resume/compact keep the
+    same process and context lineage.
+    """
+    import time
+    if not isinstance(payload, dict) or payload.get("source") != "startup":
+        return False
+    from .cycle import Requests
+    return Requests(root).settle_fresh_session(agent, time.time() if now is None else now)
+
+
 def main(argv=None) -> int:
     """The SessionStart hook. `<interpreter> -m shantytown.session_anchor [--root R]`."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -117,6 +131,10 @@ def main(argv=None) -> int:
         from .files import FilesRegistry
         session_start(root, FilesRegistry(os.path.join(root, "crew")).get(agent), payload)
     except Exception:  # noqa: BLE001 — malformed hook input must not hide the anchor
+        pass
+    try:
+        settle_cycle_request(root, agent, payload)
+    except Exception:  # noqa: BLE001 — never hide the anchor
         pass
     text = render(root, agent)
     print(json.dumps({

@@ -634,12 +634,21 @@ class CycleBlockedNotifier:
             if ledger.get(agent) == sig:
                 continue
             paths = refused.get("paths") or []
-            where = paths[0] if paths else "an unreadable tree"
-            more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
-            msg = (f"your requested context cycle is BLOCKED on {where}{more}: "
-                   f"commit + `st repo push` there, or the request stays pending and "
-                   f"you keep running on the context you asked to shed. "
-                   f"`st agent cycle {agent}` shows every blocking tree.")
+            if paths:
+                more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
+                msg = (f"your requested context cycle is BLOCKED on {paths[0]}{more}: "
+                       f"commit + `st repo push` there, or the request stays pending and "
+                       f"you keep running on the context you asked to shed. "
+                       f"`st agent cycle {agent}` shows every blocking tree.")
+            else:
+                # aegis-zxor / aegis-ba55qp: with no paths the refusal is not a
+                # tree at all (a pane state, a baseline, a gate). Say what WAS
+                # recorded; "an unreadable tree" sent agents hunting for one.
+                reason = str(refused.get("reason") or "no reason recorded").strip()
+                msg = (f"your requested context cycle is not served yet: {reason[:200]}. "
+                       f"No tree blocks it; the request stays pending and is retried. "
+                       f"`st agent cycle {agent} --cancel` withdraws it if a relaunch "
+                       f"already served it or it cannot complete.")
             if self._push(self._reg, self._panes, agent, msg) is None:
                 continue        # unreachable pane: retried next sweep, not swallowed
             ledger[agent] = sig
