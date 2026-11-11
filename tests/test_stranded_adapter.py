@@ -259,3 +259,72 @@ def test_natural_clock_census_matches_current_attention(setup):
     assert findings['work-1']['release_due'] is True
     assert census['checked_at'] == findings['work-1']['checked_at']
     assert census['owners']['worker'] == dict(work=1, release_due=1)
+
+
+def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monkeypatch):
+    """aegis-byt fixture: a whole harness at 0 live, 32 assigned items.
+
+    One tend pass must leave 0 items assigned to the stopped crew. In-progress
+    work returns to open; deferred and blocked work keeps its status and its
+    deferral; inbox pointers and a live owner's work are untouched. The admin
+    gets ONE keyed notice per stopped owner, not one per item.
+    """
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept/' + card.name, branch='kept', head='0' * 40, checkpoint='kept'))
+    harness = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']
+    for name in harness:
+        setup.cards[name] = Agent(name, 'worker', reports_to='lead', pane=name, host='test-host')
+        setup.states[name] = 'down'
+        FilesStops(setup.root / 'stopped').record(name, 0)  # undated operator stop
+    setup.cards['alive'] = Agent('alive', 'worker', reports_to='lead', pane='alive', host='test-host')
+    setup.states['alive'] = 'live'
+    statuses = ['open', 'in_progress', 'deferred', 'blocked']
+    store = {}
+    for i in range(32):
+        status = statuses[i % 4]
+        store[f'work-{i}'] = dict(id=f'work-{i}', assignee=harness[i % 6], status=status,
+            priority=i % 3, title='work', labels=[], revision=1,
+            defer_until='2999-01-01T00:00:00Z' if status == 'deferred' else None)
+    store['message-1'] = dict(id='message-1', assignee='c1', status='open', priority=2,
+                              title='inbox: pointer', labels=[], revision=1)
+    store['live-1'] = dict(id='live-1', assignee='alive', status='open', priority=0,
+                           title='work', labels=[], revision=1)
+    before = copy.deepcopy(store)
+    def release(row, comment, *, operator_stopped=False):
+        current = store[row['id']]
+        assert operator_stopped and current['revision'] == row['revision']
+        current.update(assignee='', revision=current['revision'] + 1,
+                       status='open' if current['status'] == 'in_progress' else current['status'])
+        return 'released'
+    setup.tracker.stranded_rows = lambda owners: [copy.deepcopy(r) for r in store.values()]
+    setup.tracker.stranded_read = lambda identity: copy.deepcopy(store[identity])
+    setup.tracker.release_stranded = release
+
+    run(setup, 10)
+
+    held = [r for r in store.values() if r['assignee'] in harness and not r['title'].startswith('inbox')]
+    assert held == []
+    for identity, row in before.items():
+        after = store[identity]
+        if identity in ('message-1', 'live-1'):
+            assert after == row
+        elif row['status'] == 'in_progress':
+            assert after['status'] == 'open' and after['assignee'] == ''
+        else:
+            assert after['status'] == row['status'] and after['defer_until'] == row['defer_until']
+    notices = setup.inbox.unread('admin')
+    assert len(notices) == len(harness)
+    assert all('operator-stopped' in n.body for n in notices)
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert sum(c['work'] for n, c in census['owners'].items() if n in harness) == 32
+
+
+def test_attention_notice_reads_back_as_delivered(setup):
+    """Receipt readers match the marker at the START of the body (aegis-byt)."""
+    run(setup, 0)
+    run(setup, 3601)
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['notice'] == 'delivered'
+    message, = setup.inbox.unread('admin')
+    assert message.body.startswith(finding['marker'] + ' ')

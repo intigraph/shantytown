@@ -275,7 +275,7 @@ def test_operator_release_rechecks_stop_under_lifecycle_fence(world):
     assert not world.writes
 
 
-@pytest.mark.parametrize('status', ['open', 'in_progress', 'blocked', 'deferred'])
+@pytest.mark.parametrize('status', ['open', 'blocked', 'deferred'])
 def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch, status):
     from shantytown.sd import SdTracker
     tracker = SdTracker(store='/synthetic/store', prefix='work')
@@ -293,6 +293,40 @@ def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch,
     assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
     assert calls[0] == ('update', 'work-1', '--assignee=', '--if-revision=7',
                         '--transition-comment=audit', '--json')
+
+
+def test_operator_sdk_returns_in_progress_work_to_open_in_the_same_cas(monkeypatch):
+    """An unassigned in_progress item is on no plate and outside ready work."""
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='in_progress', assignee='worker', priority=0,
+               title='work', labels=[], revision=7, notes='checkpoint')
+    calls = []
+    def sdk(identity, *args):
+        calls.append(args)
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(assignee='', status='open', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    assert tracker.release_stranded(row, 'audit', operator_stopped=True) == 'released'
+    assert calls[0] == ('update', 'work-1', '--assignee=', '--status=open',
+                        '--if-revision=7', '--transition-comment=audit', '--json')
+
+
+def test_operator_sdk_in_progress_readback_must_show_open(monkeypatch):
+    from shantytown.sd import SdTracker
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    row = dict(id='work-1', status='in_progress', assignee='worker', priority=0,
+               title='work', labels=[], revision=7)
+    def sdk(identity, *args):
+        if args[0] == 'update':
+            return SimpleNamespace(returncode=0, stdout='{}')
+        return SimpleNamespace(returncode=0, stdout=json.dumps([
+            row | dict(assignee='', revision=8, comments=[dict(text='audit')])]))
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    with pytest.raises(RuntimeError, match='UNKNOWN'):
+        tracker.release_stranded(row, 'audit', operator_stopped=True)
 
 
 def test_operator_sdk_refuses_to_claim_release_when_parking_changed(monkeypatch):

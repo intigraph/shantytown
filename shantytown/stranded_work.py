@@ -78,7 +78,8 @@ class StrandedWork:
 
     def tick(self, rows, cards, *, observe, recipient, notify, read, release,
              checkpoint, fence, now=None, release_admitted=False, t1=T1, t2=T2,
-             budget=5, max_intents=4, clock=time.monotonic, operator_release_only=False):
+             budget=5, max_intents=4, clock=time.monotonic, operator_release_only=False,
+             operator_budget=60, max_operator_releases=40, max_operator_notices=10):
         """One complete, bounded snapshot; no retries or ownership guesses.
 
         read/release are revision-aware adapter seams, NOT generic update.
@@ -90,7 +91,18 @@ class StrandedWork:
             raise ValueError('invalid stranded-owner deadlines')
         if not math.isfinite(budget) or not 0 < budget <= 30 or type(max_intents) is not int or not 0 < max_intents <= 4:
             raise ValueError('invalid stranded-owner pass bounds')
-        deadline, intents = clock() + budget, 0
+        if (not math.isfinite(operator_budget) or not 0 < operator_budget <= 120
+                or type(max_operator_releases) is not int or not 0 < max_operator_releases <= 100
+                or type(max_operator_notices) is not int or not 0 < max_operator_notices <= 20):
+            raise ValueError('invalid operator-stop pass bounds')
+        start = clock()
+        deadline, intents = start + budget, 0
+        # A recorded operator stop with proven process absence releases a whole
+        # owner's work in ONE pass (aegis-byt): one keyed notice per owner and
+        # stop generation, and a separate release cap. Under the inferred-class
+        # bounds (two intents per item, four per pass) 32 items took 16 passes.
+        operator_deadline, operator_releases, operator_notices = start + operator_budget, 0, 0
+        owner_notices = {}
         if len(rows) > 5000 or len(cards) > 100:
             raise ValueError('stranded-owner census exceeds bounds')
         if len({r['id'] for r in rows}) != len(rows):
@@ -168,12 +180,25 @@ class StrandedWork:
                     previous['release_due'] = False
                 if not previous['attention']:
                     continue
-                key = hashlib.sha256(json.dumps([identity, name, generation,
-                      previous['down_since']], separators=(',', ':')).encode()).hexdigest()
+                if operator_stopped:
+                    # The stop generation already binds the stop record's identity.
+                    key = hashlib.sha256(json.dumps([name, generation, 'operator-stopped'],
+                          separators=(',', ':')).encode()).hexdigest()
+                else:
+                    key = hashlib.sha256(json.dumps([identity, name, generation,
+                          previous['down_since']], separators=(',', ':')).encode()).hexdigest()
                 marker = 'stranded-owner:' + key
                 previous['marker'] = marker
+                if operator_stopped and owner_notices.get(marker) == 'delivered':
+                    previous.update(notice='delivered', recipient=owner_notices[marker + ':to'])
+                elif operator_stopped and previous['notice'] == 'unknown':
+                    # Keyed delivery is idempotent: re-reading by key never sends twice.
+                    previous['notice'] = 'pending'
                 if previous['notice'] == 'pending':
-                    if intents >= max_intents or clock() >= deadline:
+                    exhausted = (operator_notices >= max_operator_notices
+                                 or clock() >= operator_deadline) if operator_stopped else (
+                                 intents >= max_intents or clock() >= deadline)
+                    if exhausted:
                         result.append((identity, 'attention retained; intent budget exhausted'))
                         continue
                     save()  # Attention survives even a refused/unknown lead route.
@@ -182,17 +207,30 @@ class StrandedWork:
                     except (ValueError, LookupError):
                         result.append((identity, 'administrator route UNKNOWN; no release'))
                         continue
-                    body = (f'ERROR {marker} {identity}: owner {name} {state}; '
+                    body = (f'{marker} ERROR owner {name} operator-stopped; its assigned '
+                            f'work returns to the pool (assignee cleared, in_progress->open, '
+                            f'deferrals kept). Ledger {self.root / "attention.json"}; '
+                            f'checkpoint/trees retained.') if operator_stopped else (
+                            f'{marker} ERROR {identity}: owner {name} {state}; '
                             f'down since {previous["down_since"]}. Persistent attention '
                             f'{self.root / "attention.json"}; checkpoint/trees retained.')
+                    # Receipt readers match bodies that START with the marker; an
+                    # 'ERROR ' prefix made every notice read back UNKNOWN, and an
+                    # UNKNOWN notice refuses release forever (aegis-byt).
                     if len(body.encode()) > 480:
                         raise ValueError('stranded-owner pointer exceeds inbox bound')
                     previous.update(notice='attempting', recipient=destination)
                     save()
-                    intents += 1
+                    if operator_stopped:
+                        operator_notices += 1
+                    else:
+                        intents += 1
                     try:
                         notify(destination, body, marker)
                         previous['notice'] = 'delivered'
+                        if operator_stopped:
+                            owner_notices[marker] = 'delivered'
+                            owner_notices[marker + ':to'] = destination
                     except Exception:
                         previous['notice'] = 'unknown'
                     save()
@@ -208,7 +246,8 @@ class StrandedWork:
                 if self.unresolved_release(name):
                     result.append((identity, 'earlier release UNKNOWN; no new intent'))
                     continue
-                if intents >= max_intents or clock() >= deadline:
+                if (operator_releases >= max_operator_releases or clock() >= operator_deadline
+                        if operator_stopped else intents >= max_intents or clock() >= deadline):
                     result.append((identity, 'release due; pass budget exhausted'))
                     continue
                 # The sanctioned launch/stop paths share this lock. Recheck
@@ -237,7 +276,10 @@ class StrandedWork:
                     journal[marker] = dict(owner=name, item=identity, outcome='attempting',
                                            revision=current.get('revision'), comment=comment)
                     write_json_atomic(journal_path, journal)
-                    intents += 1
+                    if operator_stopped:
+                        operator_releases += 1
+                    else:
+                        intents += 1
                     try:
                         outcome = (release(current, comment, operator_stopped=True)
                                    if operator_stopped else release(current, comment))
