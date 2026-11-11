@@ -27,6 +27,12 @@ def owner(row):
     return (row.get('assignee') or '').rsplit('/', 1)[-1]
 
 
+def _decision_title(row):
+    """An 'ASK ...' or 'DESK: ...' title marks a decision held for a person."""
+    import re
+    return bool(re.match(r'\s*(ASK|DESK)\b', str(row.get('title', '')), re.IGNORECASE))
+
+
 def eligible(row, *, operator_stopped=False):
     """Malformed parking metadata refuses release rather than ending a hold."""
     labels = row.get('labels') or []
@@ -39,11 +45,11 @@ def eligible(row, *, operator_stopped=False):
         return (row.get('status') in {'open', 'hooked', 'in_progress', 'blocked', 'deferred'}
                 and bool(owner(row)) and not is_message(row.get('title', ''))
                 and not is_ask(row)
-                and not str(row.get('title', '')).lstrip().upper().startswith('ASK ')
+                and not _decision_title(row)
                 and type(row.get('priority')) is int and row['priority'] in range(5))
     return (row.get('status') in {'open', 'in_progress'}
             and bool(owner(row)) and not is_message(row.get('title', ''))
-            and not row.get('title', '').lstrip().upper().startswith('ASK ')
+            and not _decision_title(row)
             and not row.get('defer_until') and not row.get('blocker_kind')
             and not any(str(label).startswith(('blocked:', 'deferred', 'parked'))
                         or label in {'inbox', 'needs-stiwi', 'desk', 'decision-needed'}
@@ -118,6 +124,7 @@ class StrandedWork:
         observations = {}
         result = []
         with self.locked() as data:
+            result.extend(self._reconcile(data, read, now))
             def save():
                 write_json_atomic(self.root / 'attention.json', data)
             for identity, previous in data.items():
@@ -284,7 +291,10 @@ class StrandedWork:
                     save()
                     journal_path = self.root / 'release-intents.json'
                     journal = json.loads(journal_path.read_text()) if journal_path.exists() else {}
-                    journal[marker] = dict(owner=name, item=identity, outcome='attempting',
+                    # One owner-level notice marker can cover many items, so the
+                    # intent journal is keyed per item: never overwrite an audit entry.
+                    intent_key = marker + ':' + identity
+                    journal[intent_key] = dict(owner=name, item=identity, outcome='attempting',
                                            revision=current.get('revision'), comment=comment)
                     write_json_atomic(journal_path, journal)
                     if operator_stopped:
@@ -299,11 +309,44 @@ class StrandedWork:
                         previous['release'] = outcome
                     except Exception:
                         previous['release'] = 'unknown'
-                    journal[marker]['outcome'] = previous['release']
+                    journal[intent_key]['outcome'] = previous['release']
                     write_json_atomic(journal_path, journal)
                     save()
                     result.append((identity, 'release ' + previous['release']))
         return result
+
+    def _reconcile(self, data, read, now, limit=20):
+        """Settle earlier 'attempting'/'unknown' releases by exact read-back.
+
+        Only positive proof settles one: the item has no assignee AND carries
+        this release's own preservation comment, byte for byte. Anything else
+        (still assigned, comment absent, unreadable) stays unknown and keeps
+        fencing its owner. No write is made here (aegis-byt).
+        """
+        path = self.root / 'release-intents.json'
+        journal = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(journal, dict) or not callable(read):
+            return []
+        settled, reads = [], 0
+        for marker, entry in sorted(journal.items()):
+            if entry.get('outcome') not in {'attempting', 'unknown'} or reads >= limit:
+                continue
+            reads += 1
+            try:
+                current = read(entry['item'])
+            except Exception:
+                continue
+            comments = current.get('comments')
+            if (not current.get('assignee') and isinstance(comments, list)
+                    and any(isinstance(c, dict) and c.get('text') == entry.get('comment')
+                            for c in comments)):
+                entry.update(outcome='released', reconciled_at=now)
+                if entry['item'] in data:
+                    data[entry['item']]['release'] = 'released'
+                settled.append((entry['item'], 'release reconciled: released'))
+        if settled:
+            write_json_atomic(path, journal)
+        return settled
 
     def unresolved_release(self, name):
         """An uncertain server commit must be reconciled before a new launch."""

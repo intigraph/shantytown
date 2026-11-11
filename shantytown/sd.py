@@ -61,6 +61,12 @@ class StoreProof:
     graph: "str | None" = None
 
 
+GOVERNED_RELEASE_FIELDS = ('status', 'priority', 'labels', 'defer_until', 'title',
+                           'notes', 'description', 'design', 'acceptance_criteria',
+                           'issue_type', 'due_at', 'parent', 'rank', 'external_ref',
+                           'blocker_kind', 'closed_at', 'close_reason')
+
+
 class SdTracker(BrTracker):
     """BrTracker over `sd`, pinned to one proven store."""
 
@@ -110,7 +116,12 @@ class SdTracker(BrTracker):
         # A successful process exit alone does not prove the committed fields.
         current = self.stranded_read(row['id'])
         comments = current.get('comments')
-        preserved = set(row) - {'assignee', 'revision', 'updated_at', 'comments'}
+        # Compare the governed fields a release must not change. The full read
+        # also returns derived counters (comments_total, comments_folded,
+        # dependents, dependency_count); the release's own comment bumps
+        # comments_total, so comparing them made every correct release read
+        # back UNKNOWN and fenced the owner (aegis-byt, measured 2026-11-11).
+        preserved = {key for key in GOVERNED_RELEASE_FIELDS if key in row}
         if reopen:
             preserved.discard('status')
         if (any(current.get(key) != row.get(key) for key in preserved)
