@@ -185,7 +185,7 @@ def test_malformed_cycle_ledger_is_unknown(setup):
 def test_complete_assignee_census_counts_300_parked_work_and_skips_inbox(setup):
     rows = [dict(setup.row, id=f'work-{i}', status='deferred',
                  defer_until='2999-01-01T00:00:00Z', labels=['blocked:external'],
-                 title='ASK operator: retained') for i in range(300)]
+                 title='parked work') for i in range(300)]
     rows += [dict(setup.row, id=f'message-{i}', title='inbox: preserved') for i in range(241)]
     scopes = []
     def census(owners):
@@ -286,6 +286,13 @@ def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monk
         store[f'work-{i}'] = dict(id=f'work-{i}', assignee=harness[i % 6], status=status,
             priority=i % 3, title='work', labels=[], revision=1,
             defer_until='2999-01-01T00:00:00Z' if status == 'deferred' else None)
+    for i, extra in enumerate([dict(title='ASK Stiwi: decide'), dict(labels=['desk']),
+                               dict(labels=['needs-stiwi'], status='deferred')]):
+        store[f'ask-{i}'] = dict(dict(id=f'ask-{i}', assignee=harness[i], status='open', priority=0,
+            title='decision', labels=[], revision=1), **extra)
+    for row in store.values():
+        row['notes'] = 'checkpoint: ' + row['id']
+    comments = {}
     store['message-1'] = dict(id='message-1', assignee='c1', status='open', priority=2,
                               title='inbox: pointer', labels=[], revision=1)
     store['live-1'] = dict(id='live-1', assignee='alive', status='open', priority=0,
@@ -294,6 +301,7 @@ def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monk
     def release(row, comment, *, operator_stopped=False):
         current = store[row['id']]
         assert operator_stopped and current['revision'] == row['revision']
+        comments[row['id']] = json.loads(comment)
         current.update(assignee='', revision=current['revision'] + 1,
                        status='open' if current['status'] == 'in_progress' else current['status'])
         return 'released'
@@ -303,11 +311,16 @@ def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monk
 
     run(setup, 10)
 
-    held = [r for r in store.values() if r['assignee'] in harness and not r['title'].startswith('inbox')]
-    assert held == []
+    held = sorted(r['id'] for r in store.values()
+                  if r['assignee'] in harness and not r['title'].startswith('inbox'))
+    assert held == ['ask-0', 'ask-1', 'ask-2']  # ASK/desk class stays with its owner
     for identity, row in before.items():
         after = store[identity]
-        if identity in ('message-1', 'live-1'):
+        assert after.get('notes') == row.get('notes')  # notes are never rewritten
+        if identity.startswith('work-'):
+            assert comments[identity]['original_owner'] == row['assignee']
+            assert comments[identity]['worktree'] == '/kept/' + row['assignee']
+        if identity in ('message-1', 'live-1') or identity.startswith('ask-'):
             assert after == row
         elif row['status'] == 'in_progress':
             assert after['status'] == 'open' and after['assignee'] == ''
@@ -317,7 +330,8 @@ def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monk
     assert len(notices) == len(harness)
     assert all('operator-stopped' in n.body for n in notices)
     census = json.loads((setup.root / 'stranded-work/census.json').read_text())
-    assert sum(c['work'] for n, c in census['owners'].items() if n in harness) == 32
+    assert sum(c['work'] for n, c in census['owners'].items() if n in harness) == 35
+    assert sum(c['release_due'] for n, c in census['owners'].items() if n in harness) == 32
 
 
 def test_attention_notice_reads_back_as_delivered(setup):

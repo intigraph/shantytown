@@ -33,8 +33,13 @@ def eligible(row, *, operator_stopped=False):
     if not isinstance(labels, list):
         return False
     if operator_stopped:
+        # ASK/desk-class items are decisions held for a person, not capacity:
+        # they stay with their owner and stay visible (Sattler, aegis-byt).
+        from .ask_visibility import is_ask
         return (row.get('status') in {'open', 'hooked', 'in_progress', 'blocked', 'deferred'}
                 and bool(owner(row)) and not is_message(row.get('title', ''))
+                and not is_ask(row)
+                and not str(row.get('title', '')).lstrip().upper().startswith('ASK ')
                 and type(row.get('priority')) is int and row['priority'] in range(5))
     return (row.get('status') in {'open', 'in_progress'}
             and bool(owner(row)) and not is_message(row.get('title', ''))

@@ -36,8 +36,11 @@ restarts the duration proof. Their deferred/decision/parked work stays untouched
 Release mode applies only to a recorded operator stop plus a successful local
 process observation proving the owner down. A live or unreadable process cannot
 be overridden by a stop file. This authoritative class gets immediate attention
-and release-due accounting, including ordinary, ASK and parked work in open,
-hooked, in-progress, blocked and deferred states. Inbox recipient assignments
+and release-due accounting for ordinary and parked work in open, hooked,
+in-progress, blocked and deferred states. ASK/desk-class items (an `ASK ` title,
+an ASK label such as `desk`, `needs-stiwi`, `decision-needed` or
+`blocked:human`, or a human blocker) are decisions held for a person, not
+capacity: they stay with their owner and stay visible. Inbox recipient assignments
 remain unchanged. Stop-record identity is part of the generation rechecked
 under the lifecycle lock; relaunch or changed stop evidence prevents release.
 Unassignment changes no title, notes, gate or deferral. In-progress work also

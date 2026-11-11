@@ -250,8 +250,8 @@ def test_sdk_conflict_or_failure_never_falls_back_to_generic_update(monkeypatch,
 
 
 @pytest.mark.parametrize('status', ['open', 'hooked', 'in_progress', 'blocked', 'deferred'])
-def test_operator_release_preserves_parked_ask_status_and_all_fields(world, status, monkeypatch):
-    world.row.update(status=status, title='ASK operator: retained', labels=['needs-stiwi'],
+def test_operator_release_preserves_parked_status_and_all_fields(world, status, monkeypatch):
+    world.row.update(status=status, title='parked work', labels=['blocked:external'],
                      defer_until='2999-01-01T00:00:00Z', notes='resume_when: gate')
     world.observation.update(state='operator-stopped', intentional_stop=True)
     writes = []
@@ -264,6 +264,18 @@ def test_operator_release_preserves_parked_ask_status_and_all_fields(world, stat
     world.tick(10, operator_release_only=True, release=release)
     assert len(writes) == 1
     assert world.row == before | dict(assignee='', revision=before['revision'] + 1)
+
+
+@pytest.mark.parametrize('ask', [dict(title='ASK Stiwi: decide'), dict(title='ASK operator: retained'),
+    dict(labels=['desk']), dict(labels=['needs-stiwi']), dict(labels=['decision-needed']),
+    dict(labels=['blocked:human']), dict(blocker_kind='blocked:human')])
+def test_operator_release_never_takes_ask_or_desk_class_items(world, ask):
+    """A decision held for a person is not capacity; it stays with its owner."""
+    world.row.update(status='open', **ask)
+    world.observation.update(state='operator-stopped', intentional_stop=True)
+    world.tick(10, operator_release_only=True)
+    assert not world.writes
+    assert world.row['assignee'] == 'worker'
 
 
 def test_operator_release_rechecks_stop_under_lifecycle_fence(world):
@@ -280,7 +292,7 @@ def test_operator_sdk_cas_changes_only_assignee_with_exact_readback(monkeypatch,
     from shantytown.sd import SdTracker
     tracker = SdTracker(store='/synthetic/store', prefix='work')
     row = dict(id='work-1', status=status, assignee='worker', priority=1,
-               title='ASK operator: retained', labels=['desk'], revision=7,
+               title='parked work', labels=['blocked:external'], revision=7,
                notes='resume_when: gate', defer_until='2999-01-01T00:00:00Z')
     calls = []
     def sdk(identity, *args):
