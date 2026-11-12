@@ -705,7 +705,7 @@ def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
     return True, limits, spend
 
 
-def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
+def _haul(reg: FilesRegistry, panes, me: str, root: Path, *, payload=None) -> int:
     """The worker's own advance: anchor closed + assigned ready work -> BLOCK
     the stop with the next bead as the reason — the same model-reaching
     protocol drain and the Rule Zero gate already use. The coordinator is not
@@ -728,7 +728,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     try:
         card = reg.get(me)
         from .stop_policy import stop_advice
-        if stop_advice(root, card):
+        if stop_advice(root, card, payload):
             return 0
         from . import harness as harness_mod
         harness_name = harness_mod.name_for(card, root=root)
@@ -1340,6 +1340,11 @@ def _main(argv: list[str] | None = None) -> int:
         agent_hold.finish_turn(root, me)
         return result
     if mode == "haul":
+        # ONE read of the hook payload, shared by the spec boundary and the
+        # Stop advice. Reading it twice left the second reader an empty stream
+        # and wrote a NULL session identity on every such Stop (aegis-zxor).
+        from .stop_policy import read_hook_payload
+        payload = read_hook_payload()
         try:
             from . import config
             cfg, _error = config.load_or_default(root)
@@ -1347,14 +1352,13 @@ def _main(argv: list[str] | None = None) -> int:
                 if _ceiling_took_the_stop(root,me)[0]:
                     return 0
                 from .spec_boundary import at_boundary
-                from .spec_observation import hook_input
-                notice = at_boundary(root,me,reg,hook=hook_input(sys.stdin))
+                notice = at_boundary(root,me,reg,hook=payload or None)
                 if notice:
                     print(json.dumps({"decision":"block","reason":notice}))
                     return 0
         except Exception as error:
             print(f"spec boundary UNKNOWN: {type(error).__name__}; no repeated wake", file=sys.stderr)
-        return _haul(reg, panes, me, root)
+        return _haul(reg, panes, me, root, payload=payload)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)

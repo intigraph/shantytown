@@ -716,7 +716,22 @@ def _load_per_core() -> float | None:
         return None
 
 
-def stop_advice(root, card):
+def read_hook_payload() -> dict:
+    """Read this hook's stdin payload ONCE; {} for a terminal or unreadable input.
+
+    Hook stdin is a single stream. A second reader in the same process gets an
+    empty stream: on vati the spec-boundary read drained it before stop_advice,
+    so every such Stop wrote a NULL session identity (aegis-zxor). Read here and
+    pass the dict down instead of reading again.
+    """
+    try:
+        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
+    except (OSError, ValueError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def stop_advice(root, card, payload=None):
     """One payload consumer for optional memory advice and existing context hints."""
     from . import context_hint, ruling_memory, cycle
     # A self-cycle waiter needs this turn to become idle. Re-blocking for
@@ -730,12 +745,8 @@ def stop_advice(root, card):
             if age is not None and age < cycle.stuck_after():
                 print(f"  {card.name}: cycle pending; allowing the stop", file=sys.stderr)
                 return True  # no model feedback: allow the idle edge
-    try:
-        payload = {} if sys.stdin.isatty() else json.load(sys.stdin)
-        if not isinstance(payload, dict):
-            payload = {}
-    except (OSError, ValueError):
-        payload = {}
+    if payload is None:
+        payload = read_hook_payload()
     if ruling_memory.enabled(root):
         if reason := ruling_memory.check(root, card.name, payload):
             print(json.dumps(dict(decision='block', reason=reason)))
