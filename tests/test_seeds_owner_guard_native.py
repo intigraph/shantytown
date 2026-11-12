@@ -125,6 +125,16 @@ def test_absence_guard_preserves_bags_graphs_aliases_and_malformed_states(tmp_pa
                     assert not any(actual[f"{graph}/{name}"] for graph in
                                    (G, G + "#seeds-ephemeral") for name in
                                    ("plain", "typed", "mixed", "mixed_nonplain", "untyped"))
+            # Incremental projection repair binds changed subjects inside each
+            # GRAPH. A subquery must not leak unrelated malformed subjects.
+            branches = sp._unsupported_owner_branches(proof, ("worker",))
+            values = f'VALUES ?s {{ <{G}/missing> <{G}/two_unknown> }} '
+            scoped = branches
+            for graph in (G, G + "#seeds-ephemeral"):
+                anchor = f'GRAPH <{graph}> {{ '
+                scoped = [branch.replace(anchor, anchor + values) for branch in scoped]
+            assert read(scoped) == collections.Counter({f"{G}/missing": 2,
+                                                        f"{G}/two_unknown": 4})
             # The positive malformed guard disappears only after its own
             # scoped record is repaired, not because a foreign graph has it.
             update(f'INSERT DATA {{ GRAPH <{G}> {{ <{G}/missing> '
