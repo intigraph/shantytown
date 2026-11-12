@@ -7509,6 +7509,8 @@ def _lead_status(registry, panes):
 def _resolve_anchor(a, me, *, require_complete=False):
     """Shared startup read; publication and startup decorations stay in anchor's CLI."""
     registry, panes = _registry(a), _panes(a)
+    from .routing_identity import with_remote_lead
+    registry = with_remote_lead(registry, me, a.root)
     # Which program this agent runs. Resolved HERE, not inside anchor(),
     # whose docstring makes "reads only" a promise — and resolved
     # defensively: an unknown harness must render nothing rather than
@@ -7562,7 +7564,7 @@ def _cmd_anchor(a) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    except Unreachable as e:
+    except (Unreachable, CouldNotLook, PartialAnswer) as e:
         # NOT success, NOT failure. "I could not look" must never say "fine".
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
