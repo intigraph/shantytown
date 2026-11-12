@@ -12,7 +12,11 @@ budget ends, so a capped mutation pass cannot masquerade as an empty census.
 
 The sweep requires a complete crew census and the selected tracker's complete
 bounded assignee projection, including owned blocked/deferred work. The ranking
-projection is insufficient because it omits owned waiting work. Inbox pointers
+projection is insufficient because it omits owned waiting work. Deploy-operation records are never released by this sweep, in any phase.
+Their labels or native `deploy_admission` context identify them; malformed
+context cannot prove ordinary work. The initial census, final fenced read and
+Seeds release adapter all apply this exclusion. Only the deployment lane may
+recover these reservations. Inbox pointers
 are excluded from the query and never unassigned: with thousands of open
 pointers, hydrating them overflowed the bounded field budget and every pass
 refused (aegis-byt). The census records `inbox_pointers` as not read rather

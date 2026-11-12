@@ -425,3 +425,21 @@ def test_two_items_per_stopped_owner_both_release_through_the_real_sd_readback(s
     assert store['desk-1']['assignee'] == 'c1'
     journal = json.loads((setup.root / 'stranded-work/release-intents.json').read_text())
     assert sorted(e['outcome'] for e in journal.values()) == ['released'] * 6
+
+
+@pytest.mark.parametrize('phase', ['planned', 'inflight', 'drained'])
+def test_operator_stop_sweep_preserves_deploy_reservation(setup, monkeypatch, phase):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    setup.row.update(labels=['deploy-operation'], revision=3,
+                     agent_context={'deploy_admission': {'owner': 'worker', 'phase': phase}})
+    before = copy.deepcopy(setup.row)
+    def forbidden(*args, **kwargs):
+        pytest.fail('deploy operation entered release path')
+    setup.tracker.stranded_read = forbidden
+    setup.tracker.release_stranded = forbidden
+    assert run(setup, 10) == []
+    assert setup.row == before
+    assert not setup.inbox.unread('admin')
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert census['owners']['worker'] == dict(work=1, release_due=0)

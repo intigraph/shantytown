@@ -17,7 +17,7 @@ from pathlib import Path
 import time
 
 from .files import write_json_atomic
-from .inbox import is_message
+from .inbox import is_deploy_operation, is_message
 from .owned_work import _agent, _time
 
 T1 = T2 = 3600  # One measured hour, identical for every priority.
@@ -36,7 +36,9 @@ def _decision_title(row):
 def eligible(row, *, operator_stopped=False):
     """Malformed parking metadata refuses release rather than ending a hold."""
     labels = row.get('labels') or []
-    if not isinstance(labels, list):
+    # Deploy records are phase-CAS reservations, not crew capacity. Even a
+    # drained-but-open record must retain its owner for the deploy census.
+    if not isinstance(labels, list) or is_deploy_operation(row):
         return False
     if operator_stopped:
         # ASK/desk-class items are decisions held for a person, not capacity:
