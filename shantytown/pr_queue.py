@@ -207,15 +207,17 @@ def main(argv=None):
 
 
 def creation_policy(report, author, reviewer):
-    """Explicit independent reviewer plus complete author-bound WIP admission."""
-    for name in (author,reviewer):
-        if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_]+',name):
-            raise Refused('named crew author and reviewer required')
-    if author==reviewer:
-        raise Refused('author cannot be their own named reviewer')
-    if not admission(report,author):
-        raise Refused('WIP cap reached or author inventory incomplete')
-    return {'author':author,'reviewer':reviewer,'cap':report['cap']}
+    """Opening a draft does not reserve reviewer capacity or authorize merge."""
+    warnings = []
+    if not isinstance(author, str) or not re.fullmatch(r'[A-Za-z0-9_]+', author):
+        raise Refused('named crew author required for binding')
+    if (not isinstance(reviewer, str) or not re.fullmatch(r'[A-Za-z0-9_]+', reviewer)
+            or author == reviewer):
+        warnings.append('Independent reviewer not assigned; arrange review after complete green CI.')
+        reviewer = None
+    if not admission(report, author):
+        warnings.append('PR WIP cap reached or author inventory incomplete; coordinate the queue.')
+    return {'author': author, 'reviewer': reviewer, 'cap': report['cap'], 'warnings': warnings}
 
 
 def enqueue_stale(registry,report,lead):
