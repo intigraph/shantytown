@@ -335,7 +335,9 @@ def test_default_field_batch_fits_the_measured_structural_limit(monkeypatch):
     rows = seeds_plate.deferred_rows(PROOF).exact()
     assert refusals == []
     assert sorted(r['id'] for r in rows) == [f'test-{i:03}' for i in range(40)]
-    assert [len(r) for r in reads] == [16, 16, 8]
+    b = seeds_plate.DEFERRED_FIELD_BATCH
+    assert [len(r) for r in reads] == [b] * (40 // b) + ([40 % b] if 40 % b else [])
+    assert b == 15  # 21 lean fields + seeds:lane (aegis-6vto.4) + notes
 
 
 def test_single_candidate_structural_refusal_is_unknown_never_skipped(monkeypatch):
