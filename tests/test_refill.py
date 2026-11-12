@@ -358,3 +358,28 @@ def test_failed_split_census_falls_back_and_still_feeds(tmp_path, monkeypatch):
     assert f.sweep() == ['a'] and calls == [('n1', 'a')]
     split = json.loads((tmp_path / 'refill/state.json').read_text())['split']
     assert split['census'] == 'unknown:TimeoutError' and split['members'] == 1
+
+
+def test_stale_pending_for_a_down_worker_is_not_occupancy():
+    # 6vto.6 live tick 04:13Z: two retained indeterminate sends to DOWN workers
+    # (franklin, kelly) inflated next occupancy to 7 with 5 live members.
+    active = [row('a1', status='in_progress', assignee='a', lane='next')]
+    pending = {'down': {'item': 'x', 'at': 1, 'lane': None},
+               'a': {'item': 'a1', 'at': 1, 'lane': 'next'},
+               'b': {'item': 'y', 'at': 1, 'lane': 'now'}}
+    # down: not live -> ignored; a: already in hand -> not twice; b: live, counted.
+    assert occupancy(active, {'a', 'b', 'c'}, pending) == dict(now=1, next=1, later=0)
+
+
+def test_split_occupancy_never_exceeds_live_members(tmp_path, monkeypatch):
+    busy = row('b1', status='in_progress', assignee='b', lane='next')
+    f, calls = feeder(tmp_path, monkeypatch, [row('n1', lane='next')], active=[busy], free=('a',))
+    state = tmp_path / 'refill'
+    state.mkdir()
+    (state / 'state.json').write_text(json.dumps({'pending': {
+        'franklin': {'item': 'aegis-1tb', 'at': 1}, 'kelly': {'item': 'aegis-c9n', 'at': 1}}}))
+    f.members = lambda: ['a', 'b']
+    f.sweep()
+    split = json.loads((state / 'state.json').read_text())['split']
+    assert split['occupied_before'] == dict(now=0, next=1, later=0) and split['members'] == 2
+    assert calls == [('n1', 'a')]

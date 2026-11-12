@@ -55,8 +55,12 @@ def _owner(row):
     return (row.get('assignee') or '').rsplit('/', 1)[-1]
 
 
-def occupancy(active, members):
-    """Members whose in-hand (in_progress) work sits in each lane; one per member."""
+def occupancy(active, members, pending=None):
+    """Members whose in-hand (in_progress) work sits in each lane; one per member.
+
+    A pending dispatch counts only for a LIVE member with no counted in-hand
+    item: a retained indeterminate send to a down worker is not capacity, and a
+    member whose sent item is already in hand must not count twice."""
     seen, counts = set(), dict(now=0, next=0, later=0)
     for row in sorted(active, key=lambda r: str(r.get('id'))):
         who = _owner(row)
@@ -65,6 +69,10 @@ def occupancy(active, members):
             continue
         seen.add(who)
         counts[lane(row) or 'next'] += 1
+    for who, entry in sorted((pending or {}).items()):
+        if who in members and who not in seen:
+            seen.add(who)
+            counts[entry.get('lane') or 'next'] += 1
     return counts
 
 
@@ -158,9 +166,7 @@ class Refiller:
                 self.log(f'auto-refill split census UNKNOWN ({type(exc).__name__}); '
                          'using free members plus active owners')
         quota = quotas(len(live))
-        occupied = occupancy(active, live)
-        for entry in pending.values():
-            occupied[entry.get('lane') or 'next'] += 1
+        occupied = occupancy(active, live, pending)
         split = dict(members=len(live), census=census, quota=quota, occupied_before=dict(occupied),
                      waiting={name: sum(1 for r in rows if (lane(r) or 'next') == name)
                               for name in LANES},
