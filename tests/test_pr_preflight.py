@@ -1,4 +1,4 @@
-"""Discriminating create controls: none of the refusal arms may post a PR."""
+"""Creation advice and concrete duplicate/identity/write hazard controls."""
 from copy import deepcopy
 import subprocess
 from urllib.parse import parse_qs, urlsplit
@@ -167,11 +167,12 @@ def test_overlap_independent_exact_head_and_reason_are_recorded(candidate):
     {"number": 1, "head": OTHER, "action": "absorb", "reason": "Copies and closes prior work"},
     {"number": 1, "head": OTHER, "action": "stack", "reason": "Stacks on existing work"},
 ])
-def test_unresolved_or_invalid_overlap_refuses_before_write(candidate, decision):
+def test_unresolved_or_invalid_overlap_creates_draft(candidate, decision):
     forge = Forge([pull()])
-    with pytest.raises(p.Refused):
-        create(forge, [decision] if decision else [])
-    assert not forge.writes
+    result = create(forge, [decision] if decision else [])
+    assert len(forge.writes) == 1 and forge.writes[0]['draft'] is True
+    assert result['overlaps'][0]['number'] == 1
+    assert 'Advisory: PR #1' in forge.writes[0]['body']
 
 
 @pytest.mark.parametrize("change", [
@@ -179,27 +180,28 @@ def test_unresolved_or_invalid_overlap_refuses_before_write(candidate, decision)
     lambda f: f.rows[0].update(body="Changed work-item binding"),
     lambda f: f.rows.append(pull(2)),
 ])
-def test_inventory_race_refuses_before_write(candidate, change):
+def test_inventory_race_is_advisory(candidate, change):
     forge = Forge([pull(files=("other.py",))]); forge.race = change
-    with pytest.raises(p.Refused, match="changed"):
-        create(forge)
-    assert not forge.writes
+    result = create(forge)
+    assert len(forge.writes) == 1
+    assert result['created']
 
 
 def test_incomplete_files_refuses_before_write(candidate):
     row = pull(); row["changed_files"] = 2
     forge = Forge([row])
-    with pytest.raises(p.Refused, match="incomplete"):
-        create(forge)
-    assert not forge.writes
+    result = create(forge)
+    assert len(forge.writes) == 1 and result['draft']
+    assert result['inventory_complete'] is False
+    assert 'UNKNOWN' in forge.writes[0]['body']
 
 
 def test_renamed_old_path_is_an_overlap(candidate):
     row = pull(files=("src/renamed.py",)); row["file_rows"][0]["previous_filename"] = "src/shared.py"
     forge = Forge([row])
-    with pytest.raises(p.Refused, match="exact-head"):
-        create(forge)
-    assert not forge.writes
+    result = create(forge)
+    assert result['overlaps'][0]['files'] == ['src/shared.py']
+    assert len(forge.writes) == 1 and forge.writes[0]['draft']
 
 
 def test_complete_pagination_and_bound():
@@ -229,8 +231,8 @@ def test_pr_head_changes_during_file_read():
 
 def test_dry_run_exercises_gates_but_never_posts(candidate):
     forge = Forge([pull()])
-    with pytest.raises(p.Refused):
-        create(forge, dry_run=True)
+    preview = create(forge, dry_run=True)
+    assert preview['would_create'] and preview['draft']
     result = create(Forge(), dry_run=True)
     assert result["would_create"]
     assert "Bead: project-new" in result["body"]
@@ -285,7 +287,7 @@ def test_stack_positive_proves_base_and_ancestry(candidate, monkeypatch):
          'reason': 'Builds the follow-on behavior directly on this reviewed branch.'}
     result = create(Forge([pull()]), [d], dry_run=True)
     assert result['would_create']
-    assert ancestry == [('merge-base', '--is-ancestor', OTHER, HEAD)] * 2
+    assert ancestry == [('merge-base', '--is-ancestor', OTHER, HEAD)]
 
 
 def test_absorbed_closed_head_rechecked_before_create(candidate):
@@ -316,9 +318,9 @@ def test_command_real_dispatch_runs_gate_and_never_posts_without_create(candidat
 def test_missing_file_name_is_not_a_disjoint_result(candidate):
     row = pull(); row['file_rows'] = [{}]
     forge = Forge([row])
-    with pytest.raises(p.Refused, match='missing changed-file'):
-        create(forge)
-    assert not forge.writes
+    result = create(forge)
+    assert result['inventory_complete'] is False and result['draft']
+    assert 'UNKNOWN' in forge.writes[0]['body']
 
 
 def test_candidate_race_during_recheck_refuses(candidate, monkeypatch):
@@ -345,9 +347,9 @@ def test_candidate_race_during_recheck_refuses(candidate, monkeypatch):
 ])
 def test_malformed_metadata_never_becomes_a_disjoint_pass(candidate, mutate):
     row = pull(); mutate(row); forge = Forge([row])
-    with pytest.raises(p.Refused):
-        create(forge)
-    assert not forge.writes
+    result = create(forge)
+    assert result['inventory_complete'] is False and result['draft']
+    assert len(forge.writes) == 1
 
 
 @pytest.mark.parametrize('response', [
@@ -389,3 +391,66 @@ def test_read_existing_candidate_lists_other_overlaps(candidate):
     assert result['excluded_candidate_prs'] == [99]
     assert [p['number'] for p in result['overlaps']] == [1]
     assert not forge.writes
+
+
+@pytest.mark.parametrize('login,ref', [
+    ('release-plz[bot]', 'release-plz-2026'),
+    ('release-please[bot]', 'release-please--main'),
+    ('ledger-bot[bot]', 'ledger/daily'),
+    ('github-actions[bot]', 'release-plz-2026'),
+    ('github-actions[bot]', 'ledger/daily'),
+])
+def test_automation_excluded_without_reading_files(candidate, login, ref):
+    row = pull(); row['user'] = {'login': login, 'type': 'Bot'}
+    row['head']['ref'] = ref
+    row['file_rows'] = [{}]  # Must never inspect this automation inventory.
+    forge = Forge([row])
+    result = create(forge)
+    assert result['overlaps'] == [] and result['draft'] is False
+    assert len(forge.writes) == 1
+
+
+@pytest.mark.parametrize('user,ref', [
+    ({'login': 'human', 'type': 'User'}, 'release-plz-2026'),
+    ({'login': 'release-plz[bot]', 'type': 'User'}, 'release-plz-2026'),
+    ({'login': 'github-actions[bot]', 'type': 'Bot'}, 'another-feature'),
+    ({'login': 'unknown[bot]', 'type': 'Bot'}, 'ledger/daily'),
+])
+def test_title_branch_or_generic_bot_cannot_hide_overlap(candidate, user, ref):
+    row = pull(); row['user'] = user; row['head']['ref'] = ref
+    row['title'] = 'chore: release'
+    forge = Forge([row]); result = create(forge)
+    assert len(result['overlaps']) == 1 and forge.writes[0]['draft']
+
+
+def test_cli_create_overlap_no_disposition_is_success(candidate, monkeypatch, tmp_path, capsys):
+    import json
+    from shantytown.cli import main
+    forge = Forge([pull()]); monkeypatch.setattr(p, 'github', forge)
+    body = tmp_path / 'body.md'; body.write_text('Concrete change')
+    rc = main(['--root', str(tmp_path), '--backend', 'files', 'repo', 'pr',
+               REPO, '--bead', 'project-new', '--create', '--title', 'New work',
+               '--body-file', str(body)])
+    output = json.loads(capsys.readouterr().out)
+    assert rc == 0 and output['created'] and len(forge.writes) == 1
+    assert forge.writes[0]['draft'] is True
+    assert 'Advisory: PR #1' in forge.writes[0]['body']
+
+
+def test_duplicate_appears_during_advice_still_prevents_second_post(candidate):
+    forge = Forge()
+    def race(f):
+        row = pull(); row['head']['ref'] = 'feature'
+        f.rows.append(row)
+    forge.race = race
+    with pytest.raises(p.Refused, match='already has'):
+        create(forge)
+    assert not forge.writes
+
+
+def test_optional_unreadable_dispositions_do_not_block_creation(candidate, tmp_path):
+    forge = Forge([pull()])
+    result = p.run(
+        'unused', REPO, 'main', 'project-new', 'Concrete change', 'Title',
+        p.read_dispositions(tmp_path/'missing'), create=True, api=forge)
+    assert result['created'] and forge.writes[0]['draft']

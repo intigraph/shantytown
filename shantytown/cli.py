@@ -2487,7 +2487,7 @@ def build_parser() -> argparse.ArgumentParser:
                          "Use the feature branch for source publication; reviewed "
                          "main merges use the merge helper")
 
-    pr = leaf("pr", help="complete overlap preflight before creating a GitHub PR")
+    pr = leaf("pr", help="advisory overlap preflight before creating a GitHub PR")
     pr.add_argument("repository", help="explicit GitHub owner/name")
     pr.add_argument("--checkout", type=Path, default=Path.cwd())
     pr.add_argument("--base", default="main")
@@ -2496,7 +2496,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--title")
     pr.add_argument("--body-file", type=Path)
     pr.add_argument("--dispositions-file", type=Path)
-    pr.add_argument("--create", action="store_true", help="create after fresh overlap gates pass")
+    pr.add_argument("--create", action="store_true", help="create PR; overlaps are advisory and open as draft")
     pr.add_argument("--draft", action="store_true")
     pr.add_argument("--dry-run", "-n", action="store_true")
 

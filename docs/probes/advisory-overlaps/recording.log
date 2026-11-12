@@ -1,0 +1,12 @@
+Script started on 2026-11-12 15:33:04-05:00 [COMMAND="python3 docs/probes/advisory-overlaps/demo.py" <not executed on terminal>]
+BASE 41bbe614d12057b582f70314cbb2e37fe2bff9dc; target: isolated synthetic forge, no network writes
+ordinary: REFUSED (PR #1 needs an exact-head disposition) POSTs=0
+release: REFUSED (PR #1 needs an exact-head disposition) POSTs=0
+CANDIDATE source: same inputs, no dispositions
+ordinary: created=True POSTs=1 draft=True overlaps=1
+release: created=True POSTs=1 draft=False overlaps=0
+disjoint: created=True POSTs=1 draft=False overlaps=0
+duplicate: REFUSED (candidate branch already has an open PR; update it rather than create another) POSTs=0
+Candidate overlap creation refusals: 0/2; duplicate control remains refused
+
+Script done on 2026-11-12 15:33:04-05:00 [COMMAND_EXIT_CODE="0"]
