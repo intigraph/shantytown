@@ -313,3 +313,23 @@ def test_nonserving_cycle_does_not_silence_hard_context_hint(
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
     assert stop_policy.stop_advice(tmp_path, card)
     assert "HARD HANDOFF" in json.loads(capsys.readouterr().out)["reason"]
+
+
+@pytest.mark.parametrize("bad", [{}, {"session_id": "session-one"},
+                                 {"transcript_path": "x.jsonl"},
+                                 {"session_id": "", "transcript_path": ""}])
+def test_identityless_stop_keeps_the_bound_session_for_soft_cycle(tmp_path, capsys, bad):
+    """aegis-zxor: a Stop whose payload lacks the session identity (empty or
+    unreadable stdin) overwrote the bound identity with nulls, so every later
+    soft self-cycle failed "incomplete hook session identity" (vati, wu)."""
+    from shantytown import soft_cycle
+    card, payload = world(tmp_path)
+    (tmp_path / "crew").mkdir(exist_ok=True)
+    ch.session_start(tmp_path, card, payload)
+    bound = json.loads((tmp_path / "context_budget/reader.json").read_text())
+    ch.emit(tmp_path, card, bad)
+    capsys.readouterr()
+    row = json.loads((tmp_path / "context_budget/reader.json").read_text())
+    assert row["payload"] == {k: payload[k] for k in ("session_id", "transcript_path")}
+    assert row["at"] == bound["at"], "an identityless Stop proves nothing is current"
+    assert soft_cycle.snapshot(tmp_path, card.name)["identity"]["session_id"] == "session-one"
