@@ -34,8 +34,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands. The inbox.store setting selects legacy seed pointers by default or the isolated Message graph; invalid or unknown declarations refuse.",
-      "source_sha256": "6ecd93cfab0a4d455b9ceb010ab7660eacc76b6c88dd577e6307fcf3230da1eb",
+      "summary": "The configuration reader resolves shantytown.toml and declared environment settings. Local file-backed operation remains available independently of graph integration. The jobs.scheduler setting selects local execution by default or explicit Chaski delegation; invalid declarations and non-absence file-read errors refuse. Only an absent local file retains the built-in default behavior; best-effort supervision can report a fallback without granting local-job execution. Agent harness conversion retains validated per-harness model and browser preferences; unsupported optional fields are reported and omitted from launch commands. The inbox.store setting selects legacy seed pointers by default or the isolated Message graph; invalid or unknown declarations refuse. The escalation_poller.carrier_enabled setting is a strict boolean that defaults to false; unknown table fields refuse.",
+      "source_sha256": "73bbb63d62d63f58cb8c1af8f17b50f9148f11319073d5f86bdd004aee1bdade",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
@@ -83,7 +83,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "d24ba0d254c354506781dd8485ae56a253571abfb406d517e288136e17c16a34",
+      "source_sha256": "218d607b7b2cc2e171d8c12b27834e224291b3bc50bdde1286a044b0a2c3c0d6",
       "properties": {
         "startHereOrder": 2
       }
