@@ -27,14 +27,81 @@ def ordered(rows):
                       r.get('due_at'), r.get('created_at')), r['id']))
 
 
+# aegis-6vto.6 (Stiwi 2026-11-11, two-week trial): about 20% of live capacity
+# for Now (interrupts and new asks), 60% for Next in rank order, 20% for Later
+# oldest-first. Unused Now share works Next. A missing lane is UNLANED (6vto.4
+# plate semantics): it is served inside the Next share after laned Next items,
+# in ordered() order, so before any lane is populated the order is today's.
+LANES = ('now', 'next', 'later')
+
+
+def lane(row):
+    value = row.get('lane')
+    value = value.strip().lower() if isinstance(value, str) else ''
+    return value if value in LANES else ''
+
+
+def quotas(members):
+    """Member slots per lane; Now always keeps one slot while anyone is live."""
+    if members <= 0:
+        return dict(now=0, next=0, later=0)
+    now = max(1, int(members * 0.2 + 0.5))
+    later = min(int(members * 0.2 + 0.5), members - now)
+    return dict(now=now, next=members - now - later, later=later)
+
+
+def _owner(row):
+    # Trailing-segment match, the same parse feed_check.hauls uses.
+    return (row.get('assignee') or '').rsplit('/', 1)[-1]
+
+
+def occupancy(active, members):
+    """Members whose in-hand (in_progress) work sits in each lane; one per member."""
+    seen, counts = set(), dict(now=0, next=0, later=0)
+    for row in sorted(active, key=lambda r: str(r.get('id'))):
+        who = _owner(row)
+        if (row.get('status') != 'in_progress' or not who or who in seen
+                or who not in members):
+            continue
+        seen.add(who)
+        counts[lane(row) or 'next'] += 1
+    return counts
+
+
+def _oldest(row):
+    return (str(row.get('lane_entered_at') or row.get('laneEnteredAt')
+                or row.get('created_at') or ''), row['id'])
+
+
+def lane_sequence(rows, quota, occupied):
+    """Candidate order for ONE free member, and the lane its first item serves.
+
+    Lanes under their share come first (Now, then Later), then Next (laned by
+    rank, then unlaned), then any lane already at its share. Nothing is left
+    idle because of the split: every candidate stays reachable."""
+    groups = dict(now=sorted((r for r in rows if lane(r) == 'now'), key=_oldest),
+                  later=sorted((r for r in rows if lane(r) == 'later'), key=_oldest),
+                  next=[r for r in rows if lane(r) == 'next']
+                       + [r for r in rows if not lane(r)])
+    under = [name for name in ('now', 'later')
+             if occupied[name] < quota[name] and groups[name]]
+    over = [name for name in ('now', 'later') if name not in under]
+    order = under + ['next'] + over
+    return [(name, row) for name in order for row in groups[name]]
+
+
 class Refiller:
     def __init__(self, root, reg, panes, runtime, *, snapshot, preview, dispatch,
-                 log=print, clock=time.time, budget=45, free=None, coverage=lambda: True):
+                 log=print, clock=time.time, budget=45, free=None, coverage=lambda: True,
+                 members=None):
         self.root, self.reg, self.panes, self.runtime = Path(root), reg, panes, runtime
         self.snapshot, self.preview, self.dispatch = snapshot, preview, dispatch
         self.log, self.clock, self.budget = log, clock, budget
         self.free = free
         self.coverage = coverage
+        # Live worker/lead names for the capacity split; None = free members
+        # plus the owners of active work (a test seam, not a census).
+        self.members = members
 
     def sweep(self):
         """One item per idle member; uncertain sends retain exclusive custody."""
@@ -78,6 +145,26 @@ class Refiller:
             index = free.index(after) + 1
             free = free[index:] + free[:index]
         rows = ordered(ready)
+        fallback = {*free, *owned_idle, *pending,
+                    *(_owner(row) for row in active if _owner(row))}
+        census = 'fallback'
+        live = fallback
+        if self.members is not None:
+            try:
+                # A census can only add capacity the tick already sees as free.
+                live, census = set(self.members()) | set(free) | set(owned_idle), 'live'
+            except Exception as exc:
+                census = f'unknown:{type(exc).__name__}'
+                self.log(f'auto-refill split census UNKNOWN ({type(exc).__name__}); '
+                         'using free members plus active owners')
+        quota = quotas(len(live))
+        occupied = occupancy(active, live)
+        for entry in pending.values():
+            occupied[entry.get('lane') or 'next'] += 1
+        split = dict(members=len(live), census=census, quota=quota, occupied_before=dict(occupied),
+                     waiting={name: sum(1 for r in rows if (lane(r) or 'next') == name)
+                              for name in LANES},
+                     served=dict(now=0, next=0, later=0))
         reserved = {entry['item'] for entry in pending.values()}
         delivered, observations = [], {}
         waiting = {}
@@ -123,7 +210,7 @@ class Refiller:
             # otherwise a slow first member starves the rest on every tick.
             state['last_worker'] = worker
             seen = laps.setdefault(worker, {})
-            for row in rows:
+            for served_lane, row in lane_sequence(rows, quota, occupied):
                 if time.monotonic() - started >= self.budget:
                     observations[worker] = {'at': self.clock(), 'state': 'budget-exhausted'}
                     break
@@ -147,7 +234,8 @@ class Refiller:
                 # Any dispatch attempt changes the worker's state: start a new lap.
                 seen.clear()
                 state['lap'] = {w: v for w, v in laps.items() if v}
-                pending[worker] = {'item': item, 'at': self.clock()}
+                pending[worker] = {'item': item, 'at': self.clock(), 'lane': served_lane}
+                occupied[served_lane] += 1
                 state['last_worker'] = worker
                 write_json_atomic(path, state)
                 reserved.add(item)
@@ -160,8 +248,11 @@ class Refiller:
                     'state': 'delivered' if rc == 0 else 'refused' if rc == 1 else 'unknown'}
                 if rc in (0, 1):
                     pending.pop(worker)
+                if rc == 1:
+                    occupied[served_lane] -= 1
                 if rc == 0:
                     delivered.append(worker)
+                    split['served'][served_lane] += 1
                 # A refused real dispatch can mean the pane just became busy.
                 # Do not try another item on this worker in the same pass.
                 break
@@ -173,10 +264,19 @@ class Refiller:
         state['lap'] = {w: v for w, v in laps.items() if v}
         state['observations'] = observations
         state['waiting'] = waiting
+        # The trial's report reads these (6vto.6): Now ran DRY = Now work was
+        # waiting with its share full; Now sat IDLE = share free, nothing in Now.
+        split['occupied_after'] = dict(occupied)
+        split['now_dry'] = int(split['waiting']['now'] > split['served']['now']
+                               and occupied['now'] >= quota['now'])
+        split['now_idle'] = int(split['waiting']['now'] == 0
+                                and split['occupied_before']['now'] < quota['now'])
+        state['split'] = split
         write_json_atomic(path, state)
         with (directory / 'observations.jsonl').open('a') as journal:
             journal.write(json.dumps({'at': state['observed_at'], 'observations': observations,
-                                      'pending': pending}, sort_keys=True) + '\n')
+                                      'pending': pending, 'split': split},
+                                     sort_keys=True) + '\n')
         for worker, observation in observations.items():
             self.log(f"auto-refill {worker}: {observation['state']} {observation.get('item', '')}")
         return delivered
@@ -230,6 +330,7 @@ def from_cli(a, reg, panes, runtime, cfg, *, log=print):
     from .triage import Action
     from . import feed_check, fleet as fleet_census
     remote = set()
+    remote_live = set()
     peer_errors = []
     def free():
         local = feed_check.free_feedable_workers(reg, panes, runtime,
@@ -242,7 +343,20 @@ def from_cli(a, reg, panes, runtime, cfg, *, log=print):
             if row['live'] and row['work'] == 'idle' and row['state'] == 'up'
             and not row.get('retired')
             and row.get('tree_role', row['role']) in ('worker', 'lead'))
+        remote_live.update(row['name'] for row in fleet_census.rows(results)
+            if row['live'] and row['state'] == 'up' and not row.get('retired')
+            and row.get('tree_role', row['role']) in ('worker', 'lead'))
         return sorted(set(local) | remote)
+    def members():
+        # Capacity for the 6vto.6 split: live worker/lead panes, busy or idle,
+        # by the cheap card gates (no screen capture), plus live peer rows.
+        from .tend import is_retired
+        from .ephemeral import is_ephemeral_name
+        local = {ag.name for ag in reg.all().exact()
+                 if getattr(ag, 'role', None) in ('worker', 'lead')
+                 and getattr(ag, 'pane', None) and panes.exists(ag.pane)
+                 and not is_retired(ag) and not is_ephemeral_name(ag.name)}
+        return sorted(local | remote_live)
     def args_for(item, worker, *, dry_run):
         return argparse.Namespace(**(vars(a) | dict(item=item, agent=worker,
             dry_run=dry_run, note=None, note_file=None, reassign=False,
@@ -277,6 +391,6 @@ def from_cli(a, reg, panes, runtime, cfg, *, log=print):
         return _cmd_go(args_for(item, worker, dry_run=False))
     result = Refiller(a.root, reg, panes, runtime, snapshot=snapshot,
                       preview=preview, dispatch=dispatch, log=log, free=free,
-                      coverage=lambda: not peer_errors).sweep()
+                      coverage=lambda: not peer_errors, members=members).sweep()
     report(a.root, reg, panes, log=log)
     return result

@@ -270,3 +270,91 @@ def test_lap_memory_is_cleared_by_a_dispatch_attempt_and_pruned_to_live_candidat
     assert calls == [('z-author', 'claude')]
     state = json.loads((tmp_path / 'refill/state.json').read_text())
     assert state['lap'] == {}
+
+
+# aegis-6vto.6: 20/60/20 capacity split (Now / Next / Later) in pool refill.
+from shantytown.refill import quotas, occupancy, lane_sequence, lane
+
+
+@pytest.mark.parametrize('n,expected', [
+    (0, (0, 0, 0)), (1, (1, 0, 0)), (2, (1, 1, 0)), (3, (1, 1, 1)), (4, (1, 2, 1)),
+    (5, (1, 3, 1)), (8, (2, 4, 2)), (10, (2, 6, 2))])
+def test_quotas_reserve_about_20_60_20_and_always_one_now_slot(n, expected):
+    q = quotas(n)
+    assert (q['now'], q['next'], q['later']) == expected and sum(q.values()) == n
+
+
+def test_lane_parse_is_case_insensitive_and_unknown_is_unlaned():
+    assert [lane(row('x', lane=v)) for v in ('Now', ' later ', 'next', 'soon', None, 3)] == \
+        ['now', 'later', 'next', '', '', '']
+
+
+def test_unlaned_board_keeps_todays_order_exactly():
+    rows = ordered([row('b', priority=2), row('a', priority=0), row('c', priority=1)])
+    seq = lane_sequence(rows, quotas(5), dict(now=0, next=0, later=0))
+    assert [r['id'] for _, r in seq] == [r['id'] for r in rows] == ['a', 'c', 'b']
+    assert {name for name, _ in seq} == {'next'}
+
+
+def test_now_preempts_next_only_up_to_its_share(tmp_path, monkeypatch):
+    rows = [row('next1', priority=0, lane='next'), row('now1', priority=3, lane='now'),
+            row('now2', priority=3, lane='now')]
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=('a', 'b', 'c', 'd', 'e'))
+    f.sweep()
+    # 5 members -> one Now slot: one Now item, then Next, then the second Now.
+    assert calls == [('now1', 'a'), ('next1', 'b'), ('now2', 'c')]
+    split = json.loads((tmp_path / 'refill/state.json').read_text())['split']
+    assert split['quota'] == dict(now=1, next=3, later=1)
+    assert split['served'] == dict(now=2, next=1, later=0) and split['now_dry'] == 0
+
+
+def test_busy_now_member_fills_the_share_so_free_member_takes_next(tmp_path, monkeypatch):
+    rows = [row('now2', lane='now'), row('next1', lane='next')]
+    busy = row('now1', status='in_progress', assignee='x', lane='now')
+    f, calls = feeder(tmp_path, monkeypatch, rows, active=[busy], free=('a',))
+    f.members = lambda: ['a', 'x', 'y', 'z', 'w']
+    f.sweep()
+    assert calls == [('next1', 'a')]
+    split = json.loads((tmp_path / 'refill/state.json').read_text())['split']
+    assert split['now_dry'] == 1 and split['occupied_before']['now'] == 1
+
+
+def test_unused_now_share_works_next_and_counts_idle(tmp_path, monkeypatch):
+    f, calls = feeder(tmp_path, monkeypatch, [row('n1', lane='next'), row('u1')], free=('a', 'b'))
+    f.sweep()
+    assert calls == [('n1', 'a'), ('u1', 'b')]  # laned Next before unlaned
+    assert json.loads((tmp_path / 'refill/state.json').read_text())['split']['now_idle'] == 1
+
+
+def test_later_share_serves_oldest_first_before_next(tmp_path, monkeypatch):
+    rows = [row('next1', priority=0, lane='next'),
+            row('late-new', priority=4, lane='later', created_at='2026-11-01T00:00:00Z'),
+            row('late-old', priority=4, lane='later', created_at='2026-01-01T00:00:00Z')]
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=('a', 'b', 'c'))
+    f.sweep()
+    # 3 members -> 1/1/1: Later oldest first, then Next, then the remaining Later.
+    assert calls == [('late-old', 'a'), ('next1', 'b'), ('late-new', 'c')]
+
+
+def test_refused_preview_in_the_chosen_lane_falls_through_in_the_same_tick(tmp_path, monkeypatch):
+    rows = [row('now1', lane='now'), row('next1', lane='next')]
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=('a',),
+                      preview=lambda item, worker: item != 'now1')
+    assert f.sweep() == ['a'] and calls == [('next1', 'a')]
+
+
+def test_occupancy_counts_one_in_hand_item_per_live_member():
+    active = [row('a1', status='in_progress', assignee='crew/a', lane='now'),
+              row('a2', status='in_progress', assignee='a', lane='later'),
+              row('b1', status='in_progress', assignee='b'),
+              row('gone', status='in_progress', assignee='down', lane='now'),
+              row('c1', status='open', assignee='c', lane='now')]
+    assert occupancy(active, {'a', 'b', 'c'}) == dict(now=1, next=1, later=0)
+
+
+def test_failed_split_census_falls_back_and_still_feeds(tmp_path, monkeypatch):
+    f, calls = feeder(tmp_path, monkeypatch, [row('n1', lane='next')], free=('a',))
+    f.members = lambda: (_ for _ in ()).throw(TimeoutError())
+    assert f.sweep() == ['a'] and calls == [('n1', 'a')]
+    split = json.loads((tmp_path / 'refill/state.json').read_text())['split']
+    assert split['census'] == 'unknown:TimeoutError' and split['members'] == 1
