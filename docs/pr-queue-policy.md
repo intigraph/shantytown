@@ -7,8 +7,8 @@ names do not establish who authored or reviewed a change.
 
 `evaluate(snapshot, now=..., cap=...)` returns open count, median age, per-author
 WIP admission, advisory eligibility and deterministic stale event keys. A cap is
-required; this prototype chooses no fleet-wide cap. Unknown author bindings block
-new admissions because their outstanding work cannot be counted reliably. Missing
+required; this prototype chooses no fleet-wide cap. Unknown author bindings make WIP advice UNKNOWN because outstanding work cannot
+be counted reliably; they do not block opening a draft. Missing
 or invalid evidence does not make a PR eligible. Explicit hold clearance, exact
 head/base, independent named reviewer and a review digest are required. These
 inputs are assertions of the caller, not authentication performed by the library.
@@ -83,11 +83,12 @@ calls the bound registry reconciler through a fixed argv. It does not interpolat
 incoming event bodies into a shell. Adoption must measure the real transaction
 source, batching/load behavior and scheduled action before enabling the job.
 
-The bound foreground creator now requires an explicit reviewer and cap. It checks
-complete author-bound WIP admission before posting, and queues a named independent
-review request in the private outbox. Missing existing author bindings prevent
-admission; they are not assigned from shared forge logins. Review assignment is
-not a passing review receipt.
+The bound foreground creator accepts an optional reviewer and cap. WIP limits,
+missing reviewer assignment and unknown queue inventory are advisory and select a
+draft. Deferred items also select a draft automatically. A valid independent
+reviewer may be queued in the private outbox; self-assignment is never queued.
+Missing author bindings are not inferred from shared forge logins. Review
+assignment is not a passing review receipt, and a draft does not authorize merge.
 
 The private stale/review outbox records intent before a durable send. Delivery
 requires a control-proven destination lookup. After a lost response, a positive

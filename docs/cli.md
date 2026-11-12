@@ -3277,38 +3277,38 @@ st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
   --dispositions-file /tmp/overlaps.json --dry-run
 ```
 
-Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
-paths and explicit bead-family relationships count (`--bead-family project-epic`
-adds an otherwise unrelated parent). Dotted child IDs share their root family.
-Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
-a file count mismatch, or a candidate that differs from its remote branch refuses.
-The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
-hit is unknown coverage, never an empty result.
+Omit `--create` for the open-PR overlap report. Both renamed paths and explicit
+bead-family relationships count (`--bead-family project-epic` adds a parent).
+Dotted child IDs share their root family. Drafts are included. Known release-plz,
+release-please and ledger bot identities are excluded from overlap scans. Shared
+GitHub Actions automation is excluded only on release or ledger branch patterns.
+Release tools using a regular user token are recognized by a generated timestamped
+release-plz branch paired with a release title, or a ledger branch paired with a
+`chore(ledger):` title. A title or branch alone does not exclude human work.
+These metadata classifications only suppress overlap advice, never authorize merge.
 
-The dispositions file is a JSON list; every overlapping PR needs its exact head
-and a reason. For example:
+Overlaps are advisory: creation proceeds as a **draft**, with the overlapping PR
+numbers, exact heads, shared files and item families in its body. No dispositions
+file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
+are validated and appended when valid; missing, stale, invalid or unreadable
+annotations produce advice rather than refusing creation. This command never
+closes another PR. Other-PR churn does not block creation.
 
-```json
-[{"number": 12, "head": "<exact-other-head>", "action": "independent",
-  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
-```
+Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
+files per PR. Missing metadata, failed reads or bound exhaustion produce an
+explicit UNKNOWN warning and a draft, never a claimed disjoint result. Duplicate
+creation is checked separately without depending on other PRs' file inventories.
 
-`stack` requires the other PR's exact head as the candidate base and proves its
-ancestry. `absorb` requires the referenced PR already closed at that exact head;
-this command never closes other authors' work. `independent` records the author's
-reason rather than pretending file overlap proves a semantic conflict. Duplicate,
-stale, missing or short-reason dispositions refuse before creation.
-
-Creation checks the inventory and local/remote candidate again immediately before
-posting. It appends the primary `Bead:` and exact-head dispositions to the body.
-`--dry-run` exercises all gates and previews the body without posting. An existing
-PR for the candidate branch is identified and excluded from its own overlap report
-in read mode; creation still refuses a duplicate. A lost create response or
-mismatched resulting head/base is reported **indeterminate**: inspect the remote
-PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
-race after the last read is detected on the result, not prevented. This command
-provides the crew creation path; it does not claim to intercept raw `gh` or other
-clients. Installing a mandatory external-client hook is a separate adoption step.
+Candidate identity, committed/published source, body primary marker and duplicate
+checks still protect concrete write hazards. A changed local/remote candidate
+refuses before posting. An existing PR for the candidate branch is excluded from
+its own read report; creation refuses a duplicate. `--dry-run` previews the same
+body and draft decision without posting. A lost create response or mismatched
+resulting head/base remains **indeterminate**: inspect the remote PR before retrying.
+GitHub has no atomic expected-head create endpoint, so a branch race after the
+last read is detected on the result, not prevented. This command provides the
+crew creation path; it does not intercept raw `gh` or other clients. Merge checks
+and independent review requirements remain on the merge path.
 
 ### Explicit push destination
 
