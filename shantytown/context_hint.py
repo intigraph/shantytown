@@ -215,9 +215,20 @@ def _emit(root, card, payload=None) -> bool:
             exception = (dict(until=time.time() + 600,
                               through_pct=min(limits.hard_pct, reading.pct + 5))
                          if result["decision"] == "continue" else None)
-        snapshot = dict(payload={k: payload.get(k) for k in
-                                 ("session_id", "transcript_path")},
-                        at=time.time(), reported=key if category != "low" else None,
+        identity = {k: payload.get(k) for k in ("session_id", "transcript_path")}
+        bound_at = time.time()
+        if not all(isinstance(v, str) and v for v in identity.values()):
+            # aegis-zxor: a Stop without its identity (empty or unreadable
+            # stdin) proves nothing about which session is live. Overwriting
+            # the bound identity with nulls broke every later soft self-cycle
+            # ("incomplete hook session identity"). Keep the last complete
+            # identity AND its time, so freshness is never claimed from it.
+            prior = old.get("payload")
+            if (isinstance(prior, dict) and type(old.get("at")) in (int, float)
+                    and all(isinstance(prior.get(k), str) and prior[k] for k in identity)):
+                identity, bound_at = {k: prior[k] for k in identity}, old["at"]
+        snapshot = dict(payload=identity,
+                        at=bound_at, reported=key if category != "low" else None,
                         emitted_at=time.time() if due else old.get("emitted_at"),
                         tool_nudge=old.get("tool_nudge"),
                         state=reading.state, detail=reading.label(), exception=exception,
