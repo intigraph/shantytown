@@ -247,18 +247,30 @@ def _unsupported_owner_branches(proof, agent):
         for clause in clauses:
             # Restrict the candidate relation before joining owners and types.
             # Missing status and unknown-only status retain the original refusal.
-            for candidate, _type_clause in (
+            for candidate, missing_plain in (
                 (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
-                 f"?s a <{SCHEMA}Action> . "),
+                 False),
                 # A plain-value guard admits the server's indexed anti-join.
                 # Non-plain-only statuses are already refused by the other
                 # branch; a known plain status still permits mixed values.
                 (f"?s a <{SCHEMA}Action> . "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?any . "
                  f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
-                 f"?s a <{SCHEMA}Action> . "),
+                 True),
             ):
+                if isinstance(agent, tuple):
+                    # Admit bad states before joining variable roster owners.
+                    # The typed absence arm can use Quipu's indexed anti-join;
+                    # the other arm need not check types for every known state.
+                    # Only the typed arm is DISTINCT (FILTER EXISTS semantics).
+                    projection = "DISTINCT ?s" if missing_plain else "?s ?bad"
+                    type_check = "" if missing_plain else f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ "
+                        f"{{ SELECT {projection} WHERE {{ {candidate} }} }} "
+                        f"{clause}{type_check} }} }}")
+                    continue
                 # Keep the bound owner and status test in one relation. A
                 # type BGP or nested candidate group may materialize the whole
                 # Action class before applying that owner restriction.
