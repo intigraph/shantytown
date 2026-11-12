@@ -46,6 +46,24 @@ def test_job_scheduler_refuses_unknown_keys(tmp_path):
 
 # --- the file is optional, and the defaults are the CHEAP ones ---------------
 
+def test_escalation_carriers_require_explicit_boolean_opt_in(tmp_path):
+    assert config.load(tmp_path).escalation_poller_carrier_enabled is False
+    for enabled in (False, True):
+        _write(tmp_path, '[escalation_poller]\ncarrier_enabled = '
+               + str(enabled).lower() + '\n')
+        assert config.load(tmp_path).escalation_poller_carrier_enabled is enabled
+
+
+@pytest.mark.parametrize("body", [
+    'carrier_enabled = "true"', 'carrier_enabled = 1',
+    'carrier_enabled = []', 'carrier_enabeld = true',
+])
+def test_escalation_carrier_config_refuses_ambiguous_activation(tmp_path, body):
+    _write(tmp_path, '[escalation_poller]\n' + body + '\n')
+    with pytest.raises(config.ConfigError):
+        config.load(tmp_path)
+
+
 def test_no_file_means_builtin_defaults_and_says_so(tmp_path):
     cfg = config.load(tmp_path)
     assert cfg.mode == "lite", "the default mode must be the token-conservation one"
