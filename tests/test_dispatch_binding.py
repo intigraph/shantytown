@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import json
+import shlex
 
 import pytest
 
@@ -46,6 +47,58 @@ def world(tmp_path):
 def snapshot(root):
     return {str(p.relative_to(root)): (p.read_bytes(), p.stat().st_mtime_ns)
             for p in root.rglob('*') if p.is_file()}
+
+
+def test_different_worker_refusal_names_retained_receipt_and_read_only_reconcile(world, monkeypatch, capsys):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    (root / 'crew/other.json').write_text(json.dumps(dict(pane='%5', harness='codex')))
+    tracker.update('work-1', notes='new native revision, still open and unassigned')
+    before = snapshot(root)
+    with pytest.raises(ReceiptConflict) as refused:
+        d.go('work-1', 'other')
+    message = str(refused.value)
+    for value in (row['id'], 'worker=worker', 'state=prepared', 'revision=1'):
+        assert value in message
+    commands = [shlex.split(line) for line in message.splitlines() if line.startswith('st go ')]
+    reconcile = next(command for command in commands if '--reconcile' in command)
+    assert reconcile == ['st', 'go', 'work-1', 'worker', '--receipt', row['id'], '--reconcile']
+    assert ['st', 'go', 'work-1', 'worker', '--receipt', row['id'], '--supersede'] in commands
+    assert snapshot(root) == before and len(panes.sent) == 1
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: d.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('read-only reconcile must not dispatch'))
+    assert cli.main(['--root', str(root)] + reconcile[1:]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['id'] == row['id'] and result['worker'] == 'worker'
+    assert not result['execution_authorized']
+    assert snapshot(root) == before and len(panes.sent) == 1
+
+
+@pytest.mark.parametrize('native', ['owned', 'deferred', 'unreadable'])
+def test_different_scope_never_hints_supersede_without_native_release(world, monkeypatch, native):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    plan = d.plan('work-1', 'worker', note='different scope')
+    if native == 'owned':
+        tracker.update('work-1', status='in_progress', assignee='someone')
+    elif native == 'deferred':
+        tracker.update('work-1', defer_until='2099-01-01T00:00:00Z')
+    else:
+        monkeypatch.setattr(tracker, 'get', lambda _: (_ for _ in ()).throw(OSError('unreadable')))
+    before = snapshot(root)
+    with pytest.raises(ReceiptConflict) as refused:
+        binding.prepare(plan)
+    assert row['id'] in str(refused.value)
+    assert '--reconcile' in str(refused.value) and '--supersede' not in str(refused.value)
+    assert snapshot(root) == before and len(panes.sent) == 1
 
 
 def test_real_go_exact_body_single_assignment_and_replay(world):
