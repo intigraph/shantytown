@@ -73,23 +73,38 @@ def pages(api, path, *, maximum=3200):
     raise Refused("inventory pagination did not terminate")
 
 
-# Exact automation identities only: titles/branches alone are author-controlled.
+# Bot identities plus specific generated branch/title pairs; advisory only.
 AUTOMATION = {"release-plz[bot]", "release-please[bot]", "github-actions[bot]",
               "ledger-bot[bot]", "ledger-bot"}
 
 
 def automation(pull):
+    """Recognize automation with Bot identities or specific generated metadata.
+
+    Release tools may use an operator token and appear as User, not Bot. This
+    exclusion only reduces overlap advice; it grants no write/merge authority.
+    """
     user = pull.get("user") or {}
+    head = pull.get("head")
+    ref = head.get("ref", "") if isinstance(head, dict) else ""
+    title = pull.get("title", "")
+    if not isinstance(ref, str) or not isinstance(title, str):
+        return False
+    generated_release = (
+        re.fullmatch(r"release-plz-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z", ref)
+        and re.fullmatch(r"chore(?:\([^()]+\))?: release(?: .+)?", title)
+    )
+    generated_ledger = (ref.startswith(("ledger/", "ledger-"))
+                        and re.match(r"chore\(ledger\): ", title))
+    if generated_release or generated_ledger:
+        return True
     if not isinstance(user, dict):
         return False
     login = user.get("login")
-    if login not in AUTOMATION or user.get("type") != "Bot":
+    if not isinstance(login, str) or login not in AUTOMATION or user.get("type") != "Bot":
         return False
     if login == "github-actions[bot]":
-        # Shared Actions identity is not, by itself, a release/ledger bot.
-        head = pull.get("head")
-        ref = head.get("ref", "") if isinstance(head, dict) else ""
-        return isinstance(ref, str) and ref.startswith(("release-plz-", "release-please--", "ledger/"))
+        return ref.startswith(("release-plz-", "release-please--", "ledger/", "ledger-"))
     return True
 
 

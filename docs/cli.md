@@ -3281,8 +3281,11 @@ Omit `--create` for the open-PR overlap report. Both renamed paths and explicit
 bead-family relationships count (`--bead-family project-epic` adds a parent).
 Dotted child IDs share their root family. Drafts are included. Known release-plz,
 release-please and ledger bot identities are excluded from overlap scans. Shared
-GitHub Actions automation is excluded only on release or ledger branch patterns;
-a human release title or branch does not hide an overlap.
+GitHub Actions automation is excluded only on release or ledger branch patterns.
+Release tools using a regular user token are recognized by a generated timestamped
+release-plz branch paired with a release title, or a ledger branch paired with a
+`chore(ledger):` title. A title or branch alone does not exclude human work.
+These metadata classifications only suppress overlap advice, never authorize merge.
 
 Overlaps are advisory: creation proceeds as a **draft**, with the overlapping PR
 numbers, exact heads, shared files and item families in its body. No dispositions

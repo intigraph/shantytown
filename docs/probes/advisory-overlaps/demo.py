@@ -22,7 +22,9 @@ exec(compile((ROOT/'tests/test_pr_preflight.py').read_text(), '<forge-fixture>',
 def probe(module, kind):
     row = fixture.pull()
     if kind == 'release':
-        row['user'] = {'login': 'release-plz[bot]', 'type': 'Bot'}
+        row['user'] = {'login': 'operator', 'type': 'User'}
+        row['head']['ref'] = 'release-plz-2026-11-06T14-55-36Z'
+        row['title'] = 'chore: release v0.18.0'
     rows = [] if kind == 'disjoint' else [row]
     if kind == 'duplicate':
         row['head']['ref'] = 'feature'

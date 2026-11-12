@@ -454,3 +454,26 @@ def test_optional_unreadable_dispositions_do_not_block_creation(candidate, tmp_p
         'unused', REPO, 'main', 'project-new', 'Concrete change', 'Title',
         p.read_dispositions(tmp_path/'missing'), create=True, api=forge)
     assert result['created'] and forge.writes[0]['draft']
+
+
+@pytest.mark.parametrize('ref,title', [
+    ('release-plz-2026-11-06T14-55-36Z', 'chore: release v0.18.0'),
+    ('ledger/daily', 'chore(ledger): refresh evidence'),
+])
+def test_generated_automation_using_user_token_is_excluded(candidate, ref, title):
+    row = pull(); row.update(user={'login': 'operator', 'type': 'User'}, title=title)
+    row['head']['ref'] = ref; row['file_rows'] = [{}]
+    forge = Forge([row]); result = create(forge)
+    assert result['overlaps'] == [] and forge.writes[0]['draft'] is False
+
+
+@pytest.mark.parametrize('ref,title', [
+    ('release-plz-2026-11-06T14-55-36Z', 'Fix ordinary behavior'),
+    ('human-feature', 'chore: release v0.18.0'),
+    ('ledger/daily', 'Fix ordinary behavior'),
+])
+def test_generated_branch_or_title_alone_does_not_exclude(candidate, ref, title):
+    row = pull(); row.update(user={'login': 'operator', 'type': 'User'}, title=title)
+    row['head']['ref'] = ref
+    forge = Forge([row]); result = create(forge)
+    assert len(result['overlaps']) == 1 and forge.writes[0]['draft'] is True
