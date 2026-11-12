@@ -535,3 +535,42 @@ def test_unknown_release_reconciles_only_on_exact_marker_comment(tmp_path):
     assert after['stranded-owner:d']['outcome'] == 'released'
     assert not service.unresolved_release('u')  # a pool claim must never fence the owner
     assert not service.unresolved_release('x') and service.unresolved_release('w')
+
+
+@pytest.mark.parametrize('phase', ['planned', 'inflight', 'drained'])
+@pytest.mark.parametrize('operator_stopped', [False, True])
+@pytest.mark.parametrize('representation', ['label', 'context', 'json', 'malformed'])
+def test_deploy_reservations_never_release(world, phase, operator_stopped, representation):
+    context = {'deploy_admission': {'phase': phase, 'owner': 'worker'}}
+    if representation == 'label':
+        world.row['labels'] = ['deploy-operation']
+    else:
+        world.row['agent_context'] = (context if representation == 'context' else
+                                     json.dumps(context) if representation == 'json' else '{broken')
+    if operator_stopped:
+        world.observation['state'] = 'operator-stopped'
+    assert not eligible(world.row, operator_stopped=operator_stopped)
+    world.tick(0, operator_release_only=operator_stopped)
+    world.tick(T2 + 1, operator_release_only=operator_stopped)
+    assert world.notices == world.writes == []
+    assert world.row['assignee'] == 'worker' and world.row['revision'] == 7
+
+
+def test_deploy_label_added_after_census_is_fenced(world):
+    world.tick(0)
+    def read(_):
+        return dict(world.row, labels=['deploy-operation'])
+    world.tick(T2 + 1, read=read)
+    assert not world.writes
+    assert world.row['assignee'] == 'worker'
+
+
+def test_native_adapter_refuses_direct_deploy_release():
+    from shantytown.sd import SdTracker
+    class NoIO:
+        def _bd_for(self, *args):
+            pytest.fail('deploy release reached tracker write')
+    row = dict(id='op-1', status='open', title='operation', assignee='worker',
+               priority=0, labels=['deploy-operation'], revision=3)
+    with pytest.raises(ValueError, match='eligible revision-bound'):
+        SdTracker.release_stranded(NoIO(), row, 'preserve', operator_stopped=True)
