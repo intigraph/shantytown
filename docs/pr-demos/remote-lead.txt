@@ -1,0 +1,11 @@
+BEFORE
+Fixture: local worker, remote administrator, no local lead card; graph stub.
+ANCHOR REFUSED: declared lead absent from local cards.
+STOP REFUSED: exit=1
+No local lead card created. Relay transport is stubbed, not delivered.
+
+AFTER
+Fixture: local worker, remote administrator, no local lead card; graph stub.
+ANCHOR PASS: reports_to=remote-admin, lead=remote-admin
+STOP PASS: queued to remote-admin; durable relay seam selected; local-admin=0
+No local lead card created. Relay transport is stubbed, not delivered.
