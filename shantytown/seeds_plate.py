@@ -304,6 +304,13 @@ class RenderShapeReads:
         return result
 
 
+class FieldReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart the entire fenced read with a smaller subject batch."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 field projection; narrowing subject batch')
+        self.batch_size = batch_size
+
+
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
@@ -320,6 +327,8 @@ def _retry_owner_projection(function):
                     return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
+                if isinstance(changed, FieldReadTimeout):
+                    kwargs = {**kwargs, "field_batch_size": changed.batch_size}
                 if isinstance(changed, seeds_read_cache.StoreChanged):
                     budget["store_changed"] = True
                     admission = kwargs.get("shape_reads")
@@ -348,7 +357,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
                include_closed: bool = False, only_specs: bool = False,
-               recovery_tokens: int = 3) -> Answer[list[dict]]:
+               recovery_tokens: int = 3, field_batch_size: int = 250) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -494,7 +503,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # refusal boundary. Smaller batches leave room for optional fields
         # and labels instead of truncating the first 1,000-subject request.
         field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
-                             batch_size=250)
+                             batch_size=field_batch_size, recover_timeouts=recovery_tokens > 3)
         grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
@@ -663,7 +672,8 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
-def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500):
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
+                    recover_timeouts=False):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
@@ -696,7 +706,12 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
             + " UNION ".join(branches) + " } LIMIT 10000"
         )
-        part = _query(proof, query, timeout)["rows"]
+        try:
+            part = _query(proof, query, timeout)["rows"]
+        except HTTPError as error:
+            if recover_timeouts and error.code == 408 and len(chunk) > 1:
+                raise FieldReadTimeout(max(1, len(chunk) // 2)) from error
+            raise
         if len(part) >= 10000 or len(wire) + len(part) >= budget:
             raise ValueError("plate field budget reached")
         wire.extend(part)
