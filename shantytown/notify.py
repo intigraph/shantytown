@@ -1985,7 +1985,7 @@ class DeferralAlerter:
         try:
             source_sha = hashlib.sha256(b''.join(
                 (Path(__file__).with_name(name)).read_bytes()
-                for name in ('notify.py', 'deferral_pacing.py'))).hexdigest()
+                for name in ('notify.py', 'deferral_pacing.py', 'deferral_stopped.py'))).hexdigest()
         except OSError:
             source_sha = 'UNKNOWN'  # telemetry cannot prevent an urgent delivery
         routes = {}
@@ -2053,14 +2053,58 @@ class DeferralAlerter:
         import json
         from .files import write_json_atomic
 
+        # Deliberate stops are one administrator interruption per owner, even
+        # for routine P2+ waits. A stopped owner's backlog is not their lead's
+        # new plate. Keep failed batches pending independently of other owners.
+        from . import deferral_stopped
+        stopped_groups = {}
+        for finding in findings:
+            owner = by_id.get(finding.bead, {}).get('assignee')
+            if pacing.deliberately_stopped(owner):
+                stopped_groups.setdefault(owner, []).append(finding)
+        stopped_ids = {f.bead for group in stopped_groups.values() for f in group}
+        stopped_pending, stopped_delivered = set(), []
+        stopped_path = Path(self._root) / 'notify' / 'deferral-stopped-owners.json'
+        details = {owner: deferral_stopped.inventory(group)
+                   for owner, group in stopped_groups.items()}
+        inventory_ready = True
+        try:
+            write_json_atomic(stopped_path, details)
+        except OSError as error:
+            inventory_ready = False
+            self._log(f'deferral-sweep: stopped-owner inventory UNKNOWN ({type(error).__name__})')
+        fresh_ids = {f.bead for f in fresh}
+        for owner, group in sorted(stopped_groups.items()):
+            changed = [f for f in group if f.bead in fresh_ids]
+            if not changed:
+                continue
+            text = deferral_stopped.report(owner, details[owner], stopped_path)
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            recipient = None
+            if inventory_ready:
+                try:
+                    recipient = self._push(self._reg, self._panes, text)
+                except Exception as error:
+                    self._log(f'deferral-sweep: stopped-owner delivery UNKNOWN ({type(error).__name__})')
+            if recipient is None:
+                stopped_pending.update(f.bead for f in changed)
+                for finding in changed:
+                    log_route(finding, routes[finding.bead], None, 'pending', digest)
+            else:
+                stopped_delivered.extend(f.bead for f in changed)
+                for finding in changed:
+                    log_route(finding, routes[finding.bead], recipient, 'delivered', digest)
+                self._log(f'deferral-sweep: ADMIN-DIGEST delivered owner={owner} '
+                          f'count={len(group)} digest={digest}')
+
         def is_loud(finding):
             risk = (3 if finding.read_error or finding.bead == "tracker-store"
                     or finding.bead in persistent_failures
                     else deferred_risk(finding.priority))
             return interrupts(failure=True, risk=risk)
 
-        loud = [finding for finding in fresh if is_loud(finding)]
-        quiet = [finding for finding in fresh if not is_loud(finding)]
+        loud = [finding for finding in fresh if finding.bead not in stopped_ids and is_loud(finding)]
+        quiet = [finding for finding in fresh if finding.bead not in stopped_ids and not is_loud(finding)]
         if quiet:
             self._log("deferral log: " + "\n".join(pol.report(quiet)))
         summary_path = Path(self._root) / "notify" / "deferral-summary.json"
@@ -2085,11 +2129,11 @@ class DeferralAlerter:
                 if recipient is None:
                     for finding in loud:
                         log_route(finding, routes[finding.bead], None, 'pending', digest)
-                    seen.record([f for f in findings if f not in loud],
-                                preserve=retry | {f.bead for f in loud})
+                    seen.record([f for f in findings if f not in loud and f.bead not in stopped_pending],
+                                preserve=retry | {f.bead for f in loud} | stopped_pending)
                     self._log("deferral-sweep: no admin pane — failures remain pending; "
                               "routine findings recorded in the log")
-                    return backstop_reported
+                    return list(dict.fromkeys(backstop_reported + stopped_delivered))
                 # Count actual administrator digests in the tend journal,
                 # separately from quiet reports and owner-only reminders.
                 self._log(f"deferral-sweep: ADMIN-DIGEST delivered count={len(loud)} digest={digest}")
@@ -2103,8 +2147,9 @@ class DeferralAlerter:
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
-        seen.record(findings, preserve=retry)
-        return list(dict.fromkeys(backstop_reported + [f.bead for f in loud]))
+        seen.record([f for f in findings if f.bead not in stopped_pending],
+                    preserve=retry | stopped_pending)
+        return list(dict.fromkeys(backstop_reported + stopped_delivered + [f.bead for f in loud]))
 
 
 class BlockedStaleAlerter:

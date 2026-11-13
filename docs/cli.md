@@ -606,6 +606,18 @@ A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
 
+Ordinary pacing goes to a live owner, with a live lead as fallback when the
+owner is unexpectedly down. A valid deliberate-stop record changes that route:
+the administrator receives one digest per stopped owner, never per-item wakes
+in the lead's pane. Each digest counts all priorities and lists P0 items; an
+explicit display cap points to the complete local inventory at
+`notify/deferral-stopped-owners.json`. Read-error and authority findings remain
+visible in that owner's digest. Unchanged findings stay suppressed, failed
+delivery or inventory publication remains retryable, and clearing the stop
+restores the owner route. A malformed stop record is UNKNOWN intent, not proof
+of a deliberate scale-down. Notification routing never releases a gate,
+reassigns an item or resumes a stopped runtime.
+
 Forge event waits use two registered generic kinds:
 
 - `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
