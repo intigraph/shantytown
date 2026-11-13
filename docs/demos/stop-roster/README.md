@@ -24,3 +24,10 @@ requests in 1.41 seconds. All returned HTTP 200, all 14 plates were known and th
 selected-item dictionaries were identical. These serial read-only measurements
 qualify the primitive, not installation of this stop-hook wiring or a full hour
 of traffic. Freshness fences are preserved.
+
+Runtime follow-up `355159d06c227422a240333655272f5a8f57d975` adds the
+hard roster boundary. The stable-roster demo output was revalidated.
+The follow-up race control also models an event or registry member arriving after
+roster preparation. That owner is reported UNKNOWN without a per-agent read.
+The recording above uses a stable roster; late-arrival behavior is covered by
+the real-tracker controls in `tests/test_stop_roster.py`.
