@@ -271,7 +271,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path, *, require_complete: bool = False):
+def _plate_reader(root: Path, *, require_complete: bool = False, owners=None):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -295,7 +295,7 @@ def _plate_reader(root: Path, *, require_complete: bool = False):
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
         if require_complete:
             from .br import plate_reader
-            return plate_reader(sd_tracker, require_complete=True)
+            return plate_reader(sd_tracker, require_complete=True, owners=owners)
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -326,7 +326,7 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
     """
     notes: list[str] = []
     try:
-        item = _plate_reader(root)(me, warn=notes.append)
+        item = _plate_reader(root, require_complete=True, owners=[me])(me)
     except Exception as e:
         # A tracker that fails OUTRIGHT still degrades to "?" - but it now says
         # what happened. An unreadable EXTRA store no longer reaches here at all
@@ -1374,7 +1374,18 @@ def _main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Yupana/Quipu weighting.
-    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    # Share one exact roster across event display and admin workflow. A failed
+    # roster discovery stays UNKNOWN; it must not fan out into per-owner reads.
+    try:
+        owners = {me, *(event.frm for event in events.pending(me))}
+        if reg.get(me).role == "administrator":
+            owners.update(agent.name for agent in reg.all().exact())
+        plate = _plate_reader(root, require_complete=True, owners=sorted(owners))
+    except (LookupError, OSError, PartialAnswer) as error:
+        failure = f"stop roster unreadable: {type(error).__name__}"
+
+        def plate(_who):
+            raise RuntimeError(failure)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
