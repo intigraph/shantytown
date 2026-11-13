@@ -1,5 +1,7 @@
 """Darwin rejects GNU ps flags: missing observations must never invent MANUAL."""
 import subprocess
+import io
+import os
 
 import pytest
 
@@ -22,6 +24,10 @@ def test_scoped_native_probe_observes_actual_launch(monkeypatch, platform, bypas
         if cmd[0] == 'pgrep':
             assert cmd == ['pgrep', '-a', '-P', '100']
             return subprocess.CompletedProcess(cmd, 0, '101\n', '')
+        if platform == 'darwin' and cmd[:2] == ['ps', 'eww']:
+            assert cmd == ['ps', 'eww', '-o', 'uid=,command=', '-p', '101']
+            return subprocess.CompletedProcess(cmd, 0,
+                f'{os.getuid()} codex{flag} PATH=/bin\n', '')
         if platform == 'darwin':
             # The old query genuinely fails on Darwin, rather than a mock
             # accepting any ps invocation and hiding the original regression.
@@ -34,9 +40,20 @@ def test_scoped_native_probe_observes_actual_launch(monkeypatch, platform, bypas
             age = '93784'
         return subprocess.CompletedProcess(cmd, 0, f'{age} 100 -zsh\n{age} 101 codex{flag}\n', '')
 
+    # The fake candidate PID has no real /proc entry. Supply readable,
+    # pointer-free native environment evidence rather than treating an
+    # unreadable environment as proof of a hookless launch.
+    real_open = open
+    def process_environment(path, *args, **kwargs):
+        if str(path) == '/proc/101/environ':
+            return io.BytesIO(b'PATH=/bin\0')
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr('builtins.open', process_environment)
     monkeypatch.setattr(subprocess, 'run', run)
     line = Tmux().cmdline('st-worker')
     assert line == f'codex{flag}'
+    if platform == 'darwin':
+        assert ['ps', 'eww', '-o', 'uid=,command=', '-p', '101'] in calls
     assert launchable.observed_posture('› ready', True, line) == (
         launchable.BYPASS if bypass else launchable.MANUAL)
 
