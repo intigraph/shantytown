@@ -17,7 +17,11 @@ def publish(root, *, now=None):
         instance = physical_hostname()
         if not instance or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for c in instance):
             return False
-        _push(gateway, 'st_duties', instance, metrics(root, now=now))
+        from .item_orphan_metrics import metrics as item_metrics
+        import time
+        measured = time.time() if now is None else now
+        _push(gateway, 'st_duties', instance,
+              metrics(root, now=measured) + item_metrics(root, now=measured))
         return True
     except Exception:
         # No credential-bearing URL, path, response body or private duty text

@@ -50,6 +50,10 @@ files and units remain explicit external inventory. A malformed, changed,
 oversized or symlinked job file makes duty coverage UNKNOWN; it cannot retire
 the previous population. Successful removal of a job retires only that
 producer's rows. A duty failure never blocks the independent item sweep.
+The shared dry-run previews declared duties and newly discovered literal job
+bindings without a lock, report, inventory refresh, message or remote intent.
+Before enrollment it retains the existing item-only preview; the separate
+duty summary remains UNKNOWN.
 
 `binding: registry` is valid only when the actual consumer reads
 `Duties.resolve()`. Eligible candidates must be positively live and not authors.
@@ -89,6 +93,12 @@ command, so a changed path between rehearsal and apply cannot substitute data.
 
 The existing pushgateway configuration publishes the `st_duties` group with
 `shantytown_orphaned_duties{kind=...}`, census completeness and timestamp.
+The same group also exports `shantytown_orphaned_work{kind="items"}` and
+independent item-census completeness/timestamp. These read the existing
+projection, attention and actual CAS outcomes, without another board query.
+Item coverage is invalidated before a read: a failed projection cannot refresh
+an old zero, while an independent duty handoff can still complete. Fresh
+successful release readback counts zero; conflicts and unknown releases do not.
 Partial or stale reads omit orphan counts; zero is emitted only for a fresh
 complete declared census. A complete census is not evidence that an external
 binding was fixed. Missing/stale metrics need a separate coverage alert.

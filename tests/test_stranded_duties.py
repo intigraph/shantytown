@@ -169,8 +169,11 @@ def test_one_sweep_recovers_item_duty_and_reservation_then_explicit_stop_preserv
         checkpoint='fixture:retained notes'))
     install(world, [record(binding='registry'), record('peer', kind='review-reservation')])
     FilesStops(world.root / 'stopped').record('worker', 0)
+    run(world, 0)  # Start the item's measured interval under the shared policy.
     run(world, 1800)
     assert released == ['work-1'] and world.row['assignee'] == ''
+    from shantytown.item_orphan_metrics import metrics as item_metrics
+    assert 'shantytown_orphaned_work{kind="items"} 0' in item_metrics(world.root, now=1800)
     assert Duties(world.root).resolve('queue', live=lambda n: n == 'lead') == 'lead'
     assert len(world.repairs) == 1 and decision['assignee'] == 'worker'
     world.panes.exists = lambda _: False
@@ -209,6 +212,120 @@ def test_internal_landing_seeds_author_rule_and_checks_liveness_at_send_time(set
     with pytest.raises(ValueError, match='repository'):
         duties.send_landing('public/example', 'lead', 'wrong lane', 'fixture:wrong',
             live=lambda _: True, inbox=world.inbox)
+
+
+def test_shared_dry_run_previews_new_jobs_and_due_duties_without_any_write(setup, monkeypatch):
+    from shantytown import duties as duty_module, duty_metrics
+    world = armed(setup, monkeypatch)
+    install(world, [record(binding='registry')])
+    FilesStops(world.root / 'stopped').record('worker', 0)
+    jobs = world.root / 'jobs'
+    jobs.mkdir()
+    (jobs / 'daily.toml').write_text('[trigger]\nevery="1h"\n[action]\ninbox="worker"\nmessage="work"\n')
+    before = {str(p.relative_to(world.root)): p.read_bytes()
+              for p in world.root.rglob('*') if p.is_file()}
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('dry-run attempted an effect')
+    monkeypatch.setattr(duty_module, 'write_json_atomic', forbidden)
+    monkeypatch.setattr(duty_adapter, 'write_json_atomic', forbidden)
+    monkeypatch.setattr(duty_metrics, 'publish', forbidden)
+    world.tracker.create_duty_issue = forbidden
+    result = sweep(world.root, world.registry, world.tracker, world.panes, world.inbox,
+                   now=14400, dry_run=True)
+    assert ('queue', 'orphaned duty (dry-run; no effects)') in result
+    assert any(name.startswith('job:') and 'dry-run' in state for name, state in result)
+    assert Duties(world.root).load()['entries'][0]['holder'] == 'worker'
+    assert {str(p.relative_to(world.root)): p.read_bytes()
+            for p in world.root.rglob('*') if p.is_file()} == before
+
+
+def test_dry_run_without_installed_inventory_is_unknown_and_creates_nothing(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    assert not Duties(world.root).root.exists()
+    result = sweep(world.root, world.registry, world.tracker, world.panes, world.inbox,
+                   now=1800, dry_run=True)
+    assert result == [] and 'UNKNOWN' in summary(world.root, now=1800)
+    assert not Duties(world.root).root.exists() and not world.repairs
+
+
+def test_nonfinite_retained_clock_cannot_trigger_early_repair(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [record()])
+    run(world, 0)
+    path = Duties(world.root).root / 'attention.json'
+    data = json.loads(path.read_text())
+    data['queue']['since'] = float('nan')
+    write_json_atomic(path, data)
+    assert ('duties', 'duty census UNKNOWN') in run(world, 1)
+    assert not world.repairs and 'UNKNOWN' in summary(world.root, now=1)
+
+
+def test_parked_inferred_down_owner_is_flagged_but_never_released(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    world.row.update(title='parked ordinary work', labels=['parked:by-design'],
+                     status='deferred', defer_until='2099-01-01T00:00:00Z')
+    # No operator stop stamp: positive process absence admits attention only.
+    run(world, 0)
+    result = run(world, 1800)
+    assert ('work-1', 'needs attention') in result
+    assert world.row['assignee'] == 'worker' and world.row['status'] == 'deferred'
+    assert len(world.inbox.unread('admin')) == 1
+    from shantytown.item_orphan_metrics import metrics as item_metrics
+    assert 'shantytown_orphaned_work{kind="items"} 1' in item_metrics(world.root, now=1800)
+
+
+def test_item_metric_unknown_cannot_become_zero_or_freshen_a_stale_census(tmp_path):
+    from shantytown.item_orphan_metrics import metrics as item_metrics
+    path = tmp_path / 'stranded-work/orphans.json'
+    path.parent.mkdir()
+    write_json_atomic(path, dict(checked_at=0, complete=True, orphaned=0))
+    text = item_metrics(tmp_path, now=901)
+    assert 'item_census_complete 0' in text and 'shantytown_orphaned_work{' not in text
+    assert 'timestamp_seconds 0' in text
+    write_json_atomic(path, dict(checked_at=float('nan'), complete=True, orphaned=0))
+    text = item_metrics(tmp_path, now=1)
+    assert 'item_census_complete 0' in text and 'nan' not in text
+    write_json_atomic(path, dict(checked_at=1, complete=False, orphaned=0))
+    assert 'shantytown_orphaned_work{' not in item_metrics(tmp_path, now=1)
+
+
+def test_failed_item_projection_stays_unknown_while_independent_duty_recovers(setup, monkeypatch):
+    from shantytown.item_orphan_metrics import metrics as item_metrics
+    world = armed(setup, monkeypatch)
+    install(world, [record(binding='registry')])
+    FilesStops(world.root / 'stopped').record('worker', 0)
+    def unavailable(_owners):
+        raise ValueError('projection incomplete')
+    world.tracker.stranded_rows = unavailable
+    with pytest.raises(ValueError, match='projection incomplete'):
+        run(world, 1800)
+    assert Duties(world.root).resolve('queue', live=lambda n: n == 'lead') == 'lead'
+    text = item_metrics(world.root, now=1800)
+    assert 'item_census_complete 0' in text and 'shantytown_orphaned_work{' not in text
+    assert 'shantytown_orphaned_duties{kind="merge-queue"} 0' in metrics(world.root, now=1800)
+
+
+def test_stopping_administrator_cannot_repair_to_the_same_stopping_holder(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    row = record()
+    row['holder'] = 'admin'
+    install(world, [row])
+    args = SimpleNamespace(root=world.root, agent='admin', dry_run=False, repool_work=True)
+    with pytest.raises(ValueError, match='administrator'):
+        duty_adapter.stop_guard(args, lambda: pytest.fail('administrator stopped'),
+            registry=world.registry, panes=world.panes, inbox=world.inbox,
+            tracker=world.tracker, host='test-host')
+    assert not world.repairs and not world.inbox.unread('admin')
+
+
+def test_malformed_truthy_census_flag_cannot_certify_zero(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [])
+    write_json_atomic(Duties(world.root).root / 'report.json', dict(
+        checked_at=0, complete='false', orphaned={kind: 0 for kind in KINDS}))
+    assert 'UNKNOWN' in summary(world.root, now=1)
+    text = metrics(world.root, now=1)
+    assert 'census_complete 0' in text and 'shantytown_orphaned_duties{' not in text
 
 
 def test_positive_live_owner_is_untouched(setup, monkeypatch):
@@ -429,5 +546,7 @@ def test_metric_publisher_has_no_ambient_or_secret_diagnostic(monkeypatch, tmp_p
     monkeypatch.setattr(duty_metrics, 'metrics', lambda *_a, **_k: 'census 0\n')
     calls = []
     monkeypatch.setattr(duty_metrics, '_push', lambda *a: calls.append(a))
-    assert duty_metrics.publish(tmp_path) is True
-    assert calls == [('https://gateway.example', 'st_duties', 'fixture-host', 'census 0\n')]
+    assert duty_metrics.publish(tmp_path, now=1) is True
+    assert calls == [('https://gateway.example', 'st_duties', 'fixture-host',
+                     'census 0\nshantytown_item_census_complete 0\n'
+                     'shantytown_item_census_timestamp_seconds 1\n')]

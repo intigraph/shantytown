@@ -210,6 +210,39 @@ class Duties:
                 raise ValueError('landing delivery UNKNOWN; reconcile retained key')
             return receipt
 
+    def preview(self, *, observe, now, inventory=None):
+        """Read-only due/UNKNOWN findings; no lock creation, report or intent."""
+        if not math.isfinite(now) or now < 0:
+            raise ValueError('invalid duty preview clock')
+        data = validate(inventory) if inventory is not None else self.load()
+        path = self.root / 'attention.json'
+        states = _read(path) if path.exists() else {}
+        if not isinstance(states, dict) or len(states) > MAX_ROWS:
+            raise ValueError('duty attention UNKNOWN')
+        result, observations = [], {}
+        for row in data['entries']:
+            holder, ident = row['holder'], row['id']
+            if holder not in observations:
+                observations[holder] = observe(holder)
+            evidence = observations[holder]
+            if evidence.get('state') == 'live':
+                continue
+            if evidence.get('state') not in {'operator-stopped', 'down', 'held', 'missing'}:
+                result.append((ident, 'duty owner liveness UNKNOWN'))
+                continue
+            generation = evidence.get('generation')
+            if not isinstance(generation, str) or not generation:
+                raise ValueError('duty owner generation UNKNOWN')
+            previous = states.get(ident, {})
+            same = (previous.get('holder') == holder and previous.get('generation') == generation
+                    and previous.get('active') is True and previous.get('evidence') != 'UNKNOWN')
+            since = previous.get('since') if same else evidence.get('stopped_at', now)
+            if type(since) not in (int, float) or not math.isfinite(since) or not 0 <= since <= now:
+                raise ValueError('duty stop clock UNKNOWN')
+            if now - since >= (1800 if row['priority'] <= 1 else 14400):
+                result.append((ident, 'orphaned duty (dry-run; no effects)'))
+        return result
+
     def tick(self, *, observe, live, administrator, ensure_issue, notify,
              now=None, release=False, max_actions=10):
         """One bounded pass, stable per-duty repair identity, no new scheduler."""
@@ -268,6 +301,9 @@ class Duties:
                                     **retained)
                 previous.update(active=True, evidence=evidence['state'], checked_at=now)
                 states[ident] = previous
+                if (type(previous['since']) not in (int, float)
+                        or not math.isfinite(previous['since']) or not 0 <= previous['since'] <= now):
+                    raise ValueError('duty stop clock UNKNOWN')
                 threshold = 1800 if row['priority'] <= 1 else 14400
                 if now - previous['since'] < threshold:
                     continue
@@ -331,7 +367,9 @@ def summary(root, *, now=None):
     now = time.time() if now is None else now
     try:
         report = _read(Path(root) / 'duties/report.json')
-        if not report['complete'] or not 0 <= now - report['checked_at'] <= 900:
+        if (report['complete'] is not True or type(report['checked_at']) not in (int, float)
+                or not math.isfinite(report['checked_at'])
+                or not 0 <= now - report['checked_at'] <= 900):
             raise ValueError('duty census stale or partial')
         count = sum(report['orphaned'][kind] for kind in KINDS)
         return f'Duties: {count} orphaned (fresh declared inventory)'
@@ -342,8 +380,9 @@ def summary(root, *, now=None):
 def metrics(root, *, now=None):
     now = time.time() if now is None else now
     report = _read(Path(root) / 'duties/report.json')
-    fresh = 0 <= now - report['checked_at'] <= 900
-    ok = bool(report['complete'] and fresh)
+    fresh = (type(report['checked_at']) in (int, float) and math.isfinite(report['checked_at'])
+             and 0 <= now - report['checked_at'] <= 900)
+    ok = report['complete'] is True and fresh
     lines = [f'shantytown_duty_census_complete {int(ok)}',
              f'shantytown_duty_census_timestamp_seconds {report["checked_at"]}']
     if ok:

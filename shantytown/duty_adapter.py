@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from . import agent_hold
-from .duties import Duties
+from .duties import Duties, validate
 from .files import write_json_atomic
 from .stopped import FilesStops
 
@@ -64,8 +64,20 @@ def bindings(root, cards, panes, inbox, tracker, host, registry):
                 ensure_issue=ensure_issue, notify=notify)
 
 
-def sweep(root, cards, panes, inbox, tracker, host, registry, *, now, release):
+def sweep(root, cards, panes, inbox, tracker, host, registry, *, now, release, dry_run=False):
     duties = Duties(root)
+    if dry_run:
+        if not duties.path.exists():
+            # Unenrolled deployments retain the item-only preview contract.
+            # Their separate duty summary remains UNKNOWN, never healthy zero.
+            return []
+        from .duty_discovery import job_bindings
+        inventory = duties.load()
+        inventory['entries'] = [r for r in inventory['entries']
+                                if r.get('producer') != 'local-jobs'] + job_bindings(root, host)
+        validate(inventory)
+        hooks = bindings(root, cards, panes, inbox, tracker, host, registry)
+        return duties.preview(observe=hooks['observe'], now=now, inventory=inventory)
     from .duty_metrics import publish
     if not duties.path.exists():
         # Missing installation is explicitly UNKNOWN, not a zero-duty census.
@@ -155,7 +167,7 @@ def stop_guard(a, proceed, *, registry, panes, inbox, tracker, host):
                 next(r for r in after['entries'] if r['id'] == row['id'])['holder'] = candidates[0]
                 continue
             target = hooks['administrator']()
-            if not hooks['live'](target):
+            if target == a.agent or not hooks['live'](target):
                 raise ValueError('stop duty administrator not live; no stop')
             key = 'stranded-duty:' + hashlib.sha256(row['id'].encode()).hexdigest()
             payload = {k: row[k] for k in ('id', 'kind', 'holder', 'source')}

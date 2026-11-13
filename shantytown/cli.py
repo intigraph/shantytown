@@ -3140,6 +3140,8 @@ def _stops(a) -> FilesStops:
 
 def _owned_work_rows(tracker, name):
     """Complete owner scope on Seeds; the files floor scans only its local store."""
+    if hasattr(tracker, "stopped_owner_rows"):
+        return tracker.stopped_owner_rows([name])
     if hasattr(tracker, "capacity_rows"):
         return tracker.capacity_rows(name)
     if isinstance(tracker, FilesTracker):
@@ -14894,6 +14896,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         return CANNOT_TELL
     if admin_report is not None:
         rep.findings = admin_report.findings + rep.findings
+    if a.dry_run:
+        from .stranded_adapter import sweep as preview_stranded
+        for identity, finding in preview_stranded(
+                a.root, reg, _tracker(a), panes, _inbox(a), dry_run=True):
+            print(f"  stranded-owner {identity}: {finding}", file=sys.stderr)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.

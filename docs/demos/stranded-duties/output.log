@@ -1,4 +1,4 @@
-Script started on 2026-11-13 13:08:55-05:00 [COMMAND="bash docs/demos/stranded-duties/run.sh" <not executed on terminal>]
+Script started on 2026-11-13 14:32:39-05:00 [COMMAND="bash docs/demos/stranded-duties/run.sh" <not executed on terminal>]
 BASE: same synthetic stopped worker, supported queue, external reservation and ASK
 queue holder: worker
 external reservation holder: worker
@@ -17,4 +17,4 @@ Duties: 1 orphaned (fresh declared inventory)
   duty peer: review-reservation (external)
 stop without explicit disposition: REFUSED before pane stop
 
-Script done on 2026-11-13 13:08:55-05:00 [COMMAND_EXIT_CODE="0"]
+Script done on 2026-11-13 14:32:39-05:00 [COMMAND_EXIT_CODE="0"]
