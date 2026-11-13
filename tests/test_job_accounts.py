@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+import plistlib
 from pathlib import Path
 import stat
 from types import SimpleNamespace
@@ -199,6 +200,10 @@ def test_native_verify_requires_complete_non_admin_identity_and_private_home(mon
         UserShell='/usr/bin/false', IsHidden='1', AuthenticationAuthority=';DisabledUser;')
     if fault == 'partial': fields['IsHidden'] = '0'
     def run(argv):
+        if argv[:4] == ['/usr/bin/dscl', '-plist', '.', '-read']:
+            assert argv[4] == '/Groups/'+row['username']
+            return 0,plistlib.dumps({'dsAttrTypeStandard:RecordName':[row['username']],
+                'dsAttrTypeStandard:PrimaryGroupID':['51001']}).decode()
         if argv[0] == '/usr/bin/dscl':
             return 0,'\n'.join(('dsAttrTypeNative:' if k == 'IsHidden' else '')+k+': '+v for k,v in fields.items())
         if fault == 'admin': return 0,'yes fixture is a member of admin'

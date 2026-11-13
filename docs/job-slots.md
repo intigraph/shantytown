@@ -57,6 +57,12 @@ never cause blind replay or account adoption. They remain refused for explicit
 reviewed recovery. Existing Tambo account setup remains in place; migrating that
 older implementation is separate work.
 
+Native verification also inventories every user's primary GID and the full job-group
+record. A foreign primary-group user, named or UUID member, nested group, or
+unreadable membership refuses completion and retains the reservation. Explicit
+UUID members require the job user's independently read GeneratedUID. Fresh
+reservation admission requires a complete primary-GID census too.
+
 New accounts have their own primary group, disabled authentication and login,
 negative admin-membership proof, and a private home. This component performs no
 key enrollment, verdict registration or job launch, and never opens the

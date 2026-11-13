@@ -11,12 +11,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+from xml.parsers.expat import ExpatError
 
 from . import job_launch as jobs
 from .actor_identity import IdentityError
@@ -197,14 +199,24 @@ class Native:
         return json.loads(raw)
 
     def pristine(self, spec):
-        return (spec['username'] not in self.users and spec['username'] not in self.groups
-            and spec['uid'] not in self.users.values() and spec['uid'] not in self.groups.values()
-            and spec['uid'] not in self.used_uids and spec['principal'] not in self.used_names
-            and not os.path.lexists(spec['home']))
+        if (spec['username'] in self.users or spec['username'] in self.groups
+                or spec['uid'] in self.users.values() or spec['gid'] in self.groups.values()
+                or spec['uid'] in self.used_uids or spec['principal'] in self.used_names
+                or os.path.lexists(spec['home'])):
+            return False
+        # An otherwise unused GID can already be another user's primary group,
+        # even when no group record exists. Unknown inventory cannot reserve it.
+        primary = inventory('/Users', 'PrimaryGroupID')
+        if set(primary) != set(self.users):
+            raise IdentityError('native primary-group inventory is incomplete or changed')
+        return spec['gid'] not in primary.values()
 
     def verify(self, spec):
         users, groups = inventory('/Users', 'UniqueID'), inventory('/Groups', 'PrimaryGroupID')
-        if (users.get(spec['username']) != spec['uid'] or groups.get(spec['username']) != spec['gid']
+        primary = inventory('/Users', 'PrimaryGroupID')
+        if (set(primary) != set(users) or primary.get(spec['username']) != spec['gid']
+                or any(gid == spec['gid'] and name != spec['username'] for name, gid in primary.items())
+                or users.get(spec['username']) != spec['uid'] or groups.get(spec['username']) != spec['gid']
                 or list(users.values()).count(spec['uid']) != 1 or list(groups.values()).count(spec['gid']) != 1):
             raise IdentityError('native job UID/GID uniqueness is unproved')
         expected = {'UniqueID':str(spec['uid']), 'PrimaryGroupID':str(spec['gid']), 'NFSHomeDirectory':spec['home'],
@@ -218,6 +230,7 @@ class Native:
             fields[key.strip()] = value.strip()
         if code or fields != expected:
             raise IdentityError('job account is only partially provisioned')
+        self.verify_group(spec)
         code, text = run(['/usr/sbin/dseditgroup', '-o', 'checkmember', '-m', spec['username'], 'admin'])
         if code == 0 or text.strip() != 'no '+spec['username']+' is NOT a member of admin':
             raise IdentityError('job account non-admin membership is unproved')
@@ -225,6 +238,40 @@ class Native:
         info = Path(spec['home']).lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != spec['uid'] or info.st_gid != spec['gid'] or info.st_mode & 0o077:
             raise IdentityError('job home is not private to its identity')
+
+    @staticmethod
+    def verify_group(spec):
+        # Read the full record as a plist: absent membership attributes in a
+        # successful full read mean empty, unlike a failed single-key query.
+        prefix = 'dsAttrTypeStandard:'
+        def record(path, *fields):
+            code, text = run(['/usr/bin/dscl', '-plist', '.', '-read', path, *fields])
+            try:
+                value = plistlib.loads(text.encode())
+            except (ValueError, TypeError, plistlib.InvalidFileException, ExpatError) as error:
+                raise IdentityError('native group membership is unreadable') from error
+            if code or not isinstance(value, dict) or not value or len(value) > 16384:
+                raise IdentityError('native group membership is unknown')
+            return value
+        def values(record, key):
+            value = record.get(prefix+key, [])
+            if (not isinstance(value, list) or len(value) > 16384
+                    or any(not isinstance(item, str) or not item for item in value)):
+                raise IdentityError('native group membership is malformed')
+            return value
+        group = record('/Groups/'+spec['username'])
+        if (values(group, 'RecordName') != [spec['username']]
+                or values(group, 'PrimaryGroupID') != [str(spec['gid'])]
+                or any(name != spec['username'] for name in values(group, 'GroupMembership'))
+                or values(group, 'NestedGroups')):
+            raise IdentityError('native job group is shared or its identity is unproved')
+        members = values(group, 'GroupMembers')
+        if members:
+            own = values(record('/Users/'+spec['username'], 'GeneratedUID'), 'GeneratedUID')
+            if (len(own) != 1 or not re.fullmatch(
+                    r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}', own[0])
+                    or any(member.casefold() != own[0].casefold() for member in members)):
+                raise IdentityError('native group UUID membership is shared or unproved')
 
     def save(self, spec, digest, state, exclusive):
         path = self.receipts/(str(spec['uid'])+'.json')
