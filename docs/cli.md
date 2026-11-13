@@ -49,6 +49,14 @@ terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
+When a pending dispatch has a different scope, the refusal names the retained
+receipt ID, original worker, state and revision. Its printed `--reconcile`
+command uses that original worker, even when the refused request named someone
+else. Reconciliation is read-only. For a prepared or interrupted-assignment
+receipt whose native item is open, unassigned and undeferred, the message also
+prints the explicit `--supersede` command. Neither command is run automatically;
+supersession still checks its own current native release proof.
+
 A dispatch that remains `prepared` can be explicitly retired with
 `st go ITEM WORKER --supersede --receipt RECEIPT_ID` after a fresh native read
 proves the item is open, unassigned and undeferred. This path requires that no

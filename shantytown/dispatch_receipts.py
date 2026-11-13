@@ -15,6 +15,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shlex
 import tempfile
 import time
 import threading
@@ -60,6 +61,23 @@ def assignment_proof(receipt, current):
 
 class ReceiptConflict(ValueError):
     """No submission, assignment or replay is authorized by this receipt."""
+
+
+class DifferentScope(ReceiptConflict):
+    """Retain the blocking identity, never the requested replacement worker."""
+
+    def __init__(self, receipt, *, supersede_hint=False):
+        self.receipt = {key: receipt[key] for key in ('id', 'item', 'worker', 'state', 'revision')}
+        row = self.receipt
+        command = ['st', 'go', row['item'], row['worker'], '--receipt', row['id']]
+        message = (f"pending dispatch has a different scope; retained receipt {row['id']} "
+                   f"worker={row['worker']} state={row['state']} revision={row['revision']}\n"
+                   'Read-only reconciliation (does not authorize a resend):\n'
+                   + shlex.join(command + ['--reconcile']))
+        if supersede_hint:
+            message += ('\nExplicit supersession requires fresh native release proof; '
+                        'printed only, never run:\n' + shlex.join(command + ['--supersede']))
+        super().__init__(message)
 
 
 def assignment_supersession(receipt, current):
@@ -247,7 +265,7 @@ class ReceiptStore:
                     raise ReceiptConflict('same scope has a different body; reconcile receipt')
                 return row, False
             if row in pending:
-                raise ReceiptConflict('pending dispatch has a different scope; reconcile receipt')
+                raise DifferentScope(row)
         ident = ident or uuid.uuid4().hex
         if self._path(ident).exists():
             raise ReceiptConflict('dispatch receipt ID collision')
