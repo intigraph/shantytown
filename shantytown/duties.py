@@ -32,12 +32,17 @@ def _name(value):
     return value
 
 
-def _read(path):
+def _read(path, *, expected_sha256=None):
     if path.is_symlink() or path.stat().st_size > MAX_BYTES:
         raise ValueError('unsafe or oversized duty data')
     raw = path.read_bytes()
     if len(raw) > MAX_BYTES:
         raise ValueError('oversized duty data')
+    if expected_sha256 is not None:
+        if (not isinstance(expected_sha256, str)
+                or not re.fullmatch('[0-9a-f]{64}', expected_sha256)
+                or hashlib.sha256(raw).hexdigest() != expected_sha256):
+            raise ValueError('duty plan bytes differ from the reviewed digest')
     return json.loads(raw)
 
 
@@ -310,18 +315,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--plan', type=Path)
+    parser.add_argument('--plan-sha256')
     parser.add_argument('--expected-revision', type=int)
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--metrics', action='store_true')
     args = parser.parse_args()
     if args.plan is None:
-        if args.apply or args.expected_revision is not None:
+        if args.apply or args.expected_revision is not None or args.plan_sha256 is not None:
             parser.error('apply/revision requires a plan')
         print(metrics(args.root) if args.metrics else summary(args.root), end='\n')
         return
     if args.metrics or args.expected_revision is None:
         parser.error('plan requires its exact expected revision, not metrics')
-    print(json.dumps(Duties(args.root).install(_read(args.plan),
+    print(json.dumps(Duties(args.root).install(_read(args.plan, expected_sha256=args.plan_sha256),
         expected_revision=args.expected_revision, apply=args.apply), sort_keys=True))
 
 

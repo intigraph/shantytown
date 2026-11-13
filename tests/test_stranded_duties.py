@@ -132,6 +132,21 @@ def test_unknown_remote_intent_keeps_exact_payload_across_owner_generation_chang
     assert ('queue', 'repair same-repair') in run(world, 1802)
 
 
+def test_managed_plan_checks_the_bytes_it_reads_not_an_earlier_path_probe(tmp_path):
+    import hashlib
+    from shantytown.duties import _read
+    path = tmp_path / 'plan.json'
+    raw = b'{"same":"value"}\n'
+    path.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    assert _read(path, expected_sha256=digest) == {'same': 'value'}
+    path.write_bytes(raw + b' ')
+    with pytest.raises(ValueError, match='reviewed digest'):
+        _read(path, expected_sha256=digest)
+    with pytest.raises(ValueError, match='reviewed digest'):
+        _read(path, expected_sha256='invalid')
+
+
 def test_positive_live_owner_is_untouched(setup, monkeypatch):
     world = armed(setup, monkeypatch)
     install(world, [record(binding='registry')])

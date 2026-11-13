@@ -69,13 +69,15 @@ Internal self-cycles retain their identity and duty ownership.
 Check a managed plan, then apply the exact observed inventory revision:
 
 ```sh
-python -m shantytown.duties --root CREW_ROOT --plan PLAN.json --expected-revision 0
-python -m shantytown.duties --root CREW_ROOT --plan PLAN.json --expected-revision 0 --apply
+python -m shantytown.duties --root CREW_ROOT --plan PLAN.json --plan-sha256 REVIEWED_DIGEST --expected-revision 0
+python -m shantytown.duties --root CREW_ROOT --plan PLAN.json --plan-sha256 REVIEWED_DIGEST --expected-revision 0 --apply
 ```
 
 Plan omission does not retire a manual duty. Refresh preserves supported live
 handoffs when the holder remains eligible. External holder changes require
 actual consumer readback before the managed inventory changes.
+The plan digest is checked against the actual bounded bytes read by each
+command, so a changed path between rehearsal and apply cannot substitute data.
 
 The existing pushgateway configuration publishes the `st_duties` group with
 `shantytown_orphaned_duties{kind=...}`, census completeness and timestamp.
