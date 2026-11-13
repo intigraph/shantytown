@@ -62,3 +62,5 @@ docs/demos/6wr-busy-queue/output.log -text whitespace=cr-at-eol
 # Preserve initial native-consumption before/after replay bytes.
 docs/demos/initial-native-dispatch/output.log -text whitespace=cr-at-eol
 docs/demos/stopped-owner-pacing/output.log -text whitespace=cr-at-eol
+# Preserve raw duty-sweep terminal bytes and matching replay timing.
+docs/demos/stranded-duties/output.log -text whitespace=cr-at-eol

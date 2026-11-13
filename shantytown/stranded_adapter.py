@@ -56,6 +56,19 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     cards = {card.name: card for card in cards_list}
     if len(cards) != len(cards_list):
         raise ValueError('duplicate crew cards')
+    import time
+    measured = time.time() if now is None else now
+    # Non-item duties share this armed sweep and its host/card evidence. Run
+    # them before the separate item projection: an unavailable owner plate
+    # must not hide an independently measurable duty population.
+    from . import duty_adapter
+    try:
+        duty_findings = duty_adapter.sweep(root, cards, panes, inbox, tracker, host,
+                                          registry, now=measured, release=selected == 'release')
+    except Exception:
+        # Independent duty coverage must not starve the established item
+        # recovery path. Its report remains UNKNOWN, never an empty census.
+        duty_findings = [('duties', 'duty census UNKNOWN')]
     projection = getattr(tracker, 'stranded_rows', None)
     if not callable(projection):
         raise ValueError('stranded work requires complete bounded assignee census')
@@ -134,9 +147,7 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
     detector = StrandedWork(root)
     # One sweep timestamp joins attention to coverage. Sampling again after
     # tick made natural-clock runs report zero due work despite due findings.
-    import time
-    measured = time.time() if now is None else now
-    result = detector.tick(rows, cards, observe=observe, recipient=destination,
+    result = duty_findings + detector.tick(rows, cards, observe=observe, recipient=destination,
         notify=notify, read=read, release=release,
         checkpoint=lambda name, card: checkpoint(card),
         fence=lambda name: lifecycle_lock(root, name), now=measured,
