@@ -107,12 +107,27 @@ def test_existing_history_custody_is_never_replaced_or_copied(disk, tmp_path, ki
         (link / "old.jsonl").write_text("old")
     elif kind in {"other-link", "broken-link"}:
         link.symlink_to(history if kind == "other-link" else tmp_path / "absent")
+        # Force readlink's access-time path on filesystems that record it.
+        # A fresh link can hide this until the call crosses a clock boundary.
+        os.utime(link, ns=(0, link.lstat().st_mtime_ns), follow_symlinks=False)
     else:
         link.write_text("old")
     before = link.lstat()
     with pytest.raises(RuntimeError):
         storage.prepare(config, home)
-    assert link.lstat() == before
+    after = link.lstat()
+    # Reading an existing link may update atime; custody is identity, ownership,
+    # content and modification metadata. Keep nanoseconds (stat tuple times
+    # truncate them), so a same-second rewrite or replacement is still caught.
+    assert after[:7] == before[:7]
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert after.st_ctime_ns == before.st_ctime_ns
+    if kind in {"other-link", "broken-link"}:
+        assert link.readlink() == (history if kind == "other-link" else tmp_path / "absent")
+    elif kind == "directory":
+        assert (link / "old.jsonl").read_text() == "old"
+    else:
+        assert link.read_text() == "old"
     assert record.read_text() == "retained history"
     assert not config.root.exists()
 
