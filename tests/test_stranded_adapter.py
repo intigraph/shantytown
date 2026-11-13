@@ -154,7 +154,7 @@ def test_undated_operator_stop_has_immediate_attention_in_observe(setup):
     assert OwnedWork(setup.root).snapshot() == {}
 
 
-def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
+def test_positive_cycle_refusal_uses_priority_deadline_even_with_live_pane(setup):
     from shantytown.cycle import Requests
     path = Requests(setup.root).path
     path.parent.mkdir(parents=True)
@@ -162,9 +162,9 @@ def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
         'refused': {'reason': 'fixture dirty tree', 'paths': ['fixture']}}}))
     setup.states['worker'] = 'live'
     run(setup)
-    run(setup, 3600)
+    run(setup, 1799)
     assert not setup.inbox.unread('admin')
-    run(setup, 3601)
+    run(setup, 1800)
     assert len(setup.inbox.unread('admin')) == 1
     assert 'cycle refusal' in OwnedWork(setup.root).snapshot()['worker']['reason']
     path.write_text('{}')
@@ -195,6 +195,7 @@ def test_complete_assignee_census_counts_300_parked_work_and_skips_inbox(setup):
     setup.tracker.ranking_rows = lambda: pytest.fail('ranking is not a complete assignee census')
     FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
     run(setup, 10)
+    run(setup, 1810)
     findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
     assert len(findings) == 300
     assert all(row['release_due'] and row['evidence'] == 'operator-stopped'
@@ -203,7 +204,7 @@ def test_complete_assignee_census_counts_300_parked_work_and_skips_inbox(setup):
     assert proof['complete'] is True
     assert proof['owners']['worker'] == dict(work=300, release_due=300)
     assert proof['inbox_pointers'] == 'not read; never release candidates'
-    assert scopes == [['admin', 'lead', 'worker']]
+    assert scopes == [['admin', 'lead', 'worker']] * 2
 
 
 @pytest.mark.parametrize('state', ['live', 'unknown'])
@@ -237,6 +238,7 @@ def test_operator_stop_and_process_absence_are_not_hidden_by_old_cycle_ledger(se
     path.write_text(ledger)
     FilesStops(setup.root / 'stopped').record('worker', 0)
     run(setup, 10)
+    run(setup, 1810)
     finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
     assert finding['evidence'] == 'operator-stopped' and finding['release_due']
 
@@ -256,9 +258,9 @@ def test_natural_clock_census_matches_current_attention(setup):
         setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox)
     findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
     census = json.loads((setup.root / 'stranded-work/census.json').read_text())
-    assert findings['work-1']['release_due'] is True
+    assert findings['work-1']['release_due'] is False
     assert census['checked_at'] == findings['work-1']['checked_at']
-    assert census['owners']['worker'] == dict(work=1, release_due=1)
+    assert census['owners']['worker'] == dict(work=1, release_due=0)
 
 
 def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monkeypatch):
@@ -310,6 +312,7 @@ def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monk
     setup.tracker.release_stranded = release
 
     run(setup, 10)
+    run(setup, 14410)
 
     held = sorted(r['id'] for r in store.values()
                   if r['assignee'] in harness and not r['title'].startswith('inbox'))
@@ -362,6 +365,7 @@ def test_operator_release_serves_priority_first_under_the_pass_cap(setup, monkey
     setup.tracker.stranded_read = lambda identity: copy.deepcopy(store[identity])
     setup.tracker.release_stranded = release
     run(setup, 10)
+    run(setup, 1810)
     assert all(store[f'zz-hot-{i}']['assignee'] == '' for i in range(5))
     assert sum(r['assignee'] == '' for r in store.values()) == 40  # the cap holds
 
@@ -415,7 +419,8 @@ def test_two_items_per_stopped_owner_both_release_through_the_real_sd_readback(s
         stranded_rows=lambda names: [copy.deepcopy(r) for r in store.values() if r['assignee'] in names],
         stranded_read=tracker.stranded_read, release_stranded=tracker.release_stranded)
 
-    result = run(setup, 10)
+    run(setup, 10)
+    result = run(setup, 1810)
 
     assert not any('UNKNOWN' in f or 'unknown' in f for _, f in result), result
     for name in owners:
@@ -443,3 +448,69 @@ def test_operator_stop_sweep_preserves_deploy_reservation(setup, monkeypatch, ph
     assert not setup.inbox.unread('admin')
     census = json.loads((setup.root / 'stranded-work/census.json').read_text())
     assert census['owners']['worker'] == dict(work=1, release_due=0)
+
+
+@pytest.mark.parametrize('priority,threshold', [(0, 1800), (1, 1800), (2, 14400), (4, 14400)])
+def test_priority_release_boundary_preserves_immediate_attention(setup, monkeypatch, priority, threshold):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept', branch='kept', head='0' * 40, checkpoint='kept'))
+    setup.row.update(priority=priority, revision=1)
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    writes = []
+    setup.tracker.stranded_read = lambda _: dict(setup.row)
+    def release(row, comment, **kwargs):
+        writes.append(json.loads(comment))
+        setup.row.update(assignee='', revision=2, status='open')
+        return 'released'
+    setup.tracker.release_stranded = release
+    run(setup, 10)
+    assert len(setup.inbox.unread('admin')) == 1
+    run(setup, 10 + threshold - 1)
+    assert not writes and setup.row['assignee'] == 'worker'
+    run(setup, 10 + threshold)
+    assert len(writes) == 1 and writes[0]['original_owner'] == 'worker'
+    assert setup.row['assignee'] == ''
+
+
+def test_owner_urgent_work_shortens_lower_priority_item_deadline(setup):
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    rows = [dict(setup.row, id='urgent', priority=1), dict(setup.row, id='later', priority=4)]
+    setup.tracker.stranded_rows = lambda _: copy.deepcopy(rows)
+    run(setup, 0)
+    run(setup, 1799)
+    assert not any(r['release_due'] for r in json.loads(
+        (setup.root / 'stranded-work/attention.json').read_text()).values())
+    run(setup, 1800)
+    assert all(r['release_due'] for r in json.loads(
+        (setup.root / 'stranded-work/attention.json').read_text()).values())
+
+
+def test_dry_run_prints_due_plan_without_writing_any_boundary(setup):
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    run(setup, 10)  # Historical observation, independent of preview.
+    before = {str(p.relative_to(setup.root)): (p.read_bytes(), p.stat().st_mtime_ns)
+              for p in setup.root.rglob('*') if p.is_file()}
+    def forbidden(*a, **kw):
+        pytest.fail('dry run called a write boundary')
+    setup.tracker.stranded_read = setup.tracker.release_stranded = forbidden
+    setup.inbox.deliver_once = forbidden
+    result = sweep(setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox,
+                   now=1810, dry_run=True)
+    assert result == [('work-1', 'dry-run: would repool from worker (1800s/1800s); CAS gates still required')]
+    after = {str(p.relative_to(setup.root)): (p.read_bytes(), p.stat().st_mtime_ns)
+             for p in setup.root.rglob('*') if p.is_file()}
+    assert before == after
+    assert setup.row['assignee'] == 'worker'
+
+
+@pytest.mark.parametrize('priority,threshold', [(1, 1800), (2, 14400)])
+def test_inferred_absence_attention_uses_owner_priority_without_release(setup, priority, threshold):
+    setup.row['priority'] = priority
+    run(setup, 0)
+    run(setup, threshold - 1)
+    assert not setup.inbox.unread('admin')
+    run(setup, threshold)
+    assert len(setup.inbox.unread('admin')) == 1
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['attention'] and not finding['release_due']
