@@ -53,7 +53,7 @@ from pathlib import Path
 from .tmux import shell_foreground
 from . import triage
 from . import workflow
-from .answer import PartialAnswer
+from .answer import CouldNotLook, PartialAnswer
 from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_deploy_operation, is_anchor, is_decision, is_message
@@ -190,6 +190,9 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     the events.
     """
     def up(name: str) -> "LeadStatus":
+        if getattr(reg, "remote_lead", None) == name:
+            return LeadStatus(False, "off-host lead: live drain state is unverified here; "
+                                     "administrator stops use the durable relay")
         # RETURNS A REASON, NOT JUST A BOOL. Four distinct states collapsed into
         # False here, and two of them want opposite actions from the coordinator
         # — restart vs relaunch. The bool was right and unactionable.
@@ -350,6 +353,8 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         from .stop_failure import clear_recovered
         clear_recovered(root, me)
     try:
+        from .routing_identity import with_remote_lead
+        reg = with_remote_lead(reg, me, root)
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
     except LookupError as e:
@@ -357,6 +362,9 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         # real misconfiguration, surfaced — not swallowed. Non-zero so it shows.
         print(f"stop_event send: {e}", file=sys.stderr)
         return 1
+    except (CouldNotLook, PartialAnswer) as e:
+        print(f"stop_event send: could not resolve lead: {e}", file=sys.stderr)
+        return 2
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
     context_k = _my_context_k(reg, panes, me)
