@@ -113,7 +113,7 @@ def real_projection(tmp_path, monkeypatch, me):
     return calls
 
 
-def test_late_sender_is_unknown_without_real_tracker_per_agent_fallback(
+def test_late_sender_waits_for_next_roster_without_per_agent_fallback(
         tmp_path, monkeypatch, capsys):
     calls = real_projection(tmp_path, monkeypatch, "lead")
     FilesEvents(tmp_path / "events").persist(to="lead", frm="worker", reason="stopped", rose=False)
@@ -127,9 +127,14 @@ def test_late_sender_is_unknown_without_real_tracker_per_agent_fallback(
 
     monkeypatch.setattr(FilesEvents, "pending", pending)
     assert stop_event.main(["drain", "--root", str(tmp_path)]) == 0
-    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert capsys.readouterr().out == ""
+    assert len(original(FilesEvents(tmp_path / "events"), "lead")) == 1
     assert not any(agent is not None for agent, _owners in calls), calls
-    assert "unreadable" in reason.lower()
+    assert stop_event.main(["drain", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+    assert original(FilesEvents(tmp_path / "events"), "lead") == []
+    assert any(agent is None for agent, _owners in calls), calls
+    assert not any(agent is not None for agent, _owners in calls), calls
 
 
 def test_registry_expansion_is_unknown_without_real_tracker_fallback(
@@ -154,3 +159,24 @@ def test_registry_expansion_is_unknown_without_real_tracker_fallback(
     assert any(agent is None for agent, _owners in calls), calls
     assert not any(agent is not None for agent, _owners in calls), calls
     assert "PLATE UNKNOWN" in reason and "newworker" in reason
+
+
+def test_nonempty_batch_does_not_consume_new_sender(tmp_path, monkeypatch, capsys):
+    calls = real_projection(tmp_path, monkeypatch, "lead")
+    events = FilesEvents(tmp_path / "events")
+    events.persist(to="lead", frm="worker", reason="stopped", rose=False)
+    original = FilesEvents.pending
+    scans = 0
+
+    def pending(self, who):
+        nonlocal scans
+        scans += 1
+        if scans == 2:
+            events.persist(to="lead", frm="late", reason="stopped", rose=False)
+        return original(self, who)
+
+    monkeypatch.setattr(FilesEvents, "pending", pending)
+    assert stop_event.main(["drain", "--root", str(tmp_path)]) == 0
+    assert json.loads(capsys.readouterr().out)["decision"] == "block"
+    assert [event.frm for event in original(events, "lead")] == ["late"]
+    assert not any(agent is not None for agent, _owners in calls), calls

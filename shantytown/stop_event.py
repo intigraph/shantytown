@@ -1188,7 +1188,7 @@ def discard_busy(events, me: str, busy: set, candidates=None) -> list:
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
            shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None,
-           stood_down: bool = False, stopped=None) -> int:
+           stood_down: bool = False, stopped=None, event_ids=None) -> int:
     """Deliver MY events — minus the ones whose sender is still working. For an
     administrator, also append a prioritized workflow over fleet state.
 
@@ -1210,7 +1210,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     verdicts: dict[str, str] = {}
     candidates = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
-        candidates = list(events.pending(me))
+        candidates = [e for e in events.pending(me)
+                      if event_ids is None or e.id in event_ids]
         for ev in candidates:
             if ev.frm not in verdicts:
                 try:
@@ -1222,7 +1223,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                           file=sys.stderr)
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
-    ids = {e.id for e in candidates} if candidates is not None else None
+    ids = {e.id for e in candidates} if candidates is not None else event_ids
     # Tracker/workflow enrichment can outlive the hook deadline during an
     # outage. Preview first: marking delivery before those reads loses the
     # report when the hook is killed without ever emitting its block payload.
@@ -1387,13 +1388,17 @@ def _main(argv: list[str] | None = None) -> int:
     # default) unless SHANTY_RANKER=policy asks for Yupana/Quipu weighting.
     # Share one exact roster across event display and admin workflow. A failed
     # roster discovery stays UNKNOWN; it must not fan out into per-owner reads.
+    event_ids = frozenset()
     try:
-        owners = {me, *(event.frm for event in events.pending(me))}
+        batch = tuple(events.pending(me))
+        event_ids = frozenset(event.id for event in batch)
+        owners = {me, *(event.frm for event in batch)}
         if reg.get(me).role == "administrator":
             owners.update(agent.name for agent in reg.all().exact())
         plate = _plate_reader(root, require_complete=True, owners=sorted(owners))
     except (LookupError, OSError, PartialAnswer) as error:
         failure = f"stop roster unreadable: {type(error).__name__}"
+        print(failure, file=sys.stderr)
 
         def plate(_who):
             raise RuntimeError(failure)
@@ -1401,7 +1406,7 @@ def _main(argv: list[str] | None = None) -> int:
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
                   stood_down=_stood_down(root),
-                  stopped=FilesStops(root / "stopped").at)
+                  stopped=FilesStops(root / "stopped").at, event_ids=event_ids)
 
 
 def _stop_identity(reg, panes, me_env: str) -> str | None:

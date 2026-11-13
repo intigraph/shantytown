@@ -28,6 +28,7 @@ of traffic. Freshness fences are preserved.
 Runtime follow-up `355159d06c227422a240333655272f5a8f57d975` adds the
 hard roster boundary. The stable-roster demo output was revalidated.
 The follow-up race control also models an event or registry member arriving after
-roster preparation. That owner is reported UNKNOWN without a per-agent read.
+roster preparation. Late events remain pending for the next drain; a registry
+addition outside the prepared owner set is reported UNKNOWN without a per-agent read.
 The recording above uses a stable roster; late-arrival behavior is covered by
 the real-tracker controls in `tests/test_stop_roster.py`.
