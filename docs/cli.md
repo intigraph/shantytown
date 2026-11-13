@@ -822,8 +822,15 @@ Capture and scrub preserve citation symlinks when cold archives are relocated.
 Unchanged captures inspect the target size; growing captures and regenerated
 derivatives publish atomically beside the private archive target. Relocated
 files must retain the agent directory and filename, be owner-only, and have a
-private parent directory owned by the same user. Dangling or mismatched links
-are refused rather than replaced. Derivative links into the raw archive are
+private parent directory owned by the same user. A filename may also carry
+`.recaptured-<sha256>` with a 12-to-64-character lowercase hash prefix matching
+its original bytes. Before updating that layout, publication preserves the
+hash-verified origin in a private `.history-origin-*` file and each predecessor
+in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
+keep the citation target unchanged, and retain all versions. These version
+files are archive evidence, not temporary files to remove during a scrub.
+An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
+is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
