@@ -466,7 +466,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             + " UNION ".join(branches)
             + f" }} LIMIT {501 if only_specs else 10000}"
         )
-        candidates = _query(proof, query, timeout)["rows"]
+        with seeds_read_cache.candidate_reads():
+            candidates = _query(proof, query, timeout)["rows"]
         if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
         if inline_owner_guard and any("problem" in row for row in candidates):
