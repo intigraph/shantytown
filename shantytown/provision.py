@@ -1166,6 +1166,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         from . import legacy_capture
         capture_proof = legacy_capture.inspect(ws, manifest, settings_path)
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
+        from . import bobbin_scope
+        updates.update(bobbin_scope.prepare(root, ws, card.role))
         for path, text in instruction_plan.updates.items():
             updates[path] = (tooling.instruction_text(text, manifest.instructions)
                              if manifest is not None else text)

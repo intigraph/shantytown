@@ -3987,3 +3987,35 @@ entries (two per key), with bypass off; it did not show a per-process cache or
 a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
+
+### Optional Bobbin retrieval scopes
+
+A deployment can supply `provision/bobbin/<role>.toml` in its provisioning kit.
+`st provision` projects that role's `groups` and `hooks` settings into the
+agent workspace's `.bobbin/config.toml`. With no template, a new workspace keeps
+Bobbin's unconfigured retrieval behavior. The host-global Bobbin configuration
+is never rewritten.
+
+```toml
+[[groups]]
+name = "engineering"
+repos = ["engine", "client"]
+
+[hooks]
+search_group = "engineering"
+
+[hooks.roles]
+worker = ["engineering"]
+```
+
+The projection records a digest receipt. Existing personal configuration,
+symlinks, or edits after projection cause a refusal; reconcile them explicitly
+rather than replacing them. Removing a template for an already projected
+workspace also refuses, so old role preferences cannot silently survive a role
+change. Group preferences never replace repository access rules.
+
+An anchored item can carry `bobbin-group:<name>` labels. The normal plate
+publisher includes their bounded group names when it already has the item row;
+ID-only dispatches leave them unknown until an anchor refresh. No tracker query
+is added to prompt submission. Bobbin must support group-scoped prompt injection
+before these settings can provide runtime acceptance.

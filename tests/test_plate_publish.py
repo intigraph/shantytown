@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,25 @@ from shantytown.plate_publish import own_session, plate_path, publish, publish_i
 @dataclass
 class _Item:
     id: str
+
+
+def test_anchor_publishes_task_groups_without_a_tracker_read(tmp_path):
+    item = SimpleNamespace(id="work-1", title="Work", labels=(
+        "ordinary", "bobbin-group:engine", "bobbin-group:engine", "bobbin-group:docs"))
+    assert publish(tmp_path, "worker", item, _now=1234)
+    payload = json.loads(plate_path(tmp_path, "worker").read_text())
+    assert payload["bobbin_groups"] == ["docs", "engine"]
+    assert payload["item"] == "work-1"
+    assert publish(tmp_path, "worker", None, _now=1235)
+    assert "bobbin_groups" not in json.loads(plate_path(tmp_path, "worker").read_text())
+
+
+@pytest.mark.parametrize("groups", [["../other"], ["engine,other"], ["x"] * 9, "engine"])
+def test_invalid_group_hints_do_not_prevent_new_plate_publication(tmp_path, groups):
+    assert publish_id(tmp_path, "worker", "work-2", bobbin_groups=groups)
+    payload = json.loads(plate_path(tmp_path, "worker").read_text())
+    assert payload["item"] == "work-2"
+    assert "bobbin_groups" not in payload
 
 
 def test_publish_then_read_round_trips(tmp_path):

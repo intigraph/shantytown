@@ -116,7 +116,13 @@ def publish(
     """
     item_id = getattr(item, "id", None) if item is not None else None
     title = getattr(item, "title", None) if item is not None else None
-    return publish_id(root, agent, item_id, session=session, _now=_now, title=title or None)
+    labels = getattr(item, "labels", ()) if item is not None else ()
+    if not isinstance(labels, (list, tuple)):
+        labels = ()
+    groups = sorted({label.removeprefix("bobbin-group:") for label in labels
+                     if isinstance(label, str) and label.startswith("bobbin-group:")})
+    return publish_id(root, agent, item_id, session=session, _now=_now, title=title or None,
+                      bobbin_groups=groups or None)
 
 
 def publish_id(
@@ -126,6 +132,7 @@ def publish_id(
     session: str | None = None,
     _now: float | None = None,
     title: str | None = None,
+    bobbin_groups: list[str] | None = None,
 ) -> bool:
     """[`publish`] for a caller that holds an ID rather than a WorkItem.
 
@@ -146,6 +153,17 @@ def publish_id(
         # empty, when unknown: a reader keyed on "item" is unaffected.
         if title:
             payload["title"] = title
+        # Retrieval preferences only; consumers keep their independent access
+        # filters. ID-only dispatches omit unknown metadata instead of querying
+        # the tracker on the hook path. The next anchor publishes the labels.
+        if item_id and bobbin_groups is not None:
+            valid_groups = isinstance(bobbin_groups, list) and len(bobbin_groups) <= 8 and not any(
+                not isinstance(group, str) or not group or len(group) > 64
+                or not all(c.isascii() and (c.isalnum() or c in "._-") for c in group)
+                for group in bobbin_groups
+            )
+            if valid_groups:
+                payload["bobbin_groups"] = bobbin_groups
         path = plate_path(root, agent)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Same directory as the target: os.replace is only atomic within a
