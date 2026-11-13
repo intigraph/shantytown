@@ -538,6 +538,7 @@ class Tmux:
         if ps.returncode != 0:
             return None
         best, best_age, fallback = None, -1, None
+        unknown_environment = False
         for ln in ps.stdout.splitlines():
             ln = ln.strip()
             if not ln:
@@ -565,6 +566,9 @@ class Tmux:
             if args in ("-bash", "-zsh", "bash", "zsh"):
                 continue
             line = self._launch_line(pid, args)
+            if line is None:
+                unknown_environment = True
+                continue
             if fallback is None:
                 fallback = (pid, line)
             if _carries_settings_pointer(line):
@@ -573,10 +577,10 @@ class Tmux:
         # No pointer anywhere is a REAL answer (the hookless zombie), so return
         # the process we found rather than None, which means "could not look".
         # That distinction is the whole contract of the callers.
-        return best or fallback
+        return best or (None if unknown_environment else fallback)
 
     @staticmethod
-    def _launch_line(pid: str, args: str) -> str:
+    def _launch_line(pid: str, args: str) -> str | None:
         """argv with the settings-pointer exports folded back in.
 
         Only the harnesses' declared vars are recovered — not the whole
@@ -589,14 +593,46 @@ class Tmux:
         wanted = harness_mod.settings_env_vars()
         if not wanted:
             return args
+        if not pid.isdecimal():
+            return None
         try:
-            with open(f"/proc/{pid}/environ", "rb") as fh:
-                raw = fh.read()
-        except OSError:
-            # Unreadable environ (process gone, or not ours) is not a finding —
-            # fall back to argv and let the caller's own None/empty contract say
-            # what it can and cannot tell.
-            return args
+            if sys.platform == "darwin":
+                # BSD ps exposes only this PID. Verify its real UID before
+                # accepting environment evidence; never return the raw output.
+                result = subprocess.run(
+                    ["ps", "eww", "-o", "uid=,command=", "-p", pid],
+                    capture_output=True, text=True, timeout=2)
+                if result.returncode != 0 or len(result.stdout) > 1_048_576:
+                    raise OSError("process environment unavailable")
+                uid, sep, command = result.stdout.strip().partition(" ")
+                command = command.lstrip()
+                if (not sep or uid != str(os.getuid())
+                        or not (command == args or command.startswith(args + " "))):
+                    raise OSError("process environment identity unproven")
+                tail = command[len(args):].lstrip()
+                # ps has no lossless quoting for whitespace in values. Refuse
+                # ambiguous declared pointers rather than inventing a path.
+                assignments = list(re.finditer(r"(?:^| )([A-Za-z_][A-Za-z0-9_]*)=", tail))
+                values = {}
+                for index, match in enumerate(assignments):
+                    key = match.group(1)
+                    if key not in wanted:
+                        continue
+                    end = assignments[index + 1].start() if index + 1 < len(assignments) else len(tail)
+                    value = tail[match.end():end].rstrip()
+                    if key in values or any(c.isspace() for c in value):
+                        raise OSError("ambiguous settings pointer")
+                    values[key] = value
+                raw = b"\0".join(f"{k}={v}".encode() for k, v in values.items())
+            else:
+                with open(f"/proc/{pid}/environ", "rb") as fh:
+                    raw = fh.read(1_048_577)
+                if len(raw) > 1_048_576:
+                    raise OSError("process environment exceeds bound")
+        except (OSError, subprocess.TimeoutExpired):
+            # An argv-carried pointer is independently visible. Otherwise an
+            # unreadable environment cannot prove that a pointer is absent.
+            return args if _carries_settings_pointer(args) else None
         env = {}
         for item in raw.split(b"\0"):
             if not item:
