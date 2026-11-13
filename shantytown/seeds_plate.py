@@ -311,6 +311,13 @@ class FieldReadTimeout(seeds_read_cache.WatermarkMoved):
         self.batch_size = batch_size
 
 
+class CandidateReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart with smaller constant-status candidate branch groups."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 candidate projection; narrowing branch group')
+        self.batch_size = batch_size
+
+
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
@@ -327,6 +334,8 @@ def _retry_owner_projection(function):
                     return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
+                if isinstance(changed, CandidateReadTimeout):
+                    kwargs = {**kwargs, "candidate_batch_size": changed.batch_size}
                 if isinstance(changed, FieldReadTimeout):
                     kwargs = {**kwargs, "field_batch_size": changed.batch_size}
                 if isinstance(changed, seeds_read_cache.StoreChanged):
@@ -357,7 +366,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
                include_closed: bool = False, only_specs: bool = False,
-               recovery_tokens: int = 3, field_batch_size: int = 250) -> Answer[list[dict]]:
+               recovery_tokens: int = 3, field_batch_size: int = 250,
+               candidate_batch_size: int | None = None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -480,7 +490,21 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             + f" }} LIMIT {501 if only_specs else 10000}"
         )
         with seeds_read_cache.candidate_reads():
-            candidates = _query(proof, query, timeout)["rows"]
+            candidates = []
+            width = candidate_batch_size or len(branches)
+            for offset in range(0, len(branches), width):
+                group = branches[offset:offset + width]
+                scoped_query = ("SELECT (STR(?s) AS ?subject) ?graph "
+                    + ("?problem " if inline_owner_guard else "") + "WHERE { "
+                    + " UNION ".join(group) + f" }} LIMIT {501 if only_specs else 10000}")
+                try:
+                    candidates.extend(_query(proof, scoped_query, timeout)["rows"])
+                except HTTPError as error:
+                    if recovery_tokens > 3 and error.code == 408 and len(group) > 1:
+                        raise CandidateReadTimeout(max(1, len(group) // 2)) from error
+                    raise
+                if len(candidates) >= (501 if only_specs else 10000):
+                    raise ValueError("plate candidate budget reached")
         if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
         if inline_owner_guard and any("problem" in row for row in candidates):

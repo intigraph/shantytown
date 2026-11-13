@@ -308,3 +308,46 @@ def test_stopped_owner_single_subject_408_remains_unknown(changing, monkeypatch)
     assert not plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
                                 include_deferred=True, recovery_tokens=8).complete
     assert len(calls) == 2  # two subjects -> one subject -> refuse; never omit a timed-out subject
+
+
+@pytest.mark.parametrize('allowance,complete', [(3, False), (8, True)])
+def test_stopped_owner_candidate_408_narrows_without_losing_guard(changing, monkeypatch, allowance, complete):
+    from urllib.error import HTTPError
+    proof, state = changing
+    send = plate.urlopen
+    widths = []
+    def bounded(request, timeout):
+        if request.get_method() == 'POST':
+            query = json.loads(request.data)['query']
+            if '?predicate ?value' not in query and not query.startswith('ASK'):
+                width = query.count('BIND(')
+                widths.append(width)
+                if width > 7:
+                    raise HTTPError(request.full_url, 408, 'candidate query timeout', {}, None)
+        return send(request, timeout)
+    monkeypatch.setattr(plate, 'urlopen', bounded)
+    answer = plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                              include_deferred=True, recovery_tokens=allowance)
+    assert answer.complete is complete
+    if complete:
+        assert {r['id'] for r in answer.exact()} == {'test-a', 'test-b'}
+        assert max(widths[1:]) <= 7 and len(widths) > 2
+    else:
+        assert len(widths) == 1
+
+
+def test_split_candidate_timeout_never_drops_unsupported_owner_guard(changing, monkeypatch):
+    from urllib.error import HTTPError
+    proof, state = changing
+    state['unsupported'] = True
+    send = plate.urlopen
+    def bounded(request, timeout):
+        if request.get_method() == 'POST':
+            query = json.loads(request.data)['query']
+            if '?predicate ?value' not in query and query.count('BIND(') > 7:
+                raise HTTPError(request.full_url, 408, 'candidate query timeout', {}, None)
+        return send(request, timeout)
+    monkeypatch.setattr(plate, 'urlopen', bounded)
+    assert not plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                                include_deferred=True, recovery_tokens=8).complete
+    assert not state['fields']
