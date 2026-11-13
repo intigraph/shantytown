@@ -26,8 +26,8 @@ BASE = (Path('/Library/Application Support/Shantytown/jobs') if sys.platform == 
 HELPER = Path('/usr/local/libexec/st-job-launcher')
 OWNER = 0
 _NAME = re.compile(r'eph-(review|merge|triage|task)-[0-9a-f]{6}')
-FIELDS = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username',
-          'home', 'root', 'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment', 'review'}
+IDENTITY_FIELDS = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username', 'home', 'root'}
+FIELDS = IDENTITY_FIELDS | {'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment', 'review'}
 ENVIRONMENT = {'PATH', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
 
 
@@ -52,7 +52,7 @@ def protected(path, *, directory=False):
         raise IdentityError('job capability/code must be a regular file')
 
 
-def load(name):
+def load(name, *, allow_identity=False):
     if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise IdentityError('invalid registered job principal')
     path = BASE / (name + '.json')
@@ -69,7 +69,16 @@ def load(name):
         spec = json.loads(raw)
     except ValueError as error:
         raise IdentityError('invalid job manifest JSON') from error
-    if (not isinstance(spec, dict) or set(spec) != FIELDS or spec['version'] != 1
+    validate_manifest(spec, name, allow_identity=allow_identity)
+    return spec, hashlib.sha256(raw).hexdigest()
+
+
+def validate_manifest(spec, name, *, allow_identity=False):
+    """Shared data-only validation for reviewed renderers and protected loading."""
+    if not isinstance(name, str) or not _NAME.fullmatch(name):
+        raise IdentityError('invalid registered job principal')
+    schemas = (FIELDS, IDENTITY_FIELDS) if allow_identity else (FIELDS,)
+    if (not isinstance(spec, dict) or set(spec) not in schemas or type(spec['version']) is not int or spec['version'] != 1
             or spec['principal'] != name):
         raise IdentityError('invalid job manifest schema')
     for key in ('uid', 'gid', 'controller_uid'):
@@ -81,12 +90,8 @@ def load(name):
         raise IdentityError('job UID cannot be its controller')
     if not isinstance(spec['username'], str) or not re.fullmatch(r'_stjobs(?:_[0-9a-f]{6})?', spec['username']):
         raise IdentityError('only dedicated job accounts may be selected')
-    if spec['harness'] not in ('codex', 'claude') or not isinstance(spec['request'], dict):
-        raise IdentityError('invalid job request/harness')
-    expected = {'job', 'item', 'repo', 'pr', 'checkout', 'head', 'request_id'}
-    if set(spec['request']) != expected or not name.startswith('eph-' + str(spec['request']['job']) + '-'):
-        raise IdentityError('job principal/request mismatch')
-    for key in ('home', 'root', 'controller_root', 'workspace', 'settings'):
+    identity_only = set(spec) == IDENTITY_FIELDS
+    for key in (('home', 'root') if identity_only else ('home', 'root', 'controller_root', 'workspace', 'settings')):
         value = spec[key]
         if (not isinstance(value, str) or not Path(value).is_absolute()
                 or any(c in value for c in '\r\n\0') or '..' in Path(value).parts):
@@ -96,6 +101,13 @@ def load(name):
         raise IdentityError('job home must use the protected identity home convention')
     if spec['root'] != '/var/lib/shantytown/job-stores/' + name:
         raise IdentityError('job metadata root must be its own protected store')
+    if identity_only:
+        return spec
+    if spec['harness'] not in ('codex', 'claude') or not isinstance(spec['request'], dict):
+        raise IdentityError('invalid job request/harness')
+    expected = {'job', 'item', 'repo', 'pr', 'checkout', 'head', 'request_id'}
+    if set(spec['request']) != expected or not name.startswith('eph-' + str(spec['request']['job']) + '-'):
+        raise IdentityError('job principal/request mismatch')
     if (Path(spec['controller_root']).is_relative_to(Path(spec['root']))
             or Path(spec['root']).is_relative_to(Path(spec['controller_root']))):
         raise IdentityError('job metadata root and controller store must be separate')
@@ -117,7 +129,7 @@ def load(name):
     if spec['review'] is not None:
         from . import job_review
         job_review.policy(spec)
-    return spec, hashlib.sha256(raw).hexdigest()
+    return spec
 
 
 def request_fields(req):
@@ -156,7 +168,9 @@ def inventory():
     seen_keys = set()
     entries = []
     for path in paths:
-        spec, digest = load(path.stem)
+        # Provisioned identities participate in every isolation/digest check,
+        # but cannot poison another slot or become a launch capability.
+        spec, digest = load(path.stem, allow_identity=True)
         if plan['slots'][path.stem] != {'uid': spec['uid'], 'sha256': digest}:
             raise IdentityError('job manifest changed from its host slot reservation')
         if spec['uid'] in seen_uids:
@@ -165,7 +179,7 @@ def inventory():
             raise IdentityError('a job account cannot be shared between slots')
         seen_uids.add(spec['uid'])
         seen_users.add(spec['username'])
-        if spec['review'] is not None:
+        if spec.get('review') is not None:
             public = spec['review']['public_key']
             if public in seen_keys:
                 raise IdentityError('a review signing key cannot be shared between jobs')
@@ -180,6 +194,8 @@ def select(req, *, root, harness, used, native_probe=True):
     """Read-only selection. An absent/partial plan never falls back to caller UID."""
     candidates = []
     for spec, digest in inventory():
+        if set(spec) == IDENTITY_FIELDS:
+            continue
         if (spec['request'] == request_fields(req) and spec['controller_root'] == str(Path(root).resolve())
                 and spec['harness'] == harness and spec['controller_uid'] == os.geteuid()
                 and spec['principal'] not in used):
