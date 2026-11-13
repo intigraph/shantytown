@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Guard-only library fixture: transport and final writes are mocked."""
 import argparse
-import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
@@ -52,5 +53,7 @@ if __name__ == '__main__':
     parser.add_argument('--head', required=True)
     args = parser.parse_args()
     print('SOURCE FIXTURE: capacity guard calls only; no real SDK, graph or latency measurement')
-    for ref in (args.base, args.head):
-        print(json.dumps(observe(ref), sort_keys=True))
+    with tempfile.TemporaryDirectory(prefix='capacity-fields-demo-') as sandbox_home:
+        with patch.dict(os.environ, {'HOME': sandbox_home}):
+            for ref in (args.base, args.head):
+                print(json.dumps(observe(ref), sort_keys=True))
