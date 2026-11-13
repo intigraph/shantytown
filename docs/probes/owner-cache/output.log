@@ -1,6 +1,0 @@
-Script started on 2026-11-13 05:20:37-05:00 [COMMAND="python3 docs/probes/owner-cache/probe.py --fixture-root /tmp/owner-cache-demo-v2-20261113" <not executed on terminal>]
-Private fixture: 30 assigned items, both graphs, four reads with unrelated commits
-BEFORE: same source with candidate retention disabled; AFTER: retention enabled
-{"before": {"calls": 4, "requests": 8, "store_held_ms": 32.913942999999996, "observations": 8}, "after": {"calls": 4, "requests": 3, "store_held_ms": 7.731461, "observations": 3}}
-
-Script done on 2026-11-13 05:20:38-05:00 [COMMAND_EXIT_CODE="0"]
