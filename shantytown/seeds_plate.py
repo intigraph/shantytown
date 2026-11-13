@@ -307,7 +307,10 @@ class RenderShapeReads:
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
-        budget = {"remaining": 3,
+        tokens = kwargs.get("recovery_tokens", 3)
+        if type(tokens) is not int or not 3 <= tokens <= 8:
+            raise ValueError("owner projection recovery allowance must be 3..8")
+        budget = {"remaining": tokens,
                   "deadline": time.monotonic() + 3 * kwargs.get("timeout", 30)}
         error = "projection changed"
         while budget["remaining"]:
@@ -344,7 +347,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
-               include_closed: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
+               include_closed: bool = False, only_specs: bool = False,
+               recovery_tokens: int = 3) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None

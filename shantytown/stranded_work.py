@@ -20,7 +20,7 @@ from .files import write_json_atomic
 from .inbox import is_deploy_operation, is_message
 from .owned_work import _agent, _time
 
-T1 = T2 = 3600  # One measured hour, identical for every priority.
+T1 = T2 = 3600  # Legacy attention/library defaults; fleet release uses owner priority.
 
 
 def owner(row):
@@ -59,6 +59,10 @@ def eligible(row, *, operator_stopped=False):
             and type(row.get('priority')) is int and row['priority'] in range(5))
 
 
+def release_threshold(rows, name):
+    return 1800 if any(owner(r) == name and r["priority"] <= 1 for r in rows) else 14400
+
+
 def resume_exempt(value, now):
     if value is None:
         return False
@@ -89,10 +93,38 @@ class StrandedWork:
         path = self.root / 'attention.json'
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def preview(self, rows, cards, *, observe, now):
+        """Read-only plan from the same measured generations and release policy.
+
+        No notification, lock, checkpoint, intent journal or tracker mutation.
+        This is a candidate plan, not admission to perform the CAS.
+        """
+        now = _time(now)
+        if len(rows) > 5000 or len(cards) > 100 or len({r['id'] for r in rows}) != len(rows):
+            raise ValueError('stranded-owner census exceeds bounds or duplicates identities')
+        active = [r for r in rows if eligible(r, operator_stopped=True)]
+        saved, result = self.snapshot(), []
+        for row in active:
+            name = owner(row)
+            state = observe(name, cards.get(name))
+            previous = saved.get(row['id'], {})
+            threshold = release_threshold(active, name)
+            same = (previous.get('active') and previous.get('owner') == name
+                    and previous.get('generation') == state.get('generation'))
+            age = now - previous['down_since'] if same else 0
+            if state.get('state') != 'operator-stopped' or resume_exempt(state.get('resume_at'), now):
+                result.append((row['id'], 'dry-run: no release; owner not admitted stopped class'))
+            elif age < threshold:
+                result.append((row['id'], f'dry-run: below threshold ({age:g}s/{threshold}s)'))
+            else:
+                result.append((row['id'], f'dry-run: would repool from {name} ({age:g}s/{threshold}s); CAS gates still required'))
+        return result
+
     def tick(self, rows, cards, *, observe, recipient, notify, read, release,
              checkpoint, fence, now=None, release_admitted=False, t1=T1, t2=T2,
              budget=5, max_intents=4, clock=time.monotonic, operator_release_only=False,
-             operator_budget=60, max_operator_releases=40, max_operator_notices=10):
+             operator_budget=60, max_operator_releases=40, max_operator_notices=10,
+             priority_tiered=False):
         """One complete, bounded snapshot; no retries or ownership guesses.
 
         read/release are revision-aware adapter seams, NOT generic update.
@@ -194,8 +226,11 @@ class StrandedWork:
                     data[identity] = previous
                 previous.update(checked_at=now, evidence=state)
                 age = now - previous['down_since']
-                previous['attention'] = operator_stopped or age > t1
-                previous['release_due'] = (operator_stopped or row['status'] == 'open' and age > t2)
+                threshold = release_threshold(active.values(), name)
+                attention_due = operator_stopped or age > t1
+                release_due = age >= threshold if priority_tiered else operator_stopped or age > t2
+                previous['attention'] = attention_due
+                previous['release_due'] = release_due and (operator_stopped or row['status'] == 'open')
                 if operator_release_only and not operator_stopped:
                     previous['release_due'] = False
                 if not previous['attention']:

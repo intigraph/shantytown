@@ -44,7 +44,7 @@ def checkpoint(card):
                 checkpoint='Original item notes/comments and existing workspace retained unchanged')
 
 
-def sweep(root, registry, tracker, panes, inbox, *, now=None):
+def sweep(root, registry, tracker, panes, inbox, *, now=None, dry_run=False):
     selected = mode()
     if selected == 'off':
         return []  # No board, process, stop-store or credential read by default.
@@ -129,18 +129,21 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None):
             raise ValueError('stranded-owner error receipt UNKNOWN')
     read = getattr(tracker, 'stranded_read', None)
     release = getattr(tracker, 'release_stranded', None)
-    if selected == 'release' and (not callable(read) or not callable(release)):
+    if not dry_run and selected == 'release' and (not callable(read) or not callable(release)):
         raise ValueError('revision-fenced stranded release unsupported')
     detector = StrandedWork(root)
     # One sweep timestamp joins attention to coverage. Sampling again after
     # tick made natural-clock runs report zero due work despite due findings.
     import time
     measured = time.time() if now is None else now
+    if dry_run:
+        return detector.preview(rows, cards, observe=observe, now=measured)
     result = detector.tick(rows, cards, observe=observe, recipient=destination,
         notify=notify, read=read, release=release,
         checkpoint=lambda name, card: checkpoint(card),
         fence=lambda name: lifecycle_lock(root, name), now=measured,
-        release_admitted=selected == 'release', operator_release_only=True)
+        release_admitted=selected == 'release', operator_release_only=True,
+        priority_tiered=True)
     # The already deployed held-work reader joins these lifecycle observations
     # to assigned work. No second brief board scan or private checkpoint payload.
     findings = detector.snapshot()

@@ -387,7 +387,7 @@ def test_stranded_sdk_census_uses_owned_waiting_work_projection_without_messages
     monkeypatch.setattr('shantytown.seeds_plate.owner_rows', read)
     assert tracker.stranded_rows(['worker']) == [dict(id='work-1')]
     assert calls == [('proof', None, dict(timeout=tracker.timeout,
-        plate_owners=('worker',), capacity=True, include_deferred=True, include_messages=False))]
+        plate_owners=('worker',), capacity=True, include_deferred=True, include_messages=False, recovery_tokens=8))]
 
 
 def test_attention_not_cleared_by_unreadable_metadata(world):

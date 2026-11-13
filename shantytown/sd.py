@@ -811,6 +811,18 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def stopped_owner_rows(self, owners):
+        """Work-only stopped-owner census; bounded repair, unchanged time ceiling."""
+        if not self._use_remote_projection():
+            raise ValueError('stopped-owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stopped-owner scope unproven')
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          plate_owners=tuple(owners), capacity=True,
+                          include_deferred=True, include_messages=False,
+                          recovery_tokens=8)
+
     def stranded_rows(self, owners):
         """Complete owner-scoped census of parked and active WORK.
 
@@ -823,10 +835,7 @@ class SdTracker(BrTracker):
             raise ValueError('stranded owner census requires native Seeds projection')
         if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
             raise ValueError('stranded owner scope unproven')
-        from .seeds_plate import owner_rows
-        return owner_rows(self.prove_store(), None, timeout=self.timeout,
-                          plate_owners=tuple(owners), capacity=True,
-                          include_deferred=True, include_messages=False).exact()
+        return self.stopped_owner_rows(owners).exact()
 
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""
