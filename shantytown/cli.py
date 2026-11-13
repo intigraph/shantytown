@@ -14880,6 +14880,14 @@ def _tend_once(a, quiet: bool = False) -> int:
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.
+    _log = lambda msg: print(f"  {msg}", file=sys.stderr)
+    if a.dry_run:
+        from .stopped_repool import sweep as stopped_repool_sweep
+        try:
+            for identity, finding in stopped_repool_sweep(a.root, reg, _tracker(a), panes, dry_run=True):
+                _log(f'stopped-repool {identity}: {finding}')
+        except Exception as exc:
+            _log(f'stopped-repool UNKNOWN ({type(exc).__name__}); no changes')
     if not a.dry_run:
         _log = lambda msg: print(f"  {msg}", file=sys.stderr)
 
@@ -15058,6 +15066,12 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
+        def _repool_stopped_items():
+            from .stopped_repool import sweep
+            for identity, finding in sweep(a.root, reg, _tracker(a), panes):
+                _log(f'stopped-repool {identity}: {finding}')
+            return []
+        _fleet_sweep('stopped-repool', _repool_stopped_items)
         def _stranded_owner_work():
             from .stranded_adapter import mode, sweep
             if mode() == 'off':
