@@ -3356,6 +3356,29 @@ outcome remains unproven: read back the
 item before deciding whether to retry. The command never retries or changes the
 principal, blocker checks or close reason to get past a failure.
 
+### Alert causes and members
+
+A **cause** is the currently firing root alarm class selected from Quipu's
+existing `runs_on` / `depends_on` topology. A **member** is a dependent alert
+firing at the same time. Host-down plus service-down on that host is one open
+work item; unrelated alerts on the same host are separate causes. Ambiguous or
+unreadable topology provides no grouping authority.
+
+The producer preserves the root's `recurring-class:<hash>` identity. The current
+bridge pointer identifies the root work item, and a `Cause member:` comment
+records each dependent class, target, count and onset. In Quipu the classes are
+`FailurePattern` nodes: `member_of` names the root class and `tracked_by` names
+its `WorkItem`. This reuses existing governed types and relationship vocabulary.
+
+`st work item show ITEM` exposes the native parent and lifecycle state. An
+existing dependent item retains its history under the root as a parent-child
+member, closed with **member of cause**, not **resolved**. If the dependent alert
+fires later without that root, the producer reopens its original item. Historical
+parent links alone do not prove a current correlation. A member refire invalidates
+old fix evidence on the root; resolving an outage still needs fix evidence and
+the recurring producer's continuous-quiet gate. Membership does not broaden
+Alertmanager silences or acknowledge a firing alert.
+
 ### Replacing work-item text
 
 `st work item update ITEM --notes-file FILE` fills empty notes or verifies an
