@@ -147,6 +147,42 @@ def test_managed_plan_checks_the_bytes_it_reads_not_an_earlier_path_probe(tmp_pa
         _read(path, expected_sha256='invalid')
 
 
+def test_one_sweep_recovers_item_duty_and_reservation_then_explicit_stop_preserves_ask(setup, monkeypatch):
+    from shantytown import cli, stranded_adapter
+    world = armed(setup, monkeypatch)
+    world.row.update(title='ordinary work', labels=[], revision=1)
+    decision = dict(world.row, id='ask-1', title='ASK operator: retained', labels=['needs-stiwi'])
+    world.tracker.stranded_rows = lambda _: copy.deepcopy([world.row, decision])
+    world.tracker.stranded_read = lambda ident: copy.deepcopy(world.row if ident == world.row['id'] else decision)
+    released = []
+    def release(row, comment, *, operator_stopped):
+        assert row['id'] == world.row['id'] and operator_stopped and comment
+        released.append(row['id'])
+        world.row.update(assignee='', status='open', revision=2)
+        return 'released'
+    world.tracker.release_stranded = release
+    monkeypatch.setattr(stranded_adapter, 'checkpoint', lambda _: dict(
+        worktree='fixture:preserved', branch='fixture-branch', head='a' * 40,
+        checkpoint='fixture:retained notes'))
+    install(world, [record(binding='registry'), record('peer', kind='review-reservation')])
+    FilesStops(world.root / 'stopped').record('worker', 0)
+    run(world, 1800)
+    assert released == ['work-1'] and world.row['assignee'] == ''
+    assert Duties(world.root).resolve('queue', live=lambda n: n == 'lead') == 'lead'
+    assert len(world.repairs) == 1 and decision['assignee'] == 'worker'
+    world.panes.exists = lambda _: False
+    monkeypatch.setattr(cli, '_registry', lambda _: world.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: world.panes)
+    monkeypatch.setattr(cli, '_tracker', lambda _: world.tracker)
+    monkeypatch.setattr(cli, '_inbox', lambda _: world.inbox)
+    stopped = []
+    monkeypatch.setattr(cli, '_stop_locked', lambda _: stopped.append('worker') or 0)
+    args = SimpleNamespace(root=world.root, agent='worker', dry_run=False, repool_work=True)
+    assert cli._cmd_stop(args) == 0
+    assert stopped == ['worker'] and len(world.repairs) == 1
+    assert decision['assignee'] == 'worker' and released == ['work-1']
+
+
 def test_positive_live_owner_is_untouched(setup, monkeypatch):
     world = armed(setup, monkeypatch)
     install(world, [record(binding='registry')])
