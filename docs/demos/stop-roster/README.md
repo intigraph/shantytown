@@ -7,7 +7,8 @@ reports an unknown plate. The tracker, registry, pane and event fixtures are loc
 this recording does not query or change a live deployment.
 
 Run `PYTHONPATH=. python3 docs/demos/stop-roster/demo.py` from a source checkout.
-Compare base `4ac66122cb6ab7c9a2233b1f07150303d1645c87` with this PR's source.
+Compare base `4ac66122cb6ab7c9a2233b1f07150303d1645c87` with runtime source commit `dcd9446591971875a5ef8cfd8f401b1fffad4231`.
+Later caption-only changes preserve that runtime source and recording.
 The actual output is in [output.log](output.log), with [timing.log](timing.log).
 Download both and replay with:
 
