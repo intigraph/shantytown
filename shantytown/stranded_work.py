@@ -227,7 +227,7 @@ class StrandedWork:
                 previous.update(checked_at=now, evidence=state)
                 age = now - previous['down_since']
                 threshold = release_threshold(active.values(), name)
-                attention_due = operator_stopped or age > t1
+                attention_due = operator_stopped or (age >= threshold if priority_tiered else age > t1)
                 release_due = age >= threshold if priority_tiered else operator_stopped or age > t2
                 previous['attention'] = attention_due
                 previous['release_due'] = release_due and (operator_stopped or row['status'] == 'open')

@@ -154,7 +154,7 @@ def test_undated_operator_stop_has_immediate_attention_in_observe(setup):
     assert OwnedWork(setup.root).snapshot() == {}
 
 
-def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
+def test_positive_cycle_refusal_uses_priority_deadline_even_with_live_pane(setup):
     from shantytown.cycle import Requests
     path = Requests(setup.root).path
     path.parent.mkdir(parents=True)
@@ -162,9 +162,9 @@ def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
         'refused': {'reason': 'fixture dirty tree', 'paths': ['fixture']}}}))
     setup.states['worker'] = 'live'
     run(setup)
-    run(setup, 3600)
+    run(setup, 1799)
     assert not setup.inbox.unread('admin')
-    run(setup, 3601)
+    run(setup, 1800)
     assert len(setup.inbox.unread('admin')) == 1
     assert 'cycle refusal' in OwnedWork(setup.root).snapshot()['worker']['reason']
     path.write_text('{}')
@@ -502,3 +502,15 @@ def test_dry_run_prints_due_plan_without_writing_any_boundary(setup):
              for p in setup.root.rglob('*') if p.is_file()}
     assert before == after
     assert setup.row['assignee'] == 'worker'
+
+
+@pytest.mark.parametrize('priority,threshold', [(1, 1800), (2, 14400)])
+def test_inferred_absence_attention_uses_owner_priority_without_release(setup, priority, threshold):
+    setup.row['priority'] = priority
+    run(setup, 0)
+    run(setup, threshold - 1)
+    assert not setup.inbox.unread('admin')
+    run(setup, threshold)
+    assert len(setup.inbox.unread('admin')) == 1
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['attention'] and not finding['release_due']
