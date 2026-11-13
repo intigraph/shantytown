@@ -1,0 +1,7 @@
+Script started on 2026-11-13 16:28:46-05:00 [COMMAND=".venv/bin/python docs/demos/single-occurrence-jobs.py --before /tmp/dearing-vk5/st-base.py" <not executed on terminal>]
+BASE: REFUSED unsupported calendar qualifier
+CANDIDATE: {"repeat_count": 1, "interval_s": null, "anchor_s": 1767225600}
+COUNT=2 CONTROL: REFUSED only explicit integer repeatCount=1 is supported
+Pure fixture only; no graph, scheduler, key or runtime reads.
+
+Script done on 2026-11-13 16:28:46-05:00 [COMMAND_EXIT_CODE="0"]

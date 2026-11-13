@@ -14077,7 +14077,9 @@ def _cmd_declared_jobs(a, verb) -> int:
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
     for job in selected:
-        cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
+        cadence = (f"once at UTC epoch {job.anchor_s}"
+                   if isinstance(job, quipu_jobs.SingleOccurrenceDeclaredJob)
+                   else f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
                    if isinstance(job, quipu_jobs.CalendarDeclaredJob)
                    else f"every {job.interval_s}s")
         print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
