@@ -426,3 +426,32 @@ def test_verbose_literal_cannot_relabel_an_iri():
     row['o'] = {'value': 'urn:example:manifest:revision1', 'datatype': q.XSD+'string'}
     with pytest.raises(q.JobsUnavailable, match='contradicts'):
         q.decode_catalogue(body)
+
+
+def test_published_quechua_declaration_preserves_rdf_kinds_and_wire_body():
+    body = catalogue()
+    for row in body['rows']:
+        if row['p'].startswith(q.QUECHUA):
+            row['p'] = q.QUECHUA_CANONICAL + row['p'][len(q.QUECHUA):]
+    before = copy.deepcopy(body)
+    assert q.decode_catalogue(body) == q.decode_catalogue(catalogue())
+    assert body == before
+
+
+def test_conflicting_legacy_and_published_enablement_refuses():
+    body = catalogue()
+    row = copy.deepcopy(row_for(body, q.QUECHUA + 'enabled'))
+    row.update(p=q.QUECHUA_CANONICAL + 'enabled', o=False)
+    body['rows'].append(row)
+    body['count'] = len(body['rows'])
+    with pytest.raises(q.JobRefused, match='exactly one'):
+        q.decode_catalogue(body)
+
+
+def test_quechua_aliases_match_the_published_crosswalk():
+    from pathlib import Path
+    from shantytown import seeds_plate
+    rows = json.loads((Path(__file__).parent / 'fixtures/quechua-reader-ownership.json').read_text())
+    actual = {legacy: canonical for canonical, legacy in q._QUECHUA_READ_ALIASES.items()}
+    actual[seeds_plate.BLOCKED_ON[0]] = seeds_plate.BLOCKED_ON[1]
+    assert actual == {row['old']: row['new'] for row in rows}

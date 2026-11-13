@@ -296,11 +296,12 @@ def test_readiness_keeps_blocker_evidence_graph_local(monkeypatch):
     assert len(calls) == 1, "eligibility and blockers must share one observation"
 
 
-def test_readiness_native_semantics_in_actual_rdf(monkeypatch):
+@pytest.mark.parametrize("blocked_on", seeds_plate.BLOCKED_ON)
+def test_readiness_native_semantics_in_actual_rdf(monkeypatch, blocked_on):
     from rdflib import Dataset, URIRef, Literal, RDF
 
     data = Dataset()
-    native = URIRef("https://scbrown.github.io/quechua/ns#blockedOn")
+    native = URIRef(blocked_on)
     status = URIRef(seeds_plate.SEEDS + "ontology/status")
     identifier = URIRef(seeds_plate.SCHEMA + "identifier")
     action = URIRef(seeds_plate.SCHEMA + "Action")
@@ -948,3 +949,7 @@ def test_owner_field_response_at_limit_remains_unknown(monkeypatch):
     from shantytown.answer import PartialAnswer
     with pytest.raises(PartialAnswer, match="field budget"):
         seeds_plate.owner_rows(PROOF, "worker").exact()
+
+
+def test_published_blocker_changes_invalidate_owner_membership():
+    assert set(seeds_plate.BLOCKED_ON) <= seeds_plate.OWNER_MEMBERSHIP

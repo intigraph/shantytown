@@ -12,11 +12,11 @@ from urllib.parse import quote, unquote
 
 from .beads import _is_placeholder_dep
 from .protocols import WorkItem, blocker_kind, rank_order
-from .seeds_plate import SCHEMA, SEEDS, _iri, _query
+from .seeds_plate import SCHEMA, SEEDS, BLOCKED_ON, _iri, _query
 
 TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
-BLOCKS = "https://scbrown.github.io/quechua/ns#blockedOn"
+BLOCKS = BLOCKED_ON[0]  # stable internal read slot; both wire spellings are accepted
 EDGES = (BLOCKS, SCHEMA + "isPartOf", "http://purl.org/dc/terms/relation",
          "http://www.w3.org/ns/prov#wasDerivedFrom")
 FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
@@ -29,6 +29,8 @@ FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SEEDS + "ontology/rank", *EDGES)
 TARGET_FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
                  SEEDS + "ontology/status")
+WIRE_FIELDS = (*FIELDS, BLOCKED_ON[1])
+WIRE_EDGES = (*EDGES, BLOCKED_ON[1])
 CAP = 10000
 XSD = "http://www.w3.org/2001/XMLSchema#"
 
@@ -76,11 +78,11 @@ UNREPORTED = "unreported"
 
 def _value(row):
     predicate, value, kind = row["p"], row["o"], row["kind"]
-    if predicate not in FIELDS:
+    if predicate not in WIRE_FIELDS:
         raise ValueError("unexpected item predicate")
     if kind == UNREPORTED:
         raise ValueError(f"item field {predicate} has a type the store did not report")
-    if predicate == TYPE or predicate in EDGES:
+    if predicate == TYPE or predicate in WIRE_EDGES:
         if kind != "iri":
             raise ValueError("item reference is not an IRI")
     elif predicate == SCHEMA + "version":
@@ -143,7 +145,8 @@ def _subject_facts(rows, graphs, subject):
             raise ValueError("item field scope unreadable")
         if row["s"] == subject:
             facts = found.setdefault(row["graph"], {})
-            facts.setdefault(row["p"], set()).add(_value(row))
+            predicate = BLOCKS if row["p"] in BLOCKED_ON else row["p"]
+            facts.setdefault(predicate, set()).add(_value(row))
     if len(found) > 1:
         raise ValueError("item appears in both project graphs")
     return next(iter(found.values()), {})
@@ -160,9 +163,9 @@ def _target_id(subject):
 
 
 def _fields_query(graphs, subject):
-    source_fields = " || ".join(f"?p = {_iri(p)}" for p in FIELDS)
+    source_fields = " || ".join(f"?p = {_iri(p)}" for p in WIRE_FIELDS)
     target_fields = " || ".join(f"?p = {_iri(p)}" for p in TARGET_FIELDS)
-    edges = " || ".join(f"?edge = {_iri(p)}" for p in EDGES)
+    edges = " || ".join(f"?edge = {_iri(p)}" for p in WIRE_EDGES)
     branches = []
     for graph in graphs:
         branches.append(

@@ -293,3 +293,15 @@ def test_native_admission_context_is_preserved_for_dispatch(monkeypatch):
     item = seeds_item.read_item(value, "test-one")
     assert item.agent_context == context
     assert is_deploy_operation(item)
+
+
+@pytest.mark.parametrize('blocked_on', seeds_item.BLOCKED_ON)
+def test_historical_and_published_blockers_keep_the_same_native_classification(monkeypatch, blocked_on):
+    target = seeds_item.SEEDS + 'item/test-blocker'
+    source = rows()
+    source.append(dict(graph=GRAPH, s=SUBJECT, p=blocked_on, o=target, kind='iri'))
+    source += rows(target)
+    value, calls = tracker(monkeypatch, source)
+    result = seeds_item.read_item(value, 'test-one')
+    assert result.open_blockers == ('test-blocker',)
+    assert all('<' + iri + '>' in calls[0] for iri in seeds_item.BLOCKED_ON)

@@ -18,7 +18,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .quipu import request_headers, resolve_server
 
 SCHEMA = "https://schema.org/"
-QUECHUA = "https://scbrown.github.io/quechua/ns#"
+QUECHUA = "https://scbrown.github.io/quechua/ns#"  # historical read spelling
+QUECHUA_CANONICAL = "https://w3id.org/intigraph/quechua/ns#"
+_QUECHUA_READ_ALIASES = {QUECHUA_CANONICAL + name: QUECHUA + name
+                        for name in ("sourceKind", "owner", "enabled")}
 RDF_TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 XSD = "http://www.w3.org/2001/XMLSchema#"
 MAX_TRIPLES = 4096
@@ -96,6 +99,7 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
                 type(row.get('objectIRI')) is not bool):
             raise JobsUnavailable("typed/IRI query capability missing")
         subject, predicate = _iri(row.get('s')), _iri(row.get('p'))
+        predicate = _QUECHUA_READ_ALIASES.get(predicate, predicate)
         value, is_iri, datatype = row.get('o'), row['objectIRI'], row.get('datatype')
         # Verbose Quipu wraps typed literals; projected DATATYPE remains the
         # independent term-kind witness. Never unwrap an IRI or contradictory cell.
