@@ -13,6 +13,9 @@ from shantytown.stopped import FilesStops
 from shantytown.stranded_adapter import sweep
 from tests.test_stranded_adapter import setup
 
+ROUTING_RULES = {'internal-landing': dict(repository_prefix='internal/',
+                                        holder_rule='author', require_live=True)}
+
 
 def record(ident='queue', *, binding='external', kind='merge-queue', priority=0):
     return dict(id=ident, holder='worker', binding=binding, kind=kind,
@@ -24,7 +27,7 @@ def install(world, rows):
     path = Duties(world.root).path
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(path, dict(schema=SCHEMA, revision=1,
-                                coverage=list(KINDS), entries=rows))
+                                coverage=list(KINDS), routing=ROUTING_RULES, entries=rows))
 
 
 def armed(world, monkeypatch):
@@ -181,6 +184,31 @@ def test_one_sweep_recovers_item_duty_and_reservation_then_explicit_stop_preserv
     assert cli._cmd_stop(args) == 0
     assert stopped == ['worker'] and len(world.repairs) == 1
     assert decision['assignee'] == 'worker' and released == ['work-1']
+
+
+def test_internal_landing_seeds_author_rule_and_checks_liveness_at_send_time(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    duties = Duties(world.root)
+    plan = dict(schema=SCHEMA, revision=1, coverage=list(KINDS),
+                routing=ROUTING_RULES, entries=[])
+    duties.install(plan, expected_revision=0, apply=True)
+    assert duties.load()['routing'] == ROUTING_RULES
+    sent = duties.send_landing('internal/example', 'lead', 'reviewed landing task',
+        'fixture:landing', live=lambda n: world.states[n] == 'live', inbox=world.inbox)
+    assert sent.body == 'fixture:landing reviewed landing task' and len(world.inbox.unread('lead')) == 1
+    world.states['lead'] = 'down'
+    with pytest.raises(ValueError, match='stopped'):
+        duties.send_landing('internal/example', 'lead', 'cached target', 'fixture:next',
+            live=lambda n: world.states[n] == 'live', inbox=world.inbox)
+    assert len(world.inbox.unread('lead')) == 1 and not world.inbox.unread('worker')
+    changed = duties.load()
+    changed['routing']['internal-landing']['holder_rule'] = 'queue'
+    with pytest.raises(ValueError, match='live author'):
+        duties.install(changed, expected_revision=1, apply=True)
+    assert duties.load()['routing'] == ROUTING_RULES
+    with pytest.raises(ValueError, match='repository'):
+        duties.send_landing('public/example', 'lead', 'wrong lane', 'fixture:wrong',
+            live=lambda _: True, inbox=world.inbox)
 
 
 def test_positive_live_owner_is_untouched(setup, monkeypatch):

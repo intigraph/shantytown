@@ -13,6 +13,7 @@ The managed file is `<crew-root>/duties/registry.json`:
   "schema": "shantytown.duties/1",
   "revision": 1,
   "coverage": ["merge-queue", "reviewer", "scheduled-job", "alert-keeper", "review-reservation", "haul"],
+  "routing": {"internal-landing": {"repository_prefix": "internal/", "holder_rule": "author", "require_live": true}},
   "entries": [{
     "id": "example-queue",
     "kind": "merge-queue",
@@ -33,6 +34,13 @@ particular, prose review reservations and shell commands are not parsed into
 authority. Headless environment files, units, cron bindings, keeper sources and
 haul owners need explicit reviewed inventory until their producers register
 them. Do not count disabled templates or test expectations as serving rules.
+
+Managed adoption supplies `internal-landing` as data: for the configured owner the PR author
+owns landing and the main watch. A structured consumer calls
+`Duties.send_landing()` at delivery time; the author must be positively live
+under the lock shared with stop. No stopped-author send, queue fallback or
+process wake is admitted. An older inventory without this rule cannot send.
+The legacy global queue role is not an internal-repository landing policy.
 
 On every admitted pass, literal agent bindings from enabled local job files
 are refreshed using the existing job parser. Direct inbox/dispatch agents and

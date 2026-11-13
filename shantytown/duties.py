@@ -26,6 +26,20 @@ SCHEMA = 'shantytown.duties/1'
 MAX_BYTES, MAX_ROWS = 1024 * 1024, 1000
 
 
+def _routing(data):
+    routing = data.get('routing')
+    if not isinstance(routing, dict) or set(routing) != {'internal-landing'}:
+        raise ValueError('internal landing routing unproven')
+    rule = routing['internal-landing']
+    if (not isinstance(rule, dict)
+            or set(rule) != {'repository_prefix', 'holder_rule', 'require_live'}
+            or not isinstance(rule['repository_prefix'], str)
+            or not re.fullmatch(r'[A-Za-z0-9_.-]+/', rule['repository_prefix'])
+            or rule['holder_rule'] != 'author' or rule['require_live'] is not True):
+        raise ValueError('internal landing owner must remain the live author')
+    return rule
+
+
 def _name(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}', value):
         raise ValueError('invalid duty or holder identity')
@@ -55,6 +69,8 @@ def validate(data):
             or len(data['entries']) > MAX_ROWS):
         raise ValueError('duty registry coverage/schema UNKNOWN')
     seen = set()
+    if 'routing' in data:
+        _routing(data)
     for row in data['entries']:
         ident = _name(row['id'])
         if ident in seen:
@@ -103,9 +119,12 @@ class Duties:
                     new['holder'] = old['holder']
             merged[row['id']] = new
         after = dict(schema=SCHEMA, revision=revision + 1,
-                     coverage=list(KINDS), entries=sorted(merged.values(), key=lambda r: r['id']))
+                     coverage=list(KINDS),
+                     routing=deepcopy(plan.get('routing', (before or {}).get('routing'))),
+                     entries=sorted(merged.values(), key=lambda r: r['id']))
         validate(after)
-        changed = before is None or sorted(before['entries'], key=lambda r: r['id']) != after['entries']
+        changed = (before is None or before.get('routing') != after['routing']
+                   or sorted(before['entries'], key=lambda r: r['id']) != after['entries'])
         result = dict(revision=revision, changed=changed, duties=len(after['entries']))
         if apply and changed:
             with self.locked():
@@ -163,6 +182,33 @@ class Duties:
                 or not live(rows[0]['holder'])):
             raise ValueError('effective duty holder UNKNOWN or unavailable')
         return rows[0]['holder']
+
+    def send_landing(self, repository, author, body, key, *, live, inbox):
+        """Internal landing/main-watch goes to its live author, never a queue.
+
+        A structured consumer calls this at delivery time. The duty lock is
+        shared with permanent stop, so a cached target cannot outrun that stop.
+        This sends no dispatch, wakes no process and grants no merge authority.
+        """
+        if (not isinstance(repository, str)
+                or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)):
+            raise ValueError('unsupported internal landing repository')
+        _name(author)
+        if (not isinstance(key, str) or not re.fullmatch(r'[A-Za-z0-9:/_.-]{1,256}', key)
+                or not isinstance(body, str) or not body):
+            raise ValueError('invalid landing delivery identity or body')
+        message = key + ' ' + body
+        with self.locked():
+            rule = _routing(self.load())
+            if not repository.startswith(rule['repository_prefix']):
+                raise ValueError('unsupported internal landing repository')
+            if not live(author):
+                raise ValueError('landing author is stopped or liveness UNKNOWN; no send')
+            receipt = inbox.deliver_once(author, message, key, frm='st duty')
+            seen = inbox.find_delivery(author, key)
+            if seen is None or seen.id != receipt.id or seen.body != message:
+                raise ValueError('landing delivery UNKNOWN; reconcile retained key')
+            return receipt
 
     def tick(self, *, observe, live, administrator, ensure_issue, notify,
              now=None, release=False, max_actions=10):
