@@ -483,7 +483,14 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if subject in selected and selected[subject] != graph:
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
-        grouped = _project_fields(proof, selected, graphs, timeout, batch_size=1000)
+        # A valid ready cohort can exceed 10k scalar fields while remaining
+        # well below the candidate cap. Budget the aggregate by its admitted
+        # subjects, as ranking_rows does; each reply still has the same 10k
+        # refusal boundary. Smaller batches leave room for optional fields
+        # and labels instead of truncating the first 1,000-subject request.
+        field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
+                             batch_size=250)
+        grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
                 seeds_read_cache.certify_projection(
@@ -511,11 +518,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise seeds_read_cache.WatermarkMoved("owner candidate or guard relation changed")
                 subset = {subject: selected[subject] for subject in change.entities}
                 if subset:
-                    grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
+                    grouped.update(_project_fields(proof, subset, graphs, timeout, **field_options))
             except seeds_read_cache.EntityChanges as change:
                 seeds_read_cache.repair_entities(change)
                 subset = {subject: selected[subject] for subject in change.entities}
-                grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
+                grouped.update(_project_fields(proof, subset, graphs, timeout, **field_options))
         rows = []
         for subject, row in grouped.items():
             from .protocols import rank_order
@@ -660,9 +667,9 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
-    # Owner rosters explicitly use 1,000 subjects to avoid a round trip.
-    # Ranking retains 500: its larger aggregate budget admits dense answers
-    # that must still fit each individual response. No field/byte cap grows.
+    # Owner cohorts use smaller batches for dense scheduling metadata.
+    # Ranking retains 500. Aggregate budgets never waive the per-response
+    # row/byte caps, identity checks or ambiguous-field refusal.
     for offset in range(0, len(pairs), batch_size):
         chunk = pairs[offset : offset + batch_size]
         # Keep graph and predicate constant in each indexed branch.
