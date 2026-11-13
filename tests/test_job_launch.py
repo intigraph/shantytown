@@ -675,6 +675,7 @@ def render_fixture(capability, count):
             root='/var/lib/shantytown/job-stores/'+name)
         data = json.dumps(identity).encode()
         (jobs.BASE/(name+'.json')).write_bytes(data)
+        (jobs.BASE/(name+'.json')).chmod(0o600)
         plan['slots'][name] = dict(uid=uid, sha256=hashlib.sha256(data).hexdigest())
         bindings[name] = dict(controller_root=original['controller_root'], workspace=home+'/worktree',
             settings=home+'/codex/config.toml', harness='codex', review=None,
@@ -758,3 +759,22 @@ def test_malformed_provisioned_identity_still_refuses_the_whole_inventory(capabi
     (jobs.BASE/'slots.json').write_text(json.dumps(plan))
     with pytest.raises(IdentityError):
         jobs.inventory()
+
+
+def test_launch_renderer_refuses_a_reviewed_but_mixed_controller_inventory(capability):
+    from shantytown.job_manifest import render
+    import hashlib
+    _, _, plan, bindings, path, output, _ = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    manifest = jobs.BASE/(name+'.json')
+    value = json.loads(manifest.read_bytes())
+    value['controller_uid'] = 60001
+    raw = json.dumps(value).encode()
+    manifest.write_bytes(raw)
+    plan['slots'][name]['sha256'] = hashlib.sha256(raw).hexdigest()
+    raw = json.dumps(plan).encode()
+    (jobs.BASE/'slots.json').write_bytes(raw)
+    with pytest.raises(IdentityError, match='one separate controller'):
+        render(jobs.BASE, path, output, catalog_sha256=hashlib.sha256(raw).hexdigest(),
+            bindings_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    assert not output.exists()

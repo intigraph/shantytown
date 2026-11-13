@@ -314,11 +314,20 @@ def check_native(spec, *, consumed_digest=None, lifecycle=False):
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(argv) != 3 or argv[0] not in ('prepare', 'check', 'launch', 'stop', 'submit', 'poll') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
+        if len(argv) != 3 or argv[0] not in ('prepare', 'check', 'launch', 'stop', 'submit', 'poll', 'resume-accounts') or not re.fullmatch(r'[0-9a-f]{64}', argv[2]):
             raise IdentityError('expected fixed operation, job principal and manifest digest')
         if os.geteuid() != 0:
             raise IdentityError('job launcher requires its separately admitted privileged service')
         protected(Path(__file__).absolute())
+        if argv[0] == 'resume-accounts':
+            if argv[1] != 'inventory':
+                raise IdentityError('account setup requires the fixed host inventory')
+            # Tambo reaches this as an already admitted root setup process.
+            # The per-controller sudo fragment grants no account operation.
+            from . import job_accounts
+            job_accounts.setup(argv[2])
+            print('ACCOUNTS READY ' + argv[2])
+            return 0
         spec, digest = load(argv[1])
         if argv[2] != digest:
             raise IdentityError('job capability digest changed')

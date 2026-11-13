@@ -105,8 +105,8 @@ def render(directory, bindings, destination, *, catalog_sha256, bindings_sha256)
             keys.add(key)
         output[name+'.json'] = raw
         slots[name] = {'uid': row['uid'], 'sha256': hashlib.sha256(raw).hexdigest()}
-    if controllers & uids:
-        raise IdentityError('renderer job UID cannot control another slot')
+    if len(controllers) != 1 or controllers & uids:
+        raise IdentityError('renderer needs one separate controller for the host inventory')
     output['slots.json'] = (json.dumps(dict(plan, slots=slots), indent=2, sort_keys=True)+'\n').encode()
     # Preflight every input before the first output. Never overwrite a working
     # inventory, and retain any incomplete new output after an I/O failure.
