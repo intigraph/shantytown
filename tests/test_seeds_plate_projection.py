@@ -910,3 +910,41 @@ def test_operation_marker_survives_native_owner_projection(monkeypatch, marker):
     row = seeds_plate.owner_rows(PROOF, 'worker').exact()[0]
     assert hauls([row]) == {}
     assert _assigned_to('worker', [row]) == []
+
+
+def test_large_ready_cohort_projects_all_fields_without_hydration(monkeypatch):
+    """A valid 1,100-item queue crosses the old 10k field cap, not item cap."""
+    import re
+    monkeypatch.setattr(seeds_plate.seeds_read_cache, "certify_projection", lambda *a: None)
+    wires = {}
+    for i in range(1100):
+        ident = f"test-dense-{i}"
+        wires[seeds_plate.SEEDS + "item/" + ident] = fields(
+            id=ident, status="open", created_at="2026-11-01T00:00:00Z",
+            updated_at="2026-11-01T00:00:00Z", lane="next", rank="1",
+            spec_version="v1", spec_ack_version="v1", spec_ack_actor="worker")
+    counts = []
+    def query(proof, text, timeout):
+        if "?predicate ?value" not in text:
+            return answer([{"subject": s, "graph": G} for s in wires])
+        selected = set(re.findall(r"<([^>]+/item/test-dense-\d+)>", text))
+        wire = [row for s in selected for row in wires[s]]
+        counts.append(len(wire))
+        return answer(wire[:10000])
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    rows = seeds_plate.owner_rows(PROOF, None, feed_owners=("worker",)).exact()
+    assert {r["id"] for r in rows} == {f"test-dense-{i}" for i in range(1100)}
+    assert sum(counts) > 10000
+    assert max(counts) < 10000
+
+
+def test_owner_field_response_at_limit_remains_unknown(monkeypatch):
+    monkeypatch.setattr(seeds_plate.seeds_read_cache, "certify_projection", lambda *a: None)
+    def query(proof, text, timeout):
+        if "?predicate ?value" not in text:
+            return answer([{"subject": seeds_plate.SEEDS + "item/test-held", "graph": G}])
+        return answer(fields()[:1] * 10000)
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    from shantytown.answer import PartialAnswer
+    with pytest.raises(PartialAnswer, match="field budget"):
+        seeds_plate.owner_rows(PROOF, "worker").exact()
