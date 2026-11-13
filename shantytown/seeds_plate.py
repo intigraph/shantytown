@@ -304,10 +304,27 @@ class RenderShapeReads:
         return result
 
 
+class FieldReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart the entire fenced read with a smaller subject batch."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 field projection; narrowing subject batch')
+        self.batch_size = batch_size
+
+
+class CandidateReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart with smaller constant-status candidate branch groups."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 candidate projection; narrowing branch group')
+        self.batch_size = batch_size
+
+
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
-        budget = {"remaining": 3,
+        tokens = kwargs.get("recovery_tokens", 3)
+        if type(tokens) is not int or not 3 <= tokens <= 8:
+            raise ValueError("owner projection recovery allowance must be 3..8")
+        budget = {"remaining": tokens,
                   "deadline": time.monotonic() + 3 * kwargs.get("timeout", 30)}
         error = "projection changed"
         while budget["remaining"]:
@@ -317,6 +334,10 @@ def _retry_owner_projection(function):
                     return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
+                if isinstance(changed, CandidateReadTimeout):
+                    kwargs = {**kwargs, "candidate_batch_size": changed.batch_size}
+                if isinstance(changed, FieldReadTimeout):
+                    kwargs = {**kwargs, "field_batch_size": changed.batch_size}
                 if isinstance(changed, seeds_read_cache.StoreChanged):
                     budget["store_changed"] = True
                     admission = kwargs.get("shape_reads")
@@ -344,7 +365,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
-               include_closed: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
+               include_closed: bool = False, only_specs: bool = False,
+               recovery_tokens: int = 3, field_batch_size: int = 250,
+               candidate_batch_size: int | None = None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -467,7 +490,21 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             + f" }} LIMIT {501 if only_specs else 10000}"
         )
         with seeds_read_cache.candidate_reads():
-            candidates = _query(proof, query, timeout)["rows"]
+            candidates = []
+            width = candidate_batch_size or len(branches)
+            for offset in range(0, len(branches), width):
+                group = branches[offset:offset + width]
+                scoped_query = ("SELECT (STR(?s) AS ?subject) ?graph "
+                    + ("?problem " if inline_owner_guard else "") + "WHERE { "
+                    + " UNION ".join(group) + f" }} LIMIT {501 if only_specs else 10000}")
+                try:
+                    candidates.extend(_query(proof, scoped_query, timeout)["rows"])
+                except HTTPError as error:
+                    if recovery_tokens > 3 and error.code == 408 and len(group) > 1:
+                        raise CandidateReadTimeout(max(1, len(group) // 2)) from error
+                    raise
+                if len(candidates) >= (501 if only_specs else 10000):
+                    raise ValueError("plate candidate budget reached")
         if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
         if inline_owner_guard and any("problem" in row for row in candidates):
@@ -490,7 +527,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # refusal boundary. Smaller batches leave room for optional fields
         # and labels instead of truncating the first 1,000-subject request.
         field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
-                             batch_size=250)
+                             batch_size=field_batch_size, recover_timeouts=recovery_tokens > 3)
         grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
@@ -659,7 +696,8 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
-def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500):
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
+                    recover_timeouts=False):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
@@ -692,7 +730,12 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
             + " UNION ".join(branches) + " } LIMIT 10000"
         )
-        part = _query(proof, query, timeout)["rows"]
+        try:
+            part = _query(proof, query, timeout)["rows"]
+        except HTTPError as error:
+            if recover_timeouts and error.code == 408 and len(chunk) > 1:
+                raise FieldReadTimeout(max(1, len(chunk) // 2)) from error
+            raise
         if len(part) >= 10000 or len(wire) + len(part) >= budget:
             raise ValueError("plate field budget reached")
         wire.extend(part)
