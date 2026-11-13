@@ -170,12 +170,31 @@ time.sleep(30)
         if blocked_term:
             assert signal.SIGUSR1 in observed['mask']
         assert all(_process_running(pid) for pid in pids)
+        initial_stats = {pid: Path(f'/proc/{pid}/stat').read_text() for pid in pids}
         parent.kill()
         parent.wait(timeout=3)
         deadline = time.monotonic() + 3
         while any(_process_running(pid) for pid in pids) and time.monotonic() < deadline:
             time.sleep(.02)
-        assert not any(_process_running(pid) for pid in pids)
+        survivors = [pid for pid in pids if _process_running(pid)]
+        if survivors:
+            # Failure-only evidence: preserve the original deadline and do not
+            # expose argv/environment. Kernel signal/state fields distinguish a
+            # live cancellation defect from a stuck exit or reused PID.
+            states = {}
+            for pid in pids:
+                try:
+                    fields = Path(f'/proc/{pid}/status').read_text().splitlines()
+                    states[pid] = [line for line in fields if line.startswith((
+                        'Name:', 'State:', 'Pid:', 'PPid:', 'NSpgid:',
+                        'SigPnd:', 'ShdPnd:', 'SigBlk:', 'SigIgn:', 'SigCgt:'))]
+                    states[pid].append('stat: ' + Path(f'/proc/{pid}/stat').read_text())
+                except (FileNotFoundError, ProcessLookupError):
+                    states[pid] = ['vanished while collecting diagnostics']
+            pytest.fail(f'parent-death cancellation survivors={survivors}; '
+                        f'blocked_term={blocked_term}; ready={observed}; '
+                        f'parent_returncode={parent.returncode}; '
+                        f'initial_stats={initial_stats}; states={states}')
     finally:
         if parent.poll() is None:
             parent.kill()
