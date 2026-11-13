@@ -14977,39 +14977,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         # cursor, so this reservation cannot reset their progress each pass.
         # aegis-873: one crossing reminder then daily, on this original schedule.
         if cfg.overdue_enabled:
-            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
+            from .overdue import OverdueAlerter
+            from .overdue_ports import bind as reminder_ports
             from .feed_check import backend_adapter
-            def verify_due_receipt(recipient, marker, identifier):
-                from .br import show
-                value = show(_tracker(a, default="beads"),identifier)
-                return verify_inbox_receipt(value,recipient,marker,identifier)
-            def find_due_receipt(recipient, marker, identifier=None):
-                if identifier is not None:
-                    return verify_due_receipt(recipient,marker,identifier)
-                item = _inbox(a, default="beads").find_delivery(recipient,marker)
-                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body, *, boundary_only=False):
-                import re
-                from copy import copy
-                from contextlib import redirect_stdout
-                from io import StringIO
-                target = copy(a)
-                target.agent = recipient
-                target.dry_run = False
-                output = StringIO()
-                with redirect_stdout(output):
-                    code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
-                if code != OK:
-                    return None
-                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
-                if match is None:
-                    raise ValueError("known reminder receipt ID unavailable")
-                identifier = match.group(1)
-                try:
-                    return verify_due_receipt(recipient,marker,identifier)
-                except Exception:
-                    return PendingReceipt(identifier)
+            ports = reminder_ports(a, panes)
+            deliver_due, find_due_receipt = ports.deliver, ports.receipt
             def deliver_spec(recipient, marker, body, *, urgent):
                 return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
