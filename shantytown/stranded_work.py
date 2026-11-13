@@ -191,7 +191,10 @@ class StrandedWork:
                 if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown', 'operator-stopped'}:
                     raise ValueError('invalid owner observation')
                 operator_stopped = operator_release_only and state == 'operator-stopped'
-                if not operator_stopped and not eligible(row):
+                # Under the operator-only release policy, parked/deferred
+                # work still needs attention for a positively down holder.
+                # The release_due fence below remains operator-only.
+                if not operator_stopped and not eligible(row, operator_stopped=operator_release_only):
                     if identity in data:
                         data[identity].update(active=False, release_due=False, resolved_at=now)
                     continue
