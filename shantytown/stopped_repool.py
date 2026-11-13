@@ -38,6 +38,8 @@ def candidates(rows, evidence, now):
 def repool(rows, evidence, *, read, release, observe, fence, journal,
            save, now, dry_run=False, limit=40):
     """CAS release with comment, lifecycle recheck and durable uncertain intents."""
+    if len(rows) > 5000 or len({r['id'] for r in rows}) != len(rows):
+        raise ValueError('stopped-owner work census incomplete or exceeds bound')
     findings = []
     for row in rows:
         if (is_message(row.get('title', ''))
@@ -89,12 +91,14 @@ def sweep(root, registry, tracker, panes, *, dry_run=False, now=None):
     host = local_host(root)
     if not host:
         raise ValueError('stopped-owner host scope UNKNOWN')
+    if len(cards) > 100 or len({c.name for c in cards}) != len(cards):
+        raise ValueError('stopped-owner crew census incomplete or exceeds bound')
     local = {c.name: c for c in cards if c.host == host}
     folder = root / 'stopped-repool'
     state_path = folder / 'down.json'
     state = json.loads(state_path.read_text()) if state_path.exists() else {}
-    def observe(name):
-        card = registry.get(name)
+    def observe(name, *, fresh=False):
+        card = registry.get(name) if fresh else local[name]
         if card != local[name]:
             return {'state': 'unknown'}
         for kind, store in [('stopped', FilesStops(root/'stopped')), ('held', hold_store(root))]:
@@ -133,6 +137,6 @@ def sweep(root, registry, tracker, panes, *, dry_run=False, now=None):
         path = folder/'intents.json'
         journal = json.loads(path.read_text()) if path.exists() else {}
         return repool(rows, evidence, read=tracker.stranded_read,
-                      release=tracker.release_stranded, observe=observe,
+                      release=tracker.release_stranded, observe=lambda name: observe(name, fresh=True),
                       fence=lambda name: lifecycle_lock(root, name), journal=journal,
                       save=lambda value: write_json_atomic(path, value), now=now, dry_run=dry_run)
