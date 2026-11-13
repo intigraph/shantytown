@@ -295,7 +295,18 @@ def _plate_reader(root: Path, *, require_complete: bool = False, owners=None):
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
         if require_complete:
             from .br import plate_reader
-            return plate_reader(sd_tracker, require_complete=True, owners=owners)
+            owners = None if owners is None else tuple(owners)
+            roster = None if owners is None else frozenset(owners)
+            read = plate_reader(sd_tracker, require_complete=True, owners=owners)
+
+            def scoped(who):
+                # Events and the registry may grow after roster preparation.
+                # SdTracker otherwise falls back to a per-agent remote read.
+                if roster is not None and who not in roster:
+                    raise RuntimeError("owner absent from prepared stop roster")
+                return read(who)
+
+            return scoped
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos

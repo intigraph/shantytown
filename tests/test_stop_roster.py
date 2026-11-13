@@ -91,3 +91,66 @@ def test_incomplete_admin_roster_never_falls_back(tmp_path, monkeypatch, capsys)
     assert tracker.prepared == []
     assert tracker.reads == []
     assert "unreadable" in json.loads(capsys.readouterr().out)["reason"].lower()
+
+
+def real_projection(tmp_path, monkeypatch, me):
+    """Keep the real SdTracker roster/fallback decision, isolate only its wire."""
+    from shantytown import seeds_plate
+    from shantytown.sd import SdTracker, StoreProof
+    tracker = SdTracker(quipu="https://example.test", prefix="test")
+    setup(tmp_path, monkeypatch, me, tracker)
+    monkeypatch.setattr(tracker, "_use_remote_projection", lambda: True)
+    monkeypatch.setattr(tracker, "prove_store", lambda: StoreProof(
+        "--quipu", None, "https://example.test", "test", "urn:test:graph"))
+    calls = []
+
+    def owner_rows(proof, agent, **kwargs):
+        calls.append((agent, kwargs.get("plate_owners")))
+        return Answer.complete_read([], how="isolated projection wire")
+
+    monkeypatch.setattr(seeds_plate, "owner_rows", owner_rows)
+    monkeypatch.setattr(seeds_plate, "unblocked_ids", lambda *a, **kw: set())
+    return calls
+
+
+def test_late_sender_is_unknown_without_real_tracker_per_agent_fallback(
+        tmp_path, monkeypatch, capsys):
+    calls = real_projection(tmp_path, monkeypatch, "lead")
+    FilesEvents(tmp_path / "events").persist(to="lead", frm="worker", reason="stopped", rose=False)
+    original = FilesEvents.pending
+    scans = 0
+
+    def pending(self, who):
+        nonlocal scans
+        scans += 1
+        return [] if scans == 1 else original(self, who)
+
+    monkeypatch.setattr(FilesEvents, "pending", pending)
+    assert stop_event.main(["drain", "--root", str(tmp_path)]) == 0
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert not any(agent is not None for agent, _owners in calls), calls
+    assert "unreadable" in reason.lower()
+
+
+def test_registry_expansion_is_unknown_without_real_tracker_fallback(
+        tmp_path, monkeypatch, capsys):
+    calls = real_projection(tmp_path, monkeypatch, "admin")
+    FilesEvents(tmp_path / "events").persist(to="admin", frm="worker", reason="stopped", rose=False)
+    original = stop_event.FilesRegistry.all
+    scans = 0
+
+    def growing(self):
+        nonlocal scans
+        scans += 1
+        observed = original(self)
+        if scans == 1:
+            (tmp_path / "crew" / "newworker.json").write_text(json.dumps(
+                dict(role="worker", pane="p-newworker", reports_to="admin")))
+        return observed
+
+    monkeypatch.setattr(stop_event.FilesRegistry, "all", growing)
+    assert stop_event.main(["drain", "--root", str(tmp_path)]) == 0
+    reason = json.loads(capsys.readouterr().out)["reason"]
+    assert any(agent is None for agent, _owners in calls), calls
+    assert not any(agent is not None for agent, _owners in calls), calls
+    assert "PLATE UNKNOWN" in reason and "newworker" in reason
