@@ -1,0 +1,13 @@
+BEFORE: same 85 stopped-owner fixture rows
+source_sha256=a08fa53658471d8eb4f5c88ed6ef674a58b21532b01ca985b5b15e4fbb04188e
+lead_wakes=85 admin_digests=0
+held_rows=85/85
+after_repeat: lead_wakes=85 admin_digests=0
+AFTER: same 85 stopped-owner fixture rows
+source_sha256=054391fbb30ace8486b4a5b56fec71650bd5f39220dec741ca72449ca1007f15
+lead_wakes=0 admin_digests=1
+held_rows=85/85
+after_repeat: lead_wakes=0 admin_digests=1
+STOPPED-OWNER-PACING: owner=worker total=85 P0=22 P1=21 P2=21 P3=21 P4=0 UNKNOWN=0
+Deliberately stopped; administrator disposition only. No gate released.
+P0: test-wait-0, test-wait-12, test-wait-16, test-wait-20, test-wait-24, test-wait-28, test-wait-32, test-wait-36, test-wait-4, test-wait-40, test-wait-44, test-wait-48, test-wait-52, test-wait-56, test-wait-60, test-wait-64, test-wait-68, test-wait-72, test-wait-76, test-wait-8, test-wait-80, test-wait-84
