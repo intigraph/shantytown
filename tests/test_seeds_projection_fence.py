@@ -51,8 +51,9 @@ def wire(monkeypatch, tmp_path):
         records = [] if mode == "unrelated-graph" else [
             dict(tx=since + 1, graph=graph, entity=entity, attribute=attribute, op="assert")]
         if mode == "past-returned":
-            records = ([dict(tx=11, graph=graph, entity=S, attribute=attribute, op="assert")]
-                       if since < 11 <= state["tx"] else [])
+            change_tx = state.get("change_tx", 11)
+            records = ([dict(tx=change_tx, graph=graph, entity=S, attribute=attribute, op="assert")]
+                       if since < change_tx <= state["tx"] else [])
         if mode in ("paged", "page-cap", "epoch-change"):
             records = [dict(tx=since + n, graph=graph, entity=entity, attribute=attribute, op="assert")
                        for n in (1, 2)] if mode == "page-cap" or len(state["feeds"]) % 2 else []
@@ -200,3 +201,36 @@ def test_membership_restarts_back_off_inside_the_shared_budget(wire,monkeypatch)
     assert not plate.owner_rows(proof,'worker').complete
     assert state['queries']==6
     assert sleeps==[.1,.2]
+
+
+def test_candidate_cache_survives_unrelated_commits_but_fields_refresh(wire, monkeypatch):
+    monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
+    first = state["queries"]
+    assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
+    assert state["queries"] - first == 0  # Both cached reads are certified by changes.
+
+
+@pytest.mark.parametrize("mode", ["membership", "status", "blocker", "offline", "truncated", "store-replaced"])
+def test_retained_candidates_never_hide_changed_or_unreadable_proof(wire, mode):
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").complete
+    state["mode"] = mode
+    assert not plate.owner_rows(proof, "worker").complete
+
+
+def test_retained_candidates_reload_selected_field_changes(wire, monkeypatch):
+    monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").exact()[0]["title"] == "actual work"
+    state.update(mode="past-returned", title="changed work", change_tx=state["tx"] + 1)
+    assert plate.owner_rows(proof, "worker").exact()[0]["title"] == "changed work"
+
+
+def test_candidate_retention_does_not_apply_to_non_projection_reads(wire):
+    proof, state = wire
+    query = "SELECT ?s WHERE { ?s ?p ?o }"
+    with cache.candidate_reads():
+        with pytest.raises(cache.WatermarkMoved):
+            plate._query(proof, query, 1)

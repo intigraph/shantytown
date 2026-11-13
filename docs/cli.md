@@ -494,6 +494,13 @@ share one candidate observation, and capacity reuses the same render. Missing,
 unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
 a failed read never means an empty roster.
 
+Seeds owner projections can retain a bounded successful candidate observation
+across unrelated transactions. The scoped change feed must certify its original
+watermark before a result is returned. Selected field changes reload those fields;
+membership changes restart selection. Missing, partial or changed-store evidence
+remains UNKNOWN. No stale answer is returned when the proof fails. Ordinary
+query caching and the `ST_SEEDS_READ_CACHE=0` rollback remain unchanged.
+
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
 to the left and `…` hidden text to the right. Shorter rows clamp independently,
