@@ -580,16 +580,18 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
-CI, review, merge and install waits require a non-date `resume_when` condition
-and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
-required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
-per-item event name is not a registration.
-For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
-with an exact UTC `--until` at least a day away. Short date-only polling and
-dry-run attempts refuse before writes. A real scheduled appointment may use
-`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
-This exception does not bypass human decisions, dependency checks or resume gates.
+CI, review and merge waits stay `in_progress`, including P0 and milestone work.
+Record the exact head/run/review wake on the item. `st work defer` refuses both
+`ci-terminal:`/`pr-merged:` conditions and explicit CI/review/merge waits before
+any write, even with a 24-hour backstop, `--window` or `--dry-run`. Historical
+CI/PR deferrals remain readable; this does not manufacture green CI or release
+any existing gate. Record real technical prerequisites as dependency edges;
+external non-CI gates name their event with `blocked:external`.
+
+Other admitted asynchronous waits still require a testable condition and the
+existing backstop. A real scheduled appointment may use `--window --until <UTC time>`; this never bypasses CI, human decisions, dependency checks or resume gates.
+Capacity holds do not authorize a date defer or repooling; retain the hold and
+ask the lead for ready work.
 
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
@@ -625,7 +627,8 @@ restores the owner route. A malformed stop record is UNKNOWN intent, not proof
 of a deliberate scale-down. Notification routing never releases a gate,
 reassigns an item or resumes a stopped runtime.
 
-Forge event waits use two registered generic kinds:
+Historical forge deferrals retain two registered generic readers. New CI/merge
+waits stay in progress; `st work defer` refuses these kinds:
 
 - `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
   observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
@@ -634,8 +637,8 @@ Forge event waits use two registered generic kinds:
   including failure or cancellation. This is a prompt to inspect CI, never a
   green result, review receipt or permission to merge.
 
-Both require an explicit backstop at least 24 hours away, including marker-only
-reasons and scheduled-window requests. They read only configured forge hosts;
+Existing records retain their explicit backstops and event evaluation. The
+readers access only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
