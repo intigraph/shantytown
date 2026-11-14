@@ -24,10 +24,6 @@ def test_scoped_native_probe_observes_actual_launch(monkeypatch, platform, bypas
         if cmd[0] == 'pgrep':
             assert cmd == ['pgrep', '-a', '-P', '100']
             return subprocess.CompletedProcess(cmd, 0, '101\n', '')
-        if platform == 'darwin' and cmd[:2] == ['ps', 'eww']:
-            assert cmd == ['ps', 'eww', '-o', 'uid=,command=', '-p', '101']
-            return subprocess.CompletedProcess(cmd, 0,
-                f'{os.getuid()} codex{flag} PATH=/bin\n', '')
         if platform == 'darwin':
             # The old query genuinely fails on Darwin, rather than a mock
             # accepting any ps invocation and hiding the original regression.
@@ -51,11 +47,14 @@ def test_scoped_native_probe_observes_actual_launch(monkeypatch, platform, bypas
     monkeypatch.setattr('builtins.open', process_environment)
     monkeypatch.setattr(subprocess, 'run', run)
     line = Tmux().cmdline('st-worker')
-    assert line == f'codex{flag}'
     if platform == 'darwin':
-        assert ['ps', 'eww', '-o', 'uid=,command=', '-p', '101'] in calls
-    assert launchable.observed_posture('› ready', True, line) == (
-        launchable.BYPASS if bypass else launchable.MANUAL)
+        assert line is None  # no lossless environment evidence on this host
+        assert not any(cmd[:2] == ['ps', 'eww'] for cmd in calls)
+        assert launchable.observed_posture('› ready', True, line) == launchable.UNKNOWN
+    else:
+        assert line == f'codex{flag}'
+        assert launchable.observed_posture('› ready', True, line) == (
+            launchable.BYPASS if bypass else launchable.MANUAL)
 
 
 @pytest.mark.parametrize('failure', ['denied', 'timeout', 'missing', 'malformed', 'too-many'])

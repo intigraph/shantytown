@@ -9,17 +9,26 @@ from shantytown import tmux
 from shantytown.runtime import live_wiring
 
 
-def test_darwin_declared_pointer_only(monkeypatch):
+@pytest.mark.parametrize('tail', [
+    'NOTE=hello CODEX_HOME=/tmp/false-home',
+    'CODEX_HOME=/tmp/real NOTE=assignment-like-text',
+    'NOTE=hello CLAUDE_CONFIG_DIR=/tmp/false-home',
+])
+def test_flattened_environment_cannot_prove_assignment_boundaries(monkeypatch, tail):
+    monkeypatch.setattr(tmux.sys, 'platform', 'darwin')
+    monkeypatch.setattr(tmux.subprocess, 'run', lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=f'{os.getuid()} codex {tail}'))
+    assert tmux.Tmux._launch_line('123', 'codex') is None
+
+
+def test_darwin_does_not_collect_lossy_private_environment(monkeypatch):
     monkeypatch.setattr(tmux.sys, 'platform', 'darwin')
     args = 'codex --model example'
     def run(command, **kwargs):
-        assert command == ['ps', 'eww', '-o', 'uid=,command=', '-p', '123']
-        assert kwargs['timeout'] == 2
-        return SimpleNamespace(returncode=0, stdout=f'{os.getuid()} {args} CODEX_HOME=/private/config SECRET_TOKEN=hidden PATH=/bin\n')
+        raise AssertionError('lossy environment must not be collected')
     monkeypatch.setattr(tmux.subprocess, 'run', run)
     line = tmux.Tmux._launch_line('123', args)
-    assert line == 'CODEX_HOME=/private/config ' + args
-    assert 'hidden' not in line and 'PATH=' not in line
+    assert line is None
 
 
 @pytest.mark.parametrize('output', ['', '999999 codex CODEX_HOME=/config',
@@ -49,25 +58,25 @@ def test_readable_absent_pointer_is_measured_hookless(monkeypatch):
     assert live_wiring('pane', lambda _: line).directions == set()
 
 
-def test_darwin_configured_worker_reads_send(tmp_path, monkeypatch):
+def test_darwin_argv_carried_pointer_still_reads_configured_worker_send(tmp_path, monkeypatch):
     from shantytown import codex
     home = tmp_path / 'codexhome'
     home.mkdir()
     (home / 'config.toml').write_text(codex.render(codex.settings_for_role('worker', root=tmp_path)))
     monkeypatch.setattr(tmux.sys, 'platform', 'darwin')
-    monkeypatch.setattr(tmux.subprocess, 'run', lambda *a, **k: SimpleNamespace(
-        returncode=0, stdout=f'{os.getuid()} codex CODEX_HOME={home} SECRET_TOKEN=hidden'))
-    wiring = live_wiring('pane', lambda _: tmux.Tmux._launch_line('123', 'codex'))
+    monkeypatch.setattr(tmux.subprocess, 'run', lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('environment collection')))
+    wiring = live_wiring('pane', lambda _: tmux.Tmux._launch_line('123', f'CODEX_HOME={home} codex'))
     assert wiring is not None and 'send' in wiring.directions
     assert wiring.settings_path == str(home / 'config.toml')
 
 
-def test_darwin_readable_no_pointer_is_hookless(monkeypatch):
+def test_darwin_environment_absence_is_unknown_not_hookless(monkeypatch):
     monkeypatch.setattr(tmux.sys, 'platform', 'darwin')
     monkeypatch.setattr(tmux.subprocess, 'run', lambda *a, **k: SimpleNamespace(
         returncode=0, stdout=f'{os.getuid()} codex PATH=/bin'))
     line = tmux.Tmux._launch_line('123', 'codex')
-    assert live_wiring('pane', lambda _: line).directions == set()
+    assert line is None and live_wiring('pane', lambda _: line) is None
 
 
 def test_unknown_candidate_does_not_become_shell_fallback(monkeypatch):

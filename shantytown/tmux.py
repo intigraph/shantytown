@@ -597,33 +597,14 @@ class Tmux:
             return None
         try:
             if sys.platform == "darwin":
-                # BSD ps exposes only this PID. Verify its real UID before
-                # accepting environment evidence; never return the raw output.
-                result = subprocess.run(
-                    ["ps", "eww", "-o", "uid=,command=", "-p", pid],
-                    capture_output=True, text=True, timeout=2)
-                if result.returncode != 0 or len(result.stdout) > 1_048_576:
-                    raise OSError("process environment unavailable")
-                uid, sep, command = result.stdout.strip().partition(" ")
-                command = command.lstrip()
-                if (not sep or uid != str(os.getuid())
-                        or not (command == args or command.startswith(args + " "))):
-                    raise OSError("process environment identity unproven")
-                tail = command[len(args):].lstrip()
-                # ps has no lossless quoting for whitespace in values. Refuse
-                # ambiguous declared pointers rather than inventing a path.
-                assignments = list(re.finditer(r"(?:^| )([A-Za-z_][A-Za-z0-9_]*)=", tail))
-                values = {}
-                for index, match in enumerate(assignments):
-                    key = match.group(1)
-                    if key not in wanted:
-                        continue
-                    end = assignments[index + 1].start() if index + 1 < len(assignments) else len(tail)
-                    value = tail[match.end():end].rstrip()
-                    if key in values or any(c.isspace() for c in value):
-                        raise OSError("ambiguous settings pointer")
-                    values[key] = value
-                raw = b"\0".join(f"{k}={v}".encode() for k, v in values.items())
+                # BSD ps flattens environment entries without lossless value
+                # boundaries: NOTE='hello CODEX_HOME=/other' is indistinguishable
+                # from a real CODEX_HOME entry. Neither a pointer nor its absence
+                # can be established here. Do not collect private environment
+                # text that cannot answer this question. A lossless native reader
+                # needs separate implementation/qualification; argv evidence is
+                # still independently usable through the existing fallback.
+                raise OSError("lossless Darwin environment evidence unavailable")
             else:
                 with open(f"/proc/{pid}/environ", "rb") as fh:
                     raw = fh.read(1_048_577)
