@@ -61,8 +61,7 @@ def unheld(tracker, item):
     return {key: row[key] for key in ('id', 'status', 'assignee', 'revision')}
 
 
-def qualified(root, request, tracker):
-    ident = rr.digest(json.dumps(request, sort_keys=True, separators=(',', ':')).encode())
+def custody_record(root, request):
     path = root / 'delivery' / (request['custody'] + '.json')
     rr.owned(path)
     with path.open('rb') as stream:
@@ -71,6 +70,12 @@ def qualified(root, request, tracker):
     record = rr.decode(raw)
     rr.require(rr.digest(raw) == request['custody_sha256'],
                'terminal custody bytes changed')
+    return record
+
+
+def qualified(root, request, tracker):
+    ident = rr.digest(json.dumps(request, sort_keys=True, separators=(',', ':')).encode())
+    record = custody_record(root, request)
     rr.require(record.get('id') == request['custody'] and
                record.get('state') in ('orphaned', 'dequeued') and
                record.get('pointer_state') == 'recorded' and
@@ -138,7 +143,7 @@ def reconcile(root, request, *, apply=False, tracker=None):
                 rr.sync_directory(journal.parent)
             rr.require(rr.read(root / 'refill/state.json') == state,
                        'refill state changed under lock')
-            rr.require(rr.read(root / 'delivery' / (request['custody'] + '.json')) == record,
+            rr.require(custody_record(root, request) == record,
                        'terminal custody changed under lock')
             rr.require(unheld(tracker, request['item']) == result['tracker'],
                        'native ownership changed before release')

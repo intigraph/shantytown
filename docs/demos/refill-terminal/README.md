@@ -8,7 +8,7 @@ that the custody bytes remain unchanged and delivery remains UNKNOWN.
 
 [Actual transcript](transcript.txt), retained alongside [the probe](probe.py).
 This is a text transcript, not a video: asciinema is unavailable on the authoring
-host. No production tracker, process, message or reservation is used.
+host PATH. No production tracker, process, message or reservation is used.
 
 Reproduce from the repository root with the declared test extras installed:
 
@@ -18,7 +18,7 @@ python3 docs/demos/refill-terminal/probe.py
 
 Base: `2016b460badce9ad5630af91c302ddd485f45b42` delivered-input reconciler.
 Candidate module SHA256:
-`137c84c90a775328a5c162c5950137594ef79fb3adff5bc26fea898993f53fe1`.
+`289523ffdb4eaca761cff32fcb1222269627c49dd7f1df9ec5e2d2b63c7364ec`.
 The containing PR commit pins the probe, candidate and transcript together.
 This demonstrates source behavior with fixture ownership; it does not establish
 installed or runtime acceptance. The normal source rollback retains the audit

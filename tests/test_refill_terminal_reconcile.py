@@ -246,3 +246,16 @@ def test_cli_does_not_echo_private_adapter_error(ended, monkeypatch, capsys, tmp
     assert terminal.main(['--root', str(root), '--receipt', str(path)]) == 2
     assert 'private-fixture-error' not in capsys.readouterr().out
     assert snapshot(root) == before
+
+
+def test_byte_only_custody_change_after_prepare_refuses_release(ended, monkeypatch):
+    root, request, *_ = ended
+    append = rr.append
+    path = root / 'delivery' / (request['custody'] + '.json')
+    def change_bytes(journal, value):
+        append(journal, value)
+        path.write_bytes(path.read_bytes() + b'\n')
+    monkeypatch.setattr(rr, 'append', change_bytes)
+    with pytest.raises(ValueError, match='bytes changed'):
+        terminal.reconcile(root, request, apply=True, tracker=Tracker())
+    assert rr.read(root / 'refill/state.json')['pending']['worker'] == request['pending']
