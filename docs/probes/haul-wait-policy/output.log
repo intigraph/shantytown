@@ -1,0 +1,14 @@
+Script started on 2026-11-13 16:34:21-05:00 [COMMAND="python3 record.py" <not executed on terminal>]
+BASE 4b422d9e
+P0: defer external, ci-terminal exact head, 2099 backstop
+result: deferred | status: deferred
+resume prompt recommends defer: True
+positive control: explicit scheduled appointment: deferred
+CANDIDATE working source
+P0: defer external, ci-terminal exact head, 2099 backstop
+CI/review/merge wait: stay in_progress and record the exact wake on the item; do not date-defer work. Record real prerequisites as dependency edges instead. A backstop or --window does not waive this.
+result: refused | status: in_progress
+resume prompt recommends defer: False
+positive control: explicit scheduled appointment: deferred
+
+Script done on 2026-11-13 16:34:22-05:00 [COMMAND_EXIT_CODE="0"]

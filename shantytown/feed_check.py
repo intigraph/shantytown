@@ -1136,8 +1136,11 @@ def haul_feed_message(nid: str, title: str, rest: int, headroom: str = "",
         + f"HAUL: {nid} ({t}) — `{examples.show(nid)}`, execute, close to advance "
         f"({rest} more). {again}{authority}{instruction(nid)}"
         f"{handoff_text.deep_context_hint()}\n"
-        f"Not this one? done -> `{examples.close(nid)}` · gated -> `st work defer {nid} "
-        f"<kind> --reason-file <f>` · not yours -> "
+        f"CI/review wait: stay in_progress; record the exact wake on the item. "
+        f"External non-CI gate: record a real dependency edge or blocked:external "
+        f"with the named event. Capacity hold: record the existing hold and ask "
+        f"the lead for ready work; do not invent a date defer or re-pool it.\n"
+        f"Not this one? done -> `{examples.close(nid)}` · not yours -> "
         f"`{examples.unassign(nid)}`. "
         f"(A bare status change does NOT stop the re-serve, and clearing the "
         f"assignee only re-pools it.) Options: `st ops help haul`.")
@@ -1162,10 +1165,11 @@ def haul_resume_message(nid: str, title: str, *, examples=None) -> str:
     return (
         f"HAUL RESUME: {nid} ({t}) is still your active anchor. Continue it now "
         f"(`{examples.show(nid)}`), execute the remaining work, verify it, and close it "
-        f"when done so the haul can advance. If it is genuinely gated, record "
-        f"the evidence, then use `st work defer {nid} "
-        f"<kind> --reason-file <file>`; if it is not "
-        f"yours, clear the assignee. "
+        f"when done so the haul can advance. CI/review wait: stay in_progress; "
+        f"record the exact wake on the item. External non-CI gate: record a real "
+        f"dependency edge or blocked:external with the named event. Capacity hold: "
+        f"record the existing hold and ask the lead for ready work; do not invent "
+        f"a date defer or re-pool it. If it is not yours, clear the assignee. "
         f"Do not stop merely because the previous model turn ended. {instruction(nid)}")
 
 
