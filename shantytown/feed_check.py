@@ -948,10 +948,16 @@ class TrackerAdapter:
         return Answer.complete_read(detail["status"] == "closed", how=f"{self.kind} show status")
 
     def undefer(self, item: str) -> None:
-        """Clear both historical status and timestamp representations."""
+        """Return mechanically resumed work to the ranked pool (aegis-6vto.10).
+
+        A satisfied gate is not a dispatch decision. Retaining the old owner
+        would put this item straight into that worker's self-feeding haul,
+        bypassing the ready pool's priority and milestone ordering.
+        """
         if self.tracker is not None:
-            return self.tracker.update(item, status="open", defer_until="")
-        self._legacy("bd", "update", item, "--status", "open", "--defer", "", "--json")
+            return self.tracker.update(item, status="open", defer_until="", assignee="")
+        self._legacy("bd", "update", item, "--status", "open", "--defer", "",
+                     "--assignee", "", "--json")
 
     def claim(self, item: str) -> None:
         if self.tracker is not None:
