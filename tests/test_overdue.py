@@ -266,33 +266,29 @@ def test_unknown_unlock_owner_is_not_rerouted(tmp_path):
     assert a.sweep()==[] and not sent
 
 
-def test_scheduled_delivery_callback_retains_known_receipt():
-    """Exercise the actual nested callback without a fleet run or real sender."""
-    import ast
-    import inspect
+def test_scheduled_delivery_callback_retains_known_receipt(monkeypatch):
+    """Exercise the shared scheduled transport without a fleet run or real sender."""
     from shantytown import cli
     from shantytown.overdue import PendingReceipt
+    from shantytown.overdue_ports import bind
 
-    source = ast.parse(inspect.getsource(cli))
-    callback = next(node for node in ast.walk(source)
-                    if isinstance(node, ast.FunctionDef) and node.name == "deliver_due")
     sent = []
-    expected = object()
     def sender(target, card, body, panes, **kwargs):
         sent.append((target.agent, body))
         print("delivered to inbox as inbox-receipt-1")
         return cli.OK
-    namespace = dict(vars(cli), a=SimpleNamespace(agent="original"), panes=None,
-                     _registry=lambda _: Registry(), _inbox_durable=sender,
-                     verify_due_receipt=lambda *args: expected,
-                     PendingReceipt=PendingReceipt)
-    exec(compile(ast.Module(body=[callback], type_ignores=[]), cli.__file__, "exec"), namespace)
-    assert namespace["deliver_due"]("worker", "[marker]", "body") is expected
+    box = SimpleNamespace(find_delivery_receipt=lambda *args:
+        SimpleNamespace(id="inbox-receipt-1", to="worker", body="[marker] body"))
+    monkeypatch.setattr(cli, "_registry", lambda _: Registry())
+    monkeypatch.setattr(cli, "_inbox", lambda *args, **kwargs: box)
+    monkeypatch.setattr(cli, "_inbox_durable", sender)
+    ports = bind(SimpleNamespace(agent="original"), None)
+    assert ports.deliver("worker", "[marker]", "body") == "inbox-receipt-1"
     assert sent == [("worker", "[marker] body")]
 
     def unknown(*args):
         raise RuntimeError("read unavailable after committed delivery")
-    namespace["verify_due_receipt"] = unknown
-    pending = namespace["deliver_due"]("worker", "[second]", "body")
+    box.find_delivery_receipt = unknown
+    pending = ports.deliver("worker", "[second]", "body")
     assert isinstance(pending, PendingReceipt)
     assert pending.identifier == "inbox-receipt-1"

@@ -865,6 +865,29 @@ class MessageGraphInbox:
             return matches[0]
         return self._legacy.find_delivery(me, marker)
 
+    def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
+        """Read an exact retained native receipt; never normalize a missing owner.
+
+        Both read and unread messages count as delivery. Missing/malformed
+        identity is UNKNOWN, not evidence that another send is safe.
+        """
+        if not self._is_window(receipt_id):
+            return self._legacy.find_delivery_receipt(me, marker, receipt_id)
+        name = me.split("/")[-1]
+        rows = self._tracker.list_messages(name, unread=False, all_windows=True).exact()
+        if len(rows) >= 10000:
+            raise RuntimeError("message receipt read budget reached")
+        found = [v for v in rows if v.get("id") == receipt_id]
+        if len(found) > 1:
+            raise RuntimeError("ambiguous exact message receipt")
+        if not found:
+            return None
+        value = found[0]
+        if (value.get("to") not in (me, name) or not isinstance(value.get("text"), str)
+                or not value["text"].startswith(marker + " ")):
+            raise RuntimeError("exact message recipient/marker UNKNOWN")
+        return self._as_message(name, value)
+
     def unread(self, me: str) -> list[Message]:
         return self._legacy.unread(me) + self._window_unread(me)
 
