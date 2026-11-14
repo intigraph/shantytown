@@ -1,0 +1,6 @@
+base: /memory/read -> 404/refused; no supported round-trip
+base endpoints: /memory/read
+candidate: /query -> complete explicit owner graph, absent head
+candidate endpoints: /query
+Populated exact-byte, CAS-race and replay controls: tests/test_memory_graph.py
+Synthetic transcript only. Installed Quipu primitive-removal, native harness and private migration acceptance remain separate.
