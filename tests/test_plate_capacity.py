@@ -25,6 +25,71 @@ def world(tmp_path, count=10):
     return root, tracker
 
 
+def test_capacity_uses_two_fresh_field_reads_per_update_without_sdk_show(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    _, tracker = world(tmp_path, 0)
+    item = tracker.create('Work', assignee='worker')
+    get = tracker.get
+    reads, writes = [], []
+    def fields(identifier):
+        reads.append(identifier)
+        return get(identifier)
+    def rich_show(identifier):
+        raise AssertionError('rich SDK show must not hydrate comments for capacity')
+    tracker.capacity_read = fields
+    tracker.get = rich_show
+    tracker.update = lambda identifier, **fields: writes.append((identifier, fields))
+    guarded = guard_producers(tracker, lambda *args: None)
+    # The real defer stages a deadline first, then its deferred status.
+    guarded.update(item.id, defer_until='2999-12-01T00:00:00Z')
+    guarded.update(item.id, status='deferred')
+    assert reads == [item.id] * 4
+    assert writes == [(item.id, {'defer_until': '2999-12-01T00:00:00Z'}),
+                      (item.id, {'status': 'deferred'})]
+
+
+def test_capacity_field_read_still_refuses_owner_change_under_lock(tmp_path):
+    from dataclasses import replace
+    from shantytown.plate_capacity import guard_producers
+    _, tracker = world(tmp_path, 0)
+    item = tracker.create('Work', assignee='worker')
+    observations = iter([item, replace(item, assignee='other')])
+    writes = []
+    tracker.capacity_read = lambda identifier: next(observations)
+    tracker.update = lambda *args, **fields: writes.append((args, fields))
+    guarded = guard_producers(tracker, lambda *args: None)
+    with pytest.raises(CapacityUnknown, match='owner changed'):
+        guarded.update(item.id, status='deferred')
+    assert writes == []
+
+
+def test_capacity_unknown_field_read_never_falls_back_or_writes(tmp_path):
+    from shantytown.plate_capacity import guard_producers
+    _, tracker = world(tmp_path, 0)
+    item = tracker.create('Work', assignee='worker')
+    writes = []
+    def unknown(identifier):
+        raise CapacityUnknown('field observation incomplete')
+    def rich_show(identifier):
+        raise AssertionError('must not replace an unknown field read with SDK show')
+    tracker.capacity_read = unknown
+    tracker.get = rich_show
+    tracker.update = lambda *args, **fields: writes.append((args, fields))
+    guarded = guard_producers(tracker, lambda *args: None)
+    with pytest.raises(CapacityUnknown, match='observation incomplete'):
+        guarded.update(item.id, status='deferred')
+    assert writes == []
+
+
+def test_seeds_capacity_uses_the_existing_complete_field_reader():
+    tracker = SdTracker.__new__(SdTracker)
+    observed = []
+    sentinel = object()
+    tracker.defer_read = lambda identifier: observed.append(identifier) or sentinel
+    assert tracker.capacity_read('seed') is sentinel
+    assert observed == ['seed']
+
+
 @pytest.mark.parametrize('dry_run', [False, True])
 def test_go_full_has_no_send_or_write(tmp_path, dry_run):
     root, tracker = world(tmp_path)
