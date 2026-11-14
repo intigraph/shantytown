@@ -301,6 +301,7 @@ st repo                       a shared project repo
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
+    --instruction-report     compare composed graph instructions and tooling bytes without provisioning
   subscribe                   watch quipu entity events; route governed workflows to the admin
   hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox

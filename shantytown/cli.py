@@ -5983,13 +5983,22 @@ def _cmd_provision(a) -> int:
                 raise ValueError(f"crew workspace missing for {card.name}; configure it first")
         results = []
         if getattr(a, "instruction_report", False):
-            from . import config as config_mod, instructions
+            from . import config as config_mod, instructions, tooling
             cfg = config_mod.load(a.root, refresh_source=True)
+            try:
+                manifest = tooling.load(a.root, last_good=cfg.source_document is not None)
+            except tooling.ToolingError as e:
+                raise ProvisionError(str(e)) from None
             for card in sorted(cards, key=lambda card: card.name):
-                plan = instructions.prepare(card.workspace, card, cfg,
-                                            harness=harness_mod.name_for(card, a.root))
+                try:
+                    comparisons = instructions.report(
+                        card.workspace, card, cfg, manifest,
+                        harness=harness_mod.name_for(card, a.root))
+                except tooling.ToolingError as e:
+                    raise ProvisionError(str(e)) from None
                 results.append({"name": card.name, "harness": card.harness,
-                                "comparisons": plan.comparisons})
+                                "tooling": "configured" if manifest is not None else "not-configured",
+                                "comparisons": comparisons})
             print(json.dumps({"version": 1, "sources": cfg.source_origins,
                               "warning": cfg.source_warning, "agents": results}))
             return OK
