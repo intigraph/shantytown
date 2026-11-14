@@ -64,7 +64,16 @@ scratch directory under the ledger.
 |----------|-----------------|-----------------|
 | `review` | codex (fleet directive: reviews on codex) | Independent, non-author review of `--repo/--pr` at the exact head. Post one verdict comment on the PR (APPROVE / REQUEST CHANGES with findings), then `--report --verdict V --head SHA --evidence URL`; st signs the verdict into Quipu. Never push, never merge. |
 | `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
-| `triage` | claude | Find the cause of a red check. Comment the diagnosis on the item. A fix goes on a branch and PR, never onto main. |
+| `triage` | claude | Find the cause of a red check. Comment the diagnosis on the item. Attended jobs may propose a fix on a branch and PR, never onto main. Protected UID jobs receive the read-only alert-triage instructions below. |
+
+Protected triage jobs (a controller ledger record with `uid_binding`) investigate
+one alert and report once on its original item, then exit. Their instructions
+forbid ACKs, silences, restarts, configuration or code changes, publication, and
+other runtime actions. Missing evidence or access produces a blocked report;
+the job never borrows the controller's credentials. This narrower prompt does
+not establish OS or endpoint capability isolation. Protected delivery, own-key
+permissions, native negative probes, and host admission remain prerequisites
+before enabling unattended launches. This change does not enable that gate.
 | `task`   | claude | Do the item's acceptance criteria in the worktree. Open a PR if code changed. |
 
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
