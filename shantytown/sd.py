@@ -79,6 +79,10 @@ class SdTracker(BrTracker):
         from .seeds_item import read_item
         return read_item(self, item_id)
 
+    def capacity_read(self, item_id):
+        """Fresh seed fields for producer admission, retaining the owner fence."""
+        return self.defer_read(item_id)
+
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
         result = self._bd_for(item_id, 'show', item_id, '--json')
