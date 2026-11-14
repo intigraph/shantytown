@@ -79,6 +79,10 @@ class SdTracker(BrTracker):
         from .seeds_item import read_item
         return read_item(self, item_id)
 
+    def capacity_read(self, item_id):
+        """Fresh seed fields for producer admission, retaining the owner fence."""
+        return self.defer_read(item_id)
+
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
         result = self._bd_for(item_id, 'show', item_id, '--json')
@@ -750,11 +754,15 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows
-        rows = owner_rows(self.prove_store(), None, feed_owners=(owner,),
-                          active_only=True, timeout=self.timeout).exact()
-        return Answer.complete_read(self._tend_order(rows),
-                                    how="owner-scoped haul active anchors")
+        from .seeds_plate import owner_rows, unblocked_ids
+        proof = self.prove_store()
+        rows = owner_rows(proof, None, feed_owners=(owner,),
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
+        # Active status is not proof that technical dependencies are closed.
+        # Reobserve native blocks edges each pass; closure restores eligibility.
+        ready = unblocked_ids(proof, rows, timeout=self.timeout)
+        return Answer.complete_read(self._tend_order([r for r in rows if r["id"] in ready]),
+                                    how="owner-scoped unblocked haul active anchors")
 
     def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
@@ -763,7 +771,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, timeout=self.timeout).exact()
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),
@@ -791,8 +799,9 @@ class SdTracker(BrTracker):
                                     timeout=self.timeout).exact())
         ready = [row for row in rows if row["status"] == "open"]
         active = [row for row in rows if row["status"] == "in_progress"]
-        ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
-        return [row for row in ready if row["id"] in ids], active
+        ids = unblocked_ids(self.prove_store(), ready + active, timeout=self.timeout)
+        return ([row for row in ready if row["id"] in ids],
+                [row for row in active if row["id"] in ids])
 
     def priority_rows(self, *, ready_candidates=None, include_messages=False) -> tuple[list[dict], list[dict]] | None:
         """Lean fields for fleet priority advice; never change mutation reads."""
@@ -811,6 +820,18 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def stopped_owner_rows(self, owners):
+        """Work-only stopped-owner census; bounded repair, unchanged time ceiling."""
+        if not self._use_remote_projection():
+            raise ValueError('stopped-owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stopped-owner scope unproven')
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          plate_owners=tuple(owners), capacity=True,
+                          include_deferred=True, include_messages=False,
+                          recovery_tokens=8)
+
     def stranded_rows(self, owners):
         """Complete owner-scoped census of parked and active WORK.
 
@@ -823,10 +844,7 @@ class SdTracker(BrTracker):
             raise ValueError('stranded owner census requires native Seeds projection')
         if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
             raise ValueError('stranded owner scope unproven')
-        from .seeds_plate import owner_rows
-        return owner_rows(self.prove_store(), None, timeout=self.timeout,
-                          plate_owners=tuple(owners), capacity=True,
-                          include_deferred=True, include_messages=False).exact()
+        return self.stopped_owner_rows(owners).exact()
 
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""

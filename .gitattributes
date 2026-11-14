@@ -64,3 +64,5 @@ docs/demos/initial-native-dispatch/output.log -text whitespace=cr-at-eol
 docs/demos/stopped-owner-pacing/output.log -text whitespace=cr-at-eol
 
 docs/demos/stable-vocabulary-readers/output.log -text whitespace=cr-at-eol
+# Preserve the capacity demo terminal bytes and replay timing.
+docs/demos/2mqg-capacity/output.log -text whitespace=cr-at-eol

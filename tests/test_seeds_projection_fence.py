@@ -44,6 +44,8 @@ def wire(monkeypatch, tmp_path):
         entity = plate.SEEDS + "item/other"
         attribute = state.get("attribute", plate.SCHEMA + "description")
         mode = state["mode"]
+        if state.get("settle_after") and state["queries"] >= state["settle_after"]:
+            mode = "unrelated-entity"
         if mode == "returned": entity = S
         if mode == "membership": entity = S; attribute = plate.SCHEMA + "agent"
         if mode == "status": entity = S; attribute = plate.SEEDS + "ontology/status"
@@ -234,3 +236,25 @@ def test_candidate_retention_does_not_apply_to_non_projection_reads(wire):
     with cache.candidate_reads():
         with pytest.raises(cache.WatermarkMoved):
             plate._query(proof, query, 1)
+
+
+@pytest.mark.parametrize('allowance,complete', [(3, False), (8, True)])
+def test_stopped_owner_allowance_recovers_brief_entity_churn(wire, allowance, complete):
+    proof, state = wire
+    state.update(mode='returned', settle_after=5, title='fresh retained work')
+    answer = plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                              include_deferred=True, recovery_tokens=allowance)
+    assert answer.complete is complete
+    if complete:
+        assert answer.exact()[0]['title'] == 'fresh retained work'
+        assert state['queries'] == 5
+    else:
+        assert state['queries'] == 4
+
+
+def test_stopped_owner_continuous_churn_still_refuses(wire):
+    proof, state = wire
+    state['mode'] = 'returned'
+    assert not plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                                include_deferred=True, recovery_tokens=8).complete
+    assert state['queries'] == 9
