@@ -4,7 +4,7 @@ the parser failed importing `__version__`. The same parser probe using the
 corrected spawn settings returns zero and exposes `--root`.
 
 This recording uses the candidate's regression fixture (a synthetic editable
-finder and namespace shadow), based on commit
+finder and namespace shadow, isolated from regular wheel installs), based on commit
 `2ff8a6115a9c61f33b404a14d258fe962b2c28ee`. It calls the actual spawn function,
 then substitutes `--help` for the lifecycle arguments. No cycle is performed;
 installed adoption and a naturally served pending request remain separate checks.

@@ -163,6 +163,8 @@ def test_waiter_parser_survives_a_namespace_shadow_in_the_callers_cwd(tmp_path, 
 
     # Model an editable installation whose finder follows PathFinder. A bare
     # repository directory in the caller's cwd wins as a namespace package.
+    # Isolate only its top-level PathFinder lookup from any regular wheel
+    # installed by CI; leave dependencies and submodule lookup unchanged.
     shadow = tmp_path / "parent"
     (shadow / "shantytown").mkdir(parents=True)
     support = tmp_path / "support"
@@ -170,6 +172,11 @@ def test_waiter_parser_survives_a_namespace_shadow_in_the_callers_cwd(tmp_path, 
     package = Path(cli.__file__).parent
     (support / "sitecustomize.py").write_text(
         "import sys, importlib.abc, importlib.util, importlib.machinery\n"
+        "class CallerPath(importlib.abc.MetaPathFinder):\n"
+        " def find_spec(self, fullname, path=None, target=None):\n"
+        "  if fullname == 'shantytown':\n"
+        "   return importlib.machinery.PathFinder.find_spec(fullname, [''])\n"
+        "  return importlib.machinery.PathFinder.find_spec(fullname, path, target)\n"
         "class Editable(importlib.abc.MetaPathFinder):\n"
         " def find_spec(self, fullname, path=None, target=None):\n"
         "  if fullname == 'shantytown':\n"
@@ -177,7 +184,8 @@ def test_waiter_parser_survives_a_namespace_shadow_in_the_callers_cwd(tmp_path, 
         f"submodule_search_locations=[{str(package)!r}])\n"
         "  if fullname.startswith('shantytown.') and fullname.count('.') == 1:\n"
         f"   return importlib.machinery.PathFinder.find_spec(fullname, [{str(package)!r}])\n"
-        "sys.meta_path.append(Editable())\n"
+        "index = sys.meta_path.index(importlib.machinery.PathFinder)\n"
+        "sys.meta_path[index:index + 1] = [CallerPath(), Editable()]\n"
     )
     env = {**os.environ, "PYTHONPATH": str(support)}
     probe = [sys.executable, "-m", "shantytown.cli", "--help"]
