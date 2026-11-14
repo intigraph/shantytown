@@ -10,6 +10,11 @@ receipt. Changing that input after pinning refuses before creating output.
 All allocations and executable paths are synthetic; runtime admission stays
 false. No Alertmanager read, enrollment or native execution is demonstrated.
 
-The retained [transcript](transcript.txt) is actual reproducer output, not a
-video or installed acceptance recording. The focused renderer integration and
-negative controls are in `tests/test_alert_triage_job.py`.
+The [terminal recording](output.log) and [timing](timing.log) replay with
+`scriptreplay --log-out output.log --log-timing timing.log` after downloading
+both files. The [transcript](transcript.txt) is the readable fallback. Replay
+was checked; no inline video playback is claimed. Recorded module bytes are
+from `99d79252`; the following commit adds only this caption and recording.
+These small sanitized fixtures remain in the repository with its demo docs.
+The focused renderer integration and negative controls are in
+`tests/test_alert_triage_job.py`.
