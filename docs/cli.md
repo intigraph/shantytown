@@ -832,6 +832,10 @@ hash-verified origin in a private `.history-origin-*` file and each predecessor
 in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
 keep the citation target unchanged, and retain all versions. These version
 files are archive evidence, not temporary files to remove during a scrub.
+Publication holds a private per-target `.history-publish-*.lock` through
+preservation, staging and replacement. A competing publisher refuses without
+overwriting the current version; a later normal capture can try again. These
+lock files remain in place so concurrent publishers cannot split the lock inode.
 An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
 is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.

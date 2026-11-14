@@ -7,6 +7,8 @@ import shutil
 import stat
 import sys
 import tempfile
+import fcntl
+from contextlib import contextmanager
 
 
 def _private_digest(path):
@@ -95,9 +97,28 @@ def destination(path):
     return target, link
 
 
-def publish(path, writer):
-    path = Path(path)
-    target, link = destination(path)
+@contextmanager
+def _publication_lock(target):
+    # Persistent per-leaf lock: never unlink it, which could give a second
+    # publisher a different inode while the first still holds the old lock.
+    key = hashlib.sha256(target.name.encode()).hexdigest()
+    lock = target.parent / ('.history-publish-' + key + '.lock')
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_mode & 0o077 or info.st_nlink != 1):
+            raise ValueError('refused unsafe archive publication lock')
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError('archive publication already in progress') from error
+        yield
+    finally:
+        os.close(fd)
+
+
+def _publish_locked(path, writer, target, link):
     if link is not None and _recaptured(path, target):
         digest = _private_digest(target)
         origin = _origin(target)
@@ -115,6 +136,16 @@ def publish(path, writer):
         os.replace(temporary, target)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def publish(path, writer):
+    path = Path(path)
+    target, link = destination(path)
+    with _publication_lock(target):
+        # The citation may have changed while selecting/acquiring its lock.
+        if destination(path) != (target, link):
+            raise ValueError(f'archive citation changed before publication: {path}')
+        _publish_locked(path, writer, target, link)
 
 
 def atomic_write(path, data):
