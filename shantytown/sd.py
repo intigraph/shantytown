@@ -241,6 +241,18 @@ class SdTracker(BrTracker):
         scope_name = "all registered live recipient windows" if all_windows else f"requested {weeks}-week recipient window"
         return Answer.complete_read(value, how=f"sd msg list: complete {scope_name}")
 
+    def get_message(self, ident: str) -> Answer[dict]:
+        """Exact receipt read, including already delivered/read messages."""
+        result = self._bd('msg', 'show', ident, '--all-windows', '--json')
+        if result.returncode:
+            raise RuntimeError(f'sd msg show failed: {_failure_reason(result)}')
+        value = json.loads(result.stdout)
+        if (not isinstance(value, dict) or value.get('id') != ident
+                or not isinstance(value.get('to'), str)
+                or not isinstance(value.get('text'), str)):
+            raise RuntimeError('sd msg show answer unreadable')
+        return Answer.complete_read(value, how='sd msg show exact receipt')
+
     def read_messages(self, ids: list[str], *, weeks: int = 2,
                       all_windows: bool = False) -> Answer[list[dict]]:
         scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
