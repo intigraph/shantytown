@@ -754,7 +754,8 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     # Recipient observations are emitted for each attempted route, including
     # later probes. They must not weaken quiet-report or digest suppression.
     def report_logs():
-        return [line for line in logs if not line.startswith('deferral-recipient: ')]
+        return [line for line in logs if not line.startswith((
+            'deferral-recipient: ', 'deferral-sweep: store read complete '))]
     first_reports = report_logs()
     assert len(first_reports) == 4 and 'routine' in first_reports[0]
     assert first_reports[0].startswith('deferral log:')
@@ -762,6 +763,7 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert any(line.startswith('deferral-recipient: ') for line in logs)
     assert a.sweep() == []
     assert len(sent) == 1 and report_logs() == first_reports
+    assert logs.count('deferral-sweep: store read complete candidates=3') == 2
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

@@ -859,7 +859,43 @@ def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
     return read(pairs)
 
 
+# Candidate membership depends on both date spellings and the two note markers.
+# A type/status/date/note change anywhere can add a waiter; selected fields are
+# separately fenced by certify_projection. Unrelated graph commits need no retry.
+DEFERRED_MEMBERSHIP = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    SEEDS + "ontology/status", SCHEMA + "scheduledTime",
+    SEEDS + "ontology/deferUntil", SEEDS + "ontology/notes",
+})
+
+
+def _retry_deferred_projection(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        # ebu: never combine independently retried branches/fields from moving
+        # snapshots. Recovery shares ONE caller deadline, not three new budgets.
+        timeout = kwargs.get("timeout", 30)
+        budget = {"remaining": 3, "deadline": time.monotonic() + timeout}
+        error = "projection changed"
+        while budget["remaining"]:
+            budget["remaining"] -= 1
+            remaining = budget["deadline"] - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                with seeds_read_cache.projection_reads(budget):
+                    return function(*args, **{**kwargs, "timeout": remaining})
+            except seeds_read_cache.WatermarkMoved as changed:
+                error = str(changed)
+                if budget["remaining"] and not seeds_read_cache.projection_pause(budget):
+                    break
+        return Answer.capped([], how="Seeds deferred projection; shared and ephemeral graphs",
+                             caveat="deferral snapshot retry/time budget reached: " + error)
+    return read
+
+
 @declared_read_operation("deferred-rows")
+@_retry_deferred_projection
 def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=None) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
@@ -981,6 +1017,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                         raise ValueError("ambiguous deferral field")
                     seen.add((subject, key))
                     row[key] = value
+        seeds_read_cache.certify_projection(
+            proof.quipu_url, graphs, set(selected), DEFERRED_MEMBERSHIP, timeout, urlopen)
         statuses = (("closed", "tombstone", "deferred", "open", "blocked", "in_progress")
                     if target_ids is not None else
                     ("deferred", "open", "blocked", "in_progress") if include_asks else
@@ -1002,6 +1040,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
         rows = [row for status in statuses
                 for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
         return Answer.complete_read(rows, how=how)
+    except seeds_read_cache.WatermarkMoved:
+        raise  # Restart all candidates and fields, never just the changed query.
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 
