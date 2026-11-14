@@ -16,7 +16,34 @@ def record(root, **change):
     options = dict(administrator=True, harness="codex", session="fixture-session",
                    cold=True, ordinary=True, live=True, hooks=True, inbox=True, now=NOW)
     options.update(change)
-    return launch.record(root, Agent("operator"), **options)
+    return launch.record(root, Agent("operator", harness=options["harness"]), **options)
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_assigned_harness_and_bare_binding_are_time_bound(tmp_path, harness):
+    from shantytown.deferral_notes import provenance
+    def row(at):
+        return dict(id=at, status="deferred", labels=["blocked:external"],
+                    defer_until="2026-11-05T21:59:59Z",
+                    notes="resume_when: cold-launch:operator\n" + provenance("worker", at, ""))
+    earlier = row("2026-11-05T21:59:59Z")
+    equal = row("2026-11-05T22:00:00Z")
+    assert launch.validate("operator") == ("operator", None)
+    assert record(tmp_path, harness=harness)
+    assert launch.evaluate("operator", tmp_path, NOW, row=earlier)[0] is True
+    assert launch.evaluate("operator", tmp_path, NOW, row=equal)[0] is False
+    assert launch.evaluate("operator", tmp_path, NOW)[0] is None
+    assert launch.evaluate("operator", tmp_path, NOW, row=row("2026-11-05T22:00:01Z"))[0] is None
+    # One agent receipt must not share answers across differently timed waiters.
+    findings = deferrals.evaluate([earlier, equal], NOW, root=tmp_path)
+    assert [finding.met for finding in findings] == [True, False]
+
+
+def test_mismatched_assigned_harness_cannot_record(tmp_path):
+    assert launch.record(tmp_path, Agent("operator", harness="claude"),
+                         administrator=True, harness="codex", session="fixture",
+                         cold=True, ordinary=True, live=True, hooks=True, inbox=True) is False
+    assert not (tmp_path / "notify").exists()
 
 
 def test_native_receipt_is_root_agent_time_and_host_bound(tmp_path):
@@ -34,7 +61,7 @@ def test_native_receipt_is_root_agent_time_and_host_bound(tmp_path):
 
 @pytest.mark.parametrize("field,value", [
     ("administrator", False), ("cold", False), ("ordinary", False),
-    ("live", False), ("hooks", False), ("inbox", False), ("harness", "claude"),
+    ("live", False), ("hooks", False), ("inbox", False), ("harness", ""),
     ("administrator", "true"),
 ])
 def test_nonqualifying_observations_never_create_evidence(tmp_path, field, value):
@@ -44,7 +71,7 @@ def test_nonqualifying_observations_never_create_evidence(tmp_path, field, value
 
 @pytest.mark.parametrize("patch", [
     {"host": "other-host"}, {"root": "/other-root"}, {"agent": "other"},
-    {"harness": "claude"}, {"administrator": False}, {"inbox": None},
+    {"harness": ""}, {"administrator": False}, {"inbox": None},
     {"kind": "cycle"}, {"schema": True}, {"session": ""}, {"id": ""},
 ])
 def test_wrong_or_malformed_receipts_are_unknown(tmp_path, patch):
@@ -90,13 +117,15 @@ def test_tend_can_read_cold_launch_without_starting_anything(tmp_path):
     assert finding.met and deferrals.can_release(row, finding, NOW)
 
 
+@pytest.mark.parametrize("assigned_harness", ["claude", "codex"])
 @pytest.mark.parametrize("mode,expected", [("ordinary", True), ("cycle", False),
+    ("context-clear", False),
     ("restore", False), ("override", False), ("dry-run", False),
     ("hooks-unknown", False), ("inbox-unacked", False), ("not-live", False)])
-def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatch, mode, expected):
+def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatch, mode, expected, assigned_harness):
     from shantytown import job_launch
     a = SimpleNamespace(root=tmp_path)
-    card = Agent("operator", role="administrator", harness="codex")
+    card = Agent("operator", role="administrator", harness=assigned_harness)
     monkeypatch.setattr(cli, "_administrator_launch", lambda *a: True)
     monkeypatch.setattr(cli.quiet_time_mod, "read", lambda *a: SimpleNamespace(held=False))
     monkeypatch.setattr(job_launch, "for_card", lambda *a: ("private fixture",))
@@ -104,7 +133,7 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "_account_launch_refusal", lambda *a, **kw: "")
     monkeypatch.setattr(cli, "_despite_hold", lambda *a: mode == "override")
     monkeypatch.setattr(cli.harness_mod, "require_role_harness", lambda *a, **kw: None)
-    monkeypatch.setattr(cli.harness_mod, "name_for", lambda *a, **kw: "codex")
+    monkeypatch.setattr(cli.harness_mod, "name_for", lambda *a, **kw: assigned_harness)
     monkeypatch.setattr(cli, "_session_for", lambda *a: "private-fixture-session")
     monkeypatch.setattr(cli, "_launched_now", lambda *a: None)
     monkeypatch.setattr(cli, "_record_launch_unretirement", lambda *a: True)
@@ -116,14 +145,15 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
     panes = SimpleNamespace(new_session=lambda *a, **kw: None, respawn=lambda *a, **kw: None,
                             capture=lambda *a: "consent")
     result = cli._launch_admitted(a, card, panes, runtime, dry_run=mode == "dry-run",
-                        reuse_session=mode == "cycle", window_restore=mode == "restore")
+                        reuse_session=mode in ("cycle", "context-clear"), window_restore=mode == "restore")
     if mode == "inbox-unacked":
         assert result == cli.CANNOT_TELL
     path = launch._path(tmp_path, card.name)
     assert path.exists() is expected
 
 
-def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp_path):
+@pytest.mark.parametrize("argument", [ARG, "operator"])
+def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp_path, argument):
     from shantytown.dispatch import Dispatcher, DeferRefused
     from shantytown.files import FilesRegistry, FilesTracker
     from shantytown.tmux import NullPanes
@@ -131,10 +161,10 @@ def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp
     tracker.update('item-1', title='wait for natural launch', status='open', assignee='worker', priority=1)
     dispatch = Dispatcher(FilesRegistry(tmp_path / 'crew'), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    dispatch.defer('item-1', 'external', 'resume_when: cold-launch:' + ARG, until=until)
+    dispatch.defer('item-1', 'external', 'resume_when: cold-launch:' + argument, until=until)
     item = tracker.get('item-1')
     assert item.status == 'deferred' and item.defer_until == until
-    assert deferrals.parse_condition(item.notes).arg == ARG
+    assert deferrals.parse_condition(item.notes).arg == argument
     original = tracker._path('item-1').read_bytes()
     with pytest.raises(DeferRefused):
         dispatch.defer('item-1', 'external', 'resume_when: cold-launch:operator@now', until=until)
