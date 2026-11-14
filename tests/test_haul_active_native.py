@@ -160,3 +160,14 @@ def test_native_technical_blocker_controls_active_haul(native, state, visible):
     load("waiting", extra=f'<{N}item/waiting> <https://scbrown.github.io/quechua/ns#blockedOn> <{N}item/dependency> .')
     rows = tracker().haul_active_rows("tim").exact()
     assert ("waiting" in {row["id"] for row in rows}) is visible
+
+
+def test_native_active_projection_delivers_wait_marker_to_filter(native, monkeypatch):
+    from shantytown import quiet_waits
+    load, tracker, _ = native
+    marker = "resume_when: ci-terminal:github/example/project@" + "a" * 40
+    load("waiting", extra=f'<{N}item/waiting> <{N}ontology/notes> {json.dumps(marker)} .')
+    rows = tracker().haul_active_rows("tim").exact()
+    assert rows[0]["notes"] == marker
+    monkeypatch.setattr(quiet_waits, "evaluate", lambda *a, **kw: [])
+    assert quiet_waits.ready(rows) == []

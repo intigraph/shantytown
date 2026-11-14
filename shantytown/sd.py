@@ -757,7 +757,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows, unblocked_ids
         proof = self.prove_store()
         rows = owner_rows(proof, None, feed_owners=(owner,),
-                          active_only=True, timeout=self.timeout).exact()
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
         # Active status is not proof that technical dependencies are closed.
         # Reobserve native blocks edges each pass; closure restores eligibility.
         ready = unblocked_ids(proof, rows, timeout=self.timeout)
@@ -771,7 +771,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, timeout=self.timeout).exact()
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),
