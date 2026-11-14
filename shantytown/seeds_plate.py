@@ -361,6 +361,7 @@ def _retry_owner_projection(function):
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
+               include_waits: bool = False,
                include_deferred: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
@@ -528,6 +529,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # and labels instead of truncating the first 1,000-subject request.
         field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
                              batch_size=field_batch_size, recover_timeouts=recovery_tokens > 3)
+        if include_waits:
+            field_options["fields"] = {**FIELDS, SEEDS + "ontology/notes": "notes"}
         grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
@@ -697,12 +700,13 @@ def ranking_rows(proof, *, timeout: int = 30,
 
 
 def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
-                    recover_timeouts=False):
+                    recover_timeouts=False, fields=None):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
     budget, identity or ambiguity problem; callers turn that into UNKNOWN.
     """
+    fields = FIELDS if fields is None else fields
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
@@ -719,7 +723,7 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             bindings = " ".join(_iri(subject) for subject, graph in chunk if graph == g)
             if not bindings:
                 continue
-            for predicate in FIELDS:
+            for predicate in fields:
                 branches.append(
                     f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(g)} "
                     f"{{ ?s {_iri(predicate)} ?value }} "
@@ -750,14 +754,14 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             or not subject.startswith(SEEDS + "item/")
             or g not in graphs
             or selected.get(subject) != g
-            or p not in FIELDS
+            or p not in fields
         ):
             raise ValueError("invalid plate field")
         if subject in subjects and subjects[subject] != g:
             raise ValueError("seed appears in shared and ephemeral graphs")
         subjects[subject] = g
         row = grouped.setdefault(subject, {"labels": []})
-        key = FIELDS[p]
+        key = fields[p]
         if isinstance(value, dict):
             if set(value) != {"datatype", "value"} or key not in (
                 "updated_at",
@@ -775,6 +779,8 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             from urllib.parse import unquote
 
             value = unquote(value[len(SEEDS + "principal/") :])
+        if key == "notes" and (not isinstance(value, str) or len(value) > 65536):
+            raise ValueError("quiet-wait notes exceed bounded text shape")
         if key == "labels":
             if not isinstance(value, str):
                 raise ValueError("invalid label")

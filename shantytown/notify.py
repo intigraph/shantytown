@@ -1013,6 +1013,8 @@ class IdleFleetAlerter:
         # in_progress counts as a haul (aegis-ap4gm) — same reason as the
         # feed_check gate: an item the worker already started is its next work,
         # and `bd ready` structurally cannot report it. Fails open.
+        from .quiet_waits import ready as quiet_wait_ready
+        active = quiet_wait_ready(active, root=self._root, log=self._log)
         queues = feed_check.hauls(ready_beads, active)
         # Gate before choosing/deduplicating the next head: a governor-held
         # first item must neither hide an admitted sibling nor consume delivery
