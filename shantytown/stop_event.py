@@ -782,6 +782,9 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path, *, payload=None) -> in
         # stop pay for other workers' active work (aegis-dnw).
         held_asks = []
         active = _haul_active(me, cwd, root=root, reg=reg, held_asks=held_asks)
+        from .quiet_waits import ready as quiet_wait_ready
+        active = quiet_wait_ready(active, root=root,
+                                  log=lambda text: print(text, file=sys.stderr))
         resume = active[0] if (active and
                                harness_name == "codex") else None
         if active and resume is None:
