@@ -7165,8 +7165,9 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
         box = _inbox(a, default="beads")
         from .inbox_disposition import Dispositions
         from .inbox import Message
-        disposition = Dispositions(a.root, backend).get(
+        disposition = (Dispositions(a.root, backend).get(
             Message(id='', to=a.agent, body=msg, frm=_me(a)))
+            if _me(a) is not None else None)
         if disposition is not None:
             print(f"  -> {agent.name} exact-content repeat suppressed by recipient "
                   f"{disposition['state']}; original receipt {disposition['receipt']} retained. "
@@ -7228,6 +7229,25 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    # A cron caller may have no declared sender, while the native store records
+    # its credential-derived sender. Never equate unknown with that identity.
+    # Once controls exist, bind the persisted receipt before any live send.
+    if _me(a) is None and Dispositions(a.root, backend).directory.exists():
+        try:
+            receipt = box.get_message(agent.name, item.id)
+            if receipt is None or receipt.body != msg or receipt.to != agent.name:
+                raise ValueError('exact persisted receipt binding differs')
+            held = Dispositions(a.root, backend).get(receipt)
+        except Exception as error:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"processing decision UNKNOWN ({type(error).__name__}); "
+                  'pointer retained, no live submission or resend.')
+            return OK
+        if held is not None:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"live repeat suppressed by recipient {held['state']}; "
+                  f"original receipt {held['receipt']} retained.")
+            return OK
     if boundary_only:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
         return OK

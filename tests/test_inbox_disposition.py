@@ -191,3 +191,32 @@ def test_tracker_exact_receipt_reader_includes_closed_but_checks_owner(tmp_path)
     assert box.get_message('lead', message.id).read
     with pytest.raises(ValueError):
         box.get_message('other', message.id)
+
+
+@pytest.mark.parametrize('body', ['same unprefixed body', '[from credential-sender] same body'])
+@pytest.mark.parametrize('native_sender,readable', [('credential-sender', True), ('changed-sender', True), ('credential-sender', False)])
+def test_unknown_declared_sender_binds_native_receipt_before_live(tmp_path, monkeypatch, native_sender, readable, body):
+    raw, state, _ = setup(tmp_path)
+    original = raw.deliver('lead', body, 'credential-sender')
+    state.set(original, 'ack', 'handled')
+    class NativeBox:
+        def deliver(self, to, body, frm=None):
+            assert frm is None
+            # The native default sender is supplied by the credential, not env.
+            return raw.deliver(to, body, native_sender)
+        def get_message(self, to, ident):
+            if not readable:
+                raise RuntimeError('exact native read UNKNOWN')
+            return raw.get_message(to, ident)
+        def mark_read(self, to, ids=None):
+            return raw.mark_read(to, ids)
+    monkeypatch.setattr(cli, '_inbox', lambda *a, **kw: NativeBox())
+    monkeypatch.setattr(cli, '_looks_stranded', lambda *a: False)
+    sent = []
+    class Panes:
+        def exists(self, pane): return True
+        def send(self, pane, text): sent.append(text)
+    card = SimpleNamespace(name='lead', host=None, pane='pane', role='worker')
+    assert cli._inbox_durable(args(tmp_path), card, original.body, Panes()) == cli.OK
+    assert sent == ([original.body] if readable and native_sender == 'changed-sender' else [])
+    assert raw.get_message('lead', original.id) == original

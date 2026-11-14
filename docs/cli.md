@@ -4036,6 +4036,11 @@ read. It does not launch an agent or promise a timer wake. Receipt acknowledgeme
 after that presentation retires the reminder; the original evidence stays in
 the inbox backend. You can explicitly defer that original receipt again.
 Changed findings, severity text, sender or recipient remain eligible immediately.
+When a caller has no declared sender but the native store derives one from its
+credential, the sender persists first and reads that exact receipt before a live
+submission. Matching controls silence the live repeat; changed native senders
+pass. An unreadable binding retains the durable pointer without submitting it.
+This path can retain another evidence record while still preventing context spam.
 
 Decisions are atomic, read-back-verified local delivery metadata under
 `<root>/inbox-dispositions/<backend>/`. They survive process/session restarts
