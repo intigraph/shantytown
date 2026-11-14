@@ -152,7 +152,8 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
     assert path.exists() is expected
 
 
-def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp_path):
+@pytest.mark.parametrize("argument", [ARG, "operator"])
+def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp_path, argument):
     from shantytown.dispatch import Dispatcher, DeferRefused
     from shantytown.files import FilesRegistry, FilesTracker
     from shantytown.tmux import NullPanes
@@ -160,10 +161,10 @@ def test_writer_accepts_cold_marker_and_refuses_bad_timestamp_without_writes(tmp
     tracker.update('item-1', title='wait for natural launch', status='open', assignee='worker', priority=1)
     dispatch = Dispatcher(FilesRegistry(tmp_path / 'crew'), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    dispatch.defer('item-1', 'external', 'resume_when: cold-launch:' + ARG, until=until)
+    dispatch.defer('item-1', 'external', 'resume_when: cold-launch:' + argument, until=until)
     item = tracker.get('item-1')
     assert item.status == 'deferred' and item.defer_until == until
-    assert deferrals.parse_condition(item.notes).arg == ARG
+    assert deferrals.parse_condition(item.notes).arg == argument
     original = tracker._path('item-1').read_bytes()
     with pytest.raises(DeferRefused):
         dispatch.defer('item-1', 'external', 'resume_when: cold-launch:operator@now', until=until)
