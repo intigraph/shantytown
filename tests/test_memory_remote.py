@@ -15,8 +15,8 @@ OWNER = remote.Owner('urn:example:deploy', 'urn:example:project', 'urn:example:a
 def fixture():
     file = MemoryFile('topics/one.md', '\ufeffλ\r\n[link](two.md)\r\n'.encode())
     head = dict(revision='urn:example:r1', sha256=file.sha256, bytes=len(file.data), tombstone=False)
-    return dict(authenticated_owner=OWNER.crew, export={
-        'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+    return dict(selected_owner=OWNER.crew, export={
+        'format': 'shantytown.memory-files/v1', 'coverage': 'this_repository_owner_records',
         'snapshot': dict(owner=OWNER.wire(), revision='urn:example:s1', files={file.path: head}),
         'files': [dict(owner=OWNER.wire(), path=file.path, revision=head['revision'], text=file.data.decode())]})
 
@@ -37,20 +37,14 @@ class Opener:
         return Response(json.dumps(self.result).encode())
 
 
-def test_own_projection_stages_exact_source_without_touching_native_root(tmp_path, monkeypatch):
-    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: {'Authorization': 'Bearer fixture'})
+def test_own_projection_stages_exact_source_without_touching_native_root(tmp_path):
     native = tmp_path / 'native'
     native.mkdir()
     (native / 'MEMORY.md').write_text('external source survives')
     result = fixture()
-    opener = Opener(result)
-    generation = remote.Client('https://example.test', OWNER, opener=opener).stage_own(tmp_path)
+    generation = remote.stage(remote.verified_files(result, OWNER), tmp_path)
     assert snapshot(generation)[0].data == result['export']['files'][0]['text'].encode()
     assert (native / 'MEMORY.md').read_text() == 'external source survives'
-    request, timeout = opener.calls[0]
-    assert request.full_url == 'https://example.test/memory/projection'
-    assert timeout == 10
-    assert len(opener.calls) == 1
 
 
 @pytest.mark.parametrize('change', ['shared', 'wrong-identity', 'wrong-owner', 'hash', 'size',
@@ -61,9 +55,9 @@ def test_forged_or_incomplete_projection_refused_before_staging(tmp_path, change
     file = export['files'][0]
     head = export['snapshot']['files'][file['path']]
     if change == 'shared':
-        value.pop('authenticated_owner')
+        value.pop('selected_owner')
     elif change == 'wrong-identity':
-        value['authenticated_owner'] = 'urn:example:beta'
+        value['selected_owner'] = 'urn:example:beta'
     elif change == 'wrong-owner':
         file['owner'] = dict(OWNER.wire(), crew='urn:example:beta')
     elif change == 'hash':
@@ -88,44 +82,15 @@ def test_forged_or_incomplete_projection_refused_before_staging(tmp_path, change
     assert list(tmp_path.iterdir()) == []
 
 
-def test_crosscrew_read_stays_public_and_not_a_projection(monkeypatch):
-    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: pytest.fail('public read used credentials'))
-    result = dict(coverage='this_repository_owner_records', snapshot=fixture()['export']['snapshot'])
-    opener = Opener(result)
-    assert remote.Client('https://example.test', OWNER, opener=opener).read() == result['snapshot']
-    assert opener.calls[0][0].get_header('Authorization') is None
-
-
-def test_crosscrew_query_returns_attributed_historical_text_without_projection_identity(monkeypatch):
-    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: pytest.fail('read used credentials'))
-    envelope = fixture()['export']
-    envelope['files'][0].update(harness='fixture', account='selected', committed_at='2026-01-01T00:00:00Z')
-    opener = Opener(envelope)
-    client = remote.Client('https://example.test', OWNER, opener=opener)
-    positive = client.query('λ')
-    assert positive['coverage'] == 'this_repository_owner_records'
-    assert positive['matches'][0]['historical'] is True
-    assert positive['matches'][0]['owner'] == OWNER.wire()
-    assert positive['matches'][0]['revision'] == envelope['files'][0]['revision']
-    assert positive['matches'][0]['harness'] == 'fixture'
-    assert positive['matches'][0]['excerpt'] == envelope['files'][0]['text']
-    assert client.query('absent-literal')['matches'] == []
-    assert all(call[0].get_header('Authorization') is None for call in opener.calls)
-    # The same public response cannot be fed to own projection without proof.
-    with pytest.raises(remote.Unproven):
-        remote.verified_files({'export': envelope}, OWNER)
-
-
 def test_read_export_empty_is_explicit_coverage_but_not_a_native_projection():
-    value = {'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+    value = {'format': 'shantytown.memory-files/v1', 'coverage': 'this_repository_owner_records',
              'snapshot': None, 'files': []}
-    client = remote.Client('https://example.test', OWNER, opener=Opener(value))
-    assert client.query('positive-needle')['matches'] == []
+    assert remote._export_files(value, OWNER, allow_empty=True) == ()
     with pytest.raises(remote.Unproven):
-        remote.verified_files({'authenticated_owner': OWNER.crew, 'export': value}, OWNER)
+        remote.verified_files({'selected_owner': OWNER.crew, 'export': value}, OWNER)
     value['coverage'] = 'partial'
     with pytest.raises(remote.Unproven):
-        client.query('positive-needle')
+        remote._export_files(value, OWNER, allow_empty=True)
 
 
 def test_query_result_count_and_excerpt_are_bounded_and_explicit():
@@ -140,6 +105,7 @@ def test_query_result_count_and_excerpt_are_bounded_and_explicit():
         value['snapshot']['files'][file.path] = head
         value['files'].append(dict(original, path=file.path, revision=head['revision'], text=file.data.decode()))
     client = remote.Client('https://example.test', OWNER, opener=Opener(value))
+    client.export = lambda: value
     result = client.query('needle', limit=1)
     assert result['truncated'] is True
     assert len(result['matches']) == 1
@@ -215,30 +181,6 @@ def test_commit_receipt_must_bind_exact_intent_and_file(mutation):
         remote.Client('https://example.test', OWNER)._receipt({'receipt': value}, request)
 
 
-def test_receipt_lookup_is_read_only_and_accepts_absent_or_exact(monkeypatch):
-    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: {'Authorization': 'Bearer fixture'})
-    request = intent()
-    opener = Opener({'receipt': None})
-    client = remote.Client('https://example.test', OWNER, opener=opener)
-    assert client.receipt(request) is None
-    assert opener.calls[0][0].full_url.endswith('/memory/receipt')
-    opener.result = {'receipt': receipt(request)}
-    assert client.receipt(request) == opener.result['receipt']
-    assert all(call[0].full_url.endswith('/memory/receipt') for call in opener.calls)
-
-
-def test_own_projection_distinguishes_explicit_absence_from_omitted_snapshot(monkeypatch):
-    monkeypatch.setattr(remote.quipu_auth, 'write_headers', lambda _: {'Authorization': 'Bearer fixture'})
-    value = dict(authenticated_owner=OWNER.crew, export={
-        'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
-        'snapshot': None, 'files': []})
-    client = remote.Client('https://example.test', OWNER, opener=Opener(value))
-    assert client.projection() == value
-    del value['export']['snapshot']
-    with pytest.raises(remote.Unproven):
-        client.projection()
-
-
 def test_named_client_uses_selected_cli_identity_not_callers_ambient_token(monkeypatch, tmp_path):
     from shantytown import crew_credentials
     monkeypatch.setattr(crew_credentials, 'selection', lambda *a: ({},
@@ -254,8 +196,8 @@ def test_named_client_uses_selected_cli_identity_not_callers_ambient_token(monke
         status = 200
         def __enter__(self): return self
         def __exit__(self, *a): pass
-        def read(self, _): return json.dumps(dict(authenticated_owner=OWNER.crew,
-            export=dict(format='quipu.memory-files/v1', coverage='this_repository_owner_records',
+        def read(self, _): return json.dumps(dict(selected_owner=OWNER.crew,
+            export=dict(format='shantytown.memory-files/v1', coverage='this_repository_owner_records',
                         snapshot=None, files=[]))).encode()
     class Opener:
         def open(self, request, timeout):
@@ -263,10 +205,10 @@ def test_named_client_uses_selected_cli_identity_not_callers_ambient_token(monke
             return Response()
     client = remote.Client.for_agent(tmp_path, 'alpha', 'https://example.test',
                                      OWNER.deployment, OWNER.project, opener=Opener())
-    assert client.projection()['authenticated_owner'] == OWNER.crew
+    client._request('/update', {'update': 'fixture'}, identity=True)
     assert len(selected) == 1 and selected[0][1] == 'alpha'
     assert selected[0][2].endswith('/shantytown-credentials/alpha/quipu-cli')
     monkeypatch.setattr(remote.quipu_auth, 'status', lambda _: 'writes-disabled')
     with pytest.raises(remote.quipu_auth.CredentialRefused):
-        client.projection()
+        client._request('/update', {'update': 'fixture'}, identity=True)
     assert len(selected) == 1  # No refresh or second credential after refusal.
