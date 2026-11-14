@@ -25,9 +25,9 @@ arg = deferrals.parse_condition(marker).arg
 with TemporaryDirectory() as root:
     print("Before receipt:", resume_launch.evaluate(arg, root, now)[0])
     options = dict(administrator=True, harness="codex", session="synthetic-session", cold=True, ordinary=True, live=True, hooks=True, inbox=True, now=now)
-    assert not resume_launch.record(root, Agent("operator"), **(options | {"ordinary": False}))
+    assert not resume_launch.record(root, Agent("operator", harness="codex"), **(options | {"ordinary": False}))
     print("Hold-override fixture:", resume_launch.evaluate(arg, root, now)[0])
-    assert resume_launch.record(root, Agent("operator"), **options)
+    assert resume_launch.record(root, Agent("operator", harness="codex"), **options)
     assert resume_launch.evaluate(arg, root, now)[0] is True
     print("Verified ordinary fixture receipt:", resume_launch.evaluate(arg, root, now)[0])
 print("PASS: receipt observation only; installed and natural-launch acceptance remain separate.")
