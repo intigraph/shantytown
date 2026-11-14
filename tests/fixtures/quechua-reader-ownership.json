@@ -1,0 +1,48 @@
+[
+  {
+    "old": "https://scbrown.github.io/quechua/ns#blockedOn",
+    "new": "https://w3id.org/intigraph/quechua/ns#blockedOn",
+    "owner": "quechua/ns",
+    "declared_in": [
+      "quechua/ns"
+    ],
+    "referenced_in": [
+      "quechua/ns",
+      "seeds/ns"
+    ]
+  },
+  {
+    "old": "https://scbrown.github.io/quechua/ns#enabled",
+    "new": "https://w3id.org/intigraph/quechua/ns#enabled",
+    "owner": "quechua/ns",
+    "declared_in": [
+      "quechua/ns"
+    ],
+    "referenced_in": [
+      "quechua/ns"
+    ]
+  },
+  {
+    "old": "https://scbrown.github.io/quechua/ns#owner",
+    "new": "https://w3id.org/intigraph/quechua/ns#owner",
+    "owner": "quechua/ns",
+    "declared_in": [
+      "quechua/ns"
+    ],
+    "referenced_in": [
+      "quechua/ns"
+    ]
+  },
+  {
+    "old": "https://scbrown.github.io/quechua/ns#sourceKind",
+    "new": "https://w3id.org/intigraph/quechua/ns#sourceKind",
+    "owner": "quechua/ns",
+    "declared_in": [
+      "quechua/ns"
+    ],
+    "referenced_in": [
+      "quechua/ns",
+      "seeds/ns"
+    ]
+  }
+]
