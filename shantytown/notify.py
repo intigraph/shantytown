@@ -1914,9 +1914,10 @@ class DeferralAlerter:
                 release = self._release or backend().undefer
                 release(finding.bead)
                 after = show(finding.bead)
-                if after.get("status") != "open" or after.get("defer_until"):
+                if (after.get("status") != "open" or after.get("defer_until")
+                        or after.get("assignee")):
                     raise RuntimeError("release read-back still held")
-                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, no defer_until")
+                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, unassigned, no defer_until")
             except Exception as e:
                 # An indeterminate write is re-read next pass, never blindly
                 # repeated. An already-open row is not a release candidate.
