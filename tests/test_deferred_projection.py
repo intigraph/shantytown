@@ -199,11 +199,12 @@ def test_split_candidates_refuse_whole_read_before_hydration(monkeypatch, failur
 
 
 def test_split_candidates_share_one_wall_budget(monkeypatch):
-    ticks = iter([0, 0, 31])
-    monkeypatch.setattr(seeds_plate.time, 'monotonic', lambda: next(ticks))
+    clock = [0]
+    monkeypatch.setattr(seeds_plate.time, 'monotonic', lambda: clock[0])
     calls = []
     def query(proof, q, timeout):
         calls.append(timeout)
+        clock[0] = 31
         return dict(rows=[], count=0, truncated=False)
     monkeypatch.setattr(seeds_plate, '_query', query)
     with pytest.raises(PartialAnswer, match='candidate time budget'):

@@ -258,3 +258,60 @@ def test_stopped_owner_continuous_churn_still_refuses(wire):
     assert not plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
                                 include_deferred=True, recovery_tokens=8).complete
     assert state['queries'] == 9
+
+
+def deferred_wire(wire, monkeypatch):
+    """Keep the real cache/change-feed fence; inject only the query endpoint."""
+    proof, state = wire
+    original = plate.urlopen
+    class Response:
+        status = 200
+        def __init__(self, rows): self.rows = rows
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, size):
+            return json.dumps(dict(rows=self.rows, count=len(self.rows), truncated=False)).encode()
+    def send(request, timeout):
+        if request.get_method() != "POST":
+            return original(request, timeout)
+        state["queries"] += 1
+        query = json.loads(request.data)["query"]
+        if "AS ?predicate" not in query:
+            return Response([dict(subject=S, graph=G)])
+        values = dict(id="test-held", title=state.get("title", "held"),
+                      status="deferred", priority=1, created_at="2026-10-01T00:00:00Z")
+        inverse = {v: k for k, v in plate.FIELDS.items()}
+        return Response([dict(subject=S, graph=G, predicate=inverse[k], value=v)
+                         for k, v in values.items()])
+    monkeypatch.setattr(plate, "urlopen", send)
+    return proof, state
+
+
+def test_deferral_read_certifies_despite_continuous_unrelated_writes(wire, monkeypatch):
+    proof, state = deferred_wire(wire, monkeypatch)
+    assert plate.deferred_rows(proof).exact()[0]["id"] == "test-held"
+    assert state["queries"] == 7
+    assert {g for g, _ in state["feeds"]} == {G, G + "#seeds-ephemeral"}
+
+
+@pytest.mark.parametrize("attribute", sorted(plate.DEFERRED_MEMBERSHIP))
+def test_deferral_membership_changes_never_escape_the_fence(wire, monkeypatch, attribute):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state["attribute"] = attribute  # Includes changes to UNSELECTED subjects.
+    assert not plate.deferred_rows(proof).complete
+    assert state["queries"] == 21  # Three whole candidate+field attempts, no stale reuse.
+
+
+def test_deferral_retries_all_fields_after_selected_change(wire, monkeypatch):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state.update(mode="returned", settle_after=14)
+    assert plate.deferred_rows(proof).exact()[0]["id"] == "test-held"
+    assert state["queries"] == 14
+
+
+@pytest.mark.parametrize("mode", ["truncated", "malformed", "offline", "store-replaced"])
+def test_deferral_missing_change_proof_stays_unknown(wire, monkeypatch, mode):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state["mode"] = mode
+    assert not plate.deferred_rows(proof).complete
+    assert state["queries"] == 7
