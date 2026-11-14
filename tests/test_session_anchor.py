@@ -266,3 +266,11 @@ def test_every_injected_st_verb_is_real():
             if e.code != 0:
                 bad.append(v)
     assert not bad, f"not st verbs: {bad}"
+
+
+@pytest.mark.parametrize('result', [(0, PLATE), (2, '')])
+def test_every_startup_fallback_keeps_directive_contract(monkeypatch, result):
+    from shantytown.anchor import DIRECTIVE_INSTRUCTION
+    monkeypatch.setattr(sa, '_run_anchor', lambda *args: result)
+    monkeypatch.delenv('SHANTY_RULES_QUERY', raising=False)
+    assert DIRECTIVE_INSTRUCTION in ' '.join(sa.render(None, 'ana').split())

@@ -368,3 +368,11 @@ def test_fix_prompt_is_lightweight_and_skips_new_work(world):
     assert "Skip this for new docs, features or research" in text
     assert "record a BASELINE" not in text
     assert "Choose the success metric" not in text
+
+
+def test_anchor_always_carries_directive_instructions(world):
+    from shantytown.anchor import DIRECTIVE_INSTRUCTION
+    _, reg, tracker = world
+    for name in ('ellie', 'arya', 'arnold'):
+        text = anchor(name, reg, NullPanes(), plate=lambda w: plate(tracker, w)).render()
+        assert DIRECTIVE_INSTRUCTION in text

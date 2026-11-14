@@ -44,6 +44,12 @@ from .protocols import Agent, Panes, Registry, WorkItem
 from .tier import Reason, find_administrator
 
 
+DIRECTIVE_INSTRUCTION = (
+    "Check governing operator Directives in Quipu before acting; record each new "
+    "directive verbatim as a governed Directive entity in the same session."
+)
+
+
 def stale_plate(item: WorkItem, *, now: datetime | None = None) -> bool:
     """Age advisory from an explicit tracker timestamp, never filesystem age."""
     raw = getattr(item, "updated_at", None)
@@ -106,7 +112,7 @@ class Anchoring:
         who = f"  You are {self.me.name} — {self.me.role}"
         if self.me.reports_to:
             who += f", reports to {self.me.reports_to}"
-        L += [who + ".", ""]
+        L += [who + ".", "", "  DIRECTIVES", f"    {DIRECTIVE_INSTRUCTION}", ""]
 
         if self.responsibilities:
             L.extend(self.responsibilities.splitlines())

@@ -34,6 +34,8 @@ import os
 import re
 import sys
 
+from .anchor import DIRECTIVE_INSTRUCTION
+
 # Recognisable in the transcript, to the agent, to a human reading the pane,
 # and to a test. One spelling, named once.
 BANNER = "[st anchor — session start]"
@@ -44,6 +46,7 @@ _ROLE_RE = re.compile(r"You are \S+ — ([A-Za-z0-9_-]+)")
 _ALL = (
     "  STARTUP",
     "    Execute the plate item now; there is no one downstream to hand it to.",
+    f"    {DIRECTIVE_INSTRUCTION}",
     "    Measure the current state on the item before you change anything.",
     "    When done: close it with a falsifiable reason (before -> after), report",
     "    to your lead (`st inbox -d <lead> ...`), then consult Top of your plate and Coming due.",

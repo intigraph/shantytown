@@ -331,3 +331,9 @@ def test_completed_worker_cleanup_error_keeps_successful_cli_result(tmp_path, mo
     result = json.loads(capsys.readouterr().out)
     assert result['live']['status'] == 'absent'
     assert children[0].poll() == 0
+
+
+def test_packaged_start_orientation_carries_directive_contract_without_live_read():
+    from shantytown.anchor import DIRECTIVE_INSTRUCTION
+    text = prime.select(prime.primer(), 'Stack orientation')
+    assert DIRECTIVE_INSTRUCTION in ' '.join(text.split())
