@@ -1,7 +1,7 @@
 # SPEC — one stop decision
 
 > Status: **BUILT** (administrator chain), 2026-07-30. Written before the code, to
-> keep the work honest; this line is the only edit made after it.
+> keep the work honest. Process wording was reconciled with current milestone-wait rules on 2026-11-14.
 >
 > Owner-directed (Stiwi, 2026-07-29): *"lets make sure we're writing to a cohesive
 > vision with a solid UX and not hacking up around a bunch of bugs trying to fix
@@ -67,6 +67,15 @@ being guarded against.
   invoked as `python -m shantytown.stop_policy`, for the same reason
   `stop_event` is not a subcommand.
 
+## Current milestone wait rule
+
+Milestone ordering uses lane, priority and rank. Due dates remain allowed;
+future defer-until dates must not stand in for real dependencies. Record an item
+or PR dependency for an external blocker. Keep CI and review waits in_progress
+with the exact wake event recorded, and avoid re-serving pending waits. Record
+an existing capacity hold and ask the lead for ready work without inventing a date.
+Project-specific governed directives determine milestone scope and ownership.
+
 ## 3. The decision
 
 ONE entry point per agent, whatever its role. It performs the non-blocking side
@@ -84,7 +93,7 @@ able to answer "why did my coordinator not stop?" from this list alone.
 | 0 | *(side effect, never blocks)* route + persist my own stop event upward | — | survival before any decision; a verdict must not be able to lose the event |
 | 1 | a pending event is **urgent** — a governance alert, or one that ROSE past an unreachable lead | **BLOCK**: deliver | the alert's content is "an agent is working untracked right now"; a risen event means the tier already failed once |
 | 2 | **Rule Zero**: free feedable workers AND dispatchable work both exist | **BLOCK**: dispatch | there is work to hand out. Sleeping through this is the stall the gate exists to prevent, and it OVERRIDES hibernate |
-| 2a | **P0 plate**: a ready P0 nobody is working on AND capacity to start it, in a state not already blocked on | **BLOCK** once: start, or re-rank/defer and say why | Rule Zero for the administrator's own plate and for ephemeral slots (§3.1). Yields to stood-down and over-capacity; overrides hibernate out loud |
+| 2a | **P0 plate**: a ready P0 nobody is working on AND capacity to start it, in a state not already blocked on | **BLOCK** once: start, or re-rank or record a real blocker; milestone CI/review waits stay in_progress and say why | Rule Zero for the administrator's own plate and for ephemeral slots (§3.1). Yields to stood-down and over-capacity; overrides hibernate out loud |
 | 3 | **hibernate** declines (policy on, schedule not elapsed) | **ALLOW**, loudly | nothing to dispatch and nothing urgent: quiet is correct. Says how many events stay pending |
 | 4 | a **deliverable** pending event (sender not mid-flight) | **BLOCK**: deliver | the ordinary drain |
 | 5 | idle because a **usage-governor tier** holds the whole queue | **ALLOW**, loudly | idle is the CORRECT state under an engaged floor — and indistinguishable from a broken feeder unless something says so |
