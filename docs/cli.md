@@ -4055,3 +4055,21 @@ work-item deferral, credential change or runtime authority follows. No automatic
 processing decision is inferred from live delivery, reading a message, an agent
 stop, or an old approval. Unkeyed ephemeral send-keys traffic is outside this
 inbox control; durable alert producers must use `st inbox -d` for this contract.
+
+### Quiet CI and installation waits
+
+Keep a CI wait `in_progress` and record one exact event in the item's notes:
+`resume_when: ci-terminal:github/example/project@<full commit SHA>` (Forgejo
+uses `forgejo`), or `resume_when: installed:bobbin>=0.1.0`. This is an active
+wait with no defer date. Both the stop hook and the idle-haul sweep suppress
+repeat delivery while the event is pending or its observation is UNKNOWN.
+Terminal CI wakes the owner even when it failed or was cancelled; it does not
+approve a merge. An unreadable observation keeps the wait quiet and logs UNKNOWN.
+A lead can explicitly resume source work by removing/replacing the active marker;
+retained history must not contain another active `resume_when:` marker.
+
+The item remains visible as in-progress work to the board and governor. This
+shape applies without guessing milestone labels or changing parent membership.
+Ordinary `st work defer` still requires its existing event and backstop checks.
+Open technical `blocks` edges also suppress native haul continuation; the next
+fresh blocker observation restores eligibility after closure.
