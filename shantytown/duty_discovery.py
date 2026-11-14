@@ -49,8 +49,14 @@ def job_bindings(root, host):
             # shell, runtime.env or systemd unit requires its own source row.
             argv = list(action.command)
             if argv and Path(argv[0]).name == 'env':
-                actors = [word.split('=', 1)[1] for word in argv[1:]
-                          if word.startswith('SHANTY_AGENT=')]
+                actors = []
+                for word in argv[1:]:
+                    if word.startswith('-'):
+                        raise ValueError('unsupported env job duty options')
+                    if '=' not in word:
+                        break  # Executable reached: remaining words are arguments.
+                    if word.startswith('SHANTY_AGENT='):
+                        actors.append(word.split('=', 1)[1])
                 if len(actors) > 1:
                     raise ValueError('ambiguous job duty identity')
                 if actors:
