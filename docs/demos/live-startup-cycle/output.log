@@ -1,0 +1,14 @@
+Script started on 2026-11-14 00:52:02-05:00 [COMMAND="python3 docs/demos/live-startup-cycle/demo.py" <not executed on terminal>]
+Source fixture only: unverified startup; no actual restart or elapsed-time claim.
+Base: c96be285f052ae5ec709137842240bea0b887ce1
+  worker: respawn: fixture
+  ⚠ in-place relaunch did not verify (exit 2) — falling back to a full stop and start. THIS DETACHES ANY ATTACHED CLIENT.
+  worker: respawn: fixture
+  worker: replacement is live but startup is UNVERIFIED; preserving it without another restart. Inspect input before retrying.
+  worker: respawn: fixture
+  ⚠ in-place relaunch did not verify (exit 2) — falling back to a full stop and start. THIS DETACHES ANY ATTACHED CLIENT.
+Before LIVE: ((1, 'relaunch'), ['respawn', 'second-restart-admission'])
+After LIVE: ((2, 'respawn'), ['respawn'])
+After NOT LIVE control: ((1, 'relaunch'), ['respawn', 'second-restart-admission'])
+
+Script done on 2026-11-14 00:52:03-05:00 [COMMAND_EXIT_CODE="0"]

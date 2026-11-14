@@ -12033,6 +12033,20 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
             if rc == REFUSED and account_target is not None:
                 _registry(a).restore_selection(current)
             return rc, cycle_mod.RESPAWN
+        if rc == CANNOT_TELL:
+            # Unconfirmed startup delivery is not a dead process. A second
+            # stop/start repeats the startup wait and can kill useful work.
+            try:
+                replacement_live = runtime.is_live(panes.capture(session))
+            except (OSError, ValueError):
+                print(f"  {agent_name}: replacement liveness UNKNOWN; preserving "
+                      "the session without another restart.", file=sys.stderr)
+                return CANNOT_TELL, cycle_mod.RESPAWN
+            if replacement_live:
+                print(f"  {agent_name}: replacement is live but startup is "
+                      "UNVERIFIED; preserving it without another restart. "
+                      "Inspect input before retrying.", file=sys.stderr)
+                return CANNOT_TELL, cycle_mod.RESPAWN
         # The process is already gone by here, so there is no gentler mode left
         # to try and the session may be holding a dead shell. Fall through to the
         # floor, which starts by stopping whatever is there.
