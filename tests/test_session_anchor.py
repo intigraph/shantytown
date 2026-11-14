@@ -178,6 +178,7 @@ def test_damaged_stack_primer_is_unknown_and_preserves_anchor(monkeypatch, broke
     monkeypatch.setattr(prime, "primer", read)
     monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
     out = sa.render("/r", "ana")
+    assert sa.DIRECTIVES in out
     assert "Stack primer UNKNOWN" in out
     assert "x-1  do the thing" in out and "STARTUP" in out
 
