@@ -299,6 +299,49 @@ class SdTracker(BrTracker):
             return item
         raise AssertionError("bounded inbox retry exhausted")
 
+    def create_duty_issue(self, payload, *, target, key):
+        """One SDK workflow identity per duty, including after a lost reply.
+
+        This is a repair task, not an inbox pointer. It does not claim a duty
+        has been rebound, dispatch an agent, or change an ASK-class decision.
+        """
+        import hashlib
+        from .duties import KINDS, _name
+        ident = _name(payload['id'])
+        _name(payload['holder'])
+        _name(target)
+        expected = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
+        if key != expected or payload.get('kind') not in KINDS:
+            raise ValueError('invalid duty repair identity')
+        title = 'P0 orphaned duty: ' + ident
+        description = key + '\n' + json.dumps(payload, sort_keys=True)
+        run = 'urn:shantytown:duty:' + hashlib.sha256(key.encode()).hexdigest()
+        result = self._bd('create', title, '--json', '--priority=0',
+            '--assignee=' + target, '--labels=orphaned-duty',
+            '--description=' + description, '--workflow-run=' + run,
+            '--step=repair', '--visit=1')
+        if result.returncode:
+            raise RuntimeError('duty create outcome UNKNOWN; retain the same workflow identity')
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get('id'), str) or not value['id']:
+            raise ValueError('duty repair identity UNKNOWN')
+        item = self.get(value['id'])
+        if item.title != title or not (item.description or '').startswith(key + '\n'):
+            raise ValueError('duty repair read-back identity mismatch')
+        if item.status == 'closed':
+            row = self.stranded_read(item.id)
+            # Reopen the same unresolved repair, never mint a fresh seed for
+            # every firing. Native CAS and a transition comment retain custody.
+            result = self._bd_for(item.id, 'update', item.id, '--status=open',
+                '--priority=0', '--if-revision=' + str(row['revision']),
+                '--transition-comment=Duty remains orphaned at a fresh stranded-owner pass', '--json')
+            if result.returncode:
+                raise RuntimeError('duty repair reopening UNKNOWN; inspect before retry')
+            item = self.get(item.id)
+        if item.status == 'closed' or item.priority != 0:
+            raise ValueError('duty repair not an open P0')
+        return item
+
     @property
     def _bin(self) -> str:
         return os.environ.get("SHANTY_SD_BIN", "sd")

@@ -1985,6 +1985,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--after-turn", action="store_true",
                     help="hold all automatic feeds now; stop at the next Stop hook")
+    st.add_argument('--repool-work', action='store_true',
+                    help='explicitly repool held work and hand off or flag registered duties before stopping')
     st.add_argument('--resume-at', default=None, metavar='ISO8601',
                     help='dated stopped-owner ownership exemption (timezone required)')
     st.add_argument("--reason", default="", metavar="TEXT",
@@ -5717,10 +5719,22 @@ def _cmd_stop(a) -> int:
             return 2
     # The cycle fallback already owns this lock and must retain its request if
     # launch fails. This is an internal flag, never inferred from user prose.
-    if a.dry_run or getattr(a, "_cycle_internal_stop", False):
+    if getattr(a, "_cycle_internal_stop", False):
         return _stop_locked(a)
+    from .duty_adapter import guard_cli
+    def guarded():
+        try:
+            return guard_cli(a, lambda: _stop_locked(a))
+        except ValueError as exc:
+            print(f'  stop duty handling refused: {exc}; inspect completed handoffs before retry', file=sys.stderr)
+            return REFUSED
+        except (OSError, CouldNotLook) as exc:
+            print(f'  stop duty handling UNKNOWN ({type(exc).__name__}); inspect before retry', file=sys.stderr)
+            return CANNOT_TELL
+    if a.dry_run:
+        return guarded()
     with cycle_mod.lifecycle_lock(a.root, a.agent):
-        return _stop_locked(a)
+        return guarded()
 
 
 def _cancel_cycle_for_stop(a) -> None:
@@ -7634,6 +7648,9 @@ def _cmd_anchor(a) -> int:
                 p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
+    if p.me.role == 'administrator':
+        from .duties import summary as duty_summary
+        print('  ' + duty_summary(a.root))
     from . import feed_hold
     if feed_note := feed_hold.reason(a.root, me):
         print(f"  {me}: {feed_note}")
