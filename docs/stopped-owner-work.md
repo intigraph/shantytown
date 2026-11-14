@@ -137,3 +137,18 @@ reader remains UNKNOWN rather than enumerating all recipient history. Adapters w
 retain their declared adapter behavior; no cross-adapter cost claim is implied.
 This source change does not enable a lifecycle publisher or admit a runtime
 measurement cohort.
+
+## Stats-hook publication pacing
+
+With lifecycle publication enabled, an unchanged stats hook can skip publication
+when a verified local head receipt covers the same graph projection and this
+agent's observation is acknowledged. An unchanged partial head can remain quiet
+for an acknowledged agent while a pending agent's own hook retries delivery.
+Local lease renewals do not change those observations until the
+existing five-minute graph heartbeat is due. A skipped hook does not reread,
+validate or renew remote evidence.
+
+Missing, legacy, changed or unacknowledged receipts use the normal flush and
+readback. Stops, launches and due heartbeats still publish, and explicit lifecycle
+and tend flushes retain their remote rollback and revision checks. No failed
+delivery is acknowledged locally merely to reduce traffic.
