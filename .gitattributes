@@ -65,3 +65,6 @@ docs/demos/stopped-owner-pacing/output.log -text whitespace=cr-at-eol
 
 # Preserve the capacity demo terminal bytes and replay timing.
 docs/demos/2mqg-capacity/output.log -text whitespace=cr-at-eol
+
+# Preserve live-startup cycle fixture terminal bytes.
+docs/demos/live-startup-cycle/output.log -text whitespace=cr-at-eol
