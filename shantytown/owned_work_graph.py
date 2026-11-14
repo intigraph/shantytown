@@ -159,6 +159,63 @@ def _agent_versions(head, onto):
     return versions
 
 
+def _publication_inputs(states, receipts, onto, source):
+    """Fingerprint the acknowledged projection, including unchanged partiality."""
+    if not states or len(states) > 100 or not isinstance(receipts, dict):
+        return None
+    inputs = []
+    for name, state in sorted(states.items()):
+        iri, payload, _ = fact(name, state, onto, source)
+        receipt = receipts.get(name, {})
+        if not isinstance(receipt, dict):
+            return None
+        if (receipt.get('payload') is not None
+                and receipt.get('revision') == state.get('graph_revision', 0)
+                and (receipt.get('iri') != iri or receipt.get('payload') != payload)):
+            return None  # The ordinary flush must report this changed receipt.
+        inputs.append([name, iri, payload, receipt.get('iri'),
+                       receipt.get('payload'), receipt.get('revision')])
+    return hashlib.sha256(json.dumps([source, inputs], separators=(',', ':')).encode()).hexdigest()
+
+
+def _publication_pending(root, registry, agents=None):
+    """Local scheduling hint only; never establishes current remote truth.
+
+    A missing/legacy/changed receipt requires the ordinary fenced flush. A
+    matching receipt lets stats skip work it has already published; explicit
+    lifecycle/tend flushes still check the remote head even when unchanged.
+    """
+    service = OwnedWork(root)
+    try:
+        proof = json.loads((service.root / 'graph-head.json').read_text())
+        receipts = json.loads((service.root / 'graph-receipts.json').read_text())
+        source = producer(service.root)
+        iri = registry.onto + 'owned-work-head-' + hashlib.sha256(source.encode()).hexdigest()
+        states = service.snapshot()
+        fingerprint = _publication_inputs(states, receipts, registry.onto, source)
+        if fingerprint is None:
+            return True
+        # A partial head can be unchanged for this hook while another agent
+        # awaits delivery. That agent's own hook must still retry its fact.
+        for name in states if agents is None else agents:
+            if name not in states:
+                return True
+            state = states[name]
+            expected_iri, payload, _ = fact(name, state, registry.onto, source)
+            receipt = receipts.get(name, {})
+            if (receipt.get('iri') != expected_iri or receipt.get('payload') != payload
+                    or receipt.get('revision') != state.get('graph_revision', 0)):
+                return True
+        if (not isinstance(proof, dict) or proof.get('iri') != iri
+                or type(proof.get('revision')) is not int or proof['revision'] < 1
+                or not isinstance(proof.get('sha256'), str)
+                or len(proof['sha256']) != 64):
+            return True
+        return proof.get('inputs_sha256') != fingerprint
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
 def _advance_head(registry, service, receipts):
     # One bounded current projection. The immutable facts remain history, but
     # the reader never aggregates that history on every poll.
@@ -168,6 +225,7 @@ def _advance_head(registry, service, receipts):
     if len(states) > 100:
         raise ValueError('lifecycle writer exceeds 100-agent coverage cap')
     source = producer(service.root)
+    inputs_sha256 = _publication_inputs(states, receipts, registry.onto, source)
     iri, previous = _head(registry, source)
     head_receipt_file = service.root / 'graph-head.json'
     has_head_receipt = head_receipt_file.exists()
@@ -213,7 +271,8 @@ def _advance_head(registry, service, receipts):
     if previous and {k: v for k, v in previous.items() if k != 'revision'} == value:
         payload = json.dumps(previous, sort_keys=True, separators=(',', ':'))
         write_json_atomic(head_receipt_file, dict(iri=iri, revision=previous['revision'],
-                                                 sha256=hashlib.sha256(payload.encode()).hexdigest()))
+                                                 sha256=hashlib.sha256(payload.encode()).hexdigest(),
+                                                 inputs_sha256=inputs_sha256))
         return
     # graph.lock is held from the remote revision read through /set and its
     # read-back. /set is NOT CAS: this serialized writer is the monotonicity
@@ -233,7 +292,8 @@ def _advance_head(registry, service, receipts):
     if _head(registry, source)[1] != value:
         raise RuntimeError('lifecycle head read-back unproven')
     write_json_atomic(head_receipt_file, dict(iri=iri, revision=value['revision'],
-                                             sha256=hashlib.sha256(payload.encode()).hexdigest()))
+                                             sha256=hashlib.sha256(payload.encode()).hexdigest(),
+                                             inputs_sha256=inputs_sha256))
 
 
 def flush(root, registry, *, agents=None, limit=4, budget=5):
@@ -305,12 +365,14 @@ def enabled(root=None):
     return cfg.env.get('SHANTY_OWNED_WORK_PUBLISH') == '1'
 
 
-def publish(root, *, agents=None):
+def publish(root, *, agents=None, only_if_changed=False):
     from .quipu import QuipuRegistry
     try:
         if not enabled(root):
             return
         registry = QuipuRegistry(root=root, timeout=3, client_label='shantytown')
+        if only_if_changed and not _publication_pending(root, registry, agents):
+            return
         flush(root, registry, agents=agents)
     except Exception as exc:
         print('  stopped-owner graph: UNKNOWN (' + type(exc).__name__ +
