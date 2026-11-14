@@ -4013,3 +4013,21 @@ entries (two per key), with bypass off; it did not show a per-process cache or
 a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
+
+### Quiet CI and installation waits
+
+Keep a CI wait `in_progress` and record one exact event in the item's notes:
+`resume_when: ci-terminal:github/example/project@<full commit SHA>` (Forgejo
+uses `forgejo`), or `resume_when: installed:bobbin>=0.1.0`. This is an active
+wait with no defer date. Both the stop hook and the idle-haul sweep suppress
+repeat delivery while the event is pending or its observation is UNKNOWN.
+Terminal CI wakes the owner even when it failed or was cancelled; it does not
+approve a merge. An unreadable observation keeps the wait quiet and logs UNKNOWN.
+A lead can explicitly resume source work by removing/replacing the active marker;
+retained history must not contain another active `resume_when:` marker.
+
+The item remains visible as in-progress work to the board and governor. This
+shape applies without guessing milestone labels or changing parent membership.
+Ordinary `st work defer` still requires its existing event and backstop checks.
+Open technical `blocks` edges also suppress native haul continuation; the next
+fresh blocker observation restores eligibility after closure.
