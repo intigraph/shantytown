@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.1](https://github.com/intigraph/shantytown/compare/v0.16.0...v0.16.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **haul:** keep recorded CI waits quiet until their event ([#611](https://github.com/intigraph/shantytown/issues/611)) ([dbba83c](https://github.com/intigraph/shantytown/commit/dbba83cafdd5749b20c5ae82209ec4ff0e249e1e))
+* **jobs:** narrow protected alert triage to investigation ([#619](https://github.com/intigraph/shantytown/issues/619)) ([45024ac](https://github.com/intigraph/shantytown/commit/45024ac87cc04d19ca01c6d15bd629f31b430b3a))
+* **refill:** reconcile terminal custody only for unheld native work ([#608](https://github.com/intigraph/shantytown/issues/608)) ([bfc8427](https://github.com/intigraph/shantytown/commit/bfc8427ad50a5c0cbdb14dbae3d69aa9c1cfc42c))
+* **seeds:** fence deferral projections within one retry budget ([03bce89](https://github.com/intigraph/shantytown/commit/03bce8966cb35d41e7ebe73acb1002967cedfcc0))
+* **seeds:** recover deferral snapshots within one deadline ([#610](https://github.com/intigraph/shantytown/issues/610)) ([03bce89](https://github.com/intigraph/shantytown/commit/03bce8966cb35d41e7ebe73acb1002967cedfcc0))
+
 ## [0.16.0](https://github.com/intigraph/shantytown/compare/v0.15.1...v0.16.0) (2026-11-14)
 
 
