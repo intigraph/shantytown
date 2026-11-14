@@ -477,6 +477,12 @@ def _tracker_plate(trk, who, *, require_complete=False):
 
 
 def _inbox(a, default="files"):
+    from .inbox_disposition import ControlledInbox, Dispositions
+    return ControlledInbox(_raw_inbox(a, default),
+                           Dispositions(a.root, _backend(a, default)))
+
+
+def _raw_inbox(a, default="files"):
     """The inbox for this invocation, selected by the SAME --backend switch as the
     tracker (Stiwi: "an inbox concept we can map to beads or other ticket
     modules"). No second selection mechanism — one switch, or an operator ends up
@@ -2092,6 +2098,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--read-id", action="append", default=[], metavar="ID",
         help="ACK only this unread message ID (repeatable). Refuses the whole "
              "request if any ID is not unread for the recipient")
+    inbox_read_mode.add_argument('--ack-id', metavar='ID',
+        help='processing ACK: silence exact-content repeats on this deployment root')
+    inbox_read_mode.add_argument('--defer-id', metavar='ID',
+        help='defer this exact receipt until --until; silence identical repeats')
+    ib.add_argument('--until', help='with --defer-id: timezone-qualified deadline, within 30 days')
+    ib.add_argument('--reason', help='with --ack-id/--defer-id: processing disposition reason')
     ib.add_argument("-n", "--dry-run", action="store_true")
 
     tk = sub.add_parser("task", help="create a work item")
@@ -6735,6 +6747,11 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, 'ack_id', None) or getattr(a, 'defer_id', None):
+        return _inbox_dispose(a)
+    if getattr(a, 'until', None) or getattr(a, 'reason', None):
+        print('  refused: --until/--reason require --ack-id or --defer-id', file=sys.stderr)
+        return REFUSED
     if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
         print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
         return REFUSED
@@ -7146,12 +7163,22 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
+        from .inbox_disposition import Dispositions
+        from .inbox import Message
+        disposition = (Dispositions(a.root, backend).get(
+            Message(id='', to=a.agent, body=msg, frm=_me(a)))
+            if _me(a) is not None else None)
+        if disposition is not None:
+            print(f"  -> {agent.name} exact-content repeat suppressed by recipient "
+                  f"{disposition['state']}; original receipt {disposition['receipt']} retained. "
+                  "No new pointer or live submission.")
+            return OK
         if getattr(a, "retain_pointer", False) and backend == "seeds":
             # A fresh namespace avoids repeated probes of short-id collisions
             # on a large board. This uses the SDK's ordinary --slug contract;
             # persist-first and the store's compare-and-set remain unchanged.
             import secrets
-            if not isinstance(box, TrackerInbox):
+            if not isinstance(getattr(box, "raw", box), TrackerInbox):
                 raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
             item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
         else:
@@ -7202,6 +7229,25 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    # A cron caller may have no declared sender, while the native store records
+    # its credential-derived sender. Never equate unknown with that identity.
+    # Once controls exist, bind the persisted receipt before any live send.
+    if _me(a) is None and Dispositions(a.root, backend).directory.exists():
+        try:
+            receipt = box.get_message(agent.name, item.id)
+            if receipt is None or receipt.body != msg or receipt.to != agent.name:
+                raise ValueError('exact persisted receipt binding differs')
+            held = Dispositions(a.root, backend).get(receipt)
+        except Exception as error:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"processing decision UNKNOWN ({type(error).__name__}); "
+                  'pointer retained, no live submission or resend.')
+            return OK
+        if held is not None:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"live repeat suppressed by recipient {held['state']}; "
+                  f"original receipt {held['receipt']} retained.")
+            return OK
     if boundary_only:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
         return OK
@@ -7278,6 +7324,50 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
               f"recipient not live — they read it with `st inbox`.")
     return OK
+
+
+def _inbox_dispose(a):
+    """Explicit processing decision; never infer one from live delivery."""
+    from .inbox_disposition import Dispositions, deadline
+    me = os.environ.get('SHANTY_AGENT')
+    if (not me or (a.agent and a.agent != me) or a.message
+            or getattr(a, 'durable', False) or getattr(a, 'routine', False)
+            or getattr(a, 'retain_pointer', False) or not getattr(a, 'reason', None)):
+        print('  refused: processing disposition requires your own inbox, no send, and --reason',
+              file=sys.stderr)
+        return REFUSED
+    ident = getattr(a, 'ack_id', None) or a.defer_id
+    try:
+        until = deadline(a.until) if a.defer_id else None
+        if a.ack_id and a.until:
+            raise ValueError('--until requires --defer-id')
+        box = _inbox(a, default='beads')
+        raw = getattr(box, 'raw', box)
+        reader = getattr(raw, 'get_message', None)
+        if callable(reader):
+            message = reader(me, ident)
+            found = [message] if message else []
+        else:
+            select = getattr(raw, 'unread_selected', None)
+            rows = select(me, [ident]) if callable(select) else raw.unread(me)
+            found = [m for m in rows if m.id == ident and m.to == me]
+        if len(found) != 1:
+            raise ValueError('exact receipt for this recipient required')
+        store = Dispositions(a.root, _backend(a, 'beads'))
+        if a.dry_run:
+            print('  would record processing disposition; 0 writes, no receipt ACK')
+            return OK
+        row = store.set(found[0], 'ack' if a.ack_id else 'defer', a.reason, until=until)
+        print(f"  processing {row['state']} verified for {ident}; exact repeats quiet. "
+              'Original receipt retained; incident/work status unchanged. Root-local control.')
+        return OK
+    except (ValueError, TypeError) as error:
+        print(f'  refused: {error}', file=sys.stderr)
+        return REFUSED
+    except Exception as error:
+        print(f'  processing disposition UNKNOWN ({type(error).__name__}); do not retry blindly',
+              file=sys.stderr)
+        return CANNOT_TELL
 
 
 def _inbox_read(a, me: str) -> int:
@@ -7396,7 +7486,11 @@ def _inbox_read(a, me: str) -> int:
 
     print()
     if not unread:
-        print(f"  {me}: no unread messages.")
+        if total:
+            print(f"  {me}: no eligible messages in this bounded view; "
+                  f"{total} stored unread (processing ACK/DEFER may hide rows).")
+        else:
+            print(f"  {me}: no unread messages.")
     else:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""

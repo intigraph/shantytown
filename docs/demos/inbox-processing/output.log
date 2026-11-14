@@ -1,0 +1,15 @@
+Script started on 2026-11-14 13:14:23-05:00 [COMMAND="bash docs/demos/inbox-processing/run.sh" <not executed on terminal>]
+Synthetic local inbox probe; no production messages
+BASE bfc8427a: transport ACK is not processing ACK
+base: 34 identical repeats after receipt ACK -> 34 eligible
+base: retained duplicate evidence -> 34 stored unread
+
+CANDIDATE: explicit processing ACK/DEFER
+candidate: 34 identical repeats after receipt ACK -> 0 eligible
+candidate: retained duplicate evidence -> 34 stored unread
+changed finding -> eligible immediately
+defer before deadline -> False
+defer at deadline, original -> True
+defer at deadline, duplicate -> False (original only)
+
+Script done on 2026-11-14 13:14:24-05:00 [COMMAND_EXIT_CODE="0"]

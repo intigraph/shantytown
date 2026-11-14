@@ -4013,6 +4013,49 @@ a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
 
+### Processing ACK and DEFER for repeated inbox content
+
+Receipt acknowledgement (`--read`, `--read-id`) confirms delivery. It does not
+mean the recipient has handled the subject, and does not silence a new pointer
+with the same body. Use an explicit processing decision for that:
+
+```sh
+st inbox --ack-id msg-EXACT --reason 'Tracked on the existing incident'
+st inbox --defer-id msg-EXACT --until 2026-11-15T07:00:00Z --reason 'Await natural deploy'
+```
+
+These commands require your own recipient identity and an exact receipt from
+the selected inbox backend, including receipts already marked read after live
+delivery. An unknown or foreign ID refuses. `--dry-run` performs no write.
+DEFER requires an explicit timezone and a future deadline within 30 days.
+
+A processing ACK silences future **identical recipient, sender and full-body**
+repeats. DEFER silences those repeats and makes the original durable receipt
+eligible once at/after the deadline, on the next ordinary inbox/startup/tend
+read. It does not launch an agent or promise a timer wake. Receipt acknowledgement
+after that presentation retires the reminder; the original evidence stays in
+the inbox backend. You can explicitly defer that original receipt again.
+Changed findings, severity text, sender or recipient remain eligible immediately.
+When a caller has no declared sender but the native store derives one from its
+credential, the sender persists first and reads that exact receipt before a live
+submission. Matching controls silence the live repeat; changed native senders
+pass. An unreadable binding retains the durable pointer without submitting it.
+This path can retain another evidence record while still preventing context spam.
+
+Decisions are atomic, read-back-verified local delivery metadata under
+`<root>/inbox-dispositions/<backend>/`. They survive process/session restarts
+using that root; **they do not propagate to another host/root**. `--count` still
+reports stored unread pointers. A bounded list may show fewer eligible messages;
+that does not mean the retained pointers disappeared. At most 64 due original
+receipts are fetched per read, with a 1024-decision capacity; exceeded or malformed
+state reports UNKNOWN rather than treating unreadable state as an empty inbox.
+
+This changes presentation only: no incident resolution, Alertmanager silence,
+work-item deferral, credential change or runtime authority follows. No automatic
+processing decision is inferred from live delivery, reading a message, an agent
+stop, or an old approval. Unkeyed ephemeral send-keys traffic is outside this
+inbox control; durable alert producers must use `st inbox -d` for this contract.
+
 ### Quiet CI and installation waits
 
 Keep a CI wait `in_progress` and record one exact event in the item's notes:
