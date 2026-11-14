@@ -1,0 +1,20 @@
+Script started on 2026-11-13 21:22:48-05:00 [COMMAND="bash docs/demos/stranded-duties/run.sh" <not executed on terminal>]
+BASE: same synthetic stopped worker, supported queue, external reservation and ASK
+queue holder: worker
+external reservation holder: worker
+repair records after two passes: 0
+administrator pages: 0
+ASK owner: worker
+duty summary/stop guard: unavailable in base
+
+CANDIDATE: same input; two existing sweep passes; no real board or process changes
+queue holder: lead
+external reservation holder: worker
+repair records after two passes: 1
+administrator pages: 1
+ASK owner: worker
+Duties: 1 orphaned (fresh declared inventory)
+  duty peer: review-reservation (external)
+stop without explicit disposition: REFUSED before pane stop
+
+Script done on 2026-11-13 21:22:49-05:00 [COMMAND_EXIT_CODE="0"]
