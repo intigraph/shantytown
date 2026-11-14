@@ -219,12 +219,16 @@ def guard_producers(tracker, notify):
         proposed = {k: v for k, v in fields.items() if v is not None}
         if not any(k in proposed for k in ('assignee', 'status', 'title', 'labels', 'defer_until')):
             return update(item_id, **fields)
-        previous = tracker.get(item_id)
+        # Capacity needs exact seed fields, not historical comments or reverse
+        # dependencies. Keep two fresh observations and the owner lock; only
+        # use the bounded field reader when the backend provides it.
+        read = getattr(tracker, 'capacity_read', tracker.get)
+        previous = read(item_id)
         owner = proposed.get('assignee', previous.assignee)
         if not owner:
             return update(item_id, **fields)
         with assignment_lock(tracker, owner):
-            current = tracker.get(item_id)
+            current = read(item_id)
             if 'assignee' not in proposed and current.assignee != previous.assignee:
                 raise CapacityUnknown('owner changed before producer admission')
             if active(vars(current) | proposed, owner):

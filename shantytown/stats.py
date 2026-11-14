@@ -20,8 +20,9 @@ Three faces, one file:
             env -> the code path does not run at all.
 
 The store is .shanty/stats.sqlite (WAL, busy_timeout) — append-only in spirit:
-capture only INSERTs (events) or UPSERTs monotonically (tokens). No external
-service is consulted, ever, on the capture path. It also scrubs Quipu bearer
+capture only INSERTs (events) or UPSERTs monotonically (tokens). Optional lifecycle
+publication sends changed or unacknowledged graph observations; unchanged hooks
+remain local and make no claim of fresh remote validation. It also scrubs Quipu bearer
 values from the transcript output before they can persist there (aegis-02k5sq).
 """
 from __future__ import annotations
@@ -542,7 +543,7 @@ def capture(root: Path, payload: dict) -> None:
             from .owned_work_graph import publish
             from .quipu_provenance import hook_session
             with hook_session(session):
-                publish(root, agents={agent})
+                publish(root, agents={agent}, only_if_changed=True)
         except Exception:
             print("liveness heartbeat UNKNOWN", file=sys.stderr)
     conn = _db(root)

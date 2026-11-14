@@ -339,6 +339,15 @@ malformed field, ambiguous graph membership, truncated response or exhausted
 field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
 The projection sends the SDK's caller-declared attribution headers when present.
 
+Producer capacity admission supports an optional `capacity_read(id)` observation
+of complete seed fields. The guard reads once before the owner lock and again
+inside it, preserving the owner-change fence and slot checks. Remote Seeds uses
+its existing bounded item-field reader for these observations; this avoids
+loading historical comments and reverse dependencies for every update. Backends
+without this method retain `get(id)`. Each observation must be fresh, and an
+incomplete or failed field read propagates before any write. Render caches and
+owner-wide plate projections do not satisfy this mutation-read contract.
+
 ## Quipu request provenance
 
 The Quipu adapters derive `X-Quipu-Agent`, `-Harness`, `-Model`, `-Session` and
