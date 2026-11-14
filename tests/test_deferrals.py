@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from shantytown import deferrals
 
 
@@ -44,6 +46,17 @@ def test_a_future_deferral_is_silent():
     must produce no line at all, or the channel is noise."""
     rows = [_row(defer_until=_iso(timedelta(days=+5)))]
     assert deferrals.evaluate(rows, NOW) == []
+
+
+@pytest.mark.parametrize("status", ["closed", "done"])
+@pytest.mark.parametrize("gate", ["closed:other", "ci-terminal:github/example/repo@" + "a" * 40])
+def test_terminal_rows_do_not_resolve_historical_gates(status, gate):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("terminal item spent a gate read")
+    item = _row(status=status, defer_until=_iso(timedelta(days=-3)),
+                notes="resume_when: " + gate)
+    assert deferrals.evaluate([item], NOW, is_closed=forbidden,
+                              forge_reader=forbidden) == []
 
 
 def test_same_day_recheck_lapses_at_the_full_timestamp_boundary():
@@ -738,11 +751,17 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert set(a.sweep()) == {'urgent', 'unknown'}
     assert 'routine' not in sent[0]
     assert 'urgent' in sent[0] and 'unknown' in sent[0]
-    assert len(logs) == 4 and 'routine' in logs[0]
-    assert logs[0].startswith('deferral log:')
-    assert logs[1].startswith('deferral-sweep: ADMIN-DIGEST delivered count=2 digest=')
+    # Recipient observations are emitted for each attempted route, including
+    # later probes. They must not weaken quiet-report or digest suppression.
+    def report_logs():
+        return [line for line in logs if not line.startswith('deferral-recipient: ')]
+    first_reports = report_logs()
+    assert len(first_reports) == 4 and 'routine' in first_reports[0]
+    assert first_reports[0].startswith('deferral log:')
+    assert first_reports[1].startswith('deferral-sweep: ADMIN-DIGEST delivered count=2 digest=')
+    assert any(line.startswith('deferral-recipient: ') for line in logs)
     assert a.sweep() == []
-    assert len(sent) == 1 and len(logs) == 4
+    assert len(sent) == 1 and report_logs() == first_reports
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

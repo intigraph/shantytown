@@ -243,3 +243,95 @@ def test_failed_owner_is_retried_without_repeating_successful_lead(tmp_path, mon
         h.alerter.sweep()
     assert [pane for pane, _ in h.sent] == ["lead", "worker"]
     assert not h.admins and h.row["status"] == "deferred"
+
+
+@pytest.mark.parametrize("transport_failure", [False, True])
+def test_recipient_diagnostics_distinguish_absence_from_send_failure(
+        tmp_path, monkeypatch, transport_failure):
+    h = harness(tmp_path, monkeypatch,
+                live=("worker", "lead") if transport_failure else (),
+                failed=("worker", "lead") if transport_failure else ())
+    assert h.alerter.sweep() == [h.row['id']]
+    records = [json.loads(line.split(': ', 1)[1]) for line in h.logs
+               if line.startswith('deferral-recipient: ')]
+    assert [r['recipient'] for r in records] == ['worker', 'lead']
+    assert {r['outcome'] for r in records} == {
+        'send-failure' if transport_failure else 'live-absence'}
+    for record in records:
+        assert record['snapshot']['live'] is transport_failure
+        assert record['snapshot']['reason'] == ('live' if transport_failure else 'pane-absent')
+        assert record['exception_type'] == ('OSError' if transport_failure else None)
+        assert record['state_key'] == h.finding.key()
+        assert len(record['source_sha256']) == 64
+        assert datetime.fromisoformat(record['observed_at']).tzinfo is not None
+    assert len(h.admins) == 1 and not h.sent
+    assert not any('private transport detail' in line or '/tmp/private/' in line
+                   or h.row['notes'] in line for line in h.logs)
+
+
+def test_failed_diagnostic_logger_does_not_change_delivery_or_suppression(tmp_path, monkeypatch):
+    h = harness(tmp_path, monkeypatch)
+    def log(line):
+        if line.startswith('deferral-recipient: '):
+            raise OSError('diagnostic sink unavailable')
+        h.logs.append(line)
+    h.alerter._log = log
+    for _ in range(2):
+        assert h.alerter.sweep() == []
+    assert [pane for pane, _ in h.sent] == ['worker']
+    assert not h.admins and h.row['status'] == 'deferred'
+
+
+def test_recipient_probe_exception_retains_class_without_private_message(tmp_path, monkeypatch):
+    h = harness(tmp_path, monkeypatch)
+    def cmdline(pane):
+        if pane == 'worker':
+            raise OSError('private process detail')
+        return 'claude --settings /tmp/private/settings.json'
+    h.alerter._panes.cmdline = cmdline
+    assert h.alerter.sweep() == []
+    records = [json.loads(line.split(': ', 1)[1]) for line in h.logs
+               if line.startswith('deferral-recipient: ')]
+    assert records[0]['outcome'] == 'live-absence'
+    assert records[0]['snapshot']['reason'] == 'probe-error'
+    assert records[0]['snapshot']['exception_type'] == 'OSError'
+    assert records[1]['outcome'] == 'delivered'
+    assert [pane for pane, _ in h.sent] == ['lead']
+    assert not any('private process detail' in line for line in h.logs)
+
+
+@pytest.mark.parametrize('missing', [False, True])
+def test_lead_lookup_failure_is_visible_without_changing_admin_route(tmp_path, monkeypatch, missing):
+    h = harness(tmp_path, monkeypatch, live=())
+    h.cards['worker'] = replace(h.cards['worker'], reports_to='missing' if missing else 'admin')
+    assert h.alerter.sweep() == [h.row['id']]
+    records = [json.loads(line.split(': ', 1)[1]) for line in h.logs
+               if line.startswith('deferral-recipient: ')]
+    assert len(records) == 1 and records[0]['recipient'] == 'worker'
+    lookup = records[0]['lead_lookup']
+    assert lookup['reason'] == ('lookup-error' if missing else 'ineligible')
+    if missing:
+        assert lookup['exception_type'] == 'KeyError'
+    else:
+        assert lookup['role'] == 'administrator'
+    assert len(h.admins) == 1 and not h.sent
+
+
+def test_caught_transport_refusal_retains_exception_class(tmp_path, monkeypatch):
+    from shantytown.tmux import PaneNotAgent
+    h = harness(tmp_path, monkeypatch)
+    original = h.alerter._panes.send
+    def send(pane, text):
+        if pane == 'worker':
+            raise PaneNotAgent('private composer detail')
+        original(pane, text)
+    h.alerter._panes.send = send
+    assert h.alerter.sweep() == []
+    records = [json.loads(line.split(': ', 1)[1]) for line in h.logs
+               if line.startswith('deferral-recipient: ')]
+    assert records[0]['outcome'] == 'send-failure'
+    assert records[0]['exception_type'] == 'PaneNotAgent'
+    assert records[0]['snapshot']['live'] is True
+    assert records[1]['outcome'] == 'delivered'
+    assert [pane for pane, _ in h.sent] == ['lead']
+    assert not any('private composer detail' in line for line in h.logs)

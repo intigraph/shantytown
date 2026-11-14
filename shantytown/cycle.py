@@ -637,9 +637,12 @@ class Requests:
     def request(self, agent: str, checkpoint: str, checkpoint_bead: str = "",
                 quipu_nodes: list | None = None,
                 no_in_place: bool = False, auto: bool = False,
-                allow_loss: bool = False, bundle_custody_items=None) -> None:
+                allow_loss: bool = False, bundle_custody_items=None,
+                runtime_update=None, only_if_absent=False) -> bool:
         with self._locked():
             data = self._load()
+            if only_if_absent and agent in data:
+                return False
             data[agent] = {"checkpoint": checkpoint,
                            "checkpoint_bead": checkpoint_bead,
                            # aegis-x6yoq: graph references carried across the cycle, so
@@ -671,7 +674,10 @@ class Requests:
                 data[agent]["allow_loss"] = True
             if bundle_custody_items:
                 data[agent]["bundle_custody_items"] = list(bundle_custody_items)
+            if runtime_update is not None:
+                data[agent]["runtime_update"] = dict(runtime_update)
             self._save(data)
+            return True
 
     def mark_refused(self, agent: str, reason: str, risks=()) -> bool:
         """Record WHY a pending cycle did not happen (aegis-7xptd5).
@@ -741,6 +747,25 @@ class Requests:
             d.setdefault("refused", None)
             return d
         return {agent: norm(value) for agent, value in self._load().items()}
+
+    def settle_fresh_session(self, agent: str, started_at: float) -> bool:
+        """A NEW process for this agent serves a request made before it began.
+
+        aegis-zxor: an agent relaunched by any path (an admin `--no-in-place`
+        cycle, a death and `st agent new`) kept its predecessor's request, and
+        tend nudged the fresh session about it for hours. Only requests made
+        strictly before this session started are settled; an untimestamped legacy
+        record cannot be ordered and is kept.
+        """
+        with self._locked():
+            data = self._load()
+            record = data.get(agent)
+            asked = record.get("requested_at") if isinstance(record, dict) else None
+            if not isinstance(asked, (int, float)) or asked >= started_at:
+                return False
+            data.pop(agent)
+            self._save(data)
+            return True
 
     def clear(self, agent: str) -> None:
         """Drop a completed or explicitly cancelled request. Otherwise only AFTER

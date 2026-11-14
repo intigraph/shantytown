@@ -35,6 +35,7 @@ _CACHE_ERRORS = (OSError, ValueError, TypeError, AttributeError, KeyError)
 _DIRECT_READS = ContextVar("seeds_direct_reads", default=False)
 _READ_SNAPSHOT = ContextVar("seeds_read_snapshot", default=(False, None))
 _PROJECTION = ContextVar("seeds_projection_fence", default=None)
+_RETAIN_CANDIDATES = ContextVar("seeds_retain_candidates", default=False)
 _CHANGE_TX_LIMIT = 100
 _CHANGE_PAGES = 8
 
@@ -48,6 +49,20 @@ def projection_reads(budget=None):
         yield
     finally:
         _PROJECTION.reset(token)
+
+
+@contextmanager
+def candidate_reads():
+    """Reuse candidate observations only inside a complete projection fence.
+
+    The retained transaction is certified by the existing membership/change
+    proof before any answer escapes; this never permits stale field reads.
+    """
+    token = _RETAIN_CANDIDATES.set(True)
+    try:
+        yield
+    finally:
+        _RETAIN_CANDIDATES.reset(token)
 
 
 def store_admission_required():
@@ -361,7 +376,7 @@ def _watermark_once(server: str, timeout: int, opener) -> tuple[str, int]:
     return value["store_id"], value["watermark_tx"]
 
 
-def _cached(path: Path, watermark, validate, *, max_age=_MAX_AGE):
+def _cached(path: Path, watermark, validate, *, max_age=_MAX_AGE, retain=False):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as stream:
@@ -371,11 +386,20 @@ def _cached(path: Path, watermark, validate, *, max_age=_MAX_AGE):
                 return None
             value = json.load(stream)
         age = time.time() - value["created"]
+        observed = value.get("watermark")
+        retained = (retain and _PROJECTION.get() is not None and watermark is not None
+                    and isinstance(observed, list) and len(observed) == 2
+                    and observed[0] == watermark[0] and type(observed[1]) is int
+                    and 0 <= observed[1] <= watermark[1])
         if (value.get("schema") != 1 or value.get("key") != path.stem[5:]
-                or value.get("watermark") != (list(watermark) if watermark is not None else None)
+                or (observed != (list(watermark) if watermark is not None else None)
+                    and not retained)
                 or not 0 <= age < max_age):
             return None
-        return validate(value["result"])
+        result = validate(value["result"])
+        if retained:
+            _projection_mark(tuple(observed))
+        return result
     except _CACHE_ERRORS:
         return None
 
@@ -449,13 +473,13 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         # cache stripe across HTTP and force unrelated readers to wait a second.
         with _locked(directory, key):
             before = _cached(mark_path, None, valid_mark, max_age=_WATERMARK_MAX_AGE)
-            hit = _cached(path, before, validate) if before is not None else None
+            hit = _cached(path, before, validate, retain=_RETAIN_CANDIDATES.get()) if before is not None else None
         if before is None:
             before = (scope["mark"] if scope is not None else
                       _watermark(server, timeout, opener))
             with _locked(directory, key):
                 _publish(directory, mark_path, None, before)
-                hit = _cached(path, before, validate)
+                hit = _cached(path, before, validate, retain=_RETAIN_CANDIDATES.get())
     except _CACHE_ERRORS:
         if _PROJECTION.get() is not None:
             return fetch()  # The outer scope certifies this uncached query.
@@ -479,6 +503,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         scope["paths"].update((path, mark_path))
     if hit is not None:
         _projection_mark(before)
+        if scope is not None and _RETAIN_CANDIDATES.get():
+            scope["pending"].append((directory, path, mark_path, hit))
         return hit
 
     if scope is not None:

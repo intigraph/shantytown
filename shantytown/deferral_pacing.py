@@ -40,6 +40,9 @@ class OwnerPacing:
     """
     def __init__(self, root):
         self.path = Path(root) / "notify" / "deferral-owner-pacing.json"
+        from .stopped import FilesStops
+        self.stops = FilesStops(Path(root) / "stopped")
+        self.stop_snapshot = {}
         try:
             self.previous = json.loads(self.path.read_text())
             if not isinstance(self.previous, dict):
@@ -48,7 +51,23 @@ class OwnerPacing:
             self.previous = {}
         self.current = {}
 
-    def route(self, row, finding, live, deliver, lead_for):
+    def deliberately_stopped(self, owner):
+        if not isinstance(owner, str) or not owner or Path(owner).name != owner:
+            return False
+        if owner not in self.stop_snapshot:
+            self.stop_snapshot[owner] = self.stops.get(owner) is not None
+        return self.stop_snapshot[owner]
+
+    def route(self, row, finding, live, deliver, lead_for, *, observe=None):
+        # Diagnostics must never consume a reminder or change its recipient.
+        def report(recipient, role, outcome, error=None):
+            if observe is not None:
+                try:
+                    observe(dict(recipient=recipient, role=role, outcome=outcome,
+                                 exception_type=type(error).__name__[:64] if error else None))
+                except Exception:
+                    pass
+
         key = hashlib.sha256(json.dumps(
             [finding.key(), row.get("updated_at"), row.get("defer_until")],
             sort_keys=True).encode()).hexdigest()
@@ -66,22 +85,36 @@ class OwnerPacing:
         # Preserve receipts even while every route is temporarily unreachable.
         self.current[row["id"]] = state
         owner = row.get("assignee")
+        # A deliberate scale-down is administrator custody, not a crashed
+        # worker's per-item escalation to a live lead. An unreadable marker
+        # cannot invent stop intent; retain the ordinary unknown/down path.
+        if self.deliberately_stopped(owner):
+            report(owner, "owner", "deliberately-stopped")
+            return None, "owner-stopped", "pending"
         recipients = [(owner, "owner")]
         lead = lead_for(owner)
         if lead and lead != owner:
             recipients.append((lead, "lead"))
         for recipient, reason in recipients:
-            if not recipient or not live(recipient):
+            if not recipient:
+                report(recipient, reason, "recipient-absent")
+                continue
+            if not live(recipient):
+                report(recipient, reason, "live-absence")
                 continue
             if recipient in notified:
+                report(recipient, reason, "suppressed")
                 return recipient, reason, "suppressed"
             try:
                 sent = deliver(recipient,
                                f"OWNER-PACING: {row['id']} deferred work "
                                + ("event is ready" if finding.met or finding.prose_gate else "backstop lapsed")
                                + "; check the current gate and update the item. No gate released.")
-            except Exception:
+            except Exception as error:
+                report(recipient, reason, "send-failure", error)
                 sent = None
+            else:
+                report(recipient, reason, "delivered" if sent else "send-unconfirmed")
             if sent:
                 notified.add(recipient)
                 state["recipients"] = sorted(notified)

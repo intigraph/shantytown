@@ -1,0 +1,9 @@
+Script started on 2026-11-09 16:40:07-05:00 [COMMAND="python3 docs/demos/display-protocol/run.py" <not executed on terminal>]
+base f909de3e: display protocol module absent
+live v1 reader: refuses display v2
+display reader: accepts fresh v2; decision_eligible=false
+display reader: refuses expired 16s observation
+display reader: refuses decision-eligible envelope
+fixture complete; zero network calls
+
+Script done on 2026-11-09 16:40:07-05:00 [COMMAND_EXIT_CODE="0"]

@@ -37,6 +37,7 @@ FIELDS = {
     SEEDS + "ontology/status": "status",
     SEEDS + "ontology/priority": "priority",
     SEEDS + "ontology/rank": "rank",
+    SEEDS + "ontology/lane": "lane",
     SEEDS + "ontology/issueType": "issue_type",
     SCHEMA + "scheduledTime": "defer_until",
     SEEDS + "ontology/deferUntil": "defer_until",
@@ -246,18 +247,30 @@ def _unsupported_owner_branches(proof, agent):
         for clause in clauses:
             # Restrict the candidate relation before joining owners and types.
             # Missing status and unknown-only status retain the original refusal.
-            for candidate, _type_clause in (
+            for candidate, missing_plain in (
                 (f"?s <{SEEDS}ontology/status> ?bad . FILTER(?bad NOT IN {known}) "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . FILTER(?good IN {known}) }} ",
-                 f"?s a <{SCHEMA}Action> . "),
+                 False),
                 # A plain-value guard admits the server's indexed anti-join.
                 # Non-plain-only statuses are already refused by the other
                 # branch; a known plain status still permits mixed values.
                 (f"?s a <{SCHEMA}Action> . "
                  f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?any . "
                  f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
-                 f"?s a <{SCHEMA}Action> . "),
+                 True),
             ):
+                if isinstance(agent, tuple):
+                    # Admit bad states before joining variable roster owners.
+                    # The typed absence arm can use Quipu's indexed anti-join;
+                    # the other arm need not check types for every known state.
+                    # Only the typed arm is DISTINCT (FILTER EXISTS semantics).
+                    projection = "DISTINCT ?s" if missing_plain else "?s ?bad"
+                    type_check = "" if missing_plain else f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                    branches.append(
+                        f"{{ GRAPH {_iri(graph)} {{ "
+                        f"{{ SELECT {projection} WHERE {{ {candidate} }} }} "
+                        f"{clause}{type_check} }} }}")
+                    continue
                 # Keep the bound owner and status test in one relation. A
                 # type BGP or nested candidate group may materialize the whole
                 # Action class before applying that owner restriction.
@@ -291,10 +304,27 @@ class RenderShapeReads:
         return result
 
 
+class FieldReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart the entire fenced read with a smaller subject batch."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 field projection; narrowing subject batch')
+        self.batch_size = batch_size
+
+
+class CandidateReadTimeout(seeds_read_cache.WatermarkMoved):
+    """Restart with smaller constant-status candidate branch groups."""
+    def __init__(self, batch_size):
+        super().__init__('HTTP 408 candidate projection; narrowing branch group')
+        self.batch_size = batch_size
+
+
 def _retry_owner_projection(function):
     @wraps(function)
     def read(*args, **kwargs):
-        budget = {"remaining": 3,
+        tokens = kwargs.get("recovery_tokens", 3)
+        if type(tokens) is not int or not 3 <= tokens <= 8:
+            raise ValueError("owner projection recovery allowance must be 3..8")
+        budget = {"remaining": tokens,
                   "deadline": time.monotonic() + 3 * kwargs.get("timeout", 30)}
         error = "projection changed"
         while budget["remaining"]:
@@ -304,6 +334,10 @@ def _retry_owner_projection(function):
                     return function(*args, **kwargs)
             except seeds_read_cache.WatermarkMoved as changed:
                 error = str(changed)
+                if isinstance(changed, CandidateReadTimeout):
+                    kwargs = {**kwargs, "candidate_batch_size": changed.batch_size}
+                if isinstance(changed, FieldReadTimeout):
+                    kwargs = {**kwargs, "field_batch_size": changed.batch_size}
                 if isinstance(changed, seeds_read_cache.StoreChanged):
                     budget["store_changed"] = True
                     admission = kwargs.get("shape_reads")
@@ -331,7 +365,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
                decision: bool = False, messages_only: bool = False,
-               include_closed: bool = False, only_specs: bool = False) -> Answer[list[dict]]:
+               include_closed: bool = False, only_specs: bool = False,
+               recovery_tokens: int = 3, field_batch_size: int = 250,
+               candidate_batch_size: int | None = None) -> Answer[list[dict]]:
     how = (
         "Seeds owner-scoped plate fields"
         if agent is not None
@@ -453,7 +489,22 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             + " UNION ".join(branches)
             + f" }} LIMIT {501 if only_specs else 10000}"
         )
-        candidates = _query(proof, query, timeout)["rows"]
+        with seeds_read_cache.candidate_reads():
+            candidates = []
+            width = candidate_batch_size or len(branches)
+            for offset in range(0, len(branches), width):
+                group = branches[offset:offset + width]
+                scoped_query = ("SELECT (STR(?s) AS ?subject) ?graph "
+                    + ("?problem " if inline_owner_guard else "") + "WHERE { "
+                    + " UNION ".join(group) + f" }} LIMIT {501 if only_specs else 10000}")
+                try:
+                    candidates.extend(_query(proof, scoped_query, timeout)["rows"])
+                except HTTPError as error:
+                    if recovery_tokens > 3 and error.code == 408 and len(group) > 1:
+                        raise CandidateReadTimeout(max(1, len(group) // 2)) from error
+                    raise
+                if len(candidates) >= (501 if only_specs else 10000):
+                    raise ValueError("plate candidate budget reached")
         if len(candidates) >= (501 if only_specs else 10000):
             raise ValueError("plate candidate budget reached")
         if inline_owner_guard and any("problem" in row for row in candidates):
@@ -470,7 +521,14 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
             if subject in selected and selected[subject] != graph:
                 raise ValueError("seed appears in shared and ephemeral graphs")
             selected[subject] = graph
-        grouped = _project_fields(proof, selected, graphs, timeout, batch_size=1000)
+        # A valid ready cohort can exceed 10k scalar fields while remaining
+        # well below the candidate cap. Budget the aggregate by its admitted
+        # subjects, as ranking_rows does; each reply still has the same 10k
+        # refusal boundary. Smaller batches leave room for optional fields
+        # and labels instead of truncating the first 1,000-subject request.
+        field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
+                             batch_size=field_batch_size, recover_timeouts=recovery_tokens > 3)
+        grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
                 seeds_read_cache.certify_projection(
@@ -498,11 +556,11 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise seeds_read_cache.WatermarkMoved("owner candidate or guard relation changed")
                 subset = {subject: selected[subject] for subject in change.entities}
                 if subset:
-                    grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
+                    grouped.update(_project_fields(proof, subset, graphs, timeout, **field_options))
             except seeds_read_cache.EntityChanges as change:
                 seeds_read_cache.repair_entities(change)
                 subset = {subject: selected[subject] for subject in change.entities}
-                grouped.update(_project_fields(proof, subset, graphs, timeout, batch_size=1000))
+                grouped.update(_project_fields(proof, subset, graphs, timeout, **field_options))
         rows = []
         for subject, row in grouped.items():
             from .protocols import rank_order
@@ -638,7 +696,8 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
-def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500):
+def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
+                    recover_timeouts=False):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
@@ -647,9 +706,9 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
-    # Owner rosters explicitly use 1,000 subjects to avoid a round trip.
-    # Ranking retains 500: its larger aggregate budget admits dense answers
-    # that must still fit each individual response. No field/byte cap grows.
+    # Owner cohorts use smaller batches for dense scheduling metadata.
+    # Ranking retains 500. Aggregate budgets never waive the per-response
+    # row/byte caps, identity checks or ambiguous-field refusal.
     for offset in range(0, len(pairs), batch_size):
         chunk = pairs[offset : offset + batch_size]
         # Keep graph and predicate constant in each indexed branch.
@@ -671,7 +730,12 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             "SELECT (STR(?s) AS ?subject) ?graph ?predicate ?value WHERE { "
             + " UNION ".join(branches) + " } LIMIT 10000"
         )
-        part = _query(proof, query, timeout)["rows"]
+        try:
+            part = _query(proof, query, timeout)["rows"]
+        except HTTPError as error:
+            if recover_timeouts and error.code == 408 and len(chunk) > 1:
+                raise FieldReadTimeout(max(1, len(chunk) // 2)) from error
+            raise
         if len(part) >= 10000 or len(wire) + len(part) >= budget:
             raise ValueError("plate field budget reached")
         wire.extend(part)
@@ -729,9 +793,12 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
 # per graph per field: measured on Quipu 0.16.x, 25 subjects cost 6004 against
 # the server's structural limit of 4096 (~240 each), so EVERY first attempt at
 # 25 was refused and halved: 25 wasted ~300KB requests per read, each a 400 in
-# the server log. 16 subjects cost ~3843. The halving below stays as the
-# fallback if the limit drops or fields are added.
-DEFERRED_FIELD_BATCH = 16
+# the server log. The halving below stays as the fallback if the limit drops.
+# Derived, not hand-set: cost = subjects x 2 graphs x (FIELDS + notes) x 6 + 4,
+# so adding a field (seeds:lane, aegis-6vto.4) cannot silently push the first
+# attempt over the limit again. 21 fields gave 16; 22 give 15.
+_STRUCTURAL_LIMIT = 4096
+DEFERRED_FIELD_BATCH = (_STRUCTURAL_LIMIT - 4) // (2 * (len(FIELDS) + 1) * 6)
 
 
 def _deferred_field_rows(proof, pairs, graphs, fields, timeout):

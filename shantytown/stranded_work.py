@@ -17,29 +17,50 @@ from pathlib import Path
 import time
 
 from .files import write_json_atomic
-from .inbox import is_message
+from .inbox import is_deploy_operation, is_message
 from .owned_work import _agent, _time
 
-T1 = T2 = 3600  # One measured hour, identical for every priority.
+T1 = T2 = 3600  # Legacy attention/library defaults; fleet release uses owner priority.
 
 
 def owner(row):
     return (row.get('assignee') or '').rsplit('/', 1)[-1]
 
 
-def eligible(row):
+def _decision_title(row):
+    """An 'ASK ...' or 'DESK: ...' title marks a decision held for a person."""
+    import re
+    return bool(re.match(r'\s*(ASK|DESK)\b', str(row.get('title', '')), re.IGNORECASE))
+
+
+def eligible(row, *, operator_stopped=False):
     """Malformed parking metadata refuses release rather than ending a hold."""
     labels = row.get('labels') or []
-    if not isinstance(labels, list):
+    # Deploy records are phase-CAS reservations, not crew capacity. Even a
+    # drained-but-open record must retain its owner for the deploy census.
+    if not isinstance(labels, list) or is_deploy_operation(row):
         return False
+    if operator_stopped:
+        # ASK/desk-class items are decisions held for a person, not capacity:
+        # they stay with their owner and stay visible (Sattler, aegis-byt).
+        from .ask_visibility import is_ask
+        return (row.get('status') in {'open', 'hooked', 'in_progress', 'blocked', 'deferred'}
+                and bool(owner(row)) and not is_message(row.get('title', ''))
+                and not is_ask(row)
+                and not _decision_title(row)
+                and type(row.get('priority')) is int and row['priority'] in range(5))
     return (row.get('status') in {'open', 'in_progress'}
             and bool(owner(row)) and not is_message(row.get('title', ''))
-            and not row.get('title', '').lstrip().upper().startswith('ASK ')
+            and not _decision_title(row)
             and not row.get('defer_until') and not row.get('blocker_kind')
             and not any(str(label).startswith(('blocked:', 'deferred', 'parked'))
                         or label in {'inbox', 'needs-stiwi', 'desk', 'decision-needed'}
                         for label in labels)
             and type(row.get('priority')) is int and row['priority'] in range(5))
+
+
+def release_threshold(rows, name):
+    return 1800 if any(owner(r) == name and r["priority"] <= 1 for r in rows) else 14400
 
 
 def resume_exempt(value, now):
@@ -72,9 +93,38 @@ class StrandedWork:
         path = self.root / 'attention.json'
         return json.loads(path.read_text()) if path.exists() else {}
 
+    def preview(self, rows, cards, *, observe, now):
+        """Read-only plan from the same measured generations and release policy.
+
+        No notification, lock, checkpoint, intent journal or tracker mutation.
+        This is a candidate plan, not admission to perform the CAS.
+        """
+        now = _time(now)
+        if len(rows) > 5000 or len(cards) > 100 or len({r['id'] for r in rows}) != len(rows):
+            raise ValueError('stranded-owner census exceeds bounds or duplicates identities')
+        active = [r for r in rows if eligible(r, operator_stopped=True)]
+        saved, result = self.snapshot(), []
+        for row in active:
+            name = owner(row)
+            state = observe(name, cards.get(name))
+            previous = saved.get(row['id'], {})
+            threshold = release_threshold(active, name)
+            same = (previous.get('active') and previous.get('owner') == name
+                    and previous.get('generation') == state.get('generation'))
+            age = now - previous['down_since'] if same else 0
+            if state.get('state') != 'operator-stopped' or resume_exempt(state.get('resume_at'), now):
+                result.append((row['id'], 'dry-run: no release; owner not admitted stopped class'))
+            elif age < threshold:
+                result.append((row['id'], f'dry-run: below threshold ({age:g}s/{threshold}s)'))
+            else:
+                result.append((row['id'], f'dry-run: would repool from {name} ({age:g}s/{threshold}s); CAS gates still required'))
+        return result
+
     def tick(self, rows, cards, *, observe, recipient, notify, read, release,
              checkpoint, fence, now=None, release_admitted=False, t1=T1, t2=T2,
-             budget=5, max_intents=4, clock=time.monotonic):
+             budget=5, max_intents=4, clock=time.monotonic, operator_release_only=False,
+             operator_budget=60, max_operator_releases=40, max_operator_notices=10,
+             priority_tiered=False):
         """One complete, bounded snapshot; no retries or ownership guesses.
 
         read/release are revision-aware adapter seams, NOT generic update.
@@ -86,16 +136,29 @@ class StrandedWork:
             raise ValueError('invalid stranded-owner deadlines')
         if not math.isfinite(budget) or not 0 < budget <= 30 or type(max_intents) is not int or not 0 < max_intents <= 4:
             raise ValueError('invalid stranded-owner pass bounds')
-        deadline, intents = clock() + budget, 0
+        if (not math.isfinite(operator_budget) or not 0 < operator_budget <= 120
+                or type(max_operator_releases) is not int or not 0 < max_operator_releases <= 100
+                or type(max_operator_notices) is not int or not 0 < max_operator_notices <= 20):
+            raise ValueError('invalid operator-stop pass bounds')
+        start = clock()
+        deadline, intents = start + budget, 0
+        # A recorded operator stop with proven process absence releases a whole
+        # owner's work in ONE pass (aegis-byt): one keyed notice per owner and
+        # stop generation, and a separate release cap. Under the inferred-class
+        # bounds (two intents per item, four per pass) 32 items took 16 passes.
+        operator_deadline, operator_releases, operator_notices = start + operator_budget, 0, 0
+        owner_notices = {}
         if len(rows) > 5000 or len(cards) > 100:
             raise ValueError('stranded-owner census exceeds bounds')
         if len({r['id'] for r in rows}) != len(rows):
             raise ValueError('duplicate work identities')
         seen = {r['id']: r for r in rows}
-        active = {identity: r for identity, r in seen.items() if eligible(r)}
+        active = {identity: r for identity, r in seen.items()
+                  if eligible(r, operator_stopped=operator_release_only)}
         observations = {}
         result = []
         with self.locked() as data:
+            result.extend(self._reconcile(data, read, now))
             def save():
                 write_json_atomic(self.root / 'attention.json', data)
             for identity, previous in data.items():
@@ -108,10 +171,16 @@ class StrandedWork:
                         previous.update(evidence='UNKNOWN', checked_at=now)
                     else:
                         previous.update(active=False, resolved_at=now)
-            ordered = sorted(active.items(), key=lambda pair:
-                (data.get(pair[0], {}).get('checked_at', -1), pair[0]))
+            # Oldest observation first keeps coverage fair across capped passes.
+            # Operator-stop release serves priority first (P0 before P4), so the
+            # release cap can never leave ready P0/P1 work behind lower-priority
+            # parked work (aegis-byt metric: 0 within one pass).
+            ordered = sorted(active.items(), key=lambda pair: (
+                (pair[1]['priority'] if operator_release_only
+                 and type(pair[1].get('priority')) is int else 0),
+                data.get(pair[0], {}).get('checked_at', -1), pair[0]))
             for identity, row in ordered:
-                if clock() >= deadline:
+                if clock() >= deadline and not operator_release_only:
                     result.append((identity, 'pass budget exhausted; remaining evidence unchanged'))
                     break
                 name = _agent(owner(row))
@@ -119,19 +188,25 @@ class StrandedWork:
                     observations[name] = observe(name, cards.get(name))
                 observation = observations[name]
                 state = observation.get('state')
-                if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown'}:
+                if state not in {'live', 'down', 'missing', 'cycle-blocked', 'unknown', 'operator-stopped'}:
                     raise ValueError('invalid owner observation')
+                operator_stopped = operator_release_only and state == 'operator-stopped'
+                if not operator_stopped and not eligible(row):
+                    if identity in data:
+                        data[identity].update(active=False, release_due=False, resolved_at=now)
+                    continue
                 previous = data.get(identity, {})
                 if previous and previous.get('owner') != name:
                     previous.update(active=False, resolved_at=now)
-                if (state == 'live' or observation.get('intentional_stop') is True
-                        or resume_exempt(observation.get('resume_at'), now)):
+                if (state == 'live' or not operator_stopped and (
+                        observation.get('intentional_stop') is True
+                        or resume_exempt(observation.get('resume_at'), now))):
                     if previous:
-                        previous.update(active=False, resolved_at=now)
+                        previous.update(active=False, release_due=False, resolved_at=now)
                     continue
                 if state == 'unknown':
                     if previous:
-                        previous.update(evidence='UNKNOWN', checked_at=now)
+                        previous.update(evidence='UNKNOWN', release_due=False, checked_at=now)
                     result.append((identity, 'owner liveness UNKNOWN'))
                     continue
                 generation = observation.get('generation')
@@ -151,31 +226,66 @@ class StrandedWork:
                     data[identity] = previous
                 previous.update(checked_at=now, evidence=state)
                 age = now - previous['down_since']
-                previous['attention'] = age > t1
-                previous['release_due'] = row['status'] == 'open' and age > t2
+                threshold = release_threshold(active.values(), name)
+                attention_due = operator_stopped or (age >= threshold if priority_tiered else age > t1)
+                release_due = age >= threshold if priority_tiered else operator_stopped or age > t2
+                previous['attention'] = attention_due
+                previous['release_due'] = release_due and (operator_stopped or row['status'] == 'open')
+                if operator_release_only and not operator_stopped:
+                    previous['release_due'] = False
                 if not previous['attention']:
                     continue
-                key = hashlib.sha256(json.dumps([identity, name, generation,
-                      previous['down_since']], separators=(',', ':')).encode()).hexdigest()
+                if operator_stopped:
+                    # The stop generation already binds the stop record's identity.
+                    key = hashlib.sha256(json.dumps([name, generation, 'operator-stopped'],
+                          separators=(',', ':')).encode()).hexdigest()
+                else:
+                    key = hashlib.sha256(json.dumps([identity, name, generation,
+                          previous['down_since']], separators=(',', ':')).encode()).hexdigest()
                 marker = 'stranded-owner:' + key
                 previous['marker'] = marker
-                save()  # Attention survives even a refused/unknown lead route.
+                if operator_stopped and owner_notices.get(marker) == 'delivered':
+                    previous.update(notice='delivered', recipient=owner_notices[marker + ':to'])
+                elif operator_stopped and previous['notice'] == 'unknown':
+                    # Keyed delivery is idempotent: re-reading by key never sends twice.
+                    previous['notice'] = 'pending'
                 if previous['notice'] == 'pending':
-                    if intents >= max_intents or clock() >= deadline:
+                    exhausted = (operator_notices >= max_operator_notices
+                                 or clock() >= operator_deadline) if operator_stopped else (
+                                 intents >= max_intents or clock() >= deadline)
+                    if exhausted:
                         result.append((identity, 'attention retained; intent budget exhausted'))
                         continue
-                    destination = recipient(name, cards)
-                    body = (f'ERROR {marker} {identity}: owner {name} {state}; '
+                    save()  # Attention survives even a refused/unknown lead route.
+                    try:
+                        destination = recipient(name, cards)
+                    except (ValueError, LookupError):
+                        result.append((identity, 'administrator route UNKNOWN; no release'))
+                        continue
+                    body = (f'{marker} ERROR owner {name} operator-stopped; its assigned '
+                            f'work returns to the pool (assignee cleared, in_progress->open, '
+                            f'deferrals kept). Ledger {self.root / "attention.json"}; '
+                            f'checkpoint/trees retained.') if operator_stopped else (
+                            f'{marker} ERROR {identity}: owner {name} {state}; '
                             f'down since {previous["down_since"]}. Persistent attention '
                             f'{self.root / "attention.json"}; checkpoint/trees retained.')
+                    # Receipt readers match bodies that START with the marker; an
+                    # 'ERROR ' prefix made every notice read back UNKNOWN, and an
+                    # UNKNOWN notice refuses release forever (aegis-byt).
                     if len(body.encode()) > 480:
                         raise ValueError('stranded-owner pointer exceeds inbox bound')
                     previous.update(notice='attempting', recipient=destination)
                     save()
-                    intents += 1
+                    if operator_stopped:
+                        operator_notices += 1
+                    else:
+                        intents += 1
                     try:
                         notify(destination, body, marker)
                         previous['notice'] = 'delivered'
+                        if operator_stopped:
+                            owner_notices[marker] = 'delivered'
+                            owner_notices[marker + ':to'] = destination
                     except Exception:
                         previous['notice'] = 'unknown'
                     save()
@@ -191,7 +301,8 @@ class StrandedWork:
                 if self.unresolved_release(name):
                     result.append((identity, 'earlier release UNKNOWN; no new intent'))
                     continue
-                if intents >= max_intents or clock() >= deadline:
+                if (operator_releases >= max_operator_releases or clock() >= operator_deadline
+                        if operator_stopped else intents >= max_intents or clock() >= deadline):
                     result.append((identity, 'release due; pass budget exhausted'))
                     continue
                 # The sanctioned launch/stop paths share this lock. Recheck
@@ -205,8 +316,8 @@ class StrandedWork:
                         continue
                     current = read(identity)
                     fresh = observe(name, cards.get(name))
-                    if (fresh != observation or not eligible(current)
-                            or current['status'] != 'open' or owner(current) != name
+                    if (fresh != observation or not eligible(current, operator_stopped=operator_stopped)
+                            or current['status'] != row['status'] or owner(current) != name
                             or current['priority'] != row['priority']):
                         result.append((identity, 'changed evidence; no release'))
                         continue
@@ -217,22 +328,65 @@ class StrandedWork:
                     save()
                     journal_path = self.root / 'release-intents.json'
                     journal = json.loads(journal_path.read_text()) if journal_path.exists() else {}
-                    journal[marker] = dict(owner=name, item=identity, outcome='attempting',
+                    # One owner-level notice marker can cover many items, so the
+                    # intent journal is keyed per item: never overwrite an audit entry.
+                    intent_key = marker + ':' + identity
+                    journal[intent_key] = dict(owner=name, item=identity, outcome='attempting',
                                            revision=current.get('revision'), comment=comment)
                     write_json_atomic(journal_path, journal)
-                    intents += 1
+                    if operator_stopped:
+                        operator_releases += 1
+                    else:
+                        intents += 1
                     try:
-                        outcome = release(current, comment)
+                        outcome = (release(current, comment, operator_stopped=True)
+                                   if operator_stopped else release(current, comment))
                         if outcome not in {'released', 'conflict'}:
                             raise ValueError('release outcome unproven')
                         previous['release'] = outcome
                     except Exception:
                         previous['release'] = 'unknown'
-                    journal[marker]['outcome'] = previous['release']
+                    journal[intent_key]['outcome'] = previous['release']
                     write_json_atomic(journal_path, journal)
                     save()
                     result.append((identity, 'release ' + previous['release']))
         return result
+
+    def _reconcile(self, data, read, now, limit=20):
+        """Settle earlier 'attempting'/'unknown' releases by exact read-back.
+
+        The release CAS writes its preservation comment atomically, so that
+        exact comment, byte for byte, proves the release committed. The item
+        must also no longer belong to the stopped owner. It may since have
+        been claimed by a live agent from the pool, which is the point of
+        releasing it, so "no assignee" is NOT required (Muldoon, aegis-byt).
+        Anything else (comment absent, still the stopped owner's, unreadable)
+        stays unknown and keeps fencing. No write is made here.
+        """
+        path = self.root / 'release-intents.json'
+        journal = json.loads(path.read_text()) if path.exists() else {}
+        if not isinstance(journal, dict) or not callable(read):
+            return []
+        settled, reads = [], 0
+        for marker, entry in sorted(journal.items()):
+            if entry.get('outcome') not in {'attempting', 'unknown'} or reads >= limit:
+                continue
+            reads += 1
+            try:
+                current = read(entry['item'])
+            except Exception:
+                continue
+            comments = current.get('comments')
+            if (owner(current) != entry.get('owner') and isinstance(comments, list)
+                    and any(isinstance(c, dict) and c.get('text') == entry.get('comment')
+                            for c in comments)):
+                entry.update(outcome='released', reconciled_at=now)
+                if entry['item'] in data:
+                    data[entry['item']]['release'] = 'released'
+                settled.append((entry['item'], 'release reconciled: released'))
+        if settled:
+            write_json_atomic(path, journal)
+        return settled
 
     def unresolved_release(self, name):
         """An uncertain server commit must be reconciled before a new launch."""

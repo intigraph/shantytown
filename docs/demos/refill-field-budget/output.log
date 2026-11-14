@@ -1,0 +1,11 @@
+Script started (command metadata omitted; real output and timing retained)
+BASE 4ac66122: same 1100-item fixture
+dense: UNKNOWN read was incomplete (owner plate unreadable: plate field budget reached); measured by: Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs; field replies [10000]
+empty: COMPLETE 0 items; field replies []
+truncated: UNKNOWN read was incomplete (owner plate unreadable: plate field budget reached); measured by: Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs; field replies [10000]
+CANDIDATE: bounded field batches
+dense: COMPLETE 1100 items; field replies [3250, 3250, 3250, 3250, 1300]
+empty: COMPLETE 0 items; field replies []
+truncated: UNKNOWN read was incomplete (owner plate unreadable: plate field budget reached); measured by: Seeds Rule Zero idle-owner/unassigned fields; shared and ephemeral graphs; field replies [10000]
+
+Script done on 2026-11-12 20:26:10-05:00 [COMMAND_EXIT_CODE="0"]

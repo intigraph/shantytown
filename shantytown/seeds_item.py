@@ -213,6 +213,9 @@ def read_item(tracker, identifier):
     if len(rows) >= CAP:
         raise ValueError("item field row ceiling reached")
     facts = _subject_facts(rows, graphs, subject)
+    if not facts:
+        from .tracker_result import ItemNotFound
+        raise ItemNotFound("exact native item absent")
     if (facts.get(TYPE) != {SCHEMA + "Action"}
             or _one(facts, SCHEMA + "identifier") != identifier):
         raise LookupError("exact native item absent or identity unsupported")

@@ -49,6 +49,25 @@ terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
+When a pending dispatch has a different scope, the refusal names the retained
+receipt ID, original worker, state and revision. Its printed `--reconcile`
+command uses that original worker, even when the refused request named someone
+else. Reconciliation is read-only. For a prepared or interrupted-assignment
+receipt whose native item is open, unassigned and undeferred, the message also
+prints the explicit `--supersede` command. Neither command is run automatically;
+supersession still checks its own current native release proof.
+
+A dispatch that remains `prepared` can be explicitly retired with
+`st go ITEM WORKER --supersede --receipt RECEIPT_ID` after a fresh native read
+proves the item is open, unassigned and undeferred. This path requires that no
+submission or assignment witness was recorded and no native claim was started.
+It preserves the old body and evidence, sends nothing and claims nothing.
+It does **not** assert that the text was never delivered: even a late delivery
+of that old ID remains unauthorized. A later ordinary dispatch creates a new
+receipt and must pass the normal pane/composer gates. `--dry-run` only previews
+the retirement. A receipt at the uncertain assignment boundary still requires
+a **newer** native open/unassigned release; this recovery does not relax it.
+
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
 store and exact body. The payload names that receipt and asks the recipient to
@@ -75,12 +94,45 @@ acknowledged custody does not qualify. Never resend or claim manually. Changed r
 cards or sessions cannot reuse the receipt. Older tracker adapters retain the
 legacy path and do not emit bound execution receipts.
 
+If observation was interrupted, the dispatcher can explicitly complete the
+original receipt on the worker's declared host:
+
+```sh
+st go project-item ada --complete --receipt RECEIPT_ID
+```
+
+This sends no text or keys. Current ownership, blockers, capacity, governor and
+operator holds still apply. It preserves the original request and revision;
+it never accepts replacement notes or a caller-provided submission assertion.
+Claude proof can come from its exact native user record, or a consumed busy
+command whose exact body, session, command ID and delivery ID match both the
+native queued-command attachment and absorption acknowledgment. Queue custody,
+quoted output and discarded commands do not qualify. The current hook, stats,
+workspace transcript, pane session and runtime must agree. Missing or changed
+evidence leaves the receipt fenced. An uncertain native claim is read back;
+completion never repeats it. `--dry-run` and `--reconcile` remain read-only.
+
 File-backed tracker updates now serialize per item and increment a revision
 with the assignment and transition comment in one atomic file replacement.
 Existing unversioned files occupy revision one. Reads and dry runs do not
 migrate or rewrite them.
 
 ## Assignment capacity
+
+### Explicit intake deadlines
+
+`st task --due 2026-12-01 "review the draft"` creates the item with a due date
+in the same tracker transaction. Date-only values mean midnight UTC; an ISO
+instant must include its timezone and is normalized to UTC. Relative dates and
+timezone-free instants refuse rather than depend on the host's clock settings.
+`--dry-run` validates and prints the deadline without creating an item.
+
+Deployments may set `SHANTY_TASK_DUE_REQUIRED=1` to refuse missing deadlines
+before tracker reads, duplicate advice, capacity checks or writes. The default
+remains optional for other deployments; the command never invents a deadline
+from priority or owner. This affects `st task`, not direct SDK creation or
+internal message records. The existing agent duplicate advisory still runs on
+admitted creates; a skipped or capped advisory is not proof of no duplicate.
 
 ### Graph-ranked pickup after an anchor ends
 
@@ -443,6 +495,13 @@ share one candidate observation, and capacity reuses the same render. Missing,
 unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
 a failed read never means an empty roster.
 
+Seeds owner projections can retain a bounded successful candidate observation
+across unrelated transactions. The scoped change feed must certify its original
+watermark before a result is returned. Selected field changes reload those fields;
+membership changes restart selection. Missing, partial or changed-store evidence
+remains UNKNOWN. No stale answer is returned when the proof fails. Ordinary
+query caching and the `ST_SEEDS_READ_CACHE=0` rollback remain unchanged.
+
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
 to the left and `…` hidden text to the right. Shorter rows clamp independently,
@@ -522,16 +581,18 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
-CI, review, merge and install waits require a non-date `resume_when` condition
-and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
-required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
-per-item event name is not a registration.
-For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
-with an exact UTC `--until` at least a day away. Short date-only polling and
-dry-run attempts refuse before writes. A real scheduled appointment may use
-`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
-This exception does not bypass human decisions, dependency checks or resume gates.
+CI, review and merge waits stay `in_progress`, including P0 and milestone work.
+Record the exact head/run/review wake on the item. `st work defer` refuses both
+`ci-terminal:`/`pr-merged:` conditions and explicit CI/review/merge waits before
+any write, even with a 24-hour backstop, `--window` or `--dry-run`. Historical
+CI/PR deferrals remain readable; this does not manufacture green CI or release
+any existing gate. Record real technical prerequisites as dependency edges;
+external non-CI gates name their event with `blocked:external`.
+
+Other admitted asynchronous waits still require a testable condition and the
+existing backstop. A real scheduled appointment may use `--window --until <UTC time>`; this never bypasses CI, human decisions, dependency checks or resume gates.
+Capacity holds do not authorize a date defer or repooling; retain the hold and
+ask the lead for ready work.
 
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
@@ -555,7 +616,20 @@ A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
 
-Forge event waits use two registered generic kinds:
+Ordinary pacing goes to a live owner, with a live lead as fallback when the
+owner is unexpectedly down. A valid deliberate-stop record changes that route:
+the administrator receives one digest per stopped owner, never per-item wakes
+in the lead's pane. Each digest counts all priorities and lists P0 items; an
+explicit display cap points to the complete local inventory at
+`notify/deferral-stopped-owners.json`. Read-error and authority findings remain
+visible in that owner's digest. Unchanged findings stay suppressed, failed
+delivery or inventory publication remains retryable, and clearing the stop
+restores the owner route. A malformed stop record is UNKNOWN intent, not proof
+of a deliberate scale-down. Notification routing never releases a gate,
+reassigns an item or resumes a stopped runtime.
+
+Historical forge deferrals retain two registered generic readers. New CI/merge
+waits stay in progress; `st work defer` refuses these kinds:
 
 - `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
   observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
@@ -564,8 +638,8 @@ Forge event waits use two registered generic kinds:
   including failure or cancellation. This is a prompt to inspect CI, never a
   green result, review receipt or permission to merge.
 
-Both require an explicit backstop at least 24 hours away, including marker-only
-reasons and scheduled-window requests. They read only configured forge hosts;
+Existing records retain their explicit backstops and event evaluation. The
+readers access only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
@@ -655,6 +729,15 @@ one item's producer:
   `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
   tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
   with a fixed argv.
+- `resume_when: installed:quipu@<full40lowerhexSHA>` (also `==`) instead
+  checks the configured Quipu origin's `/version` serving identity. It requires
+  an exact full `git_sha` and explicit `git_dirty: false`; the local CLI,
+  checkout and release version cannot satisfy this condition. Only Quipu has
+  this served-SHA reader. No default origin, item-provided URL, redirect, short
+  prefix or SHA ordering operator is accepted. Missing/dirty/malformed identity,
+  incomplete responses and read failures stay UNKNOWN. A clean different SHA
+  is not met. Long bare digit targets (seven or more digits) are ambiguous
+  commit prefixes, not semver major numbers; use dotted versions for those.
 
 `st work defer` refuses a malformed argument before writing anything. A read
 that cannot answer cleanly (a network error, a tool not on PATH, a version that
@@ -842,6 +925,11 @@ clear and compact, and a plate it could not read is stated in one line, never re
 silence. "Did I get anchored?" is answerable: `st ops hooks check` verifies st's own
 emitted hooks (`st-session-anchor`) alongside registered bundles, and reports MISSING, or names
 the running agents that were launched without it.
+
+If no store directory resolves, `st ops hooks check` reports CANNOT TELL and
+exits 2 instead of treating zero inspected bundles as a pass. Its JSON report
+retains schema `st.hook-check/1` and includes `store_error: "no store found"`.
+A real, existing store with an empty registry can still pass with exit 0.
 
 Codex and administrator launches also deliver the same anchor render through the
 verified startup input, together with any unread mail in one message. Any other
@@ -1915,12 +2003,14 @@ submission. Inspect the pane or read that pointer rather than blindly resending.
 
 With a deployment root, Codex sends first retain the full body in a private
 `delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
-declared tmux socket, pane and observed session creation time. If custody cannot
+declared tmux socket, pane, observed session creation time and process generation. If custody cannot
 be written, nothing is typed. After the single submission retry fails, st can
-clear only its exact single-line body in an idle, positively identified Codex
-session. It rechecks ownership and session identity before each editing key.
-Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
-authorize no automatic clear. A later sender can clear the same owned failed
+clear its exact visible typed body, including multiline text, in an idle, positively
+identified Codex session. It rechecks ownership, session and process identity before
+each editing key and verifies an empty composer afterward. Cleanup uses bounded
+line editing, never Escape or submission keys, and does not change the UNVERIFIED
+send result. Busy, changed, opaque paste placeholders, clipped, ghost,
+attribute-stripped and unknown input authorize no automatic clear. A later sender can clear the same owned failed
 notice before submitting its own message; the older body remains retained.
 Claude and explicit shell-launch sends keep their existing transport.
 
@@ -3218,38 +3308,38 @@ st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
   --dispositions-file /tmp/overlaps.json --dry-run
 ```
 
-Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
-paths and explicit bead-family relationships count (`--bead-family project-epic`
-adds an otherwise unrelated parent). Dotted child IDs share their root family.
-Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
-a file count mismatch, or a candidate that differs from its remote branch refuses.
-The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
-hit is unknown coverage, never an empty result.
+Omit `--create` for the open-PR overlap report. Both renamed paths and explicit
+bead-family relationships count (`--bead-family project-epic` adds a parent).
+Dotted child IDs share their root family. Drafts are included. Known release-plz,
+release-please and ledger bot identities are excluded from overlap scans. Shared
+GitHub Actions automation is excluded only on release or ledger branch patterns.
+Release tools using a regular user token are recognized by a generated timestamped
+release-plz branch paired with a release title, or a ledger branch paired with a
+`chore(ledger):` title. A title or branch alone does not exclude human work.
+These metadata classifications only suppress overlap advice, never authorize merge.
 
-The dispositions file is a JSON list; every overlapping PR needs its exact head
-and a reason. For example:
+Overlaps are advisory: creation proceeds as a **draft**, with the overlapping PR
+numbers, exact heads, shared files and item families in its body. No dispositions
+file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
+are validated and appended when valid; missing, stale, invalid or unreadable
+annotations produce advice rather than refusing creation. This command never
+closes another PR. Other-PR churn does not block creation.
 
-```json
-[{"number": 12, "head": "<exact-other-head>", "action": "independent",
-  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
-```
+Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
+files per PR. Missing metadata, failed reads or bound exhaustion produce an
+explicit UNKNOWN warning and a draft, never a claimed disjoint result. Duplicate
+creation is checked separately without depending on other PRs' file inventories.
 
-`stack` requires the other PR's exact head as the candidate base and proves its
-ancestry. `absorb` requires the referenced PR already closed at that exact head;
-this command never closes other authors' work. `independent` records the author's
-reason rather than pretending file overlap proves a semantic conflict. Duplicate,
-stale, missing or short-reason dispositions refuse before creation.
-
-Creation checks the inventory and local/remote candidate again immediately before
-posting. It appends the primary `Bead:` and exact-head dispositions to the body.
-`--dry-run` exercises all gates and previews the body without posting. An existing
-PR for the candidate branch is identified and excluded from its own overlap report
-in read mode; creation still refuses a duplicate. A lost create response or
-mismatched resulting head/base is reported **indeterminate**: inspect the remote
-PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
-race after the last read is detected on the result, not prevented. This command
-provides the crew creation path; it does not claim to intercept raw `gh` or other
-clients. Installing a mandatory external-client hook is a separate adoption step.
+Candidate identity, committed/published source, body primary marker and duplicate
+checks still protect concrete write hazards. A changed local/remote candidate
+refuses before posting. An existing PR for the candidate branch is excluded from
+its own read report; creation refuses a duplicate. `--dry-run` previews the same
+body and draft decision without posting. A lost create response or mismatched
+resulting head/base remains **indeterminate**: inspect the remote PR before retrying.
+GitHub has no atomic expected-head create endpoint, so a branch race after the
+last read is detected on the result, not prevented. This command provides the
+crew creation path; it does not intercept raw `gh` or other clients. Merge checks
+and independent review requirements remain on the merge path.
 
 ### Explicit push destination
 
@@ -3296,6 +3386,29 @@ the first 768 and last 1,280 characters, with an omission marker. A nonzero chil
 outcome remains unproven: read back the
 item before deciding whether to retry. The command never retries or changes the
 principal, blocker checks or close reason to get past a failure.
+
+### Alert causes and members
+
+A **cause** is the currently firing root alarm class selected from Quipu's
+existing `runs_on` / `depends_on` topology. A **member** is a dependent alert
+firing at the same time. Host-down plus service-down on that host is one open
+work item; unrelated alerts on the same host are separate causes. Ambiguous or
+unreadable topology provides no grouping authority.
+
+The producer preserves the root's `recurring-class:<hash>` identity. The current
+bridge pointer identifies the root work item, and a `Cause member:` comment
+records each dependent class, target, count and onset. In Quipu the classes are
+`FailurePattern` nodes: `member_of` names the root class and `tracked_by` names
+its `WorkItem`. This reuses existing governed types and relationship vocabulary.
+
+`st work item show ITEM` exposes the native parent and lifecycle state. An
+existing dependent item retains its history under the root as a parent-child
+member, closed with **member of cause**, not **resolved**. If the dependent alert
+fires later without that root, the producer reopens its original item. Historical
+parent links alone do not prove a current correlation. A member refire invalidates
+old fix evidence on the root; resolving an outage still needs fix evidence and
+the recurring producer's continuous-quiet gate. Membership does not broaden
+Alertmanager silences or acknowledge a firing alert.
 
 ### Replacing work-item text
 
@@ -3729,6 +3842,19 @@ failure without blocking notification. It does not certify the bytes imported
 before an on-disk source update. A failed administrator delivery is `pending`,
 not `delivered`; a suppressed identical summary is `suppressed`.
 
+Ordinary owner/lead routing also emits one `deferral-recipient:` JSON record per
+recipient considered. It distinguishes `recipient-absent`, `live-absence`,
+`send-failure`, `send-unconfirmed`, `delivered` and `suppressed`. Records bind the
+item and finding state key, assignee, recipient role, observation time and source
+hash. A bounded snapshot records the card name, pane, retirement/stopped status,
+pane existence and recognized runtime as those checks are reached. Unreached
+checks remain absent. Lead lookup records the bounded declared lead, resolved
+card role and eligibility or lookup exception class. Probe failures retain only the exception class; send
+failures likewise retain the class without its message. Raw process commands,
+notes and message bodies are excluded. These observations do not prove later
+inbox consumption or reconstruct historical delivery custody. Diagnostic sink
+failure does not change routing or reminder suppression.
+
 Rank proposals distinguish `reowner` (a positively observed down owner) from
 `needs_owner`. An unassigned item at deterministic P0/P1 that is `open` or
 `in_progress` needs an owner, with an `owner-assignment` fact citation. Missing
@@ -3774,12 +3900,15 @@ pass duration or the duration of runtime startup and notification sweeps.
 
 ### Observed cold-launch resume condition
 
-`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
-agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+`resume_when: cold-launch:operator` waits for the named administrator's next
+ordinary cold launch after the binding was written. Its writer provenance must
+contain one valid `set_at` boundary; a missing or ambiguous boundary is UNKNOWN.
+The timestamped form `cold-launch:operator@2026-11-05T21:00:00Z` still waits
+from the stated UTC instant. Both accept the agent's assigned harness,
 in this deployment root and host. The normal launcher records a private receipt
 only after observing the live process, verifying hooks and acknowledging startup
-inbox delivery. Dry runs, cycles, window restores, hold overrides, other
-harnesses and unverified starts cannot produce it. The sweep observes receipts;
+inbox delivery. Dry runs, context-clear cycles, window restores, hold overrides,
+mismatched harnesses and unverified starts cannot produce it. The sweep observes receipts;
 it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
 before its reminder date while independent human and dependency holds remain.
 It does not prove provider responses or bypass launch admission. Existing
@@ -3803,6 +3932,10 @@ scheduled-delivery acceptance.
 
 ## Soft-cycle completion evidence
 
+Runtime updates use the same idle executor for automatic checkpointed process
+replacement. See [runtime update replacement](runtime-updates.md) for version
+evidence, credential preflight, input deferral and serialized roll receipts.
+
 Soft-cycle completion requires a fresh hook-reported session ID and transcript
 path, plus settled ready UI and the existing permission check. A missing token
 footer does not prove a reset. If the clear times out, the command reports
@@ -3811,3 +3944,72 @@ observe that attempt without sending another clear or restarting the continuing
 turn. Missing or stale session evidence withholds a new soft clear. A delayed
 clear can still execute when the turn ends; inspect the retained evidence before
 any operator recovery. No active cycle is exercised by the fixture tests.
+
+### Tracker result envelopes
+
+`st work item show ITEM --result-json` and the corresponding update, comment,
+close, rescope and ack operations opt into `tracker-result/v1`. Legacy output
+is unchanged. Check the process status and `ok`; failed reads have null `data`,
+never a successful empty board.
+
+The envelope includes a per-invocation operation ID, task, known graph, phase,
+mutation outcome, exit code, safe error category and reconciliation advice.
+INPUT and precondition READ failures prove this invocation did not submit.
+SUBMIT timeouts and READBACK failures preserve UNKNOWN. Verified operations
+report COMMITTED, including already satisfied state; this does not promise a
+new transaction. Dry runs have NOT_APPLICABLE mutation outcome. The operation
+ID correlates diagnostics and does not replace native idempotence or CAS.
+
+Known SDK exit codes and categories survive wrapping. HTTP auth, policy and
+timeout responses, missing input, malformed JSON, conflicts and indeterminate
+commits remain distinct; unknown classifications remain UNKNOWN. Errors omit
+raw server bodies, private arguments and credentials. Normal command admission
+still applies; this option grants no authority or retry.
+
+For ambiguous comments, the existing bounded exact readback can establish that
+the original attempt landed; it never resubmits automatically. Missing or
+unreadable evidence keeps UNKNOWN.
+
+A non-null `recovery` preserves a recognized native write-operation witness,
+provenance graph and exact item IDs. It excludes private field differences and
+bodies. Use this persisted identity, when available, to reconcile the SDK write;
+the new per-invocation operation ID is only a diagnostic correlation key.
+
+## Display-only roster snapshots
+
+`st crew --display-snapshot --local --json` opts into a separate v2 display
+protocol. `--count` and plain rendering are also available. Without `--local`,
+the display command collects only v2 display peers; it never recurses. Ordinary
+`st crew`, v1 peer collection, governor reads, review routing and mutation
+admission keep their live paths.
+
+A private per-UID cache shares one complete local observation across display
+processes for at most 15 seconds, measured from the start of observation. One
+reader refreshes it; concurrent readers see a fresh completed observation or
+UNKNOWN. Expired, failed, incompatible, unsafe or oversized snapshots cannot
+supply a current count. Refresh failures have a five-second retry backoff.
+Different source versions, roots, registry cards, backends and board scopes use
+separate keys. Boot changes and backwards monotonic observations invalidate
+saved data. The cache is an observation, not a tracker or admission proof.
+
+V2 JSON declares `purpose="display"`, `decision_eligible=false`, observation age
+and completeness. A v1 reader rejects it. Fleet display envelopes retain each
+host's age and errors; slow collection can expire earlier observations rather
+than reporting them as current. The refresh producer currently uses Linux
+parent-death process-group cancellation; unsupported hosts return UNKNOWN.
+
+UI consumers must opt in explicitly and understand v2 freshness. Do not globally
+replace `crew --json --local`: the v1 peer path also supplies governor and
+operational decision consumers. Shanty's existing table parser expects name,
+role and verdict columns; migrate its display readers through the versioned
+JSON contract rather than feeding the new plain display format into that
+parser. Source availability does not activate consumer migration. Acceptance
+requires a comparable before/after caller and timeout window after the scoped
+consumer release is authorized.
+
+Shanty already has a cross-process disk cache: plain and count arguments use
+separate keys. The measured 45-second sample saw four full reads at expired
+entries (two per key), with bypass off; it did not show a per-process cache or
+a same-key stampede. Its deployed version also caches failures. A v2 adapter
+should share the canonical ST observation and avoid retaining it under another
+independent 15-second output TTL. Check age at final rendering.

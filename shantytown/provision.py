@@ -450,6 +450,33 @@ def _render_manifest(manifest: tooling.Manifest, secrets: dict) -> dict:
     return {"mcpServers": expand(manifest.mcp)}
 
 
+def preflight_credentials(card: Agent, root) -> None:
+    """Check launch credential sources before accepting a replacement request.
+
+    Resolve the same sources as provision(), without projecting kit or borrowing
+    a token from a rendered workspace or another agent's config.
+    """
+    if not getattr(card, "workspace", None):
+        return
+    if root is None:
+        raise ProvisionError("replacement credential preflight needs a store root")
+    try:
+        from . import config as config_mod
+        cfg = config_mod.load(root, refresh_source=True)
+        manifest = (tooling.load(root, last_good=True)
+                    if cfg.source_document is not None else tooling.load(root))
+        if manifest is not None:
+            template = json.dumps({"mcpServers": manifest.mcp})
+            _render_manifest(manifest, load_secrets(root, template, agent=card.name))
+        else:
+            path = provision_dir(root) / MCP_TEMPLATE
+            if path.is_file():
+                template = path.read_text()
+                render(template, load_secrets(root, template, agent=card.name))
+    except (tooling.ToolingError, config_mod.ConfigError, OSError, ValueError) as exc:
+        raise ProvisionError(str(exc)) from None
+
+
 def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) -> list[str]:
     ws = Path(card.workspace).expanduser()
     template = json.dumps({"mcpServers": manifest.mcp})
@@ -1136,6 +1163,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "
                 "configure SHANTY_TOOLING_MANIFEST in the deployment first")
+        from . import legacy_capture
+        capture_proof = legacy_capture.inspect(ws, manifest, settings_path)
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
         for path, text in instruction_plan.updates.items():
             updates[path] = (tooling.instruction_text(text, manifest.instructions)
@@ -1143,6 +1172,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         retired = tooling.retired_links(ws, manifest) if manifest is not None else []
     except (tooling.ToolingError, config_mod.ConfigError, ValueError) as e:
         raise ProvisionError(str(e)) from None
+    try:
+        legacy_capture.record(ws, capture_proof)
+    except (OSError, ValueError):
+        raise ProvisionError("legacy session-capture receipt cannot be recorded") from None
     template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
     rendered = None
     canonical_consent = None

@@ -2,6 +2,7 @@
 from dataclasses import replace
 import hashlib
 import json
+import shlex
 
 import pytest
 
@@ -48,6 +49,58 @@ def snapshot(root):
             for p in root.rglob('*') if p.is_file()}
 
 
+def test_different_worker_refusal_names_retained_receipt_and_read_only_reconcile(world, monkeypatch, capsys):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    (root / 'crew/other.json').write_text(json.dumps(dict(pane='%5', harness='codex')))
+    tracker.update('work-1', notes='new native revision, still open and unassigned')
+    before = snapshot(root)
+    with pytest.raises(ReceiptConflict) as refused:
+        d.go('work-1', 'other')
+    message = str(refused.value)
+    for value in (row['id'], 'worker=worker', 'state=prepared', 'revision=1'):
+        assert value in message
+    commands = [shlex.split(line) for line in message.splitlines() if line.startswith('st go ')]
+    reconcile = next(command for command in commands if '--reconcile' in command)
+    assert reconcile == ['st', 'go', 'work-1', 'worker', '--receipt', row['id'], '--reconcile']
+    assert ['st', 'go', 'work-1', 'worker', '--receipt', row['id'], '--supersede'] in commands
+    assert snapshot(root) == before and len(panes.sent) == 1
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: d.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('read-only reconcile must not dispatch'))
+    assert cli.main(['--root', str(root)] + reconcile[1:]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['id'] == row['id'] and result['worker'] == 'worker'
+    assert not result['execution_authorized']
+    assert snapshot(root) == before and len(panes.sent) == 1
+
+
+@pytest.mark.parametrize('native', ['owned', 'deferred', 'unreadable'])
+def test_different_scope_never_hints_supersede_without_native_release(world, monkeypatch, native):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    plan = d.plan('work-1', 'worker', note='different scope')
+    if native == 'owned':
+        tracker.update('work-1', status='in_progress', assignee='someone')
+    elif native == 'deferred':
+        tracker.update('work-1', defer_until='2099-01-01T00:00:00Z')
+    else:
+        monkeypatch.setattr(tracker, 'get', lambda _: (_ for _ in ()).throw(OSError('unreadable')))
+    before = snapshot(root)
+    with pytest.raises(ReceiptConflict) as refused:
+        binding.prepare(plan)
+    assert row['id'] in str(refused.value)
+    assert '--reconcile' in str(refused.value) and '--supersede' not in str(refused.value)
+    assert snapshot(root) == before and len(panes.sent) == 1
+
+
 def test_real_go_exact_body_single_assignment_and_replay(world):
     root, d, binding, tracker, panes = world
     p = d.go('work-1', 'worker', note='scope qualifier', quipu_nodes=['context'])
@@ -79,6 +132,87 @@ def test_sent_without_positive_observation_stays_pending_and_never_resends(world
     before = snapshot(root)
     assert binding.reconcile(row['id'])['missing'] == ['submission', 'assignment']
     assert before == snapshot(root)
+
+
+def test_completion_finishes_exact_original_receipt_without_second_send(world, monkeypatch):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker', note='original qualifier', quipu_nodes=['original-context'])
+    row = binding.store.pending('work-1')
+    observed = SubmissionObserved(row['pane'], row['body_sha256'], {'kind':'fixture-native-consumed'})
+    monkeypatch.setattr(panes, 'observed_submission', lambda *a: observed, raising=False)
+    before = snapshot(root)
+    assert not d.complete('work-1', 'worker', dry_run=True, receipt=row['id'])['execution_authorized']
+    assert snapshot(root) == before
+    result = d.complete('work-1', 'worker', receipt=row['id'])
+    assert result['execution_authorized']
+    assert len(panes.sent) == 1 and tracker.get('work-1').revision == 2
+    assert binding.store.read(row['id'])['text'] == row['text']
+    assert binding.store.read(row['id'])['submission']['source'] == observed.source
+    again = snapshot(root)
+    assert d.complete('work-1', 'worker', receipt=row['id'])['execution_authorized']
+    assert snapshot(root) == again and len(panes.sent) == 1
+
+
+def test_completion_without_positive_proof_or_after_runtime_change_is_fenced(world, monkeypatch):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    with pytest.raises(ReceiptConflict, match='submission unconfirmed'):
+        d.complete('work-1', 'worker', receipt=row['id'])
+    panes.process_identity = 'replacement-process'
+    monkeypatch.setattr(panes, 'observed_submission', lambda *a:
+        SubmissionObserved(row['pane'], row['body_sha256']), raising=False)
+    with pytest.raises(ReceiptConflict, match='stale'):
+        d.complete('work-1', 'worker', receipt=row['id'])
+    assert tracker.get('work-1').revision == 1 and len(panes.sent) == 1
+
+
+def test_completion_recovers_interrupted_native_claim_without_repeating_it(world, monkeypatch):
+    root, d, binding, tracker, panes = world
+    original = binding.assignments.claim
+    calls = []
+    def interrupted(row, updates):
+        calls.append(row['id'])
+        original(row, updates)
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(binding.assignments, 'claim', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    assert row['state'] == 'assigning'
+    assert d.complete('work-1', 'worker', receipt=row['id'])['execution_authorized']
+    assert len(calls) == len(panes.sent) == 1
+
+
+def test_completion_keeps_governor_and_native_uncertainty_fences(world, monkeypatch):
+    from shantytown.dispatch import GovernorRefused
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    monkeypatch.setattr(panes, 'observed_submission', lambda *a:
+        SubmissionObserved(row['pane'], row['body_sha256']), raising=False)
+    d.governor = lambda *a: 'fixture governor hold'
+    with pytest.raises(GovernorRefused):
+        d.complete('work-1', 'worker', receipt=row['id'])
+    assert binding.store.read(row['id'])['state'] == 'prepared'
+    d.governor = None
+    calls = []
+    def uncertain(*a):
+        calls.append(True)
+        raise ReceiptConflict('fixture native outcome UNKNOWN')
+    monkeypatch.setattr(binding.assignments, 'claim', uncertain)
+    with pytest.raises(ReceiptConflict):
+        d.complete('work-1', 'worker', receipt=row['id'])
+    with pytest.raises(ReceiptConflict):
+        d.complete('work-1', 'worker', receipt=row['id'])
+    assert len(calls) == len(panes.sent) == 1
+    assert binding.store.read(row['id'])['state'] == 'assigning'
 
 
 def test_interrupt_before_send_retains_intent_and_no_claim(world, monkeypatch):
@@ -174,6 +308,31 @@ def test_reconcile_cli_is_read_only_even_for_interrupted_assignment(world, monke
     assert cli.main(['--root', str(root), 'go', 'work-1', 'worker', '--reconcile', '--receipt', p.receipt_id]) == 0
     assert json.loads(capsys.readouterr().out)['execution_authorized']
     assert before == snapshot(root) and len(panes.sent) == 1
+
+
+def test_completion_cli_is_explicit_policy_checked_and_never_sends(world, monkeypatch, capsys):
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: d.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    wired = []
+    monkeypatch.setattr(cli, '_wire', lambda _: wired.append(True) or d)
+    monkeypatch.setattr(panes, 'observed_submission', lambda *a:
+        SubmissionObserved(row['pane'], row['body_sha256']), raising=False)
+    argv = ['--root', str(root), 'go', 'work-1', 'worker', '--complete', '--receipt', row['id']]
+    monkeypatch.setattr(cli.agent_hold, 'reason', lambda *a: 'operator hold')
+    assert cli.main(argv) == cli.REFUSED and not wired
+    capsys.readouterr()
+    monkeypatch.setattr(cli.agent_hold, 'reason', lambda *a: '')
+    assert cli.main(argv + ['--reconcile']) == cli.CANNOT_TELL and not wired
+    capsys.readouterr()
+    assert cli.main(argv) == cli.OK
+    assert json.loads(capsys.readouterr().out)['execution_authorized']
+    assert wired == [True] and len(panes.sent) == 1
 
 
 @pytest.mark.parametrize('state', ['delivered', 'queued', 'dequeued', 'acknowledged', 'superseded'])

@@ -2,7 +2,7 @@
 
 All work runs inside the bounded memory worker. Deployment configuration owns
 one explicit source/outbox/staging plan per crew member. The caller's card,
-selected account and server principal must agree; a role name is not an owner.
+selected account and configured principal must agree; a role name is not an owner.
 Existing sources and generations remain recoverable, including late edits.
 """
 from __future__ import annotations

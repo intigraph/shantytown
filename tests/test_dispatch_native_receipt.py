@@ -88,3 +88,28 @@ def test_native_uncertainty_keeps_operation_diagnostics_and_is_never_retried(tmp
     assert len(calls) == 1
     assert store.read(receipt['id'])['state'] == 'assigning'
     assert store.read(receipt['id'])['assignment_error']['native'] == payload
+
+
+def test_native_supersession_reads_exact_revision_and_never_claims(tmp_path):
+    from shantytown.dispatch_binding import SeedsAssignments
+    store, scope, receipt, current, tracker, calls = fixture(tmp_path)
+    current.update(status='open', assignee=None)
+    proof = SeedsAssignments(tracker).supersession(store.read(receipt['id']))
+    assert proof == dict(receipt=receipt['id'], item='work-1', revision=5,
+                         status='open', assignee=None)
+    assert calls == [('work-1', ('show', 'work-1', '--json'))]
+    current['revision'] = receipt['revision']
+    with pytest.raises(ReceiptConflict):
+        SeedsAssignments(tracker).supersession(store.read(receipt['id']))
+
+
+def test_native_prepared_retirement_reads_open_same_revision_without_write(tmp_path):
+    from shantytown.dispatch_binding import SeedsAssignments
+    from shantytown.dispatch_receipts import prepared_supersession
+    _, _, original, current, tracker, calls = fixture(tmp_path)
+    prepared = original | dict(state='prepared', submission=None, assignment=None)
+    current.update(status='open', assignee=None, revision=prepared['revision'])
+    proof = SeedsAssignments(tracker).supersession(prepared)
+    assert proof == prepared_supersession(prepared, current)
+    assert proof['kind'] == 'prepared-no-claim'
+    assert calls == [('work-1', ('show', 'work-1', '--json'))]

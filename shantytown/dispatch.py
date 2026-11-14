@@ -791,6 +791,16 @@ class Dispatcher:
         return triage(self.panes, p.pane, p.text)
 
     @serialized_dispatch
+    def complete(self, item_id: str, agent_name: str, dry_run: bool = False,
+                 *, receipt: str):
+        # plan retains ownership, blockers, capacity and governor checks. Busy
+        # triage guards typing; completion types nothing and cannot interrupt it.
+        p = self.plan(item_id, agent_name)
+        if self.binding is None:
+            raise ValueError('selected tracker has no bound dispatch receipt contract')
+        return self.binding.complete(p, receipt, dry_run=dry_run)
+
+    @serialized_dispatch
     def go(self, item_id: str, agent_name: str, dry_run: bool = False,
            note: str | None = None, reassign: bool = False,
            quipu_nodes: list | None = None) -> Plan:
@@ -824,6 +834,7 @@ class Dispatcher:
                                reason="submission and assignment not yet confirmed")
         observed = self.panes.send(p.pane, p.text)    # 1 send
         if self.binding is not None:
+            observed = self.binding.confirm_submission(p, observed)
             if not isinstance(observed, SubmissionObserved) or not observed.matches(p.pane, p.text):
                 raise SendUnverified(item_id, p.pane)
             self.binding.submitted(p, observed)
@@ -999,6 +1010,13 @@ class Dispatcher:
                   "condition that actually gates the restart, or with --until.")
         written = parse_conditions(reason)
         marker = written[0] if written else parse_condition(item.notes or "")
+        from .deferral_waits import refuse_execution_wait
+        try:
+            refuse_execution_wait(reason, dependency_reason,
+                                  marker or (Condition("date", date) if date else None),
+                                  window=window)
+        except ValueError as exc:
+            raise DeferRefused(str(exc)) from exc
         write_until = until
         if not until and written and marker.kind == "date" and item.defer_until:
             stamp = parse_stamp(marker.arg)
@@ -1017,7 +1035,7 @@ class Dispatcher:
             condition = f"resume_when {marker.render()}"
         else:
             raise DeferRefused("a testable resume condition is required: use --until DATE "
-                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> / pr-merged:<forge>/<owner>/<repo>#<n> / ci-terminal:<forge>/<owner>/<repo>@<sha>")
+                               "or resume_when: closed:<id> / date:<ISO date> / event:<binding> / release:<owner>/<repo>@<tag> / installed:<tool><op><version> or installed:quipu@<full40hexSHA>")
 
         # A new explicit condition replaces the old one; --until supplies a
         # date marker when the reason names no condition. Old prose stays inert.
@@ -1027,7 +1045,7 @@ class Dispatcher:
                   else marker if marker else Condition("date", date) if date else None)
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
-            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version>, pr-merged:<forge>/<owner>/<repo>#<n> or ci-terminal:<forge>/<owner>/<repo>@<sha> / cold-launch:<agent>@<UTC>")
+            raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version> or installed:quipu@<full40hexSHA> / cold-launch:<agent>@<UTC>")
         if active.kind in ('recurring-quiet', 'evidence-count'):
             from .resume_producers import validate as validate_producer
             try:

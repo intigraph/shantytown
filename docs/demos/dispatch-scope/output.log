@@ -1,0 +1,15 @@
+Script started on 2026-11-12 [COMMAND="disposable receipt fixture; recorder metadata sanitized"]
+BASE 1ef8541d — disposable library fixture
+Fixture: retained prepared receipt for ada; request the same item for ben.
+REFUSED: pending dispatch has a different scope; reconcile receipt
+Read-only status: {"execution_authorized": false, "id": "11111111111111111111111111111111", "missing": ["submission", "assignment"], "state": "prepared"}
+PASS: retained bytes/mtimes unchanged; no send, claim or supersession.
+CANDIDATE — same disposable library fixture
+Fixture: retained prepared receipt for ada; request the same item for ben.
+REFUSED: pending dispatch has a different scope; retained receipt 11111111111111111111111111111111 worker=ada state=prepared revision=4
+Read-only reconciliation (does not authorize a resend):
+st go work-1 ada --receipt 11111111111111111111111111111111 --reconcile
+Read-only status: {"execution_authorized": false, "id": "11111111111111111111111111111111", "missing": ["submission", "assignment"], "state": "prepared"}
+PASS: retained bytes/mtimes unchanged; no send, claim or supersession.
+
+Script done on 2026-11-12 [COMMAND_EXIT_CODE="0"]

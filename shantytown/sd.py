@@ -61,6 +61,12 @@ class StoreProof:
     graph: "str | None" = None
 
 
+GOVERNED_RELEASE_FIELDS = ('status', 'priority', 'labels', 'defer_until', 'title',
+                           'notes', 'description', 'design', 'acceptance_criteria',
+                           'issue_type', 'due_at', 'parent', 'rank', 'external_ref',
+                           'blocker_kind', 'closed_at', 'close_reason')
+
+
 class SdTracker(BrTracker):
     """BrTracker over `sd`, pinned to one proven store."""
 
@@ -72,6 +78,10 @@ class SdTracker(BrTracker):
             return self.get(item_id)
         from .seeds_item import read_item
         return read_item(self, item_id)
+
+    def capacity_read(self, item_id):
+        """Fresh seed fields for producer admission, retaining the owner fence."""
+        return self.defer_read(item_id)
 
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
@@ -87,14 +97,21 @@ class SdTracker(BrTracker):
             raise ValueError('stranded item revision unproven')
         return row
 
-    def release_stranded(self, row, comment):
+    def release_stranded(self, row, comment, *, operator_stopped=False):
         """One CAS transaction includes its preservation comment; no fallback."""
         from .stranded_work import eligible
-        if (not eligible(row) or row.get('status') != 'open'
+        if (not eligible(row, operator_stopped=operator_stopped)
+                or not operator_stopped and row.get('status') != 'open'
                 or type(row.get('revision')) is not int or row['revision'] < 1):
             raise ValueError('stranded release requires eligible revision-bound row')
-        result = self._bd_for(row['id'], 'update', row['id'], '--status=open',
-            '--assignee=', f'--if-revision={row["revision"]}',
+        # In-progress work with no assignee is in no plate and outside ready
+        # work: the orphan that dispatch.repool exists to prevent. It returns
+        # to open in the same CAS. Deferred/blocked/open keep their status:
+        # an assignee-only release never ends a deferral or a gate (aegis-byt).
+        reopen = operator_stopped and row.get('status') == 'in_progress'
+        result = self._bd_for(row['id'], 'update', row['id'],
+            '--assignee=', *(['--status=open'] if reopen else []),
+            f'--if-revision={row["revision"]}',
             '--transition-comment=' + comment, '--json')
         if result.returncode == 4:
             return 'conflict'  # SDK guarantees nothing was committed.
@@ -103,7 +120,17 @@ class SdTracker(BrTracker):
         # A successful process exit alone does not prove the committed fields.
         current = self.stranded_read(row['id'])
         comments = current.get('comments')
-        if (current.get('status') != 'open' or current.get('assignee')
+        # Compare the governed fields a release must not change. The full read
+        # also returns derived counters (comments_total, comments_folded,
+        # dependents, dependency_count); the release's own comment bumps
+        # comments_total, so comparing them made every correct release read
+        # back UNKNOWN and fenced the owner (aegis-byt, measured 2026-11-11).
+        preserved = {key for key in GOVERNED_RELEASE_FIELDS if key in row}
+        if reopen:
+            preserved.discard('status')
+        if (any(current.get(key) != row.get(key) for key in preserved)
+                or reopen and current.get('status') != 'open'
+                or current.get('assignee')
                 or current['revision'] <= row['revision']
                 or not isinstance(comments, list)
                 or not any(c.get('text') == comment for c in comments if isinstance(c, dict))):
@@ -788,6 +815,32 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def stopped_owner_rows(self, owners):
+        """Work-only stopped-owner census; bounded repair, unchanged time ceiling."""
+        if not self._use_remote_projection():
+            raise ValueError('stopped-owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stopped-owner scope unproven')
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          plate_owners=tuple(owners), capacity=True,
+                          include_deferred=True, include_messages=False,
+                          recovery_tokens=8)
+
+    def stranded_rows(self, owners):
+        """Complete owner-scoped census of parked and active WORK.
+
+        Inbox pointers are excluded at the query. They are never release
+        candidates, and hydrating them overflowed the plate field budget once
+        open pointers reached the thousands: every pass then refused, so no
+        work was ever observed or released (aegis-byt).
+        """
+        if not self._use_remote_projection():
+            raise ValueError('stranded owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stranded owner scope unproven')
+        return self.stopped_owner_rows(owners).exact()
+
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""
         if not self._use_remote_projection():
@@ -1058,7 +1111,11 @@ class SdTracker(BrTracker):
         actor = authenticated_actor() or os.environ.get("SHANTY_AGENT", "").strip()
         explicit_actor = any(arg == "--actor" or arg.startswith("--actor=") for arg in args)
         identity = ["--actor", actor] if actor and not explicit_actor else []
-        cmd = [self._bin, *self._location(), *identity, *self._translate(args)]
+        translated = list(self._translate(args))
+        from .tracker_result import active
+        if active() and "--json" not in translated:
+            translated.append("--json")
+        cmd = [self._bin, *self._location(), *identity, *translated]
         options = dict(cwd=repo, capture_output=True, text=True,
                               timeout=self.timeout, **sdk_subprocess_options(
                                   read_operation=args[0] if args and args[0] in {
@@ -1079,10 +1136,14 @@ class SdTracker(BrTracker):
                     asserted = arg.partition('=')[2]
                 elif arg == '--actor' and i + 1 < len(args):
                     asserted = args[i + 1]
-            return run(cmd, actor=actor, asserted_actor=asserted,
+            result = run(cmd, actor=actor, asserted_actor=asserted,
                        identity_command=[self._bin, *self._location(), 'identity', '--json'],
                        options=options, runner=subprocess.run)
-        return subprocess.run(cmd, **options)
+        else:
+            result = subprocess.run(cmd, **options)
+        from .tracker_result import observe
+        observe(result)
+        return result
 
     def _get_failure(self, item_id, result) -> str:
         where = self.store or self.quipu

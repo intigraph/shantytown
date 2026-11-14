@@ -53,7 +53,7 @@ from pathlib import Path
 from .tmux import shell_foreground
 from . import triage
 from . import workflow
-from .answer import PartialAnswer
+from .answer import CouldNotLook, PartialAnswer
 from .deployment import deployment_default, resolve_root
 from .events import FilesEvents, StopEvent
 from .inbox import is_deploy_operation, is_anchor, is_decision, is_message
@@ -190,6 +190,9 @@ def _lead_is_up(reg: FilesRegistry, panes) -> "callable":
     the events.
     """
     def up(name: str) -> "LeadStatus":
+        if getattr(reg, "remote_lead", None) == name:
+            return LeadStatus(False, "off-host lead: live drain state is unverified here; "
+                                     "administrator stops use the durable relay")
         # RETURNS A REASON, NOT JUST A BOOL. Four distinct states collapsed into
         # False here, and two of them want opposite actions from the coordinator
         # — restart vs relaunch. The bool was right and unactionable.
@@ -268,7 +271,7 @@ def _my_context_k(reg: FilesRegistry, panes, me: str) -> float | None:
         return None
 
 
-def _plate_reader(root: Path, *, require_complete: bool = False):
+def _plate_reader(root: Path, *, require_complete: bool = False, owners=None):
     """A plate reader for the DEPLOYMENT'S declared backend (SHANTY_BACKEND in
     shantytown.toml/env), not a hardcoded one.
 
@@ -292,7 +295,18 @@ def _plate_reader(root: Path, *, require_complete: bool = False):
         sd_tracker = br_like_tracker(lambda k: deployment_default(root, k), "seeds")
         if require_complete:
             from .br import plate_reader
-            return plate_reader(sd_tracker, require_complete=True)
+            owners = None if owners is None else tuple(owners)
+            roster = None if owners is None else frozenset(owners)
+            read = plate_reader(sd_tracker, require_complete=True, owners=owners)
+
+            def scoped(who):
+                # Events and the registry may grow after roster preparation.
+                # SdTracker otherwise falls back to a per-agent remote read.
+                if roster is not None and who not in roster:
+                    raise RuntimeError("owner absent from prepared stop roster")
+                return read(who)
+
+            return scoped
         return lambda who, warn=None: br_plate(sd_tracker, who, warn=warn)
     if (deployment_default(root, "SHANTY_BACKEND") or "files") in ("beads", "br"):
         from .beads import EXTRA_REPOS_KEY, parse_extra_repos
@@ -323,7 +337,7 @@ def _plate_of(root: Path, me: str) -> "tuple[str | None, str | None, list[str]]"
     """
     notes: list[str] = []
     try:
-        item = _plate_reader(root)(me, warn=notes.append)
+        item = _plate_reader(root, require_complete=True, owners=[me])(me)
     except Exception as e:
         # A tracker that fails OUTRIGHT still degrades to "?" - but it now says
         # what happened. An unreadable EXTRA store no longer reaches here at all
@@ -350,6 +364,8 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         from .stop_failure import clear_recovered
         clear_recovered(root, me)
     try:
+        from .routing_identity import with_remote_lead
+        reg = with_remote_lead(reg, me, root)
         routing = route_stop(reg, me, lead_is_up=_lead_is_up(reg, panes),
                              catalog=deployment_catalog(root))
     except LookupError as e:
@@ -357,6 +373,9 @@ def _send(reg: FilesRegistry, events: FilesEvents, panes, me: str,
         # real misconfiguration, surfaced — not swallowed. Non-zero so it shows.
         print(f"stop_event send: {e}", file=sys.stderr)
         return 1
+    except (CouldNotLook, PartialAnswer) as e:
+        print(f"stop_event send: could not resolve lead: {e}", file=sys.stderr)
+        return 2
     reason = routing.reason.value if routing.reason else None
     shells = _my_shells(reg, panes, me)
     context_k = _my_context_k(reg, panes, me)
@@ -705,7 +724,7 @@ def _ceiling_took_the_stop(root: Path, me: str, next_bead: str | None = None):
     return True, limits, spend
 
 
-def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
+def _haul(reg: FilesRegistry, panes, me: str, root: Path, *, payload=None) -> int:
     """The worker's own advance: anchor closed + assigned ready work -> BLOCK
     the stop with the next bead as the reason — the same model-reaching
     protocol drain and the Rule Zero gate already use. The coordinator is not
@@ -728,7 +747,7 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path) -> int:
     try:
         card = reg.get(me)
         from .stop_policy import stop_advice
-        if stop_advice(root, card):
+        if stop_advice(root, card, payload):
             return 0
         from . import harness as harness_mod
         harness_name = harness_mod.name_for(card, root=root)
@@ -1169,7 +1188,7 @@ def discard_busy(events, me: str, busy: set, candidates=None) -> list:
 
 def _drain(events: FilesEvents, me: str, reg=None, panes=None,
            shows_ready_ui=None, awaiting_answer=None, *, plate=None, rank=None,
-           stood_down: bool = False, stopped=None) -> int:
+           stood_down: bool = False, stopped=None, event_ids=None) -> int:
     """Deliver MY events — minus the ones whose sender is still working. For an
     administrator, also append a prioritized workflow over fleet state.
 
@@ -1191,7 +1210,8 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
     verdicts: dict[str, str] = {}
     candidates = None
     if reg is not None and panes is not None and shows_ready_ui is not None:
-        candidates = list(events.pending(me))
+        candidates = [e for e in events.pending(me)
+                      if event_ids is None or e.id in event_ids]
         for ev in candidates:
             if ev.frm not in verdicts:
                 try:
@@ -1203,7 +1223,7 @@ def _drain(events: FilesEvents, me: str, reg=None, panes=None,
                           file=sys.stderr)
         discard_busy(events, me, {name for name, state in verdicts.items()
                                   if state == triage.BUSY}, candidates)
-    ids = {e.id for e in candidates} if candidates is not None else None
+    ids = {e.id for e in candidates} if candidates is not None else event_ids
     # Tracker/workflow enrichment can outlive the hook deadline during an
     # outage. Preview first: marking delivery before those reads loses the
     # report when the hook is killed without ever emitting its block payload.
@@ -1340,6 +1360,11 @@ def _main(argv: list[str] | None = None) -> int:
         agent_hold.finish_turn(root, me)
         return result
     if mode == "haul":
+        # ONE read of the hook payload, shared by the spec boundary and the
+        # Stop advice. Reading it twice left the second reader an empty stream
+        # and wrote a NULL session identity on every such Stop (aegis-zxor).
+        from .stop_policy import read_hook_payload
+        payload = read_hook_payload()
         try:
             from . import config
             cfg, _error = config.load_or_default(root)
@@ -1347,14 +1372,13 @@ def _main(argv: list[str] | None = None) -> int:
                 if _ceiling_took_the_stop(root,me)[0]:
                     return 0
                 from .spec_boundary import at_boundary
-                from .spec_observation import hook_input
-                notice = at_boundary(root,me,reg,hook=hook_input(sys.stdin))
+                notice = at_boundary(root,me,reg,hook=payload or None)
                 if notice:
                     print(json.dumps({"decision":"block","reason":notice}))
                     return 0
         except Exception as error:
             print(f"spec boundary UNKNOWN: {type(error).__name__}; no repeated wake", file=sys.stderr)
-        return _haul(reg, panes, me, root)
+        return _haul(reg, panes, me, root, payload=payload)
     # shows_ready_ui is the RUNTIME's marker check (triage stays runtime-blind).
     # It reads only the screen, so the settings resolver it never calls is None.
     runtime = ClaudeRuntime(panes, lambda card: None, root=root)
@@ -1362,12 +1386,27 @@ def _main(argv: list[str] | None = None) -> int:
     # with a prioritized workflow (a lead's/worker's is unaffected — the gate is
     # inside _compose_workflow). Ranker is opt-in: NullRanker (no backend, the
     # default) unless SHANTY_RANKER=policy asks for Yupana/Quipu weighting.
-    plate = _plate_reader(root, require_complete=True)   # the DEPLOYMENT's backend, not files-only (aegis-tisp)
+    # Share one exact roster across event display and admin workflow. A failed
+    # roster discovery stays UNKNOWN; it must not fan out into per-owner reads.
+    event_ids = frozenset()
+    try:
+        batch = tuple(events.pending(me))
+        event_ids = frozenset(event.id for event in batch)
+        owners = {me, *(event.frm for event in batch)}
+        if reg.get(me).role == "administrator":
+            owners.update(agent.name for agent in reg.all().exact())
+        plate = _plate_reader(root, require_complete=True, owners=sorted(owners))
+    except (LookupError, OSError, PartialAnswer) as error:
+        failure = f"stop roster unreadable: {type(error).__name__}"
+        print(failure, file=sys.stderr)
+
+        def plate(_who):
+            raise RuntimeError(failure)
     rank = PolicyRanker() if os.environ.get("SHANTY_RANKER") == "policy" else NullRanker()
     return _drain(events, me, reg, panes, runtime.shows_ready_ui,
                   runtime.awaiting_answer, plate=plate, rank=rank,
                   stood_down=_stood_down(root),
-                  stopped=FilesStops(root / "stopped").at)
+                  stopped=FilesStops(root / "stopped").at, event_ids=event_ids)
 
 
 def _stop_identity(reg, panes, me_env: str) -> str | None:

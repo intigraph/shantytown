@@ -32,6 +32,11 @@ ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent l
 root = "/opt/st/.shanty"
 ```
 
+An escalation poller can declare `[escalation_poller] carrier_enabled = true`
+to opt into carrier records. This field defaults to `false`, accepts only a TOML
+boolean, and has no environment override. The producer must read this root's
+configuration; schema support alone does not activate a producer.
+
 Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
 `[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
 `[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.
@@ -141,6 +146,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_SKILL_SOURCE_ROOT` | Absolute local toolkit source root used by `${SHANTY_SKILL_SOURCE_ROOT}/...` skill entries in the governed tooling manifest. Deployment `[env]` takes precedence over ambient environment; missing or relative roots refuse. | unset |
 | `CAMAYOC_SRC` | Absolute local Camayoc source root used by `${CAMAYOC_SRC}/...` skill entries. Declare it per deployment before selecting a portable tooling manifest. | unset |
 | `SHANTY_RULES_QUERY` | Name of the stored Quipu query that returns this deployment's crew process rules. When set, the session-start anchor tells every session to run it for its role and that a failed or empty read means the rules are UNKNOWN. Process rules then live in the graph, not in instruction files. | unset (no rules pointer) |
+| `SHANTY_TASK_DUE_REQUIRED` | `1` requires an explicit `st task --due` before tracker reads, duplicate advice or creation. Invalid policy values refuse. Dates and timezone-qualified instants normalize to UTC; no deadline is invented. | unset (off) |
 | `SHANTY_BACKLOG_PICKUP` | `1` enables graph-ranked worker pickup after the current anchor ends. Requires the reviewed `seeds_work_rank_v2` stored query and the matching installed v2 consumer; there is no v1 fallback. Unknown query/revision/admission or active background custody prevents pickup. See [pickup gates](cli.md#graph-ranked-pickup-after-an-anchor-ends). | unset (off) |
 | `SHANTY_BOARD_METRICS_QUERY` | Named query used by the fleet-owner ranking advisory for reconciled P0 created/closed counts across seven UTC calendar dates. Failed or incomplete coverage is UNKNOWN. | `seeds_board_metrics_v1` |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |

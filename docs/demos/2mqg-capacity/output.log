@@ -1,0 +1,6 @@
+Script started on 2026-11-13 18:14:07-05:00 [COMMAND="python3 docs/demos/2mqg-capacity/read-counts.py --base 33345efa --head d4e7d280" <not executed on terminal>]
+SOURCE FIXTURE: capacity guard calls only; no real SDK, graph or latency measurement
+{"field_reads": 0, "ref": "33345efa", "sdk_show_reads": 4, "writes": 2}
+{"field_reads": 4, "ref": "d4e7d280", "sdk_show_reads": 0, "writes": 2}
+
+Script done on 2026-11-13 18:14:07-05:00 [COMMAND_EXIT_CODE="0"]

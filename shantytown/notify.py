@@ -423,6 +423,8 @@ class CycleDriver:
             self._log("cycle: pending requests UNKNOWN; no competing prompts this pass")
             pending = dict.fromkeys(states)
         update_candidates, advice_by_agent = set(), {}
+        from .runtime_roll import ledger as runtime_ledger
+        owned_updates = runtime_ledger(self._root)
         for agent, read in sorted(states.items()):
             if read.state not in (triage_mod.IDLE, triage_mod.SATURATED) or read.shells != 0:
                 continue
@@ -432,6 +434,8 @@ class CycleDriver:
                     or not getattr(advice, "restart_required", False)):
                 continue
             update_candidates.add(agent)
+            if owned_updates.get(agent, {}).get("phase") not in (None, "unknown", "current"):
+                continue  # tend owns this update; do not ask for a competing command
             if agent in pending:
                 continue
             key = getattr(advice, "runtime_version_key", "")
@@ -630,12 +634,21 @@ class CycleBlockedNotifier:
             if ledger.get(agent) == sig:
                 continue
             paths = refused.get("paths") or []
-            where = paths[0] if paths else "an unreadable tree"
-            more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
-            msg = (f"your requested context cycle is BLOCKED on {where}{more}: "
-                   f"commit + `st repo push` there, or the request stays pending and "
-                   f"you keep running on the context you asked to shed. "
-                   f"`st agent cycle {agent}` shows every blocking tree.")
+            if paths:
+                more = (f" (+{len(paths) - 1} more)" if len(paths) > 1 else "")
+                msg = (f"your requested context cycle is BLOCKED on {paths[0]}{more}: "
+                       f"commit + `st repo push` there, or the request stays pending and "
+                       f"you keep running on the context you asked to shed. "
+                       f"`st agent cycle {agent}` shows every blocking tree.")
+            else:
+                # aegis-zxor / aegis-ba55qp: with no paths the refusal is not a
+                # tree at all (a pane state, a baseline, a gate). Say what WAS
+                # recorded; "an unreadable tree" sent agents hunting for one.
+                reason = str(refused.get("reason") or "no reason recorded").strip()
+                msg = (f"your requested context cycle is not served yet: {reason[:200]}. "
+                       f"No tree blocks it; the request stays pending and is retried. "
+                       f"`st agent cycle {agent} --cancel` withdraws it if a relaunch "
+                       f"already served it or it cannot complete.")
             if self._push(self._reg, self._panes, agent, msg) is None:
                 continue        # unreachable pane: retried next sweep, not swallowed
             ledger[agent] = sig
@@ -1748,6 +1761,7 @@ class DeferralAlerter:
             return cache[bead]
 
         from .gate_backstop import Backstop
+        delivery_errors = {}
         def deliver_backstop(recipient, text):
             if recipient == "sattler":
                 return self._push(self._reg, self._panes, text)
@@ -1757,7 +1771,8 @@ class DeferralAlerter:
                     return None
                 self._panes.send(card.pane, attribute(text, ST_TEND))
                 return recipient
-            except (LookupError, PaneNotAgent):
+            except (LookupError, PaneNotAgent) as error:
+                delivery_errors[recipient] = type(error).__name__[:64]
                 return None
         try:
             backstop_reported = ([] if store_error else Backstop(
@@ -1913,26 +1928,53 @@ class DeferralAlerter:
         if store_error:
             pacing.current.update(pacing.previous)
 
+        recipient_snapshots = {}
         def live_owner(name):
+            snapshot = {"live": False}
+            recipient_snapshots[name] = snapshot
             try:
                 card = self._reg.get(name)
                 # A surviving shell is not a live runtime. Missing process
                 # evidence retains the existing administrator route.
-                return bool(card.name == name and not card.retired and card.pane
-                            and not (Path(self._root) / "stopped" / f"{name}.json").exists()
-                            and self._panes.exists(card.pane)
-                            and harness_mod.running_name(self._panes.cmdline(card.pane)))
-            except Exception:
+                snapshot.update(card_name=str(card.name)[:64], retired=bool(card.retired),
+                                pane=str(card.pane or '')[:96])
+                if card.name != name:
+                    snapshot['reason'] = 'identity-mismatch'
+                elif card.retired:
+                    snapshot['reason'] = 'retired'
+                elif not card.pane:
+                    snapshot['reason'] = 'missing-pane'
+                else:
+                    snapshot['stopped'] = (Path(self._root) / "stopped" / f"{name}.json").exists()
+                    if snapshot['stopped']:
+                        snapshot['reason'] = 'stopped'
+                    else:
+                        snapshot['pane_exists'] = bool(self._panes.exists(card.pane))
+                        if not snapshot['pane_exists']:
+                            snapshot['reason'] = 'pane-absent'
+                        else:
+                            runtime = harness_mod.running_name(self._panes.cmdline(card.pane))
+                            snapshot['runtime'] = str(runtime or '')[:32]
+                            snapshot['live'] = bool(runtime)
+                            snapshot['reason'] = 'live' if runtime else 'no-runtime'
+                return snapshot['live']
+            except Exception as error:
+                snapshot.update(reason='probe-error', exception_type=type(error).__name__[:64])
                 return False
 
+        lead_snapshot = {}
         def lead_for(name):
             try:
                 card = self._reg.get(name)
+                lead_snapshot['reports_to'] = str(card.reports_to or '')[:64]
                 lead = self._reg.get(card.reports_to)
+                lead_snapshot.update(name=str(lead.name)[:64], role=str(lead.role)[:32],
+                                     reason='ineligible')
                 if card.name == name and lead.name == card.reports_to and lead.role == 'lead':
+                    lead_snapshot['reason'] = 'eligible'
                     return lead.name
-            except Exception:
-                pass
+            except Exception as error:
+                lead_snapshot.update(reason='lookup-error', exception_type=type(error).__name__[:64])
             return None
 
         # Fixed fields only: no raw notes, exception messages, or message bodies.
@@ -1943,7 +1985,7 @@ class DeferralAlerter:
         try:
             source_sha = hashlib.sha256(b''.join(
                 (Path(__file__).with_name(name)).read_bytes()
-                for name in ('notify.py', 'deferral_pacing.py'))).hexdigest()
+                for name in ('notify.py', 'deferral_pacing.py', 'deferral_stopped.py'))).hexdigest()
         except OSError:
             source_sha = 'UNKNOWN'  # telemetry cannot prevent an urgent delivery
         routes = {}
@@ -1966,8 +2008,30 @@ class DeferralAlerter:
             elif kind in ('ruling', 'activation'):
                 reason = 'authority-' + kind
             elif row and (finding.lapsed_at or finding.met or finding.prose_gate):
+                recipient_snapshots.clear()
+                lead_snapshot.clear()
+                delivery_errors.clear()
+                def observe_recipient(event):
+                    # Capture the decision now: mutable delivery custody cannot
+                    # reconstruct why an earlier administrator fallback occurred.
+                    recipient = event['recipient']
+                    exception_type = event['exception_type'] or delivery_errors.get(recipient)
+                    outcome = event['outcome']
+                    if outcome == 'send-unconfirmed' and exception_type:
+                        outcome = 'send-failure'
+                    self._log('deferral-recipient: ' + json.dumps({
+                        'item': finding.bead[:96], 'state_key': finding.key(),
+                        'assignee': str(row.get('assignee') or '')[:64],
+                        'recipient': str(recipient or '')[:64],
+                        'role': event['role'], 'outcome': outcome,
+                        'exception_type': exception_type,
+                        'snapshot': recipient_snapshots.get(recipient, {}),
+                        'lead_lookup': lead_snapshot,
+                        'observed_at': datetime.now(timezone.utc).isoformat(),
+                        'source_sha256': source_sha}, sort_keys=True))
                 recipient, reason, outcome = pacing.route(
-                    row, finding, live_owner, deliver_backstop, lead_for)
+                    row, finding, live_owner, deliver_backstop, lead_for,
+                    observe=observe_recipient)
                 if recipient:
                     if outcome == 'delivered':
                         log_route(finding, reason, recipient, outcome)
@@ -1989,14 +2053,58 @@ class DeferralAlerter:
         import json
         from .files import write_json_atomic
 
+        # Deliberate stops are one administrator interruption per owner, even
+        # for routine P2+ waits. A stopped owner's backlog is not their lead's
+        # new plate. Keep failed batches pending independently of other owners.
+        from . import deferral_stopped
+        stopped_groups = {}
+        for finding in findings:
+            owner = by_id.get(finding.bead, {}).get('assignee')
+            if pacing.deliberately_stopped(owner):
+                stopped_groups.setdefault(owner, []).append(finding)
+        stopped_ids = {f.bead for group in stopped_groups.values() for f in group}
+        stopped_pending, stopped_delivered = set(), []
+        stopped_path = Path(self._root) / 'notify' / 'deferral-stopped-owners.json'
+        details = {owner: deferral_stopped.inventory(group)
+                   for owner, group in stopped_groups.items()}
+        inventory_ready = True
+        try:
+            write_json_atomic(stopped_path, details)
+        except OSError as error:
+            inventory_ready = False
+            self._log(f'deferral-sweep: stopped-owner inventory UNKNOWN ({type(error).__name__})')
+        fresh_ids = {f.bead for f in fresh}
+        for owner, group in sorted(stopped_groups.items()):
+            changed = [f for f in group if f.bead in fresh_ids]
+            if not changed:
+                continue
+            text = deferral_stopped.report(owner, details[owner], stopped_path)
+            digest = hashlib.sha256(text.encode()).hexdigest()
+            recipient = None
+            if inventory_ready:
+                try:
+                    recipient = self._push(self._reg, self._panes, text)
+                except Exception as error:
+                    self._log(f'deferral-sweep: stopped-owner delivery UNKNOWN ({type(error).__name__})')
+            if recipient is None:
+                stopped_pending.update(f.bead for f in changed)
+                for finding in changed:
+                    log_route(finding, routes[finding.bead], None, 'pending', digest)
+            else:
+                stopped_delivered.extend(f.bead for f in changed)
+                for finding in changed:
+                    log_route(finding, routes[finding.bead], recipient, 'delivered', digest)
+                self._log(f'deferral-sweep: ADMIN-DIGEST delivered owner={owner} '
+                          f'count={len(group)} digest={digest}')
+
         def is_loud(finding):
             risk = (3 if finding.read_error or finding.bead == "tracker-store"
                     or finding.bead in persistent_failures
                     else deferred_risk(finding.priority))
             return interrupts(failure=True, risk=risk)
 
-        loud = [finding for finding in fresh if is_loud(finding)]
-        quiet = [finding for finding in fresh if not is_loud(finding)]
+        loud = [finding for finding in fresh if finding.bead not in stopped_ids and is_loud(finding)]
+        quiet = [finding for finding in fresh if finding.bead not in stopped_ids and not is_loud(finding)]
         if quiet:
             self._log("deferral log: " + "\n".join(pol.report(quiet)))
         summary_path = Path(self._root) / "notify" / "deferral-summary.json"
@@ -2021,11 +2129,11 @@ class DeferralAlerter:
                 if recipient is None:
                     for finding in loud:
                         log_route(finding, routes[finding.bead], None, 'pending', digest)
-                    seen.record([f for f in findings if f not in loud],
-                                preserve=retry | {f.bead for f in loud})
+                    seen.record([f for f in findings if f not in loud and f.bead not in stopped_pending],
+                                preserve=retry | {f.bead for f in loud} | stopped_pending)
                     self._log("deferral-sweep: no admin pane — failures remain pending; "
                               "routine findings recorded in the log")
-                    return backstop_reported
+                    return list(dict.fromkeys(backstop_reported + stopped_delivered))
                 # Count actual administrator digests in the tend journal,
                 # separately from quiet reports and owner-only reminders.
                 self._log(f"deferral-sweep: ADMIN-DIGEST delivered count={len(loud)} digest={digest}")
@@ -2039,8 +2147,9 @@ class DeferralAlerter:
         # Record the FULL current state, not just what was pushed: a bead that
         # stopped being lapsed must drop out of the ledger so it can report again
         # if it lapses anew.
-        seen.record(findings, preserve=retry)
-        return list(dict.fromkeys(backstop_reported + [f.bead for f in loud]))
+        seen.record([f for f in findings if f.bead not in stopped_pending],
+                    preserve=retry | stopped_pending)
+        return list(dict.fromkeys(backstop_reported + stopped_delivered + [f.bead for f in loud]))
 
 
 class BlockedStaleAlerter:
@@ -2486,7 +2595,8 @@ class AutoCycler:
                 continue                       # cannot tell: keep the episode
             if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
                 del book[agent]
-                if pending.get(agent, {}).get("auto"):
+                if (pending.get(agent, {}).get("auto")
+                        and not pending[agent].get("runtime_update")):
                     self._requests.clear(agent)
                     self._log(f"auto-cycle: {agent} is back under the line at "
                               f"{int(read.depth_k)}k; withdrew its auto request")

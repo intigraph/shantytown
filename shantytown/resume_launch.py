@@ -1,4 +1,4 @@
-"""Observe ordinary administrator/Codex cold launches; never cause one.
+"""Observe ordinary administrator cold launches; never cause one.
 
 The launch seam writes only after live-process, hooks and startup inbox checks.
 This receipt resurfaces acceptance work, not proof of every governor scenario or
@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 KIND = "cold-launch"
-_ARG = re.compile(r"([a-z][a-z0-9_-]{0,63})@(.+)")
+_ARG = re.compile(r"([a-z][a-z0-9_-]{0,63})(?:@(.+))?")
 MAX_BYTES = 16384
 
 
@@ -34,9 +34,10 @@ def stamp(text):
 def validate(arg):
     match = _ARG.fullmatch(arg)
     if not match:
-        raise ValueError("use cold-launch:<agent>@<YYYY-MM-DDTHH:MM:SSZ>")
+        raise ValueError("use cold-launch:<agent> or cold-launch:<agent>@<UTC Z>")
     agent, since = match.groups()
-    stamp(since)
+    if since is not None:
+        stamp(since)
     return agent, since
 
 
@@ -51,7 +52,9 @@ def record(root, card, *, administrator, harness, session, cold, ordinary,
     """False means ineligible, never a launch request or an exemption."""
     if not all(v is True for v in (administrator, cold, ordinary, live, hooks, inbox)):
         return False
-    if harness != "codex":
+    from .harness import name_for
+    if (not isinstance(harness, str) or not harness
+            or harness != name_for(card, root=root)):
         return False
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None or not isinstance(session, str) or not session:
@@ -120,9 +123,14 @@ def _unique(pairs):
     return value
 
 
-def evaluate(arg, root, now):
+def evaluate(arg, root, now, *, row=None):
     try:
         agent, since = validate(arg)
+        if since is None:
+            from .resume_producers import _deferred_at
+            boundary = datetime.fromtimestamp(_deferred_at(row or {}, now), timezone.utc)
+        else:
+            boundary = stamp(since)
         if root is None:
             return None, "launch receipt deployment root is unavailable"
         path = _path(root, agent)
@@ -134,14 +142,16 @@ def evaluate(arg, root, now):
         if (not isinstance(data, dict) or type(data.get("schema")) is not int
                 or data["schema"] != 1 or data.get("root") != str(Path(root).resolve())
                 or data.get("host") != socket.gethostname() or data.get("agent") != agent
-                or data.get("kind") != "ordinary-cold-launch" or data.get("harness") != "codex"
+                or data.get("kind") != "ordinary-cold-launch"
+                or not isinstance(data.get("harness"), str) or not data["harness"]
                 or not all(data.get(k) is True for k in ("administrator", "live", "hooks", "inbox"))
                 or not isinstance(data.get("session"), str) or not data["session"]
                 or not isinstance(data.get("id"), str) or not data["id"]):
             return None, "launch receipt identity or verification is unreadable"
-        at, boundary = stamp(data.get("at")), stamp(since)
+        at = stamp(data.get("at"))
         if now.tzinfo is None or at > now or boundary > now:
             return None, "launch receipt clock is unreadable or in the future"
-        return at >= boundary, "verified ordinary administrator/Codex cold-launch receipt"
+        met = at > boundary if since is None else at >= boundary
+        return met, "verified ordinary administrator cold-launch receipt"
     except (OSError, ValueError, TypeError, AttributeError, RecursionError):
         return None, "launch receipt UNKNOWN; no lifecycle action attempted"

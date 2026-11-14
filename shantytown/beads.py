@@ -360,7 +360,8 @@ class BeadsTracker:
         for k, v in fields.items():
             if v is None:
                 continue
-            args.append(f"--{k.replace('_', '-')}={v}")
+            flag = "due" if k == "due_at" else k.replace('_', '-')
+            args.append(f"--{flag}={v}")
         r = self._bd(*args)
         if r.returncode != 0:
             raise _bd_failure(f"{self._tool} create", r, tool=self._tool)
@@ -377,7 +378,8 @@ class BeadsTracker:
             # Never invent an id. A create that cannot name what it made did not
             # create anything the caller can use.
             raise RuntimeError(f"{self._tool} create gave no id: {r.stdout.strip()[:120]}")
-        return WorkItem(id=item_id, title=title, status="open", assignee=fields.get("assignee"))
+        return WorkItem(id=item_id, title=title, status="open", assignee=fields.get("assignee"),
+                        due_at=fields.get("due_at"))
 
     def update(self, item_id: str, **fields) -> None:
         args = ["update", item_id]
@@ -556,7 +558,8 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
     # not-started, then lowest id (deterministic across runs and across backends).
     mine.sort(key=lambda x: plate_key(x.get("status"), _priority(x),
                                       x.get("id", ""), ready_ids, rank=x.get("rank"),
-                                      due_at=x.get("due_at"), created_at=x.get("created_at")))
+                                      due_at=x.get("due_at"), created_at=x.get("created_at"),
+                                      lane=x.get("lane")))
     top = mine[0]
     item = WorkItem(
         id=top.get("id", ""),

@@ -324,7 +324,10 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
     still be open, which is worse than staying quiet.
     """
     out: list[Finding] = []
-    rows = list(rows)
+    # Closure can retain historical defer fields. Remove terminal rows before
+    # planning gate reads as well as before emitting any pacing findings.
+    rows = [row for row in rows if not isinstance(row, dict)
+            or row.get("status") not in ("closed", "done")]
     # A fixed prefix would consume every pass's bounded forge reads forever.
     # Rotate *facts*, not owners, once per natural five-minute slot; duplicate
     # waiters remain adjacent and share one observation. Non-forge gates retain
@@ -484,9 +487,11 @@ def evaluate(rows, now: datetime, is_closed=None, ruling_reader=None, forge_read
                     met = answer
             elif cond.kind == "cold-launch":
                 from .resume_launch import evaluate as launch_evaluate
-                key = (cond.kind, cond.arg)
+                # Bare bindings have a per-item write boundary, not a shared
+                # agent-only answer. Never reuse an older waiter's result.
+                key = (cond.kind, cond.arg, str(row.get("notes") or ""))
                 if key not in event_answers:
-                    event_answers[key] = launch_evaluate(cond.arg, root, now)
+                    event_answers[key] = launch_evaluate(cond.arg, root, now, row=row)
                 answer, why = event_answers[key]
                 if answer is None:
                     untestable = f"{cond.render()} (UNKNOWN: {why})"
