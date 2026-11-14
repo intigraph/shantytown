@@ -1,0 +1,8 @@
+Script started on 2026-11-13 13:06:12-05:00 [COMMAND="python3 docs/pr-demos/stats-publication.py" <not executed on terminal>]
+Isolated source fixture: actual stats.capture; fake graph transport; no network.
+Baseline revision: 48bb2a84b566cf107214057c4a5e1d05a928080d
+baseline: initial reads=4; 100 unchanged hooks add=100; due heartbeat adds=4
+candidate: initial reads=4; 100 unchanged hooks add=0; due heartbeat adds=4
+Control: both revisions publish the due heartbeat; candidate preserves two immutable facts.
+
+Script done on 2026-11-13 13:06:15-05:00 [COMMAND_EXIT_CODE="0"]
