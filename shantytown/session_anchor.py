@@ -45,6 +45,7 @@ _ALL = (
     "  STARTUP",
     "    Execute the plate item now; there is no one downstream to hand it to.",
     "    Measure the current state on the item before you change anything.",
+    "    Check governing Directives in Quipu before acting; record new operator directives verbatim as Directive entities.",
     "    When done: close it with a falsifiable reason (before -> after), report",
     "    to your lead (`st inbox -d <lead> ...`), then consult Top of your plate and Coming due.",
     "    Never block your pane on a question: record it on the item, recommend.",
