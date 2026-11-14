@@ -350,6 +350,8 @@ class Duties:
                 if not previous.get('paged'):
                     try:
                         target = administrator()
+                        if live(target) is not True:
+                            raise ValueError('administrator liveness UNKNOWN or unavailable')
                         notify(target, f'{key} ERROR duty {ident}; '
                                f'repair {previous["repair"]}; binding needs its normal repair lane.', key)
                         previous['paged'] = True

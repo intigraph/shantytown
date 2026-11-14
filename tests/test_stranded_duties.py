@@ -68,6 +68,50 @@ def test_existing_sweep_rebinds_supported_duty_and_flags_reservation_once(setup,
     assert 'review-reservation"} 1' in metrics(world.root, now=2000)
 
 
+@pytest.mark.parametrize('unavailable', [False, None, 'error'])
+def test_failed_page_waits_for_live_admin_then_recovers_same_key(setup, unavailable):
+    world = setup
+    install(world, [dict(record('reserved-peer', kind='review-reservation'), candidates=[])])
+    duty = Duties(world.root)
+    available = True
+    creations, pages = [], []
+
+    def live(name):
+        assert name == 'admin'
+        if available == 'error':
+            raise OSError('liveness unavailable')
+        return available
+
+    def create(payload, target, key):
+        creations.append((copy.deepcopy(payload), target, key))
+        return 'fixture-repair'
+
+    def notify(target, message, key):
+        pages.append((target, message, key))
+        if len(pages) == 1:
+            raise OSError('first page failed')
+
+    def tick(now):
+        return duty.tick(observe=lambda _: dict(state='operator-stopped', generation='stop-1', stopped_at=0),
+                         live=live, administrator=lambda: 'admin', ensure_issue=create,
+                         notify=notify, now=now, release=True)
+
+    tick(1800)
+    assert len(creations) == len(pages) == 1
+    available = unavailable
+    assert ('reserved-peer', 'duty page UNKNOWN') in tick(1801)
+    state = json.loads((duty.root / 'attention.json').read_text())['reserved-peer']
+    assert not state.get('paged') and state['repair'] == 'fixture-repair'
+    assert len(creations) == len(pages) == 1
+    available = True
+    tick(1802)
+    tick(1803)
+    state = json.loads((duty.root / 'attention.json').read_text())['reserved-peer']
+    assert state['paged'] is True
+    assert len(creations) == 1 and len(pages) == 2
+    assert creations[0][2] == pages[0][2] == pages[1][2]
+
+
 def test_corrupt_duty_inventory_does_not_block_existing_item_sweep(setup, monkeypatch):
     world = armed(setup, monkeypatch)
     install(world, [record()])
