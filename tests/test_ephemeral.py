@@ -133,6 +133,26 @@ def test_review_prompt_is_independent_and_never_merges(tmp_path):
     assert "st agent spawn --report --verdict" in text
 
 
+def test_protected_alert_triage_never_inherits_fix_permission(tmp_path):
+    rec = _rec(tmp_path, job="triage", item="alert-1",
+               uid_binding={"uid": 60000, "sha256": "a" * 64})
+    text = eph.prompt(rec)
+    assert "READ-ONLY ALERT TRIAGE for alert-1" in text
+    assert "A fix goes on your own branch" not in text
+    assert "Do NOT ACK or silence alerts, restart services" in text
+    assert "write code, create branches or PRs, push, merge" in text
+    assert "ORIGINAL item alert-1" in text
+    assert "report --verdict blocked" in text
+    assert "do not grant capabilities" in text
+    assert text.count("st agent spawn --report") == 1
+
+
+def test_attended_triage_retains_its_existing_fix_scope(tmp_path):
+    text = eph.prompt(_rec(tmp_path, job="triage"))
+    assert "A fix goes on your own branch" in text
+    assert "READ-ONLY ALERT TRIAGE" not in text
+
+
 def test_merge_prompt_only_through_the_lane_with_the_head_pinned(tmp_path):
     text = eph.prompt(_rec(tmp_path, job="merge", repo="o/n", pr=7))
     assert "SERIALIZED MERGE LANE" in text

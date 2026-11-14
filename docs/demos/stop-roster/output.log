@@ -1,0 +1,7 @@
+Script started on 2026-11-12 20:34:14-05:00 [COMMAND="bash demo-run.sh" <not executed on terminal>]
+BASE: per-agent drain reader (isolated fixture)
+{"current_work_visible": true, "exit": 0, "owner_reads": ["worker", "lead"], "prepared_rosters": [], "unknown": false}
+HEAD: shared roster drain reader (same isolated fixture)
+{"current_work_visible": true, "exit": 0, "owner_reads": ["worker", "lead"], "prepared_rosters": [["admin", "lead", "worker"]], "unknown": false}
+
+Script done on 2026-11-12 20:34:14-05:00 [COMMAND_EXIT_CODE="0"]
