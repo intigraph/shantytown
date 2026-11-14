@@ -1,0 +1,5 @@
+Fixture: ended composer, recorded pointer, unassigned native work.
+BEFORE existing delivery proof path: custody is not this unresolved/reconciled delivery
+NEGATIVE live owner holds item: native work is still held or status is unknown
+AFTER unassigned native item: {"custody_state": "orphaned", "delivery": "UNKNOWN", "state": "reconciled"}
+Verified: only exact reservation released; lane audited; custody bytes unchanged.
