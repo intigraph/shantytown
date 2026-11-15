@@ -570,8 +570,13 @@ def _wire(a) -> Dispatcher:
     from .actor_identity import authenticated_actor
     from .dispatch_binding import binding_for
     registry, tracker, panes = _registry(a), _tracker(a), _panes(a)
+    from .queue_policy import enabled as queue_enabled, gate as queue_gate, setting
+    dispatch_gate = _dispatch_gate(a)
+    if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
+        dispatch_gate = queue_gate(tracker, dispatch_gate, audit=FeedAudit(Path(a.root)),
+                                  dry_run=getattr(a, 'dry_run', False))
     return Dispatcher(registry, tracker, panes,
-                      governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
+                      governor=dispatch_gate, sender=authenticated_actor() or _me(a),
                       audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a),
                       binding=binding_for(a.root, tracker, registry, panes))
 
@@ -1687,6 +1692,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--replace-reviewer", help="explicit expected previous reviewer for reassignment")
     wi.add_argument("--contributor", action="append", default=[], help="additional author recused from review (repeatable)")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--lane", choices=("now", "next", "later"))
+    wi.add_argument("--rank", help="exact decimal work order")
     wi.add_argument("--spec-file", type=Path)
     wi.add_argument("--quote")
     wi.add_argument("--requester")
@@ -2046,6 +2053,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="declare a task boundary for the current tool-hook session")
     ss.add_argument("--task-order", action="store_true",
                     help="report observed reads before actions in declared task scopes")
+    ss.add_argument("--queue-order", action="store_true",
+                    help="report retained queue-order refusal observations; missing history is UNKNOWN")
     ss.add_argument("--files", action="store_true",
                     help="list the files an agent touched (needs agent)")
     ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
@@ -2927,6 +2936,14 @@ def _run_command(a) -> int:
         from . import cost
         return cost.run(a)
     if a.cmd == "stats":
+        if a.queue_order:
+            if a.begin_task or a.task_order or a.graph or a.files:
+                print("queue-order cannot combine with another stats report", file=sys.stderr)
+                return 2
+            from .queue_policy import observations
+            print(json.dumps(observations(a.root, since=time.time() - a.since * 3600,
+                                          owner=a.agent), indent=2))
+            return 0
         if a.begin_task or a.task_order:
             from . import task_order
             if a.graph or a.files or (a.begin_task and (a.task_order or a.agent)):
@@ -7538,10 +7555,14 @@ def _cmd_task(a) -> int:
     """
     title = " ".join(a.title)
     from .task_intake import deadline
+    from .queue_policy import enabled as queue_enabled, intake, stage, reply, setting
+    queue_plan = None
     try:
         due = deadline(getattr(a, "due", None),
                        _deployment_default(a, "SHANTY_TASK_DUE_REQUIRED"))
-    except ValueError as error:
+        if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
+            queue_plan = intake(_tracker(a).queue_rows())
+    except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED
     from .plate_capacity import (ensure_room, assignment_lock, PlateFull,
@@ -7556,6 +7577,8 @@ def _cmd_task(a) -> int:
         print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else "")
               + (f" due={due}" if due else ""))
         print("\n  0 writes.")
+        if queue_plan is not None:
+            print(reply('(not created)', queue_plan))
         return OK
     try:
         tracker = _tracker(a)
@@ -7598,6 +7621,14 @@ def _cmd_task(a) -> int:
     if refused:
         print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
         return REFUSED
+    if queue_plan is not None:
+        try:
+            queue_plan = stage(tracker, item, queue_plan)
+        except Exception as error:
+            print(f"  {item.id} CREATED; queue intake UNKNOWN: {error}. "
+                  "Retain this ID; reconcile it, do not repeat create.", file=sys.stderr)
+            return CANNOT_TELL
+        print(reply(item.id, queue_plan))
     return OK
 
 

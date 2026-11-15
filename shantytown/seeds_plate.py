@@ -699,6 +699,44 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
+@declared_read_operation("queue-rows")
+def queue_rows(proof, *, timeout=30):
+    """Only the two capped live lanes, at most 45 subjects; never a board scan."""
+    how = 'Seeds capped Now/Next queue; shared and ephemeral graphs'
+    try:
+        graphs = (proof.graph, proof.graph + '#seeds-ephemeral')
+        branches = []
+        for graph in graphs:
+            for lane in ('now', 'next'):
+                branches.append(
+                    f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/lane> {json.dumps(lane)} . '
+                    f'?s <{SEEDS}ontology/status> ?status . FILTER(?status != "closed") '
+                    f'?s a <{SCHEMA}Action> }} BIND({json.dumps(graph)} AS ?graph) }}')
+        query = ('SELECT DISTINCT (STR(?s) AS ?subject) ?graph WHERE { '
+                 + ' UNION '.join(branches) + ' } LIMIT 46')
+        candidates = _query(proof, query, timeout)['rows']
+        if len(candidates) > 45:
+            raise ValueError('live lane cap or candidate budget exceeded')
+        selected = {}
+        for candidate in candidates:
+            subject, graph = candidate.get('subject'), candidate.get('graph')
+            if (not isinstance(subject, str) or not subject.startswith(SEEDS + 'item/')
+                    or graph not in graphs or subject in selected):
+                raise ValueError('queue identity or graph coverage UNKNOWN')
+            selected[subject] = graph
+        grouped = _project_fields(proof, selected, graphs, timeout)
+        if set(grouped) != set(selected):
+            raise ValueError('queue fields incomplete')
+        from .queue_policy import validate
+        rows = validate(list(grouped.values()))
+        for subject, row in grouped.items():
+            if subject != SEEDS + 'item/' + quote(row['id'], safe=''):
+                raise ValueError('queue subject changed')
+        return Answer.complete_read(rows, how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped([], how=how, caveat=f'queue unreadable: {error}')
+
+
 def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
                     recover_timeouts=False, fields=None):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.

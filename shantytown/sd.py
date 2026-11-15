@@ -915,6 +915,15 @@ class SdTracker(BrTracker):
         ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [r for r in candidates if r["id"] in ready], rows
 
+    def queue_rows(self):
+        from .seeds_plate import queue_rows
+        return queue_rows(self.prove_store(), timeout=self.timeout).exact()
+
+    def queue_owner_rows(self, owner):
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), owner, timeout=self.timeout,
+                          include_deferred=True).exact()
+
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:
         rows, failures = {}, []
