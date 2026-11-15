@@ -23,12 +23,13 @@
       "kind": "interface",
       "source": "shantytown/cli.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fcli.py",
-      "summary": "Mail/reviews bind scope. Cycles need clean/full-history/checkpoint/fresh-session proof; pending bars resend/restart. Chaski bars local runs. Admins accept rank quarantine. Convert checks model/browser. Benchmarks admit no ranks. Intake: cause and due/no-due. Waits need events/backstops; --window is appointment. Reminders retain gates; precede sweeps. Limits: source/harness, non-held plate, budget/owner. Seeds CAS retains operation IDs, UNKNOWN and mutation outcomes; no retry. AGY SessionStart unproved. Sweeps resume at budget skip. Cold receipts resume without launch; holds stay. Priority lean/UNKNOWN. Create/cache proves store/bounds; skips separate. Exact Codex submission; unverified exits 2. Go binds scope/submission/assignment; reconcile read-only. Missing hook store: 2/UNKNOWN. Retirement: native open/unassigned; uncertain claims need newer release. Old IDs fenced; dry-run read-only. Display v2: 15s cache; live decisions. Instruction report previews graph/tooling without writes.",
-      "source_sha256": "22cc986bb2006820548374e9752b5887c3612b3f88e787ed5924647ef15de797",
       "properties": {
         "interfaceKind": "CLI",
         "publicName": "st (shantytown.cli:main)"
-      }
+      },
+      "source_hash_mode": "release-bytes",
+      "summary_source": "docs/knowledge/cli-summary.md",
+      "summary_sha256": "b51ee72379c00b51667dc753ff810976b131ef2003c97e90400929f8b99041ea"
     },
     {
       "kind": "interface",
