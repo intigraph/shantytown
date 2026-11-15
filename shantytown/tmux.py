@@ -935,6 +935,13 @@ class Tmux:
             proof = observe(self.delivery_root, worker, text, created)
             if proof:
                 observed = SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
+        if observed is None and self._confirmed_codex(pane, self.foreground(pane)):
+            from .codex_submission import observe
+            from .harness import get
+            settings = get('codex').settings_in_cmdline(self.cmdline(pane) or '')
+            proof = observe(self.delivery_root, worker, text, created, settings)
+            if proof:
+                observed = SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
         if (self.runtime_identity(pane) != runtime
                 or self.session_created(pane) != session):
             return None

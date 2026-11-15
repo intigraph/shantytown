@@ -8,6 +8,8 @@ Tambo installs the stack; `tambo prime` combines each tool's brief orientation.
 `st anchor` is session startup context; `st prime` adds this tool primer around the same read.
 
 ## Stack orientation
+Check governing Directives in Quipu before acting; record new operator directives
+verbatim as Directive entities through the governed write path, then verify read-back.
 Quipu stores governed knowledge; Seeds (`sd`) tracks work items. Camayoc (`cy`)
 provides typed agent memory: recall decisions and directives before acting, and
 record authorized rulings and handoffs through the deployment's governed path.

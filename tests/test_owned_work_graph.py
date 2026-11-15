@@ -262,6 +262,107 @@ def test_corrupt_durable_head_receipt_never_authorizes_reset(world):
         graph.flush(root, registry)
 
 
+def _stats_publisher(world, monkeypatch):
+    from shantytown import quipu, stats
+    root, service, registry = world
+    now = [101]
+    reads = []
+    registry.read = lambda: reads.append(True)
+    monkeypatch.setattr(stats, '_agent', lambda: 'worker')
+    monkeypatch.setattr(stats.time, 'time', lambda: now[0])
+    monkeypatch.setattr(graph, 'enabled', lambda _: True)
+    monkeypatch.setattr(quipu, 'QuipuRegistry', lambda **_: registry)
+    def capture(at):
+        now[0] = at
+        stats.capture(root, dict(session_id='private-stats-fixture',
+                                hook_event_name='PostToolUse'))
+    return capture, reads
+
+
+def test_unchanged_stats_hooks_skip_already_receipted_publication(world, monkeypatch):
+    root, service, registry = world
+    capture, reads = _stats_publisher(world, monkeypatch)
+    capture(101)
+    initial = len(reads)
+    assert initial > 0
+    for now in range(102, 202):
+        capture(now)
+    assert len(reads) == initial, 'unchanged tool hooks reread the remote head'
+    assert service.snapshot()['worker']['observed_at'] == 201
+    assert service.snapshot()['worker']['graph_observed_at'] == 100
+    capture(400)
+    assert len(reads) > initial, 'due graph heartbeat must still publish'
+    assert len(registry.facts) == 2
+
+
+def test_stats_stop_publishes_once_and_late_hooks_do_not_renew_it(world, monkeypatch):
+    root, service, registry = world
+    capture, reads = _stats_publisher(world, monkeypatch)
+    capture(101)
+    service.stop('worker', at=202)
+    capture(203)
+    initial = len(reads)
+    state = service.snapshot()['worker']
+    capture(10000)
+    assert len(reads) == initial
+    assert service.snapshot()['worker'] == state
+    assert graph._head(registry, graph.producer(service.root))[1]['agents'][0]['state'] == 'stopped'
+
+
+def test_stats_retries_unacknowledged_head_without_resending_fact(world, monkeypatch):
+    root, service, registry = world
+    capture, reads = _stats_publisher(world, monkeypatch)
+    capture(101)
+    def lost(registry, iri, payload):
+        registry.set_comment(iri, payload)
+        raise TimeoutError('lost head reply')
+    monkeypatch.setattr(graph, '_set_comment', lost)
+    service.stop('worker', at=202)
+    capture(203)
+    after_failure, facts = len(reads), len(registry.facts)
+    capture(204)
+    assert len(reads) > after_failure, 'unknown head publication must reconcile'
+    assert len(registry.facts) == facts
+    assert len(registry.head_sets) == 1
+    after_recovery = len(reads)
+    capture(205)
+    assert len(reads) == after_recovery
+
+
+def test_legacy_local_head_receipt_gets_one_verified_refresh(world, monkeypatch):
+    root, service, registry = world
+    capture, reads = _stats_publisher(world, monkeypatch)
+    capture(101)
+    receipt = service.root / 'graph-head.json'
+    proof = json.loads(receipt.read_text())
+    proof.pop('inputs_sha256', None)
+    receipt.write_text(json.dumps(proof))
+    initial = len(reads)
+    capture(102)
+    assert len(reads) > initial
+    after_refresh = len(reads)
+    capture(103)
+    assert len(reads) == after_refresh
+
+
+def test_partial_head_skips_unchanged_hook_but_pending_agent_retries(world, monkeypatch):
+    from shantytown import stats
+    root, service, registry = world
+    capture, reads = _stats_publisher(world, monkeypatch)
+    capture(101)
+    service.launch('other', now=102)
+    graph.flush(root, registry, agents={'worker'})
+    assert not graph._head(registry, graph.producer(service.root))[1]['complete']
+    initial = len(reads)
+    capture(103)
+    assert len(reads) == initial
+    monkeypatch.setattr(stats, '_agent', lambda: 'other')
+    capture(104)
+    assert len(reads) > initial
+    assert graph._head(registry, graph.producer(service.root))[1]['complete']
+    assert len(registry.facts) == 2
+
+
 def test_root_config_enables_existing_hooks_without_relaunching_agents(tmp_path, monkeypatch):
     monkeypatch.delenv('SHANTY_OWNED_WORK_PUBLISH', raising=False)
     (tmp_path / 'shantytown.toml').write_text('[env]\nSHANTY_OWNED_WORK_PUBLISH = "1"\n')

@@ -1,0 +1,5 @@
+Script started on 2026-11-10 01:35:53-05:00 [COMMAND="/usr/bin/python3 -m pytest -q tests/test_deferral_owner_pacing.py -k terminal_item" <not executed on terminal>]
+..                                                                       [100%]
+2 passed, 35 deselected in 0.25s
+
+Script done on 2026-11-10 01:35:54-05:00 [COMMAND_EXIT_CODE="0"]

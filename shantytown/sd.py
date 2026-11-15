@@ -61,6 +61,12 @@ class StoreProof:
     graph: "str | None" = None
 
 
+GOVERNED_RELEASE_FIELDS = ('status', 'priority', 'labels', 'defer_until', 'title',
+                           'notes', 'description', 'design', 'acceptance_criteria',
+                           'issue_type', 'due_at', 'parent', 'rank', 'external_ref',
+                           'blocker_kind', 'closed_at', 'close_reason')
+
+
 class SdTracker(BrTracker):
     """BrTracker over `sd`, pinned to one proven store."""
 
@@ -72,6 +78,10 @@ class SdTracker(BrTracker):
             return self.get(item_id)
         from .seeds_item import read_item
         return read_item(self, item_id)
+
+    def capacity_read(self, item_id):
+        """Fresh seed fields for producer admission, retaining the owner fence."""
+        return self.defer_read(item_id)
 
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
@@ -94,8 +104,14 @@ class SdTracker(BrTracker):
                 or not operator_stopped and row.get('status') != 'open'
                 or type(row.get('revision')) is not int or row['revision'] < 1):
             raise ValueError('stranded release requires eligible revision-bound row')
+        # In-progress work with no assignee is in no plate and outside ready
+        # work: the orphan that dispatch.repool exists to prevent. It returns
+        # to open in the same CAS. Deferred/blocked/open keep their status:
+        # an assignee-only release never ends a deferral or a gate (aegis-byt).
+        reopen = operator_stopped and row.get('status') == 'in_progress'
         result = self._bd_for(row['id'], 'update', row['id'],
-            '--assignee=', f'--if-revision={row["revision"]}',
+            '--assignee=', *(['--status=open'] if reopen else []),
+            f'--if-revision={row["revision"]}',
             '--transition-comment=' + comment, '--json')
         if result.returncode == 4:
             return 'conflict'  # SDK guarantees nothing was committed.
@@ -104,8 +120,16 @@ class SdTracker(BrTracker):
         # A successful process exit alone does not prove the committed fields.
         current = self.stranded_read(row['id'])
         comments = current.get('comments')
-        preserved = set(row) - {'assignee', 'revision', 'updated_at', 'comments'}
+        # Compare the governed fields a release must not change. The full read
+        # also returns derived counters (comments_total, comments_folded,
+        # dependents, dependency_count); the release's own comment bumps
+        # comments_total, so comparing them made every correct release read
+        # back UNKNOWN and fenced the owner (aegis-byt, measured 2026-11-11).
+        preserved = {key for key in GOVERNED_RELEASE_FIELDS if key in row}
+        if reopen:
+            preserved.discard('status')
         if (any(current.get(key) != row.get(key) for key in preserved)
+                or reopen and current.get('status') != 'open'
                 or current.get('assignee')
                 or current['revision'] <= row['revision']
                 or not isinstance(comments, list)
@@ -274,6 +298,49 @@ class SdTracker(BrTracker):
                 raise RuntimeError("delivery key binds a different receipt identity/content")
             return item
         raise AssertionError("bounded inbox retry exhausted")
+
+    def create_duty_issue(self, payload, *, target, key):
+        """One SDK workflow identity per duty, including after a lost reply.
+
+        This is a repair task, not an inbox pointer. It does not claim a duty
+        has been rebound, dispatch an agent, or change an ASK-class decision.
+        """
+        import hashlib
+        from .duties import KINDS, _name
+        ident = _name(payload['id'])
+        _name(payload['holder'])
+        _name(target)
+        expected = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
+        if key != expected or payload.get('kind') not in KINDS:
+            raise ValueError('invalid duty repair identity')
+        title = 'P0 orphaned duty: ' + ident
+        description = key + '\n' + json.dumps(payload, sort_keys=True)
+        run = 'urn:shantytown:duty:' + hashlib.sha256(key.encode()).hexdigest()
+        result = self._bd('create', title, '--json', '--priority=0',
+            '--assignee=' + target, '--labels=orphaned-duty',
+            '--description=' + description, '--workflow-run=' + run,
+            '--step=repair', '--visit=1')
+        if result.returncode:
+            raise RuntimeError('duty create outcome UNKNOWN; retain the same workflow identity')
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get('id'), str) or not value['id']:
+            raise ValueError('duty repair identity UNKNOWN')
+        item = self.get(value['id'])
+        if item.title != title or not (item.description or '').startswith(key + '\n'):
+            raise ValueError('duty repair read-back identity mismatch')
+        if item.status == 'closed':
+            row = self.stranded_read(item.id)
+            # Reopen the same unresolved repair, never mint a fresh seed for
+            # every firing. Native CAS and a transition comment retain custody.
+            result = self._bd_for(item.id, 'update', item.id, '--status=open',
+                '--priority=0', '--if-revision=' + str(row['revision']),
+                '--transition-comment=Duty remains orphaned at a fresh stranded-owner pass', '--json')
+            if result.returncode:
+                raise RuntimeError('duty repair reopening UNKNOWN; inspect before retry')
+            item = self.get(item.id)
+        if item.status == 'closed' or item.priority != 0:
+            raise ValueError('duty repair not an open P0')
+        return item
 
     @property
     def _bin(self) -> str:
@@ -730,11 +797,15 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows
-        rows = owner_rows(self.prove_store(), None, feed_owners=(owner,),
-                          active_only=True, timeout=self.timeout).exact()
-        return Answer.complete_read(self._tend_order(rows),
-                                    how="owner-scoped haul active anchors")
+        from .seeds_plate import owner_rows, unblocked_ids
+        proof = self.prove_store()
+        rows = owner_rows(proof, None, feed_owners=(owner,),
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
+        # Active status is not proof that technical dependencies are closed.
+        # Reobserve native blocks edges each pass; closure restores eligibility.
+        ready = unblocked_ids(proof, rows, timeout=self.timeout)
+        return Answer.complete_read(self._tend_order([r for r in rows if r["id"] in ready]),
+                                    how="owner-scoped unblocked haul active anchors")
 
     def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
@@ -743,7 +814,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, timeout=self.timeout).exact()
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),
@@ -771,8 +842,9 @@ class SdTracker(BrTracker):
                                     timeout=self.timeout).exact())
         ready = [row for row in rows if row["status"] == "open"]
         active = [row for row in rows if row["status"] == "in_progress"]
-        ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
-        return [row for row in ready if row["id"] in ids], active
+        ids = unblocked_ids(self.prove_store(), ready + active, timeout=self.timeout)
+        return ([row for row in ready if row["id"] in ids],
+                [row for row in active if row["id"] in ids])
 
     def priority_rows(self, *, ready_candidates=None, include_messages=False) -> tuple[list[dict], list[dict]] | None:
         """Lean fields for fleet priority advice; never change mutation reads."""
@@ -791,16 +863,31 @@ class SdTracker(BrTracker):
         unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [row for row in candidates if row["id"] in unblocked], active
 
+    def stopped_owner_rows(self, owners):
+        """Work-only stopped-owner census; bounded repair, unchanged time ceiling."""
+        if not self._use_remote_projection():
+            raise ValueError('stopped-owner census requires native Seeds projection')
+        if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
+            raise ValueError('stopped-owner scope unproven')
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), None, timeout=self.timeout,
+                          plate_owners=tuple(owners), capacity=True,
+                          include_deferred=True, include_messages=False,
+                          recovery_tokens=8)
+
     def stranded_rows(self, owners):
-        """Complete owner-scoped census, including parked work and messages."""
+        """Complete owner-scoped census of parked and active WORK.
+
+        Inbox pointers are excluded at the query. They are never release
+        candidates, and hydrating them overflowed the plate field budget once
+        open pointers reached the thousands: every pass then refused, so no
+        work was ever observed or released (aegis-byt).
+        """
         if not self._use_remote_projection():
             raise ValueError('stranded owner census requires native Seeds projection')
         if not owners or len(owners) > 100 or len(set(owners)) != len(owners):
             raise ValueError('stranded owner scope unproven')
-        from .seeds_plate import owner_rows
-        return owner_rows(self.prove_store(), None, timeout=self.timeout,
-                          plate_owners=tuple(owners), capacity=True,
-                          include_deferred=True, include_messages=True).exact()
+        return self.stopped_owner_rows(owners).exact()
 
     def ranking_rows(self):
         """Complete lean active/deferred metadata and proven unowned READY rows."""

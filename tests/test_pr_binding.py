@@ -134,7 +134,7 @@ def test_bad_post_response_cli_stays_indeterminate(setup,monkeypatch,capsys):
     assert f.writes==['comment','close']
 
 @pytest.mark.parametrize('status,owner,draft',[('closed','alice',False),
- ('open','bob',False),('deferred','alice',False)])
+ ('open','bob',False)])
 def test_bound_creator_owner_gate_before_forge_call(tmp_path,status,owner,draft):
     from shantytown.pr_binding import create_bound
     r=Registry(tmp_path/'registry',BOARD);f=Forge()
@@ -271,3 +271,25 @@ def test_malformed_attempt_journal_refuses_before_more_writes(setup,attempted):
         data['bindings']['example/project#1']['pending']['attempted']=attempted;r.save(data)
     with pytest.raises(Refused):reconcile(Registry(r.root,BOARD),BOARD,read,f)
     assert f.writes==['comment']
+
+
+@pytest.mark.parametrize('status,reviewer,cap', [
+    ('deferred', None, None), ('open', 'alice', 1), ('open', 'bob', 1),
+])
+def test_bound_creator_queue_uncertainty_and_deferred_are_draft_advice(tmp_path, monkeypatch, status, reviewer, cap):
+    from shantytown import pr_binding as binding, pr_preflight as pre
+    r = Registry(tmp_path/'registry', BOARD); f = Forge(); f.api = lambda *args: None
+    item = {'id': 'project-abc', 'assignee': 'alice', 'status': status}
+    monkeypatch.setattr(pre, 'candidate', lambda *args: {'head': 'a'*40, 'head_ref': 'branch'})
+    calls = []
+    def created(*args, **kwargs):
+        calls.append(kwargs)
+        return {'number': 1, 'created': 'https://github.com/example/project/pull/1'}
+    monkeypatch.setattr(pre, 'run', created)
+    monkeypatch.setattr(binding, 'register', lambda *args: None)
+    result = binding.create_bound(r, 'example/project', 'unused', 'project-abc', 'alice',
+                                  BOARD, lambda _: item, f, 'title', 'body', [],
+                                  reviewer=reviewer, cap=cap)
+    assert result['number'] == 1 and len(calls) == 1 and calls[0]['draft']
+    with r.locked() as data:
+        assert not data['creates']

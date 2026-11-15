@@ -3,6 +3,14 @@
 > Reports' stop hooks terminate at their **lead**. What the lead doesn't absorb rises to the
 > **administrator**. That's the whole hierarchy.
 
+Host-scoped crew cards may name an administrator on another host. Anchor and
+stop routing resolve a missing declared lead from the configured Quipu registry
+only when that member has explicit off-host placement. They do not create a
+local lifecycle card or repair a missing local projection. The stop sender uses
+the existing durable relay for an off-host administrator; remote live drain
+state is unverified locally. Failed graph reads remain unknown rather than
+silently selecting the local administrator. File-only deployments stay offline.
+
 **Roles live in the agent card, and declaring one is generative** — it rewrites the card and emits
 that role's stop hooks in the same write. See [`agent-card.md`](agent-card.md) for the card, the
 `role set` contract, and what happens to a lead's reports when it's demoted or goes down.

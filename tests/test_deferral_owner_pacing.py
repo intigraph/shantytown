@@ -95,6 +95,18 @@ def test_notification_does_not_require_release_provenance(tmp_path, change):
     assert len(sent) == 1 and admin == result == []
 
 
+@pytest.mark.parametrize("status", ["closed", "done"])
+def test_terminal_item_with_stale_gate_never_wakes_owner_or_admin(tmp_path, status):
+    item = row(status=status)
+    original = dict(item)
+    assert sweep(tmp_path, [item]) == ([], [], [])
+    assert sweep(tmp_path, [item], live=False) == ([], [], [])
+    assert item == original
+    item["status"] = "open"
+    sent, admin, result = sweep(tmp_path, [item])
+    assert len(sent) == 1 and not admin and not result
+
+
 def test_unknown_owner_identity_retains_admin_route(tmp_path):
     sent, admin, result = sweep(tmp_path, [row(assignee="other")])
     assert not sent and admin and result == ["test-ci"]
@@ -153,11 +165,11 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
     tracker.update("test-ci", title="CI wait", status="open", assignee="worker")
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(minutes=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    result = dispatcher.defer("test-ci", "external", "CI wait", until=until,
+    result = dispatcher.defer("test-ci", "external", "scheduled appointment", until=until,
                               gate_authority="worker", window=True)
     notes = tracker.get("test-ci").notes
     assert '"actor": "worker"' in notes and '"until":' in notes
-    assert dispatcher.defer("test-ci", "external", "CI wait", until=until,
+    assert dispatcher.defer("test-ci", "external", "scheduled appointment", until=until,
                             gate_authority="worker", window=True).noop
     assert tracker.get("test-ci").notes == notes
     assert result.reason in notes

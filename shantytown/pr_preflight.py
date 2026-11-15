@@ -1,7 +1,8 @@
-"""Complete GitHub overlap inventory and guarded PR creation (aegis-26m).
+"""Advisory GitHub overlap inventory and guarded PR creation (aegis-26m).
 
-No merge or close authority lives here. Dispositions are explicit author decisions,
-bound to the other PR's head; they are never inferred from a title or age.
+Explicit lineage trailers authorize predecessor retirement after verified publish.
+Overlap is information, never permission to create or merge. Optional dispositions
+are checked as annotations, and cannot block opening a draft.
 
 # arming: agent-invoked -- st repo pr is the explicit foreground creation path.
 """
@@ -29,8 +30,8 @@ class Indeterminate(Refused):
     """A create may have committed; never suggest a blind retry."""
 
 
-def github(path, body=None):
-    argv = ["gh", "api", "--method", "GET" if body is None else "POST", path]
+def github(path, body=None, *, method=None):
+    argv = ["gh", "api", "--method", method or ("GET" if body is None else "POST"), path]
     if body is not None:
         argv += ["--input", "-"]
     result = subprocess.run(argv, input=json.dumps(body) if body is not None else None,
@@ -73,6 +74,56 @@ def pages(api, path, *, maximum=3200):
     raise Refused("inventory pagination did not terminate")
 
 
+# Bot identities plus specific generated branch/title pairs; advisory only.
+AUTOMATION = {"release-plz[bot]", "release-please[bot]", "github-actions[bot]",
+              "ledger-bot[bot]", "ledger-bot"}
+
+
+def automation(pull):
+    """Recognize automation with Bot identities or specific generated metadata.
+
+    Release tools may use an operator token and appear as User, not Bot. This
+    exclusion only reduces overlap advice; it grants no write/merge authority.
+    """
+    user = pull.get("user") or {}
+    head = pull.get("head")
+    ref = head.get("ref", "") if isinstance(head, dict) else ""
+    title = pull.get("title", "")
+    if not isinstance(ref, str) or not isinstance(title, str):
+        return False
+    generated_release = (
+        re.fullmatch(r"release-plz-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z", ref)
+        and re.fullmatch(r"chore(?:\([^()]+\))?: release(?: .+)?", title)
+    )
+    generated_ledger = (ref.startswith(("ledger/", "ledger-"))
+                        and re.match(r"chore\(ledger\): ", title))
+    if generated_release or generated_ledger:
+        return True
+    if not isinstance(user, dict):
+        return False
+    login = user.get("login")
+    if not isinstance(login, str) or login not in AUTOMATION or user.get("type") != "Bot":
+        return False
+    if login == "github-actions[bot]":
+        return ref.startswith(("release-plz-", "release-please--", "ledger/", "ledger-"))
+    return True
+
+
+def candidate_prs(api, repo, head_ref):
+    """Separate duplicate-write check; no file/overlap coverage required."""
+    rows = pages(api, f"repos/{repo}/pulls?state=open&head={quote(repo.split('/')[0] + ':' + head_ref, safe='')}")
+    found = []
+    for row in rows:
+        try:
+            if row["head"]["ref"] == head_ref and (row["head"].get("repo") or {}).get("full_name") == repo:
+                if type(row["number"]) is not int:
+                    raise Refused("duplicate PR identity unverified")
+                found.append(row["number"])
+        except (KeyError, TypeError, AttributeError) as error:
+            raise Refused("duplicate PR inventory unverified") from error
+    return found
+
+
 def inventory(api, repo):
     pulls = pages(api, f"repos/{repo}/pulls?state=open")
     result = []
@@ -86,6 +137,8 @@ def inventory(api, repo):
         seen.add(number)
         path = f"repos/{repo}/pulls/{number}"
         detail = api(path)
+        if automation(detail):
+            continue
         files = pages(api, path + "/files", maximum=3000)
         again = api(path)
         try:
@@ -245,6 +298,7 @@ def report(candidate, pulls, bead, bead_families=()):
                             "title": pull["title"], "draft": pull["draft"],
                             "files": same_files, "families": same_family})
     return {"candidate": candidate, "bead": bead, "open_count": len(pulls),
+            "inventory_complete": True,
             "overlaps": matches,
             "inventory_digest": hashlib.sha256(json.dumps(pulls, sort_keys=True).encode()).hexdigest()}
 
@@ -285,43 +339,67 @@ def dispositions(checkout, repo, candidate, review, decisions, api):
 
 
 def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
-        create=False, draft=False, dry_run=False, api=None):
+        create=False, draft=False, dry_run=False, api=None, patch_api=None):
+    from . import pr_lineage
     api = api or github
+    patch_api = patch_api or (lambda path, value: github(path, value, method="PATCH"))
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise Refused("repository must be owner/name")
     repository_id = canonical_identity(api, repo)
     first_candidate = candidate(checkout, repo, base, api)
-    pulls = inventory(api, repo)
-    existing = [p for p in pulls if p["head_repo"] == repo
-                and p["head_ref"] == first_candidate["head_ref"]]
+    existing = candidate_prs(api, repo, first_candidate["head_ref"])
     if existing and create:
         raise Refused("candidate branch already has an open PR; update it rather than create another")
-    others = [p for p in pulls if p not in existing]
-    review = report(first_candidate, others, bead, bead_families)
-    # Read mode surfaces all candidates even when no dispositions exist yet.
+    warnings = []
+    def overlap_review(value):
+        try:
+            pulls = inventory(api, repo)
+            return report(value, [p for p in pulls if p["number"] not in existing], bead, bead_families)
+        except (Refused, OSError, subprocess.SubprocessError):
+            warnings.append("Overlap inventory UNKNOWN; inspect related PRs before merge.")
+            return {**report(value, [], bead, bead_families), "inventory_complete": False}
+    review = overlap_review(first_candidate)
     if not create:
-        return {**review, "open_count": len(pulls),
-                "excluded_candidate_prs": [p["number"] for p in existing]}
+        return {**review, "open_count": review["open_count"] + len(existing),
+                "excluded_candidate_prs": existing, "warnings": warnings}
     if not title.strip() or not body.strip():
         raise Refused("creation needs title and body")
-    chosen = dispositions(checkout, repo, first_candidate, review, decisions, api)
+    try:
+        lineage = pr_lineage.prepare(api, repo, body, bead, first_candidate)
+    except pr_lineage.LineageError as error:
+        raise Refused(str(error)) from error
     final_candidate = candidate(checkout, repo, base, api)
-    final_pulls = inventory(api, repo)
-    final_review = report(final_candidate, final_pulls, bead, bead_families)
-    if review != final_review:
-        raise Refused("candidate/open PR inventory changed; rerun preflight and review dispositions")
-    dispositions(checkout, repo, final_candidate, final_review, chosen, api)
+    if first_candidate != final_candidate:
+        raise Refused("candidate changed; rerun preflight on the intended source")
+    if candidate_prs(api, repo, final_candidate["head_ref"]):
+        raise Refused("candidate branch already has an open PR; update it rather than create another")
+    review = overlap_review(final_candidate)
+    try:
+        chosen = dispositions(checkout, repo, final_candidate, review, decisions, api)
+    except (Refused, OSError, subprocess.SubprocessError):
+        chosen = []
+        warnings.append("Overlap dispositions absent, stale or invalid; resolve integration before merge.")
+    draft = draft or bool(review["overlaps"] or warnings)
     primary = re.findall(r"^Bead:\s*(\S+)\s*$", body, re.M)
     if primary and primary != [bead]:
         raise Refused("body must identify exactly the requested primary item")
     appendix = ("" if primary else "\n\nBead: " + bead)
     appendix += "\n\nOverlap preflight: " + review["inventory_digest"]
+    for overlap in review["overlaps"]:
+        appendix += (f"\n- Advisory: PR #{overlap['number']} @ {overlap['head']}"
+                     f"; files: {', '.join(overlap['files']) or '(none)'}"
+                     f"; item families: {', '.join(overlap['families']) or '(none)'}")
+    for warning in dict.fromkeys(warnings):
+        appendix += "\n- Advisory: " + warning
+    review = {**review, "warnings": list(dict.fromkeys(warnings)), "draft": draft}
     for d in chosen:
         appendix += f"\n- PR #{d['number']} @ {d['head']}: {d['action']} — {d['reason']}"
     # GitHub lacks an atomic expected-head create API. Reconcile the result; do
     # not turn a lost response or raced head into a blind retry/new duplicate.
     if dry_run:
-        return {**review, "would_create": True, "body": body + appendix}
+        return {**review, "would_create": True, "body": body + appendix,
+                "lineage": [{k: v for k, v in old.items() if k != "body"}
+                            for old in lineage]}
     if canonical_identity(api, repo) != repository_id:
         raise Refused("repository identity changed; no PR creation attempted")
     try:
@@ -341,7 +419,14 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
              and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
     if not valid:
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
+    try:
+        lineage_receipts = pr_lineage.retire(api, patch_api, repo, lineage, result,
+                                            bead, first_candidate)
+    except (pr_lineage.LineageError, Refused, OSError, subprocess.SubprocessError) as error:
+        raise Indeterminate(f"successor #{result['number']} exists; predecessor retirement "
+                            "unverified; inspect lineage before retrying") from error
     return {**review, "created": result["html_url"], "number": result["number"],
+            "lineage": lineage_receipts,
             "node_id": result.get("node_id") if isinstance(result.get("node_id"), str) else None}
 
 
@@ -377,10 +462,20 @@ def record_authorship(result, *, root=None, actor=None, quipu=None, policy=None)
     return f"recorded {iri} authoredByAgent {actor}"
 
 
+def read_dispositions(path):
+    """Optional annotations cannot make PR creation depend on private scratch."""
+    if not path:
+        return []
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None  # dispositions() reports an advisory without leaking content.
+
+
 def command(args):
     try:
         body = args.body_file.read_text() if args.body_file else ""
-        decisions = json.loads(args.dispositions_file.read_text()) if args.dispositions_file else []
+        decisions = read_dispositions(args.dispositions_file)
         result = run(args.checkout, args.repository, args.base, args.bead, body,
                      args.title or "", decisions, bead_families=args.bead_family,
                      create=args.create, draft=args.draft, dry_run=args.dry_run)

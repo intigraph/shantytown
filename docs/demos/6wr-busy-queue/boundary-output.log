@@ -1,0 +1,6 @@
+Script started on 2026-11-10 05:01:02-05:00 [COMMAND="python3 docs/demos/6wr-busy-queue/queue-boundary.py" <not executed on terminal>]
+before: {"busy": false, "verdict": "TYPED", "controls": [["fixture", "C-e"], ["fixture", "C-u"], ["fixture", "BSpace"]]}
+after: {"busy": true, "verdict": "BUSY", "controls": []}
+PASS: later Working remains busy; NullPanes receives zero edit keys.
+
+Script done on 2026-11-10 05:01:02-05:00 [COMMAND_EXIT_CODE="0"]

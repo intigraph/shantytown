@@ -52,19 +52,47 @@ feature, or add memory CLI commands. Existing startup behavior and the original
 memory files remain unchanged. Native generated stores must not be treated as
 editable files without their own supported contract.
 
-The versioned transport candidate adds a bounded remote client. It reuses the
-administrator-owned named CLI credential selection; card aliases resolve only
-through that explicit mapping. It does not derive an owner IRI from a card name.
-The server must verify the selected named principal for own writes/projection;
-a shared-token fallback cannot establish that identity. Ordinary cross-crew
-reads stay available.
+The versioned transport is a **Shantytown client feature** over ordinary Quipu
+`POST /query` and `POST /update`. It adds no Quipu memory endpoint, credential
+audience, listener or storage primitive. The existing administrator-owned named
+CLI credential mapping selects the crew principal. The same normal Quipu bearer,
+writer-scope policy, configured ontology and loaded shapes govern its writes.
+Ambient/shared credentials cannot substitute for that selection. Public
+cross-crew queries remain intentional reads, separate from own native staging.
 
-Remote own staging validates the authenticated owner, complete owner manifest,
-identified revisions, exact UTF-8 bytes, hashes and lengths. Network timeout or
-conflict retains an unknown/conflict result without retrying or changing local
-files. The client alone does not activate lifecycle hooks or a native adapter. The
-separate opt-in controller below supplies Claude source support; installed
-acceptance remains separate. Existing startup bridge behavior remains in place.
+Each exact deployment/project/crew tuple selects a deterministic named graph.
+Ordinary `Artifact` records hold immutable JSON manifests and full canonical file
+intents; labels, references and provenance remain ordinary RDF. `dcterms:hasPart`
+links manifests to revisions; `rdfs:seeAlso` carries the collection head and
+idempotency markers. A single conditional SPARQL update compares the expected
+head, appends records and advances only the head pointer atomically in that graph.
+It never deletes an old revision. The configured ontology must admit `Artifact`
+and its required `reference`; unknown namespaces, loaded-shape refusals and writer
+policy refusals remain failures. No shape set is installed by this feature.
+
+The client first reads an exact idempotency receipt before checking a potentially
+stale parent. A concurrent head change makes the atomic update match nothing;
+a read-before-write check alone cannot authorize a write. A successful response
+must include the expected one-graph transaction report, followed by exact intent
+and receipt readback. Timeout or partial coverage preserves the outbox for later
+readback and does not claim rollback. Export reads only the explicit owner graph
+and the current manifest's bounded revision links, not an unbounded history scan.
+Hashes, lengths, owner, paths, exact canonical request and revision IDs are
+validated before staging. Startup display limits never truncate stored bytes.
+
+`selected_owner` in the internal projection envelope records **local configured
+routing**, not a server-authenticated memory identity or a per-owner server ACL.
+The generic server's authenticated transaction provenance and writer permissions
+remain the authority. A selected caller cannot request own operations for another
+principal, and a changed mapping refuses before write/staging. Deployment must
+qualify its normal graph writer/read boundary before enabling private uploads;
+this client does not grant secrecy or a new identity capability.
+
+Legacy Quipu memory records and their data are retained. The new graph format does
+not silently import old primitive tables, rewrite old receipt IDs or adopt an
+old remote head. Existing accepted-head journals therefore refuse a different
+head; any migration needs an explicit reviewed mapping and content/count controls.
+No runtime activation or private upload is implied by source installation.
 
 The outbox library keeps immutable intents and verified receipts in an existing
 private, user-owned directory. Each delivery reads the exact intent's receipt
@@ -78,7 +106,7 @@ source support does not replace the installed startup bridge.
 The explicit memory CLI can inspect source metadata, read manifests, query
 attributed historical text or export a selected owner's bounded records.
 Query scope is one explicitly selected owner/repository, not a global search
-index. Own staging and writes retain their separate named-identity requirement.
+index. Own staging and writes retain their separate configured-owner requirement.
 Frozen multi-file batches retain all exact intents before delivery, replay
 accepted receipts before stale checks, stop on unknown/conflict and never
 infer deletions from missing source files. A caller can bound delivery with
@@ -93,7 +121,7 @@ yet an automatic lifecycle producer or native-root selector.
 The synchronization library retains the accepted remote head and active frozen
 batch in the same private outbox. A nonblocking lock serializes cooperating
 triggers. An active batch resumes before source recapture; a new batch requires
-the authenticated own remote head to equal the previously accepted head. Its
+the selected own remote head to equal the previously accepted head. Its
 completion is accepted only after a fresh own projection proves the final
 receipt head. Unknown outcomes and foreign heads retain the pending batch.
 The small journal uses fsync and atomic replacement, and unchanged source does
@@ -153,9 +181,10 @@ The administrator must select the crew member's actual existing native memory
 root, not a directory inferred from a similarly named account. The source,
 outbox and staging directories must already exist, be distinct and nonoverlapping;
 outbox and staging must be private and user-owned. A named crew CLI credential
-selection is mandatory. Its selected token is resolved through the existing
-credential provider, independently of the administrator's ambient token, and
-the server must confirm the exact principal on own projection/write. An existing
+selection is mandatory. Its normal selected token is resolved through the existing
+credential provider independently of the administrator's ambient token. The
+server applies its normal writer authorization; own projection uses the local
+configured owner and a validated ordinary graph manifest. An existing
 credential refusal latch is never refreshed or bypassed by this path.
 
 For an enabled Claude plan, normal managed launch preparation reconciles at
@@ -172,7 +201,7 @@ the plan does not override those native holds. Private outbox and staging
 directories cannot be inside a Git checkout. Existing settings, hooks, permissions and environment are
 copied into a new private artifact; the role's original artifact is untouched.
 
-Only after own-authenticated projection agrees with the accepted head **and**
+Only after selected-own projection agrees with the accepted head **and**
 the current native source bytes does preparation create an exclusive generation.
 It preserves complete UTF-8 index/topic bytes and relative links. It emits
 Claude's documented `autoMemoryDirectory` and `autoMemoryEnabled` settings for
@@ -184,7 +213,7 @@ Preparation records a *pending* generation; it does not change the active source
 The actual SessionStart carrying that generation acknowledges it. An interrupted
 preparation or failed launch therefore leaves the previous source authoritative
 for the next synchronization. Stale starts and mismatched Stop sources refuse.
-The same configured source and authenticated owner must match the journal.
+The same configured source and selected owner must match the journal.
 Subscription account names are provenance, not another crew identity; an
 optional account pin is enforced, and otherwise the actual selected account
 is recorded. A verified same-crew account switch retains its accepted head
@@ -219,3 +248,11 @@ rollback. Disabling the plan does not copy generated files back over that path.
 Release, installed canary, authentic harness startup/read/write, cross-crew
 queries, private archive migration and original-hook acceptance remain separate
 reviewed deployment steps. Source support does not enable any live plan.
+
+An older Quipu build may still reserve `urn:quipu:memory:*` subjects for its
+private primitive. ST retains these existing revision/snapshot identifiers for
+outbox continuity and does not route around that refusal by renaming them.
+Ordinary-route qualification and activation therefore require the reviewed
+primitive removal to arrive through the normal Quipu release/install path.
+A source implementation or passing RDF-engine fixture does not discharge that
+installed dependency or the separate private-upload hold.

@@ -51,3 +51,8 @@ receiver controls, and the managed publication route. Synthetic byte/config
 tests prove the plumbing and refusal boundaries, not ONNX compatibility or
 semantic-search readiness. The existing publication test entrypoint runs them
 without loading a model or calling a production service.
+
+## Curated knowledge witnesses
+
+See [reviewed knowledge witnesses](knowledge/README.md) for the CLI byte/summary
+separation, strict source controls and one-time migration boundary.

@@ -1,0 +1,11 @@
+$ LANE_BASE_SOURCE=<base> LANE_HEAD_SOURCE=<head> python3 docs/demos/plate-lane/demo.py
+base source 5646631bf428216390716a879296a86d24010101
+$ same mocked Seeds rows -> br.plate(worker)
+lanes next(2), no now      -> plate: p0-unlaned
+add one Now item           -> plate: p0-unlaned
+control, no lanes anywhere -> plate: p0-unlaned
+head source a198065ab00fd65d51054711a7457e552d3d199e
+$ same mocked Seeds rows -> br.plate(worker)
+lanes next(2), no now      -> plate: p4-next-rank1
+add one Now item           -> plate: p4-now
+control, no lanes anywhere -> plate: p0-unlaned

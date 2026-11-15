@@ -74,7 +74,8 @@ def digest(ready, rows, cards, live, *, counts):
         if not owned:
             continue
         current = min(owned, key=lambda r: plate_key(r.get("status"), priority(r), r["id"],
-                         ready_ids, rank=r.get("rank"), due_at=r.get("due_at"), created_at=r.get("created_at")))
+                         ready_ids, rank=r.get("rank"), due_at=r.get("due_at"), created_at=r.get("created_at"),
+                         lane=r.get("lane")))
         higher = [r for r in unowned if priority(r) is not None and priority(current) is not None
                   and priority(r) < priority(current)]
         if higher:

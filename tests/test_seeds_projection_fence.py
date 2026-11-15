@@ -44,6 +44,8 @@ def wire(monkeypatch, tmp_path):
         entity = plate.SEEDS + "item/other"
         attribute = state.get("attribute", plate.SCHEMA + "description")
         mode = state["mode"]
+        if state.get("settle_after") and state["queries"] >= state["settle_after"]:
+            mode = "unrelated-entity"
         if mode == "returned": entity = S
         if mode == "membership": entity = S; attribute = plate.SCHEMA + "agent"
         if mode == "status": entity = S; attribute = plate.SEEDS + "ontology/status"
@@ -51,8 +53,9 @@ def wire(monkeypatch, tmp_path):
         records = [] if mode == "unrelated-graph" else [
             dict(tx=since + 1, graph=graph, entity=entity, attribute=attribute, op="assert")]
         if mode == "past-returned":
-            records = ([dict(tx=11, graph=graph, entity=S, attribute=attribute, op="assert")]
-                       if since < 11 <= state["tx"] else [])
+            change_tx = state.get("change_tx", 11)
+            records = ([dict(tx=change_tx, graph=graph, entity=S, attribute=attribute, op="assert")]
+                       if since < change_tx <= state["tx"] else [])
         if mode in ("paged", "page-cap", "epoch-change"):
             records = [dict(tx=since + n, graph=graph, entity=entity, attribute=attribute, op="assert")
                        for n in (1, 2)] if mode == "page-cap" or len(state["feeds"]) % 2 else []
@@ -200,3 +203,115 @@ def test_membership_restarts_back_off_inside_the_shared_budget(wire,monkeypatch)
     assert not plate.owner_rows(proof,'worker').complete
     assert state['queries']==6
     assert sleeps==[.1,.2]
+
+
+def test_candidate_cache_survives_unrelated_commits_but_fields_refresh(wire, monkeypatch):
+    monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
+    first = state["queries"]
+    assert plate.owner_rows(proof, "worker").exact()[0]["id"] == "test-held"
+    assert state["queries"] - first == 0  # Both cached reads are certified by changes.
+
+
+@pytest.mark.parametrize("mode", ["membership", "status", "blocker", "offline", "truncated", "store-replaced"])
+def test_retained_candidates_never_hide_changed_or_unreadable_proof(wire, mode):
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").complete
+    state["mode"] = mode
+    assert not plate.owner_rows(proof, "worker").complete
+
+
+def test_retained_candidates_reload_selected_field_changes(wire, monkeypatch):
+    monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = wire
+    assert plate.owner_rows(proof, "worker").exact()[0]["title"] == "actual work"
+    state.update(mode="past-returned", title="changed work", change_tx=state["tx"] + 1)
+    assert plate.owner_rows(proof, "worker").exact()[0]["title"] == "changed work"
+
+
+def test_candidate_retention_does_not_apply_to_non_projection_reads(wire):
+    proof, state = wire
+    query = "SELECT ?s WHERE { ?s ?p ?o }"
+    with cache.candidate_reads():
+        with pytest.raises(cache.WatermarkMoved):
+            plate._query(proof, query, 1)
+
+
+@pytest.mark.parametrize('allowance,complete', [(3, False), (8, True)])
+def test_stopped_owner_allowance_recovers_brief_entity_churn(wire, allowance, complete):
+    proof, state = wire
+    state.update(mode='returned', settle_after=5, title='fresh retained work')
+    answer = plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                              include_deferred=True, recovery_tokens=allowance)
+    assert answer.complete is complete
+    if complete:
+        assert answer.exact()[0]['title'] == 'fresh retained work'
+        assert state['queries'] == 5
+    else:
+        assert state['queries'] == 4
+
+
+def test_stopped_owner_continuous_churn_still_refuses(wire):
+    proof, state = wire
+    state['mode'] = 'returned'
+    assert not plate.owner_rows(proof, None, plate_owners=('worker',), capacity=True,
+                                include_deferred=True, recovery_tokens=8).complete
+    assert state['queries'] == 9
+
+
+def deferred_wire(wire, monkeypatch):
+    """Keep the real cache/change-feed fence; inject only the query endpoint."""
+    proof, state = wire
+    original = plate.urlopen
+    class Response:
+        status = 200
+        def __init__(self, rows): self.rows = rows
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def read(self, size):
+            return json.dumps(dict(rows=self.rows, count=len(self.rows), truncated=False)).encode()
+    def send(request, timeout):
+        if request.get_method() != "POST":
+            return original(request, timeout)
+        state["queries"] += 1
+        query = json.loads(request.data)["query"]
+        if "AS ?predicate" not in query:
+            return Response([dict(subject=S, graph=G)])
+        values = dict(id="test-held", title=state.get("title", "held"),
+                      status="deferred", priority=1, created_at="2026-10-01T00:00:00Z")
+        inverse = {v: k for k, v in plate.FIELDS.items()}
+        return Response([dict(subject=S, graph=G, predicate=inverse[k], value=v)
+                         for k, v in values.items()])
+    monkeypatch.setattr(plate, "urlopen", send)
+    return proof, state
+
+
+def test_deferral_read_certifies_despite_continuous_unrelated_writes(wire, monkeypatch):
+    proof, state = deferred_wire(wire, monkeypatch)
+    assert plate.deferred_rows(proof).exact()[0]["id"] == "test-held"
+    assert state["queries"] == 7
+    assert {g for g, _ in state["feeds"]} == {G, G + "#seeds-ephemeral"}
+
+
+@pytest.mark.parametrize("attribute", sorted(plate.DEFERRED_MEMBERSHIP))
+def test_deferral_membership_changes_never_escape_the_fence(wire, monkeypatch, attribute):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state["attribute"] = attribute  # Includes changes to UNSELECTED subjects.
+    assert not plate.deferred_rows(proof).complete
+    assert state["queries"] == 21  # Three whole candidate+field attempts, no stale reuse.
+
+
+def test_deferral_retries_all_fields_after_selected_change(wire, monkeypatch):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state.update(mode="returned", settle_after=14)
+    assert plate.deferred_rows(proof).exact()[0]["id"] == "test-held"
+    assert state["queries"] == 14
+
+
+@pytest.mark.parametrize("mode", ["truncated", "malformed", "offline", "store-replaced"])
+def test_deferral_missing_change_proof_stays_unknown(wire, monkeypatch, mode):
+    proof, state = deferred_wire(wire, monkeypatch)
+    state["mode"] = mode
+    assert not plate.deferred_rows(proof).complete
+    assert state["queries"] == 7

@@ -425,8 +425,15 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
     # In-hand ranks precede every open item and ignore readiness in plate_key.
     # A remote ready poll hydrates the open queue; it cannot change this choice.
     ready_ids = None if any(row.get("status") in _PLATE_RANK for row in mine) else read_ready()
+    # Rank, due and creation were never passed here, so the Seeds backend (a
+    # BrTracker) ignored work rank that beads/files already honoured (#314).
+    # "Next by rank" (aegis-6vto.4) needs it; rows without these keys order
+    # exactly as before apart from oldest-first replacing id among unranked ties.
     mine.sort(key=lambda row: plate_key(row.get("status"), _priority(row),
-                                        row.get("id", ""), ready_ids))
+                                        row.get("id", ""), ready_ids, rank=row.get("rank"),
+                                        due_at=row.get("due_at"),
+                                        created_at=row.get("created_at"),
+                                        lane=row.get("lane")))
     row = mine[0]
     item = WorkItem(id=row.get("id", ""), title=row.get("title", ""),
                     status=row.get("status", "open"),

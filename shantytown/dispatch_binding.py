@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 
-from .dispatch_receipts import (ReceiptConflict, ReceiptStore, assignment_comment,
+from .dispatch_receipts import (DifferentScope, ReceiptConflict, ReceiptStore, assignment_comment,
                                 assignment_proof, assignment_supersession,
                                 prepared_supersession)
 from .protocols import SubmissionObserved
@@ -166,7 +166,20 @@ class Binding:
                         f'st go {plan.item_id} {plan.agent} --reconcile --receipt {ident}; '
                         'proceed only when execution_authorized is true. Never resend or claim by hand.'
                         f' — {marker}')
-            row, fresh = self.store.prepare(scope, text, ident=ident)
+            try:
+                row, fresh = self.store.prepare(scope, text, ident=ident)
+            except DifferentScope as error:
+                # A recovery hint is not release proof: the command still runs
+                # its own native guards if an operator explicitly chooses it.
+                try:
+                    current = self.tracker.get(plan.item_id)
+                except Exception:
+                    current = None
+                if (current is not None and current.status == 'open'
+                        and not current.assignee and not current.defer_until
+                        and error.receipt['state'] in ('prepared', 'assigning')):
+                    raise DifferentScope(error.receipt, supersede_hint=True) from None
+                raise
             if fresh:
                 row['request'] = self.request(plan, plan.binding_agent)
                 self.store._save(row)

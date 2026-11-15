@@ -612,3 +612,169 @@ def test_native_uid_or_group_sharing_refuses_even_with_valid_protected_policy(ca
                         None if str(path) == row['sd'] else original(path, **kw))
     with pytest.raises(IdentityError, match='shared'):
         jobs.check_native(spec, lifecycle=True)
+
+
+@pytest.mark.parametrize('launchable', [0, 1, 65])
+def test_expanding_inventory_preserves_only_complete_launch_capabilities(capability, launchable):
+    import hashlib
+    original, _, original_path = capability
+    original_bytes = original_path.read_bytes()
+    plan = dict(version=1, uid_min=51001, uid_max=60063, slots={})
+    entries = []
+    identity_fields = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username', 'home', 'root'}
+    for index in range(65):
+        if index == 0:
+            value = dict(original)
+        else:
+            uid = 60000 + index - 1
+            name = f'eph-task-{uid:06x}'
+            home = '/var/lib/shantytown/agents/crew-' + name
+            value = dict(original, principal=name, uid=uid, gid=uid,
+                username=f'_stjobs_{uid:06x}', home=home,
+                root='/var/lib/shantytown/job-stores/' + name,
+                workspace=home+'/worktree', settings=home+'/codex/config.toml',
+                environment={'PATH': '/usr/bin:/bin', 'CODEX_HOME': home+'/codex'},
+                request=jobs.request_fields(Request('task', f'item-{index+1}', harness='codex')))
+        if index >= launchable:
+            value = {key:value[key] for key in identity_fields}
+        path = jobs.BASE/(value['principal']+'.json')
+        # Preserve the original working slot byte-for-byte during expansion.
+        raw = original_bytes if index == 0 and launchable else json.dumps(value).encode()
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        plan['slots'][value['principal']] = {'uid':value['uid'], 'sha256':hashlib.sha256(raw).hexdigest()}
+        entries.append(value)
+    (jobs.BASE/'slots.json').write_text(json.dumps(plan))
+    assert len(jobs.inventory()) == 65
+    for index, value in enumerate(entries):
+        req = Request('task', f'item-{index+1}', harness='codex')
+        if index < launchable:
+            selected, _ = jobs.select(req, root=original['controller_root'], harness='codex', used=set(), native_probe=False)
+            assert selected == value
+        else:
+            with pytest.raises(IdentityError, match='exactly one unused'):
+                jobs.select(req, root=original['controller_root'], harness='codex', used=set(), native_probe=False)
+            with pytest.raises(IdentityError, match='manifest schema'):
+                jobs.load(value['principal'])
+
+
+def render_fixture(capability, count):
+    import hashlib
+    from shantytown.job_manifest import render
+    original, _, path = capability
+    raw = path.read_bytes()
+    plan = json.loads((jobs.BASE/'slots.json').read_text())
+    plan['uid_max'] = 60063
+    bindings = {}
+    for index in range(count):
+        uid = 60000 + index
+        name = f'eph-task-{uid:06x}'
+        home = '/var/lib/shantytown/agents/crew-' + name
+        identity = dict(version=1, principal=name, controller_uid=51000,
+            uid=uid, gid=uid, username=f'_stjobs_{uid:06x}', home=home,
+            root='/var/lib/shantytown/job-stores/'+name)
+        data = json.dumps(identity).encode()
+        (jobs.BASE/(name+'.json')).write_bytes(data)
+        (jobs.BASE/(name+'.json')).chmod(0o600)
+        plan['slots'][name] = dict(uid=uid, sha256=hashlib.sha256(data).hexdigest())
+        bindings[name] = dict(controller_root=original['controller_root'], workspace=home+'/worktree',
+            settings=home+'/codex/config.toml', harness='codex', review=None,
+            request=jobs.request_fields(Request('task', f'new-{index}', harness='codex')),
+            argv=['/usr/bin/true'], environment={'CODEX_HOME':home+'/codex'})
+    catalog = json.dumps(plan).encode()
+    (jobs.BASE/'slots.json').write_bytes(catalog)
+    file = jobs.BASE.parent/'bindings.json'
+    file.write_text(json.dumps(bindings))
+    output = jobs.BASE.parent/'rendered'
+    source = jobs.BASE
+    def run():
+        return render(source, file, output, catalog_sha256=hashlib.sha256(catalog).hexdigest(),
+            bindings_sha256=hashlib.sha256(file.read_bytes()).hexdigest())
+    return original, raw, plan, bindings, file, output, run
+
+
+@pytest.mark.parametrize('count', [1, 64])
+def test_per_slot_renderer_preserves_existing_slot_and_binds_distinct_requests(capability, monkeypatch, count):
+    import hashlib
+    original, raw, _, bindings, _, output, run = render_fixture(capability, count)
+    result = run()
+    assert result['slots'] == count+1 and result['bound'] == count
+    assert (output/(original['principal']+'.json')).read_bytes() == raw
+    assert result['catalog_sha256'] == hashlib.sha256((output/'slots.json').read_bytes()).hexdigest()
+    monkeypatch.setattr(jobs, 'BASE', output)
+    assert len(jobs.inventory()) == count+1
+    for index, name in enumerate(bindings):
+        spec, _ = jobs.select(Request('task', f'new-{index}', harness='codex'),
+            root=original['controller_root'], harness='codex', used=set(), native_probe=False)
+        assert spec['principal'] == name
+    with pytest.raises(FileExistsError):
+        run()  # Never overwrite even this renderer's earlier output.
+
+
+@pytest.mark.parametrize('fault', ['unknown-slot', 'identity-override', 'partial', 'argv', 'request-kind', 'request-item', 'oversized', 'ambiguous-request', 'environment', 'input-symlink', 'pin', 'duplicate-key'])
+def test_per_slot_renderer_refuses_before_any_output(capability, fault):
+    from shantytown.job_manifest import render
+    import hashlib
+    original, _, plan, bindings, path, output, run = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    if fault == 'unknown-slot': bindings['eph-task-ffffff'] = bindings.pop(name)
+    elif fault == 'identity-override': bindings[name]['uid'] = 60001
+    elif fault == 'partial': del bindings[name]['settings']
+    elif fault == 'argv': bindings[name]['argv'] = ['relative']
+    elif fault == 'request-kind': bindings[name]['request']['job'] = 'review'
+    elif fault == 'request-item': bindings[name]['request']['item'] = '../foreign'
+    elif fault == 'oversized': bindings[name]['request']['item'] = 'x'*70000
+    elif fault == 'ambiguous-request': bindings[name]['request'] = original['request']
+    elif fault == 'environment': bindings[name]['environment']['SSH_AUTH_SOCK'] = '/foreign'
+    path.write_text(json.dumps(bindings))
+    if fault == 'input-symlink':
+        saved = path.with_suffix('.saved')
+        path.rename(saved)
+        path.symlink_to(saved)
+    elif fault == 'duplicate-key':
+        path.write_text('{"x":{},"x":{}}')
+    with pytest.raises((IdentityError, OSError, ValueError)):
+        if fault == 'pin':
+            render(jobs.BASE, path, output, catalog_sha256='0'*64,
+                bindings_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        else:
+            run()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('fault', ['duplicate-uid', 'duplicate-user', 'root', 'partial-launch'])
+def test_malformed_provisioned_identity_still_refuses_the_whole_inventory(capability, fault):
+    import hashlib
+    original, _, plan, bindings, _, _, _ = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    path = jobs.BASE/(name+'.json')
+    value = json.loads(path.read_bytes())
+    if fault == 'duplicate-uid': value.update(uid=original['uid'], gid=original['gid'])
+    elif fault == 'duplicate-user': value['username'] = original['username']
+    elif fault == 'root': value['root'] = '/foreign'
+    else: value['harness'] = 'codex'
+    raw = json.dumps(value).encode()
+    path.write_bytes(raw)
+    plan['slots'][name] = dict(uid=value['uid'], sha256=hashlib.sha256(raw).hexdigest())
+    (jobs.BASE/'slots.json').write_text(json.dumps(plan))
+    with pytest.raises(IdentityError):
+        jobs.inventory()
+
+
+def test_launch_renderer_refuses_a_reviewed_but_mixed_controller_inventory(capability):
+    from shantytown.job_manifest import render
+    import hashlib
+    _, _, plan, bindings, path, output, _ = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    manifest = jobs.BASE/(name+'.json')
+    value = json.loads(manifest.read_bytes())
+    value['controller_uid'] = 60001
+    raw = json.dumps(value).encode()
+    manifest.write_bytes(raw)
+    plan['slots'][name]['sha256'] = hashlib.sha256(raw).hexdigest()
+    raw = json.dumps(plan).encode()
+    (jobs.BASE/'slots.json').write_bytes(raw)
+    with pytest.raises(IdentityError, match='one separate controller'):
+        render(jobs.BASE, path, output, catalog_sha256=hashlib.sha256(raw).hexdigest(),
+            bindings_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    assert not output.exists()

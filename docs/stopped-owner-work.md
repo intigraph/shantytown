@@ -12,9 +12,16 @@ budget ends, so a capped mutation pass cannot masquerade as an empty census.
 
 The sweep requires a complete crew census and the selected tracker's complete
 bounded assignee projection, including owned blocked/deferred work. The ranking
-projection is insufficient because it omits owned waiting work. Inbox pointers
-are counted separately and never unassigned. Each pass writes the complete
-per-owner work, inbox and operator-stopped release-due counts to
+projection is insufficient because it omits owned waiting work. Deploy-operation records are never released by this sweep, in any phase.
+Their labels or native `deploy_admission` context identify them; malformed
+context cannot prove ordinary work. The initial census, final fenced read and
+Seeds release adapter all apply this exclusion. Only the deployment lane may
+recover these reservations. Inbox pointers
+are excluded from the query and never unassigned: with thousands of open
+pointers, hydrating them overflowed the bounded field budget and every pass
+refused (aegis-byt). The census records `inbox_pointers` as not read rather
+than a zero it never measured. Each pass writes the complete per-owner work and
+operator-stopped release-due counts to
 `<crew-root>/stranded-work/census.json`. A partial read refuses before mutation;
 there is no generic board-list fallback. A card's explicit host must match the configured local host.
 Remote or unscoped owners and failed/malformed process reads are UNKNOWN.
@@ -24,20 +31,44 @@ metadata is UNKNOWN. Otherwise only a successful process census proving a missin
 login shell establishes down. Heartbeat expiry, old scrollback, quiet agents
 and busy foreground subprocesses do not establish down. A missing card uses the same measured duration; missing preservation metadata still prevents release.
 
-The first confirmed down observation starts a one-hour clock. After more than
-one measured hour, every priority (including P0) raises persistent attention.
+The first confirmed down observation starts a measured clock. The deployed
+sweep uses 30 minutes when the owner holds any eligible P0/P1 work, otherwise
+four hours, for persistent attention and release eligibility.
 These inferred down/missing/cycle-blocked classes remain observe-only, including
 when release mode is selected. Unknown evidence or a new launch generation
-restarts the duration proof. Their deferred/decision/parked work stays untouched.
+restarts the duration proof. Deferred/parked work can raise owner attention
+after the measured threshold, while ownership, status and parking gates remain
+unchanged. ASK/desk decisions remain excluded. The deployed operator-only
+policy never releases inferred-down work.
 
 Release mode applies only to a recorded operator stop plus a successful local
 process observation proving the owner down. A live or unreadable process cannot
-be overridden by a stop file. This authoritative class gets immediate attention
-and release-due accounting, including ordinary, ASK and parked work in open,
-hooked, in-progress, blocked and deferred states. Inbox recipient assignments
+be overridden by a stop file. This authoritative class gets immediate attention;
+release becomes due after the same measured priority threshold for ordinary
+and parked work in open, hooked,
+in-progress, blocked and deferred states. ASK/desk-class items (an `ASK ` title,
+an ASK label such as `desk`, `needs-stiwi`, `decision-needed` or
+`blocked:human`, or a human blocker) are decisions held for a person, not
+capacity: they stay with their owner and stay visible. A `DESK:` title prefix counts the
+same as `ASK `. Release read-back compares only the governed fields (status,
+priority, labels, deferral, title, notes and similar), never derived counters
+such as `comments_total`, which the release's own comment changes. An earlier
+release recorded as UNKNOWN fences its owner until an exact read-back proves it:
+no assignee, and this release's own preservation comment present. Only then is
+it settled as released. The release journal keeps one entry per item. Inbox recipient assignments
 remain unchanged. Stop-record identity is part of the generation rechecked
 under the lifecycle lock; relaunch or changed stop evidence prevents release.
-No status, title, notes, gate or deferral is changed by unassignment. A dated stop
+Unassignment changes no title, notes, gate or deferral. In-progress work also
+returns to open in the same revision-fenced write, because unassigned
+in-progress work is on no plate and outside ready work. Open, blocked and
+deferred work keep their status (aegis-byt). This class has its own pass bounds:
+one keyed notice per stopped owner and stop generation (at most 10 per pass),
+and up to 40 releases within 60 seconds. A whole stopped harness therefore
+drains in one pass, not one item per two intents. Within this class work is served in
+priority order (P0 first), so the cap never leaves ready P0/P1 work behind
+parked lower-priority work. Notice bodies start with
+their marker, which is what every receipt reader matches; a body that does not
+would read back UNKNOWN and permanently refuse release. A dated stop
 can be recorded with `st agent stop NAME --resume-at ISO8601`; this requires a
 future timestamp with timezone, and cannot be combined with `--after-turn`.
 Existing undated stop records remain readable.
@@ -106,3 +137,18 @@ reader remains UNKNOWN rather than enumerating all recipient history. Adapters w
 retain their declared adapter behavior; no cross-adapter cost claim is implied.
 This source change does not enable a lifecycle publisher or admit a runtime
 measurement cohort.
+
+## Stats-hook publication pacing
+
+With lifecycle publication enabled, an unchanged stats hook can skip publication
+when a verified local head receipt covers the same graph projection and this
+agent's observation is acknowledged. An unchanged partial head can remain quiet
+for an acknowledged agent while a pending agent's own hook retries delivery.
+Local lease renewals do not change those observations until the
+existing five-minute graph heartbeat is due. A skipped hook does not reread,
+validate or renew remote evidence.
+
+Missing, legacy, changed or unacknowledged receipts use the normal flush and
+readback. Stops, launches and due heartbeats still publish, and explicit lifecycle
+and tend flushes retain their remote rollback and revision checks. No failed
+delivery is acknowledged locally merely to reduce traffic.

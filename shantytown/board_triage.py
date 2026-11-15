@@ -15,6 +15,8 @@ import subprocess
 import threading
 from dataclasses import replace
 
+from .inbox import is_message
+
 
 class TriageError(RuntimeError):
     pass
@@ -123,7 +125,7 @@ def candidates(item, corpus):
     query = words(item)
     ranked = []
     for row in corpus:
-        if row['id'] == item['id'] or str(row.get('title', '')).startswith('inbox:'):
+        if row['id'] == item['id'] or is_message(str(row.get('title', ''))):
             continue
         other = words(row)
         score = len(query & other) / max(1, len(query | other))
@@ -248,7 +250,7 @@ def run(args, tracker, registry):
         if selected - {r['id'] for r in payload}:
             raise TriageError('Requested item is absent from the board')
         rows = [r for r in payload if r.get('status') == 'open' and not r.get('assignee')
-                and not str(r.get('title', '')).startswith('inbox:')
+                and not is_message(str(r.get('title', '')))
                 and (not selected or r['id'] in selected)]
         if selected - {r['id'] for r in rows}:
             raise TriageError('Requested items must be open, unassigned, and not inbox pointers')

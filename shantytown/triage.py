@@ -193,6 +193,43 @@ def looks_wedged(screen: str) -> bool:
 _CHROME_ABOVE_PROMPT = 8
 
 
+def _without_codex_queue(screen: str) -> str:
+    """Collapse current queue previews before measuring prompt chrome.
+
+    Queue previews can push Working ten or twenty rows above the composer.
+    They are input, not runtime status: a quoted spinner in a preview must
+    never establish busy. Keep the existing eight-row chrome limit after
+    removing only a queue fenced by the current and previous composers.
+    """
+    lines = strip_attrs(screen).splitlines()
+    prompts = [i for i, row in enumerate(lines) if row.lstrip().startswith('›')]
+    if not prompts:
+        return screen
+    end = prompts[-1]
+    lower = max(0, end - 80, prompts[-2] + 1 if len(prompts) > 1 else 0)
+    removed = set()
+    for start in range(lower, end):
+        heading = lines[start].strip().removeprefix('• ').strip()
+        if (heading == 'Queued follow-up inputs'
+                or heading == 'Messages to be submitted after next tool call'
+                or heading.startswith('Messages to be submitted after next tool call (')):
+            stop = start + 1
+            arrow = False
+            # Only indented preview rows belong to this queue. A later status
+            # or output row can follow a quoted heading; preserve that suffix.
+            while stop < end:
+                row = lines[stop]
+                if row.strip() and not row[:1].isspace():
+                    break
+                arrow |= row.lstrip().startswith('↳')
+                stop += 1
+            if arrow:
+                removed.update(range(start, stop))
+    if removed:
+        return '\n'.join(row for i, row in enumerate(lines) if i not in removed)
+    return screen
+
+
 def _chrome(screen: str) -> str:
     """The runtime's chrome block: the tail window, EXTENDED UP past the input
     box when one is on screen.
@@ -209,7 +246,7 @@ def _chrome(screen: str) -> str:
     triage.py must not read as permanently busy. This widens the window by a
     measured amount; it does not remove it.
     """
-    lines = strip_attrs(screen).splitlines()
+    lines = strip_attrs(_without_codex_queue(screen)).splitlines()
     while lines and not lines[-1].strip():
         lines.pop()                       # padding is not content (see _tail)
     if not lines:

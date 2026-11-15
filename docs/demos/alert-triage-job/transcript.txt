@@ -1,0 +1,9 @@
+Synthetic reviewed input: one fingerprint and its original demo-alert item.
+Compile with exact input pins:
+{"bindings_sha256": "a7aeb711623a2e7ab322fc4e11118087f24bb0e01ab21947b8a04ea4c30d0b35", "definition_sha256": "7529834c340af4059979cece5064b8a2f044955d63edfc4adb22950fd891e728", "input_sha256": "7277561ddc8e4fae651a34dcd3772e40664899702e4960627847f4e0c129392f", "prompt_sha256": "c300cad2cb08867a1ee8ad2a420452c729cc907d2b7ba8db7370e3243ea26da9", "runtime_admitted": false, "source_sha256": {"identity": "bf6444b6d7345ffd36ad7e29634414f606d506747bddb9c78d14372ca6dbfa0d", "input": "7277561ddc8e4fae651a34dcd3772e40664899702e4960627847f4e0c129392f", "launch": "5797dc7a4588e60be75e3678644fcf4fa2a28ea2f7c2916490ea6b501fd1e03f"}, "version": 1}
+Original item: demo-alert
+Fingerprint frozen: True
+Runtime admitted: False
+Mutate input after pinning; expect refusal and no output:
+REFUSED: reviewed renderer input digest changed
+No rejected artifacts; no launch, network, accounts or credentials used.
