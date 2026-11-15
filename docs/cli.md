@@ -4046,7 +4046,11 @@ Decisions are atomic, read-back-verified local delivery metadata under
 `<root>/inbox-dispositions/<backend>/`. They survive process/session restarts
 using that root; **they do not propagate to another host/root**. `--count` still
 reports stored unread pointers. A bounded list may show fewer eligible messages;
-that does not mean the retained pointers disappeared. At most 64 due original
+that does not mean the retained pointers disappeared. Ordinary reads expand the raw
+window up to 100 rows to fill an eligible batch behind suppressed receipts. If
+that bound cannot establish a full batch or exhaustion, the read returns UNKNOWN
+without acknowledging anything; exact receipt-ID reads remain available.
+At most 64 due original
 receipts are fetched per read, with a 1024-decision capacity; exceeded or malformed
 state reports UNKNOWN rather than treating unreadable state as an empty inbox.
 

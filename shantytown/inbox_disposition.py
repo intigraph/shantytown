@@ -155,15 +155,23 @@ class ControlledInbox:
 
     def unread_view(self, me, *, limit=100, oldest_first=False):
         view = getattr(self.raw, 'unread_view', None)
-        if callable(view):
-            total, rows = view(me, limit=limit, oldest_first=oldest_first)
-        else:
+        if not callable(view):
             rows = self.raw.unread(me)
-            total = len(rows)
-            rows = rows[:limit]
-        visible = self._visible(me, rows)
-        # total describes stored rows, not a promise that hidden rows are eligible.
-        return max(total, len(visible)), visible[:limit]
+            visible = self._visible(me, rows)
+            return max(len(rows), len(visible)), visible[:limit]
+        # Retained processing-ACK rows must not pin every ordinary read to
+        # the same hidden prefix. Expand only within the backend's 100-row
+        # window budget; beyond it we cannot claim a complete eligible batch.
+        bound = limit
+        while True:
+            total, rows = view(me, limit=bound, oldest_first=oldest_first)
+            visible = self._visible(me, rows)
+            if len(visible) >= limit or len(rows) >= total:
+                return max(total, len(visible)), visible[:limit]
+            if bound >= 100 or len(rows) < min(bound, total):
+                raise ValueError('inbox eligible selection UNKNOWN; retained processing '
+                                 'decisions exceed bounded view; use exact receipt IDs')
+            bound = min(100, bound * 2)
 
     def unread_selected(self, me, ids):
         select = getattr(self.raw, 'unread_selected', None)

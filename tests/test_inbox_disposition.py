@@ -220,3 +220,58 @@ def test_unknown_declared_sender_binds_native_receipt_before_live(tmp_path, monk
     assert cli._inbox_durable(args(tmp_path), card, original.body, Panes()) == cli.OK
     assert sent == ([original.body] if readable and native_sender == 'changed-sender' else [])
     assert raw.get_message('lead', original.id) == original
+
+
+def test_ordinary_cli_read_reaches_changed_finding_after_retained_ack_batch(tmp_path, monkeypatch, capsys):
+    from test_inbox_read_progress import args as read_args
+    raw, state, box = setup(tmp_path)
+    duplicates = [raw.deliver('lead', 'same finding', 'alerting') for _ in range(34)]
+    state.set(duplicates[0], 'ack', 'tracked')
+    changed = raw.deliver('lead', 'changed critical finding', 'alerting')
+    monkeypatch.setattr(cli, '_inbox', lambda *a, **kw: box)
+    assert cli._inbox_read(read_args(), 'lead') == cli.OK
+    assert 'changed critical finding' in capsys.readouterr().out
+    assert {m.id for m in raw.unread('lead')} == {m.id for m in duplicates}
+    assert raw.get_message('lead', changed.id).read
+    assert cli._inbox_read(read_args(), 'lead') == cli.OK
+    assert {m.id for m in raw.unread('lead')} == {m.id for m in duplicates}
+
+
+@pytest.mark.parametrize('oldest_first', [False, True])
+def test_native_window_expands_until_eligible_batch(tmp_path, oldest_first):
+    raw, state, _ = setup(tmp_path)
+    hidden = Message('hidden', 'lead', 'handled', 'sender')
+    state.set(hidden, 'ack', 'tracked')
+    rows = [Message(str(i), 'lead', hidden.body, hidden.frm) for i in range(34)]
+    rows += [Message(str(i), 'lead', f'changed {i}', 'sender') for i in range(34, 54)]
+    calls = []
+    class Native:
+        def unread_view(self, me, *, limit, oldest_first):
+            calls.append((limit, oldest_first))
+            return len(rows), rows[:limit]
+    box = ControlledInbox(Native(), state)
+    total, selected = box.unread_view('lead', limit=15, oldest_first=oldest_first)
+    assert total == 54
+    assert selected == rows[34:49]
+    assert calls == [(15, oldest_first), (30, oldest_first), (60, oldest_first)]
+
+
+def test_native_scan_budget_exhaustion_is_cli_unknown_without_ack(tmp_path, monkeypatch, capsys):
+    from test_inbox_read_progress import args as read_args
+    _, state, _ = setup(tmp_path)
+    hidden = Message('hidden', 'lead', 'handled', 'sender')
+    state.set(hidden, 'ack', 'tracked')
+    calls = []
+    class Native:
+        def unread_view(self, me, *, limit, oldest_first):
+            calls.append(limit)
+            return 101, [Message(str(i), 'lead', hidden.body, hidden.frm) for i in range(limit)]
+        def mark_read(self, *a, **kw):
+            pytest.fail('UNKNOWN selection must not acknowledge anything')
+    box = ControlledInbox(Native(), state)
+    monkeypatch.setattr(cli, '_inbox', lambda *a, **kw: box)
+    assert cli._inbox_read(read_args(), 'lead') == cli.CANNOT_TELL
+    output = capsys.readouterr()
+    assert 'selection UNKNOWN' in output.err
+    assert 'Repeat' not in output.out
+    assert calls == [15, 30, 60, 100]
