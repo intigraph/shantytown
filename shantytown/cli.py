@@ -11592,6 +11592,7 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
     it, and gives up after SELF_SERVE_TIMEOUT_S, leaving the request for tend.
     Returns the log path, or "" when disabled or the spawn failed."""
     import subprocess
+    from .runtime import SettingsError, _hook_interpreter
     if os.environ.get(SELF_SERVE_ENV, "").strip().lower() in ("0", "off", "false", "no"):
         return ""
     log = Path(a.root) / "logs" / f"self-cycle-{agent}.log"
@@ -11599,11 +11600,13 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as fh:
             subprocess.Popen(
-                [sys.executable, "-m", "shantytown.cli", "--root", str(a.root),
+                [_hook_interpreter(), "-m", "shantytown.cli", "--root", str(a.root),
                  "agent", "cycle", agent, "--serve-request"],
                 stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                start_new_session=True, close_fds=True)
-    except OSError as e:
+                # A repository's parent can expose a namespace called
+                # shantytown ahead of the editable-install finder.
+                cwd="/", start_new_session=True, close_fds=True)
+    except (OSError, SettingsError) as e:
         print(f"  ⚠ could not start the self-cycle waiter ({e}); `st fleet tend` "
               f"still serves the request.", file=sys.stderr)
         return ""

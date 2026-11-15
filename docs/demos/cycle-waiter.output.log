@@ -1,0 +1,8 @@
+Script started on 2026-11-14 03:48:08-05:00 [COMMAND="uv run --no-editable python docs/demos/cycle-waiter.py" <not executed on terminal>]
+Synthetic editable-install fixture; identical parser probe; no lifecycle action.
+Inherited namespace-shadow cwd: exit=1
+ImportError: cannot import name '__version__' from 'shantytown' (unknown location)
+Waiter spawn cwd: exit=0; parser exposes --root=True
+Regression assertions passed.
+
+Script done on 2026-11-14 03:48:09-05:00 [COMMAND_EXIT_CODE="0"]

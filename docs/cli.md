@@ -407,6 +407,10 @@ existing request. While a fresh, unrefused self-cycle request is pending,
 Stop advice and self-feed stay silent so the pane can reach idle. Refused or
 stale requests resume normal advice; automatic requests do not silence it.
 This does not relax the waiter's busy-pane or background-task checks.
+The detached waiter uses an interpreter verified by the installed-hook resolver
+and starts from `/`, so a repository directory named `shantytown` in the caller's
+working directory cannot shadow the installed package. If no usable interpreter
+is available, the request remains pending for tend and the spawn reports why.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
