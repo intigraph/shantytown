@@ -1677,11 +1677,15 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack", "review-reservation"))
     wi.add_argument("item")
     wi.add_argument("--result-json", action="store_true", help="stable result envelope, including failures")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
+    wi.add_argument("--reviewer", help="reserve one independent reviewer on the seed")
+    wi.add_argument("--inherit-from", help="inherit the predecessor seed's reviewer")
+    wi.add_argument("--replace-reviewer", help="explicit expected previous reviewer for reassignment")
+    wi.add_argument("--contributor", action="append", default=[], help="additional author recused from review (repeatable)")
     wi.add_argument("--priority", type=int, choices=range(5))
     wi.add_argument("--spec-file", type=Path)
     wi.add_argument("--quote")

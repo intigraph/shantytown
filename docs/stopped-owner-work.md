@@ -31,16 +31,21 @@ metadata is UNKNOWN. Otherwise only a successful process census proving a missin
 login shell establishes down. Heartbeat expiry, old scrollback, quiet agents
 and busy foreground subprocesses do not establish down. A missing card uses the same measured duration; missing preservation metadata still prevents release.
 
-The first confirmed down observation starts a one-hour clock. After more than
-one measured hour, every priority (including P0) raises persistent attention.
+The first confirmed down observation starts a measured clock. The deployed
+sweep uses 30 minutes when the owner holds any eligible P0/P1 work, otherwise
+four hours, for persistent attention and release eligibility.
 These inferred down/missing/cycle-blocked classes remain observe-only, including
 when release mode is selected. Unknown evidence or a new launch generation
-restarts the duration proof. Their deferred/decision/parked work stays untouched.
+restarts the duration proof. Deferred/parked work can raise owner attention
+after the measured threshold, while ownership, status and parking gates remain
+unchanged. ASK/desk decisions remain excluded. The deployed operator-only
+policy never releases inferred-down work.
 
 Release mode applies only to a recorded operator stop plus a successful local
 process observation proving the owner down. A live or unreadable process cannot
-be overridden by a stop file. This authoritative class gets immediate attention
-and release-due accounting for ordinary and parked work in open, hooked,
+be overridden by a stop file. This authoritative class gets immediate attention;
+release becomes due after the same measured priority threshold for ordinary
+and parked work in open, hooked,
 in-progress, blocked and deferred states. ASK/desk-class items (an `ASK ` title,
 an ASK label such as `desk`, `needs-stiwi`, `decision-needed` or
 `blocked:human`, or a human blocker) are decisions held for a person, not
