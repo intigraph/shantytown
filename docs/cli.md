@@ -301,6 +301,7 @@ st repo                       a shared project repo
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
+    --instruction-report     compare composed graph instructions and tooling bytes without provisioning
   subscribe                   watch quipu entity events; route governed workflows to the admin
   hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
@@ -3343,7 +3344,22 @@ numbers, exact heads, shared files and item families in its body. No disposition
 file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
 are validated and appended when valid; missing, stale, invalid or unreadable
 annotations produce advice rather than refusing creation. This command never
-closes another PR. Other-PR churn does not block creation.
+closes another PR based on overlap advice. Other-PR churn does not block creation.
+
+Explicit body trailers declare publish lineage, one same-repository number per
+line: `Supersedes: #N`, `Split-from: #N`, `Folds: #N`, or `Stacked-on: #N`.
+Fenced examples do not count. Each predecessor must declare the same `Bead:`
+primary item. `Stacked-on` requires its open exact head as the candidate base
+and leaves it open. The other trailers authorize retirement: after verifying
+the created successor, the command rechecks each predecessor, posts a pointer
+to the successor, closes it, and verifies its head and closed state. Branches
+are retained. For a split, declare retirement only when the published successor
+accounts for the predecessor's remaining work; other split PRs carry that same
+work item and lineage. A dry run includes the retirement plan without writes.
+Malformed declarations or mismatched item identities refuse before creation.
+If retirement fails or races after creation, exit 2 names the existing successor;
+inspect and reconcile it rather than repeating creation. GitHub offers no
+atomic expected-head close, so a raced close remains unverified.
 
 Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
 files per PR. Missing metadata, failed reads or bound exhaustion produce an
@@ -3994,6 +4010,16 @@ A non-null `recovery` preserves a recognized native write-operation witness,
 provenance graph and exact item IDs. It excludes private field differences and
 bodies. Use this persisted identity, when available, to reconcile the SDK write;
 the new per-invocation operation ID is only a diagnostic correlation key.
+
+
+Ready-work utilization counts and board triage exclude both `inbox:` and legacy
+`mail:` title markers, including leading whitespace, using the plate message
+predicate. An `inbox` label on a real work item does not exclude that work.
+Native ready counts apply the title exclusion before fetching metadata, and
+legacy ready-list utilization applies the same rule. Unreadable readiness
+remains unknown rather than zero. Listing an inbox remains a pure read;
+explicit ACK closes tracker pointers and the scheduled retention sweep retires
+old pointers while preserving their records and verified related links.
 
 ## Display-only roster snapshots
 
