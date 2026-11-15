@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
+
 ## [0.16.0](https://github.com/intigraph/shantytown/compare/v0.15.1...v0.16.0) (2026-11-14)
 
 

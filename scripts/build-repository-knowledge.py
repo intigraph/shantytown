@@ -17,6 +17,49 @@ KINDS = {"idea", "interface", "decision", "start-here"}
 PROPERTIES = {"interfaceKind", "publicName", "status", "supersessionStatus", "startHereOrder", "glossaryTerm"}
 
 
+# This exception is an explicit reviewed contract for one high-churn interface,
+# not permission to silently rebind any other record's source witness.
+CLI_SOURCE = "shantytown/cli.py"
+CLI_SUBJECT = A + "code/shantytown/shantytown%2Fcli.py"
+CLI_SUMMARY = "docs/knowledge/cli-summary.md"
+
+
+def witness_bytes(source, path):
+    if not isinstance(path, str):
+        raise ValueError("source witness path must be explicit")
+    witness = source / path
+    if (Path(path).is_absolute() or ".." in Path(path).parts
+            or not witness.resolve().is_relative_to(source.resolve())):
+        raise ValueError("source witness escaped: " + path)
+    return witness.read_bytes()
+
+
+def record_content(source, record):
+    content = witness_bytes(source, record["source"])
+    digest = hashlib.sha256(content).hexdigest()
+    if "source_hash_mode" not in record:
+        if "summary_source" in record or "summary_sha256" in record:
+            raise ValueError("summary witness requires explicit source hash mode")
+        if digest != record.get("source_sha256"):
+            raise ValueError("source witness changed: " + record["source"])
+        return digest, record["summary"]
+    if record["source_hash_mode"] != "release-bytes":
+        raise ValueError("unknown source hash mode")
+    if "source_sha256" in record or "summary" in record:
+        raise ValueError("mixed source or summary witness modes")
+    if (record["source"] != CLI_SOURCE or record.get("subject") != CLI_SUBJECT
+            or record.get("kind") != "interface"):
+        raise ValueError("release-byte source is not the approved CLI interface")
+    if record.get("summary_source") != CLI_SUMMARY:
+        raise ValueError("summary source is not the approved stable anchor")
+    summary = witness_bytes(source, record["summary_source"])
+    if hashlib.sha256(summary).hexdigest() != record.get("summary_sha256"):
+        raise ValueError("summary witness changed")
+    # sourceHash identifies published bytes. Summary review is separately bound
+    # to the strict anchor; neither witness renews the review date.
+    return digest, summary.decode("utf-8").strip()
+
+
 def render(source, revision, lookup):
     source = Path(source)
     if not re.fullmatch("[0-9a-f]{40}", revision):
@@ -45,14 +88,7 @@ def render(source, revision, lookup):
 
     for record in records:
         path = record["source"]
-        witness = source / path
-        if (
-            Path(path).is_absolute()
-            or ".." in Path(path).parts
-            or not witness.resolve().is_relative_to(source.resolve())
-            or hashlib.sha256(witness.read_bytes()).hexdigest() != record["source_sha256"]
-        ):
-            raise ValueError("source witness changed: " + path)
+        digest, summary = record_content(source, record)
         subject = record["subject"]
         bases = (A + "doc/shantytown/" + quote(path, safe=""), A + "code/shantytown/" + quote(path, safe=""))
         if not any(subject == base or subject.startswith(base + "#") for base in bases):
@@ -71,7 +107,6 @@ def render(source, revision, lookup):
         fact(subject, A + "filePath", path)
         if record.get("type"):
             fact(subject, RDF + "type", A + record["type"], iri=True)
-        summary = record["summary"]
         if (
             not summary.strip()
             or len(summary) > 1000
@@ -80,7 +115,7 @@ def render(source, revision, lookup):
             raise ValueError("unreviewed or private summary")
         fact(subject, RDFS + "comment", summary)
         fact(subject, A + "knowledgeKind", record["kind"])
-        fact(subject, A + "sourceHash", record["source_sha256"])
+        fact(subject, A + "sourceHash", digest)
         fact(subject, A + "reviewAfter", after, datatype=XSD + "dateTime")
         fact(subject, A + "maxAge", age, datatype=XSD + "integer")
         fact(subject, "http://purl.org/dc/terms/modified", registry["reviewed_at"], datatype=XSD + "dateTime")
