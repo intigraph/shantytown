@@ -1,0 +1,6 @@
+BEFORE
+normal startup directive instruction: False
+unreadable plate and primer directive instruction: False
+AFTER
+normal startup directive instruction: True
+unreadable plate and primer directive instruction: True

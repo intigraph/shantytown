@@ -927,6 +927,12 @@ Four things, and each one has to earn its line:
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
    adapters, those two sections vanish and anchor still works.
 
+Startup text tells agents to check governing Directives in Quipu before acting and
+record new operator directives verbatim as Directive entities through the governed
+write path. This reminder appears in both anchor startup and the packaged stack
+orientation, including when the plate read is unavailable. It does not perform a
+graph write or grant permission to one.
+
 ### anchor is a read. It must never write.
 
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is
