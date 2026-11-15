@@ -60,7 +60,8 @@ def report(workspace, card, cfg, manifest, *, harness=None):
     for path, text in plan.updates.items():
         proposed[path] = (tooling.instruction_text(text, manifest.instructions)
                           if manifest is not None else text)
-    comparisons = {}
+    # Equal graph bodies produce no updates, but still belong in the report.
+    comparisons = dict(plan.comparisons)
     for name in ("CLAUDE.md", "AGENTS.md"):
         target = (ws / name).resolve()
         if target not in proposed:

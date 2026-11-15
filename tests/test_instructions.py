@@ -66,6 +66,31 @@ def test_report_composes_graph_body_with_tooling_without_writes(tmp_path, mode):
     assert (tmp_path / "AGENTS.md").is_symlink()
 
 
+@pytest.mark.parametrize("mode", ["compare", "apply"])
+def test_report_keeps_equal_graph_comparisons_without_writes(tmp_path, mode):
+    body = b"same body\n"
+    target = tmp_path / "CLAUDE.md"
+    target.write_bytes(body)
+    alias = tmp_path / "AGENTS.md"
+    alias.symlink_to("CLAUDE.md")
+    before = target.stat()
+    alias_before = alias.lstat()
+    expected = instructions.prepare(tmp_path, Agent("alice"), cfg(body.decode(), mode))
+    assert not expected.updates
+
+    actual = instructions.report(tmp_path, Agent("alice"), cfg(body.decode(), mode), None)
+
+    assert set(actual) == {"CLAUDE.md", "AGENTS.md"}
+    assert actual == expected.comparisons
+    assert all(comparison["equal"] for comparison in actual.values())
+    assert target.read_bytes() == body
+    assert target.stat().st_ino == before.st_ino
+    assert target.stat().st_mtime_ns == before.st_mtime_ns
+    assert alias.is_symlink() and alias.readlink().as_posix() == "CLAUDE.md"
+    assert alias.lstat().st_ino == alias_before.st_ino
+    assert alias.lstat().st_mtime_ns == alias_before.st_mtime_ns
+
+
 def test_effective_harness_selector_comes_from_canonical_caller(tmp_path):
     doc = cfg("fleet").source_document
     doc["fragments"].append({"id": "urn:test:codex", "scope": "harness",
