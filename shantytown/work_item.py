@@ -219,7 +219,7 @@ def command(args, tracker):
             raise ValueError("selected tracker cannot verify a close reason")
         fields = {"status": "closed", "close_reason": _body(args.reason_file).strip()}
     elif args.item_action == "update":
-        for key in ("status", "assignee", "priority"):
+        for key in ("status", "assignee", "priority", "lane", "rank"):
             value = getattr(args, key, None)
             if value is not None:
                 fields[key] = value
@@ -245,6 +245,26 @@ def command(args, tracker):
     from .plate_capacity import active, ensure_room, assignment_lock
     owner = fields.get("assignee", item.assignee)
     prospective = asdict(item) | fields
+    queue_comment = None
+    if 'lane' in fields or 'rank' in fields:
+        from .sd import SdTracker
+        from .queue_policy import promotion, validate
+        from .protocols import rank_order
+        if not isinstance(tracker, SdTracker):
+            raise ValueError('lane/rank transition requires native Seeds CAS; no fallback')
+        if type(item.revision) is not int or item.revision < 1:
+            raise ValueError('lane/rank transition revision UNKNOWN')
+        if 'rank' in fields:
+            rank_order(fields['rank'])
+        if (fields.get('lane') == 'now' and item.lane != 'now'
+                or 'rank' in fields and item.lane == 'now' and fields['rank'] != item.rank):
+            rows = validate(tracker.queue_rows())
+            queue_comment = promotion(getattr(args, 'quote', None),
+                getattr(args, 'requester', None), getattr(args, 'urgent', False),
+                displaced=[r['id'] for r in rows if r['lane'] == 'now' and r['id'] != item.id])
+            if prospective.get('rank') is None:
+                raise ValueError('Now promotion requires an explicit rank')
+        expected_revision = item.revision if expected_revision is None else expected_revision
     with assignment_lock(tracker, owner, dry_run=args.dry_run):
         if owner and ("assignee" in fields or "status" in fields):
             current = exact(tracker, item.id)
@@ -261,6 +281,8 @@ def command(args, tracker):
             options = {"replace_text": True} if replace_text and isinstance(tracker, BrTracker) else {}
             if expected_revision is not None:
                 options["if_revision"] = expected_revision
+            if queue_comment is not None:
+                options['transition_comment'] = queue_comment
             from .sd import SdTracker
             if isinstance(tracker,SdTracker) and fields.get("status") == "in_progress":
                 session = getattr(args,"session",None)
@@ -275,5 +297,8 @@ def command(args, tracker):
             after = exact(tracker, item.id)
             if any(getattr(after, key, None) != value for key, value in fields.items()):
                 raise RuntimeError("update readback unproven; write may have landed; verify exact readback before retrying")
-    return {"id": item.id, "fields": fields,
-            "result": "planned" if args.dry_run else "verified"}
+    result = {"id": item.id, "fields": fields,
+              "result": "planned" if args.dry_run else "verified"}
+    if queue_comment is not None:
+        result['queue_promotion'] = json.loads(queue_comment)
+    return result

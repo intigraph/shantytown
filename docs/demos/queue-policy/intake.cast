@@ -1,0 +1,4 @@
+{"version": 2, "width": 110, "height": 20, "timestamp": 1794727900, "title": "Ranked intake: identical synthetic request before and after"}
+[0.5022, "o", "BASE2e85\r\n  test-request    review this new request\r\n{\"exit\": 0, \"lane\": null, \"rank\": null, \"writes\": [\"create\"]}\r\n"]
+[0.786279, "o", "CANDIDATE\r\n  test-request    review this new request\r\ntest-request: Next position 1, rank 1; likely start: UNKNOWN (no duration/availability evidence); requesting now would require an explicit disposition of: none currently in Now.\r\n{\"exit\": 0, \"lane\": \"next\", \"rank\": \"1\", \"writes\": [\"create\", \"queue CAS\"]}\r\n"]
+[1.04364, "o", "CANDIDATE FULL NEXT\r\n{\"exit\": 1, \"lane\": null, \"rank\": null, \"writes\": []}\r\n  refused: Next is full (40); choose and record a displacement first\r\n"]

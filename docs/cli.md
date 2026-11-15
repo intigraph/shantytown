@@ -119,6 +119,42 @@ migrate or rewrite them.
 
 ## Assignment capacity
 
+### Ranked intake and dispatch admission
+
+`SHANTY_QUEUE_POLICY=enforce` enables the Seeds queue contract. The default is
+`off` for compatibility with unlaned deployments; any other value refuses.
+Activation and migration of existing plates are separate operator decisions.
+`st task` checks the bounded Now/Next cohort, creates the item, then CAS-writes
+Next and an exact decimal append rank. It prints the observed position, an
+UNKNOWN likely start when no duration evidence exists, and the current Now
+items a request for immediate work would need to disposition. It never guesses
+a date or silently demotes an existing item. A full or unranked Next queue
+refuses before creation. Native lane caps remain authoritative under races.
+
+Seeds currently lacks `create --lane`: a failed or uncertain follow-on write
+prints the created ID and returns UNKNOWN. Reconcile that ID; repeating create
+would duplicate the request. Successful intake requires verified lane/rank and
+a complete post-write queue observation. Dry runs perform no writes.
+
+With enforcement on, fresh `st go` refuses anything outside Now or behind the
+head of the target's ranked plate. Existing active custody retains precedence;
+priority is severity, not ordering within Now/Next. Missing lane/rank or partial
+reads refuse. Existing governor, dependency and ownership checks remain active.
+Pending dispatch receipts still reconcile without re-sending: this does not
+retroactively revoke custody already delivered by an older binary.
+
+`st work item update ID --lane now --rank 1 --quote 'verbatim request' \
+--requester NAME --urgent --if-revision REV` records the exact request and the
+current Now cohort in the same native CAS as promotion. Caps refuse and name
+displacement candidates; the command never automatically evicts another item.
+These fields declare provenance, not authentication or a governor override.
+
+Actual queue refusals are appended to the existing feed audit before the
+dispatch returns. `st agent stats --queue-order` reports retained observations;
+missing, malformed or over-budget history is UNKNOWN. It is not an all-history
+fleet counter or proof the policy is activated. Rikuy producer/query/display
+activation is separate from this local reader.
+
 ### Explicit intake deadlines
 
 `st task --due 2026-12-01 "review the draft"` creates the item with a due date
