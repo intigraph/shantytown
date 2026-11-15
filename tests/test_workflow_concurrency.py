@@ -37,3 +37,20 @@ def test_pr_heads_share_group_but_other_pr_does_not(workflow):
     assert group(17, 201) == group(17, 202)
     assert group(17, 201) != group(18, 203)
     assert render(concurrency['cancel-in-progress'], event_name='pull_request') == 'True'
+
+
+def test_ci_reports_required_contexts_on_merge_queue_groups():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())
+    triggers = workflow[True]
+    assert triggers['merge_group'] == {'types': ['checks_requested']}
+    # The required jobs must not be skipped on a group commit.
+    for name in ('test', 'order-independence'):
+        assert 'if' not in workflow['jobs'][name]
+
+
+def test_merge_queue_groups_never_cancel_each_other():
+    concurrency = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['concurrency']
+    groups = [render(concurrency['group'], workflow='ci.yml', event_name='merge_group',
+                     ref='refs/heads/gh-readonly-queue/main/pr-1-abc', run_id=run) for run in (301, 302)]
+    assert len(set(groups)) == 2
+    assert render(concurrency['cancel-in-progress'], event_name='merge_group') == 'False'

@@ -12,6 +12,11 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited, ready_for_review]
+  # A merge queue builds each entry on main plus the entries ahead of it. The
+  # required contexts must report on that group commit, or every entry waits
+  # until the queue times out. Group runs keep distinct concurrency groups.
+  merge_group:
+    types: [checks_requested]
 
 # Superseded PR heads may stop. Main pushes retain complete verdicts for
 # exact-commit qualification and installation checks.
