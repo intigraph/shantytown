@@ -3343,7 +3343,22 @@ numbers, exact heads, shared files and item families in its body. No disposition
 file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
 are validated and appended when valid; missing, stale, invalid or unreadable
 annotations produce advice rather than refusing creation. This command never
-closes another PR. Other-PR churn does not block creation.
+closes another PR based on overlap advice. Other-PR churn does not block creation.
+
+Explicit body trailers declare publish lineage, one same-repository number per
+line: `Supersedes: #N`, `Split-from: #N`, `Folds: #N`, or `Stacked-on: #N`.
+Fenced examples do not count. Each predecessor must declare the same `Bead:`
+primary item. `Stacked-on` requires its open exact head as the candidate base
+and leaves it open. The other trailers authorize retirement: after verifying
+the created successor, the command rechecks each predecessor, posts a pointer
+to the successor, closes it, and verifies its head and closed state. Branches
+are retained. For a split, declare retirement only when the published successor
+accounts for the predecessor's remaining work; other split PRs carry that same
+work item and lineage. A dry run includes the retirement plan without writes.
+Malformed declarations or mismatched item identities refuse before creation.
+If retirement fails or races after creation, exit 2 names the existing successor;
+inspect and reconcile it rather than repeating creation. GitHub offers no
+atomic expected-head close, so a raced close remains unverified.
 
 Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
 files per PR. Missing metadata, failed reads or bound exhaustion produce an
