@@ -10,12 +10,13 @@ import tempfile
 parser = argparse.ArgumentParser()
 parser.add_argument('--source', type=Path, required=True)
 parser.add_argument('--full', action='store_true')
+parser.add_argument('--off', action='store_true')
 args = parser.parse_args()
 sys.path.insert(0, str(args.source.resolve()))
 for name in list(os.environ):
     if name.startswith(('SHANTY_', 'ST_')) or name == 'QUIPU_SERVER':
         del os.environ[name]
-os.environ['SHANTY_QUEUE_POLICY'] = 'enforce'
+os.environ['SHANTY_QUEUE_POLICY'] = 'off' if args.off else 'enforce'
 from shantytown import cli
 from shantytown.protocols import WorkItem
 

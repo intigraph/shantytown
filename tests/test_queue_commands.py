@@ -10,6 +10,11 @@ from shantytown.sd import SdTracker
 from shantytown.feed_audit import FeedAudit
 
 
+@pytest.fixture(autouse=True)
+def operator_policy(monkeypatch):
+    monkeypatch.setenv('SHANTY_QUEUE_REQUESTER', 'operator')
+
+
 class Native(SdTracker):
     def __init__(self):
         self.rows = []
@@ -79,6 +84,18 @@ def test_intake_dry_run_has_no_write(monkeypatch, tmp_path):
     assert tracker.writes == []
 
 
+def test_explicit_off_mode_has_no_queue_reads_or_transition(monkeypatch, tmp_path):
+    tracker = Native()
+    def forbidden():
+        raise AssertionError('off mode must not read queue policy')
+    tracker.queue_rows = forbidden
+    monkeypatch.setenv('SHANTY_QUEUE_POLICY', 'off')
+    monkeypatch.setattr(cli, '_tracker', lambda a: tracker)
+    assert cli.main(['--root', str(tmp_path), 'task', 'ordinary work']) == cli.OK
+    assert [call[0] for call in tracker.writes] == ['create']
+    assert tracker.items['test-new'].lane is None
+
+
 def test_gate_counts_refused_attempt_and_does_not_weaken_existing_governor(tmp_path):
     tracker = Native(); audit = FeedAudit(tmp_path)
     target = WorkItem('test-new', lane='next', rank='1')
@@ -118,6 +135,14 @@ def test_unquoted_promotion_has_no_write(tmp_path):
     tracker = Native(); tracker.items['test-1'] = WorkItem('test-1', lane='next', rank='2', revision=3)
     args = promotion_args(tmp_path); args.quote = ''
     with pytest.raises(ValueError, match='--quote'):
+        work_item.command(args, tracker)
+    assert not tracker.writes
+
+
+def test_other_requester_cannot_force_now_even_with_urgent_flag(tmp_path):
+    tracker = Native(); tracker.items['test-1'] = WorkItem('test-1', lane='next', rank='2', revision=3)
+    args = promotion_args(tmp_path); args.requester = 'other'
+    with pytest.raises(ValueError, match='configured requester'):
         work_item.command(args, tracker)
     assert not tracker.writes
 
@@ -174,3 +199,39 @@ def test_dispatch_gate_refuses_before_any_send_or_tracker_write(tmp_path):
     with pytest.raises(GovernorRefused, match='not in Now'):
         dispatcher.go('test-1', 'ellie')
     assert not panes.sent and not tracker.writes
+
+
+def test_cli_wire_installs_gate_only_when_explicitly_enabled(tmp_path, monkeypatch):
+    from shantytown import dispatch_binding, actor_identity
+    from shantytown.files import FilesRegistry
+    from shantytown.tmux import NullPanes
+    from shantytown.dispatch import GovernorRefused
+    crew = tmp_path / 'crew'; crew.mkdir()
+    (crew / 'ellie.json').write_text(json.dumps({'role': 'worker', 'pane': '%1'}))
+    tracker = Native(); tracker.items['test-1'] = WorkItem('test-1', lane='next', rank='1')
+    panes = NullPanes()
+    monkeypatch.setattr(cli, '_tracker', lambda a: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda a: FilesRegistry(crew))
+    monkeypatch.setattr(cli, '_panes', lambda a: panes)
+    monkeypatch.setattr(cli, '_dispatch_gate', lambda a: None)
+    monkeypatch.setattr(cli, '_handoff_advisor', lambda a: None)
+    monkeypatch.setattr(cli, '_me', lambda a: 'operator')
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', lambda: None)
+    monkeypatch.setattr(dispatch_binding, 'binding_for', lambda *a: None)
+    args = SimpleNamespace(root=tmp_path, dry_run=False)
+    monkeypatch.setenv('SHANTY_QUEUE_POLICY', 'enforce')
+    with pytest.raises(GovernorRefused, match='not in Now'):
+        cli._wire(args).go('test-1', 'ellie')
+    assert not panes.sent and not tracker.writes
+    monkeypatch.setenv('SHANTY_QUEUE_POLICY', 'off')
+    assert cli._wire(args).governor is None
+
+
+def test_queue_authority_config_is_strict_and_beats_environment(tmp_path, monkeypatch):
+    path = tmp_path / 'shantytown.toml'
+    path.write_text('[env]\nSHANTY_QUEUE_REQUESTER="owner"\n')
+    monkeypatch.setenv('SHANTY_QUEUE_REQUESTER', 'other')
+    assert queue_policy.setting(tmp_path, 'SHANTY_QUEUE_REQUESTER') == 'owner'
+    path.write_text('[env\n')
+    with pytest.raises(ValueError, match='UNKNOWN'):
+        queue_policy.setting(tmp_path, 'SHANTY_QUEUE_POLICY')

@@ -248,7 +248,7 @@ def command(args, tracker):
     queue_comment = None
     if 'lane' in fields or 'rank' in fields:
         from .sd import SdTracker
-        from .queue_policy import promotion, validate
+        from .queue_policy import promotion, validate, setting
         from .protocols import rank_order
         if not isinstance(tracker, SdTracker):
             raise ValueError('lane/rank transition requires native Seeds CAS; no fallback')
@@ -261,6 +261,7 @@ def command(args, tracker):
             rows = validate(tracker.queue_rows())
             queue_comment = promotion(getattr(args, 'quote', None),
                 getattr(args, 'requester', None), getattr(args, 'urgent', False),
+                expected_requester=setting(getattr(args, 'root', None), 'SHANTY_QUEUE_REQUESTER'),
                 displaced=[r['id'] for r in rows if r['lane'] == 'now' and r['id'] != item.id])
             if prospective.get('rank') is None:
                 raise ValueError('Now promotion requires an explicit rank')

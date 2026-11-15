@@ -143,10 +143,14 @@ reads refuse. Existing governor, dependency and ownership checks remain active.
 Pending dispatch receipts still reconcile without re-sending: this does not
 retroactively revoke custody already delivered by an older binary.
 
-`st work item update ID --lane now --rank 1 --quote 'verbatim request' \
---requester NAME --urgent --if-revision REV` records the exact request and the
+`st work item update ID --lane now --rank 1 --quote 'Do this now' \
+--requester operator --urgent --if-revision REV` records the exact request and the
 current Now cohort in the same native CAS as promotion. Caps refuse and name
 displacement candidates; the command never automatically evicts another item.
+The declared requester must match `SHANTY_QUEUE_REQUESTER` from the deployment
+policy, and the quote must contain the explicit word "now". An absent requester
+policy refuses promotion. `--urgent` affirms the caller is recording that request. This lexical
+check does not authenticate authorship or interpret the request's meaning.
 These fields declare provenance, not authentication or a governor override.
 
 Actual queue refusals are appended to the existing feed audit before the

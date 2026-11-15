@@ -58,8 +58,21 @@ def test_unlaned_predecessor_is_unknown_not_silently_skipped():
 
 def test_promotion_retains_verbatim_quote_and_requires_all_bindings():
     quote = 'Please do this NOW.\nKeep the prior work.'
-    event = json.loads(promotion(quote, 'operator', True, displaced=['x-2']))
+    event = json.loads(promotion(quote, 'operator', True,
+                                expected_requester='operator', displaced=['x-2']))
     assert event['quote'] == quote and event['displaced'] == ['x-2']
     for args in [('', 'operator', True), (quote, '', True), (quote, 'operator', False)]:
         with pytest.raises(ValueError):
             promotion(*args)
+
+
+@pytest.mark.parametrize('quote,requester', [('Please do this now', 'other'),
+                                         ('Please queue this', 'operator')])
+def test_now_requires_the_configured_operator_now_request(quote, requester):
+    with pytest.raises(ValueError, match='configured requester'):
+        promotion(quote, requester, True, expected_requester='operator')
+
+
+def test_requester_policy_cannot_be_assumed_from_the_caller():
+    with pytest.raises(ValueError, match='UNKNOWN'):
+        promotion('Please do it now', 'operator', True)

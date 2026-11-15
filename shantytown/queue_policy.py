@@ -6,11 +6,26 @@ enforcement. This module never moves an existing item to manufacture admission.
 from decimal import Decimal
 import json
 import math
+import os
 from pathlib import Path
+import re
 
 from .protocols import plate_key, rank_order
 from .priority_advisory import workable
 from .inbox import drop_parked
+
+
+def setting(root, name):
+    """Authority settings cannot silently fall back on unreadable config."""
+    if root is not None:
+        from . import config
+        try:
+            cfg = config.load(root)
+        except config.ConfigError as error:
+            raise ValueError('queue configuration UNKNOWN') from error
+        if name in cfg.env:
+            return cfg.env[name]
+    return os.environ.get(name)
 
 
 def enabled(value):
@@ -92,10 +107,15 @@ def refusal(item, owner, rows):
     return ''
 
 
-def promotion(quote, requester, urgent, *, displaced=()):
+def promotion(quote, requester, urgent, *, expected_requester=None, displaced=()):
     if (not isinstance(quote, str) or not quote.strip()
             or not isinstance(requester, str) or not requester.strip() or urgent is not True):
         raise ValueError('Now promotion requires --quote, --requester and --urgent')
+    if not isinstance(expected_requester, str) or not expected_requester.strip():
+        raise ValueError('queue requester policy UNKNOWN; promotion refused')
+    if (requester.strip().casefold() != expected_requester.strip().casefold()
+            or re.search(r'\bnow\b', quote, re.I) is None):
+        raise ValueError("Now promotion requires the configured requester's explicit now quote")
     return json.dumps({'schema': 'queue-promotion/v1', 'quote': quote,
         'requester': requester, 'urgent': True, 'displaced': list(displaced)}, sort_keys=True)
 

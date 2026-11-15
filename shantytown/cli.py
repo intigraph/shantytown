@@ -570,9 +570,9 @@ def _wire(a) -> Dispatcher:
     from .actor_identity import authenticated_actor
     from .dispatch_binding import binding_for
     registry, tracker, panes = _registry(a), _tracker(a), _panes(a)
-    from .queue_policy import enabled as queue_enabled, gate as queue_gate
+    from .queue_policy import enabled as queue_enabled, gate as queue_gate, setting
     dispatch_gate = _dispatch_gate(a)
-    if queue_enabled(_deployment_default(a, "SHANTY_QUEUE_POLICY")):
+    if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
         dispatch_gate = queue_gate(tracker, dispatch_gate, audit=FeedAudit(Path(a.root)),
                                   dry_run=getattr(a, 'dry_run', False))
     return Dispatcher(registry, tracker, panes,
@@ -7555,12 +7555,12 @@ def _cmd_task(a) -> int:
     """
     title = " ".join(a.title)
     from .task_intake import deadline
-    from .queue_policy import enabled as queue_enabled, intake, stage, reply
+    from .queue_policy import enabled as queue_enabled, intake, stage, reply, setting
     queue_plan = None
     try:
         due = deadline(getattr(a, "due", None),
                        _deployment_default(a, "SHANTY_TASK_DUE_REQUIRED"))
-        if queue_enabled(_deployment_default(a, "SHANTY_QUEUE_POLICY")):
+        if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
             queue_plan = intake(_tracker(a).queue_rows())
     except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
