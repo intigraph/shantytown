@@ -1,0 +1,10 @@
+Script started on 2026-11-13 23:29:57-05:00 [COMMAND="python3 docs/demos/cold-launch-resume/assigned-harness.py" <not executed on terminal>]
+Source fixture only: no launch, tracker, provider or installed acceptance.
+Base: 2016b460badce9ad5630af91c302ddd485f45b42
+Before assigned-Claude receipt: False
+Before bare binding: REFUSED
+After assigned-Claude receipt: True
+After bare binding: True
+Context-clear/cycle (cold=False): False
+
+Script done on 2026-11-13 23:29:57-05:00 [COMMAND_EXIT_CODE="0"]

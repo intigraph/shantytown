@@ -165,11 +165,11 @@ def test_writer_retains_actor_time_and_bound_deadline_without_breaking_noop(tmp_
     tracker.update("test-ci", title="CI wait", status="open", assignee="worker")
     dispatcher = Dispatcher(FilesRegistry(tmp_path / "crew"), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(minutes=15)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    result = dispatcher.defer("test-ci", "external", "CI wait", until=until,
+    result = dispatcher.defer("test-ci", "external", "scheduled appointment", until=until,
                               gate_authority="worker", window=True)
     notes = tracker.get("test-ci").notes
     assert '"actor": "worker"' in notes and '"until":' in notes
-    assert dispatcher.defer("test-ci", "external", "CI wait", until=until,
+    assert dispatcher.defer("test-ci", "external", "scheduled appointment", until=until,
                             gate_authority="worker", window=True).noop
     assert tracker.get("test-ci").notes == notes
     assert result.reason in notes

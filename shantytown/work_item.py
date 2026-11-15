@@ -102,6 +102,12 @@ def _writer(tracker):
 
 
 def command(args, tracker):
+    if args.item_action == "review-reservation":
+        from .review_reservation import command as reserve
+        return reserve(args, tracker)
+    if any(getattr(args, name, None) for name in (
+            "reviewer", "inherit_from", "replace_reviewer", "contributor")):
+        raise ValueError("reviewer flags require the review-reservation action")
     expected_revision = getattr(args, "if_revision", None)
     if expected_revision is not None:
         from .sd import SdTracker

@@ -93,7 +93,7 @@ def _save(outbox, fd, previous, state):
 def _projection(client):
     result = client.projection()
     if (not isinstance(result, dict)
-            or result.get('authenticated_owner') != client.owner.crew
+            or result.get('selected_owner') != client.owner.crew
             or not isinstance(result.get('export'), dict)):
         raise Unproven('own memory synchronization identity unproven')
     _export_files(result['export'], client.owner, allow_empty=True)
@@ -108,7 +108,7 @@ def step(outbox: Outbox, client, capture, *, harness, account, max_new=1):
     """Resume before recapture; make at most max_new pending-intent attempts.
 
     capture is a bounded source snapshot callable. Never select a new native
-    root here. A completed batch advances the journal only after a fresh named
+    root here. A completed batch advances the journal only after a fresh selected
     own projection proves the final committed head, not just receipt existence.
     """
     if client.owner != outbox.owner:

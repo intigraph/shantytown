@@ -93,11 +93,14 @@ HAUL — the self-feeding queue
 
   RELEASING AN ITEM — a bare status change does NOT stop the re-serve
     done            {close}
-    gated           st work defer <id> <kind> --reason-file <f>
+    CI/review wait  stay in_progress; record the exact wake on the item
+    external gate   record a real dependency edge or blocked:external + named event
+    capacity hold   retain the hold; ask the lead for ready work, no date defer
     not yours       {unassign}
 
-  Why defer rather than just closing or unassigning: `defer` records the KIND of
-  block and takes the item OUT of the ready pool until you undo it. Clearing the
+  CI/review/merge waits are active work: a backstop does not authorize hiding
+  them as deferred. Record real technical prerequisites as dependency edges.
+  Other admitted deferrals record the KIND of block. Clearing the
   assignee only RE-POOLS it — a still-ready item is grabbed by the next idle agent,
   which is how one agent's "not mine" becomes another's surprise.
 
