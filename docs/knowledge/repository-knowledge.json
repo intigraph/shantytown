@@ -29,7 +29,7 @@
       },
       "source_hash_mode": "release-bytes",
       "summary_source": "docs/knowledge/cli-summary.md",
-      "summary_sha256": "b51ee72379c00b51667dc753ff810976b131ef2003c97e90400929f8b99041ea"
+      "summary_sha256": "e88342a2db9431d3b8e2581996afe7838668c1659309a1ec9741dfbe726fd38c"
     },
     {
       "kind": "interface",

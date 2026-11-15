@@ -532,6 +532,16 @@ class FilesInbox:
         return [m for p in sorted(self.root.glob("msg-*.json"))
                 if (m := self._read(p)).to == me and not m.read]
 
+    def get_message(self, me, receipt_id):
+        if (not isinstance(receipt_id, str) or Path(receipt_id).name != receipt_id
+                or receipt_id in ('', '.', '..')):
+            raise ValueError('invalid receipt identity')
+        path = self._path(receipt_id)
+        message = self._read(path) if path.exists() else None
+        if message is not None and message.to != me:
+            raise ValueError('receipt belongs to another recipient')
+        return message
+
     def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
         """A known receipt stays a point read, including after acknowledgement."""
         if (not isinstance(receipt_id, str) or not receipt_id
@@ -600,6 +610,23 @@ class TrackerInbox:
         self._items = items
         self._all_items = all_items
         self._items_for = items_for
+
+    def get_message(self, me, receipt_id):
+        exact = getattr(self._tracker, 'inbox_receipts', None)
+        if callable(exact):
+            rows = exact(me, [receipt_id]).exact()
+        else:
+            item = self._tracker.get(receipt_id)
+            rows = [item] if item is not None else []
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ValueError('exact receipt ambiguous')
+        item = rows[0]
+        if (item.id != receipt_id or item.assignee != me or not is_message(item.title)
+                or item.status not in ('open', 'hooked', 'in_progress', 'blocked', 'deferred', 'closed')):
+            raise ValueError('receipt recipient, identity or status differs')
+        return Message(item.id, me, _body_of(item.title), read=item.status == 'closed')
 
     def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
         """No history enumeration or marker fallback after a known-ID refusal."""
@@ -853,6 +880,14 @@ class MessageGraphInbox:
     def _send(self, to, body, frm, key):
         v = self._tracker.send_message(to, body, key=key, frm=frm).exact()
         return Message(id=v["id"], to=to, body=body, frm=frm, read=v.get("read_at") is not None)
+
+    def get_message(self, me, receipt_id):
+        if not self._is_window(receipt_id):
+            return self._legacy.get_message(me, receipt_id)
+        row = self._tracker.get_message(receipt_id).exact()
+        if row.get('id') != receipt_id or row.get('to') != me:
+            raise ValueError('receipt recipient or identity differs')
+        return self._as_message(me, row)
 
     def find_delivery(self, me: str, marker: str) -> Message | None:
         name = me.split("/")[-1]
