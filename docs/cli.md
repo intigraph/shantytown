@@ -301,6 +301,7 @@ st repo                       a shared project repo
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
+    --instruction-report     compare composed graph instructions and tooling bytes without provisioning
   subscribe                   watch quipu entity events; route governed workflows to the admin
   hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
@@ -407,6 +408,10 @@ existing request. While a fresh, unrefused self-cycle request is pending,
 Stop advice and self-feed stay silent so the pane can reach idle. Refused or
 stale requests resume normal advice; automatic requests do not silence it.
 This does not relax the waiter's busy-pane or background-task checks.
+The detached waiter uses an interpreter verified by the installed-hook resolver
+and starts from `/`, so a repository directory named `shantytown` in the caller's
+working directory cannot shadow the installed package. If no usable interpreter
+is available, the request remains pending for tend and the spawn reports why.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -580,16 +585,18 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
-CI, review, merge and install waits require a non-date `resume_when` condition
-and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
-required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
-per-item event name is not a registration.
-For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
-with an exact UTC `--until` at least a day away. Short date-only polling and
-dry-run attempts refuse before writes. A real scheduled appointment may use
-`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
-This exception does not bypass human decisions, dependency checks or resume gates.
+CI, review and merge waits stay `in_progress`, including P0 and milestone work.
+Record the exact head/run/review wake on the item. `st work defer` refuses both
+`ci-terminal:`/`pr-merged:` conditions and explicit CI/review/merge waits before
+any write, even with a 24-hour backstop, `--window` or `--dry-run`. Historical
+CI/PR deferrals remain readable; this does not manufacture green CI or release
+any existing gate. Record real technical prerequisites as dependency edges;
+external non-CI gates name their event with `blocked:external`.
+
+Other admitted asynchronous waits still require a testable condition and the
+existing backstop. A real scheduled appointment may use `--window --until <UTC time>`; this never bypasses CI, human decisions, dependency checks or resume gates.
+Capacity holds do not authorize a date defer or repooling; retain the hold and
+ask the lead for ready work.
 
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
@@ -625,7 +632,8 @@ restores the owner route. A malformed stop record is UNKNOWN intent, not proof
 of a deliberate scale-down. Notification routing never releases a gate,
 reassigns an item or resumes a stopped runtime.
 
-Forge event waits use two registered generic kinds:
+Historical forge deferrals retain two registered generic readers. New CI/merge
+waits stay in progress; `st work defer` refuses these kinds:
 
 - `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
   observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
@@ -634,8 +642,8 @@ Forge event waits use two registered generic kinds:
   including failure or cancellation. This is a prompt to inspect CI, never a
   green result, review receipt or permission to merge.
 
-Both require an explicit backstop at least 24 hours away, including marker-only
-reasons and scheduled-window requests. They read only configured forge hosts;
+Existing records retain their explicit backstops and event evaluation. The
+readers access only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
@@ -822,8 +830,19 @@ Capture and scrub preserve citation symlinks when cold archives are relocated.
 Unchanged captures inspect the target size; growing captures and regenerated
 derivatives publish atomically beside the private archive target. Relocated
 files must retain the agent directory and filename, be owner-only, and have a
-private parent directory owned by the same user. Dangling or mismatched links
-are refused rather than replaced. Derivative links into the raw archive are
+private parent directory owned by the same user. A filename may also carry
+`.recaptured-<sha256>` with a 12-to-64-character lowercase hash prefix matching
+its original bytes. Before updating that layout, publication preserves the
+hash-verified origin in a private `.history-origin-*` file and each predecessor
+in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
+keep the citation target unchanged, and retain all versions. These version
+files are archive evidence, not temporary files to remove during a scrub.
+Publication holds a private per-target `.history-publish-*.lock` through
+preservation, staging and replacement. A competing publisher refuses without
+overwriting the current version; a later normal capture can try again. These
+lock files remain in place so concurrent publishers cannot split the lock inode.
+An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
+is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
@@ -908,6 +927,12 @@ Four things, and each one has to earn its line:
    the administrator as designed. `up` here means **will drain**, not "a pane answers to that name".
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
    adapters, those two sections vanish and anchor still works.
+
+Startup text tells agents to check governing Directives in Quipu before acting and
+record new operator directives verbatim as Directive entities through the governed
+write path. This reminder appears in both anchor startup and the packaged stack
+orientation, including when the plate read is unavailable. It does not perform a
+graph write or grant permission to one.
 
 ### anchor is a read. It must never write.
 
@@ -3319,7 +3344,22 @@ numbers, exact heads, shared files and item families in its body. No disposition
 file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
 are validated and appended when valid; missing, stale, invalid or unreadable
 annotations produce advice rather than refusing creation. This command never
-closes another PR. Other-PR churn does not block creation.
+closes another PR based on overlap advice. Other-PR churn does not block creation.
+
+Explicit body trailers declare publish lineage, one same-repository number per
+line: `Supersedes: #N`, `Split-from: #N`, `Folds: #N`, or `Stacked-on: #N`.
+Fenced examples do not count. Each predecessor must declare the same `Bead:`
+primary item. `Stacked-on` requires its open exact head as the candidate base
+and leaves it open. The other trailers authorize retirement: after verifying
+the created successor, the command rechecks each predecessor, posts a pointer
+to the successor, closes it, and verifies its head and closed state. Branches
+are retained. For a split, declare retirement only when the published successor
+accounts for the predecessor's remaining work; other split PRs carry that same
+work item and lineage. A dry run includes the retirement plan without writes.
+Malformed declarations or mismatched item identities refuse before creation.
+If retirement fails or races after creation, exit 2 names the existing successor;
+inspect and reconcile it rather than repeating creation. GitHub offers no
+atomic expected-head close, so a raced close remains unverified.
 
 Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
 files per PR. Missing metadata, failed reads or bound exhaustion produce an
@@ -3896,12 +3936,15 @@ pass duration or the duration of runtime startup and notification sweeps.
 
 ### Observed cold-launch resume condition
 
-`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
-agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+`resume_when: cold-launch:operator` waits for the named administrator's next
+ordinary cold launch after the binding was written. Its writer provenance must
+contain one valid `set_at` boundary; a missing or ambiguous boundary is UNKNOWN.
+The timestamped form `cold-launch:operator@2026-11-05T21:00:00Z` still waits
+from the stated UTC instant. Both accept the agent's assigned harness,
 in this deployment root and host. The normal launcher records a private receipt
 only after observing the live process, verifying hooks and acknowledging startup
-inbox delivery. Dry runs, cycles, window restores, hold overrides, other
-harnesses and unverified starts cannot produce it. The sweep observes receipts;
+inbox delivery. Dry runs, context-clear cycles, window restores, hold overrides,
+mismatched harnesses and unverified starts cannot produce it. The sweep observes receipts;
 it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
 before its reminder date while independent human and dependency holds remain.
 It does not prove provider responses or bypass launch admission. Existing
@@ -3968,6 +4011,16 @@ provenance graph and exact item IDs. It excludes private field differences and
 bodies. Use this persisted identity, when available, to reconcile the SDK write;
 the new per-invocation operation ID is only a diagnostic correlation key.
 
+
+Ready-work utilization counts and board triage exclude both `inbox:` and legacy
+`mail:` title markers, including leading whitespace, using the plate message
+predicate. An `inbox` label on a real work item does not exclude that work.
+Native ready counts apply the title exclusion before fetching metadata, and
+legacy ready-list utilization applies the same rule. Unreadable readiness
+remains unknown rather than zero. Listing an inbox remains a pure read;
+explicit ACK closes tracker pointers and the scheduled retention sweep retires
+old pointers while preserving their records and verified related links.
+
 ## Display-only roster snapshots
 
 `st crew --display-snapshot --local --json` opts into a separate v2 display
@@ -4006,3 +4059,21 @@ entries (two per key), with bypass off; it did not show a per-process cache or
 a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
+
+### Quiet CI and installation waits
+
+Keep a CI wait `in_progress` and record one exact event in the item's notes:
+`resume_when: ci-terminal:github/example/project@<full commit SHA>` (Forgejo
+uses `forgejo`), or `resume_when: installed:bobbin>=0.1.0`. This is an active
+wait with no defer date. Both the stop hook and the idle-haul sweep suppress
+repeat delivery while the event is pending or its observation is UNKNOWN.
+Terminal CI wakes the owner even when it failed or was cancelled; it does not
+approve a merge. An unreadable observation keeps the wait quiet and logs UNKNOWN.
+A lead can explicitly resume source work by removing/replacing the active marker;
+retained history must not contain another active `resume_when:` marker.
+
+The item remains visible as in-progress work to the board and governor. This
+shape applies without guessing milestone labels or changing parent membership.
+Ordinary `st work defer` still requires its existing event and backstop checks.
+Open technical `blocks` edges also suppress native haul continuation; the next
+fresh blocker observation restores eligibility after closure.

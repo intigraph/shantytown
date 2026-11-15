@@ -1,6 +1,7 @@
 """Advisory GitHub overlap inventory and guarded PR creation (aegis-26m).
 
-No merge or close authority lives here. Overlap is information, never permission to create or merge. Optional dispositions
+Explicit lineage trailers authorize predecessor retirement after verified publish.
+Overlap is information, never permission to create or merge. Optional dispositions
 are checked as annotations, and cannot block opening a draft.
 
 # arming: agent-invoked -- st repo pr is the explicit foreground creation path.
@@ -29,8 +30,8 @@ class Indeterminate(Refused):
     """A create may have committed; never suggest a blind retry."""
 
 
-def github(path, body=None):
-    argv = ["gh", "api", "--method", "GET" if body is None else "POST", path]
+def github(path, body=None, *, method=None):
+    argv = ["gh", "api", "--method", method or ("GET" if body is None else "POST"), path]
     if body is not None:
         argv += ["--input", "-"]
     result = subprocess.run(argv, input=json.dumps(body) if body is not None else None,
@@ -338,8 +339,10 @@ def dispositions(checkout, repo, candidate, review, decisions, api):
 
 
 def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
-        create=False, draft=False, dry_run=False, api=None):
+        create=False, draft=False, dry_run=False, api=None, patch_api=None):
+    from . import pr_lineage
     api = api or github
+    patch_api = patch_api or (lambda path, value: github(path, value, method="PATCH"))
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise Refused("repository must be owner/name")
     repository_id = canonical_identity(api, repo)
@@ -361,6 +364,10 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
                 "excluded_candidate_prs": existing, "warnings": warnings}
     if not title.strip() or not body.strip():
         raise Refused("creation needs title and body")
+    try:
+        lineage = pr_lineage.prepare(api, repo, body, bead, first_candidate)
+    except pr_lineage.LineageError as error:
+        raise Refused(str(error)) from error
     final_candidate = candidate(checkout, repo, base, api)
     if first_candidate != final_candidate:
         raise Refused("candidate changed; rerun preflight on the intended source")
@@ -390,7 +397,9 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
     # GitHub lacks an atomic expected-head create API. Reconcile the result; do
     # not turn a lost response or raced head into a blind retry/new duplicate.
     if dry_run:
-        return {**review, "would_create": True, "body": body + appendix}
+        return {**review, "would_create": True, "body": body + appendix,
+                "lineage": [{k: v for k, v in old.items() if k != "body"}
+                            for old in lineage]}
     if canonical_identity(api, repo) != repository_id:
         raise Refused("repository identity changed; no PR creation attempted")
     try:
@@ -410,7 +419,14 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
              and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
     if not valid:
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
+    try:
+        lineage_receipts = pr_lineage.retire(api, patch_api, repo, lineage, result,
+                                            bead, first_candidate)
+    except (pr_lineage.LineageError, Refused, OSError, subprocess.SubprocessError) as error:
+        raise Indeterminate(f"successor #{result['number']} exists; predecessor retirement "
+                            "unverified; inspect lineage before retrying") from error
     return {**review, "created": result["html_url"], "number": result["number"],
+            "lineage": lineage_receipts,
             "node_id": result.get("node_id") if isinstance(result.get("node_id"), str) else None}
 
 

@@ -331,25 +331,31 @@ class Duties:
                 # Stable across refirings and stopped-owner generations. The
                 # backend must guarantee idempotent create for this identity.
                 key = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
-                if not previous.get('repair'):
-                    target = previous.setdefault('intent_target', administrator())
-                    if not live(target):
-                        result.append((ident, 'administrator not live; no repair intent'))
-                        continue
-                    payload = previous.setdefault('intent', dict(
-                        id=ident, kind=row['kind'], holder=holder, source=row['source']))
-                    write_json_atomic(statepath, states)  # BEFORE remote intent.
-                    try:
-                        repair = ensure_issue(payload, target, key)
-                        previous['repair'] = repair
-                    except Exception:
-                        previous['repair_state'] = 'UNKNOWN'
-                        write_json_atomic(statepath, states)
-                        result.append((ident, 'repair intent UNKNOWN; stable key retained'))
-                        continue
+                # A cached ID is not proof the repair remains open. Reconcile
+                # through the same idempotent identity on every eligible pass.
+                # max_actions bounds these backend reconciliations as well.
+                target = previous.setdefault('intent_target', administrator())
+                payload = previous.setdefault('intent', dict(
+                    id=ident, kind=row['kind'], holder=holder, source=row['source']))
+                write_json_atomic(statepath, states)  # BEFORE remote intent.
+                try:
+                    if live(target) is not True:
+                        raise ValueError('administrator liveness UNKNOWN or unavailable')
+                    repair = ensure_issue(payload, target, key)
+                    if previous.get('repair') and repair != previous['repair']:
+                        raise ValueError('stable repair identity changed')
+                    previous['repair'] = repair
+                    previous['repair_state'] = 'KNOWN'
+                except Exception:
+                    previous['repair_state'] = 'UNKNOWN'
+                    write_json_atomic(statepath, states)
+                    result.append((ident, 'repair intent UNKNOWN; stable key retained'))
+                    continue
                 if not previous.get('paged'):
                     try:
                         target = administrator()
+                        if live(target) is not True:
+                            raise ValueError('administrator liveness UNKNOWN or unavailable')
                         notify(target, f'{key} ERROR duty {ident}; '
                                f'repair {previous["repair"]}; binding needs its normal repair lane.', key)
                         previous['paged'] = True

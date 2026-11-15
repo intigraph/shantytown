@@ -1,0 +1,6 @@
+Script started on 2026-11-15 00:47:45-05:00 [COMMAND="python3 probe.py" <not executed on terminal>]
+before: {"explicit_repool_option": false, "ordinary_stop_exit": 0, "repair_count": 0, "stop_callback_called": true}
+after: {"explicit_repool_option": true, "ordinary_stop_exit": 1, "repair_count": 0, "stop_callback_called": false}
+PASS: a held duty blocks the actual CLI stop; no live pane was stopped.
+
+Script done on 2026-11-15 00:47:46-05:00 [COMMAND_EXIT_CODE="0"]

@@ -149,3 +149,59 @@ acceptance; a failed attempt waits for the next five-minute interval too.
 the existing ranking sweep consuming a fixture graph order while sending no
 notifications or tracker writes. Live query delivery and installed acceptance
 remain separate from that source demonstration.
+
+### Release terminal composer custody when native work is unheld
+
+An `orphaned` composer belongs to an ended session; a `dequeued` composer may
+have submitted **or discarded** its queued text. Neither state proves delivery.
+A separate explicit operator operation can release its refill reservation when
+a fresh exact read of the deployment's native tracker proves the item is
+unassigned (`open`, `deferred`, or `blocked`) or `closed`:
+
+```sh
+python -m shantytown.refill_terminal_reconcile --root /path/to/deployment --receipt terminal.json
+# Separate runtime authorization is required before --apply in a governed deployment.
+python -m shantytown.refill_terminal_reconcile --root /path/to/deployment --receipt terminal.json --apply
+```
+
+The receipt has exactly these fields. Copy the entire existing reservation;
+include `lane` only when the original reservation includes it. Compute the hash
+from the complete existing custody file bytes, without rewriting that file.
+
+```json
+{
+  "version": 1,
+  "worker": "worker",
+  "item": "work-1",
+  "pending": {"item": "work-1", "at": 1000, "lane": "next"},
+  "custody": "send-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "custody_sha256": "SHA256_OF_EXISTING_CUSTODY_FILE_BYTES"
+}
+```
+
+The default is read-only. The custody must retain a recorded durable pointer,
+exact original item/recipient serve footer and valid reservation/send time
+ordering. The command uses the configured native tracker adapter, not a supplied
+JSON ownership assertion or a fallback store. Missing, incomplete or failed
+native reads refuse. A stopped or absent recipient needs no replacement identity
+or launch: only the native work ownership decides release. A stop stamp cannot
+override an assigned open item. A live recipient still holding the item refuses;
+a live recipient whose item is unassigned can qualify.
+
+Apply uses the same refill-then-composer lock order, rechecks native ownership
+and revision before release, and appends prepared/completed records to
+`refill/terminal-reconciliations.jsonl`. It preserves the complete original
+reservation, custody and native ownership evidence in that private audit. A
+changed lane, reservation, custody hash, native revision, or conflicting audit
+refuses. Reads of a remote tracker and the local file replacement are not one
+cross-store transaction; the operation performs no tracker ownership write.
+An interrupted release can resume only with the same receipt and unchanged
+native evidence. A new reservation is never cleared by an old receipt.
+
+The custody file and its pointer remain unchanged, including its terminal state;
+output explicitly retains `delivery: UNKNOWN`. No receipt is relabelled as
+delivered, acknowledged, or executed. The operation never sends, claims, ticks,
+changes observations, resets an acceptance epoch, or certifies known coverage.
+Runtime authorization, scheduled acceptance and ordinary source rollback remain
+separate. Preserve the audit on rollback; never recreate the old reservation
+or replay its message.

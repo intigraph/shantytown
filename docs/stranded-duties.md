@@ -112,3 +112,9 @@ ownership blindly, delete repairs, or rerun an unknown remote intent with a
 different identity. Installation acceptance remains open until the actual
 scheduled pass, serving rule inventory, backfill, sustained zero and controlled
 orphan alert have been observed.
+# Source integration sequence
+
+The registry, adapters and library controls are the first source slice.
+The CLI parser option, stop-boundary wiring and administrator anchor output
+follow as separately reviewed slices. CLI examples below describe the complete
+integration; this first slice does not activate those CLI entrypoints.

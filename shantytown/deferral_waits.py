@@ -2,6 +2,27 @@
 from datetime import timedelta
 import re
 
+EXECUTION_WAIT = re.compile(r"\b(?:ci|reviews?|merg(?:e[ds]?|ing))\b", re.I)
+
+
+def refuse_execution_wait(reason, dependency_reason, condition, *, window=False):
+    """CI/review remains active work, not a reason to hide it for a day."""
+    from .deferrals import _CONDITION
+    prose = _CONDITION.sub("", reason)
+    kind = getattr(condition, "kind", None)
+    # Keep explicit calendar appointments, never an event wait disguised by
+    # --window. The flag alone was enough to hide a pending CI job (vo3j).
+    appointment = (window and kind == "date"
+                   and re.search(r"\b(?:appointment|meeting)\b", prose, re.I)
+                   and not re.search(r"\b(?:pending|wait(?:ing)?|blocked)\b", prose, re.I))
+    if kind in ("ci-terminal", "pr-merged") or (
+            not appointment and EXECUTION_WAIT.search(prose + "\n" + dependency_reason)):
+        raise ValueError(
+            "CI/review/merge wait: stay in_progress and record the exact wake "
+            "on the item; do not date-defer work. Record real prerequisites "
+            "as dependency edges instead. A backstop or --window does not waive this.")
+
+
 WAIT = re.compile(r"\b(?:ci|reviews?|merg(?:e[ds]?|ing)|install(?:ed|ing|ation)?)\b", re.I)
 
 

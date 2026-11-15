@@ -63,9 +63,78 @@ def test_existing_sweep_rebinds_supported_duty_and_flags_reservation_once(setup,
     assert Duties(world.root).resolve('queue', live=lambda n: n == 'lead') == 'lead'
     assert world.row['assignee'] == 'worker'  # ASK exclusion survives composition.
     run(world, 2000)
-    assert len(world.repairs) == 1 and len(world.attempts) == 1
+    assert len(world.repairs) == 1 and len(world.attempts) == 2
+    assert world.attempts[0] == world.attempts[1]
     assert len(world.inbox.unread('admin')) == 1
     assert 'review-reservation"} 1' in metrics(world.root, now=2000)
+
+
+@pytest.mark.parametrize('unavailable', [False, None, 'error'])
+def test_failed_page_waits_for_live_admin_then_recovers_same_key(setup, unavailable):
+    world = setup
+    install(world, [dict(record('reserved-peer', kind='review-reservation'), candidates=[])])
+    duty = Duties(world.root)
+    available = True
+    creations, pages = [], []
+
+    def live(name):
+        assert name == 'admin'
+        if available == 'error':
+            raise OSError('liveness unavailable')
+        return available
+
+    def create(payload, target, key):
+        creations.append((copy.deepcopy(payload), target, key))
+        return 'fixture-repair'
+
+    def notify(target, message, key):
+        pages.append((target, message, key))
+        if len(pages) == 1:
+            raise OSError('first page failed')
+
+    def tick(now):
+        return duty.tick(observe=lambda _: dict(state='operator-stopped', generation='stop-1', stopped_at=0),
+                         live=live, administrator=lambda: 'admin', ensure_issue=create,
+                         notify=notify, now=now, release=True)
+
+    tick(1800)
+    assert len(creations) == len(pages) == 1
+    available = unavailable
+    assert ('reserved-peer', 'repair intent UNKNOWN; stable key retained') in tick(1801)
+    state = json.loads((duty.root / 'attention.json').read_text())['reserved-peer']
+    assert not state.get('paged') and state['repair'] == 'fixture-repair'
+    assert len(creations) == len(pages) == 1
+    available = True
+    tick(1802)
+    tick(1803)
+    state = json.loads((duty.root / 'attention.json').read_text())['reserved-peer']
+    assert state['paged'] is True
+    assert len(creations) == 3 and len(pages) == 2
+    assert creations[0] == creations[1] == creations[2]
+    assert creations[0][2] == pages[0][2] == pages[1][2]
+
+
+def test_closed_repair_is_reconciled_without_duplicate_intent(setup):
+    world = setup
+    install(world, [dict(record(), candidates=[])])
+    duty = Duties(world.root)
+    calls, pages = [], []
+    repair = dict(status='open')
+
+    def ensure(payload, target, key):
+        calls.append((copy.deepcopy(payload), target, key))
+        repair['status'] = 'open'
+        return 'same-repair'
+
+    hooks = dict(observe=lambda _: dict(state='operator-stopped', generation='stop-1', stopped_at=0),
+                 live=lambda name: name == 'admin', administrator=lambda: 'admin',
+                 ensure_issue=ensure, notify=lambda *args: pages.append(args), release=True)
+    duty.tick(now=1800, **hooks)
+    repair['status'] = 'closed'
+    duty.tick(now=2000, **hooks)
+    assert repair['status'] == 'open'
+    assert len(calls) == 2 and calls[0] == calls[1]
+    assert len(pages) == 1
 
 
 def test_corrupt_duty_inventory_does_not_block_existing_item_sweep(setup, monkeypatch):

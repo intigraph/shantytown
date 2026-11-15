@@ -1,0 +1,11 @@
+Script started on 2026-11-14 18:44:47-05:00 [COMMAND="python3 docs/demos/codex-shim/demo.py" <not executed on terminal>]
+Private launch-setup fixtures; no agent or real HOME link is started/touched.
+base: fd30ffc9024a9730875a88ec0abff09fcaf07f46
+before unchanged-target launch: stat rewritten
+mtime_ns: 1000000000 -> 1794699887227493404
+before changed-target repair: True
+after unchanged-target launch: stat preserved
+mtime_ns: 1000000000 -> 1000000000
+after changed-target repair: True
+
+Script done on 2026-11-14 18:44:47-05:00 [COMMAND_EXIT_CODE="0"]

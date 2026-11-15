@@ -1013,6 +1013,8 @@ class IdleFleetAlerter:
         # in_progress counts as a haul (aegis-ap4gm) — same reason as the
         # feed_check gate: an item the worker already started is its next work,
         # and `bd ready` structurally cannot report it. Fails open.
+        from .quiet_waits import ready as quiet_wait_ready
+        active = quiet_wait_ready(active, root=self._root, log=self._log)
         queues = feed_check.hauls(ready_beads, active)
         # Gate before choosing/deduplicating the next head: a governor-held
         # first item must neither hide an admitted sibling nor consume delivery
@@ -1712,6 +1714,7 @@ class DeferralAlerter:
             else:
                 reader = getattr(backend(), "backstop_rows", None)
                 rows = (reader() if callable(reader) else backend().deferred()).exact()
+            self._log(f"deferral-sweep: store read complete candidates={len(rows)}")
         except Exception as e:                       # FAIL OPEN
             self._log(f"deferral-sweep: could not read the store ({e!r})")
             rows, store_error = [], True
@@ -1914,9 +1917,10 @@ class DeferralAlerter:
                 release = self._release or backend().undefer
                 release(finding.bead)
                 after = show(finding.bead)
-                if after.get("status") != "open" or after.get("defer_until"):
+                if (after.get("status") != "open" or after.get("defer_until")
+                        or after.get("assignee")):
                     raise RuntimeError("release read-back still held")
-                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, no defer_until")
+                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, unassigned, no defer_until")
             except Exception as e:
                 # An indeterminate write is re-read next pass, never blindly
                 # repeated. An already-open row is not a release candidate.

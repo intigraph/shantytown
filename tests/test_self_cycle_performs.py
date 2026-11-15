@@ -143,6 +143,8 @@ def test_the_timeout_names_a_busy_pane_as_busy(tmp_path, monkeypatch, capsys):
 
 def test_the_spawn_is_detached_and_scoped(tmp_path, monkeypatch):
     monkeypatch.setenv("SHANTY_SELF_CYCLE_SERVE", "1")
+    from shantytown import runtime
+    monkeypatch.setattr(runtime, "_hook_interpreter", lambda: "verified-python")
     calls = []
     import subprocess
     monkeypatch.setattr(subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
@@ -150,6 +152,70 @@ def test_the_spawn_is_detached_and_scoped(tmp_path, monkeypatch):
     argv, kw = calls[0]
     assert argv[-3:] == ["cycle", "hammond", "--serve-request"]
     assert kw["start_new_session"] is True and log.endswith("self-cycle-hammond.log")
+
+
+def test_waiter_parser_survives_a_namespace_shadow_in_the_callers_cwd(tmp_path, monkeypatch):
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    from shantytown import runtime
+
+    # Model an editable installation whose finder follows PathFinder. A bare
+    # repository directory in the caller's cwd wins as a namespace package.
+    # Isolate only its top-level PathFinder lookup from any regular wheel
+    # installed by CI; leave dependencies and submodule lookup unchanged.
+    shadow = tmp_path / "parent"
+    (shadow / "shantytown").mkdir(parents=True)
+    support = tmp_path / "support"
+    support.mkdir()
+    package = Path(cli.__file__).parent
+    (support / "sitecustomize.py").write_text(
+        "import sys, importlib.abc, importlib.util, importlib.machinery\n"
+        "class CallerPath(importlib.abc.MetaPathFinder):\n"
+        " def find_spec(self, fullname, path=None, target=None):\n"
+        "  if fullname == 'shantytown':\n"
+        "   return importlib.machinery.PathFinder.find_spec(fullname, [''])\n"
+        "  return importlib.machinery.PathFinder.find_spec(fullname, path, target)\n"
+        "class Editable(importlib.abc.MetaPathFinder):\n"
+        " def find_spec(self, fullname, path=None, target=None):\n"
+        "  if fullname == 'shantytown':\n"
+        f"   return importlib.util.spec_from_file_location(fullname, {str(package / '__init__.py')!r}, "
+        f"submodule_search_locations=[{str(package)!r}])\n"
+        "  if fullname.startswith('shantytown.') and fullname.count('.') == 1:\n"
+        f"   return importlib.machinery.PathFinder.find_spec(fullname, [{str(package)!r}])\n"
+        "index = sys.meta_path.index(importlib.machinery.PathFinder)\n"
+        "sys.meta_path[index:index + 1] = [CallerPath(), Editable()]\n"
+    )
+    env = {**os.environ, "PYTHONPATH": str(support)}
+    probe = [sys.executable, "-m", "shantytown.cli", "--help"]
+    before = subprocess.run(probe, cwd=shadow, env=env, capture_output=True, text=True)
+    assert before.returncode != 0 and "__version__" in before.stderr
+
+    monkeypatch.chdir(shadow)
+    monkeypatch.setenv("SHANTY_SELF_CYCLE_SERVE", "1")
+    monkeypatch.setattr(runtime, "_hook_interpreter", lambda: sys.executable)
+    calls = []
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
+        cli._spawn_self_cycle_server(argparse.Namespace(root=tmp_path / "store"), "hammond")
+    argv, kw = calls[0]
+    after = subprocess.run(argv[:3] + ["--help"], cwd=kw.get("cwd"), env=env,
+                           capture_output=True, text=True)
+    assert after.returncode == 0, after.stderr
+    assert "--root" in after.stdout
+
+
+def test_unavailable_waiter_interpreter_keeps_the_request_for_tend(tmp_path, monkeypatch, capsys):
+    from shantytown import runtime
+    cycle.Requests(tmp_path).request("hammond", "checkpoint")
+    def unavailable():
+        raise runtime.SettingsError("no installed interpreter")
+    monkeypatch.setattr(runtime, "_hook_interpreter", unavailable)
+    monkeypatch.setenv("SHANTY_SELF_CYCLE_SERVE", "1")
+    assert cli._spawn_self_cycle_server(argparse.Namespace(root=tmp_path), "hammond") == ""
+    assert "hammond" in cycle.Requests(tmp_path).pending()
+    assert "still serves the request" in capsys.readouterr().err
 
 
 # --- the checkpoint crosses a relay ---------------------------------------------
