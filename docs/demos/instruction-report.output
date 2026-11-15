@@ -1,0 +1,47 @@
+Script started on 2026-11-09 02:28:44-05:00 [COMMAND="stty -onlcr; env PYTHONPATH="$DEMO_BEFORE_SOURCE" python3 docs/demos/instruction-report-demo.py; env PYTHONPATH="$DEMO_AFTER_SOURCE" python3 docs/demos/instruction-report-demo.py" <not executed on terminal>]
+$ st ops provision --instruction-report ada
+{
+  "exit": 0,
+  "agents": [
+    {
+      "name": "ada",
+      "harness": null,
+      "comparisons": {}
+    }
+  ]
+}
+Instruction bytes unchanged: True
+AGENTS symlink retained: True
+No MCP artifact: True
+$ st ops provision --instruction-report ada
+{
+  "exit": 0,
+  "agents": [
+    {
+      "name": "ada",
+      "harness": null,
+      "tooling": "configured",
+      "comparisons": {
+        "CLAUDE.md": {
+          "before_sha256": "92a9f80e00c47c9d6969fc97c606ad922a6af6d9377949870791b8e700dc4bc5",
+          "after_sha256": "25605c8724348d4f2ac880ee03b1e6d1c82674796e285c478bf9948a8079b52a",
+          "before_bytes": 21,
+          "after_bytes": 109,
+          "equal": false
+        },
+        "AGENTS.md": {
+          "before_sha256": "92a9f80e00c47c9d6969fc97c606ad922a6af6d9377949870791b8e700dc4bc5",
+          "after_sha256": "25605c8724348d4f2ac880ee03b1e6d1c82674796e285c478bf9948a8079b52a",
+          "before_bytes": 21,
+          "after_bytes": 109,
+          "equal": false
+        }
+      }
+    }
+  ]
+}
+Instruction bytes unchanged: True
+AGENTS symlink retained: True
+No MCP artifact: True
+
+Script done on 2026-11-09 02:28:45-05:00 [COMMAND_EXIT_CODE="0"]
