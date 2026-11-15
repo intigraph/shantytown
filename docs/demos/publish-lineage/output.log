@@ -1,0 +1,8 @@
+Script started on 2026-11-14 22:23:13-05:00 [COMMAND="python3 docs/demos/publish-lineage/demo.py" <not executed on terminal>]
+Offline fake-forge probe; no network or live PR changes.
+Input: same item project-new, Supersedes: #1, successor #99
+BASE 4aa295157989aa734f0adaecdd2283f4408eeb41 successor/predecessor/writes: (99, 'open', 1)
+HEAD candidate successor/predecessor/writes: (99, 'closed', 3)
+NEGATIVE malformed cross-repository reference: lineage trailer must name one same-repository PR as #N
+
+Script done on 2026-11-14 22:23:14-05:00 [COMMAND_EXIT_CODE="0"]
