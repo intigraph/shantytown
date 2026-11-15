@@ -60,6 +60,12 @@ class DeclaredJob:
 
 
 @dataclass(frozen=True)
+class SingleOccurrenceDeclaredJob(DeclaredJob):
+    """One startDate occurrence; never advertise an elapsed recurrence."""
+    repeat_count: int
+
+
+@dataclass(frozen=True)
 class CalendarDeclaredJob(DeclaredJob):
     """Explicit weekly civil time; interval_s is None, never elapsed P7D."""
     weekday: int
@@ -104,6 +110,8 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
                     not isinstance(datatype, str) or value['datatype'] != datatype):
                 raise JobsUnavailable("typed literal contradicts query metadata")
             value = value['value']
+        if predicate == SCHEMA+'repeatCount' and type(value) not in (str, int):
+            raise JobRefused('repeatCount requires an integer RDF cell')
         if type(value) not in (str, bool, int, float):
             raise JobsUnavailable("unsupported query cell")
         if is_iri:
@@ -140,10 +148,20 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
             raise JobRefused("recurring Event bounds belong on its Schedule")
         schedule_props = facts.get(schedule, {})
         unsupported = ('byMonth', 'byMonthDay', 'byMonthWeek', 'exceptDate',
-                       'repeatCount', 'endTime', 'endDate')
+                       'endTime', 'endDate')
         if any(SCHEMA+name in schedule_props for name in unsupported):
             raise JobRefused("unsupported calendar qualifier")
+        single = SCHEMA+'repeatCount' in schedule_props
+        if single:
+            counts = schedule_props[SCHEMA+'repeatCount']
+            if (len(counts) != 1 or not all(
+                    not t.iri and t.datatype == XSD+'integer' and
+                    (type(t.value) is int and t.value == 1 or
+                     type(t.value) is str and t.value == '1') for t in counts)):
+                raise JobRefused('only explicit integer repeatCount=1 is supported')
         calendar = any(SCHEMA+name in schedule_props for name in ('byDay', 'startTime'))
+        if single and calendar:
+            raise JobRefused('single occurrence cannot mix calendar recurrence')
         if one(action, QUECHUA+'sourceKind') != 'declared':
             raise JobRefused("job is not an explicit declaration")
         enabled = one(action, QUECHUA+'enabled', datatype=XSD+'boolean')
@@ -194,7 +212,10 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
                 raise JobRefused("ambiguous or nonexistent calendar anchor")
             interval = None
             calendar_fields = dict(weekday=weekday, local_time=start[:5])
-        kind = CalendarDeclaredJob if calendar else DeclaredJob
+        if single:
+            interval = None
+            calendar_fields = dict(repeat_count=1)
+        kind = SingleOccurrenceDeclaredJob if single else CalendarDeclaredJob if calendar else DeclaredJob
         jobs.append(kind(
             action, event, schedule, one(action, SCHEMA+'name'),
             one(action, SCHEMA+'identifier'), one(action, QUECHUA+'owner'), enabled,

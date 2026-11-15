@@ -426,3 +426,68 @@ def test_verbose_literal_cannot_relabel_an_iri():
     row['o'] = {'value': 'urn:example:manifest:revision1', 'datatype': q.XSD+'string'}
     with pytest.raises(q.JobsUnavailable, match='contradicts'):
         q.decode_catalogue(body)
+
+
+def one_shot_catalogue():
+    body = catalogue()
+    body['rows'].append(dict(s=SCHEDULE, p=q.SCHEMA+'repeatCount', o=1,
+        subjectIRI=True, objectIRI=False, datatype=q.XSD+'integer'))
+    body['count'] += 1
+    return body
+
+
+def test_single_occurrence_is_explicit_and_keeps_runtime_unknown():
+    from dataclasses import asdict
+    job, = q.decode_catalogue(one_shot_catalogue())
+    assert isinstance(job, q.SingleOccurrenceDeclaredJob)
+    assert job.repeat_count == 1 and job.interval_s is None
+    assert job.anchor_s == 1767225600
+    assert 'repeat_count' not in asdict(q.decode_catalogue(catalogue())[0])
+
+
+@pytest.mark.parametrize('value', [0, 2, True, 1.0, '01', '+1', '1.0'])
+def test_single_occurrence_refuses_other_counts(value):
+    body = one_shot_catalogue()
+    row_for(body, q.SCHEMA+'repeatCount')['o'] = value
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
+
+
+def test_single_occurrence_refuses_wrong_type_and_calendar_mix():
+    for change in ('type', 'calendar', 'duplicate'):
+        body = one_shot_catalogue()
+        if change == 'type':
+            row_for(body, q.SCHEMA+'repeatCount')['datatype'] = q.XSD+'string'
+        elif change == 'calendar':
+            body['rows'].append(dict(s=SCHEDULE, p=q.SCHEMA+'byDay', o=q.SCHEMA+'Monday', subjectIRI=True, objectIRI=True))
+        else:
+            extra = dict(row_for(body, q.SCHEMA+'repeatCount')); extra['o'] = 2
+            body['rows'].append(extra)
+        body['count'] = len(body['rows'])
+        with pytest.raises(q.JobRefused):
+            q.decode_catalogue(body)
+
+
+@pytest.mark.parametrize('as_json', [False, True])
+def test_single_occurrence_cli_preserves_runtime_unknown(tmp_path, monkeypatch, capsys, as_json):
+    from shantytown import cli
+    monkeypatch.setattr(q.JobCatalogue, 'read', lambda self: q.decode_catalogue(one_shot_catalogue()))
+    argv = ['--root', str(tmp_path), 'work', 'jobs', '--graph', 'urn:example:catalogue', '--expect-job', JOB]
+    assert cli.main(argv + (['--json'] if as_json else []) + ['list']) == 0
+    out = capsys.readouterr().out
+    if as_json:
+        body = json.loads(out)
+        assert body['jobs'][0]['repeat_count'] == 1
+        assert body['jobs'][0]['interval_s'] is None
+        assert all(body[k] == 'UNKNOWN' for k in ('executable_admission', 'signed_run_status', 'firing_eligibility'))
+    else:
+        assert 'once at UTC epoch 1767225600' in out and 'None' not in out
+    assert not list(tmp_path.rglob('*'))
+
+
+def test_single_occurrence_cannot_hide_boolean_cell_by_rdf_set_equality():
+    body = one_shot_catalogue()
+    extra = dict(row_for(body, q.SCHEMA+'repeatCount')); extra['o'] = True
+    body['rows'].append(extra); body['count'] += 1
+    with pytest.raises(q.JobRefused):
+        q.decode_catalogue(body)
