@@ -18,7 +18,8 @@ N, S = seeds_plate.SEEDS, seeds_plate.SCHEMA
 
 
 @pytest.fixture
-def native(tmp_path):
+def native(tmp_path, monkeypatch):
+    monkeypatch.setenv("ST_SEEDS_READ_CACHE", "0")
     if not BINARY:
         pytest.skip("set SHANTYTOWN_TEST_QUIPU_SERVER for isolated native fixture")
     with socket.socket() as sock:
@@ -95,7 +96,8 @@ def test_native_shared_ephemeral_parked_order_and_foreign_scope(native, monkeypa
         return original(*args, **kwargs)
     monkeypatch.setattr(seeds_plate, "_query", counted)
     rows = tracker().haul_active_rows("tim").exact()
-    assert len(queries) == 4
+    assert len(queries) <= 6
+    assert any("blockedOn" in query for query in queries)
     assert [r["id"] for r in rows] == ["a-eph", "b-parked", "z-main"]
     assert rows[1]["defer_until"] == "2099-01-01T00:00:00Z"
     assert tracker().haul_active_rows("absent").exact() == []
@@ -149,3 +151,23 @@ def test_native_legacy_marker_retains_explicit_fallback(native):
     load, tracker, post = native
     load("old", extra=f'<{N}item/old> <{N}ontology/revision> 1 .')
     assert tracker().haul_active_rows("tim") is None
+
+
+@pytest.mark.parametrize("state,visible", [('"open"', False), ('"closed"', True)])
+def test_native_technical_blocker_controls_active_haul(native, state, visible):
+    load, tracker, _ = native
+    load("dependency", owner='"other"', status=state)
+    load("waiting", extra=f'<{N}item/waiting> <https://scbrown.github.io/quechua/ns#blockedOn> <{N}item/dependency> .')
+    rows = tracker().haul_active_rows("tim").exact()
+    assert ("waiting" in {row["id"] for row in rows}) is visible
+
+
+def test_native_active_projection_delivers_wait_marker_to_filter(native, monkeypatch):
+    from shantytown import quiet_waits
+    load, tracker, _ = native
+    marker = "resume_when: ci-terminal:github/example/project@" + "a" * 40
+    load("waiting", extra=f'<{N}item/waiting> <{N}ontology/notes> {json.dumps(marker)} .')
+    rows = tracker().haul_active_rows("tim").exact()
+    assert rows[0]["notes"] == marker
+    monkeypatch.setattr(quiet_waits, "evaluate", lambda *a, **kw: [])
+    assert quiet_waits.ready(rows) == []

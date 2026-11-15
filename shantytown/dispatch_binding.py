@@ -7,10 +7,13 @@ from dataclasses import asdict
 import hashlib
 import json
 import re
+import time
 import uuid
 
-from .dispatch_receipts import (ReceiptConflict, ReceiptStore, assignment_comment,
-                                assignment_proof, assignment_supersession)
+from .dispatch_receipts import (DifferentScope, ReceiptConflict, ReceiptStore, assignment_comment,
+                                assignment_proof, assignment_supersession,
+                                prepared_supersession)
+from .protocols import SubmissionObserved
 
 
 def digest(value):
@@ -44,7 +47,8 @@ class FilesAssignments:
 
     def supersession(self, row):
         current = json.loads(self.tracker._path(row['item']).read_text())
-        return assignment_supersession(row, dict(current, id=row['item']))
+        prove = prepared_supersession if row['state'] == 'prepared' else assignment_supersession
+        return prove(row, dict(current, id=row['item']))
 
 
 class SeedsAssignments:
@@ -58,7 +62,8 @@ class SeedsAssignments:
         return self.tracker.dispatch_assignment_read(row)
 
     def supersession(self, row):
-        return assignment_supersession(row, self.tracker.stranded_read(row['item']))
+        prove = prepared_supersession if row['state'] == 'prepared' else assignment_supersession
+        return prove(row, self.tracker.stranded_read(row['item']))
 
 
 class Binding:
@@ -161,7 +166,20 @@ class Binding:
                         f'st go {plan.item_id} {plan.agent} --reconcile --receipt {ident}; '
                         'proceed only when execution_authorized is true. Never resend or claim by hand.'
                         f' — {marker}')
-            row, fresh = self.store.prepare(scope, text, ident=ident)
+            try:
+                row, fresh = self.store.prepare(scope, text, ident=ident)
+            except DifferentScope as error:
+                # A recovery hint is not release proof: the command still runs
+                # its own native guards if an operator explicitly chooses it.
+                try:
+                    current = self.tracker.get(plan.item_id)
+                except Exception:
+                    current = None
+                if (current is not None and current.status == 'open'
+                        and not current.assignee and not current.defer_until
+                        and error.receipt['state'] in ('prepared', 'assigning')):
+                    raise DifferentScope(error.receipt, supersede_hint=True) from None
+                raise
             if fresh:
                 row['request'] = self.request(plan, plan.binding_agent)
                 self.store._save(row)
@@ -177,6 +195,36 @@ class Binding:
     def submitted(self, plan, observed):
         self.store.submitted(plan.receipt_id, observed)
 
+    def confirm_submission(self, plan, observed):
+        """Observe the one initial send; never type, complete or claim here."""
+        if isinstance(observed, SubmissionObserved) and observed.matches(plan.pane, plan.text):
+            return observed
+        if observed is not None or not callable(getattr(self.panes, 'observed_submission', None)):
+            return None
+        row = self.store.read(plan.receipt_id)
+        expected = self.store._scope(row)
+        if (row['state'] != 'prepared' or row['item'] != plan.item_id
+                or row['worker'] != plan.agent or row['text'] != plan.text):
+            raise ReceiptConflict('initial submission receipt differs from dispatch')
+        if self.scope(plan, current=True) != expected:
+            raise ReceiptConflict('scope changed before observing initial submission')
+        # A measured native Claude user record arrived 0.33s after preparation,
+        # while the echo-only path missed it. Poll the existing exact native reader,
+        # bounded by BOTH attempts and elapsed time; missing proof stays pending.
+        deadline = time.monotonic() + 5
+        for attempt in range(11):
+            if attempt and time.monotonic() >= deadline:
+                return None
+            proof = self.observed(row)
+            if isinstance(proof, SubmissionObserved) and proof.matches(plan.pane, plan.text):
+                if self.scope(plan, current=True) != expected:
+                    raise ReceiptConflict('scope changed while observing initial submission')
+                return proof
+            remaining = deadline - time.monotonic()
+            if attempt == 10 or remaining <= 0:
+                return None
+            time.sleep(min(0.5, remaining))
+
     def assign(self, plan):
         row = self.store.read(plan.receipt_id)
         current = self.scope(plan, current=True)
@@ -191,18 +239,18 @@ class Binding:
                                  lambda row: self.assignments.claim(row, plan.updates))
 
     def supersede(self, ident, *, dry_run=False):
-        """Explicitly retire a fenced attempt; never send, claim or authorize work."""
+        """Explicitly retire an attempt; never send, claim or authorize work."""
         row = self.store.read(ident)
         if dry_run:
             # A preview must not acquire a writable ledger lock or remove the
             # interrupted-assignment fence. Native release evidence is still
             # required; this read never authorizes a later transition.
-            if row['state'] not in ('assigning', 'superseded'):
-                raise ReceiptConflict('only a fenced assignment can be superseded')
-            if row['state'] == 'assigning':
+            if row['state'] not in ('prepared', 'assigning', 'superseded'):
+                raise ReceiptConflict('only a prepared intent or fenced assignment can be superseded')
+            if row['state'] in ('prepared', 'assigning'):
                 self.assignments.supersession(row)
             return dict(id=ident, state=row['state'], dry_run=True,
-                        would_supersede=row['state'] == 'assigning', execution_authorized=False)
+                        would_supersede=row['state'] != 'superseded', execution_authorized=False)
         with self.store.lock(row['item']):
             if row['state'] == 'superseded':
                 return dict(id=ident, state='superseded', execution_authorized=False)

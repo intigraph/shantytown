@@ -1,0 +1,11 @@
+Script started on 2026-11-12 14:11:08-05:00 [COMMAND="PYTHONPATH=. python3 docs/demos/deploy-reservations.py" <not executed on terminal>]
+Synthetic fixture: operator-stopped owner; assigned open P0 work
+Base: 6bccc8d7f1f502e12daba586d8fb6e47002924b4
+before
+  ordinary work: release eligible=True
+  deploy reservation: release eligible=True
+after
+  ordinary work: release eligible=True
+  deploy reservation: release eligible=False
+
+Script done on 2026-11-12 14:11:08-05:00 [COMMAND_EXIT_CODE="0"]

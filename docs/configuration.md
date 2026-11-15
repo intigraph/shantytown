@@ -32,6 +32,11 @@ ssh  = "me@laptop.example"     # `st inbox <agent>` relays here when the agent l
 root = "/opt/st/.shanty"
 ```
 
+An escalation poller can declare `[escalation_poller] carrier_enabled = true`
+to opt into carrier records. This field defaults to `false`, accepts only a TOML
+boolean, and has no environment override. The producer must read this root's
+configuration; schema support alone does not activate a producer.
+
 Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
 `[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
 `[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.

@@ -748,6 +748,25 @@ class Requests:
             return d
         return {agent: norm(value) for agent, value in self._load().items()}
 
+    def settle_fresh_session(self, agent: str, started_at: float) -> bool:
+        """A NEW process for this agent serves a request made before it began.
+
+        aegis-zxor: an agent relaunched by any path (an admin `--no-in-place`
+        cycle, a death and `st agent new`) kept its predecessor's request, and
+        tend nudged the fresh session about it for hours. Only requests made
+        strictly before this session started are settled; an untimestamped legacy
+        record cannot be ordered and is kept.
+        """
+        with self._locked():
+            data = self._load()
+            record = data.get(agent)
+            asked = record.get("requested_at") if isinstance(record, dict) else None
+            if not isinstance(asked, (int, float)) or asked >= started_at:
+                return False
+            data.pop(agent)
+            self._save(data)
+            return True
+
     def clear(self, agent: str) -> None:
         """Drop a completed or explicitly cancelled request. Otherwise only AFTER
         the cycle is performed — a

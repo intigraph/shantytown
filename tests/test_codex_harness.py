@@ -328,6 +328,41 @@ def test_codex_path_shim_survives_card_runtime_cleanup(tmp_path):
     assert shim.resolve(strict=True) == managed
 
 
+@pytest.mark.parametrize("name", ["codex", "codex with spaces", "codex's payload"])
+def test_codex_path_shim_launch_preserves_unchanged_link_stat(tmp_path, name):
+    managed = tmp_path / "payload" / name
+    managed.parent.mkdir()
+    managed.write_text("#!/bin/sh\nexit 0\n")
+    managed.chmod(0o700)
+    user_bin = tmp_path / "home/.local/bin"
+    setup = harness_mod.codex_path_shim_setup(managed, user_bin)
+    subprocess.run(setup, shell=True, check=True)
+    shim = user_bin / "codex"
+    os.utime(shim, ns=(1_000_000_000, 1_000_000_000), follow_symlinks=False)
+    before = shim.lstat()
+
+    # Execute the emitted launch setup twice, followed by a private stand-in CLI.
+    import shlex
+    for _ in range(2):
+        subprocess.run(setup + " && " + shlex.quote(str(shim)), shell=True, check=True)
+    after = shim.lstat()
+    assert shim.readlink() == managed
+    assert (after.st_ino, after.st_mtime_ns, after.st_ctime_ns) == (
+        before.st_ino, before.st_mtime_ns, before.st_ctime_ns)
+
+
+def test_codex_path_shim_repairs_a_dangling_target(tmp_path):
+    user_bin = tmp_path / "bin"
+    user_bin.mkdir()
+    shim = user_bin / "codex"
+    shim.symlink_to(tmp_path / "removed-payload")
+    managed = tmp_path / "new-payload"
+    managed.write_text("payload")
+    subprocess.run(harness_mod.codex_path_shim_setup(managed, user_bin),
+                   shell=True, check=True)
+    assert shim.readlink() == managed
+
+
 def test_codex_remote_control_repairs_path_shim_before_and_after_updater(tmp_path):
     root = tmp_path / ".shanty"
     root.mkdir()

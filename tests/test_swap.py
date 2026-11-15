@@ -54,7 +54,7 @@ def _outside_dispatch_protocol(source):
         "panes": {"send", "exists", "capture"},
         "handoff": {"preview", "record"},
         # Completion is the no-send recovery boundary, separate from Tracker.
-        "binding": {"prepare", "submitted", "assign", "complete"},
+        "binding": {"prepare", "confirm_submission", "submitted", "assign", "complete"},
         "updates": {"items"},  # staged field dictionary, not a backend
     }
     invalid = []
@@ -84,6 +84,7 @@ def test_dispatch_protocol_guard_rejects_tracker_advisory_and_backend_leaks():
     assert _outside_dispatch_protocol("self.handoff.preview(item, agent)") == []
     assert _outside_dispatch_protocol("self.handoff.record(agent, preview)") == []
     assert _outside_dispatch_protocol("self.binding.complete(plan, receipt)") == []
+    assert _outside_dispatch_protocol("self.binding.confirm_submission(plan, observed)") == []
 
 
 def test_tracker_interface_is_three_functions():

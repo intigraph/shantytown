@@ -218,6 +218,8 @@ class Config:
     overdue_enabled: bool = False
     # Explicit per-host scheduler cutover; omission preserves local TOML jobs.
     jobs_scheduler: str = "local"
+    # Activation belongs to the producer's declared config, never ambient env.
+    escalation_poller_carrier_enabled: bool = False
     mode: str = DEFAULT_MODE
     modes: dict[str, list[str]] = field(default_factory=lambda: dict(BUILTIN_MODES))
     hibernate: Hibernate = field(default_factory=Hibernate)
@@ -421,7 +423,7 @@ _TOP_KEYS = {"startup", "modes", "hibernate", "admin_wake_budget", "fleet", "cre
              "roles", "precedence", "governor", "session_budget", "hostmem", "quiet_time",
              "harness",
              "model", "host", "keep_current", "cycle_advice", "accounts", "overdue", "memory",
-             "ephemeral", "inbox"}
+             "ephemeral", "inbox", "escalation_poller"}
 _HARNESS_KEYS = {"default", "by_role", "required_by_role"}
 _MODEL_KEYS = {"default", "by_role", "fallback", "fallback_by_role"}
 _STARTUP_KEYS = {"mode"}
@@ -502,6 +504,8 @@ def _resolve(data: dict, path: Path) -> Config:
         raise ConfigError(f"{path}: overdue.spec_changes must be boolean")
     return Config(mode=mode, modes=modes, overdue_spec_changes=spec_changes, overdue_enabled=overdue_enabled,
                   jobs_scheduler=_jobs_scheduler(path, _table(path, data, "jobs")),
+                  escalation_poller_carrier_enabled=_escalation_poller(
+                      path, _table(path, data, "escalation_poller")),
                   overdue_external_unlocks=external_unlocks,
                   accounts=_accounts(path, _table(path, data, "accounts")),
                   memory=_memory(path, _table(path, data, "memory")),
@@ -540,6 +544,14 @@ def _resolve(data: dict, path: Path) -> Config:
 
 
 INBOX_STORES = ("seed", "message-graph")
+
+
+def _escalation_poller(path: Path, tbl: dict) -> bool:
+    _refuse_unknown(path, "escalation_poller", tbl, {"carrier_enabled"})
+    enabled = tbl.get("carrier_enabled", False)
+    if type(enabled) is not bool:
+        raise ConfigError(f"{path}: escalation_poller.carrier_enabled must be boolean")
+    return enabled
 
 
 def _inbox_store(path: Path, tbl: dict) -> str:

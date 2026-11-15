@@ -91,6 +91,9 @@ def test_unknown_soft_outcome_does_not_restart_or_consume_request(tmp_path, monk
 
 def test_pending_clear_cannot_plan_a_busy_turn_restart(tmp_path):
     hook(tmp_path)
+    # The marker belongs to a current request (aegis-zxor: an unowned marker
+    # is withdrawn instead; tests/test_cycle_zxor.py).
+    cycle.Requests(tmp_path).request("worker", "checkpoint")
     soft_cycle.begin(tmp_path, "worker")
     class NoMutation:
         def exists(self, *args): pytest.fail("must only observe pending attempt")

@@ -89,9 +89,9 @@ def test_unknown_or_changed_session_never_authorizes_clear(monkeypatch, tmp_path
     assert not any(c[-1] in ('C-e', 'C-u') for c in keys(calls))
 
 
-def test_multiline_owned_notice_is_retained_without_clear(monkeypatch, tmp_path):
+def test_opaque_multiline_notice_is_retained_without_clear(monkeypatch, tmp_path):
     body = BODY + '\nSecond line'
-    panes, calls = local(monkeypatch, tmp_path, [READY, OWNED.replace(BODY, body)])
+    panes, calls = local(monkeypatch, tmp_path, [READY, OWNED.replace(BODY, '[Pasted Content 1233 chars]')])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', body)
     assert not any(c[-1] in ('C-e', 'C-u') for c in keys(calls))

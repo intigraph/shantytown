@@ -1163,6 +1163,8 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "
                 "configure SHANTY_TOOLING_MANIFEST in the deployment first")
+        from . import legacy_capture
+        capture_proof = legacy_capture.inspect(ws, manifest, settings_path)
         updates = tooling.instruction_updates(ws, manifest) if manifest is not None else {}
         for path, text in instruction_plan.updates.items():
             updates[path] = (tooling.instruction_text(text, manifest.instructions)
@@ -1170,6 +1172,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         retired = tooling.retired_links(ws, manifest) if manifest is not None else []
     except (tooling.ToolingError, config_mod.ConfigError, ValueError) as e:
         raise ProvisionError(str(e)) from None
+    try:
+        legacy_capture.record(ws, capture_proof)
+    except (OSError, ValueError):
+        raise ProvisionError("legacy session-capture receipt cannot be recorded") from None
     template = json.dumps({"mcpServers": manifest.mcp}) if manifest is not None else None
     rendered = None
     canonical_consent = None

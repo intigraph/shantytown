@@ -40,6 +40,9 @@ class OwnerPacing:
     """
     def __init__(self, root):
         self.path = Path(root) / "notify" / "deferral-owner-pacing.json"
+        from .stopped import FilesStops
+        self.stops = FilesStops(Path(root) / "stopped")
+        self.stop_snapshot = {}
         try:
             self.previous = json.loads(self.path.read_text())
             if not isinstance(self.previous, dict):
@@ -47,6 +50,13 @@ class OwnerPacing:
         except (OSError, ValueError):
             self.previous = {}
         self.current = {}
+
+    def deliberately_stopped(self, owner):
+        if not isinstance(owner, str) or not owner or Path(owner).name != owner:
+            return False
+        if owner not in self.stop_snapshot:
+            self.stop_snapshot[owner] = self.stops.get(owner) is not None
+        return self.stop_snapshot[owner]
 
     def route(self, row, finding, live, deliver, lead_for, *, observe=None):
         # Diagnostics must never consume a reminder or change its recipient.
@@ -75,6 +85,12 @@ class OwnerPacing:
         # Preserve receipts even while every route is temporarily unreachable.
         self.current[row["id"]] = state
         owner = row.get("assignee")
+        # A deliberate scale-down is administrator custody, not a crashed
+        # worker's per-item escalation to a live lead. An unreadable marker
+        # cannot invent stop intent; retain the ordinary unknown/down path.
+        if self.deliberately_stopped(owner):
+            report(owner, "owner", "deliberately-stopped")
+            return None, "owner-stopped", "pending"
         recipients = [(owner, "owner")]
         lead = lead_for(owner)
         if lead and lead != owner:

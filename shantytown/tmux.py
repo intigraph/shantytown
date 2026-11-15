@@ -694,7 +694,7 @@ class Tmux:
                     # A failed observation must not discard the original failure
                     # or its durable ownership record.
                     try:
-                        custody.failed(self)
+                        custody.failed(self, multiline=True)
                     except Exception:
                         pass
                     raise
@@ -828,7 +828,8 @@ class Tmux:
         # and was never inbox's: it belongs to the one place st types into a pane.
         _journal_send(pane, text)
         if (codex or claude_birth is not None) and custody is not None:
-            custody.begin(text, self.session_created(pane))
+            custody.begin(text, self.session_created(pane),
+                          runtime=self.runtime_identity(pane))
         # `or [""]` keeps the empty-body case sending exactly one `-l ""`, which
         # is what this always did — the split of an empty string is no chunks.
         chunks = [text[i:i + _SEND_CHUNK]
@@ -932,6 +933,13 @@ class Tmux:
         if observed is None and self._confirmed_claude(pane, self.foreground(pane)):
             from .claude_submission import observe
             proof = observe(self.delivery_root, worker, text, created)
+            if proof:
+                observed = SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
+        if observed is None and self._confirmed_codex(pane, self.foreground(pane)):
+            from .codex_submission import observe
+            from .harness import get
+            settings = get('codex').settings_in_cmdline(self.cmdline(pane) or '')
+            proof = observe(self.delivery_root, worker, text, created, settings)
             if proof:
                 observed = SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
         if (self.runtime_identity(pane) != runtime

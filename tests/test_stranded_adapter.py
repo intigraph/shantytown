@@ -28,7 +28,7 @@ def setup(tmp_path, monkeypatch):
     registry = SimpleNamespace(all=lambda: Answer.complete_read(list(cards.values()), how='fixture'),
                                get=lambda name: cards[name])
     row = dict(id='work-1', assignee='worker', status='in_progress', priority=0, title='work', labels=[])
-    tracker = SimpleNamespace(ranking_rows=lambda: ([], [dict(row)]))
+    tracker = SimpleNamespace(stranded_rows=lambda owners: [dict(row)])
     states = dict(worker='down', lead='down', admin='live', remote='down')
     panes = SimpleNamespace(owner_state=lambda pane: states[pane])
     inbox = FilesInbox(tmp_path / 'inbox')
@@ -68,8 +68,8 @@ def test_foreign_or_unscoped_owner_is_unknown_never_down(setup, host):
 
 def test_intent_resume_keeps_owner_and_no_brief_attention(setup):
     FilesStops(setup.root / 'stopped').record('worker', 0, resume_at='2999-01-01T00:00:00Z')
-    assert run(setup) == []
-    assert not setup.inbox.unread('admin')
+    assert ('work-1', 'needs attention') in run(setup)
+    assert len(setup.inbox.unread('admin')) == 1
     assert OwnedWork(setup.root).snapshot() == {}
 
 
@@ -146,15 +146,15 @@ def test_every_real_launch_takes_lifecycle_lock_before_admission(monkeypatch, tm
     assert events == ['admission']
 
 
-def test_undated_operator_stop_is_exempt(setup):
+def test_undated_operator_stop_has_immediate_attention_in_observe(setup):
     FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
-    assert run(setup) == []
-    assert run(setup, 100000) == []
-    assert not setup.inbox.unread('admin')
+    assert ('work-1', 'needs attention') in run(setup)
+    assert ('work-1', 'needs attention') in run(setup, 100000)
+    assert len(setup.inbox.unread('admin')) == 1
     assert OwnedWork(setup.root).snapshot() == {}
 
 
-def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
+def test_positive_cycle_refusal_uses_priority_deadline_even_with_live_pane(setup):
     from shantytown.cycle import Requests
     path = Requests(setup.root).path
     path.parent.mkdir(parents=True)
@@ -162,9 +162,9 @@ def test_positive_cycle_refusal_uses_measured_hour_even_with_live_pane(setup):
         'refused': {'reason': 'fixture dirty tree', 'paths': ['fixture']}}}))
     setup.states['worker'] = 'live'
     run(setup)
-    run(setup, 3600)
+    run(setup, 1799)
     assert not setup.inbox.unread('admin')
-    run(setup, 3601)
+    run(setup, 1800)
     assert len(setup.inbox.unread('admin')) == 1
     assert 'cycle refusal' in OwnedWork(setup.root).snapshot()['worker']['reason']
     path.write_text('{}')
@@ -180,3 +180,337 @@ def test_malformed_cycle_ledger_is_unknown(setup):
     assert run(setup) == [('work-1', 'owner liveness UNKNOWN')]
     assert run(setup, 9000) == [('work-1', 'owner liveness UNKNOWN')]
     assert not setup.inbox.unread('admin')
+
+
+def test_complete_assignee_census_counts_300_parked_work_and_skips_inbox(setup):
+    rows = [dict(setup.row, id=f'work-{i}', status='deferred',
+                 defer_until='2999-01-01T00:00:00Z', labels=['blocked:external'],
+                 title='parked work') for i in range(300)]
+    rows += [dict(setup.row, id=f'message-{i}', title='inbox: preserved') for i in range(241)]
+    scopes = []
+    def census(owners):
+        scopes.append(owners)
+        return copy.deepcopy(rows)
+    setup.tracker.stranded_rows = census
+    setup.tracker.ranking_rows = lambda: pytest.fail('ranking is not a complete assignee census')
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    run(setup, 10)
+    run(setup, 1810)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert len(findings) == 300
+    assert all(row['release_due'] and row['evidence'] == 'operator-stopped'
+               for row in findings.values())
+    proof = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert proof['complete'] is True
+    assert proof['owners']['worker'] == dict(work=300, release_due=300)
+    assert proof['inbox_pointers'] == 'not read; never release candidates'
+    assert scopes == [['admin', 'lead', 'worker']] * 2
+
+
+@pytest.mark.parametrize('state', ['live', 'unknown'])
+def test_stop_record_cannot_promote_live_or_unknown_process(setup, state):
+    setup.states['worker'] = state
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    run(setup, 10)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert not any(row.get('release_due') for row in findings.values())
+    assert not setup.inbox.unread('admin')
+
+
+def test_release_mode_keeps_non_operator_classes_observe(setup, monkeypatch):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    setup.row['status'] = 'open'
+    setup.tracker.stranded_read = lambda _: copy.deepcopy(setup.row)
+    setup.tracker.release_stranded = lambda *_: pytest.fail('unadmitted class released')
+    run(setup, 0)
+    run(setup, 3601)
+    assert len(setup.inbox.unread('admin')) == 1
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    assert findings['work-1']['attention']
+    assert findings['work-1']['release_due'] is False
+
+
+@pytest.mark.parametrize('ledger', ['{malformed', '{"worker":{"refused":{"reason":"old refusal","paths":[]}}}'])
+def test_operator_stop_and_process_absence_are_not_hidden_by_old_cycle_ledger(setup, ledger):
+    from shantytown.cycle import Requests
+    path = Requests(setup.root).path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(ledger)
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    run(setup, 10)
+    run(setup, 1810)
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['evidence'] == 'operator-stopped' and finding['release_due']
+
+
+def test_stopped_administrator_cannot_receive_release_prerequisite(setup):
+    setup.states['admin'] = 'down'
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    result = run(setup, 10)
+    assert ('work-1', 'administrator route UNKNOWN; no release') in result
+    assert not setup.inbox.unread('admin')
+
+
+def test_natural_clock_census_matches_current_attention(setup):
+    """The scheduled caller omits now; its coverage count must still be honest."""
+    FilesStops(setup.root / 'stopped').record('worker', 0, reason='operator hold')
+    assert ('work-1', 'needs attention') in sweep(
+        setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox)
+    findings = json.loads((setup.root / 'stranded-work/attention.json').read_text())
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert findings['work-1']['release_due'] is False
+    assert census['checked_at'] == findings['work-1']['checked_at']
+    assert census['owners']['worker'] == dict(work=1, release_due=0)
+
+
+def test_whole_harness_stopped_releases_every_owned_item_in_one_pass(setup, monkeypatch):
+    """aegis-byt fixture: a whole harness at 0 live, 32 assigned items.
+
+    One tend pass must leave 0 items assigned to the stopped crew. In-progress
+    work returns to open; deferred and blocked work keeps its status and its
+    deferral; inbox pointers and a live owner's work are untouched. The admin
+    gets ONE keyed notice per stopped owner, not one per item.
+    """
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept/' + card.name, branch='kept', head='0' * 40, checkpoint='kept'))
+    harness = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']
+    for name in harness:
+        setup.cards[name] = Agent(name, 'worker', reports_to='lead', pane=name, host='test-host')
+        setup.states[name] = 'down'
+        FilesStops(setup.root / 'stopped').record(name, 0)  # undated operator stop
+    setup.cards['alive'] = Agent('alive', 'worker', reports_to='lead', pane='alive', host='test-host')
+    setup.states['alive'] = 'live'
+    statuses = ['open', 'in_progress', 'deferred', 'blocked']
+    store = {}
+    for i in range(32):
+        status = statuses[i % 4]
+        store[f'work-{i}'] = dict(id=f'work-{i}', assignee=harness[i % 6], status=status,
+            priority=i % 3, title='work', labels=[], revision=1,
+            defer_until='2999-01-01T00:00:00Z' if status == 'deferred' else None)
+    for i, extra in enumerate([dict(title='ASK Stiwi: decide'), dict(labels=['desk']),
+                               dict(labels=['needs-stiwi'], status='deferred')]):
+        store[f'ask-{i}'] = dict(dict(id=f'ask-{i}', assignee=harness[i], status='open', priority=0,
+            title='decision', labels=[], revision=1), **extra)
+    for row in store.values():
+        row['notes'] = 'checkpoint: ' + row['id']
+    comments = {}
+    store['message-1'] = dict(id='message-1', assignee='c1', status='open', priority=2,
+                              title='inbox: pointer', labels=[], revision=1)
+    store['live-1'] = dict(id='live-1', assignee='alive', status='open', priority=0,
+                           title='work', labels=[], revision=1)
+    before = copy.deepcopy(store)
+    def release(row, comment, *, operator_stopped=False):
+        current = store[row['id']]
+        assert operator_stopped and current['revision'] == row['revision']
+        comments[row['id']] = json.loads(comment)
+        current.update(assignee='', revision=current['revision'] + 1,
+                       status='open' if current['status'] == 'in_progress' else current['status'])
+        return 'released'
+    setup.tracker.stranded_rows = lambda owners: [copy.deepcopy(r) for r in store.values()]
+    setup.tracker.stranded_read = lambda identity: copy.deepcopy(store[identity])
+    setup.tracker.release_stranded = release
+
+    run(setup, 10)
+    run(setup, 14410)
+
+    held = sorted(r['id'] for r in store.values()
+                  if r['assignee'] in harness and not r['title'].startswith('inbox'))
+    assert held == ['ask-0', 'ask-1', 'ask-2']  # ASK/desk class stays with its owner
+    for identity, row in before.items():
+        after = store[identity]
+        assert after.get('notes') == row.get('notes')  # notes are never rewritten
+        if identity.startswith('work-'):
+            assert comments[identity]['original_owner'] == row['assignee']
+            assert comments[identity]['worktree'] == '/kept/' + row['assignee']
+        if identity in ('message-1', 'live-1') or identity.startswith('ask-'):
+            assert after == row
+        elif row['status'] == 'in_progress':
+            assert after['status'] == 'open' and after['assignee'] == ''
+        else:
+            assert after['status'] == row['status'] and after['defer_until'] == row['defer_until']
+    notices = setup.inbox.unread('admin')
+    assert len(notices) == len(harness)
+    assert all('operator-stopped' in n.body for n in notices)
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert sum(c['work'] for n, c in census['owners'].items() if n in harness) == 35
+    assert sum(c['release_due'] for n, c in census['owners'].items() if n in harness) == 32
+
+
+def test_attention_notice_reads_back_as_delivered(setup):
+    """Receipt readers match the marker at the START of the body (aegis-byt)."""
+    run(setup, 0)
+    run(setup, 3601)
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['notice'] == 'delivered'
+    message, = setup.inbox.unread('admin')
+    assert message.body.startswith(finding['marker'] + ' ')
+
+
+def test_operator_release_serves_priority_first_under_the_pass_cap(setup, monkeypatch):
+    """With more release-due work than the cap, every P0/P1 item goes first."""
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept', branch='kept', head='0' * 40, checkpoint='kept'))
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    store = {f'work-{i:03d}': dict(id=f'work-{i:03d}', assignee='worker', status='deferred',
+             priority=4, title='parked', labels=[], revision=1) for i in range(60)}
+    store.update({f'zz-hot-{i}': dict(id=f'zz-hot-{i}', assignee='worker', status='open',
+                  priority=i % 2, title='work', labels=[], revision=1) for i in range(5)})
+    def release(row, comment, *, operator_stopped=False):
+        current = store[row['id']]
+        current.update(assignee='', revision=current['revision'] + 1)
+        return 'released'
+    setup.tracker.stranded_rows = lambda owners: [copy.deepcopy(r) for r in store.values()]
+    setup.tracker.stranded_read = lambda identity: copy.deepcopy(store[identity])
+    setup.tracker.release_stranded = release
+    run(setup, 10)
+    run(setup, 1810)
+    assert all(store[f'zz-hot-{i}']['assignee'] == '' for i in range(5))
+    assert sum(r['assignee'] == '' for r in store.values()) == 40  # the cap holds
+
+
+def test_two_items_per_stopped_owner_both_release_through_the_real_sd_readback(setup, monkeypatch):
+    """aegis-byt close fixture: the real SdTracker CAS + read-back, 2 items per owner.
+
+    The first live pass released one item per owner and fenced each owner on a
+    false UNKNOWN. Here both items of every owner release in ONE pass.
+    """
+    from shantytown.sd import SdTracker
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept/' + card.name, branch='kept', head='0' * 40, checkpoint='kept'))
+    owners = ['c1', 'c2', 'c3']
+    for name in owners:
+        setup.cards[name] = Agent(name, 'worker', reports_to='lead', pane=name, host='test-host')
+        setup.states[name] = 'down'
+        FilesStops(setup.root / 'stopped').record(name, 0)
+    store = {}
+    for i, name in enumerate(owners):
+        store[f'{name}-a'] = dict(id=f'{name}-a', assignee=name, status='open', priority=1,
+                                  title='work', labels=[], revision=3)
+        store[f'{name}-b'] = dict(id=f'{name}-b', assignee=name, status='deferred', priority=2,
+                                  title='parked', labels=['blocked:external'], revision=7,
+                                  defer_until='2999-01-01T00:00:00Z')
+    store['desk-1'] = dict(id='desk-1', assignee='c1', status='open', priority=1,
+                           title='DESK: publish release - needs GO', labels=[], revision=2)
+    comments = {k: [dict(text='older')] for k in store}
+    def full(identity):
+        r = dict(store[identity])
+        return dict(r, comments=list(comments[identity]), comments_total=len(comments[identity]),
+                    comments_folded=0, dependency_count=1, dependents=[], updated_at='t%d' % r['revision'])
+    tracker = SdTracker(store='/synthetic/store', prefix='work')
+    def sdk(identity, *args):
+        if args[0] == 'show':
+            return SimpleNamespace(returncode=0, stdout=json.dumps([full(identity)]))
+        assert args[0] == 'update'
+        flags = dict(a.split('=', 1) for a in args[2:] if a.startswith('--') and '=' in a)
+        item = store[identity]
+        if int(flags['--if-revision']) != item['revision']:
+            return SimpleNamespace(returncode=4, stdout='')
+        item.update(assignee=None, revision=item['revision'] + 1)
+        if flags.get('--status'):
+            item['status'] = flags['--status']
+        comments[identity].append(dict(text=flags['--transition-comment']))
+        return SimpleNamespace(returncode=0, stdout='{}')
+    monkeypatch.setattr(tracker, '_bd_for', sdk)
+    monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
+    setup.tracker = SimpleNamespace(
+        stranded_rows=lambda names: [copy.deepcopy(r) for r in store.values() if r['assignee'] in names],
+        stranded_read=tracker.stranded_read, release_stranded=tracker.release_stranded)
+
+    run(setup, 10)
+    result = run(setup, 1810)
+
+    assert not any('UNKNOWN' in f or 'unknown' in f for _, f in result), result
+    for name in owners:
+        assert store[f'{name}-a']['assignee'] is None and store[f'{name}-a']['status'] == 'open'
+        assert store[f'{name}-b']['assignee'] is None and store[f'{name}-b']['status'] == 'deferred'
+        assert store[f'{name}-b']['defer_until'] == '2999-01-01T00:00:00Z'
+    assert store['desk-1']['assignee'] == 'c1'
+    journal = json.loads((setup.root / 'stranded-work/release-intents.json').read_text())
+    assert sorted(e['outcome'] for e in journal.values()) == ['released'] * 6
+
+
+@pytest.mark.parametrize('phase', ['planned', 'inflight', 'drained'])
+def test_operator_stop_sweep_preserves_deploy_reservation(setup, monkeypatch, phase):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    setup.row.update(labels=['deploy-operation'], revision=3,
+                     agent_context={'deploy_admission': {'owner': 'worker', 'phase': phase}})
+    before = copy.deepcopy(setup.row)
+    def forbidden(*args, **kwargs):
+        pytest.fail('deploy operation entered release path')
+    setup.tracker.stranded_read = forbidden
+    setup.tracker.release_stranded = forbidden
+    assert run(setup, 10) == []
+    assert setup.row == before
+    assert not setup.inbox.unread('admin')
+    census = json.loads((setup.root / 'stranded-work/census.json').read_text())
+    assert census['owners']['worker'] == dict(work=1, release_due=0)
+
+
+@pytest.mark.parametrize('priority,threshold', [(0, 1800), (1, 1800), (2, 14400), (4, 14400)])
+def test_priority_release_boundary_preserves_immediate_attention(setup, monkeypatch, priority, threshold):
+    monkeypatch.setenv('SHANTY_STRANDED_WORK', 'release')
+    monkeypatch.setattr('shantytown.stranded_adapter.checkpoint', lambda card: dict(
+        worktree='/kept', branch='kept', head='0' * 40, checkpoint='kept'))
+    setup.row.update(priority=priority, revision=1)
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    writes = []
+    setup.tracker.stranded_read = lambda _: dict(setup.row)
+    def release(row, comment, **kwargs):
+        writes.append(json.loads(comment))
+        setup.row.update(assignee='', revision=2, status='open')
+        return 'released'
+    setup.tracker.release_stranded = release
+    run(setup, 10)
+    assert len(setup.inbox.unread('admin')) == 1
+    run(setup, 10 + threshold - 1)
+    assert not writes and setup.row['assignee'] == 'worker'
+    run(setup, 10 + threshold)
+    assert len(writes) == 1 and writes[0]['original_owner'] == 'worker'
+    assert setup.row['assignee'] == ''
+
+
+def test_owner_urgent_work_shortens_lower_priority_item_deadline(setup):
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    rows = [dict(setup.row, id='urgent', priority=1), dict(setup.row, id='later', priority=4)]
+    setup.tracker.stranded_rows = lambda _: copy.deepcopy(rows)
+    run(setup, 0)
+    run(setup, 1799)
+    assert not any(r['release_due'] for r in json.loads(
+        (setup.root / 'stranded-work/attention.json').read_text()).values())
+    run(setup, 1800)
+    assert all(r['release_due'] for r in json.loads(
+        (setup.root / 'stranded-work/attention.json').read_text()).values())
+
+
+def test_dry_run_prints_due_plan_without_writing_any_boundary(setup):
+    FilesStops(setup.root / 'stopped').record('worker', 0)
+    run(setup, 10)  # Historical observation, independent of preview.
+    before = {str(p.relative_to(setup.root)): (p.read_bytes(), p.stat().st_mtime_ns)
+              for p in setup.root.rglob('*') if p.is_file()}
+    def forbidden(*a, **kw):
+        pytest.fail('dry run called a write boundary')
+    setup.tracker.stranded_read = setup.tracker.release_stranded = forbidden
+    setup.inbox.deliver_once = forbidden
+    result = sweep(setup.root, setup.registry, setup.tracker, setup.panes, setup.inbox,
+                   now=1810, dry_run=True)
+    assert result == [('work-1', 'dry-run: would repool from worker (1800s/1800s); CAS gates still required')]
+    after = {str(p.relative_to(setup.root)): (p.read_bytes(), p.stat().st_mtime_ns)
+             for p in setup.root.rglob('*') if p.is_file()}
+    assert before == after
+    assert setup.row['assignee'] == 'worker'
+
+
+@pytest.mark.parametrize('priority,threshold', [(1, 1800), (2, 14400)])
+def test_inferred_absence_attention_uses_owner_priority_without_release(setup, priority, threshold):
+    setup.row['priority'] = priority
+    run(setup, 0)
+    run(setup, threshold - 1)
+    assert not setup.inbox.unread('admin')
+    run(setup, threshold)
+    assert len(setup.inbox.unread('admin')) == 1
+    finding = json.loads((setup.root / 'stranded-work/attention.json').read_text())['work-1']
+    assert finding['attention'] and not finding['release_due']

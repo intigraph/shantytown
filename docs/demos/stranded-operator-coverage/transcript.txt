@@ -1,0 +1,7 @@
+Script started on 2026-11-10 00:07:43-05:00 [COMMAND="python3 docs/demos/stranded-operator-coverage/run.py" <not executed on terminal>]
+base: {"process": "down", "input_work": 300, "input_inbox": 241, "observed_work": 0, "release_due": 0, "production_mutations": 0}
+candidate: {"process": "down", "input_work": 300, "input_inbox": 241, "observed_work": 300, "release_due": 300, "production_mutations": 0}
+candidate-live-control: {"process": "live", "input_work": 300, "input_inbox": 241, "observed_work": 0, "release_due": 0, "production_mutations": 0}
+PASS: complete parked-work coverage; live process is never release-due; inbox recipients retained. Source fixture only, observe mode, no production mutation.
+
+Script done on 2026-11-10 00:07:44-05:00 [COMMAND_EXIT_CODE="0"]

@@ -462,7 +462,8 @@ def plate(tracker: FilesTracker, agent: str) -> WorkItem | None:
     # this backend disagree with the others for a reason no reader could find.
     mine.sort(key=lambda it: plate_key(it.status, getattr(it, "priority", None),
                                        it.id, None, rank=it.rank,
-                                       due_at=it.due_at, created_at=it.created_at))
+                                       due_at=it.due_at, created_at=it.created_at,
+                                       lane=getattr(it, "lane", None)))
     return mine[0]
 
 

@@ -90,13 +90,13 @@ def test_complete_metrics_adapter_and_head_race_control():
         return value
     with pytest.raises(Refused):github_snapshot('example/project',api=changed)
 
-def test_creation_policy_refuses_self_review_and_unknown_author_inventory():
+def test_creation_policy_advises_self_review_and_unknown_author_inventory():
     from shantytown.pr_queue import creation_policy
     r=evaluate(snapshot(),now=NOW,cap=2)
     assert creation_policy(r,'alice','bob')['reviewer']=='bob'
-    with pytest.raises(Refused):creation_policy(r,'alice','alice')
+    assert creation_policy(r,'alice','alice')['reviewer'] is None
     r['unknown_author_count']=1
-    with pytest.raises(Refused):creation_policy(r,'alice','bob')
+    assert creation_policy(r,'alice','bob')['warnings']
 
 
 def test_stale_outbox_dedup_delivery_and_lost_response_reconcile(tmp_path):

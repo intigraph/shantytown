@@ -37,6 +37,8 @@ import sys
 # Recognisable in the transcript, to the agent, to a human reading the pane,
 # and to a test. One spelling, named once.
 BANNER = "[st anchor — session start]"
+DIRECTIVES = ("Check governing Directives in Quipu before acting; record new "
+              "operator directives verbatim as Directive entities.")
 
 # anchor's first line: "  You are <name> — <role>[, reports to <lead>]."
 _ROLE_RE = re.compile(r"You are \S+ — ([A-Za-z0-9_-]+)")
@@ -45,6 +47,7 @@ _ALL = (
     "  STARTUP",
     "    Execute the plate item now; there is no one downstream to hand it to.",
     "    Measure the current state on the item before you change anything.",
+    "    " + DIRECTIVES,
     "    When done: close it with a falsifiable reason (before -> after), report",
     "    to your lead (`st inbox -d <lead> ...`), then consult Top of your plate and Coming due.",
     "    Never block your pane on a question: record it on the item, recommend.",
@@ -96,6 +99,20 @@ def _run_anchor(root: str, agent: str) -> tuple[int, str]:
     return int(rc or 0), out.getvalue()
 
 
+def settle_cycle_request(root: str, agent: str, payload, now=None) -> bool:
+    """A newly STARTED process serves its predecessor's cycle request (aegis-zxor).
+
+    Only `source == "startup"`: a clear is settled by the cycle that typed it,
+    which still has to verify the fresh session, and resume/compact keep the
+    same process and context lineage.
+    """
+    import time
+    if not isinstance(payload, dict) or payload.get("source") != "startup":
+        return False
+    from .cycle import Requests
+    return Requests(root).settle_fresh_session(agent, time.time() if now is None else now)
+
+
 def main(argv=None) -> int:
     """The SessionStart hook. `<interpreter> -m shantytown.session_anchor [--root R]`."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -118,6 +135,10 @@ def main(argv=None) -> int:
         session_start(root, FilesRegistry(os.path.join(root, "crew")).get(agent), payload)
     except Exception:  # noqa: BLE001 — malformed hook input must not hide the anchor
         pass
+    try:
+        settle_cycle_request(root, agent, payload)
+    except Exception:  # noqa: BLE001 — never hide the anchor
+        pass
     text = render(root, agent)
     print(json.dumps({
         "hookSpecificOutput": {
@@ -134,7 +155,7 @@ def render(root: str, agent: str) -> str:
     try:
         orientation = select(primer(), "Stack orientation").rstrip()
     except Exception:  # damaged resources must not prevent a session starting
-        orientation = "Stack primer UNKNOWN: run `st prime` and `st ops doctor`."
+        orientation = "Stack primer UNKNOWN: run `st prime` and `st ops doctor`.\n" + DIRECTIVES
     memory = for_agent(root, agent)
     suffix = "\n\n[st stack primer — stack-prime/1]\n" + orientation
     if memory:

@@ -49,6 +49,25 @@ terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
 
 ## Dispatch receipts
 
+When a pending dispatch has a different scope, the refusal names the retained
+receipt ID, original worker, state and revision. Its printed `--reconcile`
+command uses that original worker, even when the refused request named someone
+else. Reconciliation is read-only. For a prepared or interrupted-assignment
+receipt whose native item is open, unassigned and undeferred, the message also
+prints the explicit `--supersede` command. Neither command is run automatically;
+supersession still checks its own current native release proof.
+
+A dispatch that remains `prepared` can be explicitly retired with
+`st go ITEM WORKER --supersede --receipt RECEIPT_ID` after a fresh native read
+proves the item is open, unassigned and undeferred. This path requires that no
+submission or assignment witness was recorded and no native claim was started.
+It preserves the old body and evidence, sends nothing and claims nothing.
+It does **not** assert that the text was never delivered: even a late delivery
+of that old ID remains unauthorized. A later ordinary dispatch creates a new
+receipt and must pass the normal pane/composer gates. `--dry-run` only previews
+the retirement. A receipt at the uncertain assignment boundary still requires
+a **newer** native open/unassigned release; this recovery does not relax it.
+
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
 store and exact body. The payload names that receipt and asks the recipient to
@@ -282,6 +301,7 @@ st repo                       a shared project repo
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
+    --instruction-report     compare composed graph instructions and tooling bytes without provisioning
   subscribe                   watch quipu entity events; route governed workflows to the admin
   hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
@@ -388,6 +408,10 @@ existing request. While a fresh, unrefused self-cycle request is pending,
 Stop advice and self-feed stay silent so the pane can reach idle. Refused or
 stale requests resume normal advice; automatic requests do not silence it.
 This does not relax the waiter's busy-pane or background-task checks.
+The detached waiter uses an interpreter verified by the installed-hook resolver
+and starts from `/`, so a repository directory named `shantytown` in the caller's
+working directory cannot shadow the installed package. If no usable interpreter
+is available, the request remains pending for tend and the spawn reports why.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -475,6 +499,13 @@ share one candidate observation, and capacity reuses the same render. Missing,
 unknown-only or nonplain-only statuses keep assignments and capacity UNKNOWN;
 a failed read never means an empty roster.
 
+Seeds owner projections can retain a bounded successful candidate observation
+across unrelated transactions. The scoped change feed must certify its original
+watermark before a result is returned. Selected field changes reload those fields;
+membership changes restart selection. Missing, partial or changed-store evidence
+remains UNKNOWN. No stale answer is returned when the proof fails. Ordinary
+query caching and the `ST_SEEDS_READ_CACHE=0` rollback remain unchanged.
+
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text
 to the left and `…` hidden text to the right. Shorter rows clamp independently,
@@ -554,16 +585,18 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
-CI, review, merge and install waits require a non-date `resume_when` condition
-and a backstop at least 24 hours after the write. Use `closed:<item>` (with the
-required dependency reason), `release:<owner>/<repo>@<tag>`, `installed:` or an
-existing registered `event:` binding, `pr-merged:` or `ci-terminal:`. A new
-per-item event name is not a registration.
-For example, a reason can contain `resume_when: release:example/tool@v1.2.3`
-with an exact UTC `--until` at least a day away. Short date-only polling and
-dry-run attempts refuse before writes. A real scheduled appointment may use
-`--window --until <UTC time>`; its intent is retained as `defer_window: scheduled`.
-This exception does not bypass human decisions, dependency checks or resume gates.
+CI, review and merge waits stay `in_progress`, including P0 and milestone work.
+Record the exact head/run/review wake on the item. `st work defer` refuses both
+`ci-terminal:`/`pr-merged:` conditions and explicit CI/review/merge waits before
+any write, even with a 24-hour backstop, `--window` or `--dry-run`. Historical
+CI/PR deferrals remain readable; this does not manufacture green CI or release
+any existing gate. Record real technical prerequisites as dependency edges;
+external non-CI gates name their event with `blocked:external`.
+
+Other admitted asynchronous waits still require a testable condition and the
+existing backstop. A real scheduled appointment may use `--window --until <UTC time>`; this never bypasses CI, human decisions, dependency checks or resume gates.
+Capacity holds do not authorize a date defer or repooling; retain the hold and
+ask the lead for ready work.
 
 A `closed:` deferral with a marker-only reason can resume automatically when
 the named item closes. The required one-line `--dependency-reason` and the
@@ -587,7 +620,20 @@ A single candidate that still exceeds the limit is UNKNOWN; no candidate is
 skipped and no partial observation permits a release. Other HTTP failures are
 not retried by this split path. The server's structural limit stays unchanged.
 
-Forge event waits use two registered generic kinds:
+Ordinary pacing goes to a live owner, with a live lead as fallback when the
+owner is unexpectedly down. A valid deliberate-stop record changes that route:
+the administrator receives one digest per stopped owner, never per-item wakes
+in the lead's pane. Each digest counts all priorities and lists P0 items; an
+explicit display cap points to the complete local inventory at
+`notify/deferral-stopped-owners.json`. Read-error and authority findings remain
+visible in that owner's digest. Unchanged findings stay suppressed, failed
+delivery or inventory publication remains retryable, and clearing the stop
+restores the owner route. A malformed stop record is UNKNOWN intent, not proof
+of a deliberate scale-down. Notification routing never releases a gate,
+reassigns an item or resumes a stopped runtime.
+
+Historical forge deferrals retain two registered generic readers. New CI/merge
+waits stay in progress; `st work defer` refuses these kinds:
 
 - `resume_when: pr-merged:<github|forgejo>/<owner>/<repo>#<number>` wakes on an
   observed merge of that exact PR. Closing an unmerged PR does not satisfy it.
@@ -596,8 +642,8 @@ Forge event waits use two registered generic kinds:
   including failure or cancellation. This is a prompt to inspect CI, never a
   green result, review receipt or permission to merge.
 
-Both require an explicit backstop at least 24 hours away, including marker-only
-reasons and scheduled-window requests. They read only configured forge hosts;
+Existing records retain their explicit backstops and event evaluation. The
+readers access only configured forge hosts;
 item text cannot choose a URL or command. Failed, missing, malformed or capped
 inventories remain UNKNOWN and hold the wait. Reads are deduplicated within a
 candidate phase and share a twelve-request budget. All fresh pre-release reads
@@ -687,6 +733,15 @@ one item's producer:
   `--version` satisfies the operator: `@` or `>=` (at least), `>`, or `==`. The
   tool must be one of `sd st quipu bobbin yupana camayoc tambo dp`, and it is run
   with a fixed argv.
+- `resume_when: installed:quipu@<full40lowerhexSHA>` (also `==`) instead
+  checks the configured Quipu origin's `/version` serving identity. It requires
+  an exact full `git_sha` and explicit `git_dirty: false`; the local CLI,
+  checkout and release version cannot satisfy this condition. Only Quipu has
+  this served-SHA reader. No default origin, item-provided URL, redirect, short
+  prefix or SHA ordering operator is accepted. Missing/dirty/malformed identity,
+  incomplete responses and read failures stay UNKNOWN. A clean different SHA
+  is not met. Long bare digit targets (seven or more digits) are ambiguous
+  commit prefixes, not semver major numbers; use dotted versions for those.
 
 `st work defer` refuses a malformed argument before writing anything. A read
 that cannot answer cleanly (a network error, a tool not on PATH, a version that
@@ -775,8 +830,19 @@ Capture and scrub preserve citation symlinks when cold archives are relocated.
 Unchanged captures inspect the target size; growing captures and regenerated
 derivatives publish atomically beside the private archive target. Relocated
 files must retain the agent directory and filename, be owner-only, and have a
-private parent directory owned by the same user. Dangling or mismatched links
-are refused rather than replaced. Derivative links into the raw archive are
+private parent directory owned by the same user. A filename may also carry
+`.recaptured-<sha256>` with a 12-to-64-character lowercase hash prefix matching
+its original bytes. Before updating that layout, publication preserves the
+hash-verified origin in a private `.history-origin-*` file and each predecessor
+in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
+keep the citation target unchanged, and retain all versions. These version
+files are archive evidence, not temporary files to remove during a scrub.
+Publication holds a private per-target `.history-publish-*.lock` through
+preservation, staging and replacement. A competing publisher refuses without
+overwriting the current version; a later normal capture can try again. These
+lock files remain in place so concurrent publishers cannot split the lock inode.
+An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
+is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
@@ -861,6 +927,12 @@ Four things, and each one has to earn its line:
    the administrator as designed. `up` here means **will drain**, not "a pane answers to that name".
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
    adapters, those two sections vanish and anchor still works.
+
+Startup text tells agents to check governing Directives in Quipu before acting and
+record new operator directives verbatim as Directive entities through the governed
+write path. This reminder appears in both anchor startup and the packaged stack
+orientation, including when the plate read is unavailable. It does not perform a
+graph write or grant permission to one.
 
 ### anchor is a read. It must never write.
 
@@ -1952,12 +2024,14 @@ submission. Inspect the pane or read that pointer rather than blindly resending.
 
 With a deployment root, Codex sends first retain the full body in a private
 `delivery/send-<id>.json` record (directory 0700, records 0600), bound to the
-declared tmux socket, pane and observed session creation time. If custody cannot
+declared tmux socket, pane, observed session creation time and process generation. If custody cannot
 be written, nothing is typed. After the single submission retry fails, st can
-clear only its exact single-line body in an idle, positively identified Codex
-session. It rechecks ownership and session identity before each editing key.
-Busy, changed, multiline, clipped, ghost, attribute-stripped and unknown input
-authorize no automatic clear. A later sender can clear the same owned failed
+clear its exact visible typed body, including multiline text, in an idle, positively
+identified Codex session. It rechecks ownership, session and process identity before
+each editing key and verifies an empty composer afterward. Cleanup uses bounded
+line editing, never Escape or submission keys, and does not change the UNVERIFIED
+send result. Busy, changed, opaque paste placeholders, clipped, ghost,
+attribute-stripped and unknown input authorize no automatic clear. A later sender can clear the same owned failed
 notice before submitting its own message; the older body remains retained.
 Claude and explicit shell-launch sends keep their existing transport.
 
@@ -3255,38 +3329,53 @@ st repo pr example/project --checkout /path/to/own/worktree --bead project-abc \
   --dispositions-file /tmp/overlaps.json --dry-run
 ```
 
-Omit `--create` for the complete open-PR inventory and overlap report. Both renamed
-paths and explicit bead-family relationships count (`--bead-family project-epic`
-adds an otherwise unrelated parent). Dotted child IDs share their root family.
-Inventory includes drafts. Missing metadata, failed reads, nonterminating pages,
-a file count mismatch, or a candidate that differs from its remote branch refuses.
-The bound is 3,200 open PRs and fewer than 3,000 changed-file records per PR; a bound
-hit is unknown coverage, never an empty result.
+Omit `--create` for the open-PR overlap report. Both renamed paths and explicit
+bead-family relationships count (`--bead-family project-epic` adds a parent).
+Dotted child IDs share their root family. Drafts are included. Known release-plz,
+release-please and ledger bot identities are excluded from overlap scans. Shared
+GitHub Actions automation is excluded only on release or ledger branch patterns.
+Release tools using a regular user token are recognized by a generated timestamped
+release-plz branch paired with a release title, or a ledger branch paired with a
+`chore(ledger):` title. A title or branch alone does not exclude human work.
+These metadata classifications only suppress overlap advice, never authorize merge.
 
-The dispositions file is a JSON list; every overlapping PR needs its exact head
-and a reason. For example:
+Overlaps are advisory: creation proceeds as a **draft**, with the overlapping PR
+numbers, exact heads, shared files and item families in its body. No dispositions
+file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
+are validated and appended when valid; missing, stale, invalid or unreadable
+annotations produce advice rather than refusing creation. This command never
+closes another PR based on overlap advice. Other-PR churn does not block creation.
 
-```json
-[{"number": 12, "head": "<exact-other-head>", "action": "independent",
-  "reason": "The changes touch separate behaviors; integration evidence is linked."}]
-```
+Explicit body trailers declare publish lineage, one same-repository number per
+line: `Supersedes: #N`, `Split-from: #N`, `Folds: #N`, or `Stacked-on: #N`.
+Fenced examples do not count. Each predecessor must declare the same `Bead:`
+primary item. `Stacked-on` requires its open exact head as the candidate base
+and leaves it open. The other trailers authorize retirement: after verifying
+the created successor, the command rechecks each predecessor, posts a pointer
+to the successor, closes it, and verifies its head and closed state. Branches
+are retained. For a split, declare retirement only when the published successor
+accounts for the predecessor's remaining work; other split PRs carry that same
+work item and lineage. A dry run includes the retirement plan without writes.
+Malformed declarations or mismatched item identities refuse before creation.
+If retirement fails or races after creation, exit 2 names the existing successor;
+inspect and reconcile it rather than repeating creation. GitHub offers no
+atomic expected-head close, so a raced close remains unverified.
 
-`stack` requires the other PR's exact head as the candidate base and proves its
-ancestry. `absorb` requires the referenced PR already closed at that exact head;
-this command never closes other authors' work. `independent` records the author's
-reason rather than pretending file overlap proves a semantic conflict. Duplicate,
-stale, missing or short-reason dispositions refuse before creation.
+Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
+files per PR. Missing metadata, failed reads or bound exhaustion produce an
+explicit UNKNOWN warning and a draft, never a claimed disjoint result. Duplicate
+creation is checked separately without depending on other PRs' file inventories.
 
-Creation checks the inventory and local/remote candidate again immediately before
-posting. It appends the primary `Bead:` and exact-head dispositions to the body.
-`--dry-run` exercises all gates and previews the body without posting. An existing
-PR for the candidate branch is identified and excluded from its own overlap report
-in read mode; creation still refuses a duplicate. A lost create response or
-mismatched resulting head/base is reported **indeterminate**: inspect the remote
-PR before retrying. GitHub has no atomic expected-head create endpoint, so a branch
-race after the last read is detected on the result, not prevented. This command
-provides the crew creation path; it does not claim to intercept raw `gh` or other
-clients. Installing a mandatory external-client hook is a separate adoption step.
+Candidate identity, committed/published source, body primary marker and duplicate
+checks still protect concrete write hazards. A changed local/remote candidate
+refuses before posting. An existing PR for the candidate branch is excluded from
+its own read report; creation refuses a duplicate. `--dry-run` previews the same
+body and draft decision without posting. A lost create response or mismatched
+resulting head/base remains **indeterminate**: inspect the remote PR before retrying.
+GitHub has no atomic expected-head create endpoint, so a branch race after the
+last read is detected on the result, not prevented. This command provides the
+crew creation path; it does not intercept raw `gh` or other clients. Merge checks
+and independent review requirements remain on the merge path.
 
 ### Explicit push destination
 
@@ -3333,6 +3422,29 @@ the first 768 and last 1,280 characters, with an omission marker. A nonzero chil
 outcome remains unproven: read back the
 item before deciding whether to retry. The command never retries or changes the
 principal, blocker checks or close reason to get past a failure.
+
+### Alert causes and members
+
+A **cause** is the currently firing root alarm class selected from Quipu's
+existing `runs_on` / `depends_on` topology. A **member** is a dependent alert
+firing at the same time. Host-down plus service-down on that host is one open
+work item; unrelated alerts on the same host are separate causes. Ambiguous or
+unreadable topology provides no grouping authority.
+
+The producer preserves the root's `recurring-class:<hash>` identity. The current
+bridge pointer identifies the root work item, and a `Cause member:` comment
+records each dependent class, target, count and onset. In Quipu the classes are
+`FailurePattern` nodes: `member_of` names the root class and `tracked_by` names
+its `WorkItem`. This reuses existing governed types and relationship vocabulary.
+
+`st work item show ITEM` exposes the native parent and lifecycle state. An
+existing dependent item retains its history under the root as a parent-child
+member, closed with **member of cause**, not **resolved**. If the dependent alert
+fires later without that root, the producer reopens its original item. Historical
+parent links alone do not prove a current correlation. A member refire invalidates
+old fix evidence on the root; resolving an outage still needs fix evidence and
+the recurring producer's continuous-quiet gate. Membership does not broaden
+Alertmanager silences or acknowledge a firing alert.
 
 ### Replacing work-item text
 
@@ -3824,12 +3936,15 @@ pass duration or the duration of runtime startup and notification sweeps.
 
 ### Observed cold-launch resume condition
 
-`resume_when: cold-launch:operator@2026-11-05T21:00:00Z` waits for the named
-agent's ordinary administrator/Codex cold launch after the stated UTC instant,
+`resume_when: cold-launch:operator` waits for the named administrator's next
+ordinary cold launch after the binding was written. Its writer provenance must
+contain one valid `set_at` boundary; a missing or ambiguous boundary is UNKNOWN.
+The timestamped form `cold-launch:operator@2026-11-05T21:00:00Z` still waits
+from the stated UTC instant. Both accept the agent's assigned harness,
 in this deployment root and host. The normal launcher records a private receipt
 only after observing the live process, verifying hooks and acknowledging startup
-inbox delivery. Dry runs, cycles, window restores, hold overrides, other
-harnesses and unverified starts cannot produce it. The sweep observes receipts;
+inbox delivery. Dry runs, context-clear cycles, window restores, hold overrides,
+mismatched harnesses and unverified starts cannot produce it. The sweep observes receipts;
 it never starts or cycles an agent to obtain evidence. A receipt resurfaces work
 before its reminder date while independent human and dependency holds remain.
 It does not prove provider responses or bypass launch admission. Existing
@@ -3944,3 +4059,21 @@ entries (two per key), with bypass off; it did not show a per-process cache or
 a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
+
+### Quiet CI and installation waits
+
+Keep a CI wait `in_progress` and record one exact event in the item's notes:
+`resume_when: ci-terminal:github/example/project@<full commit SHA>` (Forgejo
+uses `forgejo`), or `resume_when: installed:bobbin>=0.1.0`. This is an active
+wait with no defer date. Both the stop hook and the idle-haul sweep suppress
+repeat delivery while the event is pending or its observation is UNKNOWN.
+Terminal CI wakes the owner even when it failed or was cancelled; it does not
+approve a merge. An unreadable observation keeps the wait quiet and logs UNKNOWN.
+A lead can explicitly resume source work by removing/replacing the active marker;
+retained history must not contain another active `resume_when:` marker.
+
+The item remains visible as in-progress work to the board and governor. This
+shape applies without guessing milestone labels or changing parent membership.
+Ordinary `st work defer` still requires its existing event and backstop checks.
+Open technical `blocks` edges also suppress native haul continuation; the next
+fresh blocker observation restores eligibility after closure.

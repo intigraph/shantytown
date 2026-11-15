@@ -54,3 +54,19 @@ docs/demos/runtime-roll/demo.txt -text whitespace=cr-at-eol
 docs/demos/runtime-roll/peer-ledger.txt -text whitespace=cr-at-eol
 # Preserve missing-store probe PTY bytes and replay timing.
 docs/demos/hooks-no-store/output.log -text whitespace=cr-at-eol
+# Preserve the private runtime-wrapper demonstration for terminal playback.
+docs/demos/runtime-peer-wrapper/output.log -text -whitespace
+docs/demos/runtime-peer-wrapper/timing.log -text -whitespace
+# Preserve full serving-SHA probe PTY bytes and replay timing.
+docs/demos/installed-serving-sha/output.log -text whitespace=cr-at-eol
+docs/demos/6wr-busy-queue/output.log -text whitespace=cr-at-eol
+
+# Preserve initial native-consumption before/after replay bytes.
+docs/demos/initial-native-dispatch/output.log -text whitespace=cr-at-eol
+docs/demos/stopped-owner-pacing/output.log -text whitespace=cr-at-eol
+# Preserve raw duty-sweep terminal bytes and matching replay timing.
+docs/demos/stranded-duties/output.log -text whitespace=cr-at-eol
+
+# Preserve the capacity demo terminal bytes and replay timing.
+docs/demos/2mqg-capacity/output.log -text whitespace=cr-at-eol
+docs/demos/publish-lineage/output.log -text whitespace=cr-at-eol

@@ -1624,7 +1624,7 @@ def build_parser() -> argparse.ArgumentParser:
     go.add_argument('--complete', action='store_true',
                     help='finish the original receipt from native submission proof; never resend or repeat an uncertain claim')
     go.add_argument('--supersede', action='store_true',
-                    help='retain and retire an uncertain receipt after a newer native open/unassigned release; never send or claim')
+                    help='retire a prepared receipt on native open/unassigned proof; uncertain claims require a newer release; never send or claim')
     go.add_argument('--reconcile', '--status', action='store_true',
                     help='read receipt, task/runtime and native assignment; never send or claim')
     note = go.add_mutually_exclusive_group()
@@ -1671,11 +1671,15 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack", "review-reservation"))
     wi.add_argument("item")
     wi.add_argument("--result-json", action="store_true", help="stable result envelope, including failures")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
+    wi.add_argument("--reviewer", help="reserve one independent reviewer on the seed")
+    wi.add_argument("--inherit-from", help="inherit the predecessor seed's reviewer")
+    wi.add_argument("--replace-reviewer", help="explicit expected previous reviewer for reassignment")
+    wi.add_argument("--contributor", action="append", default=[], help="additional author recused from review (repeatable)")
     wi.add_argument("--priority", type=int, choices=range(5))
     wi.add_argument("--spec-file", type=Path)
     wi.add_argument("--quote")
@@ -2422,6 +2426,13 @@ def build_parser() -> argparse.ArgumentParser:
     # GUARD before printing "would", or the preview an operator reads to authorise
     # a cycle would be silent about the work it is about to strand.
     cy.add_argument("-n", "--dry-run", action="store_true")
+    cy.add_argument("--cancel", action="store_true",
+                    help="WITHDRAW the agent's pending cycle request and any "
+                         "recorded in-place clear, and type nothing. The agent "
+                         "itself, a lead or an administrator may cancel; an "
+                         "operator shell with no $SHANTY_AGENT may too. Use it "
+                         "for a request a relaunch already served, or one that "
+                         "cannot complete, instead of editing the ledger")
     # Internal: the detached waiter a --self request starts (aegis-oj2z7m).
     cy.add_argument("--serve-request", action="store_true", help=argparse.SUPPRESS)
     cy.add_argument("--no-in-place", action="store_true",
@@ -3131,6 +3142,8 @@ def _stops(a) -> FilesStops:
 
 def _owned_work_rows(tracker, name):
     """Complete owner scope on Seeds; the files floor scans only its local store."""
+    if hasattr(tracker, "stopped_owner_rows"):
+        return tracker.stopped_owner_rows([name])
     if hasattr(tracker, "capacity_rows"):
         return tracker.capacity_rows(name)
     if isinstance(tracker, FilesTracker):
@@ -5974,13 +5987,22 @@ def _cmd_provision(a) -> int:
                 raise ValueError(f"crew workspace missing for {card.name}; configure it first")
         results = []
         if getattr(a, "instruction_report", False):
-            from . import config as config_mod, instructions
+            from . import config as config_mod, instructions, tooling
             cfg = config_mod.load(a.root, refresh_source=True)
+            try:
+                manifest = tooling.load(a.root, last_good=cfg.source_document is not None)
+            except tooling.ToolingError as e:
+                raise ProvisionError(str(e)) from None
             for card in sorted(cards, key=lambda card: card.name):
-                plan = instructions.prepare(card.workspace, card, cfg,
-                                            harness=harness_mod.name_for(card, a.root))
+                try:
+                    comparisons = instructions.report(
+                        card.workspace, card, cfg, manifest,
+                        harness=harness_mod.name_for(card, a.root))
+                except tooling.ToolingError as e:
+                    raise ProvisionError(str(e)) from None
                 results.append({"name": card.name, "harness": card.harness,
-                                "comparisons": plan.comparisons})
+                                "tooling": "configured" if manifest is not None else "not-configured",
+                                "comparisons": comparisons})
             print(json.dumps({"version": 1, "sources": cfg.source_origins,
                               "warning": cfg.source_warning, "agents": results}))
             return OK
@@ -7502,6 +7524,8 @@ def _lead_status(registry, panes):
 def _resolve_anchor(a, me, *, require_complete=False):
     """Shared startup read; publication and startup decorations stay in anchor's CLI."""
     registry, panes = _registry(a), _panes(a)
+    from .routing_identity import with_remote_lead
+    registry = with_remote_lead(registry, me, a.root)
     # Which program this agent runs. Resolved HERE, not inside anchor(),
     # whose docstring makes "reads only" a promise — and resolved
     # defensively: an unknown harness must render nothing rather than
@@ -7555,7 +7579,7 @@ def _cmd_anchor(a) -> int:
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    except Unreachable as e:
+    except (Unreachable, CouldNotLook, PartialAnswer) as e:
         # NOT success, NOT failure. "I could not look" must never say "fine".
         print(f"  could not tell: {e}", file=sys.stderr)
         return CANNOT_TELL
@@ -11037,6 +11061,62 @@ def _record_cycle_refusal(root, agent, reason, risks):
               "cycle remains refused", file=sys.stderr)
 
 
+def _cancel_cycle_request(a) -> int:
+    """`st agent cycle <who> --cancel`: withdraw a request; never touch a pane.
+
+    aegis-zxor: a served or uncompletable request had no withdraw verb, so leads
+    removed entries from notify/cycle-requests.json by hand. This is the same
+    removal, under the same lifecycle lock the servers take, so a waiter or tend
+    pass mid-cycle finishes or stands down instead of racing the edit.
+    """
+    from . import cycle as cycle_mod, soft_cycle
+    caller = os.environ.get("SHANTY_AGENT", "").strip()
+    agent_name = (a.agent or caller).strip()
+    if not agent_name:
+        print("  refused: no agent. `st agent cycle <agent> --cancel`.", file=sys.stderr)
+        return REFUSED
+    if getattr(a, "self_", False) or getattr(a, "dry_run", False):
+        print("  refused: --cancel takes no --self or --dry-run; it only withdraws.",
+              file=sys.stderr)
+        return REFUSED
+    if caller and caller != agent_name:
+        try:
+            role = _registry(a).get(caller).role
+        except Exception as e:  # noqa: BLE001 — unknown authority is no authority
+            print(f"  refused: could not read {caller}'s role ({type(e).__name__}); "
+                  f"nothing was withdrawn.", file=sys.stderr)
+            return REFUSED
+        if role not in ("administrator", "lead"):
+            print(f"  refused: {caller} ({role}) may cancel only its own request; "
+                  f"ask {agent_name} or a lead.", file=sys.stderr)
+            return REFUSED
+    try:
+        soft_cycle._path(a.root, agent_name)  # the same name check every path uses
+    except ValueError:
+        print(f"  refused: {agent_name!r} is not a valid agent name.", file=sys.stderr)
+        return REFUSED
+    with cycle_mod.lifecycle_lock(a.root, agent_name):
+        requests = cycle_mod.Requests(a.root)
+        had = requests.pending().get(agent_name)
+        requests.clear(agent_name)
+        marker = soft_cycle.abandon(a.root, agent_name)
+        gone = agent_name not in requests.pending() and not soft_cycle.pending(
+            a.root, agent_name)
+    if not gone:
+        print(f"  could not tell: {agent_name}'s request or clear marker is still "
+              f"present after the withdraw.", file=sys.stderr)
+        return CANNOT_TELL
+    if had is None and not marker:
+        print(f"  {agent_name}: no pending cycle request; nothing withdrawn.")
+        return OK
+    what = [w for w, on in (("request", had is not None),
+                            ("recorded in-place clear", marker)) if on]
+    print(f"  {agent_name}: withdrew the pending cycle {' and '.join(what)}"
+          f"{f' (by {caller})' if caller and caller != agent_name else ''}; "
+          f"no pane was touched. Read back: absent.")
+    return OK
+
+
 def _cmd_cycle(a) -> int:
     """cycle <agent> — clear context WITHOUT destroying the runtime (aegis-3laza).
 
@@ -11054,6 +11134,8 @@ def _cmd_cycle(a) -> int:
     ORDER: assess -> stop -> launch -> re-dispatch. The guard runs first and to
     completion, because everything after it is irreversible from here.
     """
+    if getattr(a, "cancel", False):
+        return _cancel_cycle_request(a)
     gaming = quiet_time_mod.read(Path(a.root))
     if gaming.held and not _despite_hold(a) and not _administrator_launch(a):
         return _refuse_gaming(a, gaming)
@@ -11448,7 +11530,7 @@ def _runtime_checkpoint(a, card, evidence):
 
 
 def _runtime_roll_sweep(a, agents, panes, runtime, log):
-    from . import runtime_roll, fleet_governor as fg
+    from . import runtime_roll, fleet_governor as fg, fleet as fleet_mod
     from .provision import preflight_credentials
 
     def boundary(card):
@@ -11523,6 +11605,7 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
     it, and gives up after SELF_SERVE_TIMEOUT_S, leaving the request for tend.
     Returns the log path, or "" when disabled or the spawn failed."""
     import subprocess
+    from .runtime import SettingsError, _hook_interpreter
     if os.environ.get(SELF_SERVE_ENV, "").strip().lower() in ("0", "off", "false", "no"):
         return ""
     log = Path(a.root) / "logs" / f"self-cycle-{agent}.log"
@@ -11530,11 +11613,13 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as fh:
             subprocess.Popen(
-                [sys.executable, "-m", "shantytown.cli", "--root", str(a.root),
+                [_hook_interpreter(), "-m", "shantytown.cli", "--root", str(a.root),
                  "agent", "cycle", agent, "--serve-request"],
                 stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                start_new_session=True, close_fds=True)
-    except OSError as e:
+                # A repository's parent can expose a namespace called
+                # shantytown ahead of the editable-install finder.
+                cwd="/", start_new_session=True, close_fds=True)
+    except (OSError, SettingsError) as e:
         print(f"  ⚠ could not start the self-cycle waiter ({e}); `st fleet tend` "
               f"still serves the request.", file=sys.stderr)
         return ""
@@ -11612,6 +11697,18 @@ def _cycle_input_empty(screen: str, card, root=None) -> bool:
     return prompt == "› Ask Codex to do anything"
 
 
+def _soft_marker_owned(root, agent: str) -> bool:
+    """A recorded clear belongs to the CURRENT request: made at or after it."""
+    from . import cycle as cycle_mod, soft_cycle
+    request = cycle_mod.Requests(root).pending().get(agent)
+    sent = soft_cycle.sent_at(root, agent)
+    if request is None or sent is None:
+        return False
+    asked = request.get("requested_at")
+    # A legacy request with no timestamp cannot be ordered: keep observing.
+    return not isinstance(asked, (int, float)) or sent >= asked
+
+
 def _cycle_plan(a, card, session: str, panes, runtime):
     """Observe the pane, then ask cycle.plan. Observation here, policy there.
 
@@ -11621,7 +11718,14 @@ def _cycle_plan(a, card, session: str, panes, runtime):
     """
     from . import soft_cycle
     if soft_cycle.pending(a.root, card.name):
-        return cycle_mod.Plan(cycle_mod.SOFT, "observe the retained clear; no new send or restart")
+        if _soft_marker_owned(a.root, card.name):
+            return cycle_mod.Plan(cycle_mod.SOFT, "observe the retained clear; no new send or restart")
+        # aegis-zxor: a marker that no pending request owns (the request was
+        # served by a relaunch, cancelled, or replaced) would "confirm" ANY later
+        # session change as this clear. Withdraw it and plan from the pane.
+        soft_cycle.abandon(a.root, card.name)
+        print(f"  {card.name}: withdrew a recorded clear that no pending request owns.",
+              file=sys.stderr)
     live = bool(session) and panes.exists(session)
     idle = input_empty = False
     if live:
@@ -11805,9 +11909,13 @@ def _perform_cycle(a, card, agent_name: str, session: str, panes, runtime,
             chosen = _cycle_plan(a, card, session, panes, runtime)
         rc, performed = _perform_cycle_locked(a, card, agent_name, session, panes,
                                               runtime, chosen, verdict)
-        if automatic and rc == OK:
+        if rc == OK:
             # Cleared INSIDE the lock, so a second server (tend and the --self
             # waiter) that was waiting on it sees no request and stands down.
+            # ANY performed cycle serves the request, including an operator's
+            # `st agent cycle <who> --no-in-place`: before aegis-zxor only an
+            # automatic one did, and tend kept nudging the fresh session about
+            # its predecessor's request.
             cycle_mod.Requests(a.root).clear(agent_name)
             if getattr(a, '_account_request_id', None):
                 from .account_switch import Requests
@@ -12005,14 +12113,26 @@ def _cycle_soft(a, card, agent_name: str, session: str, panes, runtime) -> bool:
     try:
         attempt, send = soft_cycle.begin(a.root, agent_name)
     except (OSError, ValueError) as exc:
-        print(f"  FAILED: clear session baseline unavailable ({type(exc).__name__}).",
-              file=sys.stderr)
+        # The reason, not only the type: "ValueError" alone left the Linux host logs
+        # unable to say which check refused (aegis-zxor).
+        print(f"  FAILED: clear session baseline unavailable ({type(exc).__name__}: "
+              f"{exc}).", file=sys.stderr)
         return False
     if send:
         _capture_history_before_kill(a, agent_name, "cycle-clear")
         try:
             panes.send(session, command)
         except Exception as exc:  # a failed send may already have typed its key
+            from .tmux import PaneInMode
+            if isinstance(exc, PaneInMode):
+                # Refused BEFORE any keystroke (tmux copy-mode), so no clear is
+                # queued. Retaining the marker made every later pass "observe"
+                # a clear that was never typed, forever (aegis-zxor).
+                soft_cycle.abandon(a.root, agent_name)
+                print(f"  NOT SENT: {agent_name}'s pane is in tmux copy-mode; "
+                      "nothing was typed. The request stays pending and the next "
+                      "pass sends the clear once the mode exits.", file=sys.stderr)
+                return False
             print(f"  FAILED: clear send unverified ({type(exc).__name__}); "
                   "intent retained.", file=sys.stderr)
             return False
@@ -14775,6 +14895,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         return CANNOT_TELL
     if admin_report is not None:
         rep.findings = admin_report.findings + rep.findings
+    if a.dry_run:
+        from .stranded_adapter import sweep as preview_stranded
+        for identity, finding in preview_stranded(
+                a.root, reg, _tracker(a), panes, _inbox(a), dry_run=True):
+            print(f"  stranded-owner {identity}: {finding}", file=sys.stderr)
     # DELIVER blocked workers to their coordinator (aegis-w0kk). Not on a dry run
     # — a dry run pushes nothing, same as it launches nothing. Deduped, so a
     # heartbeat does not re-spam a still-blocked worker every interval.

@@ -1,0 +1,3 @@
+{"version": 2, "width": 100, "height": 24, "title": "Owner candidate retention on a private fixture"}
+[0.506346, "o", "Private fixture: 30 assigned items, both graphs, four reads with unrelated commits\r\nBEFORE: same source with candidate retention disabled; AFTER: retention enabled\r\n"]
+[0.668979, "o", "{\"before\": {\"calls\": 4, \"requests\": 8, \"store_held_ms\": 32.913942999999996, \"observations\": 8}, \"after\": {\"calls\": 4, \"requests\": 3, \"store_held_ms\": 7.731461, \"observations\": 3}}\r\n"]

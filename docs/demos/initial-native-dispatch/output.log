@@ -1,0 +1,10 @@
+Script started on 2026-11-10 03:45:25-05:00 [COMMAND="/usr/bin/python3 docs/demos/initial-native-dispatch/probe.py" <not executed on terminal>]
+before: {"assignment": false, "authorized": false, "case": "user", "enters": 1, "receipt": "prepared", "revision": 1, "sends": 1, "submission": false}
+before: {"assignment": false, "authorized": false, "case": "queue", "enters": 1, "receipt": "prepared", "revision": 1, "sends": 1, "submission": false}
+before: {"assignment": false, "authorized": false, "case": "runtime", "enters": 1, "receipt": "prepared", "revision": 1, "sends": 1, "submission": false}
+after: {"assignment": true, "authorized": true, "case": "user", "enters": 1, "receipt": "assigned", "revision": 2, "sends": 1, "submission": true}
+after: {"assignment": false, "authorized": false, "case": "queue", "enters": 1, "receipt": "prepared", "revision": 1, "sends": 1, "submission": false}
+after: {"assignment": false, "authorized": false, "case": "runtime", "enters": 1, "receipt": "prepared", "revision": 1, "sends": 1, "submission": false}
+PASS: exact native consumption authorizes one initial claim; queue-only and runtime changes remain fenced.
+
+Script done on 2026-11-10 03:45:27-05:00 [COMMAND_EXIT_CODE="0"]

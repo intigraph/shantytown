@@ -129,14 +129,13 @@ def test_dispatcher_records_event_and_backstop_and_refuses_bad_input_without_wri
     tracker.update('item-1', title='wait for exact PR', status='open', assignee='worker', priority=1)
     dispatch = Dispatcher(FilesRegistry(tmp_path / 'crew'), tracker, NullPanes())
     until = (datetime.now(timezone.utc) + timedelta(hours=25)).strftime('%Y-%m-%dT%H:%M:%SZ')
-    dispatch.defer('item-1', 'external', 'resume_when: pr-merged:github/example/project#123', until=until)
-    item = tracker.get('item-1')
-    assert item.status == 'deferred' and item.defer_until == until
-    assert deferrals.parse_condition(item.notes).render() == 'pr-merged:github/example/project#123'
     original = tracker._path('item-1').read_bytes()
-    with pytest.raises(DeferRefused):
-        dispatch.defer('item-1', 'external', 'resume_when: ci-terminal:github/example/project@short', until=until)
-    assert tracker._path('item-1').read_bytes() == original
+    for condition in ['pr-merged:github/example/project#123',
+                      'ci-terminal:github/example/project@' + SHA]:
+        with pytest.raises(DeferRefused, match='stay in_progress'):
+            dispatch.defer('item-1', 'external', 'resume_when: ' + condition, until=until)
+        assert tracker._path('item-1').read_bytes() == original
+
 
 
 @pytest.mark.parametrize('state', ['success', 'failure', 'cancelled', 'skipped', 'waiting'])

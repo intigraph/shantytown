@@ -1,0 +1,12 @@
+Script started on 2026-11-10 04:19:59-05:00 [COMMAND="python3 docs/demos/6wr-busy-queue/reproduce.py" <not executed on terminal>]
+before: {"distance": 10, "working": true, "triage_busy": false, "input_busy": false}
+before: {"distance": 10, "working": false, "triage_busy": false, "input_busy": false}
+before: {"distance": 20, "working": true, "triage_busy": false, "input_busy": false}
+before: {"distance": 20, "working": false, "triage_busy": false, "input_busy": false}
+after: {"distance": 10, "working": true, "triage_busy": true, "input_busy": true}
+after: {"distance": 10, "working": false, "triage_busy": false, "input_busy": false}
+after: {"distance": 20, "working": true, "triage_busy": true, "input_busy": true}
+after: {"distance": 20, "working": false, "triage_busy": false, "input_busy": false}
+PASS: working queues become busy; idle queues stay idle.
+
+Script done on 2026-11-10 04:19:59-05:00 [COMMAND_EXIT_CODE="0"]

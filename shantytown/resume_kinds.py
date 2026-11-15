@@ -1,6 +1,7 @@
 """Machine-testable resume kinds for released and installed versions (aegis-tdf).
 
     release:<owner>/<repo>@<tag>   met once that GitHub release is published (not a draft)
+    installed:quipu@<40hexSHA>    exact configured clean serving /version git_sha
     installed:<tool><op><version>  met once an allowlisted tool reports a version
                                    satisfying <op>: `@` or `>=` (at least), `>` or `==`
 
@@ -14,10 +15,14 @@ work whose prerequisite may not exist yet.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.parse
+import urllib.request
 
 #: Stack tools whose fixed native version command may be read. Nothing else is executed.
 TOOLS = ("sd", "st", "quipu", "bobbin", "yupana", "camayoc", "tambo", "dp")
@@ -25,6 +30,8 @@ TIMEOUT = 15
 
 _REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
 _TAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+# SHA serving identity currently has a governed origin only for Quipu.
+_INSTALLED_SHA = re.compile(r"(quipu)(@|==)([0-9a-f]{40})")
 _INSTALLED = re.compile(r"(" + "|".join(TOOLS) + r")(>=|>|==|@)(\d+(?:\.\d+){0,2})")
 # A version starts at a token edge or after a `v` (v0.14.0 must not read as 14.0)
 # and may carry a pre-release tail (0.15.0-rc.1), which sorts BEFORE its release.
@@ -44,9 +51,13 @@ def validate(kind: str, arg: str) -> None:
         if not sep or not _REPO.fullmatch(repo) or not _TAG.fullmatch(tag):
             raise ValueError("release:<owner>/<repo>@<tag> needs a GitHub repository and a tag")
     elif kind == "installed":
-        if not _INSTALLED.fullmatch(arg):
+        version = _INSTALLED.fullmatch(arg)
+        # Long bare hex/digit strings must not become enormous semver majors.
+        ambiguous = version and "." not in version[3] and len(version[3]) >= 7
+        if not _INSTALLED_SHA.fullmatch(arg) and (not version or ambiguous):
             raise ValueError("installed:<tool><op><version> needs one of "
-                             f"{', '.join(TOOLS)}, an operator @ >= > == and a version like 0.15.0")
+                             f"{', '.join(TOOLS)}, an operator @ >= > == and a version like 0.15.0; "
+                             "or quipu@<full40lowerhexSHA> (also ==) from configured /version")
     else:
         raise ValueError(f"not a version kind: {kind}")
 
@@ -97,9 +108,72 @@ def release(arg: str, run=_run):
     return True, f"{repo} {tag} published {data['published_at']}"
 
 
+class _NoVersionRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # Never follow a new origin or forward a credential.
+
+
+def _unique_version(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate version identity field")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite(value):
+    raise ValueError("nonfinite version JSON")
+
+
+def _served_sha(want):
+    """Read only the configured Quipu origin, not PATH, a checkout or item URL."""
+    from .config import load_or_default
+    from .deployment import resolve_root, deployment_default
+    from .quipu import request_headers
+    try:
+        root, _ = resolve_root()
+        _, error = load_or_default(root)
+        if error:
+            return None, "Quipu deployment configuration unreadable"
+        server = deployment_default(root, "QUIPU_SERVER")
+        if not server:
+            return None, "Quipu serving origin is not configured"
+        parsed = urllib.parse.urlsplit(server)
+        if (parsed.scheme not in ("http", "https") or not parsed.netloc
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            return None, "Quipu serving origin is invalid"
+        request = urllib.request.Request(server.rstrip("/") + "/version",
+                                         headers=request_headers(), method="GET")
+        with urllib.request.build_opener(_NoVersionRedirect).open(request, timeout=TIMEOUT) as response:
+            if response.status != 200:
+                return None, "Quipu version response was not HTTP 200"
+            raw = response.read(8193)
+            if len(raw) > 8192:
+                return None, "Quipu version response exceeded bound"
+            length = response.headers.get("Content-Length")
+            if length is not None and int(length) != len(raw):
+                return None, "Quipu version response was incomplete"
+            data = json.loads(raw, object_pairs_hook=_unique_version,
+                              parse_constant=_reject_nonfinite)
+        if (not isinstance(data, dict) or data.get("git_dirty") is not False
+                or not isinstance(data.get("git_sha"), str)
+                or not re.fullmatch(r"[0-9a-f]{40}", data["git_sha"])):
+            return None, "Quipu serving identity missing, malformed or dirty"
+        have = data["git_sha"]
+        return have == want, f"Quipu serving SHA {have} {'matches' if have == want else 'differs from'} {want}"
+    except (OSError, ValueError, TypeError, RecursionError,
+            http.client.HTTPException, urllib.error.URLError):
+        # Never echo remote bodies, URLs, exception strings or credentials.
+        return None, "Quipu serving version read failed"
+
+
 def installed(arg: str, run=_run, which=shutil.which):
     """(met, reason): True satisfied, False older, None UNKNOWN."""
     validate("installed", arg)
+    sha = _INSTALLED_SHA.fullmatch(arg)
+    if sha:
+        return _served_sha(sha[3])
     tool, op, want = _INSTALLED.fullmatch(arg).groups()
     path = which(tool)
     if not path:

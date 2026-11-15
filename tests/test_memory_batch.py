@@ -46,8 +46,8 @@ class Remote(Client):
         return receipt
 
     def baseline(self):
-        return dict(authenticated_owner=OWNER.crew, export={
-            'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+        return dict(selected_owner=OWNER.crew, export={
+            'format': 'shantytown.memory-files/v1', 'coverage': 'this_repository_owner_records',
             'snapshot': dict(owner=OWNER.wire(), revision=self.head, files=self.files.copy()),
             'files': [dict(owner=OWNER.wire(), path=p, revision=self.files[p]['revision'], text=r['text'])
                       for p, r in {r['path']: r for r in self.writes}.items()]})

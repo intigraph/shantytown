@@ -225,6 +225,53 @@ def test_real_tend_path_requests_and_serves_without_agent_command(tmp_path, monk
     assert served[0].quipu_node == ["existing"]
 
 
+@pytest.mark.parametrize('peer_state', ['current', 'unknown', 'awaiting-version', 'owner-unreachable'])
+def test_actual_tend_wrapper_collects_peers_under_admission(tmp_path, monkeypatch, peer_state):
+    from contextlib import contextmanager
+    from shantytown import cli, config, fleet, fleet_governor, provision
+
+    peers = {'peer': 'fixture-peer'}
+    monkeypatch.setattr(config, 'load', lambda root: SimpleNamespace(
+        host_peers=peers, host_name='local', host_admission_owner='owner'))
+    admission_calls, collected, snapshots = [], [], []
+
+    @contextmanager
+    def admission(root, host, actual_peers, **kwargs):
+        admission_calls.append((root, host, actual_peers, kwargs))
+        yield SimpleNamespace(unreachable=peer_state == 'owner-unreachable')
+
+    monkeypatch.setattr(fleet_governor, 'admission_lock', admission)
+
+    def collect(actual_peers):
+        collected.append(actual_peers)
+        return [dict(host='peer', error='unreachable' if peer_state == 'unknown' else None,
+                     agents=[dict(name='remote', live=True,
+                                  runtime_update=dict(phase=peer_state))])]
+
+    monkeypatch.setattr(fleet, 'collect', collect)
+    monkeypatch.setattr(update, 'for_agent', lambda *a: update.Evidence('exact', '2.1.319', '2.1.321'))
+    monkeypatch.setattr(cli, '_cycle_stop_refusal', lambda *a: '')
+    monkeypatch.setattr(cli, '_automatic_cycle_refusal', lambda *a: '')
+    monkeypatch.setattr(provision, 'preflight_credentials', lambda *a: None)
+
+    def checkpoint(*args):
+        snapshots.append(True)
+        return dict(text='stored checkpoint', item='plate', nodes=['existing'])
+
+    monkeypatch.setattr(cli, '_runtime_checkpoint', checkpoint)
+    result = cli._runtime_roll_sweep(
+        SimpleNamespace(root=tmp_path), [Agent(name='worker', harness='claude')],
+        SimpleNamespace(exists=lambda pane: True), object(), lambda text: None)
+    assert admission_calls == [(tmp_path, 'local', peers, dict(owner='owner', local_required=True))]
+    assert collected == ([] if peer_state == 'owner-unreachable' else [peers])
+    pending = cycle.Requests(tmp_path).pending()
+    if peer_state == 'current':
+        assert result == ['worker'] and snapshots == [True]
+        assert pending['worker']['no_in_place'] and pending['worker']['runtime_update']
+    else:
+        assert result == [] and snapshots == [] and pending == {}
+
+
 def test_corrupt_version_ledger_does_not_admit_another_replacement(tmp_path):
     _, _, blocks, requests, snapshots, sweep = world(tmp_path)
     requests.path.parent.mkdir(parents=True)

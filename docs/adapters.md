@@ -339,6 +339,15 @@ malformed field, ambiguous graph membership, truncated response or exhausted
 field/byte budget remains UNKNOWN; it does not authorize a hydration fallback.
 The projection sends the SDK's caller-declared attribution headers when present.
 
+Producer capacity admission supports an optional `capacity_read(id)` observation
+of complete seed fields. The guard reads once before the owner lock and again
+inside it, preserving the owner-change fence and slot checks. Remote Seeds uses
+its existing bounded item-field reader for these observations; this avoids
+loading historical comments and reverse dependencies for every update. Backends
+without this method retain `get(id)`. Each observation must be fresh, and an
+incomplete or failed field read propagates before any write. Render caches and
+owner-wide plate projections do not satisfy this mutation-read contract.
+
 ## Quipu request provenance
 
 The Quipu adapters derive `X-Quipu-Agent`, `-Harness`, `-Model`, `-Session` and
@@ -439,3 +448,17 @@ Exact-owner candidate selection uses fixed status leaves and a correlated type
 check. Feed selection still includes the named workers' plates and unassigned
 open work, and excludes other owners. Unsupported or absent owner statuses still
 refuse the projection.
+
+
+### Deferral candidate snapshots
+
+The Seeds deferral reader selects candidates and reads their fields under one
+projection fence. It uses the existing scoped change feed to certify unrelated
+commits; changes to candidate membership or selected fields restart the entire
+read, at most three attempts inside the original caller deadline. Both date
+spellings, status, Action type and condition-note markers affect membership.
+Missing or malformed proof remains UNKNOWN, with no partial release or SDK
+hydration fallback. A successful scheduled sweep logs
+`deferral-sweep: store read complete candidates=N`; this is the positive control
+for the 24-hour failure-free acceptance window, not a claim that installation
+alone completed that window.

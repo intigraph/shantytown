@@ -320,6 +320,8 @@ def test_a_broken_plate_read_fails_open_loudly(tmp_path, monkeypatch, capsys):
 def test_live_ephemeral_jobs_use_up_slots(tmp_path):
     """The module landed (aegis-c01c.2): slots are the cap minus live jobs."""
     from shantytown import ephemeral
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "crew" / "boss.json").write_text(json.dumps({"role": "administrator"}))
     (tmp_path / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 1\n")
     assert sp.ephemeral_free_slots(tmp_path) == 1
     ephemeral.write(tmp_path, {"name": "eph-task-abcdef", "state": ephemeral.LIVE})
@@ -328,6 +330,8 @@ def test_live_ephemeral_jobs_use_up_slots(tmp_path):
 
 def test_ephemeral_slots_plug_in(tmp_path, monkeypatch):
     from shantytown import ephemeral
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "crew" / "boss.json").write_text(json.dumps({"role": "administrator"}))
     # aegis-c01c.2 landed the real plug: the cap minus live jobs.
     assert sp.ephemeral_free_slots(tmp_path) == 2           # default max_agents
     (tmp_path / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 0\n")
