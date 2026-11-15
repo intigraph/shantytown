@@ -555,7 +555,7 @@ class MechanicalHarness:
         self.releases, self.sent, self.logs = [], [], []
         def release(bead):
             self.releases.append(bead)
-            self.row.update(status='open', defer_until=None)
+            self.row.update(status='open', defer_until=None, assignee='')
         kw.setdefault('release', release)
         kw.setdefault('show', lambda _: dict(self.row))
         self.alerter = _alerter(tmp_path, [self.row],
@@ -570,6 +570,16 @@ def test_lapsed_timestamp_is_released_and_read_back_without_a_ruling(tmp_path):
     assert 'verified open' in h.logs[-1]
     h.alerter.sweep()
     assert h.releases == ['aegis-1'] and h.sent == []
+
+
+def test_release_retaining_owner_is_not_reported_as_verified(tmp_path):
+    row = _row(defer_until=_iso(timedelta(days=-1)))
+    h = MechanicalHarness(tmp_path, row)
+    h.alerter._release = lambda _: h.row.update(status='open', defer_until=None)
+    h.alerter.sweep()
+    assert h.row['assignee'] == row['assignee']
+    assert not any('verified open' in line for line in h.logs)
+    assert any('release read-back still held' in line for line in h.logs)
 
 
 def test_closed_condition_read_error_retries_next_pass_then_releases(tmp_path):
@@ -754,7 +764,8 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     # Recipient observations are emitted for each attempted route, including
     # later probes. They must not weaken quiet-report or digest suppression.
     def report_logs():
-        return [line for line in logs if not line.startswith('deferral-recipient: ')]
+        return [line for line in logs if not line.startswith((
+            'deferral-recipient: ', 'deferral-sweep: store read complete '))]
     first_reports = report_logs()
     assert len(first_reports) == 4 and 'routine' in first_reports[0]
     assert first_reports[0].startswith('deferral log:')
@@ -762,6 +773,7 @@ def test_nonurgent_deferrals_log_once_without_losing_urgent_or_unknown_failures(
     assert any(line.startswith('deferral-recipient: ') for line in logs)
     assert a.sweep() == []
     assert len(sent) == 1 and report_logs() == first_reports
+    assert logs.count('deferral-sweep: store read complete candidates=3') == 2
 
 
 def test_routine_deferral_becoming_urgent_is_not_hidden_by_log_dedup(tmp_path):

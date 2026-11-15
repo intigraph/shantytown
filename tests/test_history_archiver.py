@@ -536,3 +536,70 @@ def test_scrub_refuses_relocated_derivative_pointing_into_raw_archive(tmp_path):
     assert result.returncode != 0
     assert 'inside raw archive' in result.stderr
     assert dst.is_symlink() and source.read_bytes() == before
+
+
+@pytest.mark.parametrize("prefix_length", [12, 64])
+def test_scrub_accepts_sha_bound_recaptured_layout_and_preserves_versions(tmp_path, prefix_length):
+    import hashlib
+    raw, out, env = _archive(tmp_path, body=json.dumps({'text': 'first'}) + '\n')
+    assert _run(SCRUB, '--agent', 'tester', env=env).returncode == 0
+    dst = out / 'tester/a.jsonl'
+    old = dst.read_bytes()
+    target = _relocate(dst, tmp_path)
+    versioned = target.with_name(target.name + '.recaptured-' + hashlib.sha256(old).hexdigest()[:prefix_length])
+    target.rename(versioned)
+    dst.unlink(); dst.symlink_to(versioned)
+    original_link = os.readlink(dst)
+    (raw / 'tester/a.jsonl').write_text(json.dumps({'text': 'second'}) + '\n')
+    first = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert first.returncode == 0, first.stdout + first.stderr
+    second = versioned.read_bytes()
+    assert second != old and dst.is_symlink() and os.readlink(dst) == original_link
+    assert old in [p.read_bytes() for p in versioned.parent.glob('.history-*') if p.is_file()]
+    (raw / 'tester/a.jsonl').write_text(json.dumps({'text': 'third'}) + '\n')
+    repeat = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert repeat.returncode == 0, repeat.stdout + repeat.stderr
+    assert versioned.read_bytes() != second
+    retained = [p.read_bytes() for p in versioned.parent.glob('.history-*') if p.is_file()]
+    assert old in retained and second in retained
+    assert os.readlink(dst) == original_link
+
+
+@pytest.mark.parametrize('kind', ['wrong-hash', 'short-hash', 'public-parent', 'public-file'])
+def test_recaptured_layout_does_not_relax_private_or_hash_guards(tmp_path, kind):
+    import hashlib
+    raw, out, env = _archive(tmp_path)
+    assert _run(SCRUB, '--agent', 'tester', env=env).returncode == 0
+    dst = out / 'tester/a.jsonl'; old = dst.read_bytes()
+    target = _relocate(dst, tmp_path)
+    digest = hashlib.sha256(old).hexdigest()[:12]
+    if kind == 'wrong-hash': digest = '0' * 12
+    if kind == 'short-hash': digest = digest[:6]
+    other = target.with_name(target.name + '.recaptured-' + digest)
+    target.rename(other); dst.unlink(); dst.symlink_to(other)
+    if kind == 'public-parent': other.parent.chmod(0o775)
+    if kind == 'public-file': other.chmod(0o644)
+    before = os.readlink(dst)
+    result = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert result.returncode != 0
+    assert os.readlink(dst) == before and other.read_bytes() == old
+    assert not list(other.parent.glob('.history-*'))
+
+
+def test_changed_recaptured_origin_is_refused_before_publication(tmp_path):
+    import hashlib
+    raw, out, env = _archive(tmp_path)
+    assert _run(SCRUB, '--agent', 'tester', env=env).returncode == 0
+    dst = out / 'tester/a.jsonl'; old = dst.read_bytes()
+    target = _relocate(dst, tmp_path)
+    other = target.with_name(target.name + '.recaptured-' + hashlib.sha256(old).hexdigest()[:12])
+    target.rename(other); dst.unlink(); dst.symlink_to(other)
+    assert _run(SCRUB, '--agent', 'tester', '--full', env=env).returncode == 0
+    origin, = other.parent.glob('.history-origin-*')
+    origin.write_bytes(b'changed retained origin')
+    before = other.read_bytes()
+    (raw / 'tester/a.jsonl').write_text('{"text":"new input"}\n')
+    refused = _run(SCRUB, '--agent', 'tester', '--full', env=env)
+    assert refused.returncode != 0
+    assert other.read_bytes() == before and dst.is_symlink()
+    assert origin.read_bytes() == b'changed retained origin'

@@ -853,15 +853,19 @@ def codex_path_shim_setup(managed: Path, bin_dir: Path | None = None) -> str:
     sees through the per-card CODEX_HOME.  That path lives under
     XDG_RUNTIME_DIR and disappears when the card stops, taking Codex off PATH
     for every shell and for the governor's app-server reader.  Reassert the
-    role-owned standalone path both before and after updater runs.
+    role-owned standalone path both before and after updater runs, but leave
+    an already-correct link untouched so concurrent readers keep its identity
+    and timestamps.
 
     Returned as shell for the same reason as :func:`codex_sessions_setup`:
     rendering a dry-run must have no filesystem side effects.
     """
     destination = (bin_dir or (Path.home() / ".local" / "bin")) / "codex"
+    target = shlex.quote(str(managed))
+    link = shlex.quote(str(destination))
     return (f"mkdir -p {shlex.quote(str(destination.parent))} && "
-            f"ln -sfn {shlex.quote(str(managed))} "
-            f"{shlex.quote(str(destination))}")
+            f'if [ "$(readlink {link} 2>/dev/null)" != {target} ]; then '
+            f"ln -sfn {target} {link}; fi")
 
 
 class CodexHarness:

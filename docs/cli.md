@@ -407,6 +407,10 @@ existing request. While a fresh, unrefused self-cycle request is pending,
 Stop advice and self-feed stay silent so the pane can reach idle. Refused or
 stale requests resume normal advice; automatic requests do not silence it.
 This does not relax the waiter's busy-pane or background-task checks.
+The detached waiter uses an interpreter verified by the installed-hook resolver
+and starts from `/`, so a repository directory named `shantytown` in the caller's
+working directory cannot shadow the installed package. If no usable interpreter
+is available, the request remains pending for tend and the spawn reports why.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -825,8 +829,19 @@ Capture and scrub preserve citation symlinks when cold archives are relocated.
 Unchanged captures inspect the target size; growing captures and regenerated
 derivatives publish atomically beside the private archive target. Relocated
 files must retain the agent directory and filename, be owner-only, and have a
-private parent directory owned by the same user. Dangling or mismatched links
-are refused rather than replaced. Derivative links into the raw archive are
+private parent directory owned by the same user. A filename may also carry
+`.recaptured-<sha256>` with a 12-to-64-character lowercase hash prefix matching
+its original bytes. Before updating that layout, publication preserves the
+hash-verified origin in a private `.history-origin-*` file and each predecessor
+in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
+keep the citation target unchanged, and retain all versions. These version
+files are archive evidence, not temporary files to remove during a scrub.
+Publication holds a private per-target `.history-publish-*.lock` through
+preservation, staging and replacement. A competing publisher refuses without
+overwriting the current version; a later normal capture can try again. These
+lock files remain in place so concurrent publishers cannot split the lock inode.
+An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
+is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`

@@ -341,13 +341,30 @@ Report --verdict done with what changed and the PR link, or blocked.""",
 }
 
 
+_PROTECTED_TRIAGE = """JOB: READ-ONLY ALERT TRIAGE for {item}{target_short}.
+1. Investigate this ONE alert using admitted read-only evidence. Distinguish observed facts,
+   inferred causes, and UNKNOWN coverage; do not reproduce a fault by changing the host.
+2. Do NOT ACK or silence alerts, restart services, change configuration, install software,
+   write code, create branches or PRs, push, merge, or take runtime actions. A suspected fix
+   belongs in your finding for the custodian, not in an action by this job.
+3. Report the finding on the ORIGINAL item {item} through the single report command above,
+   with evidence and any missing access. Then exit. Do not create a competing repair item.
+These instructions do not grant capabilities. If investigation needs additional credentials,
+permissions, mutation, or another item, report --verdict blocked instead of expanding scope."""
+
+
 def prompt(rec: dict) -> str:
     target = f" — {rec['repo']}#{rec['pr']}" if rec.get("repo") and rec.get("pr") else (
         f" — {rec['repo']}" if rec.get("repo") else "")
     fields = dict(rec, target=target, target_short=target,
                   verdicts="|".join(VERDICTS),
                   deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
-    return (_COMMON.format(**fields) + "\n" + _JOBS[rec["job"]].format(**fields)).strip()
+    # Protected jobs must never inherit the attended triage prompt's permission
+    # to fix and publish. UID binding is controller ledger data, not an agent
+    # environment declaration. Endpoint permissions still need native proof.
+    job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
+                  else _JOBS[rec["job"]])
+    return (_COMMON.format(**fields) + "\n" + job_prompt.format(**fields)).strip()
 
 
 # --- delivering the job: paste, SEE it, submit, SEE the turn start -----------
