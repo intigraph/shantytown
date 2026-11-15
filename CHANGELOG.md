@@ -6,6 +6,18 @@
 
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.18.0](https://github.com/intigraph/shantytown/compare/v0.17.0...v0.18.0) (2026-11-15)
+
+
+### Features
+
+* **queue:** add opt-in ranked intake and dispatch gates ([#630](https://github.com/intigraph/shantytown/issues/630)) ([c064b3f](https://github.com/intigraph/shantytown/commit/c064b3fbaf658c2c1444740caf6c7ccccdbfca2e))
+
+
+### Continuous Integration
+
+* report required checks on merge queue groups ([#632](https://github.com/intigraph/shantytown/issues/632)) ([60c5917](https://github.com/intigraph/shantytown/commit/60c59171bb2bcc069f75ef27dd8c099285404c0b))
+
 ## [0.17.0](https://github.com/intigraph/shantytown/compare/v0.16.0...v0.17.0) (2026-11-15)
 
 
