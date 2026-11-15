@@ -103,6 +103,7 @@ class Knowledge(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / source, target)
         (self.root / "docs/knowledge").mkdir(parents=True)
+        shutil.copyfile(ROOT / "docs/knowledge/cli-summary.md", self.root / "docs/knowledge/cli-summary.md")
         self.save()
 
     def save(self):
@@ -127,6 +128,16 @@ class Knowledge(unittest.TestCase):
         for value in (None, False, ""):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "absent or ambiguous"):
                 self.render(lambda _: value)
+
+    def test_cli_source_edit_derives_hash_without_registry_or_review_edit(self):
+        import hashlib
+        registry_before = (self.root / "docs/knowledge/repository-knowledge.json").read_bytes()
+        path = self.root / "shantytown/cli.py"
+        path.write_text(path.read_text() + "\nPRIVATE_FIXTURE = True\n")
+        text = self.render()
+        self.assertIn(hashlib.sha256(path.read_bytes()).hexdigest(), text)
+        self.assertEqual((self.root / "docs/knowledge/repository-knowledge.json").read_bytes(), registry_before)
+        self.assertIn(self.registry["reviewed_at"], text)
 
     def test_changed_source_refuses(self):
         path = self.root / self.registry["records"][0]["source"]
@@ -156,6 +167,156 @@ class Knowledge(unittest.TestCase):
         self.save()
         with self.assertRaisesRegex(ValueError, "private summary"):
             self.render()
+
+    def cli_record(self):
+        return next(r for r in self.registry["records"] if r["source"] == module.CLI_SOURCE)
+
+    def test_summary_anchor_missing_changed_or_rebound_refuses(self):
+        import hashlib
+        anchor = self.root / module.CLI_SUMMARY
+        original = anchor.read_bytes()
+        anchor.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.render()
+        anchor.write_bytes(b"Reviewed CLI scope updated explicitly.\n")
+        with self.assertRaisesRegex(ValueError, "summary witness changed"):
+            self.render()
+        # A reviewed anchor update is explicit, and still obeys summary privacy.
+        self.cli_record()["summary_sha256"] = hashlib.sha256(anchor.read_bytes()).hexdigest()
+        self.save()
+        self.assertIn("Reviewed CLI scope updated explicitly.", self.render())
+        anchor.write_text("read /home/private/file\n")
+        self.cli_record()["summary_sha256"] = hashlib.sha256(anchor.read_bytes()).hexdigest()
+        self.save()
+        with self.assertRaisesRegex(ValueError, "private summary"):
+            self.render()
+
+    def test_summary_anchor_path_and_symlink_escape_refuse(self):
+        rec = self.cli_record()
+        for path in ("../outside", "/absolute", "docs/knowledge/other.md", None):
+            with self.subTest(path=path):
+                rec["summary_source"] = path
+                self.save()
+                with self.assertRaisesRegex(ValueError, "approved stable anchor"):
+                    self.render()
+        rec["summary_source"] = module.CLI_SUMMARY
+        self.save()
+        anchor = self.root / module.CLI_SUMMARY
+        anchor.unlink()
+        anchor.symlink_to(ROOT / module.CLI_SUMMARY)
+        with self.assertRaisesRegex(ValueError, "escaped"):
+            self.render()
+
+    def test_unknown_and_mixed_modes_refuse(self):
+        import hashlib
+        rec = self.cli_record()
+        for mode in (None, "", "automatic", False):
+            with self.subTest(mode=mode):
+                rec["source_hash_mode"] = mode
+                self.save()
+                with self.assertRaisesRegex(ValueError, "unknown source hash mode"):
+                    self.render()
+        rec["source_hash_mode"] = "release-bytes"
+        for key, value in (("source_sha256", None), ("source_sha256", hashlib.sha256(
+                (self.root / module.CLI_SOURCE).read_bytes()).hexdigest()), ("summary", "mixed")):
+            with self.subTest(key=key, value=value):
+                rec[key] = value
+                self.save()
+                with self.assertRaisesRegex(ValueError, "mixed"):
+                    self.render()
+                del rec[key]
+
+    def test_other_eight_records_remain_strict(self):
+        for rec in self.registry["records"]:
+            if rec is self.cli_record():
+                continue
+            with self.subTest(path=rec["source"]):
+                path = self.root / rec["source"]
+                original = path.read_bytes()
+                path.write_bytes(original + b"\nchanged\n")
+                with self.assertRaisesRegex(ValueError, "source witness changed"):
+                    self.render()
+                path.write_bytes(original)
+                digest = rec.pop("source_sha256")
+                self.save()
+                with self.assertRaisesRegex(ValueError, "source witness changed"):
+                    self.render()
+                rec["source_sha256"] = digest
+                rec["source_hash_mode"] = "release-bytes"
+                summary = rec.pop("summary")
+                del rec["source_sha256"]
+                self.save()
+                with self.assertRaisesRegex(ValueError, "approved CLI"):
+                    self.render()
+                del rec["source_hash_mode"]
+                rec["summary"] = summary
+                rec["source_sha256"] = digest
+                self.save()
+
+    def test_cli_missing_escape_wrong_identity_or_kind_refuse(self):
+        rec = self.cli_record()
+        path = self.root / rec["source"]
+        original = path.read_bytes()
+        path.unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.render()
+        path.symlink_to(ROOT / module.CLI_SOURCE)
+        with self.assertRaisesRegex(ValueError, "escaped"):
+            self.render()
+        path.unlink()
+        path.write_bytes(original)
+        for key, value in (("source", "../outside"), ("source", str(ROOT / module.CLI_SOURCE)),
+                           ("subject", module.CLI_SUBJECT + "#guessed"), ("kind", "idea")):
+            old = rec[key]
+            rec[key] = value
+            self.save()
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.render()
+            rec[key] = old
+            self.save()
+
+    def test_strict_record_cannot_silently_adopt_summary_anchor(self):
+        rec = self.registry["records"][0]
+        for key in ("summary_source", "summary_sha256"):
+            rec[key] = "unexpected"
+            self.save()
+            with self.assertRaisesRegex(ValueError, "requires explicit"):
+                self.render()
+            del rec[key]
+
+    def test_disjoint_cli_edits_merge_both_orders_without_registry_cure(self):
+        import hashlib
+        def merge(ours, base, theirs):
+            with tempfile.TemporaryDirectory() as folder:
+                paths = [Path(folder) / str(i) for i in range(3)]
+                for path, content in zip(paths, (ours, base, theirs)):
+                    path.write_text(content)
+                return subprocess.run(["git", "merge-file", "-p", *map(str, paths)],
+                                      capture_output=True, text=True)
+        path = self.root / module.CLI_SOURCE
+        original = path.read_text()
+        first, second = "PRIVATE_A = True\n" + original, original + "\nPRIVATE_B = True\n"
+        registry_before = (self.root / "docs/knowledge/repository-knowledge.json").read_bytes()
+        outputs = []
+        for ours, theirs in ((first, second), (second, first)):
+            result = merge(ours, original, theirs)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            path.write_text(result.stdout)
+            self.assertIn(hashlib.sha256(path.read_bytes()).hexdigest(), self.render())
+            self.assertEqual(registry_before,
+                             (self.root / "docs/knowledge/repository-knowledge.json").read_bytes())
+            outputs.append(result.stdout)
+        self.assertEqual(*outputs)
+        # Real semantic summary edits still conflict: never pick one silently.
+        self.assertEqual(merge("Scope A\n", "Scope\n", "Scope B\n").returncode, 1)
+        # Before migration the same code-only changes touched one scalar.
+        old = dict(self.cli_record())
+        for key in ("source_hash_mode", "summary_source", "summary_sha256"):
+            old.pop(key)
+        old["summary"] = (self.root / module.CLI_SUMMARY).read_text().strip()
+        def committed(source):
+            return json.dumps(dict(old, source_sha256=hashlib.sha256(source.encode()).hexdigest()), indent=2)
+        self.assertEqual(merge(committed(first), committed(original), committed(second)).returncode, 1)
 
     @unittest.skipUnless(os.environ.get("QUIPU_TEST_BIN"), "native schema control requires explicit test artifact")
     def test_actual_native_schema_positive_and_missing_freshness_negative(self):

@@ -1,0 +1,9 @@
+Script started on 2026-11-14 23:37:01-05:00 [COMMAND="python3 -B docs/demos/cli-knowledge-witness/probe.py" <not executed on terminal>]
+BEFORE: disjoint CLI edits update one committed digest -> registry conflict.
+AFTER: A then B and B then A -> clean merge, identical source bytes.
+AFTER: renderer emits merged-byte SHA256; registry/summary witness unchanged.
+CONTROL: concurrent reviewed-summary edits still conflict.
+CONTROL: missing/tampered summary anchor refuses; explicit reviewed update works.
+Source fixtures only; no installed or live pipeline acceptance claimed.
+
+Script done on 2026-11-14 23:37:01-05:00 [COMMAND_EXIT_CODE="0"]
