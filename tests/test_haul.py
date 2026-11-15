@@ -797,3 +797,22 @@ def test_pending_self_cycle_at_ceiling_never_reclaims_three_queued_items(
     captured = capsys.readouterr()
     assert captured.out == ''
     assert 'cycle pending' in captured.err
+
+
+@pytest.mark.parametrize("terminal", [False, True])
+def test_codex_recorded_ci_wait_quiets_and_wakes_actual_stop(monkeypatch, capsys, terminal):
+    from shantytown import quiet_waits, deferrals
+    from test_resume_forge_events import fake_ci
+    reader = fake_ci(run_status="completed" if terminal else "queued",
+                     conclusion="success" if terminal else None)
+    monkeypatch.setattr(quiet_waits, "evaluate", lambda rows, now, root:
+        deferrals.evaluate(rows, now, root=root, forge_reader=reader))
+    codex = Agent(name="billy", role="worker", pane="p-b", harness="codex")
+    item = {"id": "aegis-quiet", "title": "CI wait", "assignee": "billy",
+            "status": "in_progress", "notes": "resume_when: ci-terminal:github/example/project@" + "a" * 40}
+    rc, block = _run(monkeypatch, capsys, reg=_Reg([codex]), in_progress=[item])
+    assert rc == 0
+    assert (block is not None) is terminal
+    if terminal:
+        assert "HAUL RESUME" in block["reason"]
+    assert item["status"] == "in_progress" and "defer_until" not in item

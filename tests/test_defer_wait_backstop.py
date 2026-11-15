@@ -1,4 +1,4 @@
-"""Waiting for CI is an event gate, not an hourly administrator alarm."""
+"""CI stays active; genuine appointments and other event gates retain pacing."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -24,7 +24,7 @@ def future(hours):
 def test_short_pipeline_date_refuses_before_any_write(world, reason):
     d, tracker = world
     before = tracker._path("test-wait").read_bytes()
-    with pytest.raises(DeferRefused, match="resume_when.*24"):
+    with pytest.raises(DeferRefused, match="resume_when.*24" if reason == "install pending" else "stay in_progress"):
         d.defer("test-wait", "external", reason, until=future(1))
     assert tracker._path("test-wait").read_bytes() == before
 
@@ -39,7 +39,8 @@ def test_real_scheduled_window_is_explicit_and_preserved(world):
 
 def test_event_requires_long_backstop_but_can_be_repeated_without_extension(world):
     d, tracker = world
-    reason = "CI pending\nresume_when: release:example/project@v1.0"
+    # A registered controller event is not a CI/review wait.
+    reason = "resume_when: activation:test-wait"
     with pytest.raises(DeferRefused, match="24"):
         d.defer("test-wait", "external", reason)
     with pytest.raises(DeferRefused, match="24"):
@@ -54,7 +55,7 @@ def test_timer_only_long_ci_wait_and_dry_run_cannot_bypass_event(world):
     d, tracker = world
     before = tracker._path("test-wait").read_bytes()
     for hours in (1, 7, 25):
-        with pytest.raises(DeferRefused, match="resume_when"):
+        with pytest.raises(DeferRefused, match="stay in_progress"):
             d.defer("test-wait", "external", "CI pending", until=future(hours), dry_run=True)
     assert tracker._path("test-wait").read_bytes() == before
 

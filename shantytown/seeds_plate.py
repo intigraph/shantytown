@@ -361,6 +361,7 @@ def _retry_owner_projection(function):
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,
                active_only: bool = False, capacity: bool = False,
+               include_waits: bool = False,
                include_deferred: bool = False,
                plate_owners: tuple[str, ...] | None = None,
                include_messages: bool = False, shape_reads=None,
@@ -528,6 +529,8 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
         # and labels instead of truncating the first 1,000-subject request.
         field_options = dict(budget=max(10000, len(selected) * (len(FIELDS) + 8)),
                              batch_size=field_batch_size, recover_timeouts=recovery_tokens > 3)
+        if include_waits:
+            field_options["fields"] = {**FIELDS, SEEDS + "ontology/notes": "notes"}
         grouped = _project_fields(proof, selected, graphs, timeout, **field_options)
         while True:
             try:
@@ -697,12 +700,13 @@ def ranking_rows(proof, *, timeout: int = 30,
 
 
 def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
-                    recover_timeouts=False):
+                    recover_timeouts=False, fields=None):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
 
     `selected` maps subject IRI -> the one graph that holds it. Raises on any
     budget, identity or ambiguity problem; callers turn that into UNKNOWN.
     """
+    fields = FIELDS if fields is None else fields
     wire = []
     pairs = list(selected.items())
     # Discover scoped IDs first, then bind every subject and predicate.
@@ -719,7 +723,7 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             bindings = " ".join(_iri(subject) for subject, graph in chunk if graph == g)
             if not bindings:
                 continue
-            for predicate in FIELDS:
+            for predicate in fields:
                 branches.append(
                     f"{{ VALUES ?s {{ {bindings} }} GRAPH {_iri(g)} "
                     f"{{ ?s {_iri(predicate)} ?value }} "
@@ -750,14 +754,14 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             or not subject.startswith(SEEDS + "item/")
             or g not in graphs
             or selected.get(subject) != g
-            or p not in FIELDS
+            or p not in fields
         ):
             raise ValueError("invalid plate field")
         if subject in subjects and subjects[subject] != g:
             raise ValueError("seed appears in shared and ephemeral graphs")
         subjects[subject] = g
         row = grouped.setdefault(subject, {"labels": []})
-        key = FIELDS[p]
+        key = fields[p]
         if isinstance(value, dict):
             if set(value) != {"datatype", "value"} or key not in (
                 "updated_at",
@@ -775,6 +779,8 @@ def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_siz
             from urllib.parse import unquote
 
             value = unquote(value[len(SEEDS + "principal/") :])
+        if key == "notes" and (not isinstance(value, str) or len(value) > 65536):
+            raise ValueError("quiet-wait notes exceed bounded text shape")
         if key == "labels":
             if not isinstance(value, str):
                 raise ValueError("invalid label")
@@ -853,7 +859,43 @@ def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
     return read(pairs)
 
 
+# Candidate membership depends on both date spellings and the two note markers.
+# A type/status/date/note change anywhere can add a waiter; selected fields are
+# separately fenced by certify_projection. Unrelated graph commits need no retry.
+DEFERRED_MEMBERSHIP = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    SEEDS + "ontology/status", SCHEMA + "scheduledTime",
+    SEEDS + "ontology/deferUntil", SEEDS + "ontology/notes",
+})
+
+
+def _retry_deferred_projection(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        # ebu: never combine independently retried branches/fields from moving
+        # snapshots. Recovery shares ONE caller deadline, not three new budgets.
+        timeout = kwargs.get("timeout", 30)
+        budget = {"remaining": 3, "deadline": time.monotonic() + timeout}
+        error = "projection changed"
+        while budget["remaining"]:
+            budget["remaining"] -= 1
+            remaining = budget["deadline"] - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                with seeds_read_cache.projection_reads(budget):
+                    return function(*args, **{**kwargs, "timeout": remaining})
+            except seeds_read_cache.WatermarkMoved as changed:
+                error = str(changed)
+                if budget["remaining"] and not seeds_read_cache.projection_pause(budget):
+                    break
+        return Answer.capped([], how="Seeds deferred projection; shared and ephemeral graphs",
+                             caveat="deferral snapshot retry/time budget reached: " + error)
+    return read
+
+
 @declared_read_operation("deferred-rows")
+@_retry_deferred_projection
 def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=None) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
@@ -975,6 +1017,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                         raise ValueError("ambiguous deferral field")
                     seen.add((subject, key))
                     row[key] = value
+        seeds_read_cache.certify_projection(
+            proof.quipu_url, graphs, set(selected), DEFERRED_MEMBERSHIP, timeout, urlopen)
         statuses = (("closed", "tombstone", "deferred", "open", "blocked", "in_progress")
                     if target_ids is not None else
                     ("deferred", "open", "blocked", "in_progress") if include_asks else
@@ -996,6 +1040,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
         rows = [row for status in statuses
                 for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
         return Answer.complete_read(rows, how=how)
+    except seeds_read_cache.WatermarkMoved:
+        raise  # Restart all candidates and fields, never just the changed query.
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 

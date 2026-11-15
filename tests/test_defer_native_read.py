@@ -43,7 +43,7 @@ def test_native_defer_never_hydrates_sdk_comments_including_notes_merge(tmp_path
     t = native(monkeypatch)
     t.row['notes'] = 'preserve this history'
     result = dispatcher(tmp_path, t).defer('item-1', 'external',
-        'wait for CI\nresume_when: ci-terminal:github/example/project@' + 'a' * 40,
+        'wait for publication\nresume_when: release:example/project@v1.2.3',
         until='2026-12-01')
     assert not result.noop
     assert t.row['status'] == 'deferred'

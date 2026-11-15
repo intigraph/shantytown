@@ -1671,11 +1671,15 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack", "review-reservation"))
     wi.add_argument("item")
     wi.add_argument("--result-json", action="store_true", help="stable result envelope, including failures")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
+    wi.add_argument("--reviewer", help="reserve one independent reviewer on the seed")
+    wi.add_argument("--inherit-from", help="inherit the predecessor seed's reviewer")
+    wi.add_argument("--replace-reviewer", help="explicit expected previous reviewer for reassignment")
+    wi.add_argument("--contributor", action="append", default=[], help="additional author recused from review (repeatable)")
     wi.add_argument("--priority", type=int, choices=range(5))
     wi.add_argument("--spec-file", type=Path)
     wi.add_argument("--quote")
@@ -5983,13 +5987,22 @@ def _cmd_provision(a) -> int:
                 raise ValueError(f"crew workspace missing for {card.name}; configure it first")
         results = []
         if getattr(a, "instruction_report", False):
-            from . import config as config_mod, instructions
+            from . import config as config_mod, instructions, tooling
             cfg = config_mod.load(a.root, refresh_source=True)
+            try:
+                manifest = tooling.load(a.root, last_good=cfg.source_document is not None)
+            except tooling.ToolingError as e:
+                raise ProvisionError(str(e)) from None
             for card in sorted(cards, key=lambda card: card.name):
-                plan = instructions.prepare(card.workspace, card, cfg,
-                                            harness=harness_mod.name_for(card, a.root))
+                try:
+                    comparisons = instructions.report(
+                        card.workspace, card, cfg, manifest,
+                        harness=harness_mod.name_for(card, a.root))
+                except tooling.ToolingError as e:
+                    raise ProvisionError(str(e)) from None
                 results.append({"name": card.name, "harness": card.harness,
-                                "comparisons": plan.comparisons})
+                                "tooling": "configured" if manifest is not None else "not-configured",
+                                "comparisons": comparisons})
             print(json.dumps({"version": 1, "sources": cfg.source_origins,
                               "warning": cfg.source_warning, "agents": results}))
             return OK
@@ -11592,6 +11605,7 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
     it, and gives up after SELF_SERVE_TIMEOUT_S, leaving the request for tend.
     Returns the log path, or "" when disabled or the spawn failed."""
     import subprocess
+    from .runtime import SettingsError, _hook_interpreter
     if os.environ.get(SELF_SERVE_ENV, "").strip().lower() in ("0", "off", "false", "no"):
         return ""
     log = Path(a.root) / "logs" / f"self-cycle-{agent}.log"
@@ -11599,11 +11613,13 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as fh:
             subprocess.Popen(
-                [sys.executable, "-m", "shantytown.cli", "--root", str(a.root),
+                [_hook_interpreter(), "-m", "shantytown.cli", "--root", str(a.root),
                  "agent", "cycle", agent, "--serve-request"],
                 stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                start_new_session=True, close_fds=True)
-    except OSError as e:
+                # A repository's parent can expose a namespace called
+                # shantytown ahead of the editable-install finder.
+                cwd="/", start_new_session=True, close_fds=True)
+    except (OSError, SettingsError) as e:
         print(f"  ⚠ could not start the self-cycle waiter ({e}); `st fleet tend` "
               f"still serves the request.", file=sys.stderr)
         return ""

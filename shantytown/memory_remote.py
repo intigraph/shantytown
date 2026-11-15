@@ -12,10 +12,10 @@ import hashlib
 import os
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from . import quipu_auth
+from . import quipu_auth, quipu_provenance
 from .memory_files import MemoryFile, UnsafeMemory, stage, validate
 
 LIMIT = 8 * 1024 * 1024
@@ -39,7 +39,7 @@ class Owner:
     def __post_init__(self):
         for value in self.wire().values():
             if (not isinstance(value, str) or not urlsplit(value).scheme
-                    or any(c.isspace() for c in value)):
+                    or any(c.isspace() or ord(c) < 32 or c in '<>"{}|^`\\' for c in value)):
                 raise Unproven('memory owner requires exact absolute identities')
 
     def wire(self):
@@ -87,12 +87,14 @@ class Client:
         return client
 
     def _request(self, endpoint, body, *, identity=False):
-        headers = {'Content-Type': 'application/json', 'X-Quipu-Client': 'crew-memory'}
+        headers = {'Content-Type': 'application/json', **quipu_provenance.headers(),
+                   'X-Quipu-Purpose': 'INGEST' if identity else 'CONTEXT'}
         if identity:
-            # A shared fallback is possible here; the SERVER must reject it for
-            # own writes/projection. Local card names are not authentication.
+            self._own()
+            # Only the existing selected normal CLI bearer may write. Local
+            # owner routing is not a server-authenticated memory identity.
             if self._credential_selection is None:
-                headers.update(quipu_auth.write_headers(self.server))
+                raise Unproven('own graph operation requires explicit crew selection')
             else:
                 if quipu_auth.status(self.server) == 'writes-disabled':
                     raise quipu_auth.CredentialRefused('memory writes disabled for this session')
@@ -104,8 +106,12 @@ class Client:
                 if not value:
                     raise Unproven('selected memory CLI credential unavailable')
                 headers['Authorization'] = 'Bearer ' + value
-        encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode()
-        if len(encoded) > 1024 * 1024:
+        if endpoint == '/update':
+            encoded = urlencode(body).encode()
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+        else:
+            encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode()
+        if len(encoded) > LIMIT:
             raise Unproven('memory request exceeds limit')
         request = Request(self.server + endpoint, data=encoded, headers=headers)
         try:
@@ -126,15 +132,23 @@ class Client:
             raise Unproven('memory response exceeds limit')
         return _json(raw)
 
+    def _graph(self):
+        from .memory_graph import Graph
+        return Graph(self)
+
+    def _own(self):
+        if self._credential_selection is None:
+            raise Unproven('own graph operation requires explicit crew selection')
+        if quipu_auth.status(self.server) == 'writes-disabled':
+            raise quipu_auth.CredentialRefused('memory writes disabled for this session')
+        from .crew_credentials import selection
+        selected = selection(*self._credential_selection)
+        if (selected is None or 'quipu_cli' not in selected[1]
+                or selected[1]['principal'] != self.owner.crew):
+            raise Unproven('crew selection changed; preserve original owner and intents')
+
     def read(self):
-        result = self._request('/memory/read', self.owner.wire())
-        if not isinstance(result, dict) or result.get('coverage') != 'this_repository_owner_records':
-            raise Unproven('memory read coverage unproven')
-        snapshot = result.get('snapshot')
-        if snapshot is not None and (not isinstance(snapshot, dict)
-                                     or snapshot.get('owner') != self.owner.wire()):
-            raise Unproven('memory read owner mismatch')
-        return snapshot
+        return self.export()['snapshot']
 
     def _receipt(self, result, request, *, absent=False):
         if not isinstance(result, dict) or 'receipt' not in result:
@@ -161,18 +175,17 @@ class Client:
 
     def commit(self, request):
         request = canonical_intent(request, self.owner)
-        return self._receipt(self._request('/memory/commit', request, identity=True), request)
+        self._own()
+        return self._graph().commit(request)
 
     def receipt(self, request):
         request = canonical_intent(request, self.owner)
-        return self._receipt(self._request('/memory/receipt', request, identity=True),
-                             request, absent=True)
+        self._own()
+        return self._graph().receipt(request)
 
     def export(self):
         """Intentional cross-crew read, never an own-projection credential."""
-        envelope = self._request('/memory/export', self.owner.wire())
-        _export_files(envelope, self.owner, allow_empty=True)
-        return envelope
+        return self._graph().export()
 
     def query(self, text, *, limit=20):
         """Bounded literal search of one declared owner's repository records."""
@@ -199,12 +212,10 @@ class Client:
 
     def projection(self):
         """Read the verified own manifest, including an explicitly absent head."""
-        result = self._request('/memory/projection', self.owner.wire(), identity=True)
-        if (not isinstance(result, dict) or result.get('authenticated_owner') != self.owner.crew
-                or not isinstance(result.get('export'), dict)):
-            raise Unproven('own memory projection identity unproven')
-        _export_files(result['export'], self.owner, allow_empty=True)
-        return result
+        self._own()
+        # Selected by the existing administrator-owned crew mapping. This is
+        # local routing provenance, never a claimed server memory ACL response.
+        return dict(selected_owner=self.owner.crew, export=self.export())
 
     def stage_own(self, parent: Path):
         return stage(verified_files(self.projection(), self.owner), parent)
@@ -231,14 +242,14 @@ def canonical_intent(request, owner: Owner):
 
 def verified_files(result, owner: Owner):
     """Bind named owner, immutable manifest, revision metadata and source bytes."""
-    if (not isinstance(result, dict) or result.get('authenticated_owner') != owner.crew
+    if (not isinstance(result, dict) or result.get('selected_owner') != owner.crew
             or not isinstance(result.get('export'), dict)):
         raise Unproven('own memory projection identity unproven')
     return _export_files(result['export'], owner)
 
 
 def _export_files(envelope, owner, *, allow_empty=False):
-    if (not isinstance(envelope, dict) or envelope.get('format') != 'quipu.memory-files/v1'
+    if (not isinstance(envelope, dict) or envelope.get('format') != 'shantytown.memory-files/v1'
             or envelope.get('coverage') != 'this_repository_owner_records'
             or 'snapshot' not in envelope):
         raise Unproven('memory projection coverage unproven')

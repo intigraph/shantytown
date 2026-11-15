@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.16.0](https://github.com/intigraph/shantytown/compare/v0.15.1...v0.16.0) (2026-11-14)
+
+
+### Features
+
+* **config:** add explicit escalation carrier configuration ([#584](https://github.com/intigraph/shantytown/issues/584)) ([faa61f5](https://github.com/intigraph/shantytown/commit/faa61f521cf7037a76d2e5aec4019b1ae910535f))
+* **plate:** serve Now, then Next by rank, before the rest ([#575](https://github.com/intigraph/shantytown/issues/575)) ([d2e73bd](https://github.com/intigraph/shantytown/commit/d2e73bd6b688e129e37ef380485947e16b37e38e))
+* **refill:** split pool capacity 20/60/20 across Now, Next and Later ([#577](https://github.com/intigraph/shantytown/issues/577)) ([6bccc8d](https://github.com/intigraph/shantytown/commit/6bccc8d7f1f502e12daba586d8fb6e47002924b4))
+* **refill:** split pool capacity 20/60/20 across Now, Next and Later lanes ([6bccc8d](https://github.com/intigraph/shantytown/commit/6bccc8d7f1f502e12daba586d8fb6e47002924b4))
+
+
+### Bug Fixes
+
+* **context-hint:** an identityless Stop keeps the bound session ([#574](https://github.com/intigraph/shantytown/issues/574)) ([05c19ff](https://github.com/intigraph/shantytown/commit/05c19fffb807b87d59444fd33859a17eea9f364d))
+* **context-hint:** an identityless Stop keeps the bound session (aegis-zxor) ([05c19ff](https://github.com/intigraph/shantytown/commit/05c19fffb807b87d59444fd33859a17eea9f364d))
+* **cycle:** complete or withdraw an in-place self-cycle that cannot verify ([#573](https://github.com/intigraph/shantytown/issues/573)) ([5646631](https://github.com/intigraph/shantytown/commit/5646631bf428216390716a879296a86d24010101))
+* **dispatch:** identify retained receipts in scope refusals ([#586](https://github.com/intigraph/shantytown/issues/586)) ([69939c8](https://github.com/intigraph/shantytown/commit/69939c843951b9199c57c696532b6c55db7d7681))
+* **dispatch:** identify retained scope receipt and recovery commands ([69939c8](https://github.com/intigraph/shantytown/commit/69939c843951b9199c57c696532b6c55db7d7681))
+* **dispatch:** recover late Codex consumption from native receipts ([9dad0c6](https://github.com/intigraph/shantytown/commit/9dad0c6e13d40e5df2198a34fa8e9d4cb7ad037c))
+* **dispatch:** recover late Codex native submission proof ([#581](https://github.com/intigraph/shantytown/issues/581)) ([9dad0c6](https://github.com/intigraph/shantytown/commit/9dad0c6e13d40e5df2198a34fa8e9d4cb7ad037c))
+* **haul:** keep CI and review waits in progress ([#602](https://github.com/intigraph/shantytown/issues/602)) ([2ff8a61](https://github.com/intigraph/shantytown/commit/2ff8a6115a9c61f33b404a14d258fe962b2c28ee))
+* **job-slots:** preserve working slots in mixed inventories ([#598](https://github.com/intigraph/shantytown/issues/598)) ([a892a45](https://github.com/intigraph/shantytown/commit/a892a45c7d4c32ab2b67600ee6be279902fa4798))
+* **memory:** use ordinary Quipu graph queries and atomic updates ([#616](https://github.com/intigraph/shantytown/issues/616)) ([820fe38](https://github.com/intigraph/shantytown/commit/820fe38bb2cd16f610eee8f679a1289af3df7446))
+* preserve deploy reservations during stopped-owner sweeps ([#579](https://github.com/intigraph/shantytown/issues/579)) ([83323ee](https://github.com/intigraph/shantytown/commit/83323eeead6deae62851acf26817d3cba9b1f98d))
+* **refill:** bound field batches for dense ready cohorts ([#587](https://github.com/intigraph/shantytown/issues/587)) ([78c1ab1](https://github.com/intigraph/shantytown/commit/78c1ab1864d6e819e11dbaf8132a856327454d7a))
+* **refill:** count pending dispatches only for live members not already in hand ([#578](https://github.com/intigraph/shantytown/issues/578)) ([57dddbc](https://github.com/intigraph/shantytown/commit/57dddbc8e47fdb4ee68aaec6a52ad8249777f640))
+* **repo:** make PR overlap checks advisory at creation ([#582](https://github.com/intigraph/shantytown/issues/582)) ([1ef8541](https://github.com/intigraph/shantytown/commit/1ef8541d487c9427bcfc3740755f0fa886f17241))
+* resolve off-host leads for anchor and stop routing ([#583](https://github.com/intigraph/shantytown/issues/583)) ([4ac6612](https://github.com/intigraph/shantytown/commit/4ac66122cb6ab7c9a2233b1f07150303d1645c87))
+* **resume:** observe assigned-harness cold launches after binding ([#607](https://github.com/intigraph/shantytown/issues/607)) ([c96be28](https://github.com/intigraph/shantytown/commit/c96be285f052ae5ec709137842240bea0b887ce1))
+* **stats:** skip acknowledged unchanged lifecycle publication ([#597](https://github.com/intigraph/shantytown/issues/597)) ([c544183](https://github.com/intigraph/shantytown/commit/c5441836ceb57b385f73d57b839d71735c4c0059))
+* **stop:** exclude UID-gated ephemeral capacity (aegis-xde) ([37645ff](https://github.com/intigraph/shantytown/commit/37645ff06f7cfece7b410f46b0f06552fb3fc561))
+* **stop:** ignore ephemeral slots blocked by UID readiness ([#613](https://github.com/intigraph/shantytown/issues/613)) ([37645ff](https://github.com/intigraph/shantytown/commit/37645ff06f7cfece7b410f46b0f06552fb3fc561))
+* **stop:** read the haul hook payload once ([#576](https://github.com/intigraph/shantytown/issues/576)) ([05fbabc](https://github.com/intigraph/shantytown/commit/05fbabc9e029d96fac5ec32587c3f16cf8101be2))
+* **stop:** share roster reads across stop-event plate consumers ([#589](https://github.com/intigraph/shantytown/issues/589)) ([2016b46](https://github.com/intigraph/shantytown/commit/2016b460badce9ad5630af91c302ddd485f45b42))
+* **stranded:** keep inbox pointers out of the owner census ([#568](https://github.com/intigraph/shantytown/issues/568)) ([dabc555](https://github.com/intigraph/shantytown/commit/dabc555fb56b294ebbc6f943988610f29a9d9c0f))
+* **stranded:** keep inbox pointers out of the owner census (aegis-byt) ([dabc555](https://github.com/intigraph/shantytown/commit/dabc555fb56b294ebbc6f943988610f29a9d9c0f))
+* **stranded:** make operator-stop release drain a stopped harness in one pass ([#569](https://github.com/intigraph/shantytown/issues/569)) ([99e8404](https://github.com/intigraph/shantytown/commit/99e8404b2674f7630a5e5a4b1e706fe3fddb1c83))
+* **stranded:** release a stopped owner's work in priority order ([#571](https://github.com/intigraph/shantytown/issues/571)) ([853975c](https://github.com/intigraph/shantytown/commit/853975c0a95d9be87a01026d58150044d71d7c5d))
+* **stranded:** release a stopped owner's work in priority order (aegis-byt) ([853975c](https://github.com/intigraph/shantytown/commit/853975c0a95d9be87a01026d58150044d71d7c5d))
+* **stranded:** settle releases by governed read-back, reconcile unknowns, exclude DESK ([#572](https://github.com/intigraph/shantytown/issues/572)) ([435e9fe](https://github.com/intigraph/shantytown/commit/435e9fefebec741851a7da48143d932e8561724a))
+* **tend:** batch stopped-owner pacing for the administrator ([#591](https://github.com/intigraph/shantytown/issues/591)) ([079fa1f](https://github.com/intigraph/shantytown/commit/079fa1fb27ce836cfd34e8bda88a209259339037))
+* **tend:** recover stopped-owner census and tier existing release deadlines ([#594](https://github.com/intigraph/shantytown/issues/594)) ([4b422d9](https://github.com/intigraph/shantytown/commit/4b422d9e7d986dd5c87475b058bffad1ed0a5f0a))
+
+
+### Performance Improvements
+
+* **capacity:** avoid rich SDK history reads during admission ([#606](https://github.com/intigraph/shantytown/issues/606)) ([c916d7c](https://github.com/intigraph/shantytown/commit/c916d7c237db91601d46582ed5b34486d6b4ef62))
+* **plate:** certify cached candidates across unrelated commits ([#592](https://github.com/intigraph/shantytown/issues/592)) ([48bb2a8](https://github.com/intigraph/shantytown/commit/48bb2a84b566cf107214057c4a5e1d05a928080d))
+* **plate:** filter unsupported roster states before owner joins ([#580](https://github.com/intigraph/shantytown/issues/580)) ([41bbe61](https://github.com/intigraph/shantytown/commit/41bbe614d12057b582f70314cbb2e37fe2bff9dc))
+
+
+### Documentation
+
+* **stop:** clarify milestone dependencies and in-progress waits ([#615](https://github.com/intigraph/shantytown/issues/615)) ([9352203](https://github.com/intigraph/shantytown/commit/935220342d9219d26da493a46f2745f9bd5fecca))
+* **stop:** distinguish milestone waits from date deferral ([9352203](https://github.com/intigraph/shantytown/commit/935220342d9219d26da493a46f2745f9bd5fecca))
+* **work:** define alert causes and retained members ([#588](https://github.com/intigraph/shantytown/issues/588)) ([67c8105](https://github.com/intigraph/shantytown/commit/67c8105cd18990a546326cd0fe260a0d6d9d1e47))
+* **work:** define graph-backed alert causes and retained members ([67c8105](https://github.com/intigraph/shantytown/commit/67c8105cd18990a546326cd0fe260a0d6d9d1e47))
+
+
+### Tests
+
+* **display:** capture parent-death survivor state ([#604](https://github.com/intigraph/shantytown/issues/604)) ([33345ef](https://github.com/intigraph/shantytown/commit/33345efa26f8beb162c673c4e5c5801217c09544))
+* **storage:** distinguish link access time from history custody ([#590](https://github.com/intigraph/shantytown/issues/590)) ([ad9fddc](https://github.com/intigraph/shantytown/commit/ad9fddcd52e2a490291bae9856660373c574246f))
+
 ## [0.15.1](https://github.com/intigraph/shantytown/compare/v0.15.0...v0.15.1) (2026-11-10)
 
 

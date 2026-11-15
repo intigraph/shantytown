@@ -1,0 +1,12 @@
+Script started on 2026-11-14 21:00:22-05:00 [COMMAND="stty -onlcr && PYTHONPATH=. python3 docs/probes/reviewer-reservation/demo.py" <not executed on terminal>]
+st work item review-reservation task-1 --reviewer peer
+{"id": "task-1", "inherited_from": null, "previous": null, "result": "verified", "reviewer": "peer"}
+st work item review-reservation task-2 --inherit-from task-1
+{"id": "task-2", "inherited_from": "task-1", "previous": null, "result": "verified", "reviewer": "peer"}
+st work item review-reservation task-2 --reviewer second-peer
+REFUSED: seed already reserves peer; name it with --replace-reviewer
+st work item review-reservation task-2
+{"id": "task-2", "result": "observed", "reviewer": "peer"}
+Preserved gate: ["blocked:external", "reviewer:peer"]
+
+Script done on 2026-11-14 21:00:23-05:00 [COMMAND_EXIT_CODE="0"]

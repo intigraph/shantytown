@@ -1,0 +1,10 @@
+Script started on 2026-11-14 02:35:55-05:00 [COMMAND="python3 docs/probes/pr-demos/ephemeral-readiness/demo.py" <not executed on terminal>]
+Baseline 2ff8a6115a9c61f33b404a14d258fe962b2c28ee; candidate working source; isolated fixtures, no launches
+unattended=true, uid_ready=False
+  before: slots=2 block=True reason=p0-plate
+  after:  slots=0 block=False reason=nothing-to-do
+unattended=true, uid_ready=True
+  before: slots=2 block=True reason=p0-plate
+  after:  slots=2 block=True reason=p0-plate
+
+Script done on 2026-11-14 02:35:56-05:00 [COMMAND_EXIT_CODE="0"]

@@ -22,13 +22,13 @@ class Projected(Remote):
         if self.projection_error:
             raise Unproven('synthetic projection unknown')
         if self.head is None:
-            result = dict(authenticated_owner=self.owner.crew, export={
-                'format': 'quipu.memory-files/v1', 'coverage': 'this_repository_owner_records',
+            result = dict(selected_owner=self.owner.crew, export={
+                'format': 'shantytown.memory-files/v1', 'coverage': 'this_repository_owner_records',
                 'snapshot': None, 'files': []})
         else:
             result = copy.deepcopy(self.baseline())
         if self.wrong_principal:
-            result['authenticated_owner'] = 'urn:example:beta'
+            result['selected_owner'] = 'urn:example:beta'
         return result
 
 

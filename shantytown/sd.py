@@ -79,6 +79,10 @@ class SdTracker(BrTracker):
         from .seeds_item import read_item
         return read_item(self, item_id)
 
+    def capacity_read(self, item_id):
+        """Fresh seed fields for producer admission, retaining the owner fence."""
+        return self.defer_read(item_id)
+
     def stranded_read(self, item_id):
         """Exact SDK revision, never the revision-less plate projection."""
         result = self._bd_for(item_id, 'show', item_id, '--json')
@@ -294,6 +298,49 @@ class SdTracker(BrTracker):
                 raise RuntimeError("delivery key binds a different receipt identity/content")
             return item
         raise AssertionError("bounded inbox retry exhausted")
+
+    def create_duty_issue(self, payload, *, target, key):
+        """One SDK workflow identity per duty, including after a lost reply.
+
+        This is a repair task, not an inbox pointer. It does not claim a duty
+        has been rebound, dispatch an agent, or change an ASK-class decision.
+        """
+        import hashlib
+        from .duties import KINDS, _name
+        ident = _name(payload['id'])
+        _name(payload['holder'])
+        _name(target)
+        expected = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
+        if key != expected or payload.get('kind') not in KINDS:
+            raise ValueError('invalid duty repair identity')
+        title = 'P0 orphaned duty: ' + ident
+        description = key + '\n' + json.dumps(payload, sort_keys=True)
+        run = 'urn:shantytown:duty:' + hashlib.sha256(key.encode()).hexdigest()
+        result = self._bd('create', title, '--json', '--priority=0',
+            '--assignee=' + target, '--labels=orphaned-duty',
+            '--description=' + description, '--workflow-run=' + run,
+            '--step=repair', '--visit=1')
+        if result.returncode:
+            raise RuntimeError('duty create outcome UNKNOWN; retain the same workflow identity')
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get('id'), str) or not value['id']:
+            raise ValueError('duty repair identity UNKNOWN')
+        item = self.get(value['id'])
+        if item.title != title or not (item.description or '').startswith(key + '\n'):
+            raise ValueError('duty repair read-back identity mismatch')
+        if item.status == 'closed':
+            row = self.stranded_read(item.id)
+            # Reopen the same unresolved repair, never mint a fresh seed for
+            # every firing. Native CAS and a transition comment retain custody.
+            result = self._bd_for(item.id, 'update', item.id, '--status=open',
+                '--priority=0', '--if-revision=' + str(row['revision']),
+                '--transition-comment=Duty remains orphaned at a fresh stranded-owner pass', '--json')
+            if result.returncode:
+                raise RuntimeError('duty repair reopening UNKNOWN; inspect before retry')
+            item = self.get(item.id)
+        if item.status == 'closed' or item.priority != 0:
+            raise ValueError('duty repair not an open P0')
+        return item
 
     @property
     def _bin(self) -> str:
@@ -750,11 +797,15 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows
-        rows = owner_rows(self.prove_store(), None, feed_owners=(owner,),
-                          active_only=True, timeout=self.timeout).exact()
-        return Answer.complete_read(self._tend_order(rows),
-                                    how="owner-scoped haul active anchors")
+        from .seeds_plate import owner_rows, unblocked_ids
+        proof = self.prove_store()
+        rows = owner_rows(proof, None, feed_owners=(owner,),
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
+        # Active status is not proof that technical dependencies are closed.
+        # Reobserve native blocks edges each pass; closure restores eligibility.
+        ready = unblocked_ids(proof, rows, timeout=self.timeout)
+        return Answer.complete_read(self._tend_order([r for r in rows if r["id"] in ready]),
+                                    how="owner-scoped unblocked haul active anchors")
 
     def active_rows(self, owners: list[str]) -> Answer[list[dict]] | None:
         """Fresh active fields for the sweep's roster, including final barriers."""
@@ -763,7 +814,7 @@ class SdTracker(BrTracker):
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, timeout=self.timeout).exact()
+                          active_only=True, include_waits=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),
@@ -791,8 +842,9 @@ class SdTracker(BrTracker):
                                     timeout=self.timeout).exact())
         ready = [row for row in rows if row["status"] == "open"]
         active = [row for row in rows if row["status"] == "in_progress"]
-        ids = unblocked_ids(self.prove_store(), ready, timeout=self.timeout)
-        return [row for row in ready if row["id"] in ids], active
+        ids = unblocked_ids(self.prove_store(), ready + active, timeout=self.timeout)
+        return ([row for row in ready if row["id"] in ids],
+                [row for row in active if row["id"] in ids])
 
     def priority_rows(self, *, ready_candidates=None, include_messages=False) -> tuple[list[dict], list[dict]] | None:
         """Lean fields for fleet priority advice; never change mutation reads."""

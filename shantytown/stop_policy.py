@@ -610,12 +610,27 @@ def ephemeral_free_slots(root) -> int:
     0: no slots, so rank 2a counts only crew and the administrator's own slots.
     A failure inside a present module is also 0, loudly — claiming capacity we
     could not measure would demand starts that would then be refused.
+    Match spawn's host administrator and unattended UID gate before counting:
+    a nominal slot that cannot launch must not block the administrator's stop.
     """
     try:
         from . import ephemeral  # type: ignore[attr-defined]
     except ImportError:
         return 0
     try:
+        from .cli import _spawn_administrator
+
+        cfg, error = config.load_or_default(root)
+        if error:
+            raise ValueError(error)
+        administrator, dangerous = _spawn_administrator(
+            FilesRegistry(root / "crew"), cfg)
+        if not administrator:
+            return 0
+        unattended = (dangerous if cfg.ephemeral.unattended is None
+                      else cfg.ephemeral.unattended)
+        if unattended and not cfg.ephemeral.unattended_uid_ready:
+            return 0
         return max(0, int(ephemeral.free_slots(root)))
     except Exception as exc:  # noqa: BLE001
         print(f"stop_policy: ephemeral slot read FAILED ({exc!r}) — counting 0",

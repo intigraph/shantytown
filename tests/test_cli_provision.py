@@ -72,6 +72,47 @@ def test_empty_crew_gives_actionable_remedy(rig, capsys):
     assert not (ws / ".mcp.json").exists()
 
 
+@pytest.mark.parametrize("harness", ["claude", "codex"])
+def test_instruction_report_previews_tooling_without_graph_config(
+        rig, monkeypatch, capsys, harness):
+    import hashlib
+    root, ws, data = rig
+    FilesRegistry(root / "crew").set(
+        Agent(name="ada", workspace=str(ws), harness=harness))
+    before = b"Keep local guidance.\n"
+    (ws / "CLAUDE.md").write_bytes(before)
+    (ws / "AGENTS.md").symlink_to("CLAUDE.md")
+    monkeypatch.setattr(provision, "provision", lambda *a, **kw: pytest.fail("report must not provision"))
+    expected = tooling.instruction_text(before.decode(), data["instructions"]).encode()
+    for equal in (False, True):
+        assert run(root, "--instruction-report", "ada") == 0
+        receipt = json.loads(capsys.readouterr().out)
+        agent = receipt["agents"][0]
+        assert agent["tooling"] == "configured"
+        assert set(agent["comparisons"]) == {"CLAUDE.md", "AGENTS.md"}
+        for comparison in agent["comparisons"].values():
+            assert comparison["equal"] is equal
+            assert comparison["after_sha256"] == hashlib.sha256(expected).hexdigest()
+        assert (ws / "CLAUDE.md").read_bytes() == (expected if equal else before)
+        assert (ws / "AGENTS.md").is_symlink()
+        assert not (ws / ".mcp.json").exists()
+        assert "private-fixture-value" not in json.dumps(receipt)
+        (ws / "CLAUDE.md").write_bytes(expected)
+
+
+def test_instruction_report_refuses_unknown_tooling(rig, monkeypatch, capsys):
+    root, ws, _ = rig
+    FilesRegistry(root / "crew").set(Agent(name="ada", workspace=str(ws)))
+    def unavailable(*args, **kwargs):
+        raise tooling.ToolingError("tooling unavailable")
+    monkeypatch.setattr(tooling, "load", unavailable)
+    assert run(root, "--instruction-report") != 0
+    output = capsys.readouterr()
+    assert not output.out
+    assert "tooling unavailable" in output.err
+    assert not list(ws.iterdir())
+
+
 @pytest.mark.parametrize("failure", ["no-manifest", "empty-manifest", "graph", "secret"])
 def test_authority_failure_never_falls_back_to_local_template(rig, monkeypatch, capsys, failure):
     root, ws, data = rig
