@@ -948,3 +948,50 @@ def test_owner_field_response_at_limit_remains_unknown(monkeypatch):
     from shantytown.answer import PartialAnswer
     with pytest.raises(PartialAnswer, match="field budget"):
         seeds_plate.owner_rows(PROOF, "worker").exact()
+
+
+def test_refill_observation_ignores_unused_large_notes_but_keeps_park_gate(
+        tmp_path, monkeypatch):
+    from shantytown.refill import Refiller
+    from shantytown.answer import PartialAnswer
+
+    tracker = SdTracker(quipu=PROOF.quipu_url, prefix='test')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
+    monkeypatch.setattr(tracker, '_use_remote_projection', lambda: True)
+    monkeypatch.setattr(seeds_plate.seeds_read_cache, 'certify_projection', lambda *a: None)
+    wires = {
+        seeds_plate.SEEDS + 'item/test-held': fields(created_at='2026-01-01T00:00:00Z'),
+        seeds_plate.SEEDS + 'item/test-parked': fields(
+            id='test-parked', created_at='2026-01-01T00:00:00Z',
+            defer_until='2099-01-01T00:00:00Z'),
+    }
+    notes = seeds_plate.SEEDS + 'ontology/notes'
+    queries = []
+
+    def query(proof, text, timeout):
+        queries.append(text)
+        if '?predicate ?value' not in text:
+            return answer([{'subject': s, 'graph': G} for s in wires])
+        wire = [r for rows in wires.values() for r in rows]
+        if notes in text:
+            wire.append({'subject': next(iter(wires)), 'graph': G,
+                         'predicate': notes, 'value': 'x' * 65537})
+        return answer(wire)
+
+    monkeypatch.setattr(seeds_plate, '_query', query)
+    monkeypatch.setattr(tracker, '_bd', lambda *a: pytest.fail('SDK hydration escaped'))
+    feeder = Refiller(tmp_path, None, None, None,
+                      snapshot=lambda: ([], tracker.active_rows(['worker']).exact()),
+                      preview=lambda *a: pytest.fail('no free worker'),
+                      dispatch=lambda *a: pytest.fail('no dispatch'),
+                      free=lambda: [], members=lambda: ['worker'], clock=lambda: 1000)
+    feeder.sweep()
+    journal = tmp_path / 'refill' / 'observations.jsonl'
+    assert journal.exists(), 'unused notes must not stop natural observation collection'
+    observation = json.loads(journal.read_text())
+    assert observation['split']['occupied_before'] == {'now': 0, 'next': 1, 'later': 0}
+    assert not any(notes in q for q in queries)
+    # Consumers that need quiet-wait evidence retain the original bounded refusal.
+    with pytest.raises(PartialAnswer, match='quiet-wait notes exceed'):
+        seeds_plate.owner_rows(PROOF, None, feed_owners=('worker',),
+                               active_only=True, include_waits=True).exact()
