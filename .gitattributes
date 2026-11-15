@@ -74,3 +74,6 @@ docs/demos/publish-lineage/output.log -text whitespace=cr-at-eol
 
 # Preserve CLI witness demo terminal bytes and matching replay timing.
 docs/demos/cli-knowledge-witness/output.log -text whitespace=cr-at-eol
+
+# Output-only synthetic CLI boundary recording.
+docs/demos/duty-cli-boundary/output.log -text whitespace=cr-at-eol
