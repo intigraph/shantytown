@@ -1,0 +1,8 @@
+BASE 6b8ab7df
+first: released=2 admin_digests=0 lead_wakes=0 held=0/2
+repeat: released=2 admin_digests=0
+stop_cleared: released=2 admin_digests=0
+CANDIDATE
+first: released=0 admin_digests=1 lead_wakes=0 held=2/2
+repeat: released=0 admin_digests=1
+stop_cleared: released=2 admin_digests=1

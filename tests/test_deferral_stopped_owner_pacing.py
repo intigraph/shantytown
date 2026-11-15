@@ -2,11 +2,49 @@
 import copy
 import json
 from dataclasses import replace
+import pytest
 
 from shantytown import deferrals
 from shantytown.protocols import Agent
 from shantytown.stopped import FilesStops
 from test_deferral_owner_routing import NOW, harness
+
+
+@pytest.mark.parametrize('stopped', [True, False])
+def test_release_eligible_pair_keeps_stopped_owner_for_batch(tmp_path, monkeypatch, stopped):
+    # Exercise the real release decision: the older routing harness forces it
+    # false, which concealed the natural-pass release-before-routing failure.
+    evaluate, can_release = deferrals.evaluate, deferrals.can_release
+    h = harness(tmp_path, monkeypatch, priority=4)
+    monkeypatch.setattr(deferrals, 'evaluate', evaluate)
+    monkeypatch.setattr(deferrals, 'can_release', can_release)
+    rows = [{**h.row, 'id': f'test-lapsed-{n}', 'notes': ''} for n in range(2)]
+    by_id = {row['id']: row for row in rows}
+    h.alerter._read = lambda: rows
+    h.alerter._show = by_id.__getitem__
+    released = []
+    def release(identifier):
+        released.append(identifier)
+        by_id[identifier].update(status='open', assignee=None, defer_until=None)
+    h.alerter._release = release
+    if stopped:
+        FilesStops(tmp_path / 'stopped').record('worker', NOW.timestamp())
+    before = copy.deepcopy(rows)
+    h.alerter.sweep()
+    if stopped:
+        assert released == []
+        assert rows == before
+        assert not h.sent and len(h.admins) == 1
+        assert 'owner=worker total=2' in h.admins[0]
+        assert 'P4=2' in h.admins[0]
+        assert h.alerter.sweep() == [] and len(h.admins) == 1
+        FilesStops(tmp_path / 'stopped').forget('worker')
+        h.alerter.sweep()
+        assert released == list(by_id)
+        assert len(h.admins) == 1
+    else:
+        assert released == list(by_id)
+        assert not h.sent and not h.admins
 
 
 def stopped_batch(tmp_path, monkeypatch, counts):

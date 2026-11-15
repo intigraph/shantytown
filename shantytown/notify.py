@@ -1868,6 +1868,8 @@ class DeferralAlerter:
             budget.current.update(budget.previous)
             retry.update(pol.Reported(self._root)._load())
             findings.append(pol.Finding(bead="tracker-store", read_error=True))
+        from .deferral_pacing import OwnerPacing
+        pacing = OwnerPacing(self._root)
         for finding in findings:
             if finding.read_error:
                 failed(finding)
@@ -1885,6 +1887,11 @@ class DeferralAlerter:
                 continue  # neither the event nor its backstop is ready
             # A met event may notify its owner before the backstop. The separate
             # can_release check still retains future dates and judgement gates.
+            if pacing.deliberately_stopped(row.get('assignee')):
+                # Preserve custody until the administrator receives the batch.
+                # Releasing first clears the owner and bypasses this route.
+                reports.append(finding)
+                continue
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
                 continue
@@ -1927,8 +1934,6 @@ class DeferralAlerter:
                 failed(finding)
                 self._log(f"deferral-sweep: {finding.bead} release/read failed ({e!r}); retry next pass")
         budget.save()
-        from .deferral_pacing import OwnerPacing
-        pacing = OwnerPacing(self._root)
         if store_error:
             pacing.current.update(pacing.previous)
 
