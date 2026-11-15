@@ -825,8 +825,9 @@ class SdTracker(BrTracker):
             return None
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
+        # Occupancy and parked-date barriers use lean fields, never wait notes.
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, include_waits=True, timeout=self.timeout).exact()
+                          active_only=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),

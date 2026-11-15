@@ -83,3 +83,5 @@ docs/demos/cli-knowledge-witness/output.log -text whitespace=cr-at-eol
 
 # Output-only synthetic CLI boundary recording.
 docs/demos/duty-cli-boundary/output.log -text whitespace=cr-at-eol
+# Preserve unused-notes regression demo terminal bytes.
+docs/demos/refill-unused-notes/output.log -text whitespace=cr-at-eol
