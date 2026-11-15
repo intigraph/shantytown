@@ -106,7 +106,9 @@ class Anchoring:
         who = f"  You are {self.me.name} — {self.me.role}"
         if self.me.reports_to:
             who += f", reports to {self.me.reports_to}"
-        L += [who + ".", ""]
+        L += [who + ".", "", "  DIRECTIVES",
+              "    Check governing Directives in Quipu before acting; record new "
+              "operator directives verbatim as Directive entities.", ""]
 
         if self.responsibilities:
             L.extend(self.responsibilities.splitlines())

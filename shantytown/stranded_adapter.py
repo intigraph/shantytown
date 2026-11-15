@@ -56,6 +56,23 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None, dry_run=False):
     cards = {card.name: card for card in cards_list}
     if len(cards) != len(cards_list):
         raise ValueError('duplicate crew cards')
+    import time
+    measured = time.time() if now is None else now
+    from . import item_orphan_metrics
+    if not dry_run:
+        item_orphan_metrics.invalidate(root, measured)
+    # Non-item duties share this armed sweep and its host/card evidence. Run
+    # them before the separate item projection: an unavailable owner plate
+    # must not hide an independently measurable duty population.
+    from . import duty_adapter
+    try:
+        duty_findings = duty_adapter.sweep(root, cards, panes, inbox, tracker, host,
+                                          registry, now=measured, release=selected == 'release',
+                                          dry_run=dry_run)
+    except Exception:
+        # Independent duty coverage must not starve the established item
+        # recovery path. Its report remains UNKNOWN, never an empty census.
+        duty_findings = [('duties', 'duty census UNKNOWN')]
     projection = getattr(tracker, 'stranded_rows', None)
     if not callable(projection):
         raise ValueError('stranded work requires complete bounded assignee census')
@@ -134,16 +151,15 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None, dry_run=False):
     detector = StrandedWork(root)
     # One sweep timestamp joins attention to coverage. Sampling again after
     # tick made natural-clock runs report zero due work despite due findings.
-    import time
-    measured = time.time() if now is None else now
     if dry_run:
-        return detector.preview(rows, cards, observe=observe, now=measured)
-    result = detector.tick(rows, cards, observe=observe, recipient=destination,
+        return duty_findings + detector.preview(rows, cards, observe=observe, now=measured)
+    item_findings = detector.tick(rows, cards, observe=observe, recipient=destination,
         notify=notify, read=read, release=release,
         checkpoint=lambda name, card: checkpoint(card),
         fence=lambda name: lifecycle_lock(root, name), now=measured,
         release_admitted=selected == 'release', operator_release_only=True,
         priority_tiered=True)
+    result = duty_findings + item_findings
     # The already deployed held-work reader joins these lifecycle observations
     # to assigned work. No second brief board scan or private checkpoint payload.
     findings = detector.snapshot()
@@ -178,4 +194,8 @@ def sweep(root, registry, tracker, panes, inbox, *, now=None, dry_run=False):
                 service.confirmed_down(name, now=measured,
                     reason=('confirmed cycle refusal; stranded work' if evidence['state'] == 'cycle-blocked'
                             else 'confirmed process absence; stranded work'))
+    item_orphan_metrics.record(root, rows, findings, item_findings,
+                              observe=observe, cards=cards, now=measured)
+    from .duty_metrics import publish
+    publish(root, now=measured)
     return result

@@ -37,6 +37,8 @@ import sys
 # Recognisable in the transcript, to the agent, to a human reading the pane,
 # and to a test. One spelling, named once.
 BANNER = "[st anchor — session start]"
+DIRECTIVES = ("Check governing Directives in Quipu before acting; record new "
+              "operator directives verbatim as Directive entities.")
 
 # anchor's first line: "  You are <name> — <role>[, reports to <lead>]."
 _ROLE_RE = re.compile(r"You are \S+ — ([A-Za-z0-9_-]+)")
@@ -45,6 +47,7 @@ _ALL = (
     "  STARTUP",
     "    Execute the plate item now; there is no one downstream to hand it to.",
     "    Measure the current state on the item before you change anything.",
+    "    " + DIRECTIVES,
     "    When done: close it with a falsifiable reason (before -> after), report",
     "    to your lead (`st inbox -d <lead> ...`), then consult Top of your plate and Coming due.",
     "    Never block your pane on a question: record it on the item, recommend.",
@@ -152,7 +155,7 @@ def render(root: str, agent: str) -> str:
     try:
         orientation = select(primer(), "Stack orientation").rstrip()
     except Exception:  # damaged resources must not prevent a session starting
-        orientation = "Stack primer UNKNOWN: run `st prime` and `st ops doctor`."
+        orientation = "Stack primer UNKNOWN: run `st prime` and `st ops doctor`.\n" + DIRECTIVES
     memory = for_agent(root, agent)
     suffix = "\n\n[st stack primer — stack-prime/1]\n" + orientation
     if memory:
