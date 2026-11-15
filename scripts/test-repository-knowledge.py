@@ -185,7 +185,7 @@ class Knowledge(unittest.TestCase):
         self.cli_record()["summary_sha256"] = hashlib.sha256(anchor.read_bytes()).hexdigest()
         self.save()
         self.assertIn("Reviewed CLI scope updated explicitly.", self.render())
-        anchor.write_text("read /home/private/file\n")
+        anchor.write_text("read /home/example/file\n")
         self.cli_record()["summary_sha256"] = hashlib.sha256(anchor.read_bytes()).hexdigest()
         self.save()
         with self.assertRaisesRegex(ValueError, "private summary"):
