@@ -135,6 +135,41 @@ def test_actual_tend_wrapper_emits_only_after_existing_success_path(
     assert len(calls) == 1  # receipt observation never requests a second cycle
 
 
+def test_completed_overbudget_cycle_keeps_receipt_and_reachable_cursor(
+        tmp_path, monkeypatch, capsys):
+    from shantytown import cli, cycle, notify
+    from shantytown.sweep_rotation import SweepRotation
+    from test_tend import _roster, _Panes, _Args, IDLE
+    root = _roster(tmp_path, {'worker': {'role': 'worker', 'pane': 'p-worker'}})
+    monkeypatch.setattr(cli, 'Tmux', lambda *_a, **_k: _Panes(screens={'p-worker': IDLE}))
+    monkeypatch.setattr(notify, 'agent_states', lambda *_a, **_k: {'worker': READING})
+    monkeypatch.setattr(cli, '_TEND_SWEEP_BUDGET_S', 120)
+    clock = [0.0]
+    monkeypatch.setattr(cli.time, 'monotonic', lambda: clock[0])
+    requests = cycle.Requests(root)
+    requests.request('worker', 'saved fixture checkpoint', auto=True,
+                     checkpoint_bead='project-checkpoint')
+    calls = []
+
+    def complete(*args):
+        calls.append(args)
+        clock[0] += 130
+        requests.clear('worker')
+        return 0
+
+    monkeypatch.setattr(cli, '_serve_cycle_request', complete)
+    cli._tend_once(_Args(root))
+    output = capsys.readouterr().err
+    assert output.count(idle.PREFIX) == 1
+    assert SweepRotation(root).cursor != 'idle-cycle-receipt'
+    clock[0] += 1
+    cli._tend_once(_Args(root))
+    output = capsys.readouterr().err
+    assert 'sweep rotation cursor absent this pass' not in output
+    assert idle.PREFIX not in output
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('mode,expected', [('receipt', 'MET'), ('failed', 'UNKNOWN'), ('oversized', 'UNKNOWN')])
 def test_native_reader_bounds_real_subprocess_output(tmp_path, monkeypatch, mode, expected):
     import os
