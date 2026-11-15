@@ -1,0 +1,8 @@
+Script started on 2026-11-14 01:05:31-05:00 [COMMAND="python3 docs/demos/ebu-snapshot.py" <not executed on terminal>]
+Offline fixture: watermark advances continuously; no network calls.
+Base: c96be285f052ae5ec709137842240bea0b887ce1
+BEFORE, unrelated writes: UNKNOWN: no release; query requests=3
+AFTER, same unrelated writes: EXACT: demo-held; query requests=7
+CONTROL, candidate membership changes: UNKNOWN: no release; query requests=21
+
+Script done on 2026-11-14 01:05:32-05:00 [COMMAND_EXIT_CODE="0"]
