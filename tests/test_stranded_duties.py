@@ -619,3 +619,32 @@ def test_metric_publisher_has_no_ambient_or_secret_diagnostic(monkeypatch, tmp_p
     assert calls == [('https://gateway.example', 'st_duties', 'fixture-host',
                      'census 0\nshantytown_item_census_complete 0\n'
                      'shantytown_item_census_timestamp_seconds 1\n')]
+
+
+def test_duty_scoped_to_another_host_is_counted_not_judged(setup, monkeypatch):
+    """aegis-5dh: a holder on another host is UNKNOWN here, which kept the
+    census incomplete forever. An entry scoped to its own host is skipped by
+    this host's sweep, counted as other_host, and completeness covers the rest.
+    """
+    world = armed(setup, monkeypatch)
+    elsewhere = dict(record('mac-keeper', kind='alert-keeper', priority=1),
+                     holder='macagent', host='another-host')
+    install(world, [elsewhere])
+    run(world, 1800)
+    report = json.loads((world.root / 'duties/report.json').read_text())
+    assert report['complete'] is True and report['unknown'] == 0
+    assert report['other_host'] == 1 and world.attempts == []
+    assert 'shantytown_duty_census_complete 1' in metrics(world.root, now=1800)
+    # The same entry without a host stays UNKNOWN: the scope must be declared.
+    install(world, [{k: v for k, v in elsewhere.items() if k != 'host'}])
+    run(world, 1900)
+    report = json.loads((world.root / 'duties/report.json').read_text())
+    assert report['complete'] is False and report['unknown'] == 1
+
+
+def test_duty_host_scope_must_be_a_valid_name():
+    from shantytown.duties import validate
+    bad = dict(schema=SCHEMA, revision=1, coverage=list(KINDS),
+               entries=[dict(record(), host='bad host!')])
+    with pytest.raises(ValueError):
+        validate(bad)

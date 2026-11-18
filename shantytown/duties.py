@@ -86,7 +86,15 @@ def validate(data):
             raise ValueError('invalid duty record')
         for name in row.get('candidates', []) + row.get('authors', []):
             _name(name)
+        if 'host' in row:
+            # A duty held on another host is scoped there: this host's sweep
+            # cannot observe that holder, so it neither judges nor repairs it.
+            _name(row['host'])
     return data
+
+
+def _foreign(row, host):
+    return host is not None and 'host' in row and row['host'] != host
 
 
 class Duties:
@@ -210,7 +218,7 @@ class Duties:
                 raise ValueError('landing delivery UNKNOWN; reconcile retained key')
             return receipt
 
-    def preview(self, *, observe, now, inventory=None):
+    def preview(self, *, observe, now, inventory=None, host=None):
         """Read-only due/UNKNOWN findings; no lock creation, report or intent."""
         if not math.isfinite(now) or now < 0:
             raise ValueError('invalid duty preview clock')
@@ -221,6 +229,8 @@ class Duties:
             raise ValueError('duty attention UNKNOWN')
         result, observations = [], {}
         for row in data['entries']:
+            if _foreign(row, host):
+                continue
             holder, ident = row['holder'], row['id']
             if holder not in observations:
                 observations[holder] = observe(holder)
@@ -244,7 +254,7 @@ class Duties:
         return result
 
     def tick(self, *, observe, live, administrator, ensure_issue, notify,
-             now=None, release=False, max_actions=10):
+             now=None, release=False, max_actions=10, host=None):
         """One bounded pass, stable per-duty repair identity, no new scheduler."""
         now = time.time() if now is None else now
         if not math.isfinite(now) or now < 0 or not 1 <= max_actions <= 20:
@@ -257,13 +267,17 @@ class Duties:
                 raise ValueError('duty attention UNKNOWN')
             result, actions, observations = [], 0, {}
             report = dict(checked_at=now, complete=True,
-                          orphaned={k: 0 for k in KINDS}, unknown=0)
+                          orphaned={k: 0 for k in KINDS}, unknown=0, other_host=0)
             ordered = sorted(registry['entries'], key=lambda row: (
                 bool(states.get(row['id'], {}).get('repair')
                      and states.get(row['id'], {}).get('paged')),
                 states.get(row['id'], {}).get('checked_at', -1), row['id']))
             for row in ordered:
                 ident, holder = row['id'], row['holder']
+                if _foreign(row, host):
+                    # Counted, never judged: completeness covers this host's scope.
+                    report['other_host'] += 1
+                    continue
                 if holder not in observations:
                     observations[holder] = observe(holder)
                 evidence = observations[holder]
