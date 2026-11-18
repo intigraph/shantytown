@@ -23,8 +23,11 @@ def digest(value):
 def task_digest(item):
     # Assignment changes these fields in the very transition we are proving.
     # All other task data and the independent exact revision remain bound.
+    # Queue admission is checked separately before a fresh send. Adding lane
+    # to WorkItem must not invalidate a receipt already submitted by the older
+    # reader which could not expose it. Rank and all original scope stay bound.
     return digest({k: v for k, v in asdict(item).items()
-                   if k not in {'revision', 'status', 'assignee', 'defer_until', 'updated_at'}})
+                   if k not in {'revision', 'status', 'assignee', 'defer_until', 'updated_at', 'lane'}})
 
 
 class FilesAssignments:

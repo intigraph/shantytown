@@ -538,6 +538,7 @@ class Tmux:
         if ps.returncode != 0:
             return None
         best, best_age, fallback = None, -1, None
+        unknown_environment = False
         for ln in ps.stdout.splitlines():
             ln = ln.strip()
             if not ln:
@@ -565,6 +566,9 @@ class Tmux:
             if args in ("-bash", "-zsh", "bash", "zsh"):
                 continue
             line = self._launch_line(pid, args)
+            if line is None:
+                unknown_environment = True
+                continue
             if fallback is None:
                 fallback = (pid, line)
             if _carries_settings_pointer(line):
@@ -573,10 +577,10 @@ class Tmux:
         # No pointer anywhere is a REAL answer (the hookless zombie), so return
         # the process we found rather than None, which means "could not look".
         # That distinction is the whole contract of the callers.
-        return best or fallback
+        return best or (None if unknown_environment else fallback)
 
     @staticmethod
-    def _launch_line(pid: str, args: str) -> str:
+    def _launch_line(pid: str, args: str) -> str | None:
         """argv with the settings-pointer exports folded back in.
 
         Only the harnesses' declared vars are recovered — not the whole
@@ -589,14 +593,27 @@ class Tmux:
         wanted = harness_mod.settings_env_vars()
         if not wanted:
             return args
+        if not pid.isdecimal():
+            return None
         try:
-            with open(f"/proc/{pid}/environ", "rb") as fh:
-                raw = fh.read()
-        except OSError:
-            # Unreadable environ (process gone, or not ours) is not a finding —
-            # fall back to argv and let the caller's own None/empty contract say
-            # what it can and cannot tell.
-            return args
+            if sys.platform == "darwin":
+                # BSD ps flattens environment entries without lossless value
+                # boundaries: NOTE='hello CODEX_HOME=/other' is indistinguishable
+                # from a real CODEX_HOME entry. Neither a pointer nor its absence
+                # can be established here. Do not collect private environment
+                # text that cannot answer this question. A lossless native reader
+                # needs separate implementation/qualification; argv evidence is
+                # still independently usable through the existing fallback.
+                raise OSError("lossless Darwin environment evidence unavailable")
+            else:
+                with open(f"/proc/{pid}/environ", "rb") as fh:
+                    raw = fh.read(1_048_577)
+                if len(raw) > 1_048_576:
+                    raise OSError("process environment exceeds bound")
+        except (OSError, subprocess.TimeoutExpired):
+            # An argv-carried pointer is independently visible. Otherwise an
+            # unreadable environment cannot prove that a pointer is absent.
+            return args if _carries_settings_pointer(args) else None
         env = {}
         for item in raw.split(b"\0"):
             if not item:

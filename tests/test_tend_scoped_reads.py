@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from shantytown import cli, seeds_plate
+from shantytown.answer import Answer
 from shantytown.query_identity import declared_query_identity, current_query_identity, sdk_subprocess_options
 from shantytown.sd import StoreProof
 
@@ -23,8 +24,8 @@ def wire(monkeypatch, rows):
     monkeypatch.setattr(seeds_plate, '_query', lambda *a: dict(rows=rows, count=len(rows), truncated=False))
 
 
-def test_count_preserves_messages_and_defer_boundaries(monkeypatch):
-    wire(monkeypatch, [row('test-message'), row('test-work'),
+def test_count_preserves_defer_boundaries_without_payload_hydration(monkeypatch):
+    wire(monkeypatch, [row('test-work-a'), row('test-work'),
                       row('test-due', due='2026-01-02T00:00:00Z'),
                       row('test-future', due='2026-01-02T00:00:01Z')])
     assert seeds_plate.ready_count(PROOF, now=NOW) == 3
@@ -177,3 +178,32 @@ def test_sdk_transport_attaches_context_without_replacing_write_actor(monkeypatc
     assert seen[0][1]['env']['QUIPU_AGENT'] == 'worker'
     assert seen[0][0][seen[0][0].index('--actor') + 1] == 'worker'
     assert seen[1][1]['env']['QUIPU_AGENT'] == 'worker'
+
+
+def test_ready_work_count_excludes_actual_message_titles_in_native_query(monkeypatch):
+    rdflib = pytest.importorskip("rdflib")
+    dataset = rdflib.Dataset()
+    graph = dataset.graph(rdflib.URIRef(G))
+    titles = ["inbox: message", " mail: legacy", "  inbox: spaced", "mail: old", "real work", "Inbox messages must not live on the board"]
+    for index, title in enumerate(titles):
+        subject = rdflib.URIRef(seeds_plate.SEEDS + "item/test-" + str(index))
+        for predicate, value in [(rdflib.RDF.type, rdflib.URIRef(seeds_plate.SCHEMA + "Action")),
+                (rdflib.URIRef(seeds_plate.SEEDS + "ontology/status"), rdflib.Literal("open")),
+                (rdflib.URIRef(seeds_plate.SCHEMA + "identifier"), rdflib.Literal("test-" + str(index))),
+                (rdflib.URIRef(seeds_plate.SCHEMA + "name"), rdflib.Literal(title))]:
+            graph.add((subject, predicate, value))
+    # A real work item with the inbox label must remain counted.
+    graph.add((subject, rdflib.URIRef(seeds_plate.SCHEMA + "keywords"), rdflib.Literal("inbox")))
+    def query(proof, text, timeout):
+        rows = [{str(key): str(value) for key, value in row.asdict().items()} for row in dataset.query(text)]
+        return dict(rows=rows, count=len(rows), truncated=False)
+    monkeypatch.setattr(seeds_plate, "_query", query)
+    assert seeds_plate.ready_count(PROOF, now=NOW) == 2
+
+
+def test_ready_work_count_filters_messages_on_legacy_adapter(monkeypatch):
+    from shantytown import feed_check
+    rows = [dict(title=title) for title in ("inbox: note", " mail: note", "real work")]
+    adapter = SimpleNamespace(tracker=None, ready=lambda: Answer.complete_read(rows, how="fixture"))
+    monkeypatch.setattr(feed_check, "TrackerAdapter", lambda *args: adapter)
+    assert cli._ready_count(None, None) == 1

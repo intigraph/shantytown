@@ -241,6 +241,18 @@ class SdTracker(BrTracker):
         scope_name = "all registered live recipient windows" if all_windows else f"requested {weeks}-week recipient window"
         return Answer.complete_read(value, how=f"sd msg list: complete {scope_name}")
 
+    def get_message(self, ident: str) -> Answer[dict]:
+        """Exact receipt read, including already delivered/read messages."""
+        result = self._bd('msg', 'show', ident, '--all-windows', '--json')
+        if result.returncode:
+            raise RuntimeError(f'sd msg show failed: {_failure_reason(result)}')
+        value = json.loads(result.stdout)
+        if (not isinstance(value, dict) or value.get('id') != ident
+                or not isinstance(value.get('to'), str)
+                or not isinstance(value.get('text'), str)):
+            raise RuntimeError('sd msg show answer unreadable')
+        return Answer.complete_read(value, how='sd msg show exact receipt')
+
     def read_messages(self, ids: list[str], *, weeks: int = 2,
                       all_windows: bool = False) -> Answer[list[dict]]:
         scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
@@ -298,6 +310,49 @@ class SdTracker(BrTracker):
                 raise RuntimeError("delivery key binds a different receipt identity/content")
             return item
         raise AssertionError("bounded inbox retry exhausted")
+
+    def create_duty_issue(self, payload, *, target, key):
+        """One SDK workflow identity per duty, including after a lost reply.
+
+        This is a repair task, not an inbox pointer. It does not claim a duty
+        has been rebound, dispatch an agent, or change an ASK-class decision.
+        """
+        import hashlib
+        from .duties import KINDS, _name
+        ident = _name(payload['id'])
+        _name(payload['holder'])
+        _name(target)
+        expected = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
+        if key != expected or payload.get('kind') not in KINDS:
+            raise ValueError('invalid duty repair identity')
+        title = 'P0 orphaned duty: ' + ident
+        description = key + '\n' + json.dumps(payload, sort_keys=True)
+        run = 'urn:shantytown:duty:' + hashlib.sha256(key.encode()).hexdigest()
+        result = self._bd('create', title, '--json', '--priority=0',
+            '--assignee=' + target, '--labels=orphaned-duty',
+            '--description=' + description, '--workflow-run=' + run,
+            '--step=repair', '--visit=1')
+        if result.returncode:
+            raise RuntimeError('duty create outcome UNKNOWN; retain the same workflow identity')
+        value = json.loads(result.stdout)
+        if not isinstance(value, dict) or not isinstance(value.get('id'), str) or not value['id']:
+            raise ValueError('duty repair identity UNKNOWN')
+        item = self.get(value['id'])
+        if item.title != title or not (item.description or '').startswith(key + '\n'):
+            raise ValueError('duty repair read-back identity mismatch')
+        if item.status == 'closed':
+            row = self.stranded_read(item.id)
+            # Reopen the same unresolved repair, never mint a fresh seed for
+            # every firing. Native CAS and a transition comment retain custody.
+            result = self._bd_for(item.id, 'update', item.id, '--status=open',
+                '--priority=0', '--if-revision=' + str(row['revision']),
+                '--transition-comment=Duty remains orphaned at a fresh stranded-owner pass', '--json')
+            if result.returncode:
+                raise RuntimeError('duty repair reopening UNKNOWN; inspect before retry')
+            item = self.get(item.id)
+        if item.status == 'closed' or item.priority != 0:
+            raise ValueError('duty repair not an open P0')
+        return item
 
     @property
     def _bin(self) -> str:
@@ -770,8 +825,9 @@ class SdTracker(BrTracker):
             return None
         from .seeds_plate import owner_rows
         from .inbox import drop_parked
+        # Occupancy and parked-date barriers use lean fields, never wait notes.
         rows = owner_rows(self.prove_store(), None, feed_owners=tuple(owners),
-                          active_only=True, include_waits=True, timeout=self.timeout).exact()
+                          active_only=True, timeout=self.timeout).exact()
         return Answer.complete_read(
             self._tend_order([row for row in drop_parked(rows)
                               if row["status"] == "in_progress"]),
@@ -858,6 +914,15 @@ class SdTracker(BrTracker):
         candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
         ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
         return [r for r in candidates if r["id"] in ready], rows
+
+    def queue_rows(self):
+        from .seeds_plate import queue_rows
+        return queue_rows(self.prove_store(), timeout=self.timeout).exact()
+
+    def queue_owner_rows(self, owner):
+        from .seeds_plate import owner_rows
+        return owner_rows(self.prove_store(), owner, timeout=self.timeout,
+                          include_deferred=True).exact()
 
     def _owner_rows(self, agent: str, *, include_closed: bool = False,
                     messages_only: bool = False, status: str | None = None) -> Answer[list[dict]]:

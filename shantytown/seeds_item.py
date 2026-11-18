@@ -26,7 +26,7 @@ FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SCHEMA + "description", SEEDS + "ontology/notes", SEEDS + "ontology/agentContext",
           SCHEMA + "scheduledTime", SCHEMA + "result",
           SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due",
-          SEEDS + "ontology/rank", *EDGES)
+          SEEDS + "ontology/rank", SEEDS + "ontology/lane", *EDGES)
 TARGET_FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
                  SEEDS + "ontology/status")
 WIRE_FIELDS = (*FIELDS, BLOCKED_ON[1])
@@ -105,6 +105,9 @@ def _value(row):
         if kind != XSD + "string":
             raise ValueError("item rank type unsupported")
         rank_order(value)
+    elif predicate == SEEDS + "ontology/lane":
+        if kind != XSD + "string" or value not in ('now', 'next', 'later'):
+            raise ValueError("item lane unreadable")
     elif predicate in (SCHEMA + "dateModified", SCHEMA + "scheduledTime",
                        SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due"):
         if kind not in (XSD + "string", XSD + "dateTime", XSD + "date"):
@@ -255,6 +258,7 @@ def read_item(tracker, identifier):
                             and not _is_placeholder_dep(d)),
         unreadable_deps=sum(_is_placeholder_dep(d) for d in dependencies),
         rank=_one(facts, SEEDS + "ontology/rank"),
+        lane=_one(facts, SEEDS + "ontology/lane"),
         due_at=_one(facts, "http://www.w3.org/2002/12/cal/ical#due"),
         created_at=_one(facts, SCHEMA + "dateCreated"),
         labels=tuple(sorted(facts.get(SCHEMA + "keywords", set()))),

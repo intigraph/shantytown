@@ -17,3 +17,26 @@ replay with `scriptreplay --timing timing.log --log-out output.log`.
 
 The recording proves fixture routing and repeat suppression. Installed and
 natural fleet acceptance remain separate.
+
+## Release-eligible follow-up
+
+The original probe held `can_release` false. It did not exercise an ordinary
+lapsed date that the automatic release loop would accept. The follow-up probe
+uses the real evaluator and release decision, two P4 rows, and private board,
+stop-marker and notification fixtures.
+
+[Actual transcript](release-eligible-output.txt): base `6b8ab7df` releases both
+rows before batching (zero digests); the candidate retains both and sends one
+administrator digest, suppresses the repeated batch, and resumes ordinary release
+when the deliberate-stop marker is cleared. No live service is exercised.
+
+Repeat with an interpreter containing pytest:
+
+```sh
+python docs/demos/stopped-owner-pacing/release-eligible.py /path/to/source
+```
+
+The transcript is unedited stdout from the same probe against base and candidate;
+it has no timing track. The candidate behavior is bound to `notify.py` SHA256
+`b168608af60eefe53905ef3f83b4f53e4831151b34bb81a0fb7566ea9b29660e`.
+Installed and scheduled acceptance remain separate.

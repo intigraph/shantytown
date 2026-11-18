@@ -1,5 +1,7 @@
 """Darwin rejects GNU ps flags: missing observations must never invent MANUAL."""
 import subprocess
+import io
+import os
 
 import pytest
 
@@ -34,11 +36,25 @@ def test_scoped_native_probe_observes_actual_launch(monkeypatch, platform, bypas
             age = '93784'
         return subprocess.CompletedProcess(cmd, 0, f'{age} 100 -zsh\n{age} 101 codex{flag}\n', '')
 
+    # The fake candidate PID has no real /proc entry. Supply readable,
+    # pointer-free native environment evidence rather than treating an
+    # unreadable environment as proof of a hookless launch.
+    real_open = open
+    def process_environment(path, *args, **kwargs):
+        if str(path) == '/proc/101/environ':
+            return io.BytesIO(b'PATH=/bin\0')
+        return real_open(path, *args, **kwargs)
+    monkeypatch.setattr('builtins.open', process_environment)
     monkeypatch.setattr(subprocess, 'run', run)
     line = Tmux().cmdline('st-worker')
-    assert line == f'codex{flag}'
-    assert launchable.observed_posture('› ready', True, line) == (
-        launchable.BYPASS if bypass else launchable.MANUAL)
+    if platform == 'darwin':
+        assert line is None  # no lossless environment evidence on this host
+        assert not any(cmd[:2] == ['ps', 'eww'] for cmd in calls)
+        assert launchable.observed_posture('› ready', True, line) == launchable.UNKNOWN
+    else:
+        assert line == f'codex{flag}'
+        assert launchable.observed_posture('› ready', True, line) == (
+            launchable.BYPASS if bypass else launchable.MANUAL)
 
 
 @pytest.mark.parametrize('failure', ['denied', 'timeout', 'missing', 'malformed', 'too-many'])

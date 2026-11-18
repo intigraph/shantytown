@@ -1714,6 +1714,7 @@ class DeferralAlerter:
             else:
                 reader = getattr(backend(), "backstop_rows", None)
                 rows = (reader() if callable(reader) else backend().deferred()).exact()
+            self._log(f"deferral-sweep: store read complete candidates={len(rows)}")
         except Exception as e:                       # FAIL OPEN
             self._log(f"deferral-sweep: could not read the store ({e!r})")
             rows, store_error = [], True
@@ -1867,6 +1868,8 @@ class DeferralAlerter:
             budget.current.update(budget.previous)
             retry.update(pol.Reported(self._root)._load())
             findings.append(pol.Finding(bead="tracker-store", read_error=True))
+        from .deferral_pacing import OwnerPacing
+        pacing = OwnerPacing(self._root)
         for finding in findings:
             if finding.read_error:
                 failed(finding)
@@ -1884,6 +1887,11 @@ class DeferralAlerter:
                 continue  # neither the event nor its backstop is ready
             # A met event may notify its owner before the backstop. The separate
             # can_release check still retains future dates and judgement gates.
+            if pacing.deliberately_stopped(row.get('assignee')):
+                # Preserve custody until the administrator receives the batch.
+                # Releasing first clears the owner and bypasses this route.
+                reports.append(finding)
+                continue
             if not pol.can_release(row, finding, now):
                 reports.append(finding)
                 continue
@@ -1916,17 +1924,16 @@ class DeferralAlerter:
                 release = self._release or backend().undefer
                 release(finding.bead)
                 after = show(finding.bead)
-                if after.get("status") != "open" or after.get("defer_until"):
+                if (after.get("status") != "open" or after.get("defer_until")
+                        or after.get("assignee")):
                     raise RuntimeError("release read-back still held")
-                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, no defer_until")
+                self._log(f"deferral-sweep: auto-undeferred {finding.bead}; verified open, unassigned, no defer_until")
             except Exception as e:
                 # An indeterminate write is re-read next pass, never blindly
                 # repeated. An already-open row is not a release candidate.
                 failed(finding)
                 self._log(f"deferral-sweep: {finding.bead} release/read failed ({e!r}); retry next pass")
         budget.save()
-        from .deferral_pacing import OwnerPacing
-        pacing = OwnerPacing(self._root)
         if store_error:
             pacing.current.update(pacing.previous)
 

@@ -477,6 +477,12 @@ def _tracker_plate(trk, who, *, require_complete=False):
 
 
 def _inbox(a, default="files"):
+    from .inbox_disposition import ControlledInbox, Dispositions
+    return ControlledInbox(_raw_inbox(a, default),
+                           Dispositions(a.root, _backend(a, default)))
+
+
+def _raw_inbox(a, default="files"):
     """The inbox for this invocation, selected by the SAME --backend switch as the
     tracker (Stiwi: "an inbox concept we can map to beads or other ticket
     modules"). No second selection mechanism — one switch, or an operator ends up
@@ -564,8 +570,13 @@ def _wire(a) -> Dispatcher:
     from .actor_identity import authenticated_actor
     from .dispatch_binding import binding_for
     registry, tracker, panes = _registry(a), _tracker(a), _panes(a)
+    from .queue_policy import enabled as queue_enabled, gate as queue_gate, setting
+    dispatch_gate = _dispatch_gate(a)
+    if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
+        dispatch_gate = queue_gate(tracker, dispatch_gate, audit=FeedAudit(Path(a.root)),
+                                  dry_run=getattr(a, 'dry_run', False))
     return Dispatcher(registry, tracker, panes,
-                      governor=_dispatch_gate(a), sender=authenticated_actor() or _me(a),
+                      governor=dispatch_gate, sender=authenticated_actor() or _me(a),
                       audit=FeedAudit(Path(a.root)), handoff=_handoff_advisor(a),
                       binding=binding_for(a.root, tracker, registry, panes))
 
@@ -1671,12 +1682,18 @@ def build_parser() -> argparse.ArgumentParser:
     # documented `bd update -a ""` clears the assignee and LEAVES the status at
     # in_progress, dropping the item off every feed mechanism at once.
     wi = leaf("item", help="backend-neutral exact-ID show/update/comment/close")
-    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack"))
+    wi.add_argument("item_action", choices=("show", "update", "comment", "close", "rescope", "ack", "review-reservation"))
     wi.add_argument("item")
     wi.add_argument("--result-json", action="store_true", help="stable result envelope, including failures")
     wi.add_argument("--status", choices=("open", "in_progress"))
     wi.add_argument("--assignee")
+    wi.add_argument("--reviewer", help="reserve one independent reviewer on the seed")
+    wi.add_argument("--inherit-from", help="inherit the predecessor seed's reviewer")
+    wi.add_argument("--replace-reviewer", help="explicit expected previous reviewer for reassignment")
+    wi.add_argument("--contributor", action="append", default=[], help="additional author recused from review (repeatable)")
     wi.add_argument("--priority", type=int, choices=range(5))
+    wi.add_argument("--lane", choices=("now", "next", "later"))
+    wi.add_argument("--rank", help="exact decimal work order")
     wi.add_argument("--spec-file", type=Path)
     wi.add_argument("--quote")
     wi.add_argument("--requester")
@@ -1985,6 +2002,8 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("-n", "--dry-run", action="store_true")
     st.add_argument("--after-turn", action="store_true",
                     help="hold all automatic feeds now; stop at the next Stop hook")
+    st.add_argument('--repool-work', action='store_true',
+                    help='explicitly repool held work and hand off or flag registered duties before stopping')
     st.add_argument('--resume-at', default=None, metavar='ISO8601',
                     help='dated stopped-owner ownership exemption (timezone required)')
     st.add_argument("--reason", default="", metavar="TEXT",
@@ -2034,6 +2053,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="declare a task boundary for the current tool-hook session")
     ss.add_argument("--task-order", action="store_true",
                     help="report observed reads before actions in declared task scopes")
+    ss.add_argument("--queue-order", action="store_true",
+                    help="report retained queue-order refusal observations; missing history is UNKNOWN")
     ss.add_argument("--files", action="store_true",
                     help="list the files an agent touched (needs agent)")
     ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
@@ -2092,6 +2113,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--read-id", action="append", default=[], metavar="ID",
         help="ACK only this unread message ID (repeatable). Refuses the whole "
              "request if any ID is not unread for the recipient")
+    inbox_read_mode.add_argument('--ack-id', metavar='ID',
+        help='processing ACK: silence exact-content repeats on this deployment root')
+    inbox_read_mode.add_argument('--defer-id', metavar='ID',
+        help='defer this exact receipt until --until; silence identical repeats')
+    ib.add_argument('--until', help='with --defer-id: timezone-qualified deadline, within 30 days')
+    ib.add_argument('--reason', help='with --ack-id/--defer-id: processing disposition reason')
     ib.add_argument("-n", "--dry-run", action="store_true")
 
     tk = sub.add_parser("task", help="create a work item")
@@ -2909,6 +2936,14 @@ def _run_command(a) -> int:
         from . import cost
         return cost.run(a)
     if a.cmd == "stats":
+        if a.queue_order:
+            if a.begin_task or a.task_order or a.graph or a.files:
+                print("queue-order cannot combine with another stats report", file=sys.stderr)
+                return 2
+            from .queue_policy import observations
+            print(json.dumps(observations(a.root, since=time.time() - a.since * 3600,
+                                          owner=a.agent), indent=2))
+            return 0
         if a.begin_task or a.task_order:
             from . import task_order
             if a.graph or a.files or (a.begin_task and (a.task_order or a.agent)):
@@ -5717,10 +5752,22 @@ def _cmd_stop(a) -> int:
             return 2
     # The cycle fallback already owns this lock and must retain its request if
     # launch fails. This is an internal flag, never inferred from user prose.
-    if a.dry_run or getattr(a, "_cycle_internal_stop", False):
+    if getattr(a, "_cycle_internal_stop", False):
         return _stop_locked(a)
+    from .duty_adapter import guard_cli
+    def guarded():
+        try:
+            return guard_cli(a, lambda: _stop_locked(a))
+        except ValueError as exc:
+            print(f'  stop duty handling refused: {exc}; inspect completed handoffs before retry', file=sys.stderr)
+            return REFUSED
+        except (OSError, CouldNotLook) as exc:
+            print(f'  stop duty handling UNKNOWN ({type(exc).__name__}); inspect before retry', file=sys.stderr)
+            return CANNOT_TELL
+    if a.dry_run:
+        return guarded()
     with cycle_mod.lifecycle_lock(a.root, a.agent):
-        return _stop_locked(a)
+        return guarded()
 
 
 def _cancel_cycle_for_stop(a) -> None:
@@ -5983,13 +6030,22 @@ def _cmd_provision(a) -> int:
                 raise ValueError(f"crew workspace missing for {card.name}; configure it first")
         results = []
         if getattr(a, "instruction_report", False):
-            from . import config as config_mod, instructions
+            from . import config as config_mod, instructions, tooling
             cfg = config_mod.load(a.root, refresh_source=True)
+            try:
+                manifest = tooling.load(a.root, last_good=cfg.source_document is not None)
+            except tooling.ToolingError as e:
+                raise ProvisionError(str(e)) from None
             for card in sorted(cards, key=lambda card: card.name):
-                plan = instructions.prepare(card.workspace, card, cfg,
-                                            harness=harness_mod.name_for(card, a.root))
+                try:
+                    comparisons = instructions.report(
+                        card.workspace, card, cfg, manifest,
+                        harness=harness_mod.name_for(card, a.root))
+                except tooling.ToolingError as e:
+                    raise ProvisionError(str(e)) from None
                 results.append({"name": card.name, "harness": card.harness,
-                                "comparisons": plan.comparisons})
+                                "tooling": "configured" if manifest is not None else "not-configured",
+                                "comparisons": comparisons})
             print(json.dumps({"version": 1, "sources": cfg.source_origins,
                               "warning": cfg.source_warning, "agents": results}))
             return OK
@@ -6735,6 +6791,11 @@ def _cmd_inbox(a) -> int:
                        routine send and report success
       OK (0)           persisted (+ delivered live if the pane was there)
     """
+    if getattr(a, 'ack_id', None) or getattr(a, 'defer_id', None):
+        return _inbox_dispose(a)
+    if getattr(a, 'until', None) or getattr(a, 'reason', None):
+        print('  refused: --until/--reason require --ack-id or --defer-id', file=sys.stderr)
+        return REFUSED
     if getattr(a, "routine", False) and (not getattr(a, "durable", False) or not a.message):
         print("  refused: --routine requires -d and a message; no send or write", file=sys.stderr)
         return REFUSED
@@ -7146,12 +7207,22 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
     # promise cannot be kept; say so (2) rather than silently downgrade to routine.
     try:
         box = _inbox(a, default="beads")
+        from .inbox_disposition import Dispositions
+        from .inbox import Message
+        disposition = (Dispositions(a.root, backend).get(
+            Message(id='', to=a.agent, body=msg, frm=_me(a)))
+            if _me(a) is not None else None)
+        if disposition is not None:
+            print(f"  -> {agent.name} exact-content repeat suppressed by recipient "
+                  f"{disposition['state']}; original receipt {disposition['receipt']} retained. "
+                  "No new pointer or live submission.")
+            return OK
         if getattr(a, "retain_pointer", False) and backend == "seeds":
             # A fresh namespace avoids repeated probes of short-id collisions
             # on a large board. This uses the SDK's ordinary --slug contract;
             # persist-first and the store's compare-and-set remain unchanged.
             import secrets
-            if not isinstance(box, TrackerInbox):
+            if not isinstance(getattr(box, "raw", box), TrackerInbox):
                 raise RuntimeError("bounded Seeds delivery requires TrackerInbox")
             item = box.deliver(a.agent, msg, frm=_me(a), slug="rr" + secrets.token_hex(12))
         else:
@@ -7202,6 +7273,25 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
               f"({type(e).__name__}: {str(e)[:100]}). Nothing guaranteed to "
               f"survive; not downgrading to an ephemeral send.", file=sys.stderr)
         return CANNOT_TELL
+    # A cron caller may have no declared sender, while the native store records
+    # its credential-derived sender. Never equate unknown with that identity.
+    # Once controls exist, bind the persisted receipt before any live send.
+    if _me(a) is None and Dispositions(a.root, backend).directory.exists():
+        try:
+            receipt = box.get_message(agent.name, item.id)
+            if receipt is None or receipt.body != msg or receipt.to != agent.name:
+                raise ValueError('exact persisted receipt binding differs')
+            held = Dispositions(a.root, backend).get(receipt)
+        except Exception as error:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"processing decision UNKNOWN ({type(error).__name__}); "
+                  'pointer retained, no live submission or resend.')
+            return OK
+        if held is not None:
+            print(f"  -> {agent.name} delivered to inbox as {item.id} ({backend}); "
+                  f"live repeat suppressed by recipient {held['state']}; "
+                  f"original receipt {held['receipt']} retained.")
+            return OK
     if boundary_only:
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); queued for its next turn boundary")
         return OK
@@ -7278,6 +7368,50 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
         print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
               f"recipient not live — they read it with `st inbox`.")
     return OK
+
+
+def _inbox_dispose(a):
+    """Explicit processing decision; never infer one from live delivery."""
+    from .inbox_disposition import Dispositions, deadline
+    me = os.environ.get('SHANTY_AGENT')
+    if (not me or (a.agent and a.agent != me) or a.message
+            or getattr(a, 'durable', False) or getattr(a, 'routine', False)
+            or getattr(a, 'retain_pointer', False) or not getattr(a, 'reason', None)):
+        print('  refused: processing disposition requires your own inbox, no send, and --reason',
+              file=sys.stderr)
+        return REFUSED
+    ident = getattr(a, 'ack_id', None) or a.defer_id
+    try:
+        until = deadline(a.until) if a.defer_id else None
+        if a.ack_id and a.until:
+            raise ValueError('--until requires --defer-id')
+        box = _inbox(a, default='beads')
+        raw = getattr(box, 'raw', box)
+        reader = getattr(raw, 'get_message', None)
+        if callable(reader):
+            message = reader(me, ident)
+            found = [message] if message else []
+        else:
+            select = getattr(raw, 'unread_selected', None)
+            rows = select(me, [ident]) if callable(select) else raw.unread(me)
+            found = [m for m in rows if m.id == ident and m.to == me]
+        if len(found) != 1:
+            raise ValueError('exact receipt for this recipient required')
+        store = Dispositions(a.root, _backend(a, 'beads'))
+        if a.dry_run:
+            print('  would record processing disposition; 0 writes, no receipt ACK')
+            return OK
+        row = store.set(found[0], 'ack' if a.ack_id else 'defer', a.reason, until=until)
+        print(f"  processing {row['state']} verified for {ident}; exact repeats quiet. "
+              'Original receipt retained; incident/work status unchanged. Root-local control.')
+        return OK
+    except (ValueError, TypeError) as error:
+        print(f'  refused: {error}', file=sys.stderr)
+        return REFUSED
+    except Exception as error:
+        print(f'  processing disposition UNKNOWN ({type(error).__name__}); do not retry blindly',
+              file=sys.stderr)
+        return CANNOT_TELL
 
 
 def _inbox_read(a, me: str) -> int:
@@ -7396,7 +7530,11 @@ def _inbox_read(a, me: str) -> int:
 
     print()
     if not unread:
-        print(f"  {me}: no unread messages.")
+        if total:
+            print(f"  {me}: no eligible messages in this bounded view; "
+                  f"{total} stored unread (processing ACK/DEFER may hide rows).")
+        else:
+            print(f"  {me}: no unread messages.")
     else:
         for m in unread:
             src = f" from {m.frm}" if m.frm else ""
@@ -7417,10 +7555,14 @@ def _cmd_task(a) -> int:
     """
     title = " ".join(a.title)
     from .task_intake import deadline
+    from .queue_policy import enabled as queue_enabled, intake, stage, reply, setting
+    queue_plan = None
     try:
         due = deadline(getattr(a, "due", None),
                        _deployment_default(a, "SHANTY_TASK_DUE_REQUIRED"))
-    except ValueError as error:
+        if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
+            queue_plan = intake(_tracker(a).queue_rows())
+    except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED
     from .plate_capacity import (ensure_room, assignment_lock, PlateFull,
@@ -7435,6 +7577,8 @@ def _cmd_task(a) -> int:
         print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else "")
               + (f" due={due}" if due else ""))
         print("\n  0 writes.")
+        if queue_plan is not None:
+            print(reply('(not created)', queue_plan))
         return OK
     try:
         tracker = _tracker(a)
@@ -7477,6 +7621,14 @@ def _cmd_task(a) -> int:
     if refused:
         print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
         return REFUSED
+    if queue_plan is not None:
+        try:
+            queue_plan = stage(tracker, item, queue_plan)
+        except Exception as error:
+            print(f"  {item.id} CREATED; queue intake UNKNOWN: {error}. "
+                  "Retain this ID; reconcile it, do not repeat create.", file=sys.stderr)
+            return CANNOT_TELL
+        print(reply(item.id, queue_plan))
     return OK
 
 
@@ -7634,6 +7786,9 @@ def _cmd_anchor(a) -> int:
                 p.decision_view, due_brief.CAP - len(notice.encode())) + notice
     print()
     print(p.render())
+    if p.me.role == 'administrator':
+        from .duties import summary as duty_summary
+        print('  ' + duty_summary(a.root))
     from . import feed_hold
     if feed_note := feed_hold.reason(a.root, me):
         print(f"  {me}: {feed_note}")
@@ -9873,7 +10028,7 @@ def _ready_count(root, reg):
             projected = count()
             if projected is not None:
                 return projected
-        return len(adapter.ready().exact())
+        return sum(not is_message(row.get("title", "")) for row in adapter.ready().exact())
     except Exception:
         return None
 
@@ -11592,6 +11747,7 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
     it, and gives up after SELF_SERVE_TIMEOUT_S, leaving the request for tend.
     Returns the log path, or "" when disabled or the spawn failed."""
     import subprocess
+    from .runtime import SettingsError, _hook_interpreter
     if os.environ.get(SELF_SERVE_ENV, "").strip().lower() in ("0", "off", "false", "no"):
         return ""
     log = Path(a.root) / "logs" / f"self-cycle-{agent}.log"
@@ -11599,11 +11755,13 @@ def _spawn_self_cycle_server(a, agent: str) -> str:
         log.parent.mkdir(parents=True, exist_ok=True)
         with open(log, "a") as fh:
             subprocess.Popen(
-                [sys.executable, "-m", "shantytown.cli", "--root", str(a.root),
+                [_hook_interpreter(), "-m", "shantytown.cli", "--root", str(a.root),
                  "agent", "cycle", agent, "--serve-request"],
                 stdin=subprocess.DEVNULL, stdout=fh, stderr=fh,
-                start_new_session=True, close_fds=True)
-    except OSError as e:
+                # A repository's parent can expose a namespace called
+                # shantytown ahead of the editable-install finder.
+                cwd="/", start_new_session=True, close_fds=True)
+    except (OSError, SettingsError) as e:
         print(f"  ⚠ could not start the self-cycle waiter ({e}); `st fleet tend` "
               f"still serves the request.", file=sys.stderr)
         return ""
@@ -12033,6 +12191,20 @@ def _restart_cycle(a, card, agent_name, session, panes, runtime, chosen, verdict
             if rc == REFUSED and account_target is not None:
                 _registry(a).restore_selection(current)
             return rc, cycle_mod.RESPAWN
+        if rc == CANNOT_TELL:
+            # Unconfirmed startup delivery is not a dead process. A second
+            # stop/start repeats the startup wait and can kill useful work.
+            try:
+                replacement_live = runtime.is_live(panes.capture(session))
+            except (OSError, ValueError):
+                print(f"  {agent_name}: replacement liveness UNKNOWN; preserving "
+                      "the session without another restart.", file=sys.stderr)
+                return CANNOT_TELL, cycle_mod.RESPAWN
+            if replacement_live:
+                print(f"  {agent_name}: replacement is live but startup is "
+                      "UNVERIFIED; preserving it without another restart. "
+                      "Inspect input before retrying.", file=sys.stderr)
+                return CANNOT_TELL, cycle_mod.RESPAWN
         # The process is already gone by here, so there is no gentler mode left
         # to try and the session may be holding a dead shell. Fall through to the
         # floor, which starts by stopping whatever is there.
@@ -14077,7 +14249,9 @@ def _cmd_declared_jobs(a, verb) -> int:
     print("Membership coverage: " + (f"{len(required)} required identities verified" if required
                                      else "UNKNOWN (no --expect-job controls supplied)"))
     for job in selected:
-        cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
+        cadence = (f"once at UTC epoch {job.anchor_s}"
+                   if isinstance(job, quipu_jobs.SingleOccurrenceDeclaredJob)
+                   else f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time}"
                    if isinstance(job, quipu_jobs.CalendarDeclaredJob)
                    else f"every {job.interval_s}s")
         print(f"  {job.name}  {'enabled' if job.enabled else 'disabled'}  "
@@ -14977,39 +15151,11 @@ def _tend_once(a, quiet: bool = False) -> int:
         # cursor, so this reservation cannot reset their progress each pass.
         # aegis-873: one crossing reminder then daily, on this original schedule.
         if cfg.overdue_enabled:
-            from .overdue import OverdueAlerter, PendingReceipt, verify_inbox_receipt
+            from .overdue import OverdueAlerter
+            from .overdue_ports import bind as reminder_ports
             from .feed_check import backend_adapter
-            def verify_due_receipt(recipient, marker, identifier):
-                from .br import show
-                value = show(_tracker(a, default="beads"),identifier)
-                return verify_inbox_receipt(value,recipient,marker,identifier)
-            def find_due_receipt(recipient, marker, identifier=None):
-                if identifier is not None:
-                    return verify_due_receipt(recipient,marker,identifier)
-                item = _inbox(a, default="beads").find_delivery(recipient,marker)
-                return verify_due_receipt(recipient,marker,item.id) if item is not None else None
-            def deliver_due(recipient, marker, body, *, boundary_only=False):
-                import re
-                from copy import copy
-                from contextlib import redirect_stdout
-                from io import StringIO
-                target = copy(a)
-                target.agent = recipient
-                target.dry_run = False
-                output = StringIO()
-                with redirect_stdout(output):
-                    code = _inbox_durable(target, _registry(a).get(recipient),
-                                         marker + " " + body, panes, sender="st fleet tend", boundary_only=boundary_only)
-                if code != OK:
-                    return None
-                match = re.search(r"delivered to inbox as ([A-Za-z0-9_.-]+)",output.getvalue())
-                if match is None:
-                    raise ValueError("known reminder receipt ID unavailable")
-                identifier = match.group(1)
-                try:
-                    return verify_due_receipt(recipient,marker,identifier)
-                except Exception:
-                    return PendingReceipt(identifier)
+            ports = reminder_ports(a, panes)
+            deliver_due, find_due_receipt = ports.deliver, ports.receipt
             def deliver_spec(recipient, marker, body, *, urgent):
                 return deliver_due(recipient,marker,body,boundary_only=not urgent)
             def run_due_reminders():
@@ -15196,6 +15342,12 @@ def _tend_once(a, quiet: bool = False) -> int:
                 continue
             rc_c = _sweep(f"cycle:{who}", lambda w=who, r=request:
                           _serve_cycle_request(a, w, r))
+            # Passive scheduled-path evidence. Neither requests another cycle nor
+            # promotes owner acceptance; skipped/failed cycles emit no receipt.
+            if request.get("auto") and rc_c == OK:
+                from . import resume_idle_cycle
+                # Completed work must retain its receipt even after the budget.
+                resume_idle_cycle.emit(request, who, st_now, rc_c)
             # The request is cleared by _cmd_cycle ONLY on a completed cycle, so a
             # refusal (dirty tree, no checkpoint) leaves it pending and the agent
             # is retried next pass rather than silently dropped. That is the right

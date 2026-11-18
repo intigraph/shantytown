@@ -709,6 +709,44 @@ def ranking_rows(proof, *, timeout: int = 30,
         return Answer.capped([], how=how, caveat=f"ranking cohorts unreadable: {error}")
 
 
+@declared_read_operation("queue-rows")
+def queue_rows(proof, *, timeout=30):
+    """Only the two capped live lanes, at most 45 subjects; never a board scan."""
+    how = 'Seeds capped Now/Next queue; shared and ephemeral graphs'
+    try:
+        graphs = (proof.graph, proof.graph + '#seeds-ephemeral')
+        branches = []
+        for graph in graphs:
+            for lane in ('now', 'next'):
+                branches.append(
+                    f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/lane> {json.dumps(lane)} . '
+                    f'?s <{SEEDS}ontology/status> ?status . FILTER(?status != "closed") '
+                    f'?s a <{SCHEMA}Action> }} BIND({json.dumps(graph)} AS ?graph) }}')
+        query = ('SELECT DISTINCT (STR(?s) AS ?subject) ?graph WHERE { '
+                 + ' UNION '.join(branches) + ' } LIMIT 46')
+        candidates = _query(proof, query, timeout)['rows']
+        if len(candidates) > 45:
+            raise ValueError('live lane cap or candidate budget exceeded')
+        selected = {}
+        for candidate in candidates:
+            subject, graph = candidate.get('subject'), candidate.get('graph')
+            if (not isinstance(subject, str) or not subject.startswith(SEEDS + 'item/')
+                    or graph not in graphs or subject in selected):
+                raise ValueError('queue identity or graph coverage UNKNOWN')
+            selected[subject] = graph
+        grouped = _project_fields(proof, selected, graphs, timeout)
+        if set(grouped) != set(selected):
+            raise ValueError('queue fields incomplete')
+        from .queue_policy import validate
+        rows = validate(list(grouped.values()))
+        for subject, row in grouped.items():
+            if subject != SEEDS + 'item/' + quote(row['id'], safe=''):
+                raise ValueError('queue subject changed')
+        return Answer.complete_read(rows, how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped([], how=how, caveat=f'queue unreadable: {error}')
+
+
 def _project_fields(proof, selected, graphs, timeout, *, budget=10000, batch_size=500,
                     recover_timeouts=False, fields=None):
     """Bind every selected subject to the lean FIELDS; never hydrate bodies.
@@ -869,7 +907,43 @@ def _deferred_field_rows(proof, pairs, graphs, fields, timeout):
     return read(pairs)
 
 
+# Candidate membership depends on both date spellings and the two note markers.
+# A type/status/date/note change anywhere can add a waiter; selected fields are
+# separately fenced by certify_projection. Unrelated graph commits need no retry.
+DEFERRED_MEMBERSHIP = frozenset({
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    SEEDS + "ontology/status", SCHEMA + "scheduledTime",
+    SEEDS + "ontology/deferUntil", SEEDS + "ontology/notes",
+})
+
+
+def _retry_deferred_projection(function):
+    @wraps(function)
+    def read(*args, **kwargs):
+        # ebu: never combine independently retried branches/fields from moving
+        # snapshots. Recovery shares ONE caller deadline, not three new budgets.
+        timeout = kwargs.get("timeout", 30)
+        budget = {"remaining": 3, "deadline": time.monotonic() + timeout}
+        error = "projection changed"
+        while budget["remaining"]:
+            budget["remaining"] -= 1
+            remaining = budget["deadline"] - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                with seeds_read_cache.projection_reads(budget):
+                    return function(*args, **{**kwargs, "timeout": remaining})
+            except seeds_read_cache.WatermarkMoved as changed:
+                error = str(changed)
+                if budget["remaining"] and not seeds_read_cache.projection_pause(budget):
+                    break
+        return Answer.capped([], how="Seeds deferred projection; shared and ephemeral graphs",
+                             caveat="deferral snapshot retry/time budget reached: " + error)
+    return read
+
+
 @declared_read_operation("deferred-rows")
+@_retry_deferred_projection
 def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=None) -> Answer[list[dict]]:
     """Project evaluation fields; fresh full detail still gates every release."""
     how = "Seeds deferred and dated-open candidate fields; shared and ephemeral graphs"
@@ -991,6 +1065,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
                         raise ValueError("ambiguous deferral field")
                     seen.add((subject, key))
                     row[key] = value
+        seeds_read_cache.certify_projection(
+            proof.quipu_url, graphs, set(selected), DEFERRED_MEMBERSHIP, timeout, urlopen)
         statuses = (("closed", "tombstone", "deferred", "open", "blocked", "in_progress")
                     if target_ids is not None else
                     ("deferred", "open", "blocked", "in_progress") if include_asks else
@@ -1012,6 +1088,8 @@ def deferred_rows(proof, *, timeout: int = 30, include_asks=False, target_ids=No
         rows = [row for status in statuses
                 for row in sorted(grouped.values(), key=ranking) if row["status"] == status]
         return Answer.complete_read(rows, how=how)
+    except seeds_read_cache.WatermarkMoved:
+        raise  # Restart all candidates and fields, never just the changed query.
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
         return Answer.capped([], how=how, caveat=f"deferral candidates unreadable: {error}")
 
@@ -1104,10 +1182,10 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
 
 @declared_read_operation("ready-count")
 def ready_count(proof, *, timeout: int = 30, now=None) -> int:
-    """Count SDK-ready rows with only IDs and deferral dates.
+    """Count ready work, excluding message titles before metadata hydration.
 
-    Unlike work/plate selection, this existing utilization metric includes
-    messages. Preserve its semantics while avoiding payload hydration.
+    Mail cannot justify crew growth. Use the same title markers as plates;
+    labels alone never turn an actual work item into a message.
     """
     now = datetime.now(timezone.utc) if now is None else now
     branches = []
@@ -1118,6 +1196,8 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             f'a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . '
             f'OPTIONAL {{ ?s <{SCHEMA}scheduledTime> ?due }} '
             f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
+            f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?message . '
+            f'FILTER(REGEX(STR(?message), {MESSAGE_PATTERN})) }} '
             'FILTER NOT EXISTS { ' + blocked_on_pattern('?s', '?blocker') +
             f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
             'FILTER(?bs != "closed" && ?bs != "tombstone") } } '

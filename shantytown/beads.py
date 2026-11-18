@@ -293,6 +293,7 @@ class BeadsTracker:
             # say "nobody stated how important this is" instead of guessing.
             priority=_priority(d),
             rank=d.get("rank"), due_at=d.get("due_at"), created_at=d.get("created_at"),
+            lane=d.get("lane"),
             blocker_kind=blocker_kind(d.get("labels")),
             labels=tuple(d.get("labels") or ()),
             agent_context=d.get("agent_context"),

@@ -121,6 +121,7 @@ def test_it_injects_the_anchor_render_and_role_startup(monkeypatch, capsys):
     }
     assert out.startswith(sa.BANNER)
     assert "x-1  do the thing" in out and "STARTUP" in out
+    assert "record new operator directives verbatim as Directive entities" in out
     assert "sweep YOUR OWN plate" in out          # lead line
     assert sa._EMPTY not in out                    # plate is not empty
 
@@ -159,6 +160,8 @@ def test_startup_keeps_packaged_stack_orientation_when_anchor_unreadable(monkeyp
                  "cy prime --static", "jev_noul", "jev_choice", "jev_score",
                  "map_question", "jev_dry_run"):
         assert tool in out
+    assert "Check governing Directives in Quipu before acting" in out
+    assert "verbatim as Directive entities through the governed write path" in out
     assert "refused writes retain their" in out
     assert out.endswith("existing crew memory")
     if anchor[0]:
@@ -175,6 +178,7 @@ def test_damaged_stack_primer_is_unknown_and_preserves_anchor(monkeypatch, broke
     monkeypatch.setattr(prime, "primer", read)
     monkeypatch.setattr(sa, "_run_anchor", lambda *args: (0, PLATE))
     out = sa.render("/r", "ana")
+    assert sa.DIRECTIVES in out
     assert "Stack primer UNKNOWN" in out
     assert "x-1  do the thing" in out and "STARTUP" in out
 

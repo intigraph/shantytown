@@ -301,6 +301,7 @@ class WorkItem:
     revision: int | None = None
     # Same-read discriminator for native operation admission; never mutated here.
     agent_context: str | None = None
+    lane: str | None = None
 
 
 @runtime_checkable

@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased
+
+### Bug Fixes
+
+* Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
+
+## [0.18.0](https://github.com/intigraph/shantytown/compare/v0.17.0...v0.18.0) (2026-11-15)
+
+
+### Features
+
+* **queue:** add opt-in ranked intake and dispatch gates ([#630](https://github.com/intigraph/shantytown/issues/630)) ([c064b3f](https://github.com/intigraph/shantytown/commit/c064b3fbaf658c2c1444740caf6c7ccccdbfca2e))
+
+
+### Continuous Integration
+
+* report required checks on merge queue groups ([#632](https://github.com/intigraph/shantytown/issues/632)) ([60c5917](https://github.com/intigraph/shantytown/commit/60c59171bb2bcc069f75ef27dd8c099285404c0b))
+
+## [0.17.0](https://github.com/intigraph/shantytown/compare/v0.16.0...v0.17.0) (2026-11-15)
+
+
+### Features
+
+* add duty registry controls to the stopped-owner sweep ([#605](https://github.com/intigraph/shantytown/issues/605)) ([f3ba98a](https://github.com/intigraph/shantytown/commit/f3ba98a87dfa9385cd874a95bc4f8e8176c6db8d))
+* **inbox:** acknowledge and defer identical delivery content ([#618](https://github.com/intigraph/shantytown/issues/618)) ([1550b36](https://github.com/intigraph/shantytown/commit/1550b36a3bd00d9e8abd175296450900b51dc0cb))
+* **jobs:** compile frozen read-only alert triage bindings ([#620](https://github.com/intigraph/shantytown/issues/620)) ([1c4e00e](https://github.com/intigraph/shantytown/commit/1c4e00e014b14398886c3ea22296f7ca113216d6))
+* **jobs:** read explicit single-occurrence declarations ([#601](https://github.com/intigraph/shantytown/issues/601)) ([d2315cc](https://github.com/intigraph/shantytown/commit/d2315cc14a152bce264974d32331b10bcd48b379))
+* **pr:** retire declared predecessors after verified publish ([#626](https://github.com/intigraph/shantytown/issues/626)) ([b48274a](https://github.com/intigraph/shantytown/commit/b48274aebded79b84b2a9bc5bd5df2300b07a8b3))
+* **review:** reserve one reviewer on the seed ([#625](https://github.com/intigraph/shantytown/issues/625)) ([4aa2951](https://github.com/intigraph/shantytown/commit/4aa295157989aa734f0adaecdd2283f4408eeb41))
+* **tend:** emit passive receipts for automatic context cycles ([#566](https://github.com/intigraph/shantytown/issues/566)) ([2e85dd1](https://github.com/intigraph/shantytown/commit/2e85dd1431ff41ab2d320b0e00c97eaa3682ae02))
+
+
+### Bug Fixes
+
+* **cycle:** isolate detached waiter from namespace shadowing ([#614](https://github.com/intigraph/shantytown/issues/614)) ([fabab2e](https://github.com/intigraph/shantytown/commit/fabab2e3330f65e3bd2f2fe30b4faa9a042f144a))
+* **cycle:** preserve live replacements with unverified startup ([#609](https://github.com/intigraph/shantytown/issues/609)) ([310ee35](https://github.com/intigraph/shantytown/commit/310ee3542ea48688867ad21137b089c9e58dcce2))
+* **deferrals:** return resumed work to the ranked pool ([#612](https://github.com/intigraph/shantytown/issues/612)) ([869d0f8](https://github.com/intigraph/shantytown/commit/869d0f81059333ddaeb8ac190b8096b562ef2f41))
+* **duties:** connect stop and anchor to the duty registry ([#595](https://github.com/intigraph/shantytown/issues/595)) ([5b5bfca](https://github.com/intigraph/shantytown/commit/5b5bfcae03cee730f715353bb49a9098bc384fc5))
+* **haul:** keep recorded CI waits quiet until their event ([#611](https://github.com/intigraph/shantytown/issues/611)) ([dbba83c](https://github.com/intigraph/shantytown/commit/dbba83cafdd5749b20c5ae82209ec4ff0e249e1e))
+* **history:** verify recaptured layouts and retain predecessor bytes ([#603](https://github.com/intigraph/shantytown/issues/603)) ([219d85f](https://github.com/intigraph/shantytown/commit/219d85f7467c17ffbdba6c49335ae738a1e478e8))
+* **inbox:** exclude message pointers from ready work and triage ([#556](https://github.com/intigraph/shantytown/issues/556)) ([8c8da28](https://github.com/intigraph/shantytown/commit/8c8da282af5690bc511e3723556c8840d8b5c27f))
+* **jobs:** narrow protected alert triage to investigation ([#619](https://github.com/intigraph/shantytown/issues/619)) ([45024ac](https://github.com/intigraph/shantytown/commit/45024ac87cc04d19ca01c6d15bd629f31b430b3a))
+* **knowledge:** separate CLI release bytes from strict summary witness ([#627](https://github.com/intigraph/shantytown/issues/627)) ([135c337](https://github.com/intigraph/shantytown/commit/135c3374901acda2c0e0002a9d80e77f4bfb6a0c))
+* preserve unchanged Codex PATH symlinks at launch ([#624](https://github.com/intigraph/shantytown/issues/624)) ([5929998](https://github.com/intigraph/shantytown/commit/5929998a26b9d2bb7eb07af51e76f684e0422f4b))
+* **provision:** preview tooling without graph instruction config ([#547](https://github.com/intigraph/shantytown/issues/547)) ([12195a8](https://github.com/intigraph/shantytown/commit/12195a8aada631440bebd982152c44c1f27990b0))
+* **refill:** keep unused retained notes out of occupancy reads ([#629](https://github.com/intigraph/shantytown/issues/629)) ([529aad3](https://github.com/intigraph/shantytown/commit/529aad3f4eca362bf6ea92b2f121e0975db1d0d6))
+* **refill:** reconcile terminal custody only for unheld native work ([#608](https://github.com/intigraph/shantytown/issues/608)) ([bfc8427](https://github.com/intigraph/shantytown/commit/bfc8427ad50a5c0cbdb14dbae3d69aa9c1cfc42c))
+* **seeds:** fence deferral projections within one retry budget ([03bce89](https://github.com/intigraph/shantytown/commit/03bce8966cb35d41e7ebe73acb1002967cedfcc0))
+* **seeds:** recover deferral snapshots within one deadline ([#610](https://github.com/intigraph/shantytown/issues/610)) ([03bce89](https://github.com/intigraph/shantytown/commit/03bce8966cb35d41e7ebe73acb1002967cedfcc0))
+* **startup:** carry directive recall and verbatim capture instructions ([#622](https://github.com/intigraph/shantytown/issues/622)) ([8b8bf1d](https://github.com/intigraph/shantytown/commit/8b8bf1d675b62b0896d0c75a06f4585da98cb369))
+* **tend:** batch stopped-owner pacing before automatic release ([49c2c98](https://github.com/intigraph/shantytown/commit/49c2c980664d0e52d67325e6746e136048ee4c23))
+* **tend:** retain stopped-owner deferrals for the admin batch ([#628](https://github.com/intigraph/shantytown/issues/628)) ([49c2c98](https://github.com/intigraph/shantytown/commit/49c2c980664d0e52d67325e6746e136048ee4c23))
+* **tmux:** preserve unknown hook evidence on macOS ([#600](https://github.com/intigraph/shantytown/issues/600)) ([6f7df5f](https://github.com/intigraph/shantytown/commit/6f7df5f55fc6447c41a0271fefe50a43045fc2c9))
+
+
+### Code Refactoring
+
+* **reminders:** share native receipt transport ([#599](https://github.com/intigraph/shantytown/issues/599)) ([6b8ab7d](https://github.com/intigraph/shantytown/commit/6b8ab7dfbadfd7b8066c6e59f416c25466c0f919))
+
+
+### Tests
+
+* retain parent-death decision samples ([#621](https://github.com/intigraph/shantytown/issues/621)) ([fd30ffc](https://github.com/intigraph/shantytown/commit/fd30ffc9024a9730875a88ec0abff09fcaf07f46))
+* retain parent-death predicate samples at decision time ([fd30ffc](https://github.com/intigraph/shantytown/commit/fd30ffc9024a9730875a88ec0abff09fcaf07f46))
+
 ## [0.16.0](https://github.com/intigraph/shantytown/compare/v0.15.1...v0.16.0) (2026-11-14)
 
 

@@ -119,6 +119,46 @@ migrate or rewrite them.
 
 ## Assignment capacity
 
+### Ranked intake and dispatch admission
+
+`SHANTY_QUEUE_POLICY=enforce` enables the Seeds queue contract. The default is
+`off` for compatibility with unlaned deployments; any other value refuses.
+Activation and migration of existing plates are separate operator decisions.
+`st task` checks the bounded Now/Next cohort, creates the item, then CAS-writes
+Next and an exact decimal append rank. It prints the observed position, an
+UNKNOWN likely start when no duration evidence exists, and the current Now
+items a request for immediate work would need to disposition. It never guesses
+a date or silently demotes an existing item. A full or unranked Next queue
+refuses before creation. Native lane caps remain authoritative under races.
+
+Seeds currently lacks `create --lane`: a failed or uncertain follow-on write
+prints the created ID and returns UNKNOWN. Reconcile that ID; repeating create
+would duplicate the request. Successful intake requires verified lane/rank and
+a complete post-write queue observation. Dry runs perform no writes.
+
+With enforcement on, fresh `st go` refuses anything outside Now or behind the
+head of the target's ranked plate. Existing active custody retains precedence;
+priority is severity, not ordering within Now/Next. Missing lane/rank or partial
+reads refuse. Existing governor, dependency and ownership checks remain active.
+Pending dispatch receipts still reconcile without re-sending: this does not
+retroactively revoke custody already delivered by an older binary.
+
+`st work item update ID --lane now --rank 1 --quote 'Do this now' \
+--requester operator --urgent --if-revision REV` records the exact request and the
+current Now cohort in the same native CAS as promotion. Caps refuse and name
+displacement candidates; the command never automatically evicts another item.
+The declared requester must match `SHANTY_QUEUE_REQUESTER` from the deployment
+policy, and the quote must contain the explicit word "now". An absent requester
+policy refuses promotion. `--urgent` affirms the caller is recording that request. This lexical
+check does not authenticate authorship or interpret the request's meaning.
+These fields declare provenance, not authentication or a governor override.
+
+Actual queue refusals are appended to the existing feed audit before the
+dispatch returns. `st agent stats --queue-order` reports retained observations;
+missing, malformed or over-budget history is UNKNOWN. It is not an all-history
+fleet counter or proof the policy is activated. Rikuy producer/query/display
+activation is separate from this local reader.
+
 ### Explicit intake deadlines
 
 `st task --due 2026-12-01 "review the draft"` creates the item with a due date
@@ -301,6 +341,7 @@ st repo                       a shared project repo
 st ops                        the installation
   doctor [--install]          what's installed, stale, missing (out-of-box)
   provision [agent]           register Quipu tooling for local crew without launching
+    --instruction-report     compare composed graph instructions and tooling bytes without provisioning
   subscribe                   watch quipu entity events; route governed workflows to the admin
   hooks <register|list|check> keep tools' registered hook bundles rendered, and check they are
   help <topic>                rationale pages: handoff/cycle, haul, inbox
@@ -407,6 +448,10 @@ existing request. While a fresh, unrefused self-cycle request is pending,
 Stop advice and self-feed stay silent so the pane can reach idle. Refused or
 stale requests resume normal advice; automatic requests do not silence it.
 This does not relax the waiter's busy-pane or background-task checks.
+The detached waiter uses an interpreter verified by the installed-hook resolver
+and starts from `/`, so a repository directory named `shantytown` in the caller's
+working directory cannot shadow the installed package. If no usable interpreter
+is available, the request remains pending for tend and the spawn reports why.
 
 **How a cycle is performed, and what it costs you.** `st agent cycle` chooses the
 least destructive mechanism the agent's state allows, and only the last resort
@@ -825,8 +870,19 @@ Capture and scrub preserve citation symlinks when cold archives are relocated.
 Unchanged captures inspect the target size; growing captures and regenerated
 derivatives publish atomically beside the private archive target. Relocated
 files must retain the agent directory and filename, be owner-only, and have a
-private parent directory owned by the same user. Dangling or mismatched links
-are refused rather than replaced. Derivative links into the raw archive are
+private parent directory owned by the same user. A filename may also carry
+`.recaptured-<sha256>` with a 12-to-64-character lowercase hash prefix matching
+its original bytes. Before updating that layout, publication preserves the
+hash-verified origin in a private `.history-origin-*` file and each predecessor
+in `.history-preserved-<full-sha256>`. Later scrubs verify the retained origin,
+keep the citation target unchanged, and retain all versions. These version
+files are archive evidence, not temporary files to remove during a scrub.
+Publication holds a private per-target `.history-publish-*.lock` through
+preservation, staging and replacement. A competing publisher refuses without
+overwriting the current version; a later normal capture can try again. These
+lock files remain in place so concurrent publishers cannot split the lock inode.
+An altered origin, wrong hash, unsafe ownership/mode, dangling or mismatched link
+is refused rather than replaced. Derivative links into the raw archive are
 refused. Editing the scrub policy triggers a normal re-scrub of old derivatives.
 
 The raw transcript archive stays local and unindexed. `st-history-scrub.sh`
@@ -911,6 +967,12 @@ Four things, and each one has to earn its line:
    the administrator as designed. `up` here means **will drain**, not "a pane answers to that name".
 4. **Context and knowledge** — bobbin and quipu, first-class, and both optional. With the `none`
    adapters, those two sections vanish and anchor still works.
+
+Startup text tells agents to check governing Directives in Quipu before acting and
+record new operator directives verbatim as Directive entities through the governed
+write path. This reminder appears in both anchor startup and the packaged stack
+orientation, including when the plate read is unavailable. It does not perform a
+graph write or grant permission to one.
 
 ### anchor is a read. It must never write.
 
@@ -3322,7 +3384,22 @@ numbers, exact heads, shared files and item families in its body. No disposition
 file is required. Optional exact-head `stack`, `absorb` or `independent` annotations
 are validated and appended when valid; missing, stale, invalid or unreadable
 annotations produce advice rather than refusing creation. This command never
-closes another PR. Other-PR churn does not block creation.
+closes another PR based on overlap advice. Other-PR churn does not block creation.
+
+Explicit body trailers declare publish lineage, one same-repository number per
+line: `Supersedes: #N`, `Split-from: #N`, `Folds: #N`, or `Stacked-on: #N`.
+Fenced examples do not count. Each predecessor must declare the same `Bead:`
+primary item. `Stacked-on` requires its open exact head as the candidate base
+and leaves it open. The other trailers authorize retirement: after verifying
+the created successor, the command rechecks each predecessor, posts a pointer
+to the successor, closes it, and verifies its head and closed state. Branches
+are retained. For a split, declare retirement only when the published successor
+accounts for the predecessor's remaining work; other split PRs carry that same
+work item and lineage. A dry run includes the retirement plan without writes.
+Malformed declarations or mismatched item identities refuse before creation.
+If retirement fails or races after creation, exit 2 names the existing successor;
+inspect and reconcile it rather than repeating creation. GitHub offers no
+atomic expected-head close, so a raced close remains unverified.
 
 Overlap file coverage is bounded at 3,200 open PRs and fewer than 3,000 changed
 files per PR. Missing metadata, failed reads or bound exhaustion produce an
@@ -3974,6 +4051,16 @@ provenance graph and exact item IDs. It excludes private field differences and
 bodies. Use this persisted identity, when available, to reconcile the SDK write;
 the new per-invocation operation ID is only a diagnostic correlation key.
 
+
+Ready-work utilization counts and board triage exclude both `inbox:` and legacy
+`mail:` title markers, including leading whitespace, using the plate message
+predicate. An `inbox` label on a real work item does not exclude that work.
+Native ready counts apply the title exclusion before fetching metadata, and
+legacy ready-list utilization applies the same rule. Unreadable readiness
+remains unknown rather than zero. Listing an inbox remains a pure read;
+explicit ACK closes tracker pointers and the scheduled retention sweep retires
+old pointers while preserving their records and verified related links.
+
 ## Display-only roster snapshots
 
 `st crew --display-snapshot --local --json` opts into a separate v2 display
@@ -4012,6 +4099,53 @@ entries (two per key), with bypass off; it did not show a per-process cache or
 a same-key stampede. Its deployed version also caches failures. A v2 adapter
 should share the canonical ST observation and avoid retaining it under another
 independent 15-second output TTL. Check age at final rendering.
+
+### Processing ACK and DEFER for repeated inbox content
+
+Receipt acknowledgement (`--read`, `--read-id`) confirms delivery. It does not
+mean the recipient has handled the subject, and does not silence a new pointer
+with the same body. Use an explicit processing decision for that:
+
+```sh
+st inbox --ack-id msg-EXACT --reason 'Tracked on the existing incident'
+st inbox --defer-id msg-EXACT --until 2026-11-15T07:00:00Z --reason 'Await natural deploy'
+```
+
+These commands require your own recipient identity and an exact receipt from
+the selected inbox backend, including receipts already marked read after live
+delivery. An unknown or foreign ID refuses. `--dry-run` performs no write.
+DEFER requires an explicit timezone and a future deadline within 30 days.
+
+A processing ACK silences future **identical recipient, sender and full-body**
+repeats. DEFER silences those repeats and makes the original durable receipt
+eligible once at/after the deadline, on the next ordinary inbox/startup/tend
+read. It does not launch an agent or promise a timer wake. Receipt acknowledgement
+after that presentation retires the reminder; the original evidence stays in
+the inbox backend. You can explicitly defer that original receipt again.
+Changed findings, severity text, sender or recipient remain eligible immediately.
+When a caller has no declared sender but the native store derives one from its
+credential, the sender persists first and reads that exact receipt before a live
+submission. Matching controls silence the live repeat; changed native senders
+pass. An unreadable binding retains the durable pointer without submitting it.
+This path can retain another evidence record while still preventing context spam.
+
+Decisions are atomic, read-back-verified local delivery metadata under
+`<root>/inbox-dispositions/<backend>/`. They survive process/session restarts
+using that root; **they do not propagate to another host/root**. `--count` still
+reports stored unread pointers. A bounded list may show fewer eligible messages;
+that does not mean the retained pointers disappeared. Ordinary reads expand the raw
+window up to 100 rows to fill an eligible batch behind suppressed receipts. If
+that bound cannot establish a full batch or exhaustion, the read returns UNKNOWN
+without acknowledging anything; exact receipt-ID reads remain available.
+At most 64 due original
+receipts are fetched per read, with a 1024-decision capacity; exceeded or malformed
+state reports UNKNOWN rather than treating unreadable state as an empty inbox.
+
+This changes presentation only: no incident resolution, Alertmanager silence,
+work-item deferral, credential change or runtime authority follows. No automatic
+processing decision is inferred from live delivery, reading a message, an agent
+stop, or an old approval. Unkeyed ephemeral send-keys traffic is outside this
+inbox control; durable alert producers must use `st inbox -d` for this contract.
 
 ### Quiet CI and installation waits
 

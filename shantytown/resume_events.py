@@ -1,7 +1,8 @@
 """Reviewed natural-event bindings. No item-supplied commands, paths or queries.
 
-The initial producer contract is deliberately disabled pending its owner's
-acceptance. Enabling a binding is a reviewed source change, not a CLI option.
+Producer contracts are source-owned. The protected-recycle contract remains
+disabled; the scheduled idle-cycle receipt wakes owner reassessment only.
+Enabling a binding is a reviewed source change, not a CLI option.
 """
 from __future__ import annotations
 
@@ -36,7 +37,13 @@ class Binding:
 # by evidence; source review must replace them and explicitly accept the binding.
 REGISTRY = {"protected-recycle-v1": Binding(
     "aegis-67p0lj", "", "", "", "", "",
-    datetime(2026, 10, 16, 18, 33, tzinfo=timezone.utc))}
+    datetime(2026, 10, 16, 18, 33, tzinfo=timezone.utc)),
+    # Passive scheduled-executor receipt: wakes the owner, never closes work.
+    "natural-idle-cycle-v1": Binding(
+        "aegis-zl7jwm", "st-tend-auto-context/v1", "local-native-journal",
+        "st-tend.service", "current-boot", "post-registration",
+        datetime(2026, 11, 10, 9, 30, 57, tzinfo=timezone.utc), accepted=True),
+}
 
 
 @dataclass(frozen=True)
@@ -184,6 +191,9 @@ def decide(binding: Binding, evidence: dict, now: datetime) -> Verdict:
 def evaluate(identifier: str, item: str, now: datetime) -> Verdict:
     try:
         binding = binding_for(identifier, item)
+        if binding.producer == "st-tend-auto-context/v1":
+            from .resume_idle_cycle import evaluate as idle_cycle
+            return idle_cycle(binding, now)
         raw = _read(identifier)
         evidence = json.loads(raw, object_pairs_hook=_unique,
                               parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite JSON")))

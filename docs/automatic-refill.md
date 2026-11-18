@@ -106,6 +106,8 @@ observation timestamp, pending count and age, and
 `st_refill_owned_queue_idle_seconds`. The last metric measures observed idleness
 with an owned queue; it does **not** assert that a governor admits that work.
 Missing, stale or incomplete observations are unknown, never a zero-idle proof.
+Active occupancy reads only scheduling metadata; retained notes do not affect
+collection. Quiet-wait consumers retain their separate bounded note checks.
 
 After installation, retain the executing revision, rollback revision, original
 tend cadence and first successful scheduled observation. Verify one ordinary

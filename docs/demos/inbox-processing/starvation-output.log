@@ -1,0 +1,27 @@
+Script started on 2026-11-14 20:43:14-05:00 [COMMAND="sh docs/demos/inbox-processing/starvation-run.sh" <not executed on terminal>]
+BASE e46e8cfd: ordinary read behind processing ACKs
+ordinary st inbox --read, after 34 retained processing-ACK repeats:
+  acknowledging 0 message(s) for reader; closes are independent, not atomic.
+
+  marked 0 message(s) read for reader.
+  35 snapshot message(s) not attempted. Repeat `st inbox --read` to continue.
+CLI exit: 0
+changed finding acknowledged: False
+suppressed original records retained: 34
+
+CANDIDATE 3c589b99: eligible selection repair
+ordinary st inbox --read, after 34 retained processing-ACK repeats:
+  acknowledging 1 message(s) for reader; closes are independent, not atomic.
+
+  msg-35 from producer
+    Synthetic NEW critical finding
+  [1/1] acknowledging msg-35 ...
+  [1/1] msg-35: marked read
+
+  marked 1 message(s) read for reader.
+  34 snapshot message(s) not attempted. Repeat `st inbox --read` to continue.
+CLI exit: 0
+changed finding acknowledged: True
+suppressed original records retained: 34
+
+Script done on 2026-11-14 20:43:15-05:00 [COMMAND_EXIT_CODE="0"]
