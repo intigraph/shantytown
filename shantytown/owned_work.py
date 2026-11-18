@@ -256,8 +256,15 @@ class OwnedWork:
                                 receipt if matched else None):
                     result.append((name, "reconciled" if matched else "delivery UNKNOWN; no resend"))
                 continue
-            card = registry.get(name)
-            recipient = card.reports_to
+            try:
+                card = registry.get(name)
+            except LookupError:
+                # A stop record can outlive its crew card (a retired agent).
+                # That owner is still measured: held work pages the
+                # administrator below, and an owner holding nothing resolves
+                # to "empty" instead of failing every supervisor pass.
+                card = None
+            recipient = card.reports_to if card is not None else None
             if not recipient or recipient == name:
                 administrators = [row.name for row in registry.all().exact()
                                   if row.role == "administrator"]
