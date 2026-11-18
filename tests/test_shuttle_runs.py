@@ -108,3 +108,20 @@ def test_state_round_trips_through_disk(tmp_path):
     state.save(tmp_path / "s.json")
     loaded = sr.RunsState.load(tmp_path / "s.json")
     assert loaded.seen == state.seen
+
+
+@pytest.mark.parametrize('canonical', [False, True])
+def test_actual_query_reads_legacy_and_published_vocabulary(canonical):
+    rdflib = pytest.importorskip('rdflib')
+    from shantytown.stable_vocabulary import TERMS, LEGACY
+    graph = rdflib.Graph()
+    def iri(name):
+        return rdflib.URIRef(TERMS[name] if canonical else LEGACY + name)
+    run, workflow = rdflib.URIRef('urn:fixture:run'), rdflib.URIRef('urn:fixture:workflow')
+    graph.add((run, rdflib.RDF.type, iri('WorkflowRun')))
+    graph.add((run, iri('runOf'), workflow))
+    graph.add((run, iri('currentState'), rdflib.Literal('claimed')))
+    rows = list(graph.query(sr._runs_sparql()))
+    assert len(rows) == 1
+    assert str(rows[0].run) == str(run) and str(rows[0].state) == 'claimed'
+    assert str(rows[0].wf) == str(workflow)

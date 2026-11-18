@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 from .protocols import EventsUnavailable
+from .stable_vocabulary import aliases, pattern
 from .quipu import _ENDPOINT_MISSING, not_quipu, request_headers, resolve_server
 
 #: The dataset shuttle maintains for its not-yet-frozen windows — the name is
@@ -36,8 +37,7 @@ from .quipu import _ENDPOINT_MISSING, not_quipu, request_headers, resolve_server
 #: renames it, like every other identity parameter in this package.
 OPEN_DATASET = "urn:shuttle:dataset:open"
 
-#: The aegis namespace the shuttle export writes under. Same base the rest of
-#: the stack binds; a parameter in shuttle, mirrored here.
+#: Exact historical vocabulary, retained for old exported windows.
 _AEGIS = "http://aegis.gastown.local/ontology/"
 
 
@@ -50,11 +50,10 @@ class ShuttleRun:
 
 
 def _runs_sparql() -> str:
-    return (
-        f"PREFIX aegis: <{_AEGIS}> "
-        "SELECT ?run ?wf ?state WHERE { "
-        "?run a aegis:WorkflowRun ; aegis:runOf ?wf ; aegis:currentState ?state }"
-    )
+    kinds = ", ".join("<" + iri + ">" for iri in aliases("WorkflowRun"))
+    return ("SELECT ?run ?wf ?state WHERE { ?run a ?kind . "
+            f"FILTER(?kind IN ({kinds})) " + pattern("?run", "runOf", "?wf")
+            + pattern("?run", "currentState", "?state") + "}")
 
 
 class ShuttleRuns:

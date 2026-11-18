@@ -21,6 +21,16 @@ from . import seeds_read_cache, seeds_push_read
 
 SCHEMA = "https://schema.org/"
 SEEDS = "https://seeds.local/"
+BLOCKED_ON = ("https://scbrown.github.io/quechua/ns#blockedOn",
+              "https://w3id.org/intigraph/quechua/ns#blockedOn")
+
+
+def blocked_on_pattern(subject, target):
+    """Explicit read aliases for one published Quechua edge, no write fallback."""
+    return "{ " + " UNION ".join("{ " + subject + " <" + iri + "> " + target + " }"
+                                  for iri in BLOCKED_ON) + " } "
+
+
 MESSAGE_PATTERN = json.dumps(r"^\s*(inbox:|mail:)")
 FIELDS = {
     **{SEEDS + "ontology/" + native: public for native, public in (
@@ -53,7 +63,7 @@ OWNER_MEMBERSHIP = frozenset({
     SCHEMA + "agent", SCHEMA + "name",
     *(SEEDS + "ontology/" + name for name in (
         "status", "issueType", "specVersion", "blockedOn", "revision")),
-    "https://scbrown.github.io/quechua/ns#blockedOn",
+    *BLOCKED_ON,
 })
 
 
@@ -1145,7 +1155,7 @@ def unblocked_ids(proof, rows: list[dict], *, timeout: int = 30) -> set[str]:
                     f"?s <{SEEDS}ontology/status> {json.dumps(state)} ; "
                     f"a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id . ")
                 blocker = (
-                    f"?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . "
+                    blocked_on_pattern("?s", "?blocker") +
                     f"?blocker <{SEEDS}ontology/status> ?bs . "
                     'FILTER(?bs != "closed" && ?bs != "tombstone") ')
                 for evidence, extra in (("eligible", ""), ("blocked", blocker)):
@@ -1188,7 +1198,7 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
             f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?message . '
             f'FILTER(REGEX(STR(?message), {MESSAGE_PATTERN})) }} '
-            'FILTER NOT EXISTS { ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?blocker . '
+            'FILTER NOT EXISTS { ' + blocked_on_pattern('?s', '?blocker') +
             f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
             'FILTER(?bs != "closed" && ?bs != "tombstone") } } '
             f'BIND({json.dumps(graph)} AS ?graph) }}'

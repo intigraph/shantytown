@@ -523,7 +523,7 @@ def dependencies(tracker, rows):
     edge. That distinguishes a proven empty dependency list from an unreadable
     board. No imported payloads, descriptions or whole-board scan participate.
     """
-    from .seeds_plate import _query, _iri, SEEDS, SCHEMA
+    from .seeds_plate import _query, _iri, SEEDS, SCHEMA, blocked_on_pattern
     from urllib.parse import quote, unquote
     proof = tracker.prove_store()
     if not proof.graph or not proof.quipu_url:
@@ -537,7 +537,7 @@ def dependencies(tracker, rows):
         branches.append(f'{{ GRAPH {_iri(graph)} {{ VALUES ?s {{ {values} }} '
             f'?s a <{SCHEMA}Action> ; <{SCHEMA}identifier> ?id ; '
             f'<{SEEDS}ontology/status> ?status . '
-            'OPTIONAL { ?s <https://scbrown.github.io/quechua/ns#blockedOn> ?dep } '
+            'OPTIONAL { ' + blocked_on_pattern('?s', '?dep') + '} '
             f'}} BIND({json.dumps(graph)} AS ?graph) }}')
     response = _query(proof, 'SELECT ?s ?id ?status ?dep ?graph WHERE { '
                       + ' UNION '.join(branches) + ' } LIMIT 5001', tracker.timeout)

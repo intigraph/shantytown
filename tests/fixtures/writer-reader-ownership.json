@@ -1,0 +1,131 @@
+[
+  {
+    "old": "http://aegis.gastown.local/ontology/Decision",
+    "new": "https://w3id.org/intigraph/quipu/ns#Decision",
+    "owner": "quipu/ns",
+    "declared_in": [
+      "quipu/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/WorkflowRun",
+    "new": "https://w3id.org/intigraph/quipu/ns#WorkflowRun",
+    "owner": "quipu/ns",
+    "declared_in": [],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/by",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#by",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/commitSha",
+    "new": "https://w3id.org/intigraph/camayoc/delivery/ns#commitSha",
+    "owner": "camayoc/delivery/ns",
+    "declared_in": [
+      "camayoc/delivery/ns"
+    ],
+    "referenced_in": [
+      "camayoc/delivery/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/currentState",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#currentState",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/outcome",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#outcome",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/predicateId",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#predicateId",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/runOf",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#runOf",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/signature",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#signature",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/targetRef",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#targetRef",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  },
+  {
+    "old": "http://aegis.gastown.local/ontology/verifier",
+    "new": "https://w3id.org/intigraph/camayoc/core/ns#verifier",
+    "owner": "camayoc/core/ns",
+    "declared_in": [
+      "camayoc/core/ns"
+    ],
+    "referenced_in": [
+      "camayoc/core/ns",
+      "quipu/ns"
+    ]
+  }
+]

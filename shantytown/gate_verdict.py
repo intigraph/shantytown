@@ -61,6 +61,8 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from .stable_vocabulary import aliases, pattern
+
 AEGIS = "http://aegis.gastown.local/ontology/"
 #: What the signer's VerifierRegistration must `aegis:attests`.
 PREDICATE_ID = "github-pr-gate-approval"
@@ -510,20 +512,22 @@ def _graph(graph: str) -> str:
 
 
 def gates_query(pr: str, head: str, graph: str) -> str:
-    classes = ", ".join(f"aegis:{c}" for c in CLASSES)
-    return ("PREFIX aegis: <%s> SELECT (STR(?v) AS ?gate) ?outcome ?by ?at ?author ?evidence "
-            "WHERE { GRAPH <%s> { ?v a ?t ; aegis:aboutGitHubEntity <%s> ; aegis:commitSha %s ; "
-            "aegis:outcome ?outcome ; aegis:by ?by ; aegis:recordedAt ?at . "
-            "OPTIONAL { ?v aegis:authorAgent ?author } OPTIONAL { ?v aegis:evidence ?evidence } "
-            "FILTER(?t IN (%s)) } }" % (AEGIS, _graph(graph), pr, json.dumps(head), classes))
+    # GateApproval and these GitHub-only properties await published ownership.
+    classes = ", ".join("<" + iri + ">" for iri in (AEGIS + "GateApproval", *aliases("Decision")))
+    return (f"SELECT (STR(?v) AS ?gate) ?outcome ?by ?at ?author ?evidence WHERE {{ GRAPH <{_graph(graph)}> {{ "
+            f"?v a ?t ; <{AEGIS}aboutGitHubEntity> <{pr}> ; <{AEGIS}recordedAt> ?at . "
+            + pattern("?v", "commitSha", json.dumps(head)) + pattern("?v", "outcome", "?outcome")
+            + pattern("?v", "by", "?by")
+            + f"OPTIONAL {{ ?v <{AEGIS}authorAgent> ?author }} OPTIONAL {{ ?v <{AEGIS}evidence> ?evidence }} "
+            + f"FILTER(?t IN ({classes})) }} }}")
 
 
 def verdicts_query(gates: list[str], graph: str) -> str:
     values = " ".join(json.dumps(g) for g in gates)
-    return ("PREFIX aegis: <%s> SELECT (STR(?ver) AS ?verdict) ?target ?verifier ?sig WHERE { "
-            "VALUES ?target { %s } GRAPH <%s> { ?ver aegis:targetRef ?target ; "
-            "aegis:predicateId %s ; aegis:verifier ?verifier ; aegis:signature ?sig } }"
-            % (AEGIS, values, _graph(graph), json.dumps(PREDICATE_ID)))
+    return (f"SELECT (STR(?ver) AS ?verdict) ?target ?verifier ?sig WHERE {{ VALUES ?target {{ {values} }} "
+            f"GRAPH <{_graph(graph)}> {{ " + pattern("?ver", "targetRef", "?target")
+            + pattern("?ver", "predicateId", json.dumps(PREDICATE_ID))
+            + pattern("?ver", "verifier", "?verifier") + pattern("?ver", "signature", "?sig") + "} }")
 
 
 def authors_query(pr: str, graph: str) -> str:
@@ -560,6 +564,8 @@ def approval(quipu, *, repo: str, pr: int, node_id: str, head: str, graph: str,
     for r in quipu.query(gates_query(pr_iri(node_id), head, graph)):
         gate = _cell(r, "gate")
         if gate:
+            if gate in gates and gates[gate] != r:
+                raise VerdictError("gate has conflicting canonical/legacy evidence")
             gates[gate] = r
     signed: dict[str, list[dict]] = {}
     if gates:

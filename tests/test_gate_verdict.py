@@ -501,3 +501,53 @@ def test_the_pin_file_must_be_owned_by_root_and_not_writable_by_others(tmp_path)
     os.chmod(pin, 0o644)
     pin.write_text(json.dumps({"version": 1, "signers": {SIGNER: "not-hex"}}))
     assert REAL_TRUSTED_SIGNERS(pin, owner=me) == {}
+
+
+def test_published_gate_fields_read_without_changing_native_legacy_witness(q):
+    from shantytown.stable_vocabulary import TERMS
+    record = _record()
+    gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
+    graph = q.ds.graph(rdflib.URIRef(GRAPH))
+    # Leave the actual native witness predicate legacy until the backend
+    # prerequisite is installed; only mapped gate/read fields migrate here.
+    for name in ('commitSha', 'outcome', 'by', 'targetRef', 'predicateId', 'verifier'):
+        old, new = rdflib.URIRef(gv.AEGIS + name), rdflib.URIRef(TERMS[name])
+        for subject, _, value in list(graph.triples((None, old, None))):
+            graph.remove((subject, old, value))
+            graph.add((subject, new, value))
+    assert _approval(q)['approved']
+
+
+def test_conflicting_gate_alias_values_refuse_instead_of_overwriting(q):
+    from shantytown.stable_vocabulary import TERMS
+    record = _record()
+    gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
+    q.ds.graph(rdflib.URIRef(GRAPH)).add((rdflib.URIRef(record.iri),
+        rdflib.URIRef(TERMS['outcome']), rdflib.Literal('changes')))
+    with pytest.raises(gv.VerdictError, match='conflicting canonical/legacy'):
+        _approval(q)
+
+
+def test_canonical_signature_is_read_but_old_native_backend_does_not_verify_it(q):
+    from shantytown.stable_vocabulary import TERMS
+    record = _record()
+    gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
+    graph = q.ds.graph(rdflib.URIRef(GRAPH))
+    old = rdflib.URIRef(gv.AEGIS + 'signature')
+    for subject, _, value in list(graph.triples((None, old, None))):
+        graph.remove((subject, old, value))
+        graph.add((subject, rdflib.URIRef(TERMS['signature']), value))
+    # The real existing native-witness model stays unchanged. Do not turn
+    # a reader-only compatibility control into invented installed acceptance.
+    with pytest.raises(gv.VerdictError, match='no recorded aegis:signature'):
+        _approval(q)
+
+
+def test_dual_reader_terms_match_the_independent_published_crosswalk():
+    from pathlib import Path
+    from shantytown import stable_vocabulary as vocabulary
+    rows = json.loads((Path(__file__).parent / 'fixtures/writer-reader-ownership.json').read_text())
+    assert {vocabulary.LEGACY + name: iri for name, iri in vocabulary.TERMS.items()} == {
+        row['old']: row['new'] for row in rows}
+    with pytest.raises(KeyError):
+        vocabulary.aliases('UnpublishedTerm')
