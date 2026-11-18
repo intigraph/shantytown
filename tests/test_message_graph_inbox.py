@@ -17,6 +17,8 @@ class FakeMsgTracker:
         self.sent = []
         self.read_calls = []
         self.created = []
+        self.list_calls = []
+        self.show_calls = []
 
     def create(self, *a, **k):  # a seed write would land here
         self.created.append((a, k))
@@ -30,8 +32,17 @@ class FakeMsgTracker:
         return Answer.complete_read({"id": mid, "written": True}, how="fixture delivery")
 
     def list_messages(self, to, *, unread=True, weeks=2, all_windows=False):
+        self.list_calls.append((to, unread, all_windows))
         return Answer.complete_read([dict(m) for m in self.msgs
                 if m["to"] == to and (not unread or m["read_at"] is None)], how="fixture messages")
+
+    def get_message(self, ident):
+        """`sd msg show ID --all-windows`: exact, read or unread; unknown id fails."""
+        self.show_calls.append(ident)
+        for m in self.msgs:
+            if m["id"] == ident:
+                return Answer.complete_read(dict(m), how="fixture exact receipt")
+        raise RuntimeError("sd msg show failed: no such message")
 
     def read_messages(self, ids, *, weeks=2, all_windows=False):
         self.read_calls.append(list(ids))
@@ -213,7 +224,11 @@ def test_mail_older_than_two_weeks_remains_visible_and_acknowledgeable(operation
     elif operation == "unread_selected":
         assert box.unread_selected("wu", [old["id"]])[0].id == old["id"]
     else:
+        # A named acknowledgment reads the exact receipt (`sd msg show
+        # --all-windows`), so an old live window is still acknowledgeable.
         assert box.mark_read("wu", [old["id"]])[0].id == old["id"]
+        assert tracker.show_calls == [old["id"]] and not calls
+        return
     assert calls and all(calls)
 
 
@@ -245,3 +260,48 @@ def test_unsupported_all_window_scope_refuses_without_recent_window_retry():
     with pytest.raises(RuntimeError, match="sd msg list failed"):
         tracker.list_messages("wu", all_windows=True)
     assert len(calls) == 1
+
+
+def test_named_acknowledgment_reads_exact_receipts_not_every_window():
+    """aegis-xdvg.4: closing one delivery pointer must not list every window twice."""
+    box, trk = _box()
+    first = box.deliver("wu", "one", frm="grant")
+    second = box.deliver("wu", "two", frm="grant")
+    trk.list_calls.clear()
+    marked = box.mark_read("wu", [first.id, second.id])
+    assert {m.id for m in marked} == {first.id, second.id}
+    assert trk.list_calls == [] and trk.show_calls == [first.id, second.id]
+    assert trk.read_calls == [[first.id, second.id]]
+    # Already read: exact receipt shows read_at, quiet no-op, no second mark.
+    trk.show_calls.clear()
+    assert box.mark_read("wu", [first.id]) == [] and trk.read_calls == [[first.id, second.id]]
+
+
+@pytest.mark.parametrize("case", ["missing", "foreign"])
+def test_exact_acknowledgment_refuses_before_marking_anything(case):
+    box, trk = _box()
+    mine = box.deliver("wu", "mine", frm="grant")
+    bad = "msg-does-not-exist" if case == "missing" else box.deliver("tim", "x", frm="grant").id
+    with pytest.raises(RuntimeError, match="refused inbox acknowledgment"):
+        box.mark_read("wu", [mine.id, bad])
+    assert trk.read_calls == [] and box.unread_count("wu") == 1
+
+
+def test_unreadable_exact_receipt_is_unknown_not_marked(monkeypatch):
+    box, trk = _box()
+    mine = box.deliver("wu", "mine", frm="grant")
+    def broken(ident):
+        raise RuntimeError("sd msg show failed: transport timeout")
+    monkeypatch.setattr(trk, "get_message", broken)
+    with pytest.raises(RuntimeError, match="exact receipt UNKNOWN"):
+        box.mark_read("wu", [mine.id])
+    assert trk.read_calls == []
+
+
+def test_many_named_ids_keep_the_two_listing_path():
+    box, trk = _box()
+    ids = [box.deliver("wu", f"m{i}", frm="grant").id for i in range(MessageGraphInbox.EXACT_ACK_LIMIT + 1)]
+    trk.list_calls.clear()
+    assert len(box.mark_read("wu", ids)) == len(ids)
+    assert trk.show_calls == []
+    assert trk.list_calls == [("wu", True, True), ("wu", False, True)]
