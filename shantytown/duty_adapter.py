@@ -77,7 +77,7 @@ def sweep(root, cards, panes, inbox, tracker, host, registry, *, now, release, d
                                 if r.get('producer') != 'local-jobs'] + job_bindings(root, host)
         validate(inventory)
         hooks = bindings(root, cards, panes, inbox, tracker, host, registry)
-        return duties.preview(observe=hooks['observe'], now=now, inventory=inventory)
+        return duties.preview(observe=hooks['observe'], now=now, inventory=inventory, host=host)
     from .duty_metrics import publish
     if not duties.path.exists():
         # Missing installation is explicitly UNKNOWN, not a zero-duty census.
@@ -90,7 +90,7 @@ def sweep(root, cards, panes, inbox, tracker, host, registry, *, now, release, d
         from .duty_discovery import refresh
         refresh(root, host)
         result = duties.tick(**bindings(root, cards, panes, inbox, tracker, host, registry),
-                             now=now, release=release)
+                             now=now, release=release, host=host)
     except Exception:
         write_json_atomic(duties.root / 'report.json', dict(
             checked_at=now, complete=False, orphaned={}, unknown=1))
