@@ -1699,6 +1699,8 @@ def build_parser() -> argparse.ArgumentParser:
     wi.add_argument("--requester")
     wi.add_argument("--summary")
     wi.add_argument("--urgent", action="store_true")
+    wi.add_argument("--queue-override", metavar="REASON",
+                    help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
     wi.add_argument("--session", help="session provenance; defaults to the actor's current recorded session")
     wi.add_argument("--description-file", type=Path)
     wi.add_argument("--notes-file", type=Path)
@@ -2054,7 +2056,7 @@ def build_parser() -> argparse.ArgumentParser:
     ss.add_argument("--task-order", action="store_true",
                     help="report observed reads before actions in declared task scopes")
     ss.add_argument("--queue-order", action="store_true",
-                    help="report retained queue-order refusal observations; missing history is UNKNOWN")
+                    help="report retained queue-order refusal and override observations; missing history is UNKNOWN")
     ss.add_argument("--files", action="store_true",
                     help="list the files an agent touched (needs agent)")
     ss.add_argument("--since", type=float, default=24.0, metavar="HOURS",
@@ -2125,6 +2127,8 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("title", nargs="+")
     tk.add_argument("-a", "--assignee")
     tk.add_argument("--due", help="explicit due date (YYYY-MM-DD) or timezone-qualified instant")
+    tk.add_argument("--queue-override", metavar="REASON",
+                    help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
     dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
@@ -7562,9 +7566,26 @@ def _cmd_task(a) -> int:
                        _deployment_default(a, "SHANTY_TASK_DUE_REQUIRED"))
         if queue_enabled(setting(a.root, "SHANTY_QUEUE_POLICY")):
             queue_plan = intake(_tracker(a).queue_rows())
+        elif getattr(a, "queue_override", None) is not None:
+            raise ValueError("--queue-override applies only when the queue policy is enforce")
     except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED
+    # aegis-6vto.5 (Stiwi 2026-11-16): a new ask lands at the END of Next, so
+    # assigning it at birth jumps every unassigned ranked item unless recorded.
+    queue_refused = queue_override = None
+    if queue_plan is not None and a.assignee:
+        from .queue_policy import assignment
+        from .feed_audit import FeedAudit
+        candidate = {"id": None, "lane": "next", "rank": queue_plan["rank"],
+                     "status": "open", "assignee": None}
+        try:
+            queue_override = assignment(_tracker(a), candidate, a.assignee,
+                reason=getattr(a, "queue_override", None),
+                actor=os.environ.get("SHANTY_AGENT"),
+                audit=FeedAudit(Path(a.root)), dry_run=a.dry_run) or None
+        except ValueError as error:
+            queue_refused = str(error)
     from .plate_capacity import (ensure_room, assignment_lock, PlateFull,
                                  CapacityUnknown)
     if a.dry_run:
@@ -7574,7 +7595,10 @@ def _cmd_task(a) -> int:
             except (PlateFull, CapacityUnknown) as error:
                 print(f"  refused: {error}", file=sys.stderr)
                 return REFUSED
-        print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee else "")
+        if queue_refused:
+            print(f"  would refuse assignment: {queue_refused}; would create unassigned",
+                  file=sys.stderr)
+        print(f"  would: create {title!r}" + (f" assignee={a.assignee}" if a.assignee and not queue_refused else "")
               + (f" due={due}" if due else ""))
         print("\n  0 writes.")
         if queue_plan is not None:
@@ -7610,7 +7634,8 @@ def _cmd_task(a) -> int:
                 except CapacityUnknown as error:
                     print(f"  refused: {error}", file=sys.stderr)
                     return REFUSED
-            fields = {"assignee": None if refused else a.assignee}
+            deferred_owner = queue_refused is not None or queue_override is not None
+            fields = {"assignee": None if refused or deferred_owner else a.assignee}
             if due:
                 fields["due_at"] = due
             item = tracker.create(title, **fields)
@@ -7629,6 +7654,22 @@ def _cmd_task(a) -> int:
                   "Retain this ID; reconcile it, do not repeat create.", file=sys.stderr)
             return CANNOT_TELL
         print(reply(item.id, queue_plan))
+    if queue_refused:
+        print(f"  refused assignment: {queue_refused}; created {item.id} unassigned",
+              file=sys.stderr)
+        return REFUSED
+    if queue_override is not None:
+        try:
+            current = tracker.get(item.id)
+            tracker.update(item.id, assignee=a.assignee, if_revision=current.revision,
+                           transition_comment=queue_override)
+            if tracker.get(item.id).assignee != a.assignee:
+                raise RuntimeError("assignment readback unproven")
+        except Exception as error:
+            print(f"  {item.id} CREATED unassigned; override assignment UNKNOWN: {error}. "
+                  "Read back before retrying.", file=sys.stderr)
+            return CANNOT_TELL
+        print(f"  {item.id} assigned to {a.assignee} by recorded queue override")
     return OK
 
 

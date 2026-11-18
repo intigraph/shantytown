@@ -143,6 +143,16 @@ reads refuse. Existing governor, dependency and ownership checks remain active.
 Pending dispatch receipts still reconcile without re-sending: this does not
 retroactively revoke custody already delivered by an older binary.
 
+Assignment follows the same order as dispatch. With enforcement on, `st task -a`,
+`st work item update --assignee` and `st go` refuse to give an item to a new owner
+when it has no Now/Next rank, or when an unassigned, open, workable item ranks
+above it on the board (Now before Next, then rank). The refusal names that item.
+`--queue-override REASON` assigns anyway: the reason, actor and refusal are
+written on the item's transition and counted with refusals in `st agent stats --queue-order`
+(`out_of_order_overrides`). An unreadable board refuses and cannot
+be overridden. `st task -a` that is refused still files the request into Next,
+unassigned. Off mode never reads the queue and rejects `--queue-override`.
+
 `st work item update ID --lane now --rank 1 --quote 'Do this now' \
 --requester operator --urgent --if-revision REV` records the exact request and the
 current Now cohort in the same native CAS as promotion. Caps refuse and name
