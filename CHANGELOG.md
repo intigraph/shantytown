@@ -6,6 +6,13 @@
 
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.18.1](https://github.com/intigraph/shantytown/compare/v0.18.0...v0.18.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* read published workflow, gate, job and dependency vocabulary ([#596](https://github.com/intigraph/shantytown/issues/596)) ([cdad860](https://github.com/intigraph/shantytown/commit/cdad860b3dc71d2674c870b9eb47e5089211e418))
+
 ## [0.18.0](https://github.com/intigraph/shantytown/compare/v0.17.0...v0.18.0) (2026-11-15)
 
 
