@@ -513,3 +513,28 @@ def test_production_deadline_driver_fences_legacy_scan(tmp_path, monkeypatch, in
     state = service.snapshot()['worker']
     assert state['state'] == ('live' if relaunch else 'stopped')
     assert state['observed_at'] == (300 if relaunch else 190)
+
+
+def test_cardless_stopped_owner_is_measured_not_a_lookup_failure(world):
+    """A stop record can outlive its crew card (aegis-5dh: billy, zia, ...).
+
+    Before: registry.get raised LookupError on every supervisor pass, the
+    owner stayed pending forever and spent the pass budget. Now an owner
+    holding nothing resolves to empty, and held work pages the administrator.
+    """
+    world.rows[:] = [dict(row, assignee='retired') for row in world.rows]
+    world.service.stop('retired', at=100)
+    assert world.tick(400) == [('retired', 'delivered')]
+    notice = world.box.unread('admin')
+    assert len(notice) == 1 and 'first P1' in notice[0].body
+    assert world.box.unread('lead') == []
+    assert [row['assignee'] for row in world.rows] == ['retired', 'retired']
+
+
+def test_cardless_stopped_owner_holding_nothing_resolves_empty(world):
+    world.rows.clear()
+    world.service.stop('retired', at=100)
+    assert world.tick(400) == []
+    assert world.service.snapshot()['retired']['notice'] == 'empty'
+    assert world.service.pending() == []
+    assert world.box.unread('admin') == []
