@@ -369,3 +369,216 @@ def test_store_replacement_during_read_is_not_a_retryable_transaction(service):
                               validate=lambda value: value)
     assert state["queries"] == 1
     assert entries() == []
+
+
+# aegis-jve J3: bounded-staleness tier for per-turn crew reads.
+
+def test_stale_tier_is_off_outside_stale_ok(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    read(proof)
+    state.update(tx=11, value="changed")
+    assert read(proof)["rows"][0]["value"] == "changed"
+    assert state["queries"] == 2
+
+
+def test_stale_ok_serves_a_moving_board_without_requests_until_ttl(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        assert read(proof)["rows"][0]["value"] == "before"
+        used = state["queries"] + state["watermarks"]
+        state.update(tx=11, value="changed")  # someone else wrote
+        for _ in range(10):
+            assert read(proof)["rows"][0]["value"] == "before"
+        assert state["queries"] + state["watermarks"] == used  # zero requests
+    # older than the TTL: refetched
+    real = time.time
+    monkeypatch.setattr(seeds_read_cache.time, "time", lambda: real() + 61)
+    with seeds_read_cache.stale_ok():
+        assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_own_write_invalidates_the_stale_tier(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        read(proof)
+        state.update(tx=11, value="changed")
+        seeds_read_cache.invalidate_stale()
+        assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_a_fetch_overlapping_a_write_is_not_published(service, monkeypatch):
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        hit, publish = seeds_read_cache.stale_lookup([proof.quipu_url, "Q"], lambda v: v)
+        assert hit is None and publish is not None
+        seeds_read_cache.invalidate_stale()  # a write lands mid-fetch
+        publish({"rows": [], "count": 0, "truncated": False})
+        hit, _ = seeds_read_cache.stale_lookup([proof.quipu_url, "Q"], lambda v: v)
+        assert hit is None
+
+
+@pytest.mark.parametrize("env", [("ST_SEEDS_STALE_TTL", "0"), ("ST_SEEDS_READ_CACHE", "0")])
+def test_stale_tier_rollback_switches(service, monkeypatch, env):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    monkeypatch.setenv(*env)
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        read(proof)
+        state.update(tx=11, value="changed")
+        assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_stale_ttl_is_capped_and_unparseable_disables(monkeypatch):
+    monkeypatch.setenv("ST_SEEDS_STALE_TTL", "600")
+    assert seeds_read_cache.stale_ttl() == 60.0
+    monkeypatch.setenv("ST_SEEDS_STALE_TTL", "soon")
+    assert seeds_read_cache.stale_ttl() == 0.0
+    monkeypatch.delenv("ST_SEEDS_STALE_TTL")
+    assert seeds_read_cache.stale_ttl() == 60.0
+
+
+def test_exact_scopes_never_take_the_stale_tier(service):
+    proof, state = service
+    with seeds_read_cache.stale_ok(), seeds_read_cache.direct_reads():
+        assert seeds_read_cache.stale_lookup([proof.quipu_url, "Q"], lambda v: v) == (None, None)
+    with seeds_read_cache.stale_ok(), seeds_read_cache.projection_reads():
+        assert seeds_read_cache.stale_lookup([proof.quipu_url, "Q"], lambda v: v) == (None, None)
+
+
+@pytest.mark.real_store  # subprocess.run is replaced below; nothing reaches a store
+def test_sd_list_shares_one_child_per_ttl_and_writes_invalidate(tmp_path, monkeypatch):
+    from shantytown import sd as sd_mod
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("ST_SEEDS_READ_CACHE", raising=False)
+    monkeypatch.delenv("ST_SEEDS_STALE_TTL", raising=False)
+    tracker = sd_mod.SdTracker(repo=str(tmp_path), prefix="aegis")
+    monkeypatch.setattr(tracker, "prove_store", lambda: None)
+    monkeypatch.setattr(type(tracker), "_bin", property(lambda self: "sd"))
+    monkeypatch.setattr(tracker, "_location", lambda: [])
+    calls = []
+
+    def fake_run(cmd, **_kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"n": len(calls)}), "")
+
+    monkeypatch.setattr(sd_mod.subprocess, "run", fake_run)
+    import shantytown.advise_signing as signing
+    monkeypatch.setattr(signing, "run", lambda cmd, **kw: fake_run(cmd))
+    tracker._bd("list", "--assignee", "wu", "--json")
+    tracker._bd("list", "--assignee", "wu", "--json")
+    assert len(calls) == 2  # outside stale_ok(): always live
+    calls.clear()
+    scope = seeds_read_cache.stale_ok()
+    scope.__enter__()
+    first = tracker._bd("list", "--assignee", "wu", "--json")
+    second = tracker._bd("list", "--assignee", "wu", "--json")
+    assert first.stdout == second.stdout and len(calls) == 1
+    tracker._bd("show", "aegis-1", "--json")  # a read: no invalidation
+    tracker._bd("list", "--assignee", "wu", "--json")
+    assert sum(1 for c in calls if "list" in c) == 1
+    tracker._bd("update", "aegis-1", "--status", "open")  # a write
+    third = tracker._bd("list", "--assignee", "wu", "--json")
+    assert sum(1 for c in calls if "list" in c) == 2 and third.stdout != first.stdout
+    other = tracker._bd("list", "--assignee", "ian", "--json")
+    assert sum(1 for c in calls if "list" in c) == 3 and other.returncode == 0
+    scope.__exit__(None, None, None)
+
+
+# Review of #643: the three blocking findings.
+
+def test_own_write_cannot_republish_pre_write_data_through_the_exact_cache(service):
+    # Default 1 s watermark window (not 0): the exact cache would still
+    # certify the pre-write answer unless invalidation drops the marks.
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        assert read(proof)["rows"][0]["value"] == "before"
+        state.update(tx=11, value="changed")  # our own write commits
+        seeds_read_cache.invalidate_stale()
+        assert read(proof)["rows"][0]["value"] == "changed"
+        assert read(proof)["rows"][0]["value"] == "changed"  # and stays fresh
+
+
+def _fake_tracker(tmp_path, monkeypatch):
+    from shantytown import sd as sd_mod
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("ST_SEEDS_READ_CACHE", raising=False)
+    monkeypatch.delenv("ST_SEEDS_STALE_TTL", raising=False)
+    tracker = sd_mod.SdTracker(repo=str(tmp_path), prefix="aegis")
+    monkeypatch.setattr(tracker, "prove_store", lambda: None)
+    monkeypatch.setattr(type(tracker), "_bin", property(lambda self: "sd"))
+    monkeypatch.setattr(tracker, "_location", lambda: [])
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("cwd"), dict(kw.get("env") or {})))
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"n": len(calls)}), "")
+
+    monkeypatch.setattr(sd_mod.subprocess, "run", fake_run)
+    return sd_mod, tracker, calls
+
+
+@pytest.mark.real_store  # subprocess.run is replaced; nothing reaches a store
+def test_sd_cache_key_separates_store_identity_cwd_and_pinned_config(tmp_path, monkeypatch):
+    sd_mod, tracker, calls = _fake_tracker(tmp_path, monkeypatch)
+    with seeds_read_cache.stale_ok():
+        tracker._bd("list", "--json")
+        monkeypatch.setenv("SEEDS_STORE", "/other/store")  # a different store
+        tracker._bd("list", "--json")
+        monkeypatch.setenv("QUIPU_AGENT", "someone-else")  # a different identity
+        tracker._bd("list", "--json")
+        tracker._bd_in(str(tmp_path / "elsewhere"), "list", "--json")  # different cwd
+        import shantytown.actor_identity as ai
+        monkeypatch.setattr(ai, "config_environment", lambda: {"SEEDS_CONFIG": "/pinned"})
+        tracker._bd("list", "--json")  # pinned config
+        assert len(calls) == 5
+        tracker._bd("list", "--json")  # same everything: shared
+        assert len(calls) == 5
+
+
+@pytest.mark.real_store
+def test_a_write_that_times_out_still_invalidates(tmp_path, monkeypatch):
+    sd_mod, tracker, calls = _fake_tracker(tmp_path, monkeypatch)
+    with seeds_read_cache.stale_ok():
+        tracker._bd("list", "--json")
+        import shantytown.advise_signing as signing
+
+        def timeout(cmd, **_kw):
+            raise subprocess.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr(sd_mod.subprocess, "run", timeout)
+        monkeypatch.setattr(signing, "run", lambda cmd, **kw: timeout(cmd))
+        with pytest.raises(subprocess.TimeoutExpired):
+            tracker._bd("update", "aegis-1", "--status", "open")
+        hit, _ = seeds_read_cache.stale_lookup(["anything"], lambda v: v)
+        assert hit is None
+    # the earlier list answer is no longer served
+    monkeypatch.setattr(sd_mod.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, None, {})) or
+                        subprocess.CompletedProcess(cmd, 0, '{"n": 99}', ""))
+    with seeds_read_cache.stale_ok():
+        assert tracker._bd("list", "--json").stdout == '{"n": 99}'
+
+
+def test_failed_generation_write_drops_entries_and_unwritable_cache_disables(service, monkeypatch):
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        _, publish = seeds_read_cache.stale_lookup(["k"], lambda v: v)
+        publish({"rows": [], "count": 0, "truncated": False})
+        assert seeds_read_cache.stale_lookup(["k"], lambda v: v)[0] is not None
+
+        def broken(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(seeds_read_cache.tempfile, "mkstemp", broken)
+        seeds_read_cache.invalidate_stale()
+        assert seeds_read_cache.stale_lookup(["k"], lambda v: v)[0] is None
+        monkeypatch.undo()
+        directory = seeds_read_cache._directory()
+        directory.chmod(0o500)
+        try:
+            assert seeds_read_cache.stale_lookup(["k"], lambda v: v) == (None, None)
+        finally:
+            directory.chmod(0o700)

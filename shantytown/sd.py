@@ -45,6 +45,11 @@ from .inbox import MESSAGE_PREFIXES, is_message, is_unworkable
 BR_LIKE = ("beads", "br", "seeds")
 
 
+_READ_VERBS = frozenset({"show", "list", "ready", "where", "search", "count", "info", "stats",
+                         "spec-state", "spec-events", "spec-receipt", "spec-changes",
+                         "identity", "doctor"})
+
+
 class StoreUnproven(RuntimeError):
     """sd could not be shown to read the configured store."""
 
@@ -958,6 +963,12 @@ class SdTracker(BrTracker):
         return Answer.complete_read(list(rows.values()), how=how)
 
     def inbox_items(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
+        """aegis-jve J3: inbox views tolerate stale_ttl() (own writes invalidate)."""
+        from .seeds_read_cache import stale_ok
+        with stale_ok():
+            return self._inbox_items_live(agent, include_closed=include_closed)
+
+    def _inbox_items_live(self, agent: str, include_closed: bool = False) -> Answer[list[WorkItem]]:
         """Read only this recipient's messages, with closed receipt support."""
         try:
             answer = self._inbox_metadata(agent, include_closed=include_closed)
@@ -997,6 +1008,12 @@ class SdTracker(BrTracker):
         return answer
 
     def inbox_count(self, agent):
+        """aegis-jve J3: inbox views tolerate stale_ttl() (own writes invalidate)."""
+        from .seeds_read_cache import stale_ok
+        with stale_ok():
+            return self._inbox_count_live(agent)
+
+    def _inbox_count_live(self, agent):
         """Count membership independently of the metadata field budget."""
         from .seeds_inbox import LegacyInboxSchema
         from .seeds_inbox_window import count
@@ -1016,7 +1033,7 @@ class SdTracker(BrTracker):
         from .seeds_inbox_window import page_ids
         from .answer import PartialAnswer
         try:
-            observed = self.inbox_count(agent)
+            observed = self._inbox_count_live(agent)  # count and window: one live view
             if observed is None:
                 return None
             total = observed.exact()
@@ -1196,21 +1213,59 @@ class SdTracker(BrTracker):
         pinned_config = config_environment()
         if pinned_config:
             options['env'] = dict(options.get('env') or os.environ, **pinned_config)
+        # aegis-jve J3: inside stale_ok(), sd list/ready answers are shared per
+        # host for at most stale_ttl() seconds; any non-read through st bumps
+        # the generation so no earlier answer is served again.
+        from . import seeds_read_cache
+        verb = translated[0] if translated else ""
+        read_only = verb in _READ_VERBS or (
+            verb in ("msg", "comments") and len(translated) > 1
+            and translated[1] in ("list", "show"))
+        hit = publish = None
+        if verb in ("list", "ready"):
+            def _valid(value):
+                if not isinstance(value, str):
+                    raise ValueError("cached sd stdout is not text")
+                return value
+            # Only inside an explicit stale_ok() scope (stop hooks, inbox views);
+            # every other caller keeps a live read.
+            # Everything that can change what this child answers is in the key:
+            # the argv (store, location, --actor), the working directory, the
+            # pinned config and the seeds/quipu identity environment.
+            env = options.get('env') or os.environ
+            identity_env = sorted((k, v) for k, v in env.items()
+                                  if k.startswith(("SEEDS_", "SD_", "QUIPU_", "SHANTY_"))
+                                  or k in ("HOME", "XDG_CONFIG_HOME", "USER"))
+            hit, publish = seeds_read_cache.stale_lookup(
+                ["sd", cmd, repo or os.getcwd(), sorted(pinned_config.items()) if pinned_config else [],
+                 identity_env], _valid)
+        if hit is not None:
+            result = subprocess.CompletedProcess(cmd, 0, hit, "")
+            from .tracker_result import observe
+            observe(result)
+            return result
         # Reads retain their original route and budget. Optional signing
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
-        if mutation(self._translate(args)) and not pinned_config:
-            asserted = actor
-            for i, arg in enumerate(args):
-                if arg.startswith('--actor='):
-                    asserted = arg.partition('=')[2]
-                elif arg == '--actor' and i + 1 < len(args):
-                    asserted = args[i + 1]
-            result = run(cmd, actor=actor, asserted_actor=asserted,
-                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
-                       options=options, runner=subprocess.run)
-        else:
-            result = subprocess.run(cmd, **options)
+        try:
+            if mutation(self._translate(args)) and not pinned_config:
+                asserted = actor
+                for i, arg in enumerate(args):
+                    if arg.startswith('--actor='):
+                        asserted = arg.partition('=')[2]
+                    elif arg == '--actor' and i + 1 < len(args):
+                        asserted = args[i + 1]
+                result = run(cmd, actor=actor, asserted_actor=asserted,
+                           identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                           options=options, runner=subprocess.run)
+            else:
+                result = subprocess.run(cmd, **options)
+        finally:
+            # A write that timed out or raised may still have landed.
+            if not read_only:
+                seeds_read_cache.invalidate_stale()
+        if read_only and publish is not None and result.returncode == 0 and isinstance(result.stdout, str):
+            publish(result.stdout)
         from .tracker_result import observe
         observe(result)
         return result

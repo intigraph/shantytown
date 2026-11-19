@@ -39,6 +39,127 @@ _PROJECTION = ContextVar("seeds_projection_fence", default=None)
 _RETAIN_CANDIDATES = ContextVar("seeds_retain_candidates", default=False)
 _CHANGE_TX_LIMIT = 100
 _CHANGE_PAGES = 8
+# aegis-jve J3: bounded-staleness tier for per-turn crew reads (stop hooks,
+# inbox, sd list/ready). Never above _MAX_AGE; 0 disables.
+_DEFAULT_STALE_TTL = 60.0
+_STALE_TTL = ContextVar("seeds_stale_ttl", default=0.0)
+_GENERATION = "ttl-generation"
+
+
+def stale_ttl() -> float:
+    """ST_SEEDS_STALE_TTL seconds (default 60, capped at 60; 0 disables)."""
+    raw = os.environ.get("ST_SEEDS_STALE_TTL")
+    if raw is None:
+        return _DEFAULT_STALE_TTL
+    try:
+        value = float(raw)
+    except ValueError:
+        return 0.0
+    return max(0.0, min(value, float(_MAX_AGE)))
+
+
+@contextmanager
+def stale_ok():
+    """Admit answers up to stale_ttl() old inside this block.
+
+    For per-turn reads whose callers already tolerate a moving board (a stop
+    hook, an inbox view, a plate listing). Any write made through st bumps a
+    host-wide generation and every older answer stops being served; a fetch
+    that overlapped a write is never published. Exact readers (projections,
+    snapshots, direct/primary reads) never see this tier.
+    """
+    token = _STALE_TTL.set(stale_ttl())
+    try:
+        yield
+    finally:
+        _STALE_TTL.reset(token)
+
+
+def _generation(directory: Path) -> int:
+    path = directory / _GENERATION
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return 0
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise ValueError("stale-read generation is not private")
+        value = int(stream.read(64).decode() or 0)
+    if value < 0:
+        raise ValueError("invalid stale-read generation")
+    return value
+
+
+def invalidate_stale() -> None:
+    """A write through st: no earlier answer is served again from either tier.
+
+    Bumps the bounded-staleness generation and drops the shared watermark
+    observations, so the next exact read must observe the post-write
+    watermark and cannot republish a pre-write answer. If the generation
+    cannot be written, every bounded-staleness entry is removed instead;
+    lookups also refuse the tier while the cache cannot be written, so the
+    fail-closed state survives this process.
+    """
+    try:
+        directory = _directory()
+    except _CACHE_ERRORS:
+        return  # no cache directory: nothing can be served from it either
+    for mark in directory.glob("mark-*.json"):
+        try:
+            mark.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        fd, temporary = tempfile.mkstemp(prefix="incoming-", dir=directory)
+        try:
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(str(time.time_ns()).encode())
+            os.replace(temporary, directory / _GENERATION)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    except _CACHE_ERRORS:
+        for entry in directory.glob("ttlr-*.json"):
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def stale_lookup(parts, validate, *, ttl=None):
+    """(hit, publish) for one bounded-staleness key; (None, None) when off.
+
+    `publish(result)` stores a fresh answer only if no write bumped the
+    generation since this lookup.
+    """
+    ttl = _STALE_TTL.get() if ttl is None else ttl
+    if (ttl <= 0 or _DIRECT_READS.get() or _PROJECTION.get() is not None
+            or _READ_SNAPSHOT.get()[0] or os.environ.get("ST_SEEDS_READ_CACHE") == "0"
+            or stale_ttl() <= 0):
+        return None, None
+    key = hashlib.sha256(json.dumps(["stale-v1", *parts]).encode()).hexdigest()
+    try:
+        directory = _directory()
+        if not os.access(directory, os.W_OK):
+            return None, None  # an invalidation could not land: tier off
+        path = directory / ("ttlr-" + key + ".json")
+        with _locked(directory, key):
+            generation = [_GENERATION, _generation(directory)]
+            hit = _cached(path, generation, validate, max_age=min(ttl, stale_ttl()))
+    except _CACHE_ERRORS:
+        return None, None
+    if hit is not None:
+        return hit, None
+
+    def publish(result):
+        try:
+            with _locked(directory, key):
+                if _generation(directory) == generation[1]:
+                    _publish(directory, path, generation, result)
+        except _CACHE_ERRORS:
+            pass
+
+    return None, publish
 
 
 @contextmanager
@@ -423,14 +544,21 @@ def _publish(directory: Path, path: Path, watermark, result):
 
 
 def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
+    # aegis-jve J3: inside stale_ok(), a fresh-enough answer costs no request.
+    hit, publish = stale_lookup([server, query], validate)
+    if hit is not None:
+        return hit
     # aegis-jve: a background caller does not ask a server that just said busy;
     # every caller's busy answer (408/429/503) refreshes that per-host signal.
     quipu_busy.gate(server)
     try:
-        return _read(server, query, timeout, opener=opener, fetch=fetch, validate=validate)
+        result = _read(server, query, timeout, opener=opener, fetch=fetch, validate=validate)
     except HTTPError as error:
         quipu_busy.observe(server, error)
         raise
+    if publish is not None:
+        publish(result)
+    return result
 
 
 def _read(server: str, query: str, timeout: int, *, opener, fetch, validate):
