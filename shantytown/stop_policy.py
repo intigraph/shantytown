@@ -784,7 +784,12 @@ def run(root, me: str, **kw) -> int:
             card = None  # gather owns the existing unreadable-card diagnostic
         if card is not None and stop_advice(root, card):
             return 0
-        inp = gather(root, me, **kw)
+        # aegis-jve J3: a stop hook fires every turn; its board reads may be up
+        # to stale_ttl() old (own writes invalidate) instead of one live
+        # owner-row read per stop.
+        from .seeds_read_cache import stale_ok
+        with stale_ok():
+            inp = gather(root, me, **kw)
         verdict = decide(inp)
         state = p0_ledger_update(inp, verdict)
         if state is not None and state != inp.p0_last:
