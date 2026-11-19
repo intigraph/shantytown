@@ -13,6 +13,7 @@ import re
 from .protocols import plate_key, rank_order
 from .priority_advisory import workable
 from .inbox import drop_parked
+from .owner_snapshot import transient
 
 
 def setting(root, name):
@@ -154,18 +155,28 @@ def override(reason, actor, refused):
 def assignment(tracker, candidate, owner, *, reason=None, actor=None, audit=None,
                dry_run=False):
     """Return the override record to attach, '' when in order; raise on refusal."""
+    busy = False
     try:
         refused = assignment_refusal(candidate, tracker.queue_rows(), owner)
     except Exception as error:
-        refused = f'queue admission UNKNOWN ({type(error).__name__}: {error}); assignment refused'
+        # aegis-jve: a quipu busy signal (408/429/503/timeout, same classifier as
+        # the plate snapshot) is transient, so a recorded override may proceed.
+        # Any other unreadable board stays a hard UNKNOWN that no flag can pass.
+        busy = transient(error)
+        refused = (f'queue admission UNKNOWN (quipu busy: {type(error).__name__}: {error}); '
+                   'assignment refused (retry, or pass --queue-override with a reason)'
+                   if busy else
+                   f'queue admission UNKNOWN ({type(error).__name__}: {error}); assignment refused')
     if not refused:
         return ''
     unknown = 'UNKNOWN' in refused
-    record = None if unknown or reason is None else override(reason, actor, refused)
+    record = (None if reason is None or (unknown and not busy)
+              else override(reason, actor, refused))
     if audit is not None and not dry_run:
         audit.record(audit.begin(), leg='queue', worker=owner,
             item=candidate.get('id') or '(new)', refused=record is None, reason=refused,
-            state=('queue_order_unknown' if unknown else
+            state=('queue_order_unknown_override' if unknown and record else
+                   'queue_order_unknown' if unknown else
                    'queue_order_override' if record else 'queue_order_refused'))
     if record is None:
         raise ValueError(refused)
@@ -220,12 +231,18 @@ def gate(tracker, previous=None, *, audit=None, dry_run=False):
                 # item outranks it on the board (aegis-6vto.5 amendment).
                 reason = assignment_refusal(dict(vars(item)), tracker.queue_rows(), owner)
         except Exception as error:
-            reason = f'queue admission UNKNOWN ({type(error).__name__}: {error}); no dispatch'
+            busy = transient(error)
+            reason = (f'queue admission UNKNOWN (quipu busy: {type(error).__name__}: {error}); '
+                      'no dispatch this pass, retry when quipu recovers'
+                      if busy else
+                      f'queue admission UNKNOWN ({type(error).__name__}: {error}); no dispatch')
         if reason and audit is not None and not dry_run:
             try:
                 audit.record(audit.begin(), leg='queue', worker=owner, item=item.id,
                     refused=True, reason=reason,
-                    state='queue_order_unknown' if 'UNKNOWN' in reason else 'queue_order_refused')
+                    state=('queue_order_busy' if 'quipu busy' in reason else
+                           'queue_order_unknown' if 'UNKNOWN' in reason else
+                           'queue_order_refused'))
             except Exception as error:
                 return f'queue audit UNKNOWN ({type(error).__name__}); no dispatch'
         return reason
@@ -246,12 +263,13 @@ def observations(root, *, since=0, owner=None):
         rows = [json.loads(line) for line in raw.splitlines()]
         if not rows or any(not isinstance(row, dict) for row in rows):
             return unknown | {'reason': 'audit empty or malformed'}
+        overridden = ('queue_order_override', 'queue_order_unknown_override')
         selected = [row for row in rows if row.get('state') in (
-            'queue_order_refused', 'queue_order_unknown', 'queue_order_override')]
+            'queue_order_refused', 'queue_order_unknown', 'queue_order_busy', *overridden)]
         if not selected:
             return unknown | {'reason': 'no queue admission observation retained'}
         if any(row.get('leg') != 'queue'
-               or row.get('refused') is not (row['state'] != 'queue_order_override')
+               or row.get('refused') is not (row['state'] not in overridden)
                or not row.get('item') or not row.get('worker')
                or type(row.get('at')) not in (int, float)
                or not math.isfinite(row['at']) for row in selected):
@@ -259,8 +277,11 @@ def observations(root, *, since=0, owner=None):
         selected = [row for row in selected if row['at'] >= since
                     and (owner is None or row['worker'] == owner)]
         count = sum(row['state'] == 'queue_order_refused' for row in selected)
-        overrides = sum(row['state'] == 'queue_order_override' for row in selected)
-        unknowns = len(selected) - count - overrides
+        overrides = sum(row['state'] in overridden for row in selected)
+        # A busy refusal and an override taken while the board was UNKNOWN both
+        # leave the order unproven, so they keep the report PARTIAL (aegis-jve).
+        unknowns = sum(row['state'] in ('queue_order_unknown', 'queue_order_busy',
+                                        'queue_order_unknown_override') for row in selected)
         return unknown | {'status': 'PARTIAL' if unknowns else 'OBSERVED',
                           'out_of_order_attempts': count,
                           'out_of_order_overrides': overrides,

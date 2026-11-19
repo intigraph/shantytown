@@ -194,3 +194,52 @@ def test_dispatch_of_already_owned_item_skips_board_check(tmp_path):
     tracker.rows = [row('t-top', lane='now', rank='1')]
     target = WorkItem('t-1', lane='now', rank='2', assignee='ellie')
     assert not queue_policy.gate(tracker)(target, 'ellie')
+
+
+# --- aegis-jve: a busy quipu is transient, not a hard UNKNOWN --------------
+
+class Busy:
+    def __init__(self, message='HTTP Error 408: Request Timeout'):
+        self.message = message
+
+    def queue_rows(self):
+        raise RuntimeError(self.message)
+
+    def queue_owner_rows(self, owner):
+        raise RuntimeError(self.message)
+
+
+@pytest.mark.parametrize('message', ['HTTP Error 408: Request Timeout',
+                                     'status 503 Service Unavailable',
+                                     'code=429 too many requests', 'read timed out'])
+def test_busy_board_allows_a_recorded_override(tmp_path, message):
+    audit = FeedAudit(tmp_path)
+    with pytest.raises(ValueError, match='quipu busy.*--queue-override'):
+        queue_policy.assignment(Busy(message), row('t-1', rank='1'), 'ellie', audit=audit)
+    record = json.loads(queue_policy.assignment(Busy(message), row('t-1', rank='1'), 'ellie',
+        reason='quipu busy, operator ruling', actor='sattler', audit=audit))
+    assert record['schema'] == 'queue-override/v1' and 'quipu busy' in record['refusal']
+    assert audit_states(tmp_path) == ['queue_order_unknown', 'queue_order_unknown_override']
+    report = queue_policy.observations(tmp_path)
+    assert report['status'] == 'PARTIAL'
+    assert report['out_of_order_overrides'] == 1 and report['unknown_attempts'] == 2
+
+
+def test_non_busy_unreadable_board_stays_non_overridable(tmp_path):
+    # An identifier that merely contains a busy code is not an HTTP busy signal.
+    for message in ('projection coverage UNKNOWN', 'aegis-503 incomplete'):
+        with pytest.raises(ValueError, match='UNKNOWN') as refused:
+            queue_policy.assignment(Busy(message), row('t-1', rank='1'), 'ellie',
+                                    reason='urgent', audit=FeedAudit(tmp_path))
+        assert 'quipu busy' not in str(refused.value)
+    assert audit_states(tmp_path) == ['queue_order_unknown', 'queue_order_unknown']
+
+
+def test_busy_dispatch_is_labelled_retryable_not_a_hard_unknown(tmp_path):
+    target = WorkItem('t-1', lane='now', rank='2')
+    reason = queue_policy.gate(Busy(), audit=FeedAudit(tmp_path))(target, 'ellie')
+    assert 'quipu busy' in reason and 'retry' in reason
+    hard = queue_policy.gate(Busy('incomplete'), audit=FeedAudit(tmp_path))(target, 'ellie')
+    assert 'quipu busy' not in hard and 'no dispatch' in hard
+    assert audit_states(tmp_path) == ['queue_order_busy', 'queue_order_unknown']
+    assert queue_policy.observations(tmp_path)['unknown_attempts'] == 2
