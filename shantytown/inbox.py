@@ -945,6 +945,48 @@ class MessageGraphInbox:
             found += [m for m in self._window_unread(me) if m.id in wanted]
         return found
 
+    # A named acknowledgment (the live-delivery pointer close on every durable
+    # send, --ack-id) used to list the recipient's unread AND full history over
+    # every registered window: two `sd msg list --all-windows` calls, one query
+    # per weekly window each (13 windows = 26 queries on 2026-11-18, growing a
+    # window a week). An exact `sd msg show --all-windows` is 3 queries per id
+    # (aegis-xdvg.4, measured on the served store). Past this many ids the two
+    # listings are cheaper again, so the original path is kept for them.
+    EXACT_ACK_LIMIT = 3
+
+    def _window_to_mark(self, me: str, wanted: list[str]) -> list[Message]:
+        """Window messages to mark read; already-read is a quiet no-op.
+
+        A missing message, one addressed to someone else, or an unreadable
+        receipt refuses the whole acknowledgment before anything is marked.
+        """
+        name = me.split("/")[-1]
+        reader = getattr(self._tracker, "get_message", None)
+        if not callable(reader) or len(wanted) > self.EXACT_ACK_LIMIT:
+            mine = {m.id: m for m in self._window_unread(me)}
+            read_ids = {v["id"] for v in self._tracker.list_messages(name, unread=False, all_windows=True).exact()}
+            window = []
+            for i in wanted:
+                if i in mine:
+                    window.append(mine[i])
+                elif i not in read_ids:
+                    raise RuntimeError(f"refused inbox acknowledgment of {i}: "
+                                       "no such message to this recipient")
+            return window
+        window = []
+        for i in wanted:
+            try:
+                row = reader(i).exact()
+            except RuntimeError as error:
+                raise RuntimeError(f"refused inbox acknowledgment of {i}: "
+                                   f"exact receipt UNKNOWN ({error})") from error
+            if row.get("id") != i or row.get("to") not in (me, name):
+                raise RuntimeError(f"refused inbox acknowledgment of {i}: "
+                                   "no such message to this recipient")
+            if row.get("read_at") is None:
+                window.append(self._as_message(name, row))
+        return window
+
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         if ids is None:
             window = self._window_unread(me)
@@ -952,16 +994,7 @@ class MessageGraphInbox:
         else:
             legacy_ids = [i for i in ids if not self._is_window(i)]
             wanted = [i for i in dict.fromkeys(ids) if self._is_window(i)]
-            window = []
-            if wanted:
-                mine = {m.id: m for m in self._window_unread(me)}
-                read_ids = {v["id"] for v in self._tracker.list_messages(me.split("/")[-1], unread=False, all_windows=True).exact()}
-                for i in wanted:
-                    if i in mine:
-                        window.append(mine[i])
-                    elif i not in read_ids:
-                        raise RuntimeError(f"refused inbox acknowledgment of {i}: "
-                                           "no such message to this recipient")
+            window = self._window_to_mark(me, wanted) if wanted else []
             marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
         if window:
             self._tracker.read_messages([m.id for m in window], all_windows=True).exact()

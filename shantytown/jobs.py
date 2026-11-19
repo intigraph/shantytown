@@ -905,6 +905,54 @@ class Outcome:
     ok: bool
     detail: str = ""
     running: bool = False        # an exec that was STARTED, not finished
+    tail: str = ""               # masked tail of a FAILED run's own output (aegis-77c)
+
+
+# No leading \b: a token glued to a word char (GH_TOKEN_ghp_...) must still match.
+_TOKEN_SHAPES = re.compile(
+    r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}"
+    r"|sk-ant-[A-Za-z0-9_-]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})")
+# key, optional closing quote (JSON/dict keys), separator, optional opening quote.
+_SECRET_PAIRS = re.compile(
+    r"(?i)((?:[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key))[\"']?\s*[=:]\s*[\"']?)"
+    r"[^\s\"',;}]{4,}")
+# Any Authorization value whatever its scheme (Basic, Token, Bearer, ...).
+_AUTH_VALUE = re.compile(
+    r"(?i)(authorization[\"']?\s*[=:]\s*[\"']?(?:[a-z][a-z0-9-]*\s+)?)[^\s\"',;}]+")
+_TAIL_READ_BYTES = 64 * 1024     # bound on how much of one run's output is read
+_TAIL_LINES = 8
+_TAIL_CHARS = 1024
+
+
+def _failure_tail(log_path, offset: int) -> str:
+    """The masked end of THIS run's output, for the failed row's detail.
+
+    Reads only what the run appended after `offset`, bounded to its last
+    _TAIL_READ_BYTES. Redacts the whole read text BEFORE cutting (br.redact_cause:
+    a cut inside a token would leave a fragment the redactor cannot see), then
+    keeps the last _TAIL_LINES lines and _TAIL_CHARS characters. Any read error
+    yields "" (the full output stays in the job's .state log either way).
+    """
+    try:
+        with open(log_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            end = f.tell()
+            start = max(offset, end - _TAIL_READ_BYTES)
+            if end <= start:
+                return ""
+            f.seek(start)
+            raw = f.read(end - start)
+    except OSError:
+        return ""
+    from .br import redact_cause
+    text = redact_cause(raw.decode("utf-8", errors="replace"))
+    # A failure tail is escalated to the lead, so also mask bare well-known token
+    # shapes and secret-named key=value pairs the shared bearer redactor misses.
+    text = _TOKEN_SHAPES.sub("[REDACTED]", text)
+    text = _SECRET_PAIRS.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _AUTH_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    lines = [line for line in text.splitlines() if line.strip()][-_TAIL_LINES:]
+    return "\n".join(lines)[-_TAIL_CHARS:]
 
 
 def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> dict:
@@ -914,13 +962,20 @@ def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> di
     job cannot hold a supervision pass for twenty minutes (aegis-qwadc)."""
     start = time.time()
     out = open(log_path, "a", encoding="utf-8") if log_path else subprocess.DEVNULL
+    offset = out.tell() if log_path else 0
+
+    def failed(error: str, rc) -> dict:
+        res = {"ok": False, "rc": rc, "start": start, "end": time.time(), "error": error}
+        if log_path:
+            out.flush()
+            res["output_tail"] = _failure_tail(log_path, offset)
+        return res
     try:
         try:
             proc = subprocess.Popen(list(argv), stdout=out, stderr=subprocess.STDOUT,
                                     env=env, cwd=cwd, start_new_session=True)
         except OSError as e:
-            return {"ok": False, "rc": None, "start": start, "end": time.time(),
-                    "error": f"could not start: {e}"}
+            return failed(f"could not start: {e}", None)
         try:
             rc = proc.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
@@ -930,10 +985,10 @@ def run_exec(argv, timeout_s: float, *, log_path=None, env=None, cwd=None) -> di
             except OSError:
                 pass
             proc.wait()
-            return {"ok": False, "rc": None, "start": start, "end": time.time(),
-                    "error": f"timed out after {_human_s(timeout_s)}"}
-        return {"ok": rc == 0, "rc": rc, "start": start, "end": time.time(),
-                "error": "" if rc == 0 else f"exited {rc}"}
+            return failed(f"timed out after {_human_s(timeout_s)}", None)
+        if rc != 0:
+            return failed(f"exited {rc}", rc)
+        return {"ok": True, "rc": rc, "start": start, "end": time.time(), "error": ""}
     finally:
         if log_path:
             out.close()
@@ -1135,7 +1190,8 @@ class Runner:
             if not self.detach:
                 res = run_exec(rendered["argv"], job.timeout_s, log_path=self._log_path(job),
                                env=self._exec_env(job, fire), cwd=str(self.root))
-                return Outcome(res["ok"], res["error"] or "exit 0")
+                return Outcome(res["ok"], res["error"] or "exit 0",
+                               tail=res.get("output_tail") or "")
             result = jobs_dir(self.root) / STATE_DIR / f"{job.name}.result.json"
             try:
                 result.unlink()
@@ -1180,7 +1236,8 @@ class Runner:
                 return Outcome(False, "the exec runner exited without a result "
                                       "(killed, or the host restarted)")
         fire.pop("running", None)
-        return Outcome(bool(res.get("ok")), res.get("error") or "exit 0")
+        return Outcome(bool(res.get("ok")), res.get("error") or "exit 0",
+                       tail=str(res.get("output_tail") or ""))
 
     def _finish(self, job: Job, st: dict, fire: dict, outcome: Outcome) -> list[str]:
         now = self.now()
@@ -1189,7 +1246,7 @@ class Runner:
                "event": (fire.get("event") or {}).get("id"), "attempt": attempt,
                "start": fire.get("started", now), "end": now, "ok": outcome.ok,
                "error": "" if outcome.ok else outcome.detail,
-               "detail": outcome.detail if outcome.ok else ""}
+               "detail": outcome.detail if outcome.ok else outcome.tail}
         st["last_run"] = {k: row[k] for k in ("start", "end", "ok", "error", "reason", "attempt")}
         queue = st["pending"]
         if outcome.ok:
@@ -1293,7 +1350,7 @@ class Runner:
                    "event": None, "attempt": 1, "start": fire.get("started", now),
                    "end": self.now(), "ok": outcome.ok, "final": True,
                    "error": "" if outcome.ok else outcome.detail,
-                   "detail": outcome.detail if outcome.ok else ""}
+                   "detail": outcome.detail if outcome.ok else outcome.tail}
             st["last_run"] = {k: row[k] for k in ("start", "end", "ok", "error", "reason", "attempt")}
             if outcome.ok:
                 st["last_ok"] = st["last_done"] = row["end"]

@@ -23,9 +23,10 @@ import tempfile
 import time
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from .query_identity import read_headers
+from . import quipu_busy
 
 _LIMIT = 1024 * 1024
 _ENTRIES = 64
@@ -422,6 +423,17 @@ def _publish(directory: Path, path: Path, watermark, result):
 
 
 def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
+    # aegis-jve: a background caller does not ask a server that just said busy;
+    # every caller's busy answer (408/429/503) refreshes that per-host signal.
+    quipu_busy.gate(server)
+    try:
+        return _read(server, query, timeout, opener=opener, fetch=fetch, validate=validate)
+    except HTTPError as error:
+        quipu_busy.observe(server, error)
+        raise
+
+
+def _read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     # A projection owns its retry boundary: never keep its earlier fields and
     # retry just one query against a newer snapshot.
     scope = _PROJECTION.get()
