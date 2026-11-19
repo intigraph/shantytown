@@ -172,7 +172,9 @@ def test_hostname_failure_stays_unknown(clean_context, monkeypatch, transport):
     assert lower(seen[1][0])["x-quipu-host"] == "declared-host"
 
 
-@pytest.mark.parametrize('command', ['anchor', 'plate', 'inbox', 'stop_policy', 'tend'])
+@pytest.mark.parametrize('command', ['anchor', 'plate', 'inbox', 'stop_policy', 'tend',
+                                     'crew', 'crewid', 'task', 'events', 'harness',
+                                     'stats', 'go', 'status', 'census'])
 def test_default_command_reaches_http_and_sdk_child(command, clean_context, monkeypatch, transport):
     from shantytown.query_identity import declared_command
     url, seen = transport
@@ -242,3 +244,9 @@ def test_stop_entrypoints_and_sdk_preflight_preserve_outer_command(clean_context
     # Invalid hook invocation exits before any registry/board read, restoring context.
     assert stop_policy.main([]) == 1
     assert read_headers()['X-Quipu-Source'] == 'shantytown'
+
+
+def test_unlisted_command_still_reports_other(clean_context):
+    from shantytown.query_identity import declared_command
+    with declared_command('some-new-command'):
+        assert read_headers()['X-Quipu-Source'] == 'st-other'

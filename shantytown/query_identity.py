@@ -110,8 +110,12 @@ def declared_command(command):
     The outer entrypoint owns attribution through nested stop hooks; source is
     diagnostic, not an actor or authority. Context restoration includes errors.
     """
+    # aegis-jve: status segments (crew, crewid, task, events, harness, stats)
+    # and dispatch (go, status, census) were all "st-other". Quipu's request
+    # log accepts exactly these labels; keep the two lists in step.
     known = {"anchor", "plate", "inbox", "stop_policy", "stop_event",
-             "haul", "tend", "work"}
+             "haul", "tend", "work", "crew", "crewid", "task", "events",
+             "harness", "stats", "go", "status", "census"}
     label = command if command in known else "other"
     token = _command.set(_command.get() or "st-" + label)
     try:
