@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import os
+
 import pytest
 
 from shantytown import cli, jobs
@@ -885,3 +887,24 @@ def test_failure_tail_is_bounded(tmp_path):
 def test_failed_row_detail_uses_the_tail():
     o = jobs.Outcome(False, "exited 2", tail="last useful line")
     assert o.tail == "last useful line" and o.detail == "exited 2"
+
+
+# aegis-77c review (malcolm): each of these leaked through run_exec at fcc5537c.
+# Synthetic fixtures assembled at runtime so no credential-shaped literal is committed.
+_FAKE_TOKEN_BODY = "A1b2C3d4" + "E5f6G7h8" + "I9j0K1l2" + "M3n4O5p6" + "Q7r8"
+_FAKE_AUTH_VALUE = "abcdef12" + "34567890" + "xyz"
+@pytest.mark.parametrize("line,secret", [
+    ("export GH_TOKEN_" + "gh" + "p_" + _FAKE_TOKEN_BODY, _FAKE_TOKEN_BODY),
+    ('{"api_key": "s3cr3tValue9876543210"}', "s3cr3tValue9876543210"),
+    ("{'client_secret': 'anotherSecretValue42'}", "anotherSecretValue42"),
+    ("Authorization: Basic dXNlcjpwYXNzd29yZGxvbmc=", "dXNlcjpwYXNzd29yZGxvbmc="),
+    ('"authorization": "Token ' + _FAKE_AUTH_VALUE + '"', _FAKE_AUTH_VALUE),
+])
+def test_failure_tail_masks_review_leak_shapes(tmp_path, line, secret):
+    log = tmp_path / "leak.log"
+    script = "printf '%s\\n' \"$LINE\"; echo 'final useful line'; exit 2"
+    res = jobs.run_exec(["/bin/sh", "-c", script], 10, log_path=str(log),
+                        env={**os.environ, "LINE": line})
+    tail = res["output_tail"]
+    assert secret not in tail, tail
+    assert "[REDACTED]" in tail and "final useful line" in tail

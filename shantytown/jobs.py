@@ -908,11 +908,17 @@ class Outcome:
     tail: str = ""               # masked tail of a FAILED run's own output (aegis-77c)
 
 
+# No leading \b: a token glued to a word char (GH_TOKEN_ghp_...) must still match.
 _TOKEN_SHAPES = re.compile(
-    r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}"
+    r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}"
     r"|sk-ant-[A-Za-z0-9_-]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})")
+# key, optional closing quote (JSON/dict keys), separator, optional opening quote.
 _SECRET_PAIRS = re.compile(
-    r"(?i)\b((?:[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key))\s*[=:]\s*[\"']?)[^\s\"']{8,}")
+    r"(?i)((?:[a-z0-9_-]*(?:token|password|passwd|secret|api[_-]?key))[\"']?\s*[=:]\s*[\"']?)"
+    r"[^\s\"',;}]{4,}")
+# Any Authorization value whatever its scheme (Basic, Token, Bearer, ...).
+_AUTH_VALUE = re.compile(
+    r"(?i)(authorization[\"']?\s*[=:]\s*[\"']?(?:[a-z][a-z0-9-]*\s+)?)[^\s\"',;}]+")
 _TAIL_READ_BYTES = 64 * 1024     # bound on how much of one run's output is read
 _TAIL_LINES = 8
 _TAIL_CHARS = 1024
@@ -944,6 +950,7 @@ def _failure_tail(log_path, offset: int) -> str:
     # shapes and secret-named key=value pairs the shared bearer redactor misses.
     text = _TOKEN_SHAPES.sub("[REDACTED]", text)
     text = _SECRET_PAIRS.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = _AUTH_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
     lines = [line for line in text.splitlines() if line.strip()][-_TAIL_LINES:]
     return "\n".join(lines)[-_TAIL_CHARS:]
 
