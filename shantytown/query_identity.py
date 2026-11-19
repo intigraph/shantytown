@@ -58,6 +58,8 @@ def read_context():
         "QUIPU_HOST": _host(),
         "QUIPU_SOURCE": _command.get() or _key(env.get("QUIPU_SOURCE")) or _source.get(),
         "QUIPU_OPERATION": _key(env.get("QUIPU_OPERATION")) or _operation.get(),
+        # aegis-jve/69x: scheduling class only; can only LOWER priority.
+        "QUIPU_PRIORITY": "background" if (env.get("QUIPU_PRIORITY") or "").strip().lower() == "background" else None,
     }.items() if v is not None}
 
 
