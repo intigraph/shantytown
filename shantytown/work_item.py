@@ -275,6 +275,26 @@ def command(args, tracker):
             prospective = asdict(item) | fields
         from .ask_visibility import refuse_deferral
         refuse_deferral(item, fields)
+        if fields.get("assignee"):
+            override_reason = getattr(args, "queue_override", None)
+            from .queue_policy import enabled, setting, assignment
+            if enabled(setting(getattr(args, "root", None), "SHANTY_QUEUE_POLICY")):
+                from .feed_audit import FeedAudit
+                root = getattr(args, "root", None)
+                # Judge the item as it stands: prospective already names the new owner.
+                if type(item.revision) is not int or item.revision < 1:
+                    raise ValueError("assignment revision UNKNOWN; queue admission refused")
+                if expected_revision is None:
+                    expected_revision = item.revision
+                record = assignment(tracker, prospective | {"assignee": item.assignee},
+                    fields["assignee"], reason=override_reason, actor=os.environ.get("SHANTY_AGENT"),
+                    audit=FeedAudit(Path(root)) if root else None, dry_run=args.dry_run)
+                if record and queue_comment is not None:
+                    raise ValueError("a queue override and a Now promotion are separate "
+                                     "commands; run them one at a time")
+                queue_comment = record or queue_comment
+            elif override_reason is not None:
+                raise ValueError("--queue-override applies only when the queue policy is enforce")
         if owner and active(prospective, owner):
             ensure_room(tracker, owner, item, candidate=prospective)
         if not args.dry_run:
