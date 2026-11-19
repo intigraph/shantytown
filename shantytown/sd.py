@@ -1229,7 +1229,16 @@ class SdTracker(BrTracker):
                 return value
             # Only inside an explicit stale_ok() scope (stop hooks, inbox views);
             # every other caller keeps a live read.
-            hit, publish = seeds_read_cache.stale_lookup(["sd", cmd, repo or ""], _valid)
+            # Everything that can change what this child answers is in the key:
+            # the argv (store, location, --actor), the working directory, the
+            # pinned config and the seeds/quipu identity environment.
+            env = options.get('env') or os.environ
+            identity_env = sorted((k, v) for k, v in env.items()
+                                  if k.startswith(("SEEDS_", "SD_", "QUIPU_", "SHANTY_"))
+                                  or k in ("HOME", "XDG_CONFIG_HOME", "USER"))
+            hit, publish = seeds_read_cache.stale_lookup(
+                ["sd", cmd, repo or os.getcwd(), sorted(pinned_config.items()) if pinned_config else [],
+                 identity_env], _valid)
         if hit is not None:
             result = subprocess.CompletedProcess(cmd, 0, hit, "")
             from .tracker_result import observe
@@ -1238,21 +1247,24 @@ class SdTracker(BrTracker):
         # Reads retain their original route and budget. Optional signing
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
-        if mutation(self._translate(args)) and not pinned_config:
-            asserted = actor
-            for i, arg in enumerate(args):
-                if arg.startswith('--actor='):
-                    asserted = arg.partition('=')[2]
-                elif arg == '--actor' and i + 1 < len(args):
-                    asserted = args[i + 1]
-            result = run(cmd, actor=actor, asserted_actor=asserted,
-                       identity_command=[self._bin, *self._location(), 'identity', '--json'],
-                       options=options, runner=subprocess.run)
-        else:
-            result = subprocess.run(cmd, **options)
-        if not read_only:
-            seeds_read_cache.invalidate_stale()
-        elif publish is not None and result.returncode == 0 and isinstance(result.stdout, str):
+        try:
+            if mutation(self._translate(args)) and not pinned_config:
+                asserted = actor
+                for i, arg in enumerate(args):
+                    if arg.startswith('--actor='):
+                        asserted = arg.partition('=')[2]
+                    elif arg == '--actor' and i + 1 < len(args):
+                        asserted = args[i + 1]
+                result = run(cmd, actor=actor, asserted_actor=asserted,
+                           identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                           options=options, runner=subprocess.run)
+            else:
+                result = subprocess.run(cmd, **options)
+        finally:
+            # A write that timed out or raised may still have landed.
+            if not read_only:
+                seeds_read_cache.invalidate_stale()
+        if read_only and publish is not None and result.returncode == 0 and isinstance(result.stdout, str):
             publish(result.stdout)
         from .tracker_result import observe
         observe(result)

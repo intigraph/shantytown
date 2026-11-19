@@ -92,9 +92,25 @@ def _generation(directory: Path) -> int:
 
 
 def invalidate_stale() -> None:
-    """A write through st: no earlier bounded-staleness answer is served again."""
+    """A write through st: no earlier answer is served again from either tier.
+
+    Bumps the bounded-staleness generation and drops the shared watermark
+    observations, so the next exact read must observe the post-write
+    watermark and cannot republish a pre-write answer. If the generation
+    cannot be written, every bounded-staleness entry is removed instead;
+    lookups also refuse the tier while the cache cannot be written, so the
+    fail-closed state survives this process.
+    """
     try:
         directory = _directory()
+    except _CACHE_ERRORS:
+        return  # no cache directory: nothing can be served from it either
+    for mark in directory.glob("mark-*.json"):
+        try:
+            mark.unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
         fd, temporary = tempfile.mkstemp(prefix="incoming-", dir=directory)
         try:
             with os.fdopen(fd, "wb") as stream:
@@ -103,8 +119,11 @@ def invalidate_stale() -> None:
         finally:
             Path(temporary).unlink(missing_ok=True)
     except _CACHE_ERRORS:
-        # Fail closed: without a writable generation, stop serving the tier.
-        os.environ["ST_SEEDS_STALE_TTL"] = "0"
+        for entry in directory.glob("ttlr-*.json"):
+            try:
+                entry.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def stale_lookup(parts, validate, *, ttl=None):
@@ -121,6 +140,8 @@ def stale_lookup(parts, validate, *, ttl=None):
     key = hashlib.sha256(json.dumps(["stale-v1", *parts]).encode()).hexdigest()
     try:
         directory = _directory()
+        if not os.access(directory, os.W_OK):
+            return None, None  # an invalidation could not land: tier off
         path = directory / ("ttlr-" + key + ".json")
         with _locked(directory, key):
             generation = [_GENERATION, _generation(directory)]

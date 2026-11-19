@@ -485,3 +485,100 @@ def test_sd_list_shares_one_child_per_ttl_and_writes_invalidate(tmp_path, monkey
     other = tracker._bd("list", "--assignee", "ian", "--json")
     assert sum(1 for c in calls if "list" in c) == 3 and other.returncode == 0
     scope.__exit__(None, None, None)
+
+
+# Review of #643: the three blocking findings.
+
+def test_own_write_cannot_republish_pre_write_data_through_the_exact_cache(service):
+    # Default 1 s watermark window (not 0): the exact cache would still
+    # certify the pre-write answer unless invalidation drops the marks.
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        assert read(proof)["rows"][0]["value"] == "before"
+        state.update(tx=11, value="changed")  # our own write commits
+        seeds_read_cache.invalidate_stale()
+        assert read(proof)["rows"][0]["value"] == "changed"
+        assert read(proof)["rows"][0]["value"] == "changed"  # and stays fresh
+
+
+def _fake_tracker(tmp_path, monkeypatch):
+    from shantytown import sd as sd_mod
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.delenv("ST_SEEDS_READ_CACHE", raising=False)
+    monkeypatch.delenv("ST_SEEDS_STALE_TTL", raising=False)
+    tracker = sd_mod.SdTracker(repo=str(tmp_path), prefix="aegis")
+    monkeypatch.setattr(tracker, "prove_store", lambda: None)
+    monkeypatch.setattr(type(tracker), "_bin", property(lambda self: "sd"))
+    monkeypatch.setattr(tracker, "_location", lambda: [])
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("cwd"), dict(kw.get("env") or {})))
+        return subprocess.CompletedProcess(cmd, 0, json.dumps({"n": len(calls)}), "")
+
+    monkeypatch.setattr(sd_mod.subprocess, "run", fake_run)
+    return sd_mod, tracker, calls
+
+
+@pytest.mark.real_store  # subprocess.run is replaced; nothing reaches a store
+def test_sd_cache_key_separates_store_identity_cwd_and_pinned_config(tmp_path, monkeypatch):
+    sd_mod, tracker, calls = _fake_tracker(tmp_path, monkeypatch)
+    with seeds_read_cache.stale_ok():
+        tracker._bd("list", "--json")
+        monkeypatch.setenv("SEEDS_STORE", "/other/store")  # a different store
+        tracker._bd("list", "--json")
+        monkeypatch.setenv("QUIPU_AGENT", "someone-else")  # a different identity
+        tracker._bd("list", "--json")
+        tracker._bd_in(str(tmp_path / "elsewhere"), "list", "--json")  # different cwd
+        import shantytown.actor_identity as ai
+        monkeypatch.setattr(ai, "config_environment", lambda: {"SEEDS_CONFIG": "/pinned"})
+        tracker._bd("list", "--json")  # pinned config
+        assert len(calls) == 5
+        tracker._bd("list", "--json")  # same everything: shared
+        assert len(calls) == 5
+
+
+@pytest.mark.real_store
+def test_a_write_that_times_out_still_invalidates(tmp_path, monkeypatch):
+    sd_mod, tracker, calls = _fake_tracker(tmp_path, monkeypatch)
+    with seeds_read_cache.stale_ok():
+        tracker._bd("list", "--json")
+        import shantytown.advise_signing as signing
+
+        def timeout(cmd, **_kw):
+            raise subprocess.TimeoutExpired(cmd, 1)
+
+        monkeypatch.setattr(sd_mod.subprocess, "run", timeout)
+        monkeypatch.setattr(signing, "run", lambda cmd, **kw: timeout(cmd))
+        with pytest.raises(subprocess.TimeoutExpired):
+            tracker._bd("update", "aegis-1", "--status", "open")
+        hit, _ = seeds_read_cache.stale_lookup(["anything"], lambda v: v)
+        assert hit is None
+    # the earlier list answer is no longer served
+    monkeypatch.setattr(sd_mod.subprocess, "run",
+                        lambda cmd, **kw: calls.append((cmd, None, {})) or
+                        subprocess.CompletedProcess(cmd, 0, '{"n": 99}', ""))
+    with seeds_read_cache.stale_ok():
+        assert tracker._bd("list", "--json").stdout == '{"n": 99}'
+
+
+def test_failed_generation_write_drops_entries_and_unwritable_cache_disables(service, monkeypatch):
+    proof, state = service
+    with seeds_read_cache.stale_ok():
+        _, publish = seeds_read_cache.stale_lookup(["k"], lambda v: v)
+        publish({"rows": [], "count": 0, "truncated": False})
+        assert seeds_read_cache.stale_lookup(["k"], lambda v: v)[0] is not None
+
+        def broken(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(seeds_read_cache.tempfile, "mkstemp", broken)
+        seeds_read_cache.invalidate_stale()
+        assert seeds_read_cache.stale_lookup(["k"], lambda v: v)[0] is None
+        monkeypatch.undo()
+        directory = seeds_read_cache._directory()
+        directory.chmod(0o500)
+        try:
+            assert seeds_read_cache.stale_lookup(["k"], lambda v: v) == (None, None)
+        finally:
+            directory.chmod(0o700)
