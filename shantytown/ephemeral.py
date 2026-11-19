@@ -280,6 +280,65 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     }
 
 
+# --- attended job permissions (aegis-e579 option B) ---------------------------
+#
+# An ATTENDED job runs under the controller UID WITHOUT
+# --dangerously-skip-permissions (card_for: dangerous=False). With no allowlist
+# its harness asks before its first command and, with nobody attending, sits
+# there until the deadline. These are the exact commands each job prompt below
+# tells it to run, and nothing else. Anything outside them still prompts (the
+# job stalls and is reaped at its deadline); edits, pushes and direct merges are
+# denied outright so they fail at once instead of waiting.
+# Unattended (protected UID) jobs never use this: their settings are staged by
+# the operator under the job UID (job_launch).
+_READ_TOOLS = ["Read", "Grep", "Glob"]
+_DENY = ["Edit", "Write", "NotebookEdit", "WebFetch",
+         "Bash(git push:*)", "Bash(git commit:*)", "Bash(gh pr merge:*)",
+         "Bash(gh pr review:*)", "Bash(gh api:*)"]
+ATTENDED_PERMISSIONS = {
+    "review": {"allow": _READ_TOOLS + [
+        "Bash(gh pr view:*)", "Bash(gh pr diff:*)", "Bash(gh pr checks:*)",
+        "Bash(gh pr comment:*)",
+        "Bash(git log:*)", "Bash(git show:*)", "Bash(git diff:*)", "Bash(git status:*)",
+        "Bash(st agent spawn --report:*)"], "deny": _DENY},
+    "merge": {"allow": _READ_TOOLS + [
+        "Bash(gh pr view:*)", "Bash(gh pr checks:*)",
+        "Bash(st agent spawn --merge:*)", "Bash(st agent spawn --report:*)"], "deny": _DENY},
+}
+
+
+def attended_settings(rec: dict, *, unattended: bool) -> dict | None:
+    """The project-local Claude settings an attended job needs, or None."""
+    if unattended or rec.get("harness") != "claude":
+        return None
+    perms = ATTENDED_PERMISSIONS.get(rec.get("job"))
+    if perms is None:
+        return None
+    return {"permissions": {"allow": list(perms["allow"]), "deny": list(perms["deny"])}}
+
+
+def write_attended_settings(rec: dict, *, unattended: bool) -> Path | None:
+    """Write the job's own .claude/settings.local.json before launch.
+
+    Only inside the job's workspace. An existing file with different content
+    is refused, never merged or overwritten: it could widen the allowlist.
+    """
+    settings = attended_settings(rec, unattended=unattended)
+    if settings is None:
+        return None
+    path = Path(rec["workspace"]) / ".claude" / "settings.local.json"
+    body = json.dumps(settings, indent=2, sort_keys=True) + "\n"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise Refused(f"{path} is a symlink; refusing to write job permissions through it")
+    if path.exists():
+        if path.read_text() == body:
+            return path
+        raise Refused(f"{path} already exists with other settings; not widening a job's permissions")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    return path
+
+
 def card_for(rec: dict, *, unattended: bool) -> dict:
     """An ordinary worker card. `first` is the survival band a governor tier
     sheds first: an ephemeral job is the most deferrable work on the host."""

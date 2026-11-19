@@ -1110,3 +1110,20 @@ def test_controller_reaper_drains_only_bound_mailbox_and_never_signs_for_job(tmp
     assert args[1] == rec['name'] and kwargs == {'detached': False}
     assert args[2] == {'report': 'done', 'budget': 'failed', 'unsigned-review': 'blocked'}[mode]
     assert args[-1] == ('turn budget' if mode == 'budget' else 'report')
+
+
+def test_attended_claude_review_has_its_allowlist_before_launch(store):
+    """aegis-e579 B: the settings exist when the pane starts, not after."""
+    root, panes, launched = store
+    seen = {}
+
+    def during(a):
+        (rec,) = eph.records(root)
+        path = Path(rec["workspace"]) / ".claude" / "settings.local.json"
+        seen["perms"] = json.loads(path.read_text())["permissions"] if path.exists() else None
+    panes.behaviour["during"] = during
+    assert _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+               "--repo", "o/n", "--pr", "3") == cli.OK
+    assert seen["perms"] is not None
+    assert "Bash(st agent spawn --report:*)" in seen["perms"]["allow"]
+    assert "Bash(git push:*)" in seen["perms"]["deny"]

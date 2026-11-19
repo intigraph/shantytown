@@ -4025,6 +4025,9 @@ def _cmd_spawn(a) -> int:
                 scratch = eph.ledger_dir(a.root) / "scratch" / rec["name"]
                 scratch.mkdir(parents=True, exist_ok=True)
                 rec["workspace"] = str(scratch)
+            # Attended jobs get their exact per-job allowlist (aegis-e579 B)
+            # before the ledger: a refusal here leaves nothing to tear down.
+            eph.write_attended_settings(rec, unattended=unattended)
             # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
             # report and a teardown, including a launch that is refused.
             eph.write(a.root, rec)
