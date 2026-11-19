@@ -6,6 +6,28 @@
 
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.19.0](https://github.com/intigraph/shantytown/compare/v0.18.1...v0.19.0) (2026-11-19)
+
+
+### Features
+
+* **duties:** scope a duty to its own host ([#635](https://github.com/intigraph/shantytown/issues/635)) ([e1336d8](https://github.com/intigraph/shantytown/commit/e1336d896d6e14cf6731c5136554c800e46d8eee))
+* **queue:** refuse out-of-order assignment, not only dispatch ([#638](https://github.com/intigraph/shantytown/issues/638)) ([a313c2c](https://github.com/intigraph/shantytown/commit/a313c2c0a4cc927399991ed331d390e327919732))
+* **quipu:** background reads back off while quipu is busy; send X-Quipu-Priority ([#641](https://github.com/intigraph/shantytown/issues/641)) ([7b1f6b4](https://github.com/intigraph/shantytown/commit/7b1f6b4883129cbb2770a639c24d05fe02546ac4))
+
+
+### Bug Fixes
+
+* **jobs:** record a masked tail of a failed run in the job detail ([#639](https://github.com/intigraph/shantytown/issues/639)) ([9c0c5f9](https://github.com/intigraph/shantytown/commit/9c0c5f9dd9a8e5e1d6653b8ae5dc342cc2b777ff))
+* **owned-work:** measure a stopped owner whose crew card is gone ([#634](https://github.com/intigraph/shantytown/issues/634)) ([be47a98](https://github.com/intigraph/shantytown/commit/be47a9814419db3cc3bda79440b8a870a3e53515))
+* **plate:** count from a fresh snapshot when quipu is busy instead of refusing ([#640](https://github.com/intigraph/shantytown/issues/640)) ([954da42](https://github.com/intigraph/shantytown/commit/954da42fa844bc1d529e4f1df4e71e4b3669a508))
+
+
+### Performance Improvements
+
+* **inbox:** acknowledge named messages by exact receipt, not every window ([#637](https://github.com/intigraph/shantytown/issues/637)) ([55a8c50](https://github.com/intigraph/shantytown/commit/55a8c50cebab8c8765601c8a5a3b27e68a0b0de2))
+* **seeds:** 60s bounded-staleness reads for stop hooks and inbox views ([#643](https://github.com/intigraph/shantytown/issues/643)) ([0d71eaa](https://github.com/intigraph/shantytown/commit/0d71eaa79da47639161871e0274e0d9536f55d23))
+
 ## [0.18.1](https://github.com/intigraph/shantytown/compare/v0.18.0...v0.18.1) (2026-11-18)
 
 
