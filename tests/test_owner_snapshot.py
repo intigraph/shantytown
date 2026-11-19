@@ -119,6 +119,10 @@ def test_tracker_without_store_proof_keeps_refusing():
     ('HTTP Error 503: Service Unavailable', True),
     ('<urlopen error timed out>', True),
     ('truncated', False),
+    ('owner listing completeness unproven for aegis-503', False),
+    ('aegis-408 and aegis-429 are open', False),
+    ('status 503', True),
+    ('code=429', True),
     ('owner has an unsupported or absent status', False),
     ('owner listing completeness unproven', False),
 ])

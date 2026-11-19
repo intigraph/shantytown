@@ -36,8 +36,11 @@ _SCHEMA = 1
 # A transient "server busy" signal from the read path, as it surfaces in the
 # PartialAnswer caveat / exception text. Deliberately narrow: truncation,
 # shape refusals and unknown errors do NOT match and keep refusing.
+# Status codes count only in an HTTP context ("HTTP Error 408", "status 503",
+# "code=429"), so an identifier such as aegis-503 never reads as busy.
 _TRANSIENT = re.compile(
-    r"\b(408|429|503)\b|request timeout|too many requests|service unavailable"
+    r"\b(?:http(?: error)?|status|code)\s*[:=]?\s*(?:408|429|503)\b"
+    r"|request timeout|too many requests|service unavailable"
     r"|timed out|read timeout|quipu busy",
     re.IGNORECASE,
 )
