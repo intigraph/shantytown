@@ -7,6 +7,7 @@ import fcntl
 from functools import wraps
 import hashlib
 import json
+import sys
 import threading
 from pathlib import Path
 
@@ -91,7 +92,7 @@ def rows(tracker, owner, *, admission=False):
 
 def counted_rows(tracker, owner, *, admission=False):
     try:
-        seen = rows(tracker, owner, admission=admission)
+        seen = _rows_or_busy_snapshot(tracker, owner, admission=admission)
         for row in seen:
             if owner_name(row.get('assignee')) == owner_name(owner):
                 if (not isinstance(row.get('id'), str) or not row['id']
@@ -101,6 +102,31 @@ def counted_rows(tracker, owner, *, admission=False):
         return [row for row in seen if active(row, owner)]
     except Exception as error:
         raise CapacityUnknown(f'{owner_name(owner)} plate size UNKNOWN: {error}') from error
+
+
+def _rows_or_busy_snapshot(tracker, owner, *, admission=False):
+    """Live rows; on a TRANSIENT busy failure only, a fresh labelled snapshot (aegis-jve).
+
+    A complete live read is published for later busy moments. A failed read
+    falls back ONLY when quipu signalled busy (408/429/503/timeout) and this host
+    holds the same owner's rows from the same store at most MAX_AGE seconds old;
+    every other failure re-raises and stays UNKNOWN.
+    """
+    from . import owner_snapshot
+    ident = owner_snapshot.identity(tracker)
+    name = owner_name(owner)
+    try:
+        seen = rows(tracker, owner, admission=admission)
+    except Exception as error:
+        cached = owner_snapshot.fresh(ident, name) if owner_snapshot.transient(error) else None
+        if cached is None:
+            raise
+        snapshot, age = cached
+        print(f'plate capacity: quipu busy ({str(error)[:120]}); counted {name} '
+              f'from snapshot age={age:.0f}s (max {owner_snapshot.MAX_AGE}s)', file=sys.stderr)
+        return snapshot
+    owner_snapshot.publish(ident, name, seen)
+    return seen
 
 
 def size(tracker, owner):
