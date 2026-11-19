@@ -848,3 +848,40 @@ def test_parse_duration_reads_the_systemd_spelling_the_flag_always_took():
         jobs.parse_duration("five minutes")
     with pytest.raises(ValueError):
         jobs.parse_duration(0)
+
+
+# aegis-77c: a failed run's row carries a MASKED tail of its own output.
+def test_failed_exec_detail_is_a_masked_tail_of_its_own_output(tmp_path):
+    log = tmp_path / "job.log"
+    log.write_text("EARLIER RUN SECRET LINE should not appear\n")
+    gh = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    bearer = "z" * 40
+    script = (f"echo 'Authorization: Bearer {bearer}'; echo 'clone with {gh}'; "
+              "echo 'db_password=hunter2hunter2'; echo 'UnsafeObservation: SDK not admitted'; exit 2")
+    res = jobs.run_exec(["/bin/sh", "-c", script], 10, log_path=str(log))
+    assert res["ok"] is False and res["error"] == "exited 2"
+    tail = res["output_tail"]
+    assert gh not in tail and bearer not in tail and "hunter2hunter2" not in tail
+    assert "[REDACTED]" in tail
+    assert "UnsafeObservation: SDK not admitted" in tail      # the useful line survives
+    assert "EARLIER RUN" not in tail                          # only THIS run's output
+    assert gh in log.read_text()                              # full log unchanged on disk
+
+
+def test_successful_exec_has_no_output_tail(tmp_path):
+    res = jobs.run_exec(["/bin/sh", "-c", "echo fine"], 10, log_path=str(tmp_path / "ok.log"))
+    assert res["ok"] is True and "output_tail" not in res
+
+
+def test_failure_tail_is_bounded(tmp_path):
+    log = tmp_path / "big.log"
+    res = jobs.run_exec(["/bin/sh", "-c", "i=0; while [ $i -lt 400 ]; do echo line-$i-xxxxxxxxxxxxxxxx; "
+                         "i=$((i+1)); done; exit 3"], 10, log_path=str(log))
+    tail = res["output_tail"]
+    assert len(tail) <= jobs._TAIL_CHARS and len(tail.splitlines()) <= jobs._TAIL_LINES
+    assert tail.endswith("line-399-xxxxxxxxxxxxxxxx")
+
+
+def test_failed_row_detail_uses_the_tail():
+    o = jobs.Outcome(False, "exited 2", tail="last useful line")
+    assert o.tail == "last useful line" and o.detail == "exited 2"
