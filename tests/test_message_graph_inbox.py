@@ -31,8 +31,9 @@ class FakeMsgTracker:
             self.msgs.append({"id": mid, "to": to, "from": frm, "text": body, "read_at": None})
         return Answer.complete_read({"id": mid, "written": True}, how="fixture delivery")
 
-    def list_messages(self, to, *, unread=True, weeks=2, all_windows=False):
+    def list_messages(self, to, *, unread=True, weeks=2, all_windows=False, include_expired=False):
         self.list_calls.append((to, unread, all_windows))
+        self.__dict__.setdefault("expired_calls", []).append(include_expired)
         return Answer.complete_read([dict(m) for m in self.msgs
                 if m["to"] == to and (not unread or m["read_at"] is None)], how="fixture messages")
 
@@ -305,3 +306,21 @@ def test_many_named_ids_keep_the_two_listing_path():
     assert len(box.mark_read("wu", ids)) == len(ids)
     assert trk.show_calls == []
     assert trk.list_calls == [("wu", True, True), ("wu", False, True)]
+
+
+def test_unread_reads_live_windows_and_lets_sd_expire_old_mail():
+    # aegis-9qx: unread counts and listings never ask for expired mail; sd's
+    # TTL (seeds [msg] ttl, default 7 days) decides what is live.
+    box, trk = _box()
+    box.deliver("wu", "fresh", "sattler")
+    assert box.unread_count("wu") == 1
+    box.unread("wu")
+    assert trk.expired_calls and not any(trk.expired_calls)
+
+
+def test_delivery_lookups_include_expired_mail_so_old_keys_are_never_resent():
+    box, trk = _box()
+    sent = box.deliver_once("wu", "MARK-1 body", key="k-1", frm="sattler")
+    assert box.find_delivery("wu", "MARK-1") == sent
+    assert box.find_delivery_receipt("wu", "MARK-1", sent.id) == sent
+    assert trk.expired_calls == [True, True]

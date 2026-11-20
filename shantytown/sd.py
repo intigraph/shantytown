@@ -232,18 +232,36 @@ class SdTracker(BrTracker):
         return Answer.complete_read(value, how="sd msg send: validated delivery receipt")
 
     def list_messages(self, to: str, *, unread: bool = True, weeks: int = 2,
-                      all_windows: bool = False) -> Answer[list[dict]]:
+                      all_windows: bool = False,
+                      include_expired: bool = False) -> Answer[list[dict]]:
+        """List a recipient's window messages.
+
+        sd hides messages older than its configured TTL (seeds `[msg] ttl`,
+        default 7 days; aegis-9qx). `include_expired` is for readers that must
+        see old mail: delivery idempotence and acknowledgment lookups. An sd
+        that predates expiry refuses the flag; it also hides nothing, so the
+        same read is repeated without it.
+        """
         scope = ["--all-windows"] if all_windows else ["--weeks", str(weeks)]
         args = ["msg", "list", "--to", to, *scope, "--json"]
         if unread:
             args.append("--unread")
-        result = self._bd(*args)
+        expired_flag = ["--include-expired"] if include_expired else []
+        result = self._bd(*args, *expired_flag)
+        # Only clap's own unknown-flag refusal means "this sd predates expiry".
+        # Any other error that merely mentions the flag (an argv echo) must
+        # refuse: dropping expired rows there could resend an old key.
+        if (result.returncode and expired_flag
+                and "unexpected argument '--include-expired'" in _failure_reason(result)):
+            result = self._bd(*args)
         if result.returncode:
             raise RuntimeError(f"sd msg list failed: {_failure_reason(result)}")
         value = json.loads(result.stdout)
         if not isinstance(value, list) or not all(isinstance(v, dict) and v.get("id") for v in value):
             raise RuntimeError("sd msg list answer unreadable")
         scope_name = "all registered live recipient windows" if all_windows else f"requested {weeks}-week recipient window"
+        if include_expired:
+            scope_name += ", expired messages included"
         return Answer.complete_read(value, how=f"sd msg list: complete {scope_name}")
 
     def get_message(self, ident: str) -> Answer[dict]:
