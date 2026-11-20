@@ -36,7 +36,12 @@ def _comments(tracker, item_id, body=None):
     from .files import FilesTracker, write_json_atomic
     if isinstance(tracker, BrTracker):
         if body is not None:
+            # Submit only. Every caller reads back separately, and on sd a
+            # comment-list read is the item's whole comment family (3-4 s of
+            # quipu store time on a long-running item; aegis-n0wc). Reading it
+            # here as well cost one more family read per comment, unused.
             append_comment(tracker, item_id, body)
+            return []
         return comments(tracker, item_id)
     if isinstance(tracker, FilesTracker):
         path = tracker._path(item_id)
