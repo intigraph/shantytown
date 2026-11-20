@@ -91,20 +91,35 @@ def rows(tracker, owner, *, admission=False):
 
 
 def counted_rows(tracker, owner, *, admission=False):
+    source = {}
     try:
-        seen = _rows_or_busy_snapshot(tracker, owner, admission=admission)
+        seen = _rows_or_busy_snapshot(tracker, owner, admission=admission, source=source)
         for row in seen:
             if owner_name(row.get('assignee')) == owner_name(owner):
                 if (not isinstance(row.get('id'), str) or not row['id']
                         or not isinstance(row.get('title'), str)
                         or row.get('status') not in ACTIVE | {'closed', 'tombstone', 'deferred'}):
                     raise ValueError('owner assignment fields incomplete or unsupported')
-        return [row for row in seen if active(row, owner)]
+        counted = [row for row in seen if active(row, owner)]
     except Exception as error:
+        if admission:
+            _record_outcome('unknown_busy' if source.get('busy') else 'unknown_other', owner)
         raise CapacityUnknown(f'{owner_name(owner)} plate size UNKNOWN: {error}') from error
+    if admission:
+        _record_outcome(source.get('outcome', 'live'), owner)
+    return counted
 
 
-def _rows_or_busy_snapshot(tracker, owner, *, admission=False):
+def _record_outcome(outcome, owner):
+    """Durable admission outcome count (aegis-jve); never changes the decision."""
+    try:
+        from . import plate_outcomes
+        plate_outcomes.record(outcome, owner_name(owner))
+    except Exception:  # noqa: BLE001 - counting is best effort
+        pass
+
+
+def _rows_or_busy_snapshot(tracker, owner, *, admission=False, source=None):
     """Live rows; on a TRANSIENT busy failure only, a fresh labelled snapshot (aegis-jve).
 
     A complete live read is published for later busy moments. A failed read
@@ -118,10 +133,15 @@ def _rows_or_busy_snapshot(tracker, owner, *, admission=False):
     try:
         seen = rows(tracker, owner, admission=admission)
     except Exception as error:
-        cached = owner_snapshot.fresh(ident, name) if owner_snapshot.transient(error) else None
+        busy = owner_snapshot.transient(error)
+        if source is not None:
+            source['busy'] = busy
+        cached = owner_snapshot.fresh(ident, name) if busy else None
         if cached is None:
             raise
         snapshot, age = cached
+        if source is not None:
+            source['outcome'] = 'snapshot'
         print(f'plate capacity: quipu busy ({str(error)[:120]}); counted {name} '
               f'from snapshot age={age:.0f}s (max {owner_snapshot.MAX_AGE}s)', file=sys.stderr)
         return snapshot

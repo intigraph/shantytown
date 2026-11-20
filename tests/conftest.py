@@ -164,6 +164,16 @@ def _no_real_pointer(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_plate_outcomes(tmp_path_factory, monkeypatch):
+    """Plate admission outcome lines (aegis-jve) never land in the developer's state dir."""
+    from shantytown import plate_outcomes
+    target = tmp_path_factory.mktemp("plate-outcomes") / plate_outcomes.FILENAME
+    # The variable reaches child `st` processes; the patch covers this process.
+    monkeypatch.setenv("SHANTYTOWN_PLATE_OUTCOMES", str(target))
+    monkeypatch.setattr(plate_outcomes, "path", lambda: target)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_steam_appinfo(tmp_path_factory, monkeypatch):
     """No gaming test may classify an AppId from the DEVELOPER'S Steam cache.
 
