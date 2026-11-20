@@ -81,9 +81,13 @@ def build_live(a):
             argv.extend(['--' + name, str(value)])
     argv.extend(['crew', '--json', '--local', '--no-priority-advice'])
     try:
+        # aegis-az3d: name this producer to quipu so its cost is attributable.
+        env = dict(os.environ)
+        if not env.get('QUIPU_AGENT'):
+            env['QUIPU_AGENT'] = 'st-crew-display'
         with subprocess.Popen(argv, cwd=Path(__file__).parent.parent,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              text=True, start_new_session=True) as child:
+                              text=True, start_new_session=True, env=env) as child:
             try:
                 stdout, _stderr = child.communicate(timeout=15)
             except subprocess.TimeoutExpired:
@@ -123,15 +127,16 @@ def read_peer(peer):
             raise ValueError('display peer refused or oversized')
         value = json.loads(result.stdout)
         age = value.get('age_seconds')
+        ttl = value.get('ttl_seconds')
         if (value.get('version') != 2 or value.get('purpose') != 'display'
                 or value.get('decision_eligible') is not False
-                or value.get('ttl_seconds') != cache.TTL
+                or type(ttl) is not int or not 0 < ttl <= cache.MAX_PEER_TTL
                 or type(age) not in (float, int)
-                or not 0 <= age + time.monotonic() - started < cache.TTL):
+                or not 0 <= age + time.monotonic() - started < ttl):
             raise ValueError('invalid or expired display peer')
         validate_rows(dict(value, version=1), peer.name)
         value['age_seconds'] = age + time.monotonic() - started
-        if value['age_seconds'] >= cache.TTL:
+        if value['age_seconds'] >= ttl:
             raise ValueError('display peer expired')
         value['_received_at'] = time.monotonic()
         return value
@@ -161,7 +166,7 @@ def command(a):
             received = snap.pop('_received_at', None)
             if received is not None:
                 snap['age_seconds'] += time.monotonic() - received
-                if not 0 <= snap['age_seconds'] < cache.TTL:
+                if not 0 <= snap['age_seconds'] < snap.get('ttl_seconds', cache.TTL):
                     snap.update(complete=False, agents=[], errors=[snap['host'] + ': display expired'])
         errors = [e for snap in snapshots for e in snap['errors']]
         value = dict(version=2, purpose='display', decision_eligible=False,

@@ -54,7 +54,7 @@ def test_expiry_uses_oldest_observation_not_publication(isolated, monkeypatch):
     now = [100.]
     monkeypatch.setattr(cache.time, 'monotonic', lambda: now[0])
     def slow():
-        now[0] += 16
+        now[0] += cache.TTL + 1
         return payload()
     with pytest.raises(ValueError, match='UNKNOWN'):
         read(slow)
@@ -67,7 +67,7 @@ def test_expiry_uses_oldest_observation_not_publication(isolated, monkeypatch):
 def test_invalid_saved_observation_cannot_be_returned(isolated, mutation):
     first = read()
     path = isolated / ('a' * 64 + '.json')
-    if mutation == 'expired': first['started'] -= 16
+    if mutation == 'expired': first['started'] -= cache.TTL + 1
     if mutation == 'clock': first['started'] += 100
     if mutation == 'boot': first['boot'] = 'previous-boot'
     if mutation == 'key': first['key'] = 'another-scope'

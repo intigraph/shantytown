@@ -82,8 +82,8 @@ def test_expired_local_observation_after_peer_delay_is_unknown(monkeypatch, tmp_
     cfg = SimpleNamespace(host_peers={'box': peer})
     monkeypatch.setattr(cli.config, 'load_or_default', lambda root: (cfg, None))
     def slow_peer(peer):
-        clock[0] = 30.
-        return dict(payload(), errors=[], age_seconds=0, _received_at=30.)
+        clock[0] = 10. + cache.TTL + 5
+        return dict(payload(), errors=[], age_seconds=0, _received_at=clock[0])
     monkeypatch.setattr(display, 'read_peer', slow_peer)
     args = SimpleNamespace(root=tmp_path, local=False, json=False, count=True)
     assert display.command(args) == 3
@@ -290,3 +290,54 @@ def test_predicate_samples_permission_unknown_still_raises(monkeypatch):
     with pytest.raises(PermissionError):
         _process_running(12345, samples=samples)
     assert samples[12345][-1]['observation'] == 'UNKNOWN: PermissionError'
+
+
+@pytest.mark.parametrize('ttl', [15, 120, cache.MAX_PEER_TTL])
+def test_display_peer_accepts_its_own_ttl_across_releases(monkeypatch, ttl):
+    # aegis-az3d: a peer on an older (15s) or newer TTL stays readable.
+    wire = dict(payload(), version=2, purpose='display', decision_eligible=False,
+                ttl_seconds=ttl, age_seconds=1)
+    monkeypatch.setattr(display.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(wire), stderr=''))
+    assert display.read_peer(HostPeer('box', 'peer', '/root'))['complete'] is True
+
+
+@pytest.mark.parametrize('ttl', [0, -1, cache.MAX_PEER_TTL + 1, True, 15.0, '15', None])
+def test_display_peer_refuses_unbounded_or_mistyped_ttl(monkeypatch, ttl):
+    wire = dict(payload(), version=2, purpose='display', decision_eligible=False,
+                ttl_seconds=ttl, age_seconds=0)
+    monkeypatch.setattr(display.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(wire), stderr=''))
+    assert display.read_peer(HostPeer('box', 'peer', '/root'))['complete'] is False
+
+
+def test_display_peer_expires_against_its_own_ttl(monkeypatch):
+    wire = dict(payload(), version=2, purpose='display', decision_eligible=False,
+                ttl_seconds=15, age_seconds=16)
+    monkeypatch.setattr(display.subprocess, 'run', lambda *a, **k:
+                        SimpleNamespace(returncode=0, stdout=json.dumps(wire), stderr=''))
+    assert display.read_peer(HostPeer('box', 'peer', '/root'))['complete'] is False
+
+
+@pytest.mark.parametrize('inherited,expected', [(None, 'st-crew-display'), ('unit-x', 'unit-x')])
+def test_display_producer_names_itself_to_quipu(monkeypatch, tmp_path, inherited, expected):
+    # aegis-az3d: the rebuild's Quipu reads are attributable; an explicit agent wins.
+    if inherited is None:
+        monkeypatch.delenv('QUIPU_AGENT', raising=False)
+    else:
+        monkeypatch.setenv('QUIPU_AGENT', inherited)
+    seen = {}
+    class Child:
+        returncode = 0
+        pid = 1
+        def __init__(self, argv, **kw):
+            seen.update(kw['env'])
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+        def communicate(self, timeout=None):
+            return json.dumps(payload()), ''
+    monkeypatch.setattr(display.subprocess, 'Popen', Child)
+    display.build_live(SimpleNamespace(root=tmp_path, backend=None, registry=None, repo=None))
+    assert seen['QUIPU_AGENT'] == expected
