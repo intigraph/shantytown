@@ -39,14 +39,42 @@ def _host():
         return None
 
 
+#: The producer a session-less st process declares (aegis-yc6f). It is the
+#: same name st's own writes already declare (quipu_provenance), and never a
+#: crew member: an inherited SHANTY_AGENT outside a session is not credited.
+PRODUCER = "shantytown"
+
+
+def process_agent(env=None):
+    """The one agent this st process declares, to quipu and to its sd children.
+
+    An explicit declaration wins (QUIPU_AGENT, the declared caller,
+    SEEDS_AGENT_NAME); inside an agent session it is the crew member. A timer,
+    cron job or launcher with none of those names the producer instead of
+    nothing, so its requests are attributable (aegis-yc6f, prna). A deployment
+    names a unit precisely by setting QUIPU_AGENT in that unit's environment.
+    A malformed explicit QUIPU_AGENT stays UNKNOWN rather than becoming another
+    identity.
+    """
+    env = os.environ if env is None else env
+    in_session = env.get("CLAUDECODE") == "1" or bool(env.get("CODEX_HOME"))
+    explicit = env.get("QUIPU_AGENT")
+    if explicit:
+        return _value(explicit)
+    declared = next((v for v in (
+        current_query_identity(), env.get("SEEDS_AGENT_NAME"),
+        env.get("SHANTY_AGENT") if in_session else None,
+    ) if v), None)
+    if declared:
+        return _value(declared)
+    return None if in_session else PRODUCER
+
+
 def read_context():
     """Resolve known declarations without guessing identity from an owner/actor."""
     env = os.environ
     in_session = env.get("CLAUDECODE") == "1" or bool(env.get("CODEX_HOME"))
-    caller = _value(next((v for v in (
-        env.get("QUIPU_AGENT"), current_query_identity(), env.get("SEEDS_AGENT_NAME"),
-        env.get("SHANTY_AGENT") if in_session else None,
-    ) if v), None))
+    caller = process_agent(env)
     session = _value(env.get("QUIPU_SESSION")) or _value(env.get("SEEDS_SESSION"))
     if not session:
         session = (_value(env.get("CODEX_SESSION_ID")) or _value(env.get("CODEX_THREAD_ID"))
@@ -75,6 +103,10 @@ def sdk_subprocess_options(*, read_operation=None):
         with declared_query_identity(current_query_identity(), operation=read_operation):
             return {"env": dict(os.environ, **read_context())}
     name = current_query_identity() or (_source.get() if _source.get() == "st-tend" else None)
+    # aegis-yc6f: a write child is attributed like a read child. Without this a
+    # session-less st (timer, cron, launcher) passed no agent and sd's writes
+    # were credited to "seeds", hiding which producer wrote.
+    name = name or (None if os.environ.get("QUIPU_AGENT") else process_agent())
     env = dict(os.environ, QUIPU_AGENT=name) if name else None
     if _command.get():
         env = dict(env or os.environ, QUIPU_SOURCE=_command.get())
