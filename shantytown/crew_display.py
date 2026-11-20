@@ -1,5 +1,6 @@
 """Opt-in roster display protocol v2. Version1 peers and all decisions stay live."""
 from concurrent.futures import ThreadPoolExecutor
+from .query_identity import context_map
 import hashlib
 import json
 import os
@@ -154,7 +155,7 @@ def command(a):
         peers = []
         if not getattr(a, 'local', False) and cfg.host_peers:
             with ThreadPoolExecutor(max_workers=min(16, len(cfg.host_peers))) as pool:
-                peers = list(pool.map(read_peer, sorted(cfg.host_peers.values(), key=lambda p: p.name)))
+                peers = list(context_map(pool, read_peer, sorted(cfg.host_peers.values(), key=lambda p: p.name)))
         snapshots = [local, *peers]
         for snap in snapshots:
             received = snap.pop('_received_at', None)

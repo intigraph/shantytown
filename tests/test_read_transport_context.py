@@ -250,3 +250,47 @@ def test_unlisted_command_still_reports_other(clean_context):
     from shantytown.query_identity import declared_command
     with declared_command('some-new-command'):
         assert read_headers()['X-Quipu-Source'] == 'st-other'
+
+
+@pytest.mark.parametrize('argv,label', [
+    (['work', 'item', 'show', 'aegis-x'], 'st-work-item'),
+    (['work', 'cost', '--sync'], 'st-work-cost'),
+    (['cost', '--sync'], 'st-work-cost'),            # old spelling, same leaf
+    (['fleet', 'hold', 'gaming', '--status'], 'st-fleet-hold'),
+    (['fleet', 'watch'], 'st-fleet-watch'),
+    (['inbox', 'sattler'], 'st-inbox'),              # known labels unchanged
+    (['fleet', 'tend'], 'st-tend'),
+    (['agent', 'stats', '--begin-task', 'aegis-x'], 'st-stats'),
+])
+def test_registered_leaf_gets_group_label_not_other(argv, label, clean_context):
+    # aegis-z29i: `st work item show` canonicalised to the leaf "item", which
+    # was not a known label, so the crew's whole work-item traffic read as
+    # "st-other" and a quipu 408 burst could not be attributed.
+    from shantytown import cli
+    from shantytown.query_identity import declared_command
+    a = cli._parse_args(argv)
+    with declared_command(a.cmd, a.group, registered=True):
+        assert read_headers()['X-Quipu-Source'] == label
+        assert sdk_subprocess_options()['env']['QUIPU_SOURCE'] == label
+
+
+def test_unregistered_or_unbounded_names_stay_other(clean_context):
+    from shantytown.query_identity import command_label
+    assert command_label('secret-message') == 'other'                       # not registered
+    assert command_label('item', 'work') == 'other'                         # not registered
+    assert command_label('Item', 'work', registered=True) == 'other'        # outside the shape
+    assert command_label('x' * 40, 'work', registered=True) == 'other'      # too long
+    assert command_label('a\nb', None, registered=True) == 'other'
+    assert command_label('item', 'work', registered=True) == 'work-item'
+
+
+def test_context_map_keeps_the_command_label_in_executor_workers(clean_context):
+    from concurrent.futures import ThreadPoolExecutor
+    from shantytown.query_identity import declared_command, context_map
+    seen_plain, seen_ctx = [], []
+    with declared_command('item', 'work', registered=True):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda _: seen_plain.append(read_headers()['X-Quipu-Source']), range(4)))
+            list(context_map(pool, lambda _: seen_ctx.append(read_headers()['X-Quipu-Source']), range(4)))
+    assert set(seen_ctx) == {'st-work-item'}
+    assert set(seen_plain) == {'shantytown'}   # the defect context_map fixes

@@ -1,5 +1,6 @@
 """Bounded, non-recursive peer census. A missing host is not an empty fleet."""
 from concurrent.futures import ThreadPoolExecutor
+from .query_identity import context_map
 import json
 import shlex
 import subprocess
@@ -55,7 +56,7 @@ def collect(peers):
     if not peers:
         return []
     with ThreadPoolExecutor(max_workers=min(16, len(peers))) as pool:
-        return list(pool.map(read_peer, peers))
+        return list(context_map(pool, read_peer, peers))
 
 
 def rows(results):

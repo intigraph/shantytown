@@ -2768,7 +2768,8 @@ def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
-    with declared_command(a.cmd):
+    # a.cmd/a.group come from argparse choices, so they are registered verbs.
+    with declared_command(a.cmd, getattr(a, "group", None), registered=True):
         return _main(a, argv)
 
 

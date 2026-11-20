@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from .query_identity import context_map
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -279,7 +280,7 @@ def command(a):
     if not getattr(a, 'local', False) and cfg.host_peers:
         with ThreadPoolExecutor(max_workers=min(16, len(cfg.host_peers))) as pool:
             peers = sorted(cfg.host_peers.values(), key=lambda p: p.name)
-            for peer, remote in zip(peers, pool.map(read_peer, peers)):
+            for peer, remote in zip(peers, context_map(pool, read_peer, peers)):
                 result['agents'].extend(remote['agents'])
                 result['errors'].extend(remote['errors'])
                 metadata[peer.name] = remote['inference']
