@@ -624,14 +624,42 @@ def _comment_failure_reason(result) -> str:
     return f"exit {result.returncode}: {reason}"
 
 
-def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
-    """Append a comment through br's file-safe comments subcommand."""
+def comment_receipt(stdout: str, bead_id: str) -> "int | None":
+    """The new comment's position from sd's `comments add --json` receipt.
+
+    Only an exact receipt for this item with a positive integer position and a
+    positive committed transaction counts; anything else is None, and callers
+    fall back to reading the comment list. The receipt alone never verifies a
+    write: the caller still reads the comment it names (aegis-n0wc).
+    """
+    try:
+        value = json.loads(stdout) if stdout and stdout.strip() else None
+    except ValueError:
+        return None
+    if isinstance(value, dict) and isinstance(value.get("result"), dict):
+        value = value["result"]
+    if not isinstance(value, dict) or value.get("issue_id") != bead_id:
+        return None
+    index, tx = value.get("id"), value.get("tx")
+    if type(index) is not int or index < 1 or type(tx) is not int or tx < 1:
+        return None
+    return index
+
+
+def append_comment(tracker: BrTracker, bead_id: str, body: str) -> "int | None":
+    """Append a comment through br's file-safe comments subcommand.
+
+    Returns the new comment's position when sd's receipt names one (see
+    comment_receipt), else None.
+    """
     path = None
+    sd = getattr(tracker, "_tool", "br") == "sd"
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False) as f:
             f.write(body)
             path = f.name
-        r = tracker._bd_for(bead_id, "comments", "add", bead_id, "--file", path)
+        r = tracker._bd_for(bead_id, "comments", "add", bead_id, "--file", path,
+                            *(("--json",) if sd else ()))
         if r.returncode != 0 and "No such file" in (r.stderr or ""):
             # THE RELAY CASE (aegis-oj2z7m): br is an ssh wrapper to another host,
             # where this host's temp path does not exist. stdin crosses ssh; a
@@ -645,6 +673,7 @@ def append_comment(tracker: BrTracker, bead_id: str, body: str) -> None:
         if r.returncode != 0:
             raise RuntimeError(
                 f"br comments add {bead_id} failed: {_comment_failure_reason(r)}")
+        return comment_receipt(r.stdout, bead_id) if sd else None
     finally:
         if path:
             try:

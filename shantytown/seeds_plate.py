@@ -175,6 +175,47 @@ def closed_status(proof, identifier: str, *, timeout: int = 30) -> Answer[bool]:
         return Answer.capped(False, how=how, caveat=f"condition status unreadable: {error}")
 
 
+@declared_read_operation("comment-landed")
+def comment_landed(proof, identifier: str, index: int, body: str, *,
+                   timeout: int = 30) -> Answer[bool]:
+    """Exact read of ONE comment: does <item>/comment/<index> hold this body?
+
+    A comment write's readback (aegis-n0wc). Listing the item's comments reads
+    its whole comment family, 3-4 s of quipu store time on a long-running item;
+    this reads one subject. True only for exactly one row that is a
+    schema:Comment on this item at this position with this exact text. Absent,
+    ambiguous or different is False (complete) or capped (unreadable), never
+    a guess.
+    """
+    how = "Seeds exact comment subject; shared and ephemeral graphs"
+    try:
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise ValueError("empty item identifier")
+        if type(index) is not int or index < 1:
+            raise ValueError("comment position must be a positive integer")
+        item = SEEDS + "item/" + quote(identifier, safe="")
+        subject = _iri(item + "/comment/" + str(index))
+        graphs = (proof.graph, proof.graph + "#seeds-ephemeral")
+        branches = [
+            f"{{ GRAPH {_iri(graph)} {{ {subject} a <{SCHEMA}Comment> ; "
+            f"<{SCHEMA}parentItem> ?parent ; <{SCHEMA}position> ?position ; "
+            f"<{SCHEMA}text> ?text }} BIND({json.dumps(graph)} AS ?graph) }}"
+            for graph in graphs
+        ]
+        rows = _query(proof, "SELECT ?graph ?parent ?position ?text WHERE { "
+                      + " UNION ".join(branches) + " } LIMIT 10", timeout)["rows"]
+        if not rows:
+            return Answer.complete_read(False, how=how)
+        if len(rows) != 1:
+            raise ValueError("comment subject ambiguous")
+        row = rows[0]
+        same = (row.get("graph") in graphs and row.get("parent") == item
+                and str(row.get("position")) == str(index) and row.get("text") == body)
+        return Answer.complete_read(same, how=how)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+        return Answer.capped(False, how=how, caveat=f"comment unreadable: {error}")
+
+
 @declared_read_operation("closed-statuses")
 def closed_statuses(proof, identifiers, *, timeout: int = 30) -> dict[str, bool | None]:
     """Bounded candidate-only conditions; never a pre-mutation freshness check.

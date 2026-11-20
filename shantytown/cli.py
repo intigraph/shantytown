@@ -4593,10 +4593,10 @@ def _ceiling_transfer_sweep(a, agents, rep, *, dispatcher=None, plate=None,
     ledger = Path(a.root) / "ceiling-transfers.jsonl"
 
     def _comment(item_id, body):
-        from .work_item import _comment_body, _comments
+        from .work_item import _comments, comment_verified
         trk = dispatcher.tracker
-        _comments(trk, item_id, body)
-        if not any(_comment_body(row) == body for row in _comments(trk, item_id)):
+        receipt = _comments(trk, item_id, body)
+        if not comment_verified(trk, item_id, body, receipt):
             raise RuntimeError("comment readback unproven")
 
     def _emit(event):

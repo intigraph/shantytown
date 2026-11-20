@@ -793,6 +793,13 @@ class SdTracker(BrTracker):
         from .seeds_plate import closed_status
         return closed_status(self.prove_store(), identifier, timeout=self.timeout)
 
+    def comment_landed(self, identifier: str, index: int, body: str) -> Answer[bool] | None:
+        """One exact comment read (aegis-n0wc); None when no remote projection."""
+        if not self._use_remote_projection():
+            return None
+        from .seeds_plate import comment_landed
+        return comment_landed(self.prove_store(), identifier, index, body, timeout=self.timeout)
+
     def closed_statuses(self, identifiers) -> Answer[dict[str, bool | None]] | None:
         if not self._use_remote_projection():
             return None
