@@ -863,8 +863,9 @@ class MessageGraphInbox:
 
     def _window_unread(self, me: str) -> list[Message]:
         name = me.split("/")[-1]
-        # No expiry exists yet: every live registered week must remain visible.
-        # Older sd versions refuse --all-windows rather than silently hiding mail.
+        # sd applies its message TTL (seeds [msg] ttl, default 7 days; aegis-9qx):
+        # expired mail no longer counts as unread and only the live windows are
+        # read. Older sd versions refuse --all-windows rather than hiding mail.
         return [self._as_message(name, v)
                 for v in self._tracker.list_messages(name, unread=True, all_windows=True).exact()
                 if v.get("to") in (me, name)]
@@ -892,7 +893,8 @@ class MessageGraphInbox:
     def find_delivery(self, me: str, marker: str) -> Message | None:
         name = me.split("/")[-1]
         matches = [self._as_message(name, v)
-                   for v in self._tracker.list_messages(name, unread=False, all_windows=True).exact()
+                   for v in self._tracker.list_messages(name, unread=False, all_windows=True,
+                                                        include_expired=True).exact()
                    if str(v.get("text", "")).startswith(marker + " ")]
         if len(matches) > 1:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
@@ -909,7 +911,9 @@ class MessageGraphInbox:
         if not self._is_window(receipt_id):
             return self._legacy.find_delivery_receipt(me, marker, receipt_id)
         name = me.split("/")[-1]
-        rows = self._tracker.list_messages(name, unread=False, all_windows=True).exact()
+        # Delivery evidence never expires: an old receipt must still be found.
+        rows = self._tracker.list_messages(name, unread=False, all_windows=True,
+                                           include_expired=True).exact()
         if len(rows) >= 10000:
             raise RuntimeError("message receipt read budget reached")
         found = [v for v in rows if v.get("id") == receipt_id]
@@ -964,7 +968,8 @@ class MessageGraphInbox:
         reader = getattr(self._tracker, "get_message", None)
         if not callable(reader) or len(wanted) > self.EXACT_ACK_LIMIT:
             mine = {m.id: m for m in self._window_unread(me)}
-            read_ids = {v["id"] for v in self._tracker.list_messages(name, unread=False, all_windows=True).exact()}
+            read_ids = {v["id"] for v in self._tracker.list_messages(
+                name, unread=False, all_windows=True, include_expired=True).exact()}
             window = []
             for i in wanted:
                 if i in mine:

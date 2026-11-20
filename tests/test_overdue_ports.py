@@ -34,7 +34,9 @@ def test_native_exact_receipt_keeps_read_messages_and_queries_all_registered_win
     box = inbox([value])
     result = box.find_delivery_receipt('worker', '[overdue:fixture]', 'msg-1')
     assert (result.id, result.to, result.read) == ('msg-1', 'worker', True)
-    assert box._tracker.calls == [('worker', {'unread': False, 'all_windows': True})]
+    # Delivery evidence never expires: the lookup includes expired mail (aegis-9qx).
+    assert box._tracker.calls == [('worker', {'unread': False, 'all_windows': True,
+                                              'include_expired': True})]
 
 
 @pytest.mark.parametrize('change', [{'to': 'other'}, {'to': None}, {'text': None},

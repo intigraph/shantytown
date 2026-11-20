@@ -1,8 +1,9 @@
 # Messages in their own graph (design)
 
 **Status:** source slices exist; the storage flip and native acceptance remain
-gated. The default remains the seed inbox. Ack, expiry, escalation and legacy
-migration are not implemented by the window reader. Every term marked
+gated. The default remains the seed inbox. Expiry is implemented in `sd msg`
+(aegis-9qx, below). Ack, escalation and legacy migration are not implemented
+by the window reader. Every term marked
 *proposed* still needs the admission step in
 [Vocabulary](#vocabulary-proposed-not-admitted) before any code writes it.
 
@@ -107,9 +108,18 @@ delivered ──read──▶ read ──ack──▶ acked
   24 h, sends **one** `escalation` message to the recipient's lead (delivery key
   `escalate:<message id>`, so it is sent once at most), and records
   `escalatedTo`. It never escalates an escalation.
-- **expiry.** After 7 days any message that is not acked gets `dateExpired`.
-  Expired is a terminal state. It is not a delivery failure, and it is never
-  silently counted as acked.
+- **expiry.** A message expires when its TTL has passed since `dateSent`. The
+  TTL is seeds `[msg] ttl` (default 7 days; `SEEDS_MSG_TTL` overrides; `0`
+  never expires). Expiry is DERIVED when a mailbox is read: nothing writes
+  `dateExpired`, nothing sweeps, and nothing is deleted (aegis-9qx, Stiwi
+  2026-11-20). Unread counts and listings read only the windows overlapping the
+  last TTL, and remote reads filter by send time on the server. Delivery
+  idempotence and acknowledgment lookups still read expired mail
+  (`--include-expired`), so an old key is never resent and an expired message
+  can still be acknowledged by id. Expired is not a delivery failure, and it is
+  never counted as acked. The earlier plan for a tend pass that writes
+  `dateExpired` was replaced: it added writes and a polling loop and saved
+  no reads.
 - **archive.** A window is frozen once its week ended more than 7 days ago and
   every message in it is acked or expired. A window that fails that test is
   reported, not frozen. Thawing restores it exactly.
