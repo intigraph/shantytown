@@ -2634,8 +2634,10 @@ already active hold while the matched process/session remains present, even if
 inactive. Steam requires `absent` and zero entry delay; its bounded shader phase
 and AppId launch grace retain their existing semantics.
 
-`st fleet hold <name>` creates a persistent manual hold for that configured detector;
-`--clear` removes only that manual marker. `--disable-detection` suppresses its
+`st fleet hold <name> --set` creates a persistent manual hold for that configured
+detector; `--clear` removes only that manual marker. A bare `st fleet hold <name>`
+(or `all`, or `status`) only reads status, like `--status`: before aegis-e5r1 a bare
+name SET a hold, and a status check run that way held the fleet for 9.5 hours. `--disable-detection` suppresses its
 automatic observations without clearing manual holds; `--enable-detection`
 removes that runtime suppression. An explicit `enabled = false` in TOML still
 wins. Without a gaming config entry, the legacy opt-in marker remains in use.

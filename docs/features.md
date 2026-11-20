@@ -55,7 +55,7 @@
   that host's own `st` over ssh (`[host.peers.<name>]`), or refuses by name when no peer is declared.
 - 🎛️ **A governor, not a scheduler.** `[governor]` tiers hold launches when a provider window is
   spent and release them when it resets; `[session_budget]` bounds hours, items and risk per
-  session; `st fleet hold gaming` pauses local launches while you use the box. All of it *asks*; none of
+  session; `st fleet hold gaming --set` pauses local launches while you use the box. All of it *asks*; none of
   it kills.
 - 🧠 **Context is measured, and handoff comes before compaction.** Occupancy is read from the harness
   with UNKNOWN as a real third state, hints are advisory, and the PreCompact hook checkpoints so the

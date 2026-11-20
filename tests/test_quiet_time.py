@@ -102,6 +102,35 @@ def test_legacy_cli_status_observes_media_too(tmp_path, monkeypatch):
     assert cli.main(['--root', str(tmp_path), 'hold', 'typo', '--status']) == 1
 
 
+@pytest.mark.parametrize('argv', [['hold', 'gaming'], ['hold', 'media'], ['hold', 'all'],
+                                  ['hold', 'status'], ['fleet', 'hold', 'media']])
+def test_bare_hold_reads_status_and_never_sets_a_hold(tmp_path, monkeypatch, capsys, argv):
+    # aegis-e5r1: `st fleet hold gaming` + `media` run as a status check created
+    # both manual holds and held the fleet for 9.5 hours.
+    configure(tmp_path)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    cli.main(['--root', str(tmp_path), *argv])
+    for name in ('gaming', 'media'):
+        assert not (quiet.folder(tmp_path, name) / 'manual').exists()
+    assert not quiet.read(tmp_path).held
+
+
+def test_set_is_the_only_way_to_create_a_manual_hold(tmp_path, monkeypatch, capsys):
+    configure(tmp_path)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    assert 'to set a manual hold: st fleet hold media --set' in (
+        cli.main(['--root', str(tmp_path), 'hold', 'media']) is not None
+        and capsys.readouterr().err)
+    cli.main(['--root', str(tmp_path), 'hold', 'media', '--set'])
+    assert (quiet.folder(tmp_path, 'media') / 'manual').exists()
+    assert cli.main(['--root', str(tmp_path), 'hold', 'status']) == 1
+    assert cli.main(['--root', str(tmp_path), 'hold', 'media']) == 1  # bare = status: held
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--set']) != 0
+    cli.main(['--root', str(tmp_path), 'hold', 'media', '--clear'])
+    assert not (quiet.folder(tmp_path, 'media') / 'manual').exists()
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all']) != 1  # not held (unprobed = UNKNOWN)
+
+
 def http_spec(**options):
     return detectors.parse({'detector': [dict(name='media', kind='http_json',
         url='http://localhost/sessions', items_path='MediaContainer.Metadata',

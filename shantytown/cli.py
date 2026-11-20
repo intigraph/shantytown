@@ -1732,6 +1732,8 @@ def build_parser() -> argparse.ArgumentParser:
     hold = leaf("hold", help="configurable quiet-time holds and scheduled observation")
     hold.add_argument("kind", help="configured detector name, or all for aggregate status/probe")
     actions = hold.add_mutually_exclusive_group()
+    actions.add_argument("--set", action="store_true",
+                         help="create a persistent manual hold (a bare name only reads status)")
     actions.add_argument("--clear", action="store_true", help="clear manual override only")
     actions.add_argument("--status", action="store_true", help="exit 1 held, 0 clear/off, 2 unknown")
     actions.add_argument("--probe", action="store_true", help="scheduled read-only detector sweep")
@@ -14477,11 +14479,15 @@ def _cmd_hold(a) -> int:
         from .config import load
         policy = load(root).quiet_time
         names = {spec.name for spec in policy.detectors}
+        if a.kind == 'status' and 'status' not in names:
+            # Reads like a status query, so it is one (aegis-e5r1).
+            a.kind, a.status = 'all', True
         if a.kind not in names | {'all'}:
             print('unknown detector; configured: ' + ', '.join(sorted(names)), file=sys.stderr)
             return REFUSED
-        if a.kind == 'all' and not (a.status or a.probe):
-            print('all requires --status or --probe; mutate a named detector', file=sys.stderr)
+        set_hold = getattr(a, 'set', False)
+        if a.kind == 'all' and (set_hold or a.clear or a.enable_detection or a.disable_detection):
+            print('all is read-only (status/probe); mutate a named detector', file=sys.stderr)
             return REFUSED
     except ValueError as exc:
         print(f'quiet-time configuration invalid: {exc}', file=sys.stderr)
@@ -14497,8 +14503,16 @@ def _cmd_hold(a) -> int:
             (folder / 'enabled').unlink(missing_ok=True)
     elif a.clear:
         quiet_time_mod.manual(root, a.kind, clear=True)
-    elif not a.status and not a.probe:
+    elif getattr(a, 'set', False):
         quiet_time_mod.manual(root, a.kind)
+    elif not a.status and not a.probe:
+        # aegis-e5r1: a bare `st fleet hold gaming` run to READ status used to
+        # create a manual hold, which held the whole fleet for 9.5 hours. A bare
+        # name is now a status read; setting a hold requires --set.
+        a.status = True
+        if a.kind != 'all':
+            print(f'status only; to set a manual hold: st fleet hold {a.kind} --set',
+                  file=sys.stderr)
     # Every probe/status uses the aggregate, including the legacy gaming command.
     # A clear detector must never restore scopes while a different hold is active.
     status = quiet_time_mod.probe(root) if a.probe else quiet_time_mod.read(root)
