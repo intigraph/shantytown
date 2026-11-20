@@ -582,3 +582,75 @@ def test_failed_generation_write_drops_entries_and_unwritable_cache_disables(ser
             assert seeds_read_cache.stale_lookup(["k"], lambda v: v) == (None, None)
         finally:
             directory.chmod(0o700)
+
+
+# aegis-jve: inside stale_ok() the exact /watermark fence is relaxed to the
+# stale bound. A miss is answered by one query, an exact hit by none, and the
+# exact cache is never published from a stale-scope answer.
+
+def _advance(monkeypatch, seconds):
+    real = time.time
+    monkeypatch.setattr(seeds_read_cache.time, "time", lambda: real() + seconds)
+
+
+def test_stale_scope_miss_reuses_a_recent_mark_and_skips_the_after_fence(service, monkeypatch):
+    proof, state = service
+    read(proof)  # exact read observes the watermark (before + after)
+    assert state["watermarks"] == 2
+    _advance(monkeypatch, 30)  # mark older than the exact 1s, within the 60s stale bound
+    with seeds_read_cache.stale_ok():
+        assert read(proof, "SELECT owner-two")["rows"][0]["query"] == "SELECT owner-two"
+    assert state["watermarks"] == 2  # no before/after fence for a stale-scope miss
+    assert state["queries"] == 2
+
+
+def test_stale_scope_exact_hit_with_recent_mark_costs_no_request(service, monkeypatch):
+    proof, state = service
+    read(proof)
+    used = state["queries"] + state["watermarks"]
+    _advance(monkeypatch, 30)
+    with seeds_read_cache.stale_ok():
+        assert read(proof)["rows"][0]["value"] == "before"
+    assert state["queries"] + state["watermarks"] == used
+
+
+def test_stale_scope_answer_never_publishes_the_exact_cache(service, monkeypatch):
+    proof, state = service
+    read(proof)
+    _advance(monkeypatch, 30)
+    with seeds_read_cache.stale_ok():
+        read(proof, "SELECT owner-two")
+    assert not [p for p in entries() if "owner-two" in p.read_text()]
+    # outside the scope the exact path is unchanged: fresh mark, full fence
+    before = state["watermarks"]
+    read(proof, "SELECT owner-two")
+    assert state["watermarks"] == before + 2
+
+
+def test_stale_scope_mark_older_than_the_bound_is_reobserved(service, monkeypatch):
+    proof, state = service
+    read(proof)
+    _advance(monkeypatch, 61)
+    with seeds_read_cache.stale_ok():
+        read(proof, "SELECT owner-two")
+    assert state["watermarks"] == 3  # one fresh before-observation, still no after-fence
+
+
+def test_own_write_drops_the_mark_so_a_stale_scope_reobserves(service, monkeypatch):
+    proof, state = service
+    read(proof)
+    _advance(monkeypatch, 30)
+    seeds_read_cache.invalidate_stale()  # an own write
+    with seeds_read_cache.stale_ok():
+        read(proof, "SELECT owner-two")
+    assert state["watermarks"] == 3
+
+
+def test_stale_scope_fence_relaxation_obeys_rollback(service, monkeypatch):
+    proof, state = service
+    monkeypatch.setenv("ST_SEEDS_STALE_TTL", "0")
+    read(proof)
+    _advance(monkeypatch, 30)
+    with seeds_read_cache.stale_ok():
+        read(proof, "SELECT owner-two")
+    assert state["watermarks"] == 4  # exact behaviour: before + after again
