@@ -248,8 +248,11 @@ class SdTracker(BrTracker):
             args.append("--unread")
         expired_flag = ["--include-expired"] if include_expired else []
         result = self._bd(*args, *expired_flag)
+        # Only clap's own unknown-flag refusal means "this sd predates expiry".
+        # Any other error that merely mentions the flag (an argv echo) must
+        # refuse: dropping expired rows there could resend an old key.
         if (result.returncode and expired_flag
-                and "--include-expired" in _failure_reason(result)):
+                and "unexpected argument '--include-expired'" in _failure_reason(result)):
             result = self._bd(*args)
         if result.returncode:
             raise RuntimeError(f"sd msg list failed: {_failure_reason(result)}")

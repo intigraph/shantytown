@@ -55,3 +55,18 @@ def test_other_failures_still_refuse():
     else:
         raise AssertionError("an unreadable mailbox must refuse")
     assert len(calls) == 1
+
+
+def test_an_error_that_only_echoes_the_flag_still_refuses():
+    # ian on #648: only the unknown-flag refusal may fall back; an argv echo in
+    # some other failure must not silently drop expired rows.
+    echoed = SimpleNamespace(returncode=1, stdout="",
+                             stderr="sd msg list --include-expired: quipu unreachable")
+    tracker, calls = _tracker([echoed])
+    try:
+        tracker.list_messages("wu", unread=False, all_windows=True, include_expired=True)
+    except RuntimeError as error:
+        assert "quipu unreachable" in str(error)
+    else:
+        raise AssertionError("an echoed flag is not an older sd")
+    assert len(calls) == 1
