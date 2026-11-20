@@ -76,7 +76,8 @@ def test_missing_caller_and_stale_inherited_identity_are_not_crew(clean_context,
     with declared_query_identity(None, source="st-tend", operation="tend"):
         query(url)
     h = lower(seen[0][0])
-    assert "x-quipu-agent" not in h and "x-quipu-task" not in h
+    # aegis-yc6f: a session-less st names its producer, never the inherited crew.
+    assert h["x-quipu-agent"] == "shantytown" and "x-quipu-task" not in h
     assert h["x-quipu-source"] == "st-tend"
     monkeypatch.setenv("CODEX_HOME", "declared-harness")
     query(url)
@@ -155,7 +156,7 @@ def test_host_header_crosses_http_without_inventing_caller(
     headers = lower(seen[0][0])
     assert headers.get("x-quipu-host") == expected
     assert headers["x-quipu-client"] == "seeds"
-    assert "x-quipu-agent" not in headers
+    assert headers["x-quipu-agent"] == "shantytown"  # producer, not a crew member (aegis-yc6f)
     assert seen[0][1] == {"query": "ASK {}"}
     assert dict(os.environ) == before
 
@@ -238,7 +239,7 @@ def test_stop_entrypoints_and_sdk_preflight_preserve_outer_command(clean_context
         assert stop_event.main(['send']) == 0
         values = sdk_subprocess_options()['env']
         assert values['QUIPU_SOURCE'] == 'st-stop_policy'
-        assert 'QUIPU_AGENT' not in values
+        assert values['QUIPU_AGENT'] == 'shantytown'  # session-less producer (aegis-yc6f)
     assert seen[-1] == 'st-stop_policy'
     assert read_headers()['X-Quipu-Source'] == 'shantytown'
     # Invalid hook invocation exits before any registry/board read, restoring context.
@@ -294,3 +295,24 @@ def test_context_map_keeps_the_command_label_in_executor_workers(clean_context):
             list(context_map(pool, lambda _: seen_ctx.append(read_headers()['X-Quipu-Source']), range(4)))
     assert set(seen_ctx) == {'st-work-item'}
     assert set(seen_plain) == {'shantytown'}   # the defect context_map fixes
+
+
+def test_session_less_child_names_the_producer_and_never_overrides_a_declaration(clean_context, monkeypatch):
+    """aegis-yc6f: timers, cron and launchers sent sd children with no agent.
+
+    Both child paths now carry one agent: an explicit QUIPU_AGENT (a unit's own
+    name) wins unchanged, a session uses its crew member, and otherwise the
+    producer is named. An inherited SHANTY_AGENT outside a session is never
+    credited.
+    """
+    monkeypatch.setenv("SHANTY_AGENT", "stale-crew")
+    for kwargs in ({}, {"read_operation": "list"}):
+        assert sdk_subprocess_options(**kwargs)["env"]["QUIPU_AGENT"] == "shantytown"
+    monkeypatch.setenv("QUIPU_AGENT", "st-tend-timer")
+    for kwargs in ({}, {"read_operation": "list"}):
+        env = sdk_subprocess_options(**kwargs).get("env") or os.environ
+        assert env["QUIPU_AGENT"] == "st-tend-timer"
+    monkeypatch.delenv("QUIPU_AGENT")
+    monkeypatch.setenv("CLAUDECODE", "1")
+    for kwargs in ({}, {"read_operation": "list"}):
+        assert sdk_subprocess_options(**kwargs)["env"]["QUIPU_AGENT"] == "stale-crew"
