@@ -1110,3 +1110,81 @@ def test_controller_reaper_drains_only_bound_mailbox_and_never_signs_for_job(tmp
     assert args[1] == rec['name'] and kwargs == {'detached': False}
     assert args[2] == {'report': 'done', 'budget': 'failed', 'unsigned-review': 'blocked'}[mode]
     assert args[-1] == ('turn budget' if mode == 'budget' else 'report')
+
+
+def test_attended_claude_review_has_its_allowlist_before_launch(store):
+    """aegis-e579 B: the settings exist when the pane starts, not after."""
+    root, panes, launched = store
+    seen = {}
+
+    def during(a):
+        (rec,) = eph.records(root)
+        path = Path(rec["workspace"]) / ".claude" / "settings.local.json"
+        seen["perms"] = json.loads(path.read_text())["permissions"] if path.exists() else None
+    panes.behaviour["during"] = during
+    assert _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+               "--repo", "o/n", "--pr", "3") == cli.OK
+    assert seen["perms"] is not None
+    assert "Bash(st agent spawn --report:*)" in seen["perms"]["allow"]
+    assert "Bash(git:*)" in seen["perms"]["deny"]
+
+
+def _attended_review(store, monkeypatch):
+    root, panes, _launched = store
+    assert _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+               "--repo", "o/n", "--pr", "3") == cli.OK
+    (rec,) = eph.records(root)
+    monkeypatch.setenv("SHANTY_AGENT", rec["name"])
+    panes.verified_actor = rec["name"]
+    monkeypatch.chdir(rec["workspace"])
+    monkeypatch.setattr(eph, "detached_teardown", lambda root_, name: None)
+    return root, rec
+
+
+def test_attended_report_refuses_a_summary_file_path(store, monkeypatch, tmp_path, capsys):
+    """Ian's finding: an appended --summary-file <path> would publish any readable file."""
+    root, rec = _attended_review(store, monkeypatch)
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOKEN")
+    posted = []
+    monkeypatch.setattr(cli, "_spawn_post_review_comment", lambda *a, **k: posted.append(a) or ("", ""))
+    head = "a" * 40
+    assert _st(root, "--report", "--verdict", "approve", "--head", head,
+               "--summary-file", str(secret)) == cli.REFUSED
+    assert "stdin" in capsys.readouterr().err
+    assert posted == [] and eph.read(root, rec["name"])["result"] is None
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("1. looks right"))
+    assert _st(root, "--report", "--verdict", "approve", "--head", head,
+               "--summary-file", "-") in (cli.OK, cli.CANNOT_TELL)   # control: stdin works
+    assert eph.read(root, rec["name"])["result"]["verdict"] == "approve"
+
+
+def test_st_posts_the_attended_review_comment_with_fixed_argv(store, monkeypatch):
+    root, rec = _attended_review(store, monkeypatch)
+    calls = []
+
+    class _R:
+        returncode, stdout, stderr = 0, "https://github.com/o/n/pull/3#issuecomment-1\n", ""
+    real = cli._spawn_post_review_comment
+    monkeypatch.setattr(cli, "_spawn_post_review_comment",
+                        lambda *a, **k: real(*a, run=lambda argv, **kw: calls.append((argv, kw)) or _R()))
+    head = "b" * 40
+    assert _st(root, "--report", "--verdict", "request-changes", "--head", head,
+               "--summary", "1. a test cannot fail") in (cli.OK, cli.CANNOT_TELL)
+    (argv, kw), = calls
+    assert argv == ["gh", "pr", "comment", "3", "--repo", "o/n", "--body-file", "-"]
+    assert kw["input"].startswith(f"REQUEST CHANGES at head {head}") and "1. a test cannot fail" in kw["input"]
+    assert "issuecomment-1" in eph.read(root, rec["name"])["result"]["summary"]
+
+
+def test_a_failed_comment_is_reported_not_hidden(store, monkeypatch):
+    root, rec = _attended_review(store, monkeypatch)
+
+    class _R:
+        returncode, stdout, stderr = 1, "", "HTTP 403"
+    real = cli._spawn_post_review_comment
+    monkeypatch.setattr(cli, "_spawn_post_review_comment",
+                        lambda *a, **k: real(*a, run=lambda argv, **kw: _R()))
+    assert _st(root, "--report", "--verdict", "approve", "--head", "c" * 40,
+               "--summary", "ok") in (cli.OK, cli.CANNOT_TELL)
+    assert "NOT posted" in eph.read(root, rec["name"])["result"]["summary"]

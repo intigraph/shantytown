@@ -280,6 +280,82 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     }
 
 
+# --- attended job permissions (aegis-e579 option B) ---------------------------
+#
+# An ATTENDED job runs under the controller UID WITHOUT
+# --dangerously-skip-permissions (card_for: dangerous=False). With no allowlist
+# its harness asks before its first command and, with nobody attending, sits
+# there until the deadline. These are the exact commands each job prompt below
+# tells it to run, and nothing else. Anything outside them still prompts (the
+# job stalls and is reaped at its deadline); edits, pushes and direct merges are
+# denied outright so they fail at once instead of waiting.
+# Unattended (protected UID) jobs never use this: their settings are staged by
+# the operator under the job UID (job_launch).
+# Reads are limited to the job's own worktree (Read rules also govern Grep and
+# Glob). git is not allowed at all: `git log/show/diff --output=<path>` writes
+# arbitrary files. gh rules are bound to the job's exact PR and repo. The job
+# has NO write channel of its own: it does not run `gh pr comment`; st posts
+# its stdin summary as the verdict comment (cli._spawn_post_review_comment),
+# and an attended --report refuses a --summary-file path. A prefix rule cannot
+# stop arguments appended after it, so no allowed command may write a file or
+# send data elsewhere whatever is appended.
+_DENY = ["Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
+         "Bash(git:*)", "Bash(gh pr comment:*)", "Bash(gh pr merge:*)",
+         "Bash(gh pr review:*)", "Bash(gh api:*)", "Bash(gh pr edit:*)"]
+
+
+def _attended_rules(rec: dict) -> dict | None:
+    job, repo, pr = rec.get("job"), rec.get("repo"), rec.get("pr")
+    if job not in ("review", "merge") or not repo or not pr:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", str(repo)) or not str(pr).isdigit():
+        return None
+    target = f"{pr} --repo {repo}"
+    allow = ["Read(./**)", f"Bash(gh pr view {target}:*)", f"Bash(gh pr checks {target}:*)"]
+    if job == "review":
+        allow.append(f"Bash(gh pr diff {target}:*)")
+    else:
+        allow.append("Bash(st agent spawn --merge:*)")
+    allow.append("Bash(st agent spawn --report:*)")
+    return {"allow": allow, "deny": list(_DENY)}
+
+
+def attended_settings(rec: dict, *, unattended: bool) -> dict | None:
+    """The project-local Claude settings an attended job needs, or None."""
+    if unattended or rec.get("harness") != "claude":
+        return None
+    rules = _attended_rules(rec)
+    return None if rules is None else {"permissions": rules}
+
+
+def attended_review(rec: dict) -> bool:
+    """A review that runs on the attended allowlist: st posts its comment."""
+    return (rec.get("job") == "review" and not rec.get("uid_binding")
+            and rec.get("harness") == "claude" and _attended_rules(rec) is not None)
+
+
+def write_attended_settings(rec: dict, *, unattended: bool) -> Path | None:
+    """Write the job's own .claude/settings.local.json before launch.
+
+    Only inside the job's workspace. An existing file with different content
+    is refused, never merged or overwritten: it could widen the allowlist.
+    """
+    settings = attended_settings(rec, unattended=unattended)
+    if settings is None:
+        return None
+    path = Path(rec["workspace"]) / ".claude" / "settings.local.json"
+    body = json.dumps(settings, indent=2, sort_keys=True) + "\n"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise Refused(f"{path} is a symlink; refusing to write job permissions through it")
+    if path.exists():
+        if path.read_text() == body:
+            return path
+        raise Refused(f"{path} already exists with other settings; not widening a job's permissions")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+    return path
+
+
 def card_for(rec: dict, *, unattended: bool) -> dict:
     """An ordinary worker card. `first` is the survival band a governor tier
     sheds first: an ephemeral job is the most deferrable work on the host."""
@@ -316,6 +392,16 @@ _JOBS = {
 5. NEVER push, never merge, never edit the branch. Report with the head you read and the comment's URL:
      st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary-file -
    st signs that verdict as a Quipu GateApproval record naming you as the reviewer; the merge gate reads it.""",
+    "review_attended": """JOB: an INDEPENDENT, NON-AUTHOR review of {repo}#{pr}.
+1. Read the PR at its current head: `gh pr view {pr} --repo {repo} --json headRefOid,author,title,body,files`
+   and `gh pr diff {pr} --repo {repo}`. Record the head SHA you reviewed. Read files only inside your worktree.
+2. If you (or the agent identity you run as) authored any commit on it, report --verdict blocked: a review must be independent.
+3. Review for correctness, tests that can fail, security and scope. Check CI with `gh pr checks {pr} --repo {repo}`.
+4. Do NOT comment on the PR, push, merge or edit anything: your permissions allow only the commands above.
+   st posts your summary as the ONE verdict comment on the PR.
+5. Report once, the summary on stdin (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary-file -
+   st posts it on the PR, then signs the verdict record naming you as the reviewer.""",
     "merge": """JOB: merge {repo}#{pr} at EXACTLY head {head} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo}
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
 1. `gh pr view {pr} --repo {repo} --json headRefOid,mergeable,mergeStateStatus,reviews,author,isDraft`
@@ -363,6 +449,7 @@ def prompt(rec: dict) -> str:
     # to fix and publish. UID binding is controller ledger data, not an agent
     # environment declaration. Endpoint permissions still need native proof.
     job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
+                  else _JOBS["review_attended"] if attended_review(rec)
                   else _JOBS[rec["job"]])
     return (_COMMON.format(**fields) + "\n" + job_prompt.format(**fields)).strip()
 

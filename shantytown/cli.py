@@ -3628,6 +3628,28 @@ def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None
     return f"signed verdict record {iri} ({outcome} on {head[:12]}, signer {signer})", ""
 
 
+def _spawn_post_review_comment(rec, verdict, head, summary, *, run=None):
+    """st posts an attended review's ONE verdict comment (aegis-e579 B).
+
+    The job has no write channel of its own; st fixes the repo, PR and argv,
+    and the body comes only from the job's stdin summary. Returns
+    (comment_url_or_empty, note_for_summary)."""
+    import subprocess
+    run = run or subprocess.run
+    heading = "APPROVE" if verdict == "approve" else "REQUEST CHANGES"
+    body = (f"{heading} at head {head}\n\n{summary.strip()}\n\n"
+            f"Independent review by ephemeral job {rec['name']} for {rec.get('item')}.\n")
+    try:
+        r = run(["gh", "pr", "comment", str(int(rec["pr"])), "--repo", str(rec["repo"]),
+                 "--body-file", "-"], input=body, capture_output=True, text=True, timeout=60)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return "", f"PR verdict comment NOT posted: {exc}"
+    url = (r.stdout or "").strip().splitlines()[-1:] if r.returncode == 0 else []
+    if not url or not url[0].startswith("https://"):
+        return "", f"PR verdict comment NOT posted: {(r.stderr or r.stdout or '').strip()[:160]}"
+    return url[0], f"verdict comment {url[0]}"
+
+
 def _spawn_item_work_request(a, item) -> dict | None:
     """chaski's work request from the item body, or None if unreadable/absent."""
     from . import gate_verdict as gv
@@ -3896,11 +3918,22 @@ def _cmd_spawn(a) -> int:
             if job.get("job") == "review" and a.verdict in ("approve", "request-changes"):
                 if not eph._SHA.fullmatch(a.head or ""):
                     raise eph.Refused("a review verdict needs --head <the 40-hex head you read>")
+            attended = eph.attended_review(job)
+            if (not job.get("uid_binding") and getattr(a, "summary_file", None) is not None
+                    and str(a.summary_file) != "-"):
+                # An appended `--summary-file <path>` would publish any file the
+                # job's UID can read; attended jobs report on stdin only.
+                raise eph.Refused("an attended job reports its summary on stdin (--summary-file -)")
             if a.dry_run:
                 print(f"would report {me}: {a.verdict}")
                 return OK
             summary = _spawn_summary(a)
-            note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, a.evidence)
+            evidence = a.evidence
+            if attended and a.verdict in ("approve", "request-changes") and not evidence:
+                evidence, posted = _spawn_post_review_comment(job, a.verdict, a.head, summary)
+                if posted:
+                    summary = (summary.rstrip() + "\n\n" + posted).strip()
+            note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, evidence)
             if note or problem:
                 summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()
             rec, problems = _spawn_end(a, me, a.verdict, summary, "report",
@@ -4025,6 +4058,9 @@ def _cmd_spawn(a) -> int:
                 scratch = eph.ledger_dir(a.root) / "scratch" / rec["name"]
                 scratch.mkdir(parents=True, exist_ok=True)
                 rec["workspace"] = str(scratch)
+            # Attended jobs get their exact per-job allowlist (aegis-e579 B)
+            # before the ledger: a refusal here leaves nothing to tear down.
+            eph.write_attended_settings(rec, unattended=unattended)
             # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
             # report and a teardown, including a launch that is refused.
             eph.write(a.root, rec)
