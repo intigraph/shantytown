@@ -8,7 +8,13 @@ import stat
 import tempfile
 import time
 
-TTL = 15
+# aegis-az3d: every rebuild is a full local crew census (Quipu reads). At 15s,
+# a peer polling once a minute rebuilt on nearly every read and drove quipu
+# deadline 408s. The view is display-only (decision_eligible=False), so a
+# two-minute-old count carries no decision hazard.
+TTL = 120
+# A peer may run a different release; accept its own TTL inside this bound.
+MAX_PEER_TTL = 600
 MAX_BYTES = 1024 * 1024
 RETRY_AFTER = 5
 
