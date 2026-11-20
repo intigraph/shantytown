@@ -36,7 +36,10 @@ def _comments(tracker, item_id, body=None):
     from .files import FilesTracker, write_json_atomic
     if isinstance(tracker, BrTracker):
         if body is not None:
-            append_comment(tracker, item_id, body)
+            # Submit only; callers verify with comment_verified. On sd a
+            # comment-list read is the item's whole comment family (3-4 s of
+            # quipu store time on a long-running item; aegis-n0wc).
+            return append_comment(tracker, item_id, body)
         return comments(tracker, item_id)
     if isinstance(tracker, FilesTracker):
         path = tracker._path(item_id)
@@ -47,6 +50,28 @@ def _comments(tracker, item_id, body=None):
             tracker.update(item_id, comments=rows)
         return rows
     raise ValueError("selected tracker does not support comments")
+
+
+def comment_verified(tracker, item_id, body, receipt=None):
+    """Did this comment land? One read, and on sd never the whole family.
+
+    With sd's receipt position (br.comment_receipt), read exactly that comment
+    and require this body there (aegis-n0wc, Sattler B2 ruling: the receipt
+    names what to read; it is not itself the verification). An unreadable or
+    mismatched exact read is unproven, not a cue to list every comment.
+    Without a receipt (br, the relay path), read the list once, as before.
+    """
+    phase("READBACK")
+    exact_read = getattr(tracker, "comment_landed", None)
+    if type(receipt) is int and callable(exact_read):
+        answer = exact_read(item_id, receipt, body)
+        if answer is not None:
+            if not answer.complete:
+                raise RuntimeError(
+                    f"comment readback unreadable ({answer.caveat}); write may have landed; "
+                    "verify exact readback before retrying")
+            return answer.exact()
+    return any(_comment_body(row) == body for row in _comments(tracker, item_id))
 
 
 def _comment_body(row):
@@ -178,7 +203,7 @@ def command(args, tracker):
         if not args.dry_run:
             started = datetime.now(timezone.utc)
             try:
-                _comments(tracker, item.id, body)
+                receipt = _comments(tracker, item.id, body)
             except subprocess.TimeoutExpired as timed_out:
                 from .tracker_result import timed_out as record_timeout
                 record_timeout()
@@ -204,8 +229,7 @@ def command(args, tracker):
                     f"comment write timed out after {timed_out.timeout:g}s and readback "
                     "does not show it; write may still land; verify exact readback "
                     "before retrying") from None
-            if not any(_comment_body(row) == body
-                       for row in _comments(tracker, item.id)):
+            if not comment_verified(tracker, item.id, body, receipt):
                 raise RuntimeError("comment readback unproven; write may have landed; verify exact readback before retrying")
         return {"id": item.id, "comment": "planned" if args.dry_run else "verified"}
     fields = {}
