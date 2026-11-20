@@ -6,6 +6,7 @@ unknown distinct from incomplete, and never turn an SSH failure into an empty ho
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from .query_identity import context_map
 import json
 import os
 from pathlib import Path
@@ -205,7 +206,7 @@ def check(root, *, backend=None, local=False):
     peers = sorted(cfg.host_peers.values(), key=lambda p: p.name)
     if peers:
         with ThreadPoolExecutor(max_workers=min(8, len(peers))) as pool:
-            for rows in pool.map(inspect, peers):
+            for rows in context_map(pool, inspect, peers):
                 report["checks"].extend(rows)
     return report
 

@@ -1,5 +1,6 @@
 """Caller-declared read context, separate from components and write actors."""
 from contextlib import contextmanager
+import contextvars
 from contextvars import ContextVar
 import os
 import re
@@ -103,20 +104,54 @@ def declared_read_operation(operation):
         _operation.reset(token)
 
 
+#: Labels that predate group-leaf labels. They stay exactly as they were:
+#: quipu filters and alerts already key on them (aegis-jve).
+KNOWN_COMMANDS = frozenset({"anchor", "plate", "inbox", "stop_policy", "stop_event",
+                            "haul", "tend", "work", "crew", "crewid", "task", "events",
+                            "harness", "stats", "go", "status", "census"})
+
+#: The finite shape quipu admits for an st source (aegis-z29i):
+#: st-[a-z][a-z_-]{0,30}.
+_LABEL = re.compile(r"[a-z][a-z_-]{0,30}")
+
+
+def command_label(command, group=None, *, registered=False):
+    """The finite source label for one st command, never free text.
+
+    A known leaf keeps its historical label. Otherwise a REGISTERED verb (the
+    CLI passes only argparse-validated names) becomes "<group>-<leaf>", e.g.
+    `st work item show` -> "work-item" and `st fleet hold` -> "fleet-hold",
+    where it used to collapse into "other" and hid the P0 caller (aegis-z29i).
+    Anything unregistered or outside the bounded shape stays "other".
+    """
+    if command in KNOWN_COMMANDS:
+        return command
+    if registered and isinstance(command, str):
+        label = f"{group}-{command}" if isinstance(group, str) and group else command
+        if _LABEL.fullmatch(label):
+            return label
+    return "other"
+
+
+def context_map(pool, fn, items):
+    """`pool.map` that keeps the caller's declared query identity.
+
+    A ThreadPoolExecutor worker does not inherit the submitting thread's
+    contextvars, so reads made there lost their st command label (aegis-z29i).
+    Each call runs in its own copy of the caller's context.
+    """
+    context = contextvars.copy_context()
+    return pool.map(lambda item: context.copy().run(fn, item), items)
+
+
 @contextmanager
-def declared_command(command):
+def declared_command(command, group=None, *, registered=False):
     """Finite command label only: never argv, subjects, paths, or message text.
 
     The outer entrypoint owns attribution through nested stop hooks; source is
     diagnostic, not an actor or authority. Context restoration includes errors.
     """
-    # aegis-jve: status segments (crew, crewid, task, events, harness, stats)
-    # and dispatch (go, status, census) were all "st-other". Quipu's request
-    # log accepts exactly these labels; keep the two lists in step.
-    known = {"anchor", "plate", "inbox", "stop_policy", "stop_event",
-             "haul", "tend", "work", "crew", "crewid", "task", "events",
-             "harness", "stats", "go", "status", "census"}
-    label = command if command in known else "other"
+    label = command_label(command, group, registered=registered)
     token = _command.set(_command.get() or "st-" + label)
     try:
         yield

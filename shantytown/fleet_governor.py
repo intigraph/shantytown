@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
+from .query_identity import context_map
 from dataclasses import asdict, dataclass, replace
 from contextlib import contextmanager
 import json
@@ -449,7 +450,7 @@ def collect(peers):
     if not ordered:
         return []
     with ThreadPoolExecutor(max_workers=min(16, len(ordered))) as pool:
-        return list(pool.map(read_peer, ordered))
+        return list(context_map(pool, read_peer, ordered))
 
 
 class MergedState:
