@@ -126,6 +126,21 @@ def invalidate_stale() -> None:
                 pass
 
 
+def _stale_fence_age() -> float:
+    """Seconds a stale_ok() read may reuse an observed watermark; 0 when exact.
+
+    aegis-jve: a stale-tier caller already accepts answers up to the stale TTL,
+    so paying the exact 1s /watermark fence on its misses buys no consistency.
+    Projections, snapshots and direct reads stay exact; own writes drop the
+    marks (invalidate_stale), so the next read observes again.
+    """
+    ttl = _STALE_TTL.get()
+    if (ttl <= 0 or _DIRECT_READS.get() or _PROJECTION.get() is not None
+            or _READ_SNAPSHOT.get()[0] or os.environ.get("ST_SEEDS_READ_CACHE") == "0"):
+        return 0.0
+    return min(ttl, stale_ttl())
+
+
 def stale_lookup(parts, validate, *, ttl=None):
     """(hit, publish) for one bounded-staleness key; (None, None) when off.
 
@@ -596,6 +611,7 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
             or parsed.username or parsed.password or parsed.query or parsed.fragment):
         return fetch()
     key = hashlib.sha256(json.dumps([server, query]).encode()).hexdigest()
+    fence_age = _stale_fence_age()
     try:
         directory = _directory()
         mark_key = hashlib.sha256(json.dumps([server, "watermark-v1"]).encode()).hexdigest()
@@ -612,7 +628,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         # The lock protects local files only. A slow reader must not hold a
         # cache stripe across HTTP and force unrelated readers to wait a second.
         with _locked(directory, key):
-            before = _cached(mark_path, None, valid_mark, max_age=_WATERMARK_MAX_AGE)
+            before = _cached(mark_path, None, valid_mark,
+                             max_age=max(_WATERMARK_MAX_AGE, fence_age))
             hit = _cached(path, before, validate, retain=_RETAIN_CANDIDATES.get()) if before is not None else None
         if before is None:
             before = (scope["mark"] if scope is not None else
@@ -654,6 +671,11 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         return result  # The whole projection owns the post-read proof.
 
     result = fetch()  # Never swallow a wire or completeness refusal.
+    if fence_age > 0:
+        # Bounded-staleness answer: the caller publishes it to the stale
+        # tier only. Without an after-observation it cannot certify an
+        # exact entry, so the exact cache is left untouched.
+        return result
     # A changed watermark cannot certify this answer, even without caching:
     # callers combine projections, so returning it could serve a mixed view.
     after = _watermark(server, timeout, opener)
