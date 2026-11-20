@@ -179,7 +179,10 @@ class SdTracker(BrTracker):
         from .plate_capacity import assignment_lock, ensure_room
         with assignment_lock(self, owner):
             ensure_room(self, owner, candidate=row)
-            if row['id'] not in unblocked_ids(self.prove_store(), [row], timeout=self.timeout):
+            from .seeds_read_cache import exact_reads
+            with exact_reads():  # aegis-jve: the claim proof is never a stale-tier read
+                ready = unblocked_ids(self.prove_store(), [row], timeout=self.timeout)
+            if row['id'] not in ready:
                 return False
             comment = 'Backlog rank pickup at completed-anchor stop; previous queue retained.'
             result = self._bd_for(row['id'], 'update', row['id'], '--status=in_progress',
@@ -634,6 +637,20 @@ class SdTracker(BrTracker):
         except (OSError, ValueError, RuntimeError) as error:
             return Answer.capped([], how="Seeds capacity owner scope", caveat=str(error))
 
+    def _candidate_ready(self, rows, proof=None):
+        """aegis-jve: readiness for a candidate SCAN (plates, tend, haul, ranking).
+
+        Every batch query still runs live; inside stale_ok() the batches share
+        one recent /watermark observation (at most stale_ttl() old, dropped by
+        own writes) instead of an exact before/after fence per 125-row batch.
+        Never a claim proof: claim_ranked_pickup re-reads readiness under
+        exact_reads(), and release gates are exact projections.
+        """
+        from .seeds_plate import unblocked_ids
+        from .seeds_read_cache import stale_ok
+        with stale_ok():
+            return unblocked_ids(proof or self.prove_store(), rows, timeout=self.timeout)
+
     def prepare_roster(self, agents):
         """One bounded native observation for this reader's named roster.
 
@@ -642,7 +659,7 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return
-        from .seeds_plate import owner_rows, unblocked_ids
+        from .seeds_plate import owner_rows
         from .inbox import drop_parked
         agents = tuple(dict.fromkeys(agents))
         answer = owner_rows(self.prove_store(), None, plate_owners=agents, capacity=True,
@@ -665,7 +682,7 @@ class SdTracker(BrTracker):
             self._plate_projection_candidates[agent] = plate
         candidates = [row for row in drop_parked(rows) if row["status"] == "open"]
         try:
-            ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+            ready = self._candidate_ready(candidates)
             self._roster_ready = {agent: Answer.complete_read(
                 {row["id"] for row in self._plate_projection_candidates[agent]
                  if row["id"] in ready}, how="roster-scoped readiness") for agent in agents}
@@ -839,13 +856,13 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows, unblocked_ids
+        from .seeds_plate import owner_rows
         proof = self.prove_store()
         rows = owner_rows(proof, None, feed_owners=(owner,),
                           active_only=True, include_waits=True, timeout=self.timeout).exact()
         # Active status is not proof that technical dependencies are closed.
         # Reobserve native blocks edges each pass; closure restores eligibility.
-        ready = unblocked_ids(proof, rows, timeout=self.timeout)
+        ready = self._candidate_ready(rows, proof)
         return Answer.complete_read(self._tend_order([r for r in rows if r["id"] in ready]),
                                     how="owner-scoped unblocked haul active anchors")
 
@@ -878,14 +895,14 @@ class SdTracker(BrTracker):
         """
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows, unblocked_ids
+        from .seeds_plate import owner_rows
         from .inbox import drop_parked
         rows = drop_parked(owner_rows(self.prove_store(), None,
                                     feed_owners=tuple(owners),
                                     timeout=self.timeout).exact())
         ready = [row for row in rows if row["status"] == "open"]
         active = [row for row in rows if row["status"] == "in_progress"]
-        ids = unblocked_ids(self.prove_store(), ready + active, timeout=self.timeout)
+        ids = self._candidate_ready(ready + active)
         return ([row for row in ready if row["id"] in ids],
                 [row for row in active if row["id"] in ids])
 
@@ -893,7 +910,7 @@ class SdTracker(BrTracker):
         """Lean fields for fleet priority advice; never change mutation reads."""
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import owner_rows, unblocked_ids
+        from .seeds_plate import owner_rows
         rows = owner_rows(self.prove_store(), None, timeout=self.timeout,
                           include_messages=include_messages).exact()
         from .inbox import drop_parked
@@ -903,7 +920,7 @@ class SdTracker(BrTracker):
         # The advice consumer may prove most open items irrelevant before the
         # dependency read. Active rows preserve the SDK list semantics.
         candidates = ready_candidates(ready, active) if ready_candidates else ready
-        unblocked = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        unblocked = self._candidate_ready(candidates)
         return [row for row in candidates if row["id"] in unblocked], active
 
     def stopped_owner_rows(self, owners):
@@ -936,13 +953,13 @@ class SdTracker(BrTracker):
         """Complete lean active/deferred metadata and proven unowned READY rows."""
         if not self._use_remote_projection():
             return None
-        from .seeds_plate import ranking_rows, unblocked_ids
+        from .seeds_plate import ranking_rows
         from .priority_advisory import workable
         # aegis-bzc: the dedicated bounded cohort reader. owner_rows(None,
         # include_deferred=True) is refused before any query by design.
         rows = ranking_rows(self.prove_store(), timeout=self.timeout).exact()
         candidates = [r for r in rows if r.get("status") == "open" and workable(r)]
-        ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+        ready = self._candidate_ready(candidates)
         return [r for r in candidates if r["id"] in ready], rows
 
     def queue_rows(self):
@@ -1172,7 +1189,7 @@ class SdTracker(BrTracker):
         except (OSError, ValueError, TypeError, RuntimeError) as error:
             return Answer.capped(set(), how="Seeds owner readiness format proof", caveat=str(error))
         if projected:
-            from .seeds_plate import owner_rows, unblocked_ids
+            from .seeds_plate import owner_rows
             from .answer import PartialAnswer
             from .inbox import drop_parked
             try:
@@ -1181,7 +1198,7 @@ class SdTracker(BrTracker):
                     rows = owner_rows(self.prove_store(), agent, timeout=self.timeout).exact()
                 candidates = [row for row in drop_parked(rows)
                               if row["status"] == "open" and not is_message(row["title"])]
-                ready = unblocked_ids(self.prove_store(), candidates, timeout=self.timeout)
+                ready = self._candidate_ready(candidates)
                 return Answer.complete_read(ready, how="Seeds scoped readiness of projected owner IDs")
             except (OSError, ValueError, RuntimeError, PartialAnswer) as error:
                 return Answer.capped(set(), how="Seeds scoped readiness", caveat=str(error))
