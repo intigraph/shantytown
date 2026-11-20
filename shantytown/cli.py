@@ -160,6 +160,7 @@ import json
 import os
 import sys
 import time
+import re
 # MODULE LEVEL, not function-local. `_retire_card` referenced a bare `replace`
 # while the only import of it sat INSIDE `_tend_retire`, so the crash-loop
 # give-up raised NameError on every call and had never once written a card. It
@@ -8644,6 +8645,11 @@ def _cmd_crew(a) -> int:
     if getattr(a, "pane_state", False):
         from .pane_state import command
         return command(a)
+    if getattr(a, "count", False) and not getattr(a, "json", False):
+        cached = _crew_count_cached(a.root)
+        if cached is not None:
+            print(cached)
+            return OK
     a._crew_share_tracker = True
     a._crew_snapshot_tracker = None
     from . import fleet as fleet_mod
@@ -8793,7 +8799,8 @@ def _cmd_crew(a) -> int:
             return CANNOT_TELL
         return _crew_count(agents, panes, runtime, untracked_root=a.root,
                            peer_rows=fleet_mod.rows(peer_results), plate=plate,
-                           cycling=cycling, cycle_blocked=cycle_blocked, budget_root=a.root)
+                           cycling=cycling, cycle_blocked=cycle_blocked, budget_root=a.root,
+                           cache_root=a.root)
     if not agents and not peer_results:
         print("  no agents. `st agent new <agent>`.")
         return OK
@@ -10134,8 +10141,60 @@ def _utilization(harness, *, readings, policy, verdict, live, now, advisory,
     return seen
 
 
+#: Seconds a successful `st crew --count` answer is reused (aegis-t14). Its
+#: only consumer is a status bar, and each fresh answer is a CREW-WIDE plate
+#: read: one call measured 15 Quipu requests including four owner-rows pages,
+#: re-paid about once a minute per host by status bars on their own schedules.
+#: Who is busy changes on the scale of tasks. SHANTY_CREW_COUNT_TTL overrides
+#: it; 0 disables. Only an OK answer is cached; UNKNOWN is always re-asked.
+CREW_COUNT_TTL = 300
+
+
+def _crew_count_cache(root):
+    return Path(root) / ".shanty" / "cache" / "crew-count"
+
+
+def _crew_count_ttl():
+    raw = os.environ.get("SHANTY_CREW_COUNT_TTL")
+    if raw is None:
+        return CREW_COUNT_TTL
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return CREW_COUNT_TTL
+
+
+def _crew_count_cached(root):
+    ttl = _crew_count_ttl()
+    if not ttl or root is None:
+        return None
+    path = _crew_count_cache(root)
+    try:
+        age = time.time() - path.stat().st_mtime
+        if not 0 <= age < ttl:
+            return None
+        value = path.read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return value if re.fullmatch(r"[0-9]+/[0-9]+", value) else None
+
+
+def _crew_count_store(root, value):
+    if root is None or not _crew_count_ttl():
+        return
+    path = _crew_count_cache(root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}")
+        tmp.write_text(value + "\n")
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a failed cache write is only a miss next time
+
+
 def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=(),
-                *, plate=None, cycling=(), cycle_blocked=(), budget_root=None) -> int:
+                *, plate=None, cycling=(), cycle_blocked=(), budget_root=None,
+                cache_root=None) -> int:
     """`st crew --count` — print `busy/total`, nothing else.
 
     TOTAL IS NOT THE ROSTER SIZE. It is the number of agents we can actually
@@ -10156,7 +10215,9 @@ def _crew_count(agents, panes, runtime, untracked_root=None, peer_rows=(),
             idle += 1
     busy += sum(row["work"] == triage_mod.BUSY for row in peer_rows)
     idle += sum(row["work"] == triage_mod.IDLE for row in peer_rows)
-    print(f"{busy}/{busy + idle}")
+    answer = f"{busy}/{busy + idle}"
+    _crew_count_store(cache_root, answer)
+    print(answer)
     return OK
 
 

@@ -4,6 +4,7 @@
 
 ### Bug Fixes
 
+* `st crew --count` reuses a successful answer for 5 minutes (`SHANTY_CREW_COUNT_TTL`, 0 disables). Each fresh answer is a crew-wide plate read, and its only consumer is a status bar (aegis-t14).
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
 ## [0.19.0](https://github.com/intigraph/shantytown/compare/v0.18.1...v0.19.0) (2026-11-19)

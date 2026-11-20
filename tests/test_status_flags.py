@@ -217,6 +217,47 @@ def test_count_of_an_empty_roster_is_zero_over_zero(tmp_path, monkeypatch, capsy
     assert capsys.readouterr().out == "0/0\n", "the bar got prose instead of a ratio"
 
 
+def test_count_reuses_a_recent_ok_answer(tmp_path, monkeypatch, capsys):
+    """aegis-t14: each fresh `--count` is a crew-wide plate read, and its only
+    consumer is a status bar. A second ask within the TTL must not re-judge:
+    with the panes changed underneath, it still prints the first answer."""
+    monkeypatch.delenv("SHANTY_CREW_COUNT_TTL", raising=False)
+    for name in ("ellie", "ian"):
+        _card(tmp_path, name, role="worker", pane=f"p-{name}")
+    assert _run(["crew", "--count"], tmp_path, monkeypatch,
+                _Panes({"p-ellie": IDLE_SCREEN, "p-ian": BUSY_SCREEN})) == cli.OK
+    assert capsys.readouterr().out == "1/2\n"
+    assert _run(["crew", "--count"], tmp_path, monkeypatch,
+                _Panes({"p-ellie": BUSY_SCREEN, "p-ian": BUSY_SCREEN})) == cli.OK
+    assert capsys.readouterr().out == "1/2\n", "re-judged inside the cache TTL"
+
+
+def test_count_cache_expires_and_can_be_disabled(tmp_path, monkeypatch, capsys):
+    import os, time
+    for name in ("ellie", "ian"):
+        _card(tmp_path, name, role="worker", pane=f"p-{name}")
+    assert _run(["crew", "--count"], tmp_path, monkeypatch,
+                _Panes({"p-ellie": IDLE_SCREEN, "p-ian": BUSY_SCREEN})) == cli.OK
+    assert capsys.readouterr().out == "1/2\n"
+    cache = cli._crew_count_cache(tmp_path)
+    old = time.time() - cli.CREW_COUNT_TTL - 1
+    os.utime(cache, (old, old))
+    assert _run(["crew", "--count"], tmp_path, monkeypatch,
+                _Panes({"p-ellie": BUSY_SCREEN, "p-ian": BUSY_SCREEN})) == cli.OK
+    assert capsys.readouterr().out == "2/2\n", "an expired answer was reused"
+    monkeypatch.setenv("SHANTY_CREW_COUNT_TTL", "0")
+    assert _run(["crew", "--count"], tmp_path, monkeypatch,
+                _Panes({"p-ellie": IDLE_SCREEN, "p-ian": IDLE_SCREEN})) == cli.OK
+    assert capsys.readouterr().out == "0/2\n", "TTL 0 must always re-judge"
+
+
+def test_count_never_caches_unknown(tmp_path, monkeypatch, capsys):
+    cli._crew_count_store(tmp_path, "1/2")
+    cache = cli._crew_count_cache(tmp_path)
+    cache.write_text("unknown peer vati: timeout\n")
+    assert cli._crew_count_cached(tmp_path) is None, "a non-ratio answer was served"
+
+
 def test_count_agrees_with_the_table_it_replaces(tmp_path, monkeypatch, capsys):
     """One judgment, two renderings. If `--count` ever grows its own opinion of
     busy, this fails — which is the point of sharing _crew_states."""
