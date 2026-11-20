@@ -75,6 +75,21 @@ def stale_ok():
         _STALE_TTL.reset(token)
 
 
+@contextmanager
+def exact_reads():
+    """Refuse the bounded-staleness tier inside this block, even under stale_ok().
+
+    aegis-jve: a read that proves something before a write (a claim's
+    readiness, a release gate) must take the exact fence however its caller
+    was entered.
+    """
+    token = _STALE_TTL.set(0.0)
+    try:
+        yield
+    finally:
+        _STALE_TTL.reset(token)
+
+
 def _generation(directory: Path) -> int:
     path = directory / _GENERATION
     try:
