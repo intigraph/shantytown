@@ -1188,3 +1188,118 @@ def test_a_failed_comment_is_reported_not_hidden(store, monkeypatch):
     assert _st(root, "--report", "--verdict", "approve", "--head", "c" * 40,
                "--summary", "ok") in (cli.OK, cli.CANNOT_TELL)
     assert "NOT posted" in eph.read(root, rec["name"])["result"]["summary"]
+
+
+# --- codex job trust (aegis-e579) ------------------------------------------------
+# Codex 0.161 stops a folder with no trust record on "Trust this folder?"; the
+# job pane read as ready and st typed the job into the dialog. The spawner now
+# records trust for the job workspace (after the trust-surface guard) and
+# removes it at teardown.
+
+from shantytown import codex as codex_mod  # noqa: E402
+
+CODEX_TRUST_DIALOG = """  Folder access
+  /work/quipu-wt/eph-review-abc123
+  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings.
+  trust these files. Your trust decision will be saved.
+› 1. Trust and continue
+  2. Quit
+  enter continue · esc quit
+"""
+
+
+def test_untrust_removes_only_the_trust_key_st_wrote():
+    base = codex_mod.trust_projects('model = "x"\n', ["/w/a", "/w/b"])
+    kept = base + '\n[projects."/w/c"]\ntrust_level = "trusted"\nnote = "operator"\n'
+    out = codex_mod.untrust_projects(kept, ["/w/a", "/w/c"])
+    projects = codex_mod.tomllib.loads(out)["projects"]
+    assert "/w/a" not in projects
+    assert projects["/w/b"] == {"trust_level": "trusted"}
+    assert projects["/w/c"] == {"note": "operator"}
+    assert codex_mod.tomllib.loads(out)["model"] == "x"
+
+
+def test_untrust_leaves_unreadable_or_unrelated_config_alone():
+    assert codex_mod.untrust_projects("not = [valid", ["/w/a"]) == "not = [valid"
+    plain = 'model = "x"\n'
+    assert codex_mod.untrust_projects(plain, ["/w/a"]) == plain
+
+
+def test_job_trust_is_written_read_back_and_removed_at_teardown(tmp_path):
+    cfg = tmp_path / "home" / "config.toml"
+    cfg.parent.mkdir()
+    cfg.write_text('model = "x"\n[projects."/crew/ian"]\ntrust_level = "trusted"\n')
+    rec = _rec(tmp_path)
+    scratch = eph.ledger_dir(tmp_path) / "scratch" / rec["name"]
+    scratch.mkdir(parents=True)
+    rec["workspace"] = str(scratch)
+    rec["codex_trust_config"] = eph.trust_codex_workspace(rec, cfg)
+    projects = codex_mod.tomllib.loads(cfg.read_text())["projects"]
+    assert projects[str(scratch)] == {"trust_level": "trusted"}
+    eph.write(tmp_path, rec)
+    done = eph.teardown(tmp_path, rec["name"], kill_session=lambda s: None)
+    assert done["codex_trust_teardown"] == "removed"
+    after = codex_mod.tomllib.loads(cfg.read_text())
+    assert str(scratch) not in after["projects"]
+    assert after["projects"]["/crew/ian"] == {"trust_level": "trusted"}  # crew trust untouched
+
+
+def test_job_trust_refuses_when_the_record_cannot_be_written(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("not = [valid")
+    with pytest.raises(eph.Refused):
+        eph.trust_codex_workspace({"workspace": "/w/job"}, cfg)
+    assert cfg.read_text() == "not = [valid"
+
+
+def test_codex_0161_trust_dialog_is_a_blocking_picker_not_a_ready_pane():
+    from shantytown.runtime import ClaudeRuntime
+    r = ClaudeRuntime.__new__(ClaudeRuntime)
+    assert not r.is_live(CODEX_TRUST_DIALOG)
+    assert r.awaiting_answer(CODEX_TRUST_DIALOG)
+
+
+@pytest.fixture
+def codex_store(store, monkeypatch):
+    root, panes, launched = store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 1\nunattended = false\nrequire_verified_identity = true\n"
+        "[ephemeral.harness_by_job]\ntask = \"codex\"\n")
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('model = "x"\n')
+    seen = {}
+
+    class Rt:
+        def settings_path(self, card):
+            seen["card"] = card.name
+            return str(cfg)
+    monkeypatch.setattr(cli, "_runtime", lambda a, p: Rt())
+    return root, panes, launched, cfg, seen
+
+
+def test_a_codex_job_is_trusted_before_launch(codex_store):
+    root, _panes, launched, cfg, seen = codex_store
+    trusted_at_launch = []
+    _panes.behaviour["during"] = lambda a: trusted_at_launch.append(
+        codex_mod.tomllib.loads(cfg.read_text()).get("projects", {}))
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["harness"] == "codex" and seen["card"] == rec["name"]
+    assert rec["codex_trust_config"] == str(cfg.resolve())
+    assert trusted_at_launch[0][rec["workspace"]] == {"trust_level": "trusted"}
+    assert _st(root, "--stop", rec["name"]) == cli.OK
+    assert rec["workspace"] not in codex_mod.tomllib.loads(cfg.read_text()).get("projects", {})
+
+
+def test_a_codex_job_without_resolvable_settings_is_refused_unlaunched(codex_store, monkeypatch, capsys):
+    root, _panes, launched, _cfg, _seen = codex_store
+
+    class NoSettings:
+        def settings_path(self, card):
+            return None
+    monkeypatch.setattr(cli, "_runtime", lambda a, p: NoSettings())
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
+    assert "codex trust not recorded" in capsys.readouterr().err
+    (rec,) = eph.records(root)
+    assert not launched and rec["state"] == eph.DONE

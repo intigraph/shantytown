@@ -4146,6 +4146,24 @@ def _cmd_spawn(a) -> int:
                 json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
         card = files.get(rec["name"])
         panes = _panes(a)
+        if (rec.get("harness") == "codex" and not rec.get("uid_binding")
+                and not rec.get("codex_trust_config")):
+            # Codex 0.161 stops an untrusted folder on "Trust this folder?" and
+            # the pane then reads as ready (aegis-e579). The guard above has
+            # passed (or this is st's own scratch dir), so record the trust the
+            # role emission would have written for a crew workspace.
+            try:
+                settings = _runtime(a, panes).settings_path(card)
+                if not settings:
+                    raise eph.Refused("no codex settings resolved for the job card")
+                rec["codex_trust_config"] = eph.trust_codex_workspace(rec, settings)
+                eph.write(a.root, rec)
+            except (eph.Refused, OSError) as e:
+                _spawn_end(a, rec["name"], "failed", f"codex trust not recorded: {e}",
+                           "launch refused", detached=False)
+                print(f"  refused: {rec['name']}: codex trust not recorded ({e})",
+                      file=sys.stderr)
+                return REFUSED
         a._startup_delivered = False
         rc = _launch(a, card, panes, _runtime(a, panes))
         if rc == REFUSED:

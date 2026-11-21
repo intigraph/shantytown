@@ -465,6 +465,47 @@ def trust_projects(existing: str, workspaces) -> str:
     return dumps({**current, "projects": merged}, existing=existing)
 
 
+def untrust_projects(existing: str, workspaces) -> str:
+    """`existing` with st's trust record for each workspace removed (aegis-e579).
+
+    The inverse of trust_projects, for workspaces that live only as long as one
+    ephemeral job. Removes only the `trust_level` key st wrote; an entry that
+    holds other operator settings keeps them. Returns `existing` UNCHANGED when
+    there is nothing to remove or the file cannot be parsed, for the same reason
+    trust_projects does: a config we cannot read is one we must not clobber.
+    """
+    gone = {str(w) for w in workspaces if w}
+    if not gone or not existing.strip():
+        return existing
+    try:
+        current = tomllib.loads(existing)
+    except (ValueError, TypeError):
+        return existing
+    projects = current.get("projects")
+    if not isinstance(projects, dict):
+        return existing
+    merged = dict(projects)
+    changed = False
+    for w in gone:
+        entry = merged.get(w)
+        if not isinstance(entry, dict) or "trust_level" not in entry:
+            continue
+        rest = {k: v for k, v in entry.items() if k != "trust_level"}
+        if rest:
+            merged[w] = rest
+        else:
+            del merged[w]
+        changed = True
+    if not changed:
+        return existing
+    out = dict(current)
+    if merged:
+        out["projects"] = merged
+    else:
+        out.pop("projects", None)
+    return dumps(out, existing=existing)
+
+
 def stop_directions(text: str) -> set[str] | None:
     """Which stop directions this config.toml carries — {"send"}, {"send",
     "drain"}, … — or None for CANNOT TELL.

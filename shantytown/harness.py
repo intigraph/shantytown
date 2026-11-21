@@ -945,9 +945,18 @@ class CodexHarness:
     # footer above — but that is INFERRED, and this file's whole rule is that an
     # unobserved marker is not a marker. To settle it, capture a pane the moment
     # one appears and add what is actually on it.
+    #   Codex 0.161.0 reworded the directory-trust dialog (measured on a crew host
+    #   2026-11-21, aegis-e579); the old markers miss it and the dialog read as a
+    #   READY pane, so a job prompt was typed into it:
+    #       Trust this folder? Codex can read, edit, and run files here, …
+    #     › 1. Trust and continue
+    #       2. Quit
+    #       enter continue · esc quit
     picker_markers = ("Press enter to confirm or esc to go back",
                       "Do you trust the contents of this directory",
-                      "1. Yes, continue")
+                      "1. Yes, continue",
+                      "Trust this folder?",
+                      "1. Trust and continue")
 
     # MEASURED on live idle AND busy Codex 0.146.1 panes. The model/status/cwd
     # line persists in both states and is absent from the directory-trust picker.

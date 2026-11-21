@@ -472,6 +472,64 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
     return ""
 
 
+def _codex_config(settings_path) -> Path:
+    path = Path(settings_path)
+    from . import codex
+    return (path if path.name == codex.CONFIG_FILE else path.parent / codex.CONFIG_FILE).resolve()
+
+
+def trust_codex_workspace(rec: dict, settings_path) -> str:
+    """Record the job workspace as a trusted Codex project (aegis-e579).
+
+    Codex 0.161 blocks a directory it has no trust record for behind
+    "Trust this folder?", and the job pane then reads as ready while st types
+    the job into the dialog. Role emission trusts card workspaces, but a job
+    worktree is new every time, so the spawner writes the one record itself.
+    Call ONLY after trust_surface_refusal passed (or for st's own scratch dir):
+    trusting the folder makes Codex honour the checkout's own .codex config,
+    and that guard is what proves it equals reviewed main. Returns the config
+    path written, which teardown uses to remove the record again.
+    """
+    from . import codex
+    cfg = _codex_config(settings_path)
+    before = cfg.read_text() if cfg.exists() else ""
+    after = codex.trust_projects(before, [rec["workspace"]])
+    if after != before:
+        tmp = cfg.with_name(f".{cfg.name}.{os.getpid()}.tmp")
+        tmp.write_text(after)
+        os.replace(tmp, cfg)
+    # Read back: trust_projects leaves an unparseable config untouched, and a
+    # job launched without the record would stop on the dialog.
+    try:
+        entry = codex.tomllib.loads(cfg.read_text()).get("projects", {}).get(rec["workspace"])
+    except (OSError, ValueError):
+        entry = None
+    if not (isinstance(entry, dict) and entry.get("trust_level") == "trusted"):
+        raise Refused(f"could not record codex trust for {rec['workspace']} in {cfg}")
+    return str(cfg)
+
+
+def untrust_codex_workspace(rec: dict) -> str:
+    """Remove the trust record trust_codex_workspace wrote. Best effort: a
+    stale record names a worktree path that is never reused (job names are
+    random), so a failure is reported, not raised."""
+    cfg = rec.get("codex_trust_config")
+    if not cfg or not rec.get("workspace"):
+        return "none"
+    from . import codex
+    try:
+        path = Path(cfg)
+        before = path.read_text()
+        after = codex.untrust_projects(before, [rec["workspace"]])
+        if after != before:
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(after)
+            os.replace(tmp, path)
+        return "removed"
+    except OSError as e:
+        return f"left in place ({type(e).__name__})"
+
+
 def card_for(rec: dict, *, unattended: bool) -> dict:
     """An ordinary worker card. `first` is the survival band a governor tier
     sheds first: an ephemeral job is the most deferrable work on the host."""
@@ -1032,6 +1090,8 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
     with lock(root):
         rec = read(root, name)
         rec["workspace_teardown"] = _try_remove_workspace(rec, root, git=git)
+        if rec.get("codex_trust_config"):
+            rec["codex_trust_teardown"] = untrust_codex_workspace(rec)
         results = []
         seen = {str(Path(rec['workspace']).resolve())} if rec.get('workspace') else set()
         for entry in rec.get('worktrees', []):
