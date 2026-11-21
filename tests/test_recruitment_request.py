@@ -159,3 +159,15 @@ def test_controller_reader_does_not_fall_back_on_untrusted_key_file(tmp_path, mo
     monkeypatch.setattr(advise_signing, '_read', read)
     with pytest.raises(IdentityError, match='refused'):
         rr._protected_json(tmp_path / 'controller.json')
+
+
+def test_verified_request_body_is_detached_before_authority_callbacks(context):
+    key, pin, body, ledger = context
+    envelope = signed(key, body)
+    def changing_caller(item):
+        envelope['body']['head'] = 'f' * 40
+        return native(item)
+    verified = rr.qualify(envelope, binding=pin, now=110, ledger=ledger,
+                           native_binding=changing_caller)
+    assert verified['head'] == 'a' * 40
+    assert envelope['body']['head'] == 'f' * 40

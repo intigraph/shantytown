@@ -88,14 +88,12 @@ def stop_target(body, record):
         raise IdentityError('controller stop target ownership unproved')
 
 
-def receive(envelope, *, policy, actor, inside, role_of, root, host, ledger,
+def admitted_body(envelope, *, policy, actor, inside, role_of, root, host, ledger,
             native_binding, admit, clock=time.time):
-    """Verify, reserve, re-admit and return a non-executable qualification receipt.
+    """Return the verified body copy after fresh admission, never caller state.
 
-    ledger is controller-owned. Tests use a durable private fixture to prove
-    replay/crash behavior. The CLI preview uses memory, explicitly grants no
-    durable acceptance and has no launch/stop callback to accidentally invoke.
-    The production loader is fixed and cannot be supplied by request fields.
+    The caller supplies controller-owned state. A preview uses memory; the
+    separately gated handoff uses its private durable store. No execution occurs.
     """
     controller_authority(policy=policy, actor=actor, inside=inside, role_of=role_of)
     pin = recruit_request.load_controller_binding()
@@ -127,16 +125,26 @@ def receive(envelope, *, policy, actor, inside, role_of, root, host, ledger,
         if not body['issued_at'] <= int(clock()) < body['expires_at']:
             reason = 'expiry'
             raise IdentityError('controller request expired during custody read')
-        ledger.record(body['nonce'], 'qualified', 'controller-preview-only')
-        return {'schema': 'shantytown.recruitment-controller-qualification/v1',
-                'request_sha256': hashlib.sha256(recruit_request.message(body)).hexdigest(),
-                'principal': pin.principal, 'host': host, 'verb': body['verb'],
-                'job': 'review', 'item': body['item'], 'repo': body['repo'],
-                'pr': body['pr'], 'head': body['head'], 'target': body['target'],
-                'live': False, 'execution': 'refused', 'durable_acceptance': False}
+        ledger.record(body['nonce'], 'qualified', 'controller-admitted')
+        return body
     except Exception:
         ledger.record(body['nonce'], 'refused', reason)
         raise
+
+
+
+def receive(envelope, *, policy, actor, inside, role_of, root, host, ledger,
+            native_binding, admit, clock=time.time):
+    """Existing non-executable preview; its receipt is never a launch lease."""
+    body = admitted_body(envelope, policy=policy, actor=actor, inside=inside,
+                         role_of=role_of, root=root, host=host, ledger=ledger,
+                         native_binding=native_binding, admit=admit, clock=clock)
+    return {'schema': 'shantytown.recruitment-controller-qualification/v1',
+            'request_sha256': hashlib.sha256(recruit_request.message(body)).hexdigest(),
+            'principal': body['principal'], 'host': body['host'], 'verb': body['verb'],
+            'job': 'review', 'item': body['item'], 'repo': body['repo'],
+            'pr': body['pr'], 'head': body['head'], 'target': body['target'],
+            'live': False, 'execution': 'refused', 'durable_acceptance': False}
 
 
 def cli_qualify(a, *, policy, actor, inside, host, role_of, gh, quipu, binding):
