@@ -1897,6 +1897,8 @@ def build_parser() -> argparse.ArgumentParser:
                               "(lane, pinned head, green CI, non-author approval)")
     sp_mode.add_argument("--recruitment-request", action="store_true",
                          help="controller signed-request qualification on stdin (--dry-run only; no execution)")
+    sp_mode.add_argument("--recruitment-prepare", action="store_true",
+                         help="controller durable admission on stdin (--dry-run only; spends nonce, never launches)")
     sp.add_argument("--recruiter", action="store_true",
                     help="qualify scoped review recruitment (--dry-run only; live handoff gated)")
     sp.add_argument("--head", default=None,
@@ -4001,6 +4003,16 @@ def _cmd_spawn(a) -> int:
             return OK
         actor = _spawn_actor(require_verified=policy.require_verified_identity)
         inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
+        if getattr(a, 'recruitment_prepare', False):
+            from . import recruit_handoff
+            admin, admin_dangerous = _spawn_administrator(files, cfg)
+            unattended = admin_dangerous if policy.unattended is None else policy.unattended
+            return recruit_handoff.cli_prepare(
+                a, policy=policy, actor=actor, inside=inside, host=cfg.host_name,
+                role_of=role_of, administrator=admin, unattended=unattended,
+                gh=_gh_json, quipu=lambda: _spawn_quipu(a),
+                native_binding=lambda item: _spawn_item_work_request(a, item),
+                governor=lambda card: _spawn_governor_refusal(a, card))
         if getattr(a, 'recruitment_request', False):
             from . import recruit_controller
             return recruit_controller.cli_qualify(

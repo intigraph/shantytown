@@ -1,3 +1,4 @@
+import json
 """Real durable fixtures and planner, fake forge/capability/governor; no launch."""
 from copy import deepcopy
 from dataclasses import replace
@@ -147,3 +148,63 @@ def test_wrong_controller_host_refuses_before_creating_store(ctx):
     with pytest.raises(IdentityError, match='protected binding'):
         handoff.prepare(ctx.signed(), **(ctx.kwargs | {'host': 'other-host'}))
     assert not (ctx.directory / rs.NAME).exists()
+
+
+@pytest.mark.parametrize('extra', [[], ['--dry-run', '--job', 'merge'],
+                                  ['--dry-run', '--recruiter'],
+                                  ['--dry-run', '--head', 'a'*40]])
+def test_prepare_cli_refuses_selectors_before_input_or_state(ctx, monkeypatch, extra, capsys):
+    from shantytown import cli
+    def forbidden(*a, **kw): pytest.fail('refused selector reached input/state')
+    monkeypatch.setattr(handoff.recruit_controller, 'read_input', forbidden)
+    monkeypatch.setattr(handoff, 'Store', forbidden)
+    args = cli.build_parser().parse_args(['agent', 'spawn', '--recruitment-prepare', *extra])
+    kw = dict(ctx.kwargs); kw.pop('root')
+    assert handoff.cli_prepare(args, **kw) == 1
+    assert 'signature' not in capsys.readouterr().err
+
+
+def test_prepare_cli_uses_durable_state_and_refuses_replay(ctx, monkeypatch, capsys):
+    from shantytown import cli
+    monkeypatch.setattr(handoff.recruit_controller, 'read_input', ctx.signed)
+    args = cli.build_parser().parse_args(['--root', ctx.pin.root, 'agent', 'spawn',
+                                         '--recruitment-prepare', '--dry-run', '--json'])
+    kw = dict(ctx.kwargs); kw.pop('root')
+    assert handoff.cli_prepare(args, **kw) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt['state'] == 'prepared' and receipt['nonce_durable'] is True
+    assert receipt['execution'] == 'refused' and receipt['live'] is False
+    assert handoff.cli_prepare(args, **kw) == 1
+    assert 'IdentityError' in capsys.readouterr().err
+
+
+def test_existing_spawn_routes_prepare_before_lifecycle(ctx, monkeypatch, capsys):
+    from shantytown import cli
+    cfg = replace(config.Config(host_name=ctx.pin.host), ephemeral=ctx.kwargs['policy'])
+    monkeypatch.setattr(cli.config, 'load_or_default', lambda _: (cfg, None))
+    monkeypatch.setattr(cli, '_spawn_actor', lambda **_: 'fixture-admin')
+    monkeypatch.setattr(cli, '_spawn_inside', lambda *a, **kw: None)
+    monkeypatch.setattr(cli, '_spawn_administrator', lambda *a: ('fixture-admin', True))
+    monkeypatch.setattr(cli, '_spawn_item_work_request', lambda a, item: ctx.custody)
+    monkeypatch.setattr(cli, '_spawn_governor_refusal', lambda *a: '')
+    monkeypatch.setattr(ephemeral, 'authority', lambda *a, **kw: None)
+    monkeypatch.setattr(handoff.recruit_controller, 'read_input', ctx.signed)
+    original = handoff.prepare
+    monkeypatch.setattr(handoff, 'prepare', lambda *a, **kw: original(*a, **kw, clock=lambda: 110))
+    def forbidden(*a, **kw): pytest.fail('prepare entered lifecycle/native execution')
+    monkeypatch.setattr(ephemeral, 'write', forbidden)
+    monkeypatch.setattr(handoff.job_launch, 'execute', forbidden)
+    monkeypatch.setattr(handoff.job_launch, 'probe', forbidden)
+    args = cli.build_parser().parse_args(['--root', ctx.pin.root, 'agent', 'spawn',
+                                         '--recruitment-prepare', '--dry-run', '--json'])
+    assert cli._cmd_spawn(args) == 0
+    assert json.loads(capsys.readouterr().out)['activation'] == 'gated'
+
+
+def test_prepare_cli_requires_independent_authority_before_stdin(ctx, monkeypatch):
+    from shantytown import cli
+    def forbidden(*a, **kw): pytest.fail('untrusted controller reached input')
+    monkeypatch.setattr(handoff.recruit_controller, 'read_input', forbidden)
+    kw = dict(ctx.kwargs);kw.pop('root');kw['inside'] = 'eph-review-abcdef'
+    args = cli.build_parser().parse_args(['agent', 'spawn', '--recruitment-prepare', '--dry-run'])
+    assert handoff.cli_prepare(args, **kw) == 1
