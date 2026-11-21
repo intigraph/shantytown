@@ -3858,6 +3858,30 @@ def _spawn_item_comment(a):
     return comment
 
 
+def _spawn_keep_pane(a, panes, session, name):
+    """Save a failed job's last screen before its pane is killed (aegis-e579).
+
+    A launch that fails on what the pane showed leaves nothing to diagnose once
+    teardown kills the session. Best effort and owner-only: a failed capture
+    never blocks teardown. The launch line carries no secrets by invariant.
+    """
+    try:
+        screen = panes.capture(session, history=200, attrs=True, timeout=2)
+    except Exception:  # noqa: BLE001 — teardown must proceed regardless
+        return None
+    if not screen:
+        return None
+    path = Path(a.root) / "ephemeral" / f"{name}.pane.txt"
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(screen)
+    except OSError:
+        return None
+    print(f"  {name}: last pane screen kept at {path}", file=sys.stderr)
+    return path
+
+
 def _spawn_end(a, name, verdict, summary, cause, *, detached):
     """Every ending goes through here: result once, report, teardown."""
     from . import ephemeral as eph
@@ -3866,6 +3890,8 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
     panes = _panes(a)
 
     def kill(session):
+        if verdict == "failed":
+            _spawn_keep_pane(a, panes, session, name)
         try:
             from . import codex_daemon
             codex_daemon.stop_owned(name)

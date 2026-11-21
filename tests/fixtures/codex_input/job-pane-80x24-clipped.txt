@@ -1,0 +1,24 @@
+
+[1m›[0m for the clipped composer probe.
+  Fixture line 13: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 14: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 15: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 16: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 17: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 18: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 19: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 20: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  Fixture line 21: synthetic job instructions that wrap across the pane width
+  for the clipped composer probe.
+  ST-STARTUP-ANCHOR-COMPLETE:eph-review-000000:0000000000000000
+
+  [38;2;246;226;183mGPT-6.1 Terra default[39m · [38;2;171;223;167m/workspace/eph-review-000000/project/…
+[39m                                                      ⚠ [38;2;196;167;103m5 warnings[39m · [1mf2[0m to view

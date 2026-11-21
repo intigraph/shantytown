@@ -336,8 +336,11 @@ def codex_composer(screen: str) -> str | None:
     if not footers:
         return None
     footer = footers[-1]
+    # The model label can be several words ("GPT-6.1 Terra default"). An
+    # 80-column job pane shows the warnings row instead of "? for shortcuts",
+    # so a one-word limit here hid every typed job prompt (aegis-e579).
     warning_footer = re.match(
-        r'\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+[·.]\s+(?:~|/)',
+        r'\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+){0,3}\s+[·.]\s+(?:~|/)',
         strip_attrs(lines[footer]))
     if not any('shortcuts' in strip_attrs(row)
                or (warning_footer and (

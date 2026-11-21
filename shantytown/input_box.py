@@ -92,7 +92,7 @@ def _codex_box(screen: str) -> tuple[str, str, str] | None:
         rows.pop()
     plain = [triage.strip_attrs(row) for row in rows]
     footers = [i for i in range(max(0, len(rows) - 8), len(rows))
-               if re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+·\s+(?:~|/)", plain[i])]
+               if re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+){0,3}\s+·\s+(?:~|/)", plain[i])]
     if not footers:
         return None
     end = footers[-1]
