@@ -7,11 +7,9 @@ The verifier key is a controller input; the request cannot nominate a key.
 from __future__ import annotations
 
 import json
-import os
 import re
 import socket
 import sqlite3
-import stat
 from pathlib import Path
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -147,23 +145,19 @@ CONTROLLER_BINDING_PATH = Path('/etc/shantytown/recruit-controller.json')
 def _protected_json(path):
     from .job_launch import protected
     protected(path)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0))
-    with os.fdopen(fd, 'rb') as stream:
-        meta = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0
-                or meta.st_mode & 0o022 or meta.st_size > 1024 * 1024):
-            raise IdentityError('controller binding must be protected and bounded')
-        def unique(pairs):
-            value = {}
-            for key, item in pairs:
-                if key in value:
-                    raise IdentityError('duplicate controller binding field')
-                value[key] = item
-            return value
-        try:
-            return json.loads(stream.read(1024 * 1024 + 1), object_pairs_hook=unique)
-        except (ValueError, UnicodeError) as error:
-            raise IdentityError('controller binding JSON refused') from error
+    from .advise_signing import _read
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise IdentityError('duplicate controller binding field')
+            value[key] = item
+        return value
+    try:
+        raw = _read(path, owner=0, maximum=1024 * 1024)
+        return json.loads(raw, object_pairs_hook=unique)
+    except (OSError, ValueError, UnicodeError) as error:
+        raise IdentityError('controller binding JSON refused') from error
 
 
 def load_controller_binding():

@@ -134,3 +134,27 @@ def test_unprotected_controller_binding_refuses_before_open(tmp_path, monkeypatc
     monkeypatch.setattr(job_launch, 'protected', refuse)
     with pytest.raises(IdentityError, match='unprotected'):
         rr._protected_json(path)
+
+
+def test_controller_reader_uses_fixed_root_pin_and_rejects_duplicate_keys(tmp_path, monkeypatch):
+    from shantytown import advise_signing, job_launch
+    path = tmp_path / 'controller.json'
+    checked = []
+    monkeypatch.setattr(job_launch, 'protected', lambda p: checked.append(p))
+    def read(p, *, owner, maximum):
+        assert checked == [path]
+        assert p == path and owner == 0 and maximum == 1024 * 1024
+        return b'{"version":1,"version":2}'
+    monkeypatch.setattr(advise_signing, '_read', read)
+    with pytest.raises(IdentityError, match='duplicate'):
+        rr._protected_json(path)
+
+
+def test_controller_reader_does_not_fall_back_on_untrusted_key_file(tmp_path, monkeypatch):
+    from shantytown import advise_signing, job_launch
+    monkeypatch.setattr(job_launch, 'protected', lambda _: None)
+    def read(*args, **kwargs):
+        raise ValueError('unqualified file')
+    monkeypatch.setattr(advise_signing, '_read', read)
+    with pytest.raises(IdentityError, match='refused'):
+        rr._protected_json(tmp_path / 'controller.json')

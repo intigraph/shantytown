@@ -443,3 +443,11 @@ with exactly `version`, `principal`, `uid`, `host`, `root`, `repos`, and
 nor `identity.json` may have writable or symlinked parent components. Duplicate
 JSON keys are refused. This is configuration read by the existing controller,
 not a receiver service; no key file is installed by this PR.
+
+The future live integration has one seam: the scoped-recruiter refusal before
+`uid_launch` / `job_launch`. Only reviewed transport may replace that refusal
+with `handoff(envelope) -> receipt`, retaining the receipt in `rec['recruiter']`.
+It must not bypass the existing planner, admission or protected launcher gates.
+For now the refusal remains. Root-pinned key reads reuse
+`advise_signing._read(..., owner=0)` (also used by verdict signer pins), with
+protected parent validation added; graph trust alone never supplies the key.
