@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import stat
+import sys
 import threading
 
 import pytest
@@ -11,6 +12,10 @@ from test_job_review import job  # noqa: F401 -- signed RDF/key fixture
 from test_gate_verdict import HEAD, NOW
 from shantytown import job_review, review_enqueue as requeue
 from shantytown.actor_identity import IdentityError
+
+
+pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux'),
+                                reason='Linux directory-FD custody backend')
 
 
 @pytest.fixture

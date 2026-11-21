@@ -12,7 +12,7 @@ the recording demonstrates its candidate behavior rather than a changed live
 report flow. [Source hashes](source-sha256.json) identify the recorded code;
 the PR identifies the corresponding commit.
 
-Install the test extras, then reproduce from the repository root:
+On Linux, install the test extras, then reproduce from the repository root:
 
 ```sh
 PYTHONPATH=.:tests python3 tests/demo_review_enqueue.py
