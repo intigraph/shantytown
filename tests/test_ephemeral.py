@@ -1308,3 +1308,52 @@ def test_a_codex_job_without_resolvable_settings_is_refused_unlaunched(codex_sto
     assert "codex trust not recorded" in capsys.readouterr().err
     (rec,) = eph.records(root)
     assert not launched and rec["state"] == eph.DONE
+
+
+@pytest.mark.parametrize('fault', [None, 'missing-binding', 'head-mismatch', 'merge', 'stop', 'live-handoff'])
+def test_scoped_recruiter_cli_keeps_native_binding_and_management_guards(store, monkeypatch, capsys, fault):
+    import dataclasses
+    import socket
+    from shantytown import recruiter, gate_verdict
+    from test_recruiter import admission_fixture
+    root, panes, launched = store
+    panes.verified_actor = 'recruiter-test'
+    req, info, binding, runs, statuses, required, decision, gh, calls = admission_fixture()
+    if fault == 'missing-binding': binding = None
+    if fault == 'head-mismatch': info['head']['sha'] = 'b' * 40
+    scope = recruiter.Scope('recruiter-test', 10001, str(root), socket.gethostname(),
+                            (req.repo,), ('review',))
+    monkeypatch.setattr(recruiter, 'load', lambda **kw: scope)
+    monkeypatch.setattr(eph.os, 'geteuid', lambda: 10001)
+    original_load = config.load_or_default
+    def configured(path):
+        cfg, error = original_load(path)
+        return dataclasses.replace(cfg, host_name=socket.gethostname(),
+                    ephemeral=dataclasses.replace(cfg.ephemeral, unattended=True, unattended_uid_ready=True,
+                                                 verdict_graph='https://example.invalid/verdicts')), error
+    monkeypatch.setattr(config, 'load_or_default', configured)
+    from shantytown import job_launch
+    monkeypatch.setattr(job_launch, 'select', lambda *args, **kw: (
+        {'principal': 'eph-review-123abc', 'uid': 10002, 'workspace': str(root / 'job')}, 'a' * 64))
+    monkeypatch.setattr(cli, '_spawn_item_work_request', lambda a, item: binding)
+    monkeypatch.setattr(cli, '_spawn_quipu', lambda a: object())
+    monkeypatch.setattr(cli, '_gh_json', gh)
+    monkeypatch.setattr(gate_verdict, 'trusted_signers', lambda: {'fixture': 'pin'})
+    monkeypatch.setattr(gate_verdict, 'approval', lambda *args, **kw: decision)
+    monkeypatch.setattr(cli, '_spawn_governor_refusal', lambda *args: None)
+    args = ['--recruiter', '--ephemeral', '--job', 'merge' if fault == 'merge' else 'review',
+            '--item', req.item, '--repo', req.repo, '--pr', str(req.pr), '--head', req.head, '--dry-run']
+    if fault == 'stop': args = ['--recruiter', '--stop', 'eph-review-fixture', '--dry-run']
+    if fault is None: args.append('--json')
+    if fault == 'live-handoff':
+        args.remove('--dry-run')
+        monkeypatch.setattr(job_launch, 'select', lambda *args, **kw: pytest.fail('recruiter attempted sudo-capable launcher'))
+    assert _st(root, *args) == (cli.OK if fault is None else cli.REFUSED)
+    assert not launched and not eph.records(root)
+    if fault is None:
+        result = json.loads(capsys.readouterr().out)
+        assert result['schema'] == 'shantytown.recruitment-plan/v1'
+        assert result['live'] is False and result['head'] == req.head
+        assert result['controller_handoff'] == 'gated'
+    if fault in ('missing-binding', 'merge', 'stop'):
+        assert not calls

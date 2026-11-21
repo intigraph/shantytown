@@ -209,9 +209,22 @@ def harness_for(req: Request, policy) -> str:
 
 
 def authority(actor: str | None, role_of: Callable[[str], str | None], *,
-              require_verified: bool = False) -> None:
+              require_verified: bool = False, recruiter_scope=None, request=None,
+              root=None, host=None) -> None:
     """Administrators manage jobs; migration mode also admits a human shell.
     With verified identity required, callers resolve the protected principal first."""
+    if recruiter_scope is not None:
+        from .recruiter import Scope
+        from .actor_identity import IdentityError
+        if (not require_verified or not isinstance(recruiter_scope, Scope)
+                or actor != recruiter_scope.principal or os.geteuid() != recruiter_scope.uid
+                or request is None):
+            raise Refused('recruiter identity/scope is unproved')
+        try:
+            recruiter_scope.check(request, root=root, host=host)
+        except IdentityError as error:
+            raise Refused(str(error)) from None
+        return
     if actor is None:
         if require_verified:
             raise Refused("ephemeral mutations require a verified protected UID identity")
@@ -255,10 +268,11 @@ def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
 
 
 def plan(req: Request, *, root, policy, actor, administrator, host, now,
-         role_of, name=None, attempt=1, retry_of=None) -> dict:
+         role_of, name=None, attempt=1, retry_of=None, recruiter_scope=None) -> dict:
     """Admit or refuse, and build the ledger record. Writes nothing."""
     validate(req)
-    authority(actor, role_of, require_verified=policy.require_verified_identity)
+    authority(actor, role_of, require_verified=policy.require_verified_identity,
+              recruiter_scope=recruiter_scope, request=req, root=root, host=host)
     if not administrator:
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")

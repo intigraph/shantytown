@@ -1,0 +1,10 @@
+Script started on 2026-11-21 08:27:22-05:00 [COMMAND="python3 docs/demos/scoped-recruiter/run.py" <not executed on terminal>]
+BASE a5194aea29f5e417c8dbc810a1f0253b2484f920 st agent spawn: error: unrecognized arguments: --recruiter
+CANDIDATE cli.py SHA256=08a5f43468f8c413ac1c82fcc579a03ae3a63949e965d31cfd34ea22fb4d2927
+CANDIDATE: scoped qualification flag accepted; dry-run only
+FIXTURE AUTHORITIES: matching custody + exact green head + no verdict -> qualification admitted
+SAME PR, DIFFERENT CUSTODY HEAD: refused: native work request does not bind this exact PR/head/job
+ACTUAL CLI CONTROL: live request refused before sudo-capable launcher; no job record or launch
+LIMIT: fixture identity/forge data; no installed capability, real attestation or live spawn
+
+Script done on 2026-11-21 08:27:23-05:00 [COMMAND_EXIT_CODE="0"]
