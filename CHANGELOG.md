@@ -7,6 +7,37 @@
 * `st crew --count` reuses a successful answer for 5 minutes (`SHANTY_CREW_COUNT_TTL`, 0 disables). Each fresh answer is a crew-wide plate read, and its only consumer is a status bar (aegis-t14).
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.20.0](https://github.com/intigraph/shantytown/compare/v0.19.0...v0.20.0) (2026-11-21)
+
+
+### Features
+
+* **ephemeral:** exact permission allowlist for attended review/merge jobs ([#644](https://github.com/intigraph/shantytown/issues/644)) ([326e825](https://github.com/intigraph/shantytown/commit/326e825251170ea89de5c3553bf54f22ffba3ae8))
+* **inbox:** let sd expire window mail; delivery lookups keep expired mail ([#648](https://github.com/intigraph/shantytown/issues/648)) ([efa7c48](https://github.com/intigraph/shantytown/commit/efa7c488f1a32d5613d43ebeff06fd277fbe228c))
+* **plate:** count admission outcomes durably (live, snapshot, unknown) ([#642](https://github.com/intigraph/shantytown/issues/642)) ([343074f](https://github.com/intigraph/shantytown/commit/343074fdf4af3016e4cc81fdc1716f0b572772ae))
+
+
+### Bug Fixes
+
+* **crew-display:** hold the display census 120s and name its producer ([#649](https://github.com/intigraph/shantytown/issues/649)) ([cda74b9](https://github.com/intigraph/shantytown/commit/cda74b9f15bdc455339cc87b42ed639f7ef9c0c6))
+* **crew-display:** hold the display census 120s and name its producer (aegis-az3d) ([cda74b9](https://github.com/intigraph/shantytown/commit/cda74b9f15bdc455339cc87b42ed639f7ef9c0c6))
+* **crew:** reuse a recent st crew --count answer for 5 minutes ([#651](https://github.com/intigraph/shantytown/issues/651)) ([fbffaaf](https://github.com/intigraph/shantytown/commit/fbffaafefd3111958d8b635d92591040faa8d162))
+* **hold:** a bare `st fleet hold <name>` reads status; setting needs --set (aegis-e5r1) ([16b88a9](https://github.com/intigraph/shantytown/commit/16b88a92ba2d3ebfc3d4a74dbf3e0867f0cbc002))
+* **hold:** a bare st fleet hold &lt;name&gt; reads status; setting needs --set ([#650](https://github.com/intigraph/shantytown/issues/650)) ([16b88a9](https://github.com/intigraph/shantytown/commit/16b88a92ba2d3ebfc3d4a74dbf3e0867f0cbc002))
+* **query-identity:** label every st verb; keep the label in executor workers ([#646](https://github.com/intigraph/shantytown/issues/646)) ([a9c2eff](https://github.com/intigraph/shantytown/commit/a9c2eff224aa4ce7e773e75836ca6363a738258e))
+* **query-identity:** label every st verb; keep the label in executor workers (aegis-z29i) ([a9c2eff](https://github.com/intigraph/shantytown/commit/a9c2eff224aa4ce7e773e75836ca6363a738258e))
+* **query-identity:** name a session-less producer on every sd child ([#647](https://github.com/intigraph/shantytown/issues/647)) ([52f2af1](https://github.com/intigraph/shantytown/commit/52f2af1c7234c54190624b33d971080b9694a390))
+* **query-identity:** name a session-less producer on every sd child (aegis-yc6f) ([52f2af1](https://github.com/intigraph/shantytown/commit/52f2af1c7234c54190624b33d971080b9694a390))
+* **seeds:** stale_ok() reads skip the exact /watermark fence ([#652](https://github.com/intigraph/shantytown/issues/652)) ([c21c400](https://github.com/intigraph/shantytown/commit/c21c400ed07a44ba32864fd422805b234e6e8429))
+* **seeds:** stale_ok() reads skip the exact /watermark fence (aegis-jve) ([c21c400](https://github.com/intigraph/shantytown/commit/c21c400ed07a44ba32864fd422805b234e6e8429))
+* **work:** verify an st comment by one exact read, never the comment family ([#653](https://github.com/intigraph/shantytown/issues/653)) ([22908ee](https://github.com/intigraph/shantytown/commit/22908ee562d642a37dc1bac16f9418313eec62d1))
+
+
+### Performance Improvements
+
+* **seeds:** candidate-scan readiness shares one watermark ([#654](https://github.com/intigraph/shantytown/issues/654)) ([905ec30](https://github.com/intigraph/shantytown/commit/905ec3070d9ada10abb3c1bc28f3a1c0c105d95c))
+* **seeds:** candidate-scan readiness shares one watermark (aegis-jve) ([905ec30](https://github.com/intigraph/shantytown/commit/905ec3070d9ada10abb3c1bc28f3a1c0c105d95c))
+
 ## [0.19.0](https://github.com/intigraph/shantytown/compare/v0.18.1...v0.19.0) (2026-11-19)
 
 
