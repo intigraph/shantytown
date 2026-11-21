@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Steve Brown", email = "scbrown3@gmail.com" }]
-dependencies = []
+dependencies = ["cryptography>=46,<47"]
 
 # Declared for TWO reasons, both of which broke a deploy tonight:
 #  1. A top-level assets/ dir gives setuptools' flat-layout auto-discovery two
@@ -24,7 +24,7 @@ build-backend = "setuptools.build_meta"
 packages = ["shantytown"]
 
 [project.optional-dependencies]
-test = ["pytest", "rdflib>=7.1,<8", "PyYAML>=6,<7", "cryptography>=46,<47"]
+test = ["pytest", "rdflib>=7.1,<8", "PyYAML>=6,<7"]
 
 [project.scripts]
 st = "shantytown.cli:main"

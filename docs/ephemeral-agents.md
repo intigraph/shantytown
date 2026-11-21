@@ -417,9 +417,9 @@ event-triggered review with durable receipt and latency measurement.
 `recruit_request.py` qualifies a bounded, domain-separated
 `shantytown.recruitment-request/v1` envelope offline. Its fixed fields admit
 only review launch or review stop; merge, arbitrary argv, environment, paths
-and request-supplied keys are refused. Ed25519 verification uses the optional
-`cryptography` library and refuses if it is unavailable. The test extra supplies
-that library; this change does not install a production verifier.
+and request-supplied keys are refused. Ed25519 verification uses the declared runtime dependency
+`cryptography>=46,<47` and still refuses if it is unavailable. Source metadata
+does not prove that an installed controller has the dependency or a key binding.
 
 Authenticated requests expire within 120 seconds. A durable unique nonce is
 reserved before exact native custody lookup, so a crash or custody refusal
