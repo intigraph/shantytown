@@ -3708,6 +3708,17 @@ def _spawn_post_review_comment(rec, verdict, head, summary, *, run=None):
     return url[0], f"verdict comment {url[0]}"
 
 
+def _spawn_item_context(a, item) -> str:
+    """The job's item, bounded, for its prompt; "" when unreadable (the prompt
+    then says UNKNOWN). The job itself cannot read it from its sandbox."""
+    from . import ephemeral as eph
+    from .work_item import exact
+    try:
+        return eph.item_context(exact(_tracker(a), item))
+    except Exception:  # noqa: BLE001 — unreadable is reported as UNKNOWN in the prompt
+        return ""
+
+
 def _spawn_item_work_request(a, item) -> dict | None:
     """chaski's work request from the item body, or None if unreadable/absent."""
     from . import gate_verdict as gv
@@ -4106,6 +4117,8 @@ def _cmd_spawn(a) -> int:
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
                        "retried", detached=False)
+        # Read once, outside the ledger lock: a job's sandbox has no network.
+        item_ctx = _spawn_item_context(a, req.item)
         with eph.lock(a.root):
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),
@@ -4113,6 +4126,7 @@ def _cmd_spawn(a) -> int:
                            name=uid_launch[0]['principal'] if uid_launch else None)
             if uid_launch:
                 rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
+            rec["item_context"] = item_ctx
             known = {h.name for h in harness_mod.all_harnesses()}
             if rec["harness"] not in known:
                 raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "
