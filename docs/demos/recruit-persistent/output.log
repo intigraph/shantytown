@@ -1,0 +1,13 @@
+Script started on 2026-11-21 13:11:38-05:00 [COMMAND="python3 docs/demos/recruit-persistent/run.py" <not executed on terminal>]
+BASE fd10adc776c214200f1f143f45352123c0354044 signed head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; callback changes caller head=ffffffffffffffffffffffffffffffffffffffff; verified result=ffffffffffffffffffffffffffffffffffffffff
+CANDIDATE signed head=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; callback changes caller head=ffffffffffffffffffffffffffffffffffffffff; verified result=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+CANDIDATE recruit_request.py SHA256=2679218192e8bf7f793450289de675c9184a6957f5d9f3148228bf3e6ab6ddd4
+CANDIDATE recruit_controller.py SHA256=b0bb2a9fdbc8a2120a2c59615998b460901b1b5a4d35f3a7664bdd00063d9890
+CANDIDATE recruit_store.py SHA256=01d11bfc100c326834609224c4f1a131a8da46c55302c0a23b08d3cbb6b0b224
+CANDIDATE recruit_handoff.py SHA256=f5a5a913f5f68b24def39b26fe08abd469def691073521802507e2dd07c056dc
+FIXTURE durable state -> existing planner/UID/gates: {"activation": "gated", "execution": "refused", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "live": false, "name": "eph-review-abcdef", "nonce_durable": true, "operation": "b43b2d3c786596354b059a10106d6e3bf6596a9d3878e3cb4c5a4523c74d630f", "plan_sha256": "25bee288bbef311a8e05026938396e735e3b64e2f59b83344cf5ae076efa5050", "schema": "shantytown.recruitment-handoff/v1", "state": "prepared"}
+REOPENED store, same request: recruitment replay refused
+SAME state path replaced with symlink: controller state file is not private single-link regular data
+LIMIT: fixture identities/authority/capabilities. No CLI activation, native UID drop, privileged call, job/card/pane or host enrollment.
+
+Script done on 2026-11-21 13:11:39-05:00 [COMMAND_EXIT_CODE="0"]

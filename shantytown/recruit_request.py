@@ -62,6 +62,9 @@ def qualify(envelope, *, binding, now, ledger, native_binding):
             raise IdentityError('invalid signed recruitment envelope')
         body = envelope['body']
         raw = message(body)
+        # Detach from caller memory before any authority callback. Every field
+        # used below must come from the exact bytes the signature covers.
+        body = json.loads(raw[len(DOMAIN):])
         signature = envelope['signature']
         if (not isinstance(signature, str) or not re.fullmatch('[0-9a-f]{128}', signature)
                 or not isinstance(binding.public_key, bytes) or len(binding.public_key) != 32):

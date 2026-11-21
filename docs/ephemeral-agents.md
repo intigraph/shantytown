@@ -481,3 +481,47 @@ The recruiter's existing live-refusal seam is unchanged. Live integration must
 add reviewed protected persistent state and transport, then re-enter the normal
 planner, holds, governor, cap and protected launcher gates; a preview receipt
 is never a credential for skipping those checks. Merge verbs remain excluded.
+
+### Protected nonce state and launch admission handoff
+
+`recruit_store.Store` and `recruit_handoff.prepare` provide the next controller
+library slice. Merge permitted; runtime activation gated separately. The CLI
+preview still uses memory and the live-refusal seam remains in place. Neither
+library is a new listener or a route to the privileged launcher.
+
+The protected controller binding supplies the root. A provisioner must create
+`<root>/ephemeral/recruitment` owned by the controller with mode `0700`; the
+library never creates missing parents. The state file name is fixed. Directory
+FD traversal refuses links, foreign owners and group/world-writable ancestors.
+Files require controller ownership, mode `0600`, one link and a regular inode;
+unknown entries, corrupt/incomplete databases and unexpected schemas refuse.
+The qualified backend is Linux, using a pinned directory-FD path for SQLite and
+its journal. Other platforms refuse this backend rather than using a weaker
+path. Tests explicitly model trusted outer fixture ancestry; production has no
+fixture exception.
+
+SQLite uses DELETE journals and synchronous EXTRA, including directory sync
+after journal removal. The database is bounded to 64 MiB, 50,000 nonces and
+operations, and 200,000 audit rows. Capacity, corruption or an interrupted
+initialization require operator disposition; records are never automatically
+pruned, reset or replaced. Source rollback retains this state. Reservations,
+operation claims, refusals and prepared observations survive process exit.
+Fresh nonces cannot repeat a launch candidate for the same repo/PR/head/job.
+
+The handoff first reuses signature, expiry and fresh exact-head authority
+checks. Fields are detached from caller memory using the exact canonical bytes
+covered by the signature before authority callbacks. It then durably claims the
+candidate and enters the existing ephemeral lock, planner, cap, protected job
+selector and governor interfaces. Quiet-time uncertainty and maintenance windows
+refuse; malformed job inventory cannot appear as free capacity. Recruiter,
+controller and review job identities must differ. Custody, expiry and the exact
+unused protected capability are checked again after the gates. A refusal or
+interruption spends the attempt; an unknown reply is not automatically replayed.
+
+The resulting receipt reports a durable nonce and prepared plan digest, with
+`live: false`, `execution: refused`, `activation: gated`. Preparation reserves no
+runtime cap and proves no native UID drop. It creates no job/card/pane, invokes
+no sudo or execution callback, and cannot be reused as a launch credential.
+Runtime execution must re-enter the normal launcher and its current gates after
+separate activation qualification. Stop still uses the earlier non-executable
+preview; this handoff accepts review launch only. Merge verbs remain excluded.
