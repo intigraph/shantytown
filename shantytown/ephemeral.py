@@ -852,11 +852,16 @@ def box_state(screen: str, text: str) -> str:
         return EMPTY
     pasted = False
     for piece in pieces:
-        rest, n = PASTE_TOKEN.subn("", piece)
-        pasted = pasted or n > 0
-        rest = rest.strip("\xa0 \t")
-        if rest and rest not in text:
-            return FOREIGN
+        # A paste token can land MID-ROW: Claude Code folds part of a long
+        # typed job into "[Pasted text #1 +9 lines]" between two halves of a
+        # line (aegis-e579 finding 4). Each side is a separate run of our text;
+        # gluing them together made text we never typed, so judge each side.
+        fragments = PASTE_TOKEN.split(piece)
+        pasted = pasted or len(fragments) > 1
+        for rest in fragments:
+            rest = rest.strip("\xa0 \t")
+            if rest and rest not in text:
+                return FOREIGN
     last = text.rstrip().splitlines()[-1].strip() if text.strip() else ""
     joined = "\n".join(pieces)
     return OURS if pasted or (last and last in joined) else PARTIAL
