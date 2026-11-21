@@ -329,10 +329,73 @@ def attended_settings(rec: dict, *, unattended: bool) -> dict | None:
     return None if rules is None else {"permissions": rules}
 
 
+#: Codex spelling of _DENY's command half: forbidden fails at once instead of
+#: prompting a human who is not there. Claude's tool denies (Edit, Write, web)
+#: have no exec-policy form; the Codex sandbox keeps writes to the worktree.
+_CODEX_FORBID = (("git",), ("gh", "pr", "comment"), ("gh", "pr", "merge"),
+                 ("gh", "pr", "review"), ("gh", "api"), ("gh", "pr", "edit"))
+CODEX_RULES_FILE = "st-job.rules"
+
+
+def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
+    """The Codex exec-policy rules an attended job needs, or None (aegis-e579 B).
+
+    The same exact per-job allowlist as the Claude settings, as prefix rules.
+    Codex runs an allowed command outside its sandbox without asking, which is
+    what lets `st agent spawn --report` write st's ledger: no writable root is
+    opened to the job's other commands. Anything unlisted still prompts.
+    """
+    if unattended or rec.get("harness") != "codex" or rec.get("uid_binding"):
+        return None
+    rules = _attended_rules(rec)
+    if rules is None:
+        return None
+    repo, pr = str(rec["repo"]), str(rec["pr"])
+    reads = ["view", "checks", "diff"] if rec["job"] == "review" else ["view", "checks"]
+    q = json.dumps
+    lines = [f"# st ephemeral job {rec['name']}: written by st before launch; do not edit."]
+    lines.append(f"prefix_rule(pattern=[\"gh\", \"pr\", {q(reads)}, {q(pr)}, \"--repo\", {q(repo)}], "
+                 "decision=\"allow\", justification=\"st job: read its own PR\")")
+    if rec["job"] == "merge":
+        lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--merge\"], "
+                     "decision=\"allow\", justification=\"st job: guarded merge\")")
+    lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--report\"], "
+                 "decision=\"allow\", justification=\"st job: report its verdict\")")
+    for pattern in _CODEX_FORBID:
+        lines.append(f"prefix_rule(pattern={q(list(pattern))}, decision=\"forbidden\", "
+                     "justification=\"st job: not part of this job\")")
+    return "\n".join(lines) + "\n"
+
+
+def write_codex_job_rules(rec: dict, home: Path, *, unattended: bool) -> Path | None:
+    """Write the job's rules into its own Codex daemon home before launch.
+
+    The daemon loads `<CODEX_HOME>/rules/*.rules` at thread start, and a job's
+    daemon home is its own. Never through a symlink, never over other content.
+    """
+    body = codex_job_rules(rec, unattended=unattended)
+    if body is None:
+        return None
+    rules = Path(home) / "rules"
+    path = rules / CODEX_RULES_FILE
+    for p in (Path(home), rules, path):
+        if p.is_symlink():
+            raise Refused(f"{p} is a symlink; refusing to write job rules through it")
+    if path.exists():
+        if path.read_text() == body:
+            return path
+        raise Refused(f"{path} already exists with other rules; not widening a job's permissions")
+    rules.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body)
+    return path
+
+
 def attended_review(rec: dict) -> bool:
     """A review that runs on the attended allowlist: st posts its comment."""
     return (rec.get("job") == "review" and not rec.get("uid_binding")
-            and rec.get("harness") == "claude" and _attended_rules(rec) is not None)
+            and rec.get("harness") in ("claude", "codex") and _attended_rules(rec) is not None)
 
 
 def write_attended_settings(rec: dict, *, unattended: bool) -> Path | None:
@@ -575,6 +638,7 @@ _JOBS = {
    st posts your summary as the ONE verdict comment on the PR.
 5. Report once, the summary on stdin (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
      st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary-file -
+   or pass the same summary as ONE quoted argument: --summary '<summary>' instead of --summary-file -.
    st posts it on the PR, then signs the verdict record naming you as the reviewer.""",
     "merge": """JOB: merge {repo}#{pr} at EXACTLY head {head} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo}
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
@@ -1127,9 +1191,45 @@ def detached_teardown(root, name: str, delay: float = 2.0) -> None:
 
 # --- the reaper (code-side, run by `st fleet tend`) ---------------------------
 
-def reap(root, *, pane_alive, end, now: float, dry_run: bool = False) -> list[str]:
+#: How long a job may sit on an unanswered approval prompt before st ends it
+#: as blocked (aegis-e579 B). Nobody answers an unattended job; without this it
+#: idles to its deadline. Several reap ticks, so one slow frame cannot end it.
+PROMPT_WAIT_S = 300
+#: The approval footers, read off live panes: Codex 0.161's command approval
+#: and Claude Code's tool-permission prompt.
+APPROVAL_MARKERS = ("Press enter to confirm or esc to cancel", "Do you want to proceed?")
+
+
+def awaiting_approval(screen: str) -> bool:
+    """Is the pane stopped on a tool/command approval prompt? Both a numbered
+    picker AND an approval footer in the tail: a numbered list in the agent's
+    own output above an empty composer is neither."""
+    from . import picker
+    from .triage import strip_attrs
+    tail = [ln for ln in strip_attrs(screen or "").splitlines() if ln.strip()][-12:]
+    return (any(m in ln for ln in tail for m in APPROVAL_MARKERS)
+            and picker.parse(screen or "") is not None)
+
+
+def _prompt_clock(root, name: str, since: float | None) -> None:
+    with lock(root):
+        rec = read(root, name)
+        if rec is not None and rec.get("state") in (LAUNCHING, LIVE):
+            if since is None:
+                rec.pop("prompt_since", None)
+            else:
+                rec["prompt_since"] = since
+            write(root, rec)
+
+
+def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
+         prompting=None, prompt_wait_s: float = PROMPT_WAIT_S) -> list[str]:
     """End every live job whose pane is gone or whose deadline passed, and finish
-    any teardown a crash left half-done. Returns one line per action."""
+    any teardown a crash left half-done. Returns one line per action.
+
+    `prompting(pane)` says whether the pane waits on an approval prompt (True),
+    does not (False) or cannot tell (None). A prompt seen on two ticks at least
+    `prompt_wait_s` apart ends the job as blocked instead of idling to TTL."""
     out = []
     for rec in live(root):
         name = rec["name"]
@@ -1143,10 +1243,20 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False) -> list[st
                      and now - rec.get("spawned_at", 0) < LAUNCH_GRACE_S)
         cause = ("timeout" if now >= rec["deadline"]
                  else "" if launching or pane_alive(f"st-{name}") else "died")
+        verdict = "failed"
+        if not cause and not launching and rec["state"] == LIVE and prompting is not None:
+            waiting = prompting(f"st-{name}")
+            since = rec.get("prompt_since")
+            if waiting is True and since is not None and now - since >= prompt_wait_s:
+                cause, verdict = "approval prompt unanswered", "blocked"
+            elif waiting is True and since is None and not dry_run:
+                _prompt_clock(root, name, now)
+            elif waiting is False and since is not None and not dry_run:
+                _prompt_clock(root, name, None)
         if not cause:
             continue
         if not dry_run:
-            if end(name, "failed", cause) is False:
+            if end(name, verdict, cause) is False:
                 out.append(f'{name}: termination unproven; retained')
                 continue
         out.append(f"{name}: {cause} -> reported to {rec['administrator']}, torn down")
