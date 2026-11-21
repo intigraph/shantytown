@@ -411,3 +411,26 @@ checks remain in the source path. Merge recruitment remains disabled.
 identity/forge adapters and no live job. Operational acceptance still requires
 the separately authorized security migration, controller transport and a real
 event-triggered review with durable receipt and latency measurement.
+
+### Signed recruiter request qualification
+
+`recruitment_request.py` qualifies a bounded, domain-separated
+`shantytown.recruitment-request/v1` envelope offline. Its fixed fields admit
+only review launch or review stop; merge, arbitrary argv, environment, paths
+and request-supplied keys are refused. Ed25519 verification uses the optional
+`cryptography` library and refuses if it is unavailable. The test extra supplies
+that library; this change does not install a production verifier.
+
+Authenticated requests expire within 120 seconds. A durable unique nonce is
+reserved before exact native custody lookup, so a crash or custody refusal
+cannot turn into an automatic replay. Refusals retain fixed reason labels,
+without exception text or key material. The supplied `Binding` is an offline
+fixture input, not proof of root-owned policy or introducer enrollment.
+
+No transport, CLI entry point, socket, daemon, privileged call or execution
+callback is added. The existing controller still needs reviewed loading of
+the enrolled public key bound to its protected Unix identity, its fresh
+forge/check/verdict gates, stop-target ownership checks and protected nonce
+state. Live recruiter requests remain refused before native selection. Those
+integration checks and the separate activation/rollback approval must be met
+before the first live signed request.
