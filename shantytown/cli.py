@@ -3890,7 +3890,7 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
     panes = _panes(a)
 
     def kill(session):
-        if verdict == "failed":
+        if verdict in ("failed", "blocked"):
             _spawn_keep_pane(a, panes, session, name)
         try:
             from . import codex_daemon
@@ -4145,6 +4145,13 @@ def _cmd_spawn(a) -> int:
             # Attended jobs get their exact per-job allowlist (aegis-e579 B)
             # before the ledger: a refusal here leaves nothing to tear down.
             written = eph.write_attended_settings(rec, unattended=unattended)
+            if rec.get("harness") == "codex":
+                # The Codex spelling of the same allowlist, in the job's own
+                # daemon home: without it every gh call waits on a prompt.
+                from .codex_daemon import runtime_home
+                rules = eph.write_codex_job_rules(rec, runtime_home(rec["name"]),
+                                                  unattended=unattended)
+                rec["codex_rules"] = str(rules) if rules else None
             # What the trust guard compares against (aegis-e579): the exact base
             # commit the worktree was cut from, and the settings st just wrote.
             rec["kit_settings_sha256"] = eph.kit_settings_sha256(written)
@@ -4264,8 +4271,15 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
         except eph.Refused as error:
             problems.append(f'{name}: termination unproven; lane retained ({type(error).__name__})')
             return False
+    def prompting(pane):
+        try:
+            screen = panes.capture(pane, history=0, attrs=True, timeout=2)
+        except Exception:  # noqa: BLE001 — cannot tell is never "waiting"
+            return None
+        return eph.awaiting_approval(screen) if screen else None
+
     lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
-                     dry_run=dry_run)
+                     dry_run=dry_run, prompting=prompting)
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
     for problem in problems:

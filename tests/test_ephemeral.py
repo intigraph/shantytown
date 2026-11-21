@@ -126,11 +126,16 @@ def test_merge_lane_is_serialized_and_spaced_per_repo(tmp_path):
 # --- the prompt ---------------------------------------------------------------
 
 def test_review_prompt_is_independent_and_never_merges(tmp_path):
-    text = eph.prompt(_rec(tmp_path, job="review", repo="o/n", pr=7))
+    # The agent-posts-its-own-comment template is now the protected-UID lane's;
+    # an attended Codex review reports on stdin and st posts (aegis-e579 B).
+    text = eph.prompt(_rec(tmp_path, job="review", repo="o/n", pr=7,
+                           uid_binding={"uid": 60000, "sha256": "a" * 64}))
     assert "NON-AUTHOR" in text and "gh pr comment 7 --repo o/n" in text
     assert "--head <sha> --evidence <comment-url>" in text
     assert "NEVER push, never merge" in text
     assert "st agent spawn --report --verdict" in text
+    attended = eph.prompt(_rec(tmp_path, job="review", repo="o/n", pr=7))
+    assert "Do NOT comment on the PR" in attended and "gh pr comment" not in attended
 
 
 def test_protected_alert_triage_never_inherits_fix_permission(tmp_path):
