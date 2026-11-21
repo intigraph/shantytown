@@ -31,6 +31,7 @@ class Binding:
     host: str
     repos: tuple[str, ...]
     public_key: bytes
+    root: str | None = None
 
 
 def message(body):
@@ -195,4 +196,4 @@ def load_controller_binding():
             or matches[0][1].get('home') != '/var/lib/shantytown/agents/crew-' + data['principal']):
         raise IdentityError('controller key has no unique matching protected UID identity')
     return Binding(data['principal'], data['uid'], data['host'], tuple(data['repos']),
-                   bytes.fromhex(data['public_key']))
+                   bytes.fromhex(data['public_key']), data['root'])

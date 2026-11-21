@@ -427,15 +427,14 @@ cannot turn into an automatic replay. Refusals retain fixed reason labels,
 without exception text or key material. The supplied `Binding` is an offline
 fixture input, not proof of root-owned policy or introducer enrollment.
 
-No transport, CLI entry point, socket, daemon, privileged call or execution
-callback is added. A read-only source loader checks the fixed root-owned controller key file
+The read-only source loader checks the fixed root-owned controller key file
 against the unique UID/principal in protected `identity.json`, with configured
 host/root/repository validation. Installing that binding and proving introducer
-enrollment remain activation work. The existing controller still needs fresh
-forge/check/verdict integration, stop-target ownership checks and protected
-nonce state. Live recruiter requests remain refused before native selection. Those
-integration checks and the separate activation/rollback approval must be met
-before the first live signed request.
+enrollment remain activation work. Controller source qualification below integrates
+fresh forge/check/verdict admission and stop-target ownership checks. Protected
+persistent nonce state, live handoff and the separate activation/rollback approval
+remain prerequisites before the first live signed request. Live recruiter
+requests remain refused before native selection.
 
 The proposed controller binding file is `/etc/shantytown/recruit-controller.json`,
 with exactly `version`, `principal`, `uid`, `host`, `root`, `repos`, and
@@ -451,3 +450,34 @@ It must not bypass the existing planner, admission or protected launcher gates.
 For now the refusal remains. Root-pinned key reads reuse
 `advise_signing._read(..., owner=0)` (also used by verdict signer pins), with
 protected parent validation added; graph trust alone never supplies the key.
+
+### Existing controller signed-request preview
+
+`st agent spawn --recruitment-request --dry-run --json` reads one signed
+envelope from stdin, ending at EOF (8 KiB and a five-second pipe deadline).
+Only an independently authenticated controller administrator can use it.
+Mixed CLI selectors, a recruiter acting as its own controller, a different
+configured host/root, duplicate JSON keys and malformed or oversized frames
+are refused. The request never selects the root-owned key or controller path.
+
+`recruit_controller.receive` checks protected enrollment, request signatures,
+expiry and nonce reservation before the existing fresh admission adapter.
+Review launch rechecks the exact native item description, PR head, complete
+checks and authoritative non-author verdict state. Review stop instead
+requires the controller's own live job ledger to match the recruiter's exact
+principal, host, item, repository, PR, head and distinct protected job UID.
+Stop does not require green checks: a failed job must remain stoppable.
+Custody and expiry are checked again after the reads; a slow read never extends
+the signed lease. Refused or interrupted authenticated attempts remain spent
+in the supplied ledger; durable fixture tests reopen it to verify refusal.
+
+The CLI preview uses an **in-memory ledger**, so it writes no production state
+and grants no durable replay protection or operational acceptance. Its receipt
+always says `live: false`, `execution: refused`, `durable_acceptance: false`.
+It contains a canonical request digest, not the signature or nonce. There is
+no execution callback, listener, socket, service, enrollment or privileged
+call. Without `--dry-run` the command refuses before reading stdin or keys.
+The recruiter's existing live-refusal seam is unchanged. Live integration must
+add reviewed protected persistent state and transport, then re-enter the normal
+planner, holds, governor, cap and protected launcher gates; a preview receipt
+is never a credential for skipping those checks. Merge verbs remain excluded.

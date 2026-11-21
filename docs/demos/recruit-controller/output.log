@@ -1,0 +1,13 @@
+Script started on 2026-11-21 11:36:50-05:00 [COMMAND="python3 docs/demos/recruit-controller/run.py" <not executed on terminal>]
+BASE ac947ac9febea9e43e6f5e6d8fa488c1fc101414 st agent spawn: error: one of the arguments --ephemeral --list --stop --retry --report --reap --merge is required
+CANDIDATE cli.py SHA256=00e27c6131aa62908e86e33e4d2afc9e7e4de4e0202ac79b3fb11029b8558afe
+CANDIDATE recruit_controller.py SHA256=db9379088548f09dbe544035eae22bc936ae11c334703ee6c86e5000e10a972e
+CANDIDATE recruit_request.py SHA256=f19ac4fca2a9eea336d6209fe22bbc3fd8a9697017fb427d0d829fdf77a69c08
+CANDIDATE same CLI input, signed fixture + fresh fixture authorities:
+{"durable_acceptance": false, "execution": "refused", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "host": "fixture-host", "item": "task-1", "job": "review", "live": false, "pr": 42, "principal": "fixture-recruiter", "repo": "intigraph/widget", "request_sha256": "24fb1ab7b8abda58d1bbe1746a2379de942bbc6e749d65d997e13d484a43bce0", "schema": "shantytown.recruitment-controller-qualification/v1", "target": null, "verb": "launch"}
+NO --dry-run: expected refusal before reading a request
+  refused: controller recruitment qualification unproved (IdentityError)
+DURABLE FIXTURE same nonce: recruitment replay refused
+LIMIT: source preview only; fixture identity/key/forge/custody. No installed binding, state, privileged call or live job.
+
+Script done on 2026-11-21 11:36:51-05:00 [COMMAND_EXIT_CODE="0"]
