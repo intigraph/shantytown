@@ -7,6 +7,21 @@
 * `st crew --count` reuses a successful answer for 5 minutes (`SHANTY_CREW_COUNT_TTL`, 0 disables). Each fresh answer is a crew-wide plate read, and its only consumer is a status bar (aegis-t14).
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.21.0](https://github.com/intigraph/shantytown/compare/v0.20.0...v0.21.0) (2026-11-21)
+
+
+### Features
+
+* **spawn:** give attended Codex jobs their exact allowlist as exec-policy rules ([#659](https://github.com/intigraph/shantytown/issues/659)) ([f327e6b](https://github.com/intigraph/shantytown/commit/f327e6b0a5110663e10d926b61e11aed0db68dad))
+
+
+### Bug Fixes
+
+* **launch:** answer Claude Code's unnumbered trust dialog, only for a clean job worktree ([#655](https://github.com/intigraph/shantytown/issues/655)) ([7d000f1](https://github.com/intigraph/shantytown/commit/7d000f115310678a76b34b9abbd1ccdae51ce0aa))
+* **spawn:** read a Codex job's typed prompt in an 80-column pane ([#658](https://github.com/intigraph/shantytown/issues/658)) ([9d560be](https://github.com/intigraph/shantytown/commit/9d560be4a5866de68ef74769a4b14a582c951c9b))
+* **spawn:** trust a codex job's workspace before launch ([#657](https://github.com/intigraph/shantytown/issues/657)) ([beb69ea](https://github.com/intigraph/shantytown/commit/beb69eaf29f973bf679948401cb33c94b361f135))
+* **spawn:** trust a codex job's workspace before launch, untrust at teardown ([beb69ea](https://github.com/intigraph/shantytown/commit/beb69eaf29f973bf679948401cb33c94b361f135))
+
 ## [0.20.0](https://github.com/intigraph/shantytown/compare/v0.19.0...v0.20.0) (2026-11-21)
 
 
