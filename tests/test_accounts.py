@@ -432,7 +432,7 @@ def test_account_replacement_reaps_old_daemons_after_pane_change_before_new_runt
     monkeypatch.setattr(cli, 'provision_ws', lambda *args, **kwargs: [])
     monkeypatch.setattr(cli, '_launched_now', lambda *args: None)
     monkeypatch.setattr(cli, '_record_launch_unretirement', lambda *args: True)
-    monkeypatch.setattr(cli, '_observe_live', lambda *args: True)
+    monkeypatch.setattr(cli, '_observe_live', lambda *args, **kw: True)
     monkeypatch.setattr(cli, '_verify_live_hooks', lambda *args: cli.OK)
     monkeypatch.setattr(cli, '_deliver_startup_inbox', lambda *args: True)
     def stop_owned(agent):

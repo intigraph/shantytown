@@ -14,7 +14,7 @@ from shantytown.runtime import ClaudeRuntime
 from shantytown.tmux import NullPanes
 
 NEW_NO = """ Accessing workspace:
- /home/u/gt/quipu-wt/eph-review-c8a981
+ /work/quipu-wt/eph-review-c8a981
  Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known
  folder first.
  Claude Code'll be able to read, edit, and execute files here.

@@ -137,7 +137,7 @@ def test_actual_launcher_emits_only_after_qualifying_checks(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "_session_for", lambda *a: "private-fixture-session")
     monkeypatch.setattr(cli, "_launched_now", lambda *a: None)
     monkeypatch.setattr(cli, "_record_launch_unretirement", lambda *a: True)
-    monkeypatch.setattr(cli, "_observe_live", lambda *a: mode != "not-live")
+    monkeypatch.setattr(cli, "_observe_live", lambda *a, **kw: mode != "not-live")
     monkeypatch.setattr(cli, "_verify_live_hooks", lambda *a: cli.CANNOT_TELL if mode == "hooks-unknown" else cli.OK)
     monkeypatch.setattr(cli, "_deliver_startup_inbox", lambda *a: mode != "inbox-unacked")
     runtime = SimpleNamespace(compose=lambda *a: "fixture command never executed",
