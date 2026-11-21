@@ -1895,6 +1895,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode.add_argument("--merge", action="store_true",
                          help="run BY a merge job: the guarded merge of its own PR "
                               "(lane, pinned head, green CI, non-author approval)")
+    sp_mode.add_argument("--recruitment-request", action="store_true",
+                         help="controller signed-request qualification on stdin (--dry-run only; no execution)")
     sp.add_argument("--recruiter", action="store_true",
                     help="qualify scoped review recruitment (--dry-run only; live handoff gated)")
     sp.add_argument("--head", default=None,
@@ -3999,6 +4001,12 @@ def _cmd_spawn(a) -> int:
             return OK
         actor = _spawn_actor(require_verified=policy.require_verified_identity)
         inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
+        if getattr(a, 'recruitment_request', False):
+            from . import recruit_controller
+            return recruit_controller.cli_qualify(
+                a, policy=policy, actor=actor, inside=inside, host=cfg.host_name,
+                role_of=role_of, gh=_gh_json, quipu=lambda: _spawn_quipu(a),
+                binding=lambda item: _spawn_item_work_request(a, item))
         if a.report:
             # Migrated hosts require the verified job principal. Compatibility
             # mode retains the workspace/ancestry and matching-claim checks.

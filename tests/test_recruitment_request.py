@@ -1,6 +1,7 @@
 """Offline protocol controls only: never launches a job or installs a key."""
 
 import pytest
+from dataclasses import replace
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
@@ -103,7 +104,7 @@ def test_controller_loader_cross_checks_protected_identity(context, monkeypatch,
     def read(path):
         return data if path == rr.CONTROLLER_BINDING_PATH else identity
     monkeypatch.setattr(rr, '_protected_json', read)
-    assert rr.load_controller_binding() == pin
+    assert rr.load_controller_binding() == replace(pin, root=str(tmp_path))
     identity['users'][str(pin.uid)]['principal'] = 'other'
     with pytest.raises(IdentityError, match='unique matching'):
         rr.load_controller_binding()
