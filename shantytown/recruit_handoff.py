@@ -1,7 +1,7 @@
 """Protected signed-request handoff to existing launch admission; activation gated.
 
-There is no transport entry, execution callback, configuration switch or CLI
-activation in this slice. The resulting plan is an observation, never a lease
+The controller CLI can prepare an explicitly requested durable observation.
+There is no execution callback, configuration switch or live activation. The resulting plan is an observation, never a lease
 that can skip the controller's existing launch gates.
 """
 from __future__ import annotations
@@ -127,3 +127,28 @@ def prepare(envelope, *, root, host, policy, actor, inside, role_of,
                 'plan_sha256': plan_digest, 'name': plan['name'], 'head': body['head'],
                 'state': 'prepared', 'nonce_durable': True,
                 'live': False, 'execution': 'refused', 'activation': 'gated'}
+
+
+def cli_prepare(a, **context):
+    """Explicit controller preparation: spends durable state but never launches.
+
+    No input is read until selectors and independent authority are checked.
+    A dry run here qualifies admission only; its durable audit/nonce is real.
+    """
+    import sys
+    try:
+        if (not a.dry_run or getattr(a, 'recruiter', False)
+                or any(getattr(a, key, None) is not None for key in
+                       ('job', 'item', 'pr_repo', 'pr', 'head', 'checkout', 'harness',
+                        'evidence', 'verdict'))):
+            raise IdentityError('durable preparation requires only --recruitment-prepare --dry-run')
+        recruit_controller.controller_authority(
+            policy=context['policy'], actor=context['actor'], inside=context['inside'],
+            role_of=context['role_of'])
+        receipt = prepare(recruit_controller.read_input(), root=a.root, **context)
+        print(json.dumps(receipt, sort_keys=True))
+        return 0
+    except Exception as error:
+        print('  refused: controller durable preparation unproved (' +
+              type(error).__name__ + ')', file=sys.stderr)
+        return 1

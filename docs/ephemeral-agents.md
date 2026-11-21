@@ -525,3 +525,22 @@ no sudo or execution callback, and cannot be reused as a launch credential.
 Runtime execution must re-enter the normal launcher and its current gates after
 separate activation qualification. Stop still uses the earlier non-executable
 preview; this handoff accepts review launch only. Merge verbs remain excluded.
+
+### Controller durable preparation entry
+
+`st agent spawn --recruitment-prepare --dry-run --json` accepts one signed
+stdin frame using the existing bounded reader. This is an independent verified
+controller operation, never a recruiter privilege. It enters the protected
+persistent handoff library using the configured administrator, unattended
+policy, native custody reader and existing governor adapter. Mixed request
+selectors and an in-job identity refuse before stdin is read.
+
+The explicit preparation mode **writes durable nonce/audit/operation state**;
+`--dry-run` guarantees no launch, not a read-only database preview. Replaying
+that signed frame, even after reopening the database, refuses. It never creates
+state directories or enables a missing capability. Use the earlier
+`--recruitment-request --dry-run` for the memory-only preview instead.
+
+The resulting receipt remains `live: false`, `execution: refused`,
+`activation: gated`. No transport listener or protected execution callback is
+installed. Runtime activation remains gated on xu2; merge verbs are excluded.
