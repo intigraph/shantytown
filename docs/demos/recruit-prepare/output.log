@@ -1,0 +1,7 @@
+Script started on 2026-11-21 13:53:23-05:00 [COMMAND="python3 docs/demos/recruit-prepare/run.py" <not executed on terminal>]
+BASE abebe316dbffb0aba3688571de1c145e043ad457 parser refuses --recruitment-prepare (exit 2)
+CANDIDATE explicit durable preparation: {"activation": "gated", "execution": "refused", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "live": false, "name": "eph-review-abcdef", "nonce_durable": true, "operation": "b43b2d3c786596354b059a10106d6e3bf6596a9d3878e3cb4c5a4523c74d630f", "plan_sha256": "25bee288bbef311a8e05026938396e735e3b64e2f59b83344cf5ae076efa5050", "schema": "shantytown.recruitment-handoff/v1", "state": "prepared"}
+REOPENED same signed frame: refused: controller durable preparation unproved (IdentityError) exit 1
+LIMIT: synthetic controller enrollment/custody/forge/capability; private fixture state. No live listener, native UID probe, job or privileged launch.
+
+Script done on 2026-11-21 13:53:25-05:00 [COMMAND_EXIT_CODE="0"]
