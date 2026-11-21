@@ -3423,7 +3423,7 @@ def _runtime(a, panes):
     return ClaudeRuntime(panes, _default_settings(a.root, agents), root=a.root)
 
 
-def _observe_live(runtime, panes, session, card=None) -> bool:
+def _observe_live(runtime, panes, session, card=None, *, trust_guard=None) -> bool:
     """Poll capture() until the runtime is OBSERVED live, or give up (-> 2).
 
     This proves the PROCESS came up — NOT that hooks fired. The hooks guarantee is
@@ -3455,14 +3455,28 @@ def _observe_live(runtime, panes, session, card=None) -> bool:
         # can see the launcher did it.
         if not answered and getattr(runtime, "trust_prompt", None) and \
                 runtime.trust_prompt(screen):
+            answered = True
+            refusal = trust_guard() if trust_guard else ""
+            if refusal:
+                # FAIL CLOSED (aegis-e579): accepting would load hooks/servers
+                # that are not main's or st's. Press nothing; could-not-tell.
+                print(f"  first-run TRUST prompt in {session} — REFUSED: {refusal}. "
+                      f"Nothing pressed.", file=sys.stderr)
+                if _LIVE_DELAY:
+                    time.sleep(_LIVE_DELAY)
+                continue
             print(f"  first-run TRUST prompt in {session} — accepting the "
                   f"workspace the card already elected.", file=sys.stderr)
             # BARE BY DESIGN (aegis-5vxmz). This is an ANSWER to a prompt the
             # runtime is showing — a single keystroke's worth of text consumed by
             # a chooser, not a message anyone reads. Signing it would answer a
             # different question. Pinned in tests/test_attribution_inventory.py.
-            panes.send(session, runtime.trust_answer())
-            answered = True
+            numbered = getattr(runtime, "trust_numbered", None)
+            if numbered is None or numbered(screen):
+                panes.send(session, runtime.trust_answer())
+            elif not _accept_unnumbered_trust(runtime, panes, session):
+                print(f"  could not select the trust row in {session}; nothing "
+                      f"pressed, left for a human.", file=sys.stderr)
         # THE CHROME CONSENT GATE (aegis-neffw), and it is the trust gate's twin.
         # Live-fire 2026-08-05: `claude --chrome` shows the folder-trust dialog,
         # then a SECOND screen consenting to the browser integration, and that one
@@ -3482,6 +3496,46 @@ def _observe_live(runtime, panes, session, card=None) -> bool:
                   f"(chrome = true).", file=sys.stderr)
             panes.send(session, runtime.chrome_answer())
             chrome_answered = True
+        if _LIVE_DELAY:
+            time.sleep(_LIVE_DELAY)
+    return False
+
+
+def _job_trust_guard(a, card):
+    """For an ephemeral job, the check that must pass before its folder-trust
+    dialog is accepted (aegis-e579); None for a crew card, whose workspace the
+    card itself elected."""
+    from . import ephemeral as _eph
+    if card is None or not _eph.is_ephemeral_name(getattr(card, "name", None)):
+        return None
+
+    def guard():
+        try:
+            from .provision import expected_servers
+            servers = expected_servers(a.root)
+        except Exception:  # noqa: BLE001 -- no kit to compare: .mcp.json refuses
+            servers = ()
+        return _eph.trust_surface_refusal(_eph.read(a.root, card.name),
+                                          expected_servers=servers)
+    return guard
+
+
+def _accept_unnumbered_trust(runtime, panes, session, *, moves: int = 3) -> bool:
+    """Answer the UNNUMBERED folder-trust menu (Claude Code 2.1.32x): move Down
+    until the cursor is SEEN on the accepting row, then Enter as its own key.
+    Its default row is "No, exit", so Enter is pressed ONLY on that observed
+    state; if the dialog vanishes or the row is never reached, nothing is
+    pressed and the caller reports could-not-tell as before."""
+    for move in range(moves + 1):
+        screen = panes.capture(session)
+        if not runtime.trust_prompt(screen):
+            return False
+        if runtime.trust_selected(screen):
+            panes.submit(session)
+            return True
+        if move == moves:
+            break
+        panes.select_next(session)
         if _LIVE_DELAY:
             time.sleep(_LIVE_DELAY)
     return False
@@ -4064,7 +4118,15 @@ def _cmd_spawn(a) -> int:
                 rec["workspace"] = str(scratch)
             # Attended jobs get their exact per-job allowlist (aegis-e579 B)
             # before the ledger: a refusal here leaves nothing to tear down.
-            eph.write_attended_settings(rec, unattended=unattended)
+            written = eph.write_attended_settings(rec, unattended=unattended)
+            # What the trust guard compares against (aegis-e579): the exact base
+            # commit the worktree was cut from, and the settings st just wrote.
+            rec["kit_settings_sha256"] = eph.kit_settings_sha256(written)
+            if rec.get("worktree_of"):
+                import subprocess as _sp
+                head = _sp.run(["git", "-C", rec["workspace"], "rev-parse", "HEAD"],
+                               capture_output=True, text=True, timeout=30)
+                rec["worktree_base_sha"] = head.stdout.strip() if head.returncode == 0 else None
             # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
             # report and a teardown, including a launch that is refused.
             eph.write(a.root, rec)
@@ -4909,7 +4971,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # never turn a successful launch into a failure.
     _launched_now(a, card.name, runtime.settings_path(card))
     ledger_ok = _record_launch_unretirement(a, card)
-    if _observe_live(runtime, panes, session, card):
+    if _observe_live(runtime, panes, session, card, trust_guard=_job_trust_guard(a, card)):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
         from . import ephemeral as _eph
         if verified == OK:

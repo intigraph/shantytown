@@ -1716,8 +1716,14 @@ class ClaudeRuntime:
     # symptom recorded against harding's first launch, and the same one a
     # tend-respawn hits. A provisioning story that stops at files does not
     # produce a working agent.
+    # Two renderings (measured). The numbered dialog ("1. Yes, I trust this
+    # folder"), where a bare `1` selects and confirms; and Claude Code 2.1.32x's
+    # UNNUMBERED menu ("Quick safety check: Is this a project you created or one
+    # you trust?") whose cursor starts on "No, exit". See trust_numbered() and
+    # trust_selected(): the second one is answered Down, then Enter, never `1`.
     TRUST_MARKERS = ("Do you trust the files in this folder",
-                     "1. Yes, I trust this folder")
+                     "Yes, I trust this folder")
+    TRUST_ACCEPT_ROW = "Yes, I trust this folder"
     # An interactive picker BLOCKING the pane (aegis-qxc2). See awaiting_answer().
     # Read off live panes 2026-07-20, both the unanswered and the answered shape.
     # "Do you want to proceed?" is the TOOL-PERMISSION prompt — the commonest
@@ -1946,6 +1952,17 @@ class ClaudeRuntime:
         rather than making a new one. Every other first-run prompt still needs a
         person."""
         return any(m in screen for m in self.TRUST_MARKERS)
+
+    def trust_numbered(self, screen: str) -> bool:
+        """Is it the NUMBERED trust dialog, the one a bare `1` answers?"""
+        return f"1. {self.TRUST_ACCEPT_ROW}" in (screen or "")
+
+    def trust_selected(self, screen: str) -> bool:
+        """Is the picker cursor (the composer glyph) ON the accepting row? The
+        only state in which Enter may be pressed on the unnumbered dialog: on
+        any other row Enter exits the agent."""
+        return any(line.strip().startswith("\u276f") and self.TRUST_ACCEPT_ROW in line
+                   for line in (screen or "").splitlines())
 
     def trust_answer(self) -> str:
         """The keystroke that accepts. Kept next to the markers so a runtime that
