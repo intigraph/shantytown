@@ -362,18 +362,54 @@ def kit_settings_sha256(body_path: Path | None) -> str | None:
     return hashlib.sha256(Path(body_path).read_bytes()).hexdigest() if body_path else None
 
 
+#: What a harness loads from a trusted folder: Claude Code's hooks, skills and
+#: MCP servers, and codex's project config/hooks, skills and instructions.
+TRUST_SURFACE = (".claude", ".mcp.json", ".codex", ".agents", "AGENTS.md", "CLAUDE.md")
+
+
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def _only_tooling_block(base_text: str, path: Path) -> bool:
+    """Does the worktree file equal the base file once st's provisioned tooling
+    block (tooling.BEGIN..END) is removed from both? A symlink, an unreadable
+    file or any other difference is False."""
+    from .tooling import BEGIN, END
+
+    def strip(text: str) -> str:
+        out, rest = [], text
+        while BEGIN in rest:
+            head, _, tail = rest.partition(BEGIN)
+            if END not in tail:
+                return text + "\0unterminated"
+            out.append(head)
+            rest = tail.partition(END)[2]
+        return ("".join(out) + rest).rstrip()
+
+    try:
+        if path.is_symlink():
+            return False
+        return strip(path.read_text()) == strip(base_text)
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) -> str:
     """Why the launcher must NOT accept Claude Code's folder-trust dialog for this
     job's worktree, or "" when it may (sattler ruling, aegis-e579, 11-21).
 
-    Accepting the dialog loads the folder's hooks, skills and .mcp.json servers.
+    Accepting the dialog loads the folder's hooks, skills and .mcp.json servers;
+    codex trusts a job workspace without any dialog (st records the trust when
+    it writes the launch config, and launches with hook trust bypassed), so for
+    codex this check is the only gate. spawn runs it before EVERY launch.
     A job worktree is cut from main, so the only acceptable trust surface is
     main's own bytes plus the kit st itself wrote. FAILS CLOSED on anything it
     cannot prove:
-      - every TRACKED path under .claude/ and .mcp.json equals the worktree's
+      - every TRACKED path in TRUST_SURFACE equals the worktree's
         recorded base commit (no commit or edit on top of it touches them);
       - every UNTRACKED path there is st's kit: the job's settings.local.json
         with the exact sha256 st recorded when it wrote it, a provisioned skill
+        (.claude/skills or .agents/skills)
         that is a symlink resolving OUTSIDE the worktree, or an untracked
         .mcp.json naming only the provisioned servers.
     Content arriving from a pull request is tracked, so it lands in the first
@@ -387,7 +423,7 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
     base = rec.get("worktree_base_sha") or ""
     if not _SHA.fullmatch(base):
         return "the worktree's base commit was not recorded; trust surface unproven"
-    surface = ["--", ".claude", ".mcp.json"]
+    surface = ["--", *TRUST_SURFACE]
 
     def git(*args):
         r = run(["git", "-C", str(ws), *args], capture_output=True, text=True, timeout=30)
@@ -397,6 +433,11 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
 
     try:
         changed = git("diff", "--name-only", base, *surface).stdout.split()
+        # The ONE sanctioned edit to a tracked file: provisioning's tooling block
+        # in the instruction files. Anything outside that block still refuses.
+        changed = [rel for rel in changed
+                   if not (rel in INSTRUCTION_FILES and _only_tooling_block(
+                       git("show", f"{base}:{rel}").stdout, ws / rel))]
         if changed:
             return "tracked trust surface differs from the base commit: " + ", ".join(changed[:5])
         extra = git("ls-files", "--others", *surface).stdout.split()
@@ -410,7 +451,7 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
                 return f"{rel} was not written by st for this job"
             if hashlib.sha256(path.read_bytes()).hexdigest() != want:
                 return f"{rel} differs from the settings st wrote for this job"
-        elif rel.startswith(".claude/skills/") and rel.count("/") == 2:
+        elif rel.split("/")[:2] in ([".claude", "skills"], [".agents", "skills"]) and rel.count("/") == 2:
             try:
                 target = path.resolve()
             except (OSError, RuntimeError):

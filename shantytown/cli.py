@@ -4127,6 +4127,17 @@ def _cmd_spawn(a) -> int:
                 head = _sp.run(["git", "-C", rec["workspace"], "rev-parse", "HEAD"],
                                capture_output=True, text=True, timeout=30)
                 rec["worktree_base_sha"] = head.stdout.strip() if head.returncode == 0 else None
+            # BOTH HARNESSES, BEFORE ANY LAUNCH (aegis-e579): codex trusts the
+            # workspace with no dialog at all, so this is its only gate; Claude
+            # re-checks at its trust dialog. Fail closed: nothing is launched.
+            if rec.get("worktree_of"):
+                try:
+                    from .provision import expected_servers
+                    kit = expected_servers(a.root)
+                except Exception:  # noqa: BLE001 -- no kit: an .mcp.json refuses
+                    kit = ()
+                if why := eph.trust_surface_refusal(rec, expected_servers=kit):
+                    raise eph.Refused(f"job worktree {rec['workspace']} is not trusted: {why}")
             # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
             # report and a teardown, including a launch that is refused.
             eph.write(a.root, rec)
