@@ -1085,6 +1085,24 @@ class Tmux:
         _journal_send(pane, f"<control:{key}>")
         subprocess.run(self._cmd("send-keys", "-t", pane, key), check=True)
 
+    def select_next(self, pane: str) -> None:
+        """Move a blocking picker's cursor DOWN one row. One key, no text, no Enter.
+
+        Its own verb, like option(), and for the same reason: control()'s
+        allowlist means "edit a line, never commit it", and a picker move is a
+        different act. Claude Code 2.1.32x renders the folder-trust dialog as an
+        UNNUMBERED menu whose default row is "No, exit": a digit does nothing
+        there, and a bare Enter EXITS the agent. The only accepting sequence is
+        Down, SEE the cursor on the trust row, then submit() on its own.
+
+        The safety is at the caller, exactly as for option(): it moves only
+        while the runtime says the trust dialog is up, and it presses Enter only
+        after it has SEEN the cursor on the accepting row.
+        """
+        self._refuse_in_mode(pane)
+        _journal_send(pane, "<select:Down>")
+        subprocess.run(self._cmd("send-keys", "-t", pane, "Down"), check=True)
+
     def option(self, pane: str, n: int) -> None:
         """Send ONE DIGIT, 1-9, to pick an option from a blocking picker.
 
@@ -1514,6 +1532,12 @@ class NullPanes:
         if self.foreground_cmd in SHELL_COMMANDS:
             raise PaneNotAgent(f"pane {pane} is a shell: Enter withheld.")
         self.submits = getattr(self, "submits", []) + [pane]
+
+    def select_next(self, pane: str) -> None:
+        """Tmux.select_next's double: records the move apart from text and keys."""
+        if self.in_mode:
+            raise PaneInMode(f"pane {pane} is in a tmux mode: NOT DELIVERED.")
+        self.selects = getattr(self, "selects", []) + [pane]
 
     def control(self, pane: str, key: str) -> None:
         """Records the key; enforces the SAME allowlist as Tmux.control.

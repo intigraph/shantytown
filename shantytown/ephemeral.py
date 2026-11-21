@@ -23,6 +23,7 @@ so the rules can be tested without any of them.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -354,6 +355,121 @@ def write_attended_settings(rec: dict, *, unattended: bool) -> Path | None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body)
     return path
+
+
+def kit_settings_sha256(body_path: Path | None) -> str | None:
+    """sha256 of the settings.local.json st just wrote, for trust_surface_refusal."""
+    return hashlib.sha256(Path(body_path).read_bytes()).hexdigest() if body_path else None
+
+
+#: What a harness loads from a trusted folder: Claude Code's hooks, skills and
+#: MCP servers, and codex's project config/hooks, skills and instructions.
+TRUST_SURFACE = (".claude", ".mcp.json", ".codex", ".agents", "AGENTS.md", "CLAUDE.md")
+
+
+INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
+
+
+def _only_tooling_block(base_text: str, path: Path) -> bool:
+    """Does the worktree file equal the base file once st's provisioned tooling
+    block (tooling.BEGIN..END) is removed from both? A symlink, an unreadable
+    file or any other difference is False."""
+    from .tooling import BEGIN, END
+
+    def strip(text: str) -> str:
+        out, rest = [], text
+        while BEGIN in rest:
+            head, _, tail = rest.partition(BEGIN)
+            if END not in tail:
+                return text + "\0unterminated"
+            out.append(head)
+            rest = tail.partition(END)[2]
+        return ("".join(out) + rest).rstrip()
+
+    try:
+        if path.is_symlink():
+            return False
+        return strip(path.read_text()) == strip(base_text)
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) -> str:
+    """Why the launcher must NOT accept Claude Code's folder-trust dialog for this
+    job's worktree, or "" when it may (sattler ruling, aegis-e579, 11-21).
+
+    Accepting the dialog loads the folder's hooks, skills and .mcp.json servers;
+    codex trusts a job workspace without any dialog (st records the trust when
+    it writes the launch config, and launches with hook trust bypassed), so for
+    codex this check is the only gate. spawn runs it before EVERY launch.
+    A job worktree is cut from main, so the only acceptable trust surface is
+    main's own bytes plus the kit st itself wrote. FAILS CLOSED on anything it
+    cannot prove:
+      - every TRACKED path in TRUST_SURFACE equals the worktree's
+        recorded base commit (no commit or edit on top of it touches them);
+      - every UNTRACKED path there is st's kit: the job's settings.local.json
+        with the exact sha256 st recorded when it wrote it, a provisioned skill
+        (.claude/skills or .agents/skills)
+        that is a symlink resolving OUTSIDE the worktree, or an untracked
+        .mcp.json naming only the provisioned servers.
+    Content arriving from a pull request is tracked, so it lands in the first
+    check; the second catches anything else dropped into the worktree.
+    """
+    import subprocess
+    run = run or subprocess.run
+    if not rec or not rec.get("workspace"):
+        return "no job record or workspace to check"
+    ws = Path(rec["workspace"])
+    base = rec.get("worktree_base_sha") or ""
+    if not _SHA.fullmatch(base):
+        return "the worktree's base commit was not recorded; trust surface unproven"
+    surface = ["--", *TRUST_SURFACE]
+
+    def git(*args):
+        r = run(["git", "-C", str(ws), *args], capture_output=True, text=True, timeout=30)
+        if r.returncode not in (0, 1):
+            raise RuntimeError((r.stderr or "").strip()[:120])
+        return r
+
+    try:
+        changed = git("diff", "--name-only", base, *surface).stdout.split()
+        # The ONE sanctioned edit to a tracked file: provisioning's tooling block
+        # in the instruction files. Anything outside that block still refuses.
+        changed = [rel for rel in changed
+                   if not (rel in INSTRUCTION_FILES and _only_tooling_block(
+                       git("show", f"{base}:{rel}").stdout, ws / rel))]
+        if changed:
+            return "tracked trust surface differs from the base commit: " + ", ".join(changed[:5])
+        extra = git("ls-files", "--others", *surface).stdout.split()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        return f"could not read the worktree's trust surface ({str(e)[:80]})"
+    for rel in extra:
+        path = ws / rel
+        if rel == ".claude/settings.local.json":
+            want = rec.get("kit_settings_sha256")
+            if not want or path.is_symlink():
+                return f"{rel} was not written by st for this job"
+            if hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                return f"{rel} differs from the settings st wrote for this job"
+        elif rel.split("/")[:2] in ([".claude", "skills"], [".agents", "skills"]) and rel.count("/") == 2:
+            try:
+                target = path.resolve()
+            except (OSError, RuntimeError):
+                return f"{rel} does not resolve"
+            if not path.is_symlink() or target == ws.resolve() or ws.resolve() in target.parents:
+                return f"{rel} is not a provisioned skill link"
+        elif rel == ".mcp.json":
+            try:
+                servers = set(json.loads(path.read_text()).get("mcpServers", {}))
+            except (OSError, ValueError, AttributeError):
+                return ".mcp.json is unreadable"
+            allowed = set(expected_servers if expected_servers is not None else ())
+            if not allowed or not servers <= allowed:
+                return ".mcp.json names servers outside the provisioned kit: " + \
+                       ", ".join(sorted(servers - allowed)[:5] or ["(no kit to compare)"])
+        else:
+            return f"untracked {rel} is not part of st's kit"
+    return ""
 
 
 def card_for(rec: dict, *, unattended: bool) -> dict:
