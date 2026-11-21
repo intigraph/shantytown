@@ -4810,6 +4810,11 @@ def unobserved_launch_report(agent: str, harness: str, session: str,
             f"over the session this launch left behind.")
 
 
+def _eph_refused():
+    from .ephemeral import Refused
+    return Refused
+
+
 def _launch(a, card, panes, runtime, *, dry_run: bool = False,
             window_restore: bool = False, reuse_session: bool = False) -> int:
     # Preserve the early quiet-time refusal even for callers without a card.
@@ -4974,6 +4979,14 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             selected_settings = (runtime.settings_path(card)
                                  if hasattr(runtime, "settings_path") else None)
             servers = provision_ws(card, Path(a.root), settings_path=selected_settings)
+            # Provisioning just rewrote the workspace consent file; a Claude
+            # job's exact allowlist goes back on top (aegis-e579 finding 3).
+            from . import ephemeral as _eph
+            if _eph.is_ephemeral_name(card.name):
+                _eph.reapply_attended_settings(a.root, card.name)
+        except _eph_refused() as e:
+            print(f"  refused: {e}", file=sys.stderr)
+            return REFUSED
         except ProvisionError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED

@@ -420,6 +420,45 @@ def write_attended_settings(rec: dict, *, unattended: bool) -> Path | None:
     return path
 
 
+def reapply_attended_settings(root, name) -> Path | None:
+    """Put a Claude job's exact allowlist back after launch provisioning.
+
+    Provisioning renders the workspace consent file (MCP consent, hooks) on
+    every launch and overwrote the settings st wrote for the job, which lost
+    the per-PR allowlist AND made the trust guard refuse the folder-trust
+    dialog (the file no longer matched kit_settings_sha256), so the job never
+    started (aegis-e579 finding 3). Keep provisioning's file, replace its
+    permission allowlist with the job's exact one, union the denies, and
+    record the new sha256 for the guard. A job st wrote no settings for is
+    left alone (None)."""
+    rec = read(root, name)
+    if not rec or not rec.get("kit_settings_sha256") or not rec.get("workspace"):
+        return None
+    job = attended_settings(rec, unattended=False)
+    if job is None:
+        return None
+    path = Path(rec["workspace"]) / ".claude" / "settings.local.json"
+    if path.is_symlink() or path.parent.is_symlink():
+        raise Refused(f"{path} is a symlink; refusing to write job permissions through it")
+    try:
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError) as e:
+        raise Refused(f"{path} is unreadable after provisioning ({type(e).__name__})") from None
+    if not isinstance(cfg, dict):
+        raise Refused(f"{path} is not a JSON object after provisioning")
+    perms = cfg.get("permissions") if isinstance(cfg.get("permissions"), dict) else {}
+    deny = perms.get("deny") if isinstance(perms.get("deny"), list) else []
+    cfg["permissions"] = {"allow": list(job["permissions"]["allow"]),
+                          "deny": sorted(set(deny) | set(job["permissions"]["deny"]))}
+    body = json.dumps(cfg, indent=2, sort_keys=True) + "\n"
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(body)
+    os.replace(tmp, path)
+    rec["kit_settings_sha256"] = kit_settings_sha256(path)
+    write(root, rec)
+    return path
+
+
 def kit_settings_sha256(body_path: Path | None) -> str | None:
     """sha256 of the settings.local.json st just wrote, for trust_surface_refusal."""
     return hashlib.sha256(Path(body_path).read_bytes()).hexdigest() if body_path else None
