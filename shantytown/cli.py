@@ -1895,6 +1895,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode.add_argument("--merge", action="store_true",
                          help="run BY a merge job: the guarded merge of its own PR "
                               "(lane, pinned head, green CI, non-author approval)")
+    sp.add_argument("--recruiter", action="store_true",
+                    help="qualify scoped review recruitment (--dry-run only; live handoff gated)")
     sp.add_argument("--head", default=None,
                     help="40-hex head SHA: with --merge the verified head; with --job merge the "
                          "head the job may merge (default: the item's chaski work request); "
@@ -4050,7 +4052,27 @@ def _cmd_spawn(a) -> int:
                 raise eph.Refused(f"this process runs inside {me}; it cannot merge as {claimed}")
             return _spawn_merge(a, me)
         # An ephemeral process that unset $SHANTY_AGENT is still that job.
-        eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity)
+        recruiter_scope = None
+        if getattr(a, 'recruiter', False):
+            from . import recruiter
+            from .actor_identity import IdentityError
+            if (not policy.require_verified_identity or inside or not a.ephemeral
+                    or a.job != 'review' or a.retry or a.stop or a.reap):
+                raise eph.Refused('scoped recruitment requires verified identity and a new review request')
+            try:
+                recruiter_scope = recruiter.load(root=a.root, host=cfg.host_name)
+                if recruiter_scope is None:
+                    raise IdentityError('protected recruiter policy is not installed')
+                proposed = eph.Request(job=a.job, item=a.item, repo=a.pr_repo, pr=a.pr,
+                                       head=a.head, harness=a.harness,
+                                       checkout=str(a.checkout) if a.checkout else None)
+                recruiter_scope.check(proposed, root=a.root, host=cfg.host_name)
+            except IdentityError as error:
+                raise eph.Refused(str(error)) from None
+            eph.authority(actor, role_of, require_verified=True, recruiter_scope=recruiter_scope,
+                          request=proposed, root=a.root, host=cfg.host_name)
+        else:
+            eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
         if a.stop:
@@ -4089,13 +4111,23 @@ def _cmd_spawn(a) -> int:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
-                              head=head if a.job == "merge" else None, request_id=request_id)
+                              head=head if a.job == "merge" or recruiter_scope else None, request_id=request_id)
+        if recruiter_scope is not None:
+            recruiter.cli_admit(req, policy=policy, gh=_gh_json,
+                                quipu=lambda: _spawn_quipu(a),
+                                binding=lambda item: _spawn_item_work_request(a, item))
         admin, admin_dangerous = _spawn_administrator(files, cfg)
         unattended = admin_dangerous if policy.unattended is None else policy.unattended
+        if recruiter_scope is not None and not unattended:
+            raise eph.Refused('scoped recruitment requires a separate protected job UID, never attended identity sharing')
         if unattended and not policy.unattended_uid_ready:
             raise eph.Refused("unattended ephemeral launches are gated: "
                               "ephemeral.unattended_uid_ready is false; "
                               "a distinct protected job UID must be established first")
+        if recruiter_scope is not None and not a.dry_run:
+            # The existing protected launcher uses sudo. The recruiter ruling
+            # forbids sudo/controller sockets; do not silently reuse that path.
+            raise eph.Refused('scoped recruiter controller handoff is not installed; no sudo launch permitted')
         uid_launch = None
         if unattended:
             if not policy.require_verified_identity:
@@ -4108,6 +4140,8 @@ def _cmd_spawn(a) -> int:
                     used={r['name'] for r in eph.records(a.root)}, native_probe=not a.dry_run)
             except (IdentityError, OSError, ValueError, subprocess.SubprocessError) as error:
                 raise eph.Refused("protected job UID admission failed: " + type(error).__name__) from None
+        if recruiter_scope is not None and (uid_launch is None or uid_launch[0]['uid'] == recruiter_scope.uid):
+            raise eph.Refused('recruiter and job must have distinct protected Unix UIDs')
         if unattended and a.retry and old.get('state') != eph.DONE:
             # The separate UID process must not cost the original its lane if
             # an exec-time switch later fails. Until an atomic cross-UID handoff
@@ -4123,7 +4157,13 @@ def _cmd_spawn(a) -> int:
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),
                            role_of=role_of, attempt=attempt, retry_of=retry_of,
-                           name=uid_launch[0]['principal'] if uid_launch else None)
+                           name=uid_launch[0]['principal'] if uid_launch else None,
+                           recruiter_scope=recruiter_scope)
+            if recruiter_scope is not None:
+                rec['recruiter'] = {'principal': recruiter_scope.principal,
+                                    'host': recruiter_scope.host, 'uid': recruiter_scope.uid, 'item': req.item,
+                                    'repo': req.repo, 'pr': req.pr, 'head': req.head,
+                                    'binding': 'chaski.github.work-request/v1'}
             if uid_launch:
                 rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
             rec["item_context"] = item_ctx
@@ -4138,6 +4178,12 @@ def _cmd_spawn(a) -> int:
                 raise eph.Refused(refusal)
             shared = _spawn_checkout(rec)
             if a.dry_run:
+                if recruiter_scope is not None and a.json:
+                    print(json.dumps({'schema': 'shantytown.recruitment-plan/v1', 'live': False,
+                                      'controller_handoff': 'gated', 'principal': recruiter_scope.principal,
+                                      'host': recruiter_scope.host, 'repo': req.repo, 'pr': req.pr,
+                                      'head': req.head, 'item': req.item, 'job': req.job}))
+                    return OK
                 print(f"would spawn {rec['name']} ({rec['job']} on {rec['item']}, "
                       f"{rec['harness']}, worktree of {shared or 'scratch'}, "
                       f"reports to {rec['administrator']})")

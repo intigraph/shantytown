@@ -367,3 +367,87 @@ and scope before accepting an approval/change result, then performs ordinary
 notification and UID teardown. A missing or unproved signature still becomes
 blocked. No real signing identity or registration was created during source
 qualification; per-job enrollment and native isolation remain rollout work.
+
+## Scoped event recruiter source qualification
+
+`st agent spawn --recruiter --ephemeral --job review --repo OWNER/REPO --pr N
+--item ID --head SHA --dry-run` qualifies a request through a separate capability;
+it does not make the principal an administrator. `--json` returns a
+`shantytown.recruitment-plan/v1` object with `live: false`. This is not a spawn
+receipt. Live requests currently refuse before the protected launcher because
+its sudo transport is outside the recruiter's granted authority. A reviewed
+controller handoff is a separate prerequisite; no fallback is provided.
+
+The authenticated principal and UID come from protected identity configuration
+and its existing introducer enrollment. A fixed protected `recruiters.json`
+selects the permitted root, host, repositories and jobs. For example, an
+operator policy can use principal `crew-recruiter`, UID 10001, an isolated
+private home `/var/lib/shantytown/agents/crew-recruiter`, and the configured
+crew host. Those values are not compiled into the authorizer. This source does
+not create the user, enroll its key, install identity policy or enable a drain.
+The recruiter's UID and a launched job's UID must be distinct. It receives no
+administrator credential, sudo grant or controller socket.
+
+The policy structure is `{"version":1,"principals":{"PRINCIPAL":{"uid":10001,
+"root":"/absolute/crew/root","host":"configured-host","repos":["intigraph/widget"],
+"jobs":["review"]}}}`. The file and its parent chain must be operator-owned and
+non-writable by other users. Missing/malformed identity or scope, wrong UID,
+root or host, extra command overrides, and all merge requests refuse.
+
+Custody is only the native `chaski.github.work-request/v1` record read by the
+existing helper from the exact item's description. Repository, PR number, job
+and revision must match. PR prose, branches, trailers, comments and webhook
+payloads establish no custody. The legacy record is deliberately reused;
+introducing a stronger signed custody format is a separate schema change.
+
+Qualification reads authoritative current PR state, bounded complete check and
+status inventories, required contexts/app identities, and verified non-author
+verdict state from the configured verdict graph. Unknown author/verdict state,
+partial inventories, outside contributors, existing verdicts, changed custody
+or a changed head refuse. The ordinary cap, protected job UID, hold and governor
+checks remain in the source path. Merge recruitment remains disabled.
+
+[Source demonstration](demos/scoped-recruiter/README.md) uses explicit fake
+identity/forge adapters and no live job. Operational acceptance still requires
+the separately authorized security migration, controller transport and a real
+event-triggered review with durable receipt and latency measurement.
+
+### Signed recruiter request qualification
+
+`recruit_request.py` qualifies a bounded, domain-separated
+`shantytown.recruitment-request/v1` envelope offline. Its fixed fields admit
+only review launch or review stop; merge, arbitrary argv, environment, paths
+and request-supplied keys are refused. Ed25519 verification uses the declared runtime dependency
+`cryptography>=46,<47` and still refuses if it is unavailable. Source metadata
+does not prove that an installed controller has the dependency or a key binding.
+
+Authenticated requests expire within 120 seconds. A durable unique nonce is
+reserved before exact native custody lookup, so a crash or custody refusal
+cannot turn into an automatic replay. Refusals retain fixed reason labels,
+without exception text or key material. The supplied `Binding` is an offline
+fixture input, not proof of root-owned policy or introducer enrollment.
+
+No transport, CLI entry point, socket, daemon, privileged call or execution
+callback is added. A read-only source loader checks the fixed root-owned controller key file
+against the unique UID/principal in protected `identity.json`, with configured
+host/root/repository validation. Installing that binding and proving introducer
+enrollment remain activation work. The existing controller still needs fresh
+forge/check/verdict integration, stop-target ownership checks and protected
+nonce state. Live recruiter requests remain refused before native selection. Those
+integration checks and the separate activation/rollback approval must be met
+before the first live signed request.
+
+The proposed controller binding file is `/etc/shantytown/recruit-controller.json`,
+with exactly `version`, `principal`, `uid`, `host`, `root`, `repos`, and
+`public_key` (32-byte Ed25519 public key in lowercase hex). Neither this file
+nor `identity.json` may have writable or symlinked parent components. Duplicate
+JSON keys are refused. This is configuration read by the existing controller,
+not a receiver service; no key file is installed by this PR.
+
+The future live integration has one seam: the scoped-recruiter refusal before
+`uid_launch` / `job_launch`. Only reviewed transport may replace that refusal
+with `handoff(envelope) -> receipt`, retaining the receipt in `rec['recruiter']`.
+It must not bypass the existing planner, admission or protected launcher gates.
+For now the refusal remains. Root-pinned key reads reuse
+`advise_signing._read(..., owner=0)` (also used by verdict signer pins), with
+protected parent validation added; graph trust alone never supplies the key.
