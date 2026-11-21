@@ -177,3 +177,20 @@ def admit(request, *, gh, verdict, binding):
     if (latest.get('state') != 'open' or latest.get('draft') is not False
             or (latest.get('head') or {}).get('sha') != request.head):
         raise IdentityError('PR changed during recruitment admission')
+
+
+def cli_admit(request, *, policy, gh, quipu, binding):
+    """Keep the scoped CLI adapter outside the shared spawn lifecycle code."""
+    import subprocess
+    from . import ephemeral, gate_verdict as gv
+    try:
+        if not policy.verdict_graph:
+            raise IdentityError('recruiter verdict_graph is not configured')
+        def authoritative_verdict(repo, pr, node, head):
+            return gv.approval(quipu(), repo=repo, pr=pr, node_id=node,
+                               head=head, graph=policy.verdict_graph,
+                               signers=gv.trusted_signers())
+        admit(request, gh=gh, verdict=authoritative_verdict, binding=binding)
+    except (IdentityError, gv.VerdictError, OSError, ValueError, TypeError,
+            AttributeError, KeyError, subprocess.SubprocessError) as error:
+        raise ephemeral.Refused('scoped recruitment admission unproved: ' + type(error).__name__) from None

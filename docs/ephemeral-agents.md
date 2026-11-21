@@ -414,7 +414,7 @@ event-triggered review with durable receipt and latency measurement.
 
 ### Signed recruiter request qualification
 
-`recruitment_request.py` qualifies a bounded, domain-separated
+`recruit_request.py` qualifies a bounded, domain-separated
 `shantytown.recruitment-request/v1` envelope offline. Its fixed fields admit
 only review launch or review stop; merge, arbitrary argv, environment, paths
 and request-supplied keys are refused. Ed25519 verification uses the optional
@@ -428,9 +428,18 @@ without exception text or key material. The supplied `Binding` is an offline
 fixture input, not proof of root-owned policy or introducer enrollment.
 
 No transport, CLI entry point, socket, daemon, privileged call or execution
-callback is added. The existing controller still needs reviewed loading of
-the enrolled public key bound to its protected Unix identity, its fresh
-forge/check/verdict gates, stop-target ownership checks and protected nonce
-state. Live recruiter requests remain refused before native selection. Those
+callback is added. A read-only source loader checks the fixed root-owned controller key file
+against the unique UID/principal in protected `identity.json`, with configured
+host/root/repository validation. Installing that binding and proving introducer
+enrollment remain activation work. The existing controller still needs fresh
+forge/check/verdict integration, stop-target ownership checks and protected
+nonce state. Live recruiter requests remain refused before native selection. Those
 integration checks and the separate activation/rollback approval must be met
 before the first live signed request.
+
+The proposed controller binding file is `/etc/shantytown/recruit-controller.json`,
+with exactly `version`, `principal`, `uid`, `host`, `root`, `repos`, and
+`public_key` (32-byte Ed25519 public key in lowercase hex). Neither this file
+nor `identity.json` may have writable or symlinked parent components. Duplicate
+JSON keys are refused. This is configuration read by the existing controller,
+not a receiver service; no key file is installed by this PR.

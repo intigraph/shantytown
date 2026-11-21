@@ -7,8 +7,12 @@ The verifier key is a controller input; the request cannot nominate a key.
 from __future__ import annotations
 
 import json
+import os
 import re
+import socket
 import sqlite3
+import stat
+from pathlib import Path
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -133,3 +137,68 @@ class Ledger:
 
     def close(self):
         self.db.close()
+
+
+# This is configuration for the existing controller, not a new service.
+# No environment variable or request field can select either policy path.
+CONTROLLER_BINDING_PATH = Path('/etc/shantytown/recruit-controller.json')
+
+
+def _protected_json(path):
+    from .job_launch import protected
+    protected(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_CLOEXEC', 0))
+    with os.fdopen(fd, 'rb') as stream:
+        meta = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0
+                or meta.st_mode & 0o022 or meta.st_size > 1024 * 1024):
+            raise IdentityError('controller binding must be protected and bounded')
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise IdentityError('duplicate controller binding field')
+                value[key] = item
+            return value
+        try:
+            return json.loads(stream.read(1024 * 1024 + 1), object_pairs_hook=unique)
+        except (ValueError, UnicodeError) as error:
+            raise IdentityError('controller binding JSON refused') from error
+
+
+def load_controller_binding():
+    """Read operator-installed key binding; never trust key identity on the wire.
+
+    This read-only source primitive neither enrolls a key nor proves that its
+    enrollment was authorized. Installing this configuration is activation.
+    """
+    from .actor_identity import POLICY_PATH
+    from .recruiter import _scope
+    data = _protected_json(CONTROLLER_BINDING_PATH)
+    if (not isinstance(data, dict)
+            or set(data) != {'version', 'principal', 'uid', 'host', 'root', 'repos', 'public_key'}
+            or type(data['version']) is not int or data['version'] != 1
+            or not isinstance(data['principal'], str) or not data['principal']
+            or type(data['uid']) is not int or data['uid'] < 10000
+            or not isinstance(data['public_key'], str)
+            or not re.fullmatch('[0-9a-f]{64}', data['public_key'])
+            or data['host'] != socket.gethostname()):
+        raise IdentityError('controller recruiter binding refused')
+    # Reuse the exact reviewed host/root/repository scope validator; merge is
+    # still absent from the wire allowlist regardless of config content.
+    _scope({'version': 1, 'principals': {data['principal']: {
+        key: data[key] for key in ('uid', 'host', 'root', 'repos')
+    } | {'jobs': ['review']}}}, principal=data['principal'], uid=data['uid'],
+           root=data['root'], host=data['host'])
+    identity = _protected_json(POLICY_PATH)
+    if (not isinstance(identity, dict) or type(identity.get('version')) is not int
+            or identity['version'] != 1 or identity.get('required') is not True
+            or not isinstance(identity.get('users'), dict)):
+        raise IdentityError('controller protected identity binding refused')
+    matches = [(uid, row) for uid, row in identity['users'].items()
+               if isinstance(row, dict) and row.get('principal') == data['principal']]
+    if (len(matches) != 1 or matches[0][0] != str(data['uid'])
+            or matches[0][1].get('home') != '/var/lib/shantytown/agents/crew-' + data['principal']):
+        raise IdentityError('controller key has no unique matching protected UID identity')
+    return Binding(data['principal'], data['uid'], data['host'], tuple(data['repos']),
+                   bytes.fromhex(data['public_key']))

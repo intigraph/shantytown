@@ -5,7 +5,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 from shantytown.actor_identity import IdentityError
-from shantytown import recruitment_request as rr
+from shantytown import recruit_request as rr
 
 
 @pytest.fixture
@@ -91,3 +91,46 @@ def test_stop_has_fixed_review_target_and_no_execution(context):
                       native_binding=native)['target'] == 'eph-review-abcdef'
     # Qualification does not claim target ownership or authorize native stop;
     # the existing controller must recheck its ledger when integrated.
+
+
+def test_controller_loader_cross_checks_protected_identity(context, monkeypatch, tmp_path):
+    _, pin, _, _ = context
+    data = dict(version=1, principal=pin.principal, uid=pin.uid, host=pin.host,
+                root=str(tmp_path), repos=list(pin.repos), public_key=pin.public_key.hex())
+    identity = {'version': 1, 'required': True, 'users': {str(pin.uid): {
+        'principal': pin.principal, 'home': '/var/lib/shantytown/agents/crew-' + pin.principal}}}
+    monkeypatch.setattr(rr.socket, 'gethostname', lambda: pin.host)
+    def read(path):
+        return data if path == rr.CONTROLLER_BINDING_PATH else identity
+    monkeypatch.setattr(rr, '_protected_json', read)
+    assert rr.load_controller_binding() == pin
+    identity['users'][str(pin.uid)]['principal'] = 'other'
+    with pytest.raises(IdentityError, match='unique matching'):
+        rr.load_controller_binding()
+
+
+@pytest.mark.parametrize('changes', [{'host': 'wrong-host'}, {'uid': True},
+    {'public_key': 'short'}, {'public_key_path': '/caller/key'}, {'repos': ['*']}])
+def test_controller_loader_refuses_bad_scope_before_identity(context, monkeypatch, tmp_path, changes):
+    _, pin, _, _ = context
+    data = dict(version=1, principal=pin.principal, uid=pin.uid, host=pin.host,
+                root=str(tmp_path), repos=list(pin.repos), public_key=pin.public_key.hex())
+    data.update(changes)
+    monkeypatch.setattr(rr.socket, 'gethostname', lambda: pin.host)
+    def read(path):
+        assert path == rr.CONTROLLER_BINDING_PATH
+        return data
+    monkeypatch.setattr(rr, '_protected_json', read)
+    with pytest.raises(IdentityError):
+        rr.load_controller_binding()
+
+
+def test_unprotected_controller_binding_refuses_before_open(tmp_path, monkeypatch):
+    from shantytown import job_launch
+    path = tmp_path / 'binding.json'
+    path.write_text('{}')
+    def refuse(_):
+        raise IdentityError('unprotected fixture')
+    monkeypatch.setattr(job_launch, 'protected', refuse)
+    with pytest.raises(IdentityError, match='unprotected'):
+        rr._protected_json(path)

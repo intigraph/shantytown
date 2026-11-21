@@ -4113,19 +4113,9 @@ def _cmd_spawn(a) -> int:
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
                               head=head if a.job == "merge" or recruiter_scope else None, request_id=request_id)
         if recruiter_scope is not None:
-            from . import gate_verdict as gv
-            try:
-                if not policy.verdict_graph:
-                    raise IdentityError('recruiter verdict_graph is not configured')
-                def authoritative_verdict(repo, pr, node, head):
-                    return gv.approval(_spawn_quipu(a), repo=repo, pr=pr, node_id=node,
-                                       head=head, graph=policy.verdict_graph,
-                                       signers=gv.trusted_signers())
-                recruiter.admit(req, gh=_gh_json, verdict=authoritative_verdict,
+            recruiter.cli_admit(req, policy=policy, gh=_gh_json,
+                                quipu=lambda: _spawn_quipu(a),
                                 binding=lambda item: _spawn_item_work_request(a, item))
-            except (IdentityError, gv.VerdictError, OSError, ValueError, TypeError,
-                    AttributeError, KeyError, subprocess.SubprocessError) as error:
-                raise eph.Refused('scoped recruitment admission unproved: ' + type(error).__name__) from None
         admin, admin_dangerous = _spawn_administrator(files, cfg)
         unattended = admin_dangerous if policy.unattended is None else policy.unattended
         if recruiter_scope is not None and not unattended:
