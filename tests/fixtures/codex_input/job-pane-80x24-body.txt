@@ -1,0 +1,23 @@
+[from st startup] You are eph-review-000000, an EPHEMERAL review agent. You do this one job, report, and are torn down.
+Fixture line 01: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 02: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 03: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 04: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 05: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 06: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 07: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 08: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 09: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 10: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 11: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 12: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 13: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 14: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 15: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 16: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 17: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 18: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 19: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 20: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+Fixture line 21: synthetic job instructions that wrap across the pane width for the clipped composer probe.
+ST-STARTUP-ANCHOR-COMPLETE:eph-review-000000:0000000000000000

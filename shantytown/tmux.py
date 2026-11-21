@@ -97,7 +97,7 @@ def _codex_owned_input(screen: str, text: str) -> bool:
     rows = [lines[start].lstrip()[1:]]
     tail = lines[start + 1:]
     footers = [i for i, line in enumerate(tail) if
-               re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+)?\s+[·.]\s+(?:~|/)", line)
+               re.match(r"\s*(?:GPT|gpt|codex)[\w.-]*(?:\s+\S+){0,3}\s+[·.]\s+(?:~|/)", line)
                or ("tab to queue message" in line and "context left" in line)]
     if not footers:
         return False
