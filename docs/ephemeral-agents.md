@@ -581,8 +581,23 @@ installed. Runtime activation remains gated on xu2; merge verbs are excluded.
 An optional `[ephemeral.jobs.<job>]` table narrows the MCP and workspace skill
 kit for `review`, `merge`, `triage` or `task`. An absent table keeps the legacy
 kit. An explicit empty table selects no MCP servers or workspace skills.
-Unknown job names and fields refuse configuration; budget/model/verdict/trigger
-and action fields are reserved for the JobSpec extension.
+Unknown job names and fields refuse configuration; budget/model/trigger and
+action fields are reserved for the JobSpec extension.
+
+`verdicts` lists the verdicts the job may report (1-16 names, `blocked`
+required; `failed` is recorded by st at teardown and refuses here). It replaces
+the legacy enum `approve|request-changes|merged|blocked|done|failed` in the
+job prompt and in `st agent spawn --report --verdict`, which refuses any other
+name. `review` and `merge` may only narrow the legacy names, because their gates
+key on `approve`, `request-changes` and `merged`. An absent key keeps the legacy
+enum and the existing binding hash. Like any job table it also selects the tool
+profile, so set `mcp_servers` and `skills` alongside it. The protected-UID rail
+accepts the legacy enum only.
+
+```toml
+[ephemeral.jobs.triage]
+verdicts = ["diagnosed", "needs-owner", "unknown", "blocked"]
+```
 
 ```toml
 [ephemeral.jobs.review]

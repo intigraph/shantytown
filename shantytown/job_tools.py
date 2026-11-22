@@ -10,7 +10,11 @@ import tempfile
 import tomllib
 from dataclasses import replace
 
-_FIELDS = {"mcp_servers", "skills", "claude_ai_connectors", "mcp_tools"}
+_FIELDS = {"mcp_servers", "skills", "claude_ai_connectors", "mcp_tools", "verdicts"}
+# Review and merge gates key on these exact names (approve/request-changes sign a
+# GateApproval, merged ends the queue), so those jobs may narrow but never rename.
+LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+_GATED_JOBS = {"review", "merge"}
 _RESERVED = {"budget", "model", "harness", "verdict", "trigger", "action", "actions",
              "prompt_template", "max_tool_calls"}
 _NAME = re.compile(r"[A-Za-z0-9_-]+")
@@ -44,6 +48,16 @@ def validate_specs(value, jobs):
         if not isinstance(tools, dict) or set(tools) - set(spec["mcp_servers"]):
             raise ValueError("mcp_tools must select only allowed servers")
         spec["mcp_tools"] = {server: _names(names, "mcp_tools") for server, names in tools.items()}
+        if "verdicts" in raw:
+            # Absent keeps the legacy enum (and the existing binding hash).
+            verdicts = _names(raw["verdicts"], "verdicts")
+            if not 1 <= len(verdicts) <= 16 or "blocked" not in verdicts:
+                raise ValueError("verdicts must list 1-16 names including blocked")
+            if "failed" in verdicts:
+                raise ValueError("failed is recorded by st at teardown, not reported by a job")
+            if name in _GATED_JOBS and set(verdicts) - set(LEGACY_VERDICTS):
+                raise ValueError(f"{name} verdicts may only narrow the gated legacy names")
+            spec["verdicts"] = verdicts
         result[name] = spec
     return result
 

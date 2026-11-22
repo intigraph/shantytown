@@ -40,6 +40,19 @@ from typing import Callable
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
 VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+
+
+def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
+    """The verdicts this job may report: its JobSpec list, else the legacy enum.
+
+    `spec` is a hash-verified profile (job_tools.selected); without one the
+    record's own binding is used, which st wrote at spawn.
+    """
+    if spec is None:
+        bound = rec.get("jobspec") if isinstance(rec, dict) else None
+        spec = bound.get("resolved") if isinstance(bound, dict) else None
+    verdicts = spec.get("verdicts") if isinstance(spec, dict) else None
+    return tuple(verdicts) if verdicts else VERDICTS
 #: Fleet directive 10/21: ALL reviews on codex; important work on Claude.
 DEFAULT_HARNESS = {"review": "codex", "merge": "claude", "triage": "claude",
                    "task": "claude"}
@@ -770,7 +783,7 @@ def prompt(rec: dict) -> str:
     target = f" — {rec['repo']}#{rec['pr']}" if rec.get("repo") and rec.get("pr") else (
         f" — {rec['repo']}" if rec.get("repo") else "")
     fields = dict(rec, target=target, target_short=target,
-                  verdicts="|".join(VERDICTS),
+                  verdicts="|".join(job_verdicts(rec)),
                   deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
     # Protected jobs must never inherit the attended triage prompt's permission
     # to fix and publish. UID binding is controller ledger data, not an agent
@@ -778,6 +791,10 @@ def prompt(rec: dict) -> str:
     job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
                   else _JOBS["review_attended"] if attended_review(rec)
                   else _JOBS[rec["job"]])
+    custom = job_verdicts(rec) != VERDICTS
+    if custom:
+        job_prompt += (f"\nThis job's configured verdicts are {fields['verdicts']}; they replace "
+                       "any other verdict named above. Report blocked when you cannot finish.")
     from .job_context import render as render_context
     return ((_COMMON.format(**fields) + "\n" + job_prompt.format(**fields)).strip()
             + _item_block(rec) + render_context(rec.get("quipu_context")))

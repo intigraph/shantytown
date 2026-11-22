@@ -218,3 +218,48 @@ def test_profiled_protected_launch_refuses_before_touching_operator_staging(tmp_
     assert rc == cli.REFUSED
     assert "qualified protected-UID projection" in capsys.readouterr().err
     assert eph.records(root) == []
+
+
+TRIAGE_VERDICTS = ["diagnosed", "needs-owner", "unknown", "blocked"]
+
+
+def test_job_verdicts_bind_per_job_and_absent_keeps_the_legacy_enum():
+    specs = jobs.validate_specs({"triage": {"verdicts": TRIAGE_VERDICTS},
+                                 "task": {}}, eph.JOBS)
+    assert specs["triage"]["verdicts"] == TRIAGE_VERDICTS
+    assert "verdicts" not in specs["task"]          # existing binding hashes stay stable
+    assert eph.job_verdicts({"jobspec": {"resolved": specs["triage"]}}) == tuple(TRIAGE_VERDICTS)
+    assert eph.job_verdicts({"jobspec": {"resolved": specs["task"]}}) == eph.VERDICTS
+    assert eph.job_verdicts({}) == eph.VERDICTS
+
+
+@pytest.mark.parametrize("job,verdicts", [
+    ("triage", ["diagnosed"]),                      # blocked is mandatory
+    ("triage", ["diagnosed", "blocked", "failed"]), # failed belongs to st teardown
+    ("triage", []), ("triage", "blocked"),
+    ("review", ["approve", "blocked", "lgtm"]),     # gated jobs never rename
+    ("merge", ["shipped", "blocked"]),
+])
+def test_bad_job_verdicts_refuse(job, verdicts):
+    with pytest.raises(ValueError):
+        jobs.validate_specs({job: {"verdicts": verdicts}}, eph.JOBS)
+
+
+def test_gated_jobs_may_narrow_the_legacy_verdicts():
+    spec = jobs.validate_specs({"review": {"verdicts": ["approve", "request-changes", "blocked"]}},
+                               eph.JOBS)["review"]
+    assert spec["verdicts"] == ["approve", "request-changes", "blocked"]
+
+
+def test_prompt_names_the_jobs_own_verdicts_and_legacy_prompt_is_unchanged():
+    import time
+    base = {"name": "eph-triage-a1b2c3", "job": "triage", "item": "it-1",
+            "deadline": time.time() + 600, "administrator": "boss", "max_turns": 2,
+            "attempt": 1, "repo": None, "pr": None}
+    legacy = eph.prompt(dict(base))
+    assert "approve|request-changes|merged|blocked|done|failed" in legacy
+    assert "configured verdicts" not in legacy
+    spec = jobs.validate_specs({"triage": {"verdicts": TRIAGE_VERDICTS}}, eph.JOBS)["triage"]
+    custom = eph.prompt(dict(base, jobspec={"resolved": spec, "sha256": "x"}))
+    assert "diagnosed|needs-owner|unknown|blocked" in custom
+    assert "configured verdicts are diagnosed|needs-owner|unknown|blocked" in custom
