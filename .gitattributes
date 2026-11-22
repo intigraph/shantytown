@@ -86,3 +86,6 @@ docs/demos/cli-knowledge-witness/output.log -text whitespace=cr-at-eol
 docs/demos/duty-cli-boundary/output.log -text whitespace=cr-at-eol
 # Preserve unused-notes regression demo terminal bytes.
 docs/demos/refill-unused-notes/output.log -text whitespace=cr-at-eol
+
+# Preserve task consent probe PTY bytes and their replay timing.
+docs/probes/pr-demos/task-consent/output.log -text whitespace=cr-at-eol

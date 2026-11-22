@@ -224,6 +224,7 @@ id, `aegis:publicKey` = the key's public half, `aegis:attests
 - **One GitHub identity.** A non-author GitHub APPROVE can never exist, so the approval comes from a signed Quipu verdict record (above). Until verdict records are enabled and the signer is registered, merge jobs report `blocked`. That is the safe outcome.
 - **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
 - **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
+- **Task workspace consent.** Task jobs have no per-PR allowlist to restore. Provisioning records the hash of the exact workspace consent bytes it emits for that task, so the folder-trust guard can verify them. A later edit, a different workspace, or an unproven file still refuses trust; a completed job is not rebound by provisioning.
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
 
 ## Out of scope here
