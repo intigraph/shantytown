@@ -1146,6 +1146,16 @@ def _attended_review(store, monkeypatch):
     return root, rec
 
 
+@pytest.mark.parametrize('summary', ['', '  \n'])
+def test_empty_report_refuses_before_comment_or_terminal_write(store, monkeypatch, summary):
+    root, rec = _attended_review(store, monkeypatch)
+    monkeypatch.setattr(cli, '_spawn_post_review_comment', lambda *a: pytest.fail('empty report posted'))
+    monkeypatch.setattr(cli, '_spawn_write_verdict', lambda *a: pytest.fail('empty verdict written'))
+    assert _st(root, '--report', '--verdict', 'approve', '--head', 'a' * 40,
+               '--summary', summary) == cli.REFUSED
+    assert eph.read(root, rec['name'])['result'] is None
+
+
 def test_attended_report_refuses_a_summary_file_path(store, monkeypatch, tmp_path, capsys):
     """Ian's finding: an appended --summary-file <path> would publish any readable file."""
     root, rec = _attended_review(store, monkeypatch)
@@ -1357,3 +1367,34 @@ def test_scoped_recruiter_cli_keeps_native_binding_and_management_guards(store, 
         assert result['controller_handoff'] == 'gated'
     if fault in ('missing-binding', 'merge', 'stop'):
         assert not calls
+
+
+def test_report_verdict_must_be_one_of_the_jobs_bound_verdicts(store, monkeypatch, capsys):
+    """za4f.2 c6: triage had to report `done` because the enum had no `diagnosed`.
+    A bound JobSpec verdict list replaces the enum; anything else refuses."""
+    from shantytown import job_tools
+    root, panes, _launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    spec = job_tools.validate_specs({"task": {"verdicts": ["diagnosed", "blocked"]}}, eph.JOBS)
+    rec["jobspec"] = job_tools.bind(config.Ephemeral(jobs=spec), "task")
+    eph.write(root, rec)
+    monkeypatch.setenv("SHANTY_AGENT", rec["name"])
+    panes.verified_actor = rec["name"]
+    monkeypatch.chdir(rec["workspace"])
+    monkeypatch.setattr(eph, "detached_teardown", lambda root_, name: None)
+    assert _st(root, "--report", "--verdict", "done", "--summary", "x") == cli.REFUSED
+    assert "diagnosed|blocked" in capsys.readouterr().err
+    assert _st(root, "--report", "--verdict", "diagnosed", "--summary", "ok") in (cli.OK, cli.CANNOT_TELL)
+    assert eph.read(root, rec["name"])["result"]["verdict"] == "diagnosed"
+
+
+def test_report_without_a_profile_keeps_the_legacy_verdicts(store, monkeypatch, capsys):
+    root, panes, _launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    monkeypatch.setenv("SHANTY_AGENT", rec["name"])
+    panes.verified_actor = rec["name"]
+    monkeypatch.chdir(rec["workspace"])
+    assert _st(root, "--report", "--verdict", "diagnosed", "--dry-run") == cli.REFUSED
+    assert _st(root, "--report", "--verdict", "done", "--dry-run") == cli.OK

@@ -40,6 +40,19 @@ from typing import Callable
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
 VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+
+
+def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
+    """The verdicts this job may report: its JobSpec list, else the legacy enum.
+
+    `spec` is a hash-verified profile (job_tools.selected); without one the
+    record's own binding is used, which st wrote at spawn.
+    """
+    if spec is None:
+        bound = rec.get("jobspec") if isinstance(rec, dict) else None
+        spec = bound.get("resolved") if isinstance(bound, dict) else None
+    verdicts = spec.get("verdicts") if isinstance(spec, dict) else None
+    return tuple(verdicts) if verdicts else VERDICTS
 #: Fleet directive 10/21: ALL reviews on codex; important work on Claude.
 DEFAULT_HARNESS = {"review": "codex", "merge": "claude", "triage": "claude",
                    "task": "claude"}
@@ -669,7 +682,9 @@ Bounds: you end at {deadline} UTC or after {max_turns} turns, whichever comes fi
 You never spawn agents, never take other board work, and never change items other than {item}.
 
 When you are done, report EXACTLY ONCE (this posts your result on {item}, tells {administrator}, and tears you down):
-  st agent spawn --report --verdict <{verdicts}> --summary-file -   (summary on stdin, under 1500 chars)
+  st agent spawn --report --verdict <{verdicts}> --summary '<nonempty summary, under 1500 chars>'
+Run this command directly with the summary as ONE quoted argument. Do not wrap it in a heredoc,
+pipe, shell script or bash -c: the attended Codex report permission matches the direct command only.
 If you cannot do the job, report --verdict blocked with what is missing. Do not keep trying past your bounds.
 """
 
@@ -684,7 +699,7 @@ _JOBS = {
    findings: `gh pr comment {pr} --repo {repo} --body-file -`. (One shared GitHub account: a GitHub approval is
    impossible and does not count. The approval that counts is the signed verdict record st writes in step 5.)
 5. NEVER push, never merge, never edit the branch. Report with the head you read and the comment's URL:
-     st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary-file -
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary '<summary>'
    st signs that verdict as a Quipu GateApproval record naming you as the reviewer; the merge gate reads it.""",
     "review_attended": """JOB: an INDEPENDENT, NON-AUTHOR review of {repo}#{pr}.
 1. Read the PR at its current head: `gh pr view {pr} --repo {repo} --json headRefOid,author,title,body,files,commits`
@@ -694,9 +709,8 @@ _JOBS = {
 3. Review for correctness, tests that can fail, security and scope. Check CI with `gh pr checks {pr} --repo {repo}`.
 4. Do NOT comment on the PR, push, merge or edit anything: your permissions allow only the commands above.
    st posts your summary as the ONE verdict comment on the PR.
-5. Report once, the summary on stdin (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
-     st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary-file -
-   or pass the same summary as ONE quoted argument: --summary '<summary>' instead of --summary-file -.
+5. Report once, the summary as ONE quoted argument (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary '<summary>'
    st posts it on the PR, then signs the verdict record naming you as the reviewer.""",
     "merge": """JOB: merge {repo}#{pr} at EXACTLY head {head} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo}
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
@@ -773,7 +787,7 @@ def prompt(rec: dict) -> str:
     target = f" — {rec['repo']}#{rec['pr']}" if rec.get("repo") and rec.get("pr") else (
         f" — {rec['repo']}" if rec.get("repo") else "")
     fields = dict(rec, target=target, target_short=target,
-                  verdicts="|".join(VERDICTS),
+                  verdicts="|".join(job_verdicts(rec)),
                   deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
     # Protected jobs must never inherit the attended triage prompt's permission
     # to fix and publish. UID binding is controller ledger data, not an agent
@@ -781,6 +795,10 @@ def prompt(rec: dict) -> str:
     job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
                   else _JOBS["review_attended"] if attended_review(rec)
                   else _JOBS[rec["job"]])
+    custom = job_verdicts(rec) != VERDICTS
+    if custom:
+        job_prompt += (f"\nThis job's configured verdicts are {fields['verdicts']}; they replace "
+                       "any other verdict named above. Report blocked when you cannot finish.")
     from .job_context import render as render_context
     return ((_COMMON.format(**fields) + "\n" + job_prompt.format(**fields)).strip()
             + _item_block(rec) + render_context(rec.get("quipu_context")))
@@ -1120,11 +1138,23 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
                   now: float) -> dict:
     """Write the result ONCE. A second ending (a report racing a timeout) keeps
     the first result, so the administrator never hears two different stories."""
+    # Read transcripts OUTSIDE the ledger lock; stored only with the first result.
+    usage = None
+    prior = read(root, name)
+    if prior is not None and prior.get("result") is None:
+        try:
+            from . import job_usage
+            usage = job_usage.collect(prior, now=now)
+        except Exception as error:  # noqa: BLE001 - capture must never fail an ending
+            usage = {"captured_at": now, "state": "unknown",
+                     "reason": f"usage capture failed: {type(error).__name__}"}
     with lock(root):              # a report racing a reaper: one read-modify-write
         rec = read(root, name)
         if rec is None:
             raise Refused(f"no ledger entry for {name}")
         if rec.get("result") is None:
+            if usage is not None:
+                rec["usage"] = usage
             rec["result"] = {"verdict": verdict, "summary": summary[:1500],
                              "cause": cause, "at": now}
             rec["state"] = ENDING

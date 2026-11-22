@@ -117,11 +117,17 @@ st agent spawn --list [--json]          # live + recent jobs (also in `st crew` 
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
 st agent spawn --ephemeral --job merge --item aegis-y --repo owner/name --pr 12 [--head SHA]
-st agent spawn --report --verdict approve --summary-file -   # run BY the ephemeral agent
-st agent spawn --report --verdict approve --head SHA --evidence URL --summary-file -   # a review job
+st agent spawn --report --verdict done --summary 'Nonempty result'   # run BY the ephemeral agent
+st agent spawn --report --verdict approve --head SHA --evidence URL --summary 'APPROVE: findings'   # a review job
 st agent spawn --merge --head <sha>     # run BY a merge job: the guarded merge
 st agent spawn --reap                   # the sweep tend runs; by hand for a dry look with -n
 ```
+
+Run the report command directly with one quoted summary argument. In attended
+Codex jobs, heredocs, pipes and shell wrappers can fail to match the report-only
+permission and leave the ledger read-only. An empty summary is refused before
+publishing a verdict or ending the job. Existing stdin reports remain supported
+for callers that can supply stdin without wrapping the command.
 
 ## Configuration
 
@@ -577,13 +583,40 @@ The resulting receipt remains `live: false`, `execution: refused`,
 installed. Runtime activation remains gated on xu2; merge verbs are excluded.
 
 
+## Per-job usage on the ledger
+
+When a job's result is first written (its report, or a forced teardown), st
+records `usage` on the job record: the harness, each session id and model, and
+token totals (input, cached input, cache write, output, reasoning, total). Codex
+jobs are read from their durable `sessions` link
+(`$XDG_STATE_HOME/shantytown/codex/<job>/sessions`, filtered to the job
+workspace). Claude jobs are read from the job workspace's
+`~/.claude/projects/<encoded workspace>` directory. A missing or usage-free
+transcript records `state: "unknown"` with a reason, never zero. A capture error
+never fails the ending. A later second ending keeps the first result and usage.
+
 ## Job-owned tool profiles and graph context
 
 An optional `[ephemeral.jobs.<job>]` table narrows the MCP and workspace skill
 kit for `review`, `merge`, `triage` or `task`. An absent table keeps the legacy
 kit. An explicit empty table selects no MCP servers or workspace skills.
-Unknown job names and fields refuse configuration; budget/model/verdict/trigger
-and action fields are reserved for the JobSpec extension.
+Unknown job names and fields refuse configuration; budget/model/trigger and
+action fields are reserved for the JobSpec extension.
+
+`verdicts` lists the verdicts the job may report (1-16 names, `blocked`
+required; `failed` is recorded by st at teardown and refuses here). It replaces
+the legacy enum `approve|request-changes|merged|blocked|done|failed` in the
+job prompt and in `st agent spawn --report --verdict`, which refuses any other
+name. `review` and `merge` may only narrow the legacy names, because their gates
+key on `approve`, `request-changes` and `merged`. An absent key keeps the legacy
+enum and the existing binding hash. Like any job table it also selects the tool
+profile, so set `mcp_servers` and `skills` alongside it. The protected-UID rail
+accepts the legacy enum only.
+
+```toml
+[ephemeral.jobs.triage]
+verdicts = ["diagnosed", "needs-owner", "unknown", "blocked"]
+```
 
 ```toml
 [ephemeral.jobs.review]
@@ -618,6 +651,29 @@ auth helpers, writer tools and stdio processes are refused for these profiles.
 The ordinary crew's direct-Quipu credential guard stays in force. A mixed
 operations server is not a substitute for this read endpoint. Declare its URL
 in the deployment manifest; never put a credential into a job to make reads work.
+
+The crew tooling manifest cannot carry a direct Quipu entry (crew provisioning
+refuses one without a headersHelper), so a job-only server is declared in
+deployment config instead and reaches only the job whose profile selects it:
+
+```toml
+[ephemeral.job_servers.quipu-read]
+type = "http"
+url = "http://quipu.example/mcp"
+[ephemeral.job_servers.quipu-read.headers]
+X-Quipu-Client = "st-job"
+
+[ephemeral.jobs.triage]
+mcp_servers = ["quipu-read"]
+[ephemeral.jobs.triage.mcp_tools]
+quipu-read = ["quipu_query", "quipu_ask", "quipu_search"]
+```
+
+A selected job server must qualify as the anonymous read-only profile above;
+anything else refuses configuration. Its definition is copied into the bound
+JobSpec (`server_defs`), so it is covered by the binding hash. It may not
+shadow a crew server name. Crew cards never render it, and the crew guard is
+unchanged.
 
 At spawn, generic stored queries `references_to` and `entity_facts` collect one
 bounded, one-hop snapshot: at most four exact IRIs, twelve facts each, a 64 KiB
