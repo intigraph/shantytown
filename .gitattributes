@@ -63,6 +63,7 @@ docs/demos/6wr-busy-queue/output.log -text whitespace=cr-at-eol
 
 # Preserve initial native-consumption before/after replay bytes.
 docs/demos/initial-native-dispatch/output.log -text whitespace=cr-at-eol
+docs/probes/pr-demos/watch-program/output.log -text whitespace=cr-at-eol
 
 # Preserve passive idle-cycle fixture PTY bytes for replay.
 docs/demos/natural-idle-cycle/output.log -text whitespace=cr-at-eol
@@ -86,6 +87,3 @@ docs/demos/cli-knowledge-witness/output.log -text whitespace=cr-at-eol
 docs/demos/duty-cli-boundary/output.log -text whitespace=cr-at-eol
 # Preserve unused-notes regression demo terminal bytes.
 docs/demos/refill-unused-notes/output.log -text whitespace=cr-at-eol
-
-# Preserve the pure watch evaluator demo recording.
-docs/probes/pr-demos/watch-program/output.log -text whitespace=cr-at-eol
