@@ -1069,13 +1069,40 @@ def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
         hooks[event] = kept
 
 
+def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
+    """Bind task trust to consent bytes emitted by this provisioning call."""
+    from . import ephemeral as eph
+    if card.harness != "claude" or not eph.is_ephemeral_name(card.name):
+        return
+    with eph.lock(root):
+        rec = eph.read(root, card.name)
+        if not rec or rec.get("job") != "task":
+            return  # review/merge/triage retain their exact allowlist rail
+        if (rec.get("harness") != card.harness or not rec.get("workspace")
+                or Path(rec["workspace"]).resolve() != ws.resolve()
+                or rec.get("state") not in (eph.LAUNCHING, eph.LIVE)):
+            raise ProvisionError("task consent does not match the launching job")
+        path = ws / ".claude" / CONSENT_TEMPLATE
+        emitted = body.encode("utf-8")
+        if (path.is_symlink() or path.parent.is_symlink()
+                or path.read_bytes() != emitted):
+            raise ProvisionError("task consent differs from the bytes just provisioned")
+        # Task jobs have no per-PR allowlist to reapply. Previously their NULL
+        # kit hash made the trust guard reject st's own newly emitted file.
+        import hashlib
+        rec["kit_settings_sha256"] = hashlib.sha256(emitted).hexdigest()
+        eph.write(root, rec)
+
+
 def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:
     if card.harness == "codex":
         return  # Codex's config was refreshed above; it does not read this file.
     path = ws / ".claude" / CONSENT_TEMPLATE
     text = path.read_text() if path.is_file() else "{}"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_workspace_capture(text, root, settings_path, card=card))
+    body = _workspace_capture(text, root, settings_path, card=card)
+    path.write_text(body)
+    _record_task_consent(card, root, ws, body)
 
 
 def headerless_quipu(servers: dict) -> list[str]:
@@ -1370,6 +1397,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                 card.role, root),
             card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)
+        _record_task_consent(card, root, ws, final)
     else:
         _provision_capture_without_kit(card, root, ws, settings_path)
 
