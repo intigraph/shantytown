@@ -729,6 +729,21 @@ def test_sdk_resolution_preserves_operator_changes_and_unknown_revision(duty_res
     assert not w.calls
 
 
+def test_sdk_resolution_accepts_operator_rerouted_and_closed_repair(duty_resolution_sdk):
+    """aegis-5dh: an operator re-routed the repair item (assignee changed) and the
+    item was later closed. That closed record resolves the duty, including on the
+    reconcile path, with no write; an open re-routed item still refuses (above)."""
+    w = duty_resolution_sdk
+    w.row.update(assignee='other', status='closed')
+    assert w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+    assert w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1',
+                                       reconcile_only=True)
+    assert not w.calls
+    w.row['labels'] = ['orphaned-duty', 'needs-stiwi']
+    with pytest.raises(ValueError):
+        w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+
+
 @pytest.mark.parametrize('failure', ['before', 'after'])
 def test_sdk_resolution_never_resends_unknown_close(duty_resolution_sdk, failure):
     w = duty_resolution_sdk

@@ -403,7 +403,11 @@ class SdTracker(BrTracker):
                     or row.get('description') != description or 'orphaned-duty' not in labels
                     or labels & {'needs-stiwi', 'blocked:human', 'desk', 'decision-needed'}
                     or row.get('priority') != 0
-                    or row.get('assignee') != target or row.get('status') not in {'open', 'closed'}):
+                    or row.get('status') not in {'open', 'closed'}
+                    # An operator may re-route the repair and then close it
+                    # themselves: that closed record is the resolution. Only an
+                    # automatic close still requires the original target.
+                    or (row.get('status') == 'open' and row.get('assignee') != target)):
                 raise ValueError('duty resolution identity or operator disposition changed')
             return row
 
