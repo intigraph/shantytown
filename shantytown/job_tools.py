@@ -202,12 +202,29 @@ def anonymous_read_servers(servers, spec):
     approved = set()
     for name, tools in spec["mcp_tools"].items():
         server = servers.get(name, {})
-        fields = {str(k).lower(): v for k, v in server.get("headers", {}).items()}
-        if (tools and set(tools) <= QUIPU_READ_TOOLS and server.get("url")
-                and not server.get("command") and not fields.get("authorization")
-                and not any(server.get(k) for k in ("headersHelper", "http_headers_helper",
-                                                    "bearer_token", "bearer_token_env_var"))
-                and not any(str(k).lower() == "authorization" for k in server.get("http_headers", {}))):
+        from urllib.parse import urlparse
+        url = server.get("url", "")
+        try:
+            endpoint = urlparse(url)
+            url_safe = (isinstance(url, str) and "$" not in url
+                        and endpoint.scheme in {"http", "https"} and bool(endpoint.hostname)
+                        and not any((endpoint.username, endpoint.password, endpoint.query, endpoint.fragment)))
+        except (TypeError, ValueError, AttributeError):
+            url_safe = False
+        # This is an anonymous endpoint, not an extensible credential transport.
+        # Unknown options (including env-backed headers/auth) cannot silently
+        # flow into a native harness config. Only inert transport controls and
+        # a narrow set of noncredential headers belong on this rail.
+        safe_fields = {"url", "type", "headers", "http_headers", "enabled_tools",
+                       "disabled_tools", "enabled", "startup_timeout_sec", "tool_timeout_sec"}
+        safe_headers = {"accept", "content-type", "x-quipu-client"}
+        header_maps = [server.get(key, {}) for key in ("headers", "http_headers")]
+        headers_safe = all(isinstance(fields, dict) and
+                           all(str(key).lower() in safe_headers and isinstance(value, str)
+                               and "$" not in value for key, value in fields.items())
+                           for fields in header_maps)
+        if (tools and set(tools) <= QUIPU_READ_TOOLS and url_safe
+                and not set(server) - safe_fields and headers_safe):
             approved.add(name)
     return approved
 

@@ -150,11 +150,18 @@ def test_only_unselected_provisioned_skill_links_are_removed(tmp_path):
     ({"headers": {"Authorization": "Bearer fixture"}}, ["quipu_query"], False),
     ({"headersHelper": "fixture-helper"}, ["quipu_query"], False),
     ({"command": "qp"}, ["quipu_query"], False),
+    ({"env_http_headers": {"Authorization": "FIXTURE_TOKEN"}}, ["quipu_query"], False),
+    ({"http_headers": {"X-API-Key": "fixture"}}, ["quipu_query"], False),
+    ({"headers": {"X-Quipu-Client": "${FIXTURE_TOKEN}"}}, ["quipu_query"], False),
+    ({"headers": {"X-Quipu-Client": "job-read"}}, ["quipu_query"], True),
+    ({"future_auth_option": "fixture"}, ["quipu_query"], False),
+    ({"url": "https://fixture:secret@quipu.example.invalid/mcp"}, ["quipu_query"], False),
+    ({"url": "https://quipu.example.invalid/mcp?token=fixture"}, ["quipu_query"], False),
 ])
 def test_only_explicit_anonymous_read_tools_use_the_headerless_job_rail(extra, tools, accepted):
     spec = jobs.validate_specs({"review": {"mcp_servers": ["quipu-read"],
                 "mcp_tools": {"quipu-read": tools}}}, eph.JOBS)["review"]
-    servers = {"quipu-read": dict(url="https://quipu.example.invalid/mcp", **extra)}
+    servers = {"quipu-read": {"url": "https://quipu.example.invalid/mcp", **extra}}
     assert bool(jobs.anonymous_read_servers(servers, spec)) is accepted
     assert jobs.anonymous_read_servers(servers, None) == set()
 
