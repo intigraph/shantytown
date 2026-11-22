@@ -21,6 +21,7 @@ docs/demos/admin-wake-projection/output.log -text whitespace=cr-at-eol
 docs/demos/cycle-refusal/output.log -text whitespace=cr-at-eol
 # Preserve raw terminal bytes used by the cycle-request replay timing.
 docs/demos/cycle-request/output.log -text whitespace=cr-at-eol
+docs/probes/pr-demos/job-report/output.log -text
 # Preserve the replayable isolated tend refresh-budget probe.
 docs/probes/tend-refresh-budget/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 

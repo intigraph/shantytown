@@ -1,0 +1,1 @@
+Replay with `scriptreplay --log-timing timing.log --log-out output.log`. Regenerate from the repository root using `PYTHONPATH=. python docs/probes/pr-demos/job-report/demo.py`. This compares the base rule generator with the candidate and evaluates the candidate using native Codex execpolicy. It demonstrates command admission, not a live job or installed acceptance.
