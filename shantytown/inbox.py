@@ -42,6 +42,7 @@ acknowledged handoff. The full payload stays in the bridge spool, not the inbox.
 """
 from __future__ import annotations
 import json
+import os
 import hashlib
 import uuid
 from contextlib import contextmanager
@@ -145,6 +146,43 @@ def is_deploy_operation(item) -> bool:
     return not isinstance(context, dict) or "deploy_admission" in context
 
 
+# aegis-8dda.1 (Sattler ruling A): machine-produced operations records are
+# not backlog work. They leave plates, ranking, feed, counts and reminders;
+# each producer owns and closes its own records. A real fix for an alarm is a
+# normal linked work item. `ops` is the seeds issue type (phase 2); the labels
+# are the producers' existing markers so the count drops before migration.
+OPS_RECORD_TYPES = frozenset({"ops"})
+OPS_RECORD_LABELS = frozenset({
+    "ops-record", "recurring-alarm", "recurring-alarm-fixed", "repo-health",
+    "stack-release", "stack-stale-action", "gt:escalation", "escalation-record",
+    "orphaned-duty",
+})
+# deploy-operation is deliberately absent: is_deploy_operation already gives
+# those records a structured path that REFUSES them loudly at claim and rank.
+
+
+def _ops_exclusion_enabled() -> bool:
+    return os.environ.get("ST_OPS_RECORD_EXCLUSION", "1").strip() != "0"
+
+
+def is_ops_label_set(labels) -> bool:
+    """Do these labels mark an operations record? (Rollback: ST_OPS_RECORD_EXCLUSION=0.)"""
+    if not _ops_exclusion_enabled():
+        return False
+    return any(str(label or "").strip().lower() in OPS_RECORD_LABELS for label in (labels or ()))
+
+
+def is_ops_record(item) -> bool:
+    """Is this tracker row an operations record rather than backlog work?"""
+    if not _ops_exclusion_enabled():
+        return False
+    get = item.get if isinstance(item, dict) else lambda key, default=None: getattr(item, key, default)
+    kind = str(get("issue_type") or get("type") or "").strip().lower()
+    labels = get("labels") or ()
+    return kind in OPS_RECORD_TYPES or (isinstance(labels, (list, tuple, set, frozenset))
+                                        and is_ops_label_set(labels))
+
+
 def is_anchor(labels) -> bool:
     """A permanent referent record has no completion state; it is not work.
 
@@ -209,7 +247,8 @@ def is_unfeedable(title, labels) -> bool:
     if any(t.startswith(p) for p in _RECORD_TITLE_PREFIXES):
         return True
     low = {(lbl or "").strip().lower() for lbl in (labels or [])}
-    return is_anchor(labels) or bool(low & (_HUMAN_BLOCKED_LABELS | _RECORD_LABELS))
+    return (is_anchor(labels) or bool(low & (_HUMAN_BLOCKED_LABELS | _RECORD_LABELS))
+            or is_ops_label_set(low))
 
 
 def is_blocked(status) -> bool:

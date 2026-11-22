@@ -17,7 +17,7 @@ from pathlib import Path
 import time
 
 from .files import write_json_atomic
-from .inbox import is_deploy_operation, is_message
+from .inbox import is_deploy_operation, is_message, is_ops_record
 from .owned_work import _agent, _time
 
 T1 = T2 = 3600  # Legacy attention/library defaults; fleet release uses owner priority.
@@ -38,7 +38,7 @@ def eligible(row, *, operator_stopped=False):
     labels = row.get('labels') or []
     # Deploy records are phase-CAS reservations, not crew capacity. Even a
     # drained-but-open record must retain its owner for the deploy census.
-    if not isinstance(labels, list) or is_deploy_operation(row):
+    if not isinstance(labels, list) or is_deploy_operation(row) or is_ops_record(row):
         return False
     if operator_stopped:
         # ASK/desk-class items are decisions held for a person, not capacity:

@@ -11,7 +11,7 @@ import sys
 import threading
 from pathlib import Path
 
-from .inbox import is_anchor, is_message, _deferred_until_is_future
+from .inbox import is_anchor, is_message, is_ops_record, _deferred_until_is_future
 from .ask_visibility import is_ask, label_names
 
 MAX_ACTIVE = 10
@@ -43,6 +43,7 @@ def real_work(row):
             and not labels.intersection({'inbox', 'inbox-body', 'mail', 'alarm', 'alerting', 'recurring-alarm'})
             and not title.startswith(('Recurring alarm:', 'ALARM:', 'alert:'))
             and not is_anchor(labels)
+            and not is_ops_record(row)
             and 'handoff' not in labels
             and not title.startswith('ANCHOR'))
 
