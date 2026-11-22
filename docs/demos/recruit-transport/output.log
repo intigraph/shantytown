@@ -1,0 +1,8 @@
+Script started on 2026-11-22 04:51:39-05:00 [COMMAND="python3 docs/demos/recruit-transport/run.py" <not executed on terminal>]
+BASE 6c115c7fa034d46965201f98219ef7627e5cef4b bounded connected-channel helper unavailable
+CANDIDATE one real Unix exchange + existing signature verifier: {"live": false, "execution": "refused"}
+LOST/MALFORMED RESPONSE: controller delivery uncertain; preserve attempt and nonce (no automatic retry)
+ORIGINAL NONCE after reopen: recruitment replay refused
+LIMIT: synthetic key/custody/controller response; real local sockets and verifier. No endpoint install, listener, daemon, privilege or job launch. Existing live refusal remains.
+
+Script done on 2026-11-22 04:51:40-05:00 [COMMAND_EXIT_CODE="0"]
