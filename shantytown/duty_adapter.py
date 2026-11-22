@@ -60,8 +60,15 @@ def bindings(root, cards, panes, inbox, tracker, host, registry):
         if seen is None or seen.id != receipt.id or seen.body != body:
             raise ValueError('duty page delivery UNKNOWN')
 
+    def resolve_issue(payload, identifier, target, evidence, *, reconcile_only):
+        close = getattr(tracker, 'resolve_duty_issue', None)
+        if not callable(close):
+            raise ValueError('revision-bound duty resolution adapter unsupported')
+        return close(payload, identifier, target=target, evidence=evidence,
+                     reconcile_only=reconcile_only)
+
     return dict(observe=observe, live=live, administrator=administrator,
-                ensure_issue=ensure_issue, notify=notify)
+                ensure_issue=ensure_issue, notify=notify, resolve_issue=resolve_issue)
 
 
 def sweep(root, cards, panes, inbox, tracker, host, registry, *, now, release, dry_run=False):
