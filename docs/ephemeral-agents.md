@@ -576,6 +576,18 @@ The resulting receipt remains `live: false`, `execution: refused`,
 installed. Runtime activation remains gated on xu2; merge verbs are excluded.
 
 
+## Per-job usage on the ledger
+
+When a job's result is first written (its report, or a forced teardown), st
+records `usage` on the job record: the harness, each session id and model, and
+token totals (input, cached input, cache write, output, reasoning, total). Codex
+jobs are read from their durable `sessions` link
+(`$XDG_STATE_HOME/shantytown/codex/<job>/sessions`, filtered to the job
+workspace). Claude jobs are read from the job workspace's
+`~/.claude/projects/<encoded workspace>` directory. A missing or usage-free
+transcript records `state: "unknown"` with a reason, never zero. A capture error
+never fails the ending. A later second ending keeps the first result and usage.
+
 ## Job-owned tool profiles and graph context
 
 An optional `[ephemeral.jobs.<job>]` table narrows the MCP and workspace skill

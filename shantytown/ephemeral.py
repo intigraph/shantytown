@@ -1134,11 +1134,23 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
                   now: float) -> dict:
     """Write the result ONCE. A second ending (a report racing a timeout) keeps
     the first result, so the administrator never hears two different stories."""
+    # Read transcripts OUTSIDE the ledger lock; stored only with the first result.
+    usage = None
+    prior = read(root, name)
+    if prior is not None and prior.get("result") is None:
+        try:
+            from . import job_usage
+            usage = job_usage.collect(prior, now=now)
+        except Exception as error:  # noqa: BLE001 - capture must never fail an ending
+            usage = {"captured_at": now, "state": "unknown",
+                     "reason": f"usage capture failed: {type(error).__name__}"}
     with lock(root):              # a report racing a reaper: one read-modify-write
         rec = read(root, name)
         if rec is None:
             raise Refused(f"no ledger entry for {name}")
         if rec.get("result") is None:
+            if usage is not None:
+                rec["usage"] = usage
             rec["result"] = {"verdict": verdict, "summary": summary[:1500],
                              "cause": cause, "at": now}
             rec["state"] = ENDING
