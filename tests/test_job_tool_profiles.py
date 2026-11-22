@@ -405,3 +405,44 @@ def test_a_genuine_crew_shadow_still_refuses_on_any_pass(present):
     spec = _job_server_spec()
     with pytest.raises(ValueError, match="shadow"):
         jobs.filter_servers({"quipu-read": present}, spec)
+
+
+def _git_repo(root):
+    import subprocess
+    run = lambda *a: subprocess.run(["git", "-C", str(root), *a], check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q")
+    run("config", "user.email", "fixture@example.invalid")
+    run("config", "user.name", "fixture")
+    return run
+
+
+def test_unselected_tracked_repo_skill_is_hidden_not_published(tmp_path):
+    run = _git_repo(tmp_path)
+    tracked = tmp_path / ".agents/skills/repo-skill"
+    (tracked / "agents").mkdir(parents=True)
+    (tracked / "SKILL.md").write_text("repo")
+    (tracked / "agents/openai.yaml").write_text("x: 1")
+    run("add", "-A"); run("commit", "-qm", "fixture")
+    jobs.prune_skills(tmp_path, profile())
+    assert not tracked.exists()
+    assert run("status", "--porcelain").stdout == ""
+    run("add", "-A")
+    assert run("diff", "--cached", "--name-only").stdout == ""
+
+
+@pytest.mark.parametrize("mutation", ["modified", "untracked", "outside-repo"])
+def test_tracked_skill_with_local_state_keeps_refusal(tmp_path, mutation):
+    root = tmp_path / "ws"; root.mkdir()
+    tracked = root / ".agents/skills/repo-skill"; tracked.mkdir(parents=True)
+    (tracked / "SKILL.md").write_text("repo")
+    if mutation != "outside-repo":
+        run = _git_repo(root)
+        run("add", "-A"); run("commit", "-qm", "fixture")
+        if mutation == "modified":
+            (tracked / "SKILL.md").write_text("local edit")
+        else:
+            (tracked / "notes.md").write_text("personal")
+    with pytest.raises(ValueError, match="not a provisioned link"):
+        jobs.prune_skills(root, profile())
+    assert (tracked / "SKILL.md").exists()
