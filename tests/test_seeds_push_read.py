@@ -83,3 +83,45 @@ def test_false_ask_is_valid_but_missing_boolean_is_unknown(monkeypatch):
     monkeypatch.setattr(seeds_push_read, "read", lambda *a: {"result": 0})
     with pytest.raises(ValueError, match="unreadable"):
         seeds_plate._query(PROOF, "ASK { ?s ?p ?o }", 30)
+
+
+# aegis-ygz: the az3d re-enable was rolled back when `st anchor malcolm
+# --short` (first seen in a Codex pane) reported "owner plate unreadable: push
+# read UNKNOWN: SDK refused or response exceeded budget". sd had refused for
+# its freshness budget and said so on stderr, which this layer discarded.
+FRESHNESS = (b"sd: push read UNKNOWN: IPC binding or end-to-end freshness mismatch;"
+             b" no primary polling fallback\n")
+
+
+def test_owner_plate_names_the_sdk_refusal_reason(monkeypatch):
+    monkeypatch.setenv("ST_SEEDS_PUSH_READS", "1")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=5, stdout=b"", stderr=FRESHNESS))
+    monkeypatch.setattr(seeds_plate, "urlopen", lambda *a, **k: pytest.fail("fallback"))
+    monkeypatch.setattr(seeds_read_cache, "read", lambda *a, **k: pytest.fail("polling"))
+    answer = seeds_plate.owner_rows(PROOF, "malcolm")
+    caveat = str(answer.caveat)
+    assert "owner plate unreadable" in caveat
+    assert "SDK refused (exit 5)" in caveat
+    assert "end-to-end freshness mismatch" in caveat
+    assert "exceeded budget" not in caveat
+
+
+def test_refusal_reason_is_one_bounded_line_and_budget_is_separate(monkeypatch):
+    monkeypatch.setenv("ST_SEEDS_PUSH_READS", "1")
+    noisy = b"warning: x\n" + b"sd: push read UNKNOWN: " + b"y" * 5000 + b"\r\n\n"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=5, stdout=b"", stderr=noisy))
+    with pytest.raises(ValueError) as refused:
+        seeds_push_read.read(PROOF, QUERY, 30)
+    message = str(refused.value)
+    assert "\n" not in message and "warning" not in message
+    assert len(message) < 400
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=1, stdout=b"{}", stderr=None))
+    with pytest.raises(ValueError, match=r"exit 1\): no reason given"):
+        seeds_push_read.read(PROOF, QUERY, 30)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(
+        returncode=0, stdout=b" " * (8 * 1024 * 1024 + 1), stderr=b""))
+    with pytest.raises(ValueError, match="response exceeded budget"):
+        seeds_push_read.read(PROOF, QUERY, 30)
