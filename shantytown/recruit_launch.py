@@ -107,7 +107,7 @@ class Admission:
             raise IdentityError('controller launch ledger does not prove this review')
 
 
-def launch(envelope, *, args, clock=time.time, **context):
+def launch(envelope, *, args, clock=time.time, channel_binding=None, **context):
     """One signed attempt through native spawn; activation remains separate.
 
     Context and arguments belong to the verified controller, never the sender.
@@ -118,6 +118,8 @@ def launch(envelope, *, args, clock=time.time, **context):
     if not context['policy'].recruitment_launch_ready:
         raise IdentityError('controller recruitment activation is gated')
     pin = recruit_request.load_controller_binding()
+    if channel_binding is not None and pin != channel_binding:
+        raise IdentityError('controller binding changed after peer authentication')
     with Store(pin) as ledger:
         body = recruit_controller.admitted_body(envelope, ledger=ledger, clock=clock,
             admit=lambda req: recruiter.cli_admit(req, policy=context['policy'],
