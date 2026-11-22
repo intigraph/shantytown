@@ -60,6 +60,15 @@ def _no_detached_self_cycle_waiter(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_inbox_count_cache(monkeypatch, tmp_path):
+    """`st inbox --count` caches per agent under the user cache dir (aegis-dnw).
+    A test must never read a count another test, or the operator, left there;
+    tests of the cache re-enable it against their own tmp dir."""
+    monkeypatch.setenv("ST_INBOX_COUNT_TTL", "0")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_operator_env(monkeypatch):
     """CI and an operator shell must start each test with the same defaults.
 
