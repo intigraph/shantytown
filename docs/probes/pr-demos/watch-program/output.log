@@ -1,0 +1,9 @@
+Script started on 2026-11-21 22:23:51-05:00 [COMMAND="python3 docs/probes/pr-demos/watch-program/demo.py" <not executed on terminal>]
+Original sample grid: (1000, 1045, 1090, 1100)
+Resume at 1090 -> final sample: 1100
+Safe but native inactive: WatchResult(safety='PASS', activation='INACTIVE', improvement='NOT_EVALUATED', reasons=(), compensation='NOT_EXECUTED')
+Missing final sample: WatchResult(safety='UNKNOWN', activation='ACTIVE', improvement='NOT_EVALUATED', reasons=('original window ended with incomplete coverage',), compensation='NOT_EXECUTED')
+Breach plus missing metric: WatchResult(safety='BREACH', activation='ACTIVE', improvement='NOT_EVALUATED', reasons=('metric coverage incomplete', 'bound exceeded: p99_seconds'), compensation='NOT_EXECUTED')
+No collector, launch, compensation or close operation occurred.
+
+Script done on 2026-11-21 22:23:51-05:00 [COMMAND_EXIT_CODE="0"]
