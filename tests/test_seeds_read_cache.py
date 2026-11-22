@@ -654,3 +654,53 @@ def test_stale_scope_fence_relaxation_obeys_rollback(service, monkeypatch):
     with seeds_read_cache.stale_ok():
         read(proof, "SELECT owner-two")
     assert state["watermarks"] == 4  # exact behaviour: before + after again
+
+
+# aegis-dnw lever B: an explicit wider ttl for the administrator stop hook.
+
+def test_explicit_ttl_serves_past_the_default_ceiling(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    with seeds_read_cache.stale_ok(300):
+        read(proof)
+    state.update(tx=11, value="changed")
+    real = time.time
+    monkeypatch.setattr(seeds_read_cache.time, "time", lambda: real() + 200)
+    with seeds_read_cache.stale_ok(300):
+        assert read(proof)["rows"][0]["value"] == "before"
+    with seeds_read_cache.stale_ok():  # default 60 s scope refetches
+        assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_explicit_ttl_is_capped_at_300(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    with seeds_read_cache.stale_ok(10_000):
+        read(proof)
+    state.update(tx=11, value="changed")
+    real = time.time
+    monkeypatch.setattr(seeds_read_cache.time, "time", lambda: real() + 301)
+    with seeds_read_cache.stale_ok(10_000):
+        assert read(proof)["rows"][0]["value"] == "changed"
+
+
+def test_explicit_ttl_still_honours_own_writes_and_the_kill_switch(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    proof, state = service
+    with seeds_read_cache.stale_ok(300):
+        read(proof)
+        state.update(tx=11, value="changed")
+        seeds_read_cache.invalidate_stale()
+        assert read(proof)["rows"][0]["value"] == "changed"
+    monkeypatch.setenv("ST_SEEDS_STALE_TTL", "0")
+    with seeds_read_cache.stale_ok(300):
+        state.update(tx=12, value="third")
+        assert read(proof)["rows"][0]["value"] == "third"
+
+
+def test_explicit_ttl_scope_does_not_leak_after_exit(service, monkeypatch):
+    monkeypatch.setattr(seeds_read_cache, "_WATERMARK_MAX_AGE", 0)
+    with seeds_read_cache.stale_ok(300):
+        pass
+    assert seeds_read_cache._STALE_CAP.get() is None
+    assert seeds_read_cache._STALE_TTL.get() == 0.0
