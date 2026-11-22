@@ -1,0 +1,10 @@
+Script started on 2026-11-22 02:41:16-05:00 [COMMAND="python3 docs/probes/pr-demos/direct-report/demo.py" <not executed on terminal>]
+OFFLINE: rendered source prompts and native policy check; no report or launch.
+BEFORE: st agent spawn --report --verdict <approve|request-changes|merged|blocked|done|failed> --summary-file -   (summary on stdin, under 1500 chars)
+AFTER: st agent spawn --report --verdict <approve|request-changes|merged|blocked|done|failed> --summary '<nonempty summary, under 1500 chars>'
+DIRECT: decision=allow
+WRAPPED: decision=NO MATCH
+CONTROL: decision=forbidden
+LIMIT: policy matching is not installed live start-to-report acceptance.
+
+Script done on 2026-11-22 02:41:16-05:00 [COMMAND_EXIT_CODE="0"]

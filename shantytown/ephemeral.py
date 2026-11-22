@@ -682,7 +682,9 @@ Bounds: you end at {deadline} UTC or after {max_turns} turns, whichever comes fi
 You never spawn agents, never take other board work, and never change items other than {item}.
 
 When you are done, report EXACTLY ONCE (this posts your result on {item}, tells {administrator}, and tears you down):
-  st agent spawn --report --verdict <{verdicts}> --summary-file -   (summary on stdin, under 1500 chars)
+  st agent spawn --report --verdict <{verdicts}> --summary '<nonempty summary, under 1500 chars>'
+Run this command directly with the summary as ONE quoted argument. Do not wrap it in a heredoc,
+pipe, shell script or bash -c: the attended Codex report permission matches the direct command only.
 If you cannot do the job, report --verdict blocked with what is missing. Do not keep trying past your bounds.
 """
 
@@ -697,7 +699,7 @@ _JOBS = {
    findings: `gh pr comment {pr} --repo {repo} --body-file -`. (One shared GitHub account: a GitHub approval is
    impossible and does not count. The approval that counts is the signed verdict record st writes in step 5.)
 5. NEVER push, never merge, never edit the branch. Report with the head you read and the comment's URL:
-     st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary-file -
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --evidence <comment-url> --summary '<summary>'
    st signs that verdict as a Quipu GateApproval record naming you as the reviewer; the merge gate reads it.""",
     "review_attended": """JOB: an INDEPENDENT, NON-AUTHOR review of {repo}#{pr}.
 1. Read the PR at its current head: `gh pr view {pr} --repo {repo} --json headRefOid,author,title,body,files,commits`
@@ -707,9 +709,8 @@ _JOBS = {
 3. Review for correctness, tests that can fail, security and scope. Check CI with `gh pr checks {pr} --repo {repo}`.
 4. Do NOT comment on the PR, push, merge or edit anything: your permissions allow only the commands above.
    st posts your summary as the ONE verdict comment on the PR.
-5. Report once, the summary on stdin (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
-     st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary-file -
-   or pass the same summary as ONE quoted argument: --summary '<summary>' instead of --summary-file -.
+5. Report once, the summary as ONE quoted argument (never a file), headed APPROVE or REQUEST CHANGES with numbered findings:
+     st agent spawn --report --verdict <approve|request-changes> --head <sha> --summary '<summary>'
    st posts it on the PR, then signs the verdict record naming you as the reviewer.""",
     "merge": """JOB: merge {repo}#{pr} at EXACTLY head {head} THROUGH THE SERIALIZED MERGE LANE. st holds the lane for {repo}
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.

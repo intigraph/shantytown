@@ -117,11 +117,17 @@ st agent spawn --list [--json]          # live + recent jobs (also in `st crew` 
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
 st agent spawn --ephemeral --job merge --item aegis-y --repo owner/name --pr 12 [--head SHA]
-st agent spawn --report --verdict approve --summary-file -   # run BY the ephemeral agent
-st agent spawn --report --verdict approve --head SHA --evidence URL --summary-file -   # a review job
+st agent spawn --report --verdict done --summary 'Nonempty result'   # run BY the ephemeral agent
+st agent spawn --report --verdict approve --head SHA --evidence URL --summary 'APPROVE: findings'   # a review job
 st agent spawn --merge --head <sha>     # run BY a merge job: the guarded merge
 st agent spawn --reap                   # the sweep tend runs; by hand for a dry look with -n
 ```
+
+Run the report command directly with one quoted summary argument. In attended
+Codex jobs, heredocs, pipes and shell wrappers can fail to match the report-only
+permission and leave the ledger read-only. An empty summary is refused before
+publishing a verdict or ending the job. Existing stdin reports remain supported
+for callers that can supply stdin without wrapping the command.
 
 ## Configuration
 

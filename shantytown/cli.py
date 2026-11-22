@@ -4052,12 +4052,14 @@ def _cmd_spawn(a) -> int:
             if (not job.get("uid_binding") and getattr(a, "summary_file", None) is not None
                     and str(a.summary_file) != "-"):
                 # An appended `--summary-file <path>` would publish any file the
-                # job's UID can read; attended jobs report on stdin only.
-                raise eph.Refused("an attended job reports its summary on stdin (--summary-file -)")
+                # job's UID can read; only inline text or stdin is admitted.
+                raise eph.Refused("an attended job reports inline with --summary or on stdin (--summary-file -)")
             if a.dry_run:
                 print(f"would report {me}: {a.verdict}")
                 return OK
             summary = _spawn_summary(a)
+            if not summary.strip():
+                raise eph.Refused("--report needs a nonempty summary; use --summary '<summary>' directly")
             evidence = a.evidence
             if attended and a.verdict in ("approve", "request-changes") and not evidence:
                 evidence, posted = _spawn_post_review_comment(job, a.verdict, a.head, summary)
