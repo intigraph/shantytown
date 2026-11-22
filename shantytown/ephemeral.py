@@ -879,6 +879,26 @@ def _composer(screen: str):
     return None
 
 
+def foreign_fragment(screen: str, text: str) -> str | None:
+    """The first composer fragment st did not type, for a refusal reason.
+
+    box_state answers FOREIGN without saying what it saw, and the frame is gone
+    by the time anyone reads the report (aegis-za4f.2: a Claude job was refused
+    "holds text that is not the job's" with nothing left to diagnose). Same
+    reading as box_state; None when nothing is foreign."""
+    if box_state(screen, text) != FOREIGN:
+        return None
+    frame = _composer(screen)
+    _prompt_raw, body, _above = frame
+    first = body[0].split(_PROMPT, 1)[1] if body else ""
+    for piece in [first] + body[1:]:
+        for rest in PASTE_TOKEN.split(piece.strip("\xa0 \t")):
+            rest = rest.strip("\xa0 \t")
+            if rest and rest not in text:
+                return rest
+    return None
+
+
 def box_state(screen: str, text: str) -> str:
     """What the composer holds, judged against the job text we typed.
 
@@ -971,7 +991,10 @@ def deliver(text: str, *, type_text, submit, capture, alive, sleep=time.sleep,
         if state == OURS:
             break
     if state == FOREIGN:
-        return False, "the composer holds text that is not the job's; Enter withheld"
+        seen = foreign_fragment(screen, text) or ""
+        shown = seen if len(seen) <= 80 else seen[:77] + "..."
+        return False, ("the composer holds text that is not the job's; Enter withheld"
+                       + (f" (first foreign row: {shown!r})" if shown else ""))
     if state != OURS:
         return False, f"the job never showed in the composer ({state}); Enter withheld"
     for n in range(1, attempts + 1):
