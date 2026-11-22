@@ -38,6 +38,7 @@ def armed(world, monkeypatch):
     world.states['lead'] = 'live'
     world.repairs = {}
     world.attempts = []
+    world.resolutions = []
 
     def create(payload, *, target, key):
         world.attempts.append((copy.deepcopy(payload), target, key))
@@ -45,11 +46,84 @@ def armed(world, monkeypatch):
         return world.repairs[key]
 
     world.tracker.create_duty_issue = create
+    def resolve(payload, identifier, *, target, evidence, reconcile_only):
+        world.resolutions.append((copy.deepcopy(payload), identifier, target, evidence, reconcile_only))
+        assert target == 'admin' and identifier in {r.id for r in world.repairs.values()}
+        return True
+    world.tracker.resolve_duty_issue = resolve
     return world
 
 
 def run(world, at):
     return sweep(world.root, world.registry, world.tracker, world.panes, world.inbox, now=at)
+
+
+def test_recovered_live_binding_closes_its_repair_once(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [record()])
+    stops = FilesStops(world.root / 'stopped')
+    stops.record('worker', 0)
+    run(world, 1800)
+    assert not world.resolutions
+    stops.forget('worker')
+    world.states['worker'] = 'live'
+    assert ('queue', 'repair closed after verified live binding') in run(world, 1900)
+    assert len(world.resolutions) == 1 and world.resolutions[0][-1] is False
+    run(world, 2000)
+    assert len(world.resolutions) == 1
+
+
+def test_uncertain_close_is_reconciled_without_resend_and_survives_new_stop(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [record()])
+    stops = FilesStops(world.root / 'stopped')
+    stops.record('worker', 0)
+    run(world, 1800)
+    attempted = []
+    def lost(*args, **kwargs):
+        attempted.append(kwargs['reconcile_only'])
+        raise TimeoutError('close outcome UNKNOWN')
+    world.tracker.resolve_duty_issue = lost
+    stops.forget('worker')
+    world.states['worker'] = 'live'
+    run(world, 1900)
+    run(world, 2000)
+    assert attempted == [False, True]
+    world.states['worker'] = 'down'
+    stops.record('worker', 2100)
+    assert ('queue', 'prior repair close UNKNOWN; no new repair write') in run(world, 3900)
+    assert len(world.attempts) == 1 and attempted == [False, True]
+    assert 'UNKNOWN' in summary(world.root, now=3900)
+
+
+def test_changed_live_evidence_prevents_repair_close(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [record()])
+    FilesStops(world.root / 'stopped').record('worker', 0)
+    run(world, 1800)
+    observations = iter([dict(state='live', generation='one'), dict(state='down', generation='two')])
+    duties = Duties(world.root)
+    result = duties.tick(observe=lambda _: next(observations), live=lambda _: True,
+                         administrator=lambda: 'admin', ensure_issue=lambda *a: pytest.fail('new repair'),
+                         notify=lambda *a: pytest.fail('new page'),
+                         resolve_issue=lambda *a, **kw: pytest.fail('changed evidence closed'),
+                         now=1900, release=True, host='test-host')
+    assert ('queue', 'repair resolution UNKNOWN; intent retained') in result
+    assert not world.resolutions
+
+
+def test_shadow_recovery_never_closes_a_repair(setup, monkeypatch):
+    world = armed(setup, monkeypatch)
+    install(world, [record()])
+    FilesStops(world.root / 'stopped').record('worker', 0)
+    run(world, 1800)
+    duties = Duties(world.root)
+    result = duties.tick(observe=lambda _: dict(state='live', generation='one'), live=lambda _: True,
+                         administrator=lambda: 'admin', ensure_issue=lambda *a: pytest.fail('new repair'),
+                         notify=lambda *a: pytest.fail('new page'),
+                         resolve_issue=lambda *a, **kw: pytest.fail('shadow close'),
+                         now=1900, release=False, host='test-host')
+    assert ('queue', 'repair resolution held; no write') in result
 
 
 def test_existing_sweep_rebinds_supported_duty_and_flags_reservation_once(setup, monkeypatch):
@@ -605,6 +679,69 @@ def test_sdk_repair_uses_stable_workflow_identity_and_reads_exact_p0(monkeypatch
     with pytest.raises(ValueError, match='identity'):
         tracker.create_duty_issue(payload, target='admin', key='different')
     assert len(calls) == 2
+
+
+@pytest.fixture
+def duty_resolution_sdk(monkeypatch):
+    from subprocess import CompletedProcess
+    import hashlib
+    from shantytown.sd import SdTracker
+    tracker = object.__new__(SdTracker)
+    payload = {k: record()[k] for k in ('id', 'kind', 'holder', 'source')}
+    key = 'stranded-duty:' + hashlib.sha256(payload['id'].encode()).hexdigest()
+    row = dict(id='fixture-1', title='P0 orphaned duty: queue', status='open', priority=0,
+               assignee='admin', labels=['orphaned-duty'], revision=7,
+               description=key + '\n' + json.dumps(payload, sort_keys=True))
+    calls, mode = [], {}
+    def command(identifier, *args):
+        assert identifier == 'fixture-1'
+        if args[0] == 'show':
+            return CompletedProcess(args, 0, json.dumps([row]), '')
+        calls.append(args)
+        assert args[:3] == ('update', 'fixture-1', '--status=closed')
+        assert '--if-revision=' + str(row['revision']) in args
+        assert not any('--force' in x for x in args)
+        if mode.get('failure') == 'before':
+            return CompletedProcess(args, 4, '{}', '')
+        row.update(status='closed', revision=row['revision'] + 1)
+        return CompletedProcess(args, 1 if mode.get('failure') == 'after' else 0, '{}', '')
+    monkeypatch.setattr(tracker, '_bd_for', command)
+    return SimpleNamespace(tracker=tracker, row=row, payload=payload, calls=calls, mode=mode)
+
+
+def test_sdk_resolution_cas_reads_back_once_and_preserves_closed_history(duty_resolution_sdk):
+    w = duty_resolution_sdk
+    assert w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+    assert w.row['status'] == 'closed' and len(w.calls) == 1
+    assert w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1',
+                                       reconcile_only=True)
+    assert len(w.calls) == 1
+
+
+@pytest.mark.parametrize('field,value', [('description', 'other work'), ('labels', []),
+    ('labels', ['orphaned-duty', 'needs-stiwi']), ('assignee', 'other'), ('priority', 2),
+    ('status', 'blocked'), ('revision', 0), ('title', 'other work')])
+def test_sdk_resolution_preserves_operator_changes_and_unknown_revision(duty_resolution_sdk, field, value):
+    w = duty_resolution_sdk
+    w.row[field] = value
+    with pytest.raises((ValueError, RuntimeError)):
+        w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+    assert not w.calls
+
+
+@pytest.mark.parametrize('failure', ['before', 'after'])
+def test_sdk_resolution_never_resends_unknown_close(duty_resolution_sdk, failure):
+    w = duty_resolution_sdk
+    w.mode['failure'] = failure
+    if failure == 'after':
+        assert w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+    else:
+        with pytest.raises(RuntimeError):
+            w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1')
+        with pytest.raises(RuntimeError):
+            w.tracker.resolve_duty_issue(w.payload, 'fixture-1', target='admin', evidence='live revision1',
+                                         reconcile_only=True)
+    assert len(w.calls) == 1
 
 
 def test_metric_publisher_has_no_ambient_or_secret_diagnostic(monkeypatch, tmp_path):

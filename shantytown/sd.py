@@ -380,6 +380,45 @@ class SdTracker(BrTracker):
             raise ValueError('duty repair not an open P0')
         return item
 
+    def resolve_duty_issue(self, payload, identifier, *, target, evidence, reconcile_only=False):
+        """Close the exact producer record after a fresh live duty binding.
+
+        The controller journals intent before calling. Reconciliation reads a
+        previous result; it never automatically resends an uncertain close.
+        """
+        import hashlib
+        from .duties import KINDS, _name
+        ident = _name(payload['id'])
+        _name(payload['holder'])
+        _name(target)
+        if payload.get('kind') not in KINDS or not isinstance(evidence, str) or not evidence.strip():
+            raise ValueError('duty resolution identity/evidence UNKNOWN')
+        key = 'stranded-duty:' + hashlib.sha256(ident.encode()).hexdigest()
+        description = key + '\n' + json.dumps(payload, sort_keys=True)
+
+        def exact():
+            row = self.stranded_read(identifier)
+            labels = set(row.get('labels') or [])
+            if (row.get('id') != identifier or row.get('title') != 'P0 orphaned duty: ' + ident
+                    or row.get('description') != description or 'orphaned-duty' not in labels
+                    or labels & {'needs-stiwi', 'blocked:human', 'desk', 'decision-needed'}
+                    or row.get('priority') != 0
+                    or row.get('assignee') != target or row.get('status') not in {'open', 'closed'}):
+                raise ValueError('duty resolution identity or operator disposition changed')
+            return row
+
+        row = exact()
+        if row['status'] == 'closed':
+            return True
+        if reconcile_only:
+            raise RuntimeError('prior duty close UNKNOWN; no automatic resend')
+        self._bd_for(identifier, 'update', identifier, '--status=closed',
+                     '--if-revision=' + str(row['revision']),
+                     '--transition-comment=Duty binding recovered: ' + evidence, '--json')
+        if exact()['status'] != 'closed':
+            raise RuntimeError('duty close outcome UNKNOWN; retain resolution intent')
+        return True
+
     @property
     def _bin(self) -> str:
         return os.environ.get("SHANTY_SD_BIN", "sd")
