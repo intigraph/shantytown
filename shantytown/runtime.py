@@ -1850,6 +1850,11 @@ class ClaudeRuntime:
             self._memory_settings[card.name] = (base_settings_path, settings_path)
         else:
             self._memory_settings.pop(card.name, None)
+        from .job_tools import prepare_settings as prepare_job_settings
+        try:
+            settings_path = prepare_job_settings(self._root, card, settings_path)
+        except (OSError, ValueError) as exc:
+            raise SettingsError(f"job tool profile not prepared: {exc}") from None
         launch = program.launch(card, settings_path, root=self._root)
         # The invariant, asserted where it is made. If this ever fails, the bug is
         # here, not downstream — a settings-less string must be UNREACHABLE.
@@ -1872,11 +1877,12 @@ class ClaudeRuntime:
         from .account_auth import settings_path
         base = settings_path(card, self._resolve(card), self._root)
         prepared = self._memory_settings.get(card.name)
-        if prepared is not None and prepared[0] == base:
-            return prepared[1]
         from .memory_lifecycle import selected_settings
         try:
-            return selected_settings(self._root, card, base)
+            from .job_tools import selected_settings as job_settings
+            memory = (prepared[1] if prepared is not None and prepared[0] == base
+                      else selected_settings(self._root, card, base))
+            return job_settings(self._root, card, memory)
         except (OSError, ValueError):
             raise SettingsError('native memory settings UNKNOWN; preserve prior artifacts') from None
 

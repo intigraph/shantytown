@@ -1,0 +1,8 @@
+Script started on 2026-11-21 22:04:32-05:00 [COMMAND="python3 docs/probes/pr-demos/job-tool-context/demo.py" <not executed on terminal>]
+BASE b4d5a1fa effective workspace MCP servers: ['bobbin', 'gmail']
+CANDIDATE effective workspace MCP servers: ['bobbin']
+  account connectors disabled: True
+  missing selected server: REFUSED
+Graph read failure: UNKNOWN (job launch is not blocked)
+
+Script done on 2026-11-21 22:04:33-05:00 [COMMAND_EXIT_CODE="0"]

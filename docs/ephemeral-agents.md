@@ -574,3 +574,62 @@ state directories or enables a missing capability. Use the earlier
 The resulting receipt remains `live: false`, `execution: refused`,
 `activation: gated`. No transport listener or protected execution callback is
 installed. Runtime activation remains gated on xu2; merge verbs are excluded.
+
+
+## Job-owned tool profiles and graph context
+
+An optional `[ephemeral.jobs.<job>]` table narrows the MCP and workspace skill
+kit for `review`, `merge`, `triage` or `task`. An absent table keeps the legacy
+kit. An explicit empty table selects no MCP servers or workspace skills.
+Unknown job names and fields refuse configuration; budget/model/verdict/trigger
+and action fields are reserved for the JobSpec extension.
+
+```toml
+[ephemeral.jobs.review]
+mcp_servers = ["forge", "search", "structure", "quipu-read"]
+skills = ["code-review"]
+claude_ai_connectors = false
+
+[ephemeral.jobs.review.mcp_tools]
+quipu-read = ["quipu_query", "quipu_ask", "quipu_search"]
+```
+
+Server and skill names must exist in the deployment's tooling source. The
+resolved table and its canonical SHA256 are recorded together as `jobspec` in
+the job ledger. A changed or malformed binding refuses realization.
+Provisioning removes unselected workspace skill links, preserves real files
+and refuses unselected real skill directories. It does not edit shared role
+settings. Codex uses a private job config with only selected MCP servers and
+native `enabled_tools` filters. Claude uses a per-tool PreToolUse deny guard
+for the bound subset (an allowed match never grants permission), job-owned settings, explicit
+`--strict-mcp-config --mcp-config`, exact MCP permission allow rules and, by
+default, `disableClaudeAiConnectors` plus `ENABLE_CLAUDEAI_MCP_SERVERS=false`.
+An empty skills list also disables Claude slash commands. Existing sandbox,
+permission and trust gates still apply; this is not OS isolation. A configured
+profile on the separately staged protected-UID rail refuses until its projection
+is qualified; the operator-owned staged kit is never silently rewritten.
+
+A native Quipu read server can be declared without a bearer when the operator
+has verified that anonymous reads work and writes require authentication. Only
+an explicit `mcp_tools` subset of `quipu_query`, `quipu_ask`, `quipu_search` and
+`quipu_graph_list` admits this anonymous profile. Direct Quipu writer tokens,
+auth helpers, writer tools and stdio processes are refused for these profiles.
+The ordinary crew's direct-Quipu credential guard stays in force. A mixed
+operations server is not a substitute for this read endpoint. Declare its URL
+in the deployment manifest; never put a credential into a job to make reads work.
+
+At spawn, generic stored queries `references_to` and `entity_facts` collect one
+bounded, one-hop snapshot: at most four exact IRIs, twelve facts each, a 64 KiB
+response bound and a five-second request budget. The item IRI is derived from
+the explicitly configured namespace; `--quipu-node IRI` adds an exact PR,
+repository or service node without guessing identity from a label. The injected
+block is capped at 6,000 JSON characters, with omissions and truncation visible.
+A separate two-second exact-item read includes the newest three comment
+snippets from the proven board graph; it does not promote them into all current
+rulings. Missing configuration, failed/empty/capped reads and unproven named-graph
+coverage remain UNKNOWN. The job still launches. This snapshot is evidence,
+not authorization: historical notes cannot silently become current holds.
+Triage follows the actual alert or failure subject and uses forge CI logs only
+when the item identifies a CI failure.
+
+Claude connector controls follow the [native settings reference](https://code.claude.com/docs/en/settings-reference#disableclaudeaiconnectors).
