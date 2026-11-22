@@ -218,3 +218,115 @@ def test_profiled_protected_launch_refuses_before_touching_operator_staging(tmp_
     assert rc == cli.REFUSED
     assert "qualified protected-UID projection" in capsys.readouterr().err
     assert eph.records(root) == []
+
+
+TRIAGE_VERDICTS = ["diagnosed", "needs-owner", "unknown", "blocked"]
+
+
+def test_job_verdicts_bind_per_job_and_absent_keeps_the_legacy_enum():
+    specs = jobs.validate_specs({"triage": {"verdicts": TRIAGE_VERDICTS},
+                                 "task": {}}, eph.JOBS)
+    assert specs["triage"]["verdicts"] == TRIAGE_VERDICTS
+    assert "verdicts" not in specs["task"]          # existing binding hashes stay stable
+    assert eph.job_verdicts({"jobspec": {"resolved": specs["triage"]}}) == tuple(TRIAGE_VERDICTS)
+    assert eph.job_verdicts({"jobspec": {"resolved": specs["task"]}}) == eph.VERDICTS
+    assert eph.job_verdicts({}) == eph.VERDICTS
+
+
+@pytest.mark.parametrize("job,verdicts", [
+    ("triage", ["diagnosed"]),                      # blocked is mandatory
+    ("triage", ["diagnosed", "blocked", "failed"]), # failed belongs to st teardown
+    ("triage", []), ("triage", "blocked"),
+    ("review", ["approve", "blocked", "lgtm"]),     # gated jobs never rename
+    ("merge", ["shipped", "blocked"]),
+])
+def test_bad_job_verdicts_refuse(job, verdicts):
+    with pytest.raises(ValueError):
+        jobs.validate_specs({job: {"verdicts": verdicts}}, eph.JOBS)
+
+
+def test_gated_jobs_may_narrow_the_legacy_verdicts():
+    spec = jobs.validate_specs({"review": {"verdicts": ["approve", "request-changes", "blocked"]}},
+                               eph.JOBS)["review"]
+    assert spec["verdicts"] == ["approve", "request-changes", "blocked"]
+
+
+def test_prompt_names_the_jobs_own_verdicts_and_legacy_prompt_is_unchanged():
+    import time
+    base = {"name": "eph-triage-a1b2c3", "job": "triage", "item": "it-1",
+            "deadline": time.time() + 600, "administrator": "boss", "max_turns": 2,
+            "attempt": 1, "repo": None, "pr": None}
+    legacy = eph.prompt(dict(base))
+    assert "approve|request-changes|merged|blocked|done|failed" in legacy
+    assert "configured verdicts" not in legacy
+    spec = jobs.validate_specs({"triage": {"verdicts": TRIAGE_VERDICTS}}, eph.JOBS)["triage"]
+    custom = eph.prompt(dict(base, jobspec={"resolved": spec, "sha256": "x"}))
+    assert "diagnosed|needs-owner|unknown|blocked" in custom
+    assert "configured verdicts are diagnosed|needs-owner|unknown|blocked" in custom
+
+
+ANON = {"type": "http", "url": "https://quipu.example.invalid/mcp",
+        "headers": {"X-Quipu-Client": "st-job"}}
+
+
+def _job_server_spec(server=None, tools=("quipu_query",), job="task"):
+    return jobs.validate_specs(
+        {job: {"mcp_servers": ["quipu-read"], "mcp_tools": {"quipu-read": list(tools)}}},
+        eph.JOBS, jobs.validate_job_servers({"quipu-read": server or dict(ANON)}))[job]
+
+
+def test_job_only_server_is_bound_into_the_spec_and_provisioned_without_the_crew_manifest(tmp_path):
+    """za4f.2 ruling B: the crew manifest cannot carry a direct Quipu entry
+    (aegis-g034ts), so a job-only anonymous server lives in deployment config
+    and reaches ONLY the job that selects it."""
+    spec = _job_server_spec()
+    assert spec["server_defs"] == {"quipu-read": ANON}
+    ws = tmp_path / "ws"; ws.mkdir()
+    rec, card = record(tmp_path, ws, spec=spec)
+    templates = tmp_path / "provision"; templates.mkdir()
+    (templates / provision.MCP_TEMPLATE).write_text(json.dumps({"mcpServers": {
+        "bobbin": {"type": "http", "url": "https://bobbin.example.invalid/mcp"}}}))
+    assert provision.provision(card, tmp_path) == ["quipu-read"]
+    assert json.loads((ws / ".mcp.json").read_text())["mcpServers"] == {"quipu-read": ANON}
+    assert jobs.selected(tmp_path, card.name)["server_defs"] == {"quipu-read": ANON}
+
+
+def test_unselected_job_server_is_never_bound():
+    spec = jobs.validate_specs({"task": {"mcp_servers": ["bobbin"]}}, eph.JOBS,
+                               jobs.validate_job_servers({"quipu-read": dict(ANON)}))["task"]
+    assert "server_defs" not in spec
+
+
+@pytest.mark.parametrize("server,tools", [
+    (dict(ANON, headersHelper="writer-helper"), ("quipu_query",)),          # credential helper
+    (dict(ANON, headers={"Authorization": "Bearer x"}), ("quipu_query",)),  # bearer header
+    (dict(ANON, url="https://quipu.example.invalid/mcp?token=x"), ("quipu_query",)),
+    (dict(ANON), ("quipu_knot",)),                                         # writer tool
+    (dict(ANON), ()),                                                      # no explicit subset
+])
+def test_job_only_servers_must_be_anonymous_read_profiles(server, tools):
+    with pytest.raises(ValueError):
+        _job_server_spec(server, tools)
+
+
+def test_job_only_server_cannot_shadow_a_crew_server():
+    spec = _job_server_spec()
+    with pytest.raises(ValueError, match="shadow"):
+        jobs.filter_servers({"quipu-read": {"type": "http", "url": "https://other.invalid/mcp"}}, spec)
+
+
+def test_operator_cannot_declare_server_defs_directly():
+    with pytest.raises(ValueError, match="unknown JobSpec field"):
+        jobs.validate_specs({"task": {"mcp_servers": ["quipu-read"],
+                                      "server_defs": {"quipu-read": ANON}}}, eph.JOBS)
+
+
+def test_config_parses_job_servers(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        '[ephemeral.job_servers.quipu-read]\ntype = "http"\n'
+        'url = "https://quipu.example.invalid/mcp"\n'
+        '[ephemeral.job_servers.quipu-read.headers]\nX-Quipu-Client = "st-job"\n'
+        '[ephemeral.jobs.task]\nmcp_servers = ["quipu-read"]\n'
+        '[ephemeral.jobs.task.mcp_tools]\nquipu-read = ["quipu_query", "quipu_ask"]\n')
+    cfg = config.load(tmp_path)
+    assert cfg.ephemeral.jobs["task"]["server_defs"]["quipu-read"]["url"].endswith("/mcp")
