@@ -354,22 +354,25 @@ CODEX_RULES_FILE = "st-job.rules"
 def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
     """The Codex exec-policy rules an attended job needs, or None (aegis-e579 B).
 
-    The same exact per-job allowlist as the Claude settings, as prefix rules.
+    Review/merge use the exact per-PR allowlist from the Claude settings.
+    Task/triage get only the controller-guarded report command: their work
+    commands retain normal sandbox policy.
     Codex runs an allowed command outside its sandbox without asking, which is
     what lets `st agent spawn --report` write st's ledger: no writable root is
     opened to the job's other commands. Anything unlisted still prompts.
     """
     if unattended or rec.get("harness") != "codex" or rec.get("uid_binding"):
         return None
-    rules = _attended_rules(rec)
-    if rules is None:
+    report_only = rec.get("job") in ("triage", "task")
+    if not report_only and _attended_rules(rec) is None:
         return None
-    repo, pr = str(rec["repo"]), str(rec["pr"])
+    repo, pr = str(rec.get("repo", "")), str(rec.get("pr", ""))
     reads = ["view", "checks", "diff"] if rec["job"] == "review" else ["view", "checks"]
     q = json.dumps
     lines = [f"# st ephemeral job {rec['name']}: written by st before launch; do not edit."]
-    lines.append(f"prefix_rule(pattern=[\"gh\", \"pr\", {q(reads)}, {q(pr)}, \"--repo\", {q(repo)}], "
-                 "decision=\"allow\", justification=\"st job: read its own PR\")")
+    if not report_only:
+        lines.append(f"prefix_rule(pattern=[\"gh\", \"pr\", {q(reads)}, {q(pr)}, \"--repo\", {q(repo)}], "
+                     "decision=\"allow\", justification=\"st job: read its own PR\")")
     if rec["job"] == "merge":
         lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--merge\"], "
                      "decision=\"allow\", justification=\"st job: guarded merge\")")

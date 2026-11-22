@@ -41,7 +41,7 @@ def test_merge_rules_allow_the_guarded_merge_and_no_diff():
     (dict(REC, harness="claude"), False),
     (REC, True),
     (dict(REC, uid_binding={"uid": 10001}), False),
-    (dict(REC, job="triage"), False),
+    (dict(REC, job="unknown"), False),
     (dict(REC, repo="bad repo"), False),
     (dict(REC, pr="75; rm"), False),
 ])
@@ -140,3 +140,24 @@ def test_reap_without_a_prompt_reader_is_unchanged(tmp_path):
     ended = []
     eph.reap(tmp_path, now=5000, pane_alive=lambda _: True, end=lambda *a: ended.append(a))
     assert ended == []
+
+
+@pytest.mark.parametrize("job", ["triage", "task"])
+def test_non_pr_jobs_get_only_the_guarded_report_command(tmp_path, job):
+    rec = dict(job=job, harness="codex", name=f"eph-{job}-a1b2c3")
+    path = eph.write_codex_job_rules(rec, tmp_path, unattended=False)
+    body = path.read_text()
+    assert body.count('decision="allow"') == 1
+    assert '["st", "agent", "spawn", "--report"], decision="allow"' in body
+    assert 'read its own PR' not in body
+    assert '--merge' not in body
+    if _codex():
+        for cmd, decision in [
+            (["st", "agent", "spawn", "--report", "--verdict", "blocked", "--summary-file", "-"], "allow"),
+            (["st", "agent", "spawn", "--merge"], None),
+            (["gh", "pr", "view", "75", "--repo", "intigraph/example"], None),
+            (["git", "push"], "forbidden"),
+        ]:
+            result = subprocess.run([_codex(), "execpolicy", "check", "-r", str(path), *cmd],
+                                    capture_output=True, text=True, check=True)
+            assert json.loads(result.stdout).get("decision") == decision
