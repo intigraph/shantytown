@@ -751,3 +751,9 @@ internal identifiers. This is not a native review approval or an author identity
 change; a non-author crew reviewer must validate and record the native review.
 Review-fix execution, named account switching, and unattended review authority
 are not enabled by this initial adapter.
+
+Codex live delivery uses Tab to queue during a turn, including when a tall
+composer hides `Working` but the current model footer still advertises
+`tab to queue message`. Idle composers use Enter. A quoted hint in message
+text does not authorize Tab. Queue observation preserves pending custody;
+it is not a delivered-message receipt.
