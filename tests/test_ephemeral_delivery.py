@@ -151,6 +151,19 @@ def test_a_transient_foreign_frame_waits_but_a_lasting_one_gets_no_enter():
     pane.type_text = lambda t: (real(t), setattr(pane, "_pending", ["not ours at all"]))
     ok, why = _deliver(pane, _job(), show_looks=4)
     assert not ok and pane.submits == 0 and "not the job's" in why
+    # aegis-za4f.2: the refusal names what it saw, because the frame is gone
+    # by the time anyone reads the report.
+    assert "first foreign row: 'not ours at all'" in why
+
+
+def test_foreign_fragment_names_only_text_st_did_not_type():
+    pane = ClaudePane()
+    assert eph.foreign_fragment(pane.capture(), _job()) is None
+    pane.composer = ["[Pasted text #1 +41 lines] plus something else"]
+    assert eph.foreign_fragment(pane.capture(), _job()) == "plus something else"
+    pane.composer = ["[Pasted text #1 +41 lines]"]
+    assert eph.foreign_fragment(pane.capture(), _job()) is None
+    assert eph.foreign_fragment("no frame here\n", _job()) is None
 
 
 def test_text_appearing_beside_the_job_stops_the_retries():
