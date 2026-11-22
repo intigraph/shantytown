@@ -645,6 +645,29 @@ The ordinary crew's direct-Quipu credential guard stays in force. A mixed
 operations server is not a substitute for this read endpoint. Declare its URL
 in the deployment manifest; never put a credential into a job to make reads work.
 
+The crew tooling manifest cannot carry a direct Quipu entry (crew provisioning
+refuses one without a headersHelper), so a job-only server is declared in
+deployment config instead and reaches only the job whose profile selects it:
+
+```toml
+[ephemeral.job_servers.quipu-read]
+type = "http"
+url = "http://quipu.example/mcp"
+[ephemeral.job_servers.quipu-read.headers]
+X-Quipu-Client = "st-job"
+
+[ephemeral.jobs.triage]
+mcp_servers = ["quipu-read"]
+[ephemeral.jobs.triage.mcp_tools]
+quipu-read = ["quipu_query", "quipu_ask", "quipu_search"]
+```
+
+A selected job server must qualify as the anonymous read-only profile above;
+anything else refuses configuration. Its definition is copied into the bound
+JobSpec (`server_defs`), so it is covered by the binding hash. It may not
+shadow a crew server name. Crew cards never render it, and the crew guard is
+unchanged.
+
 At spawn, generic stored queries `references_to` and `entity_facts` collect one
 bounded, one-hop snapshot: at most four exact IRIs, twelve facts each, a 64 KiB
 response bound and a five-second request budget. The item IRI is derived from

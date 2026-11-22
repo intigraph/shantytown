@@ -28,16 +28,36 @@ def _names(value, field):
     return list(value)
 
 
-def validate_specs(value, jobs):
+def validate_job_servers(value):
+    """[ephemeral.job_servers.<name>]: job-only MCP definitions.
+
+    Crew provisioning never renders these; a job receives one only when its
+    profile selects it, copied into the bound JobSpec (and so into its hash).
+    Each must qualify as an anonymous read endpoint at use (see
+    anonymous_read_servers); a credential-bearing shape cannot be declared here.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("ephemeral.job_servers must be a table of server tables")
+    result = {}
+    for name, server in value.items():
+        if not _NAME.fullmatch(str(name)) or not isinstance(server, dict):
+            raise ValueError("ephemeral.job_servers entries must be named tables")
+        result[name] = json.loads(json.dumps(server))
+    return result
+
+
+def validate_specs(value, jobs, job_servers=None, *, resolved=False):
     if not isinstance(value, dict) or set(value) - set(jobs):
         raise ValueError("ephemeral.jobs must name only supported job types")
+    job_servers = job_servers or {}
     result = {}
     for name, raw in value.items():
         if not isinstance(raw, dict):
             raise ValueError(f"ephemeral.jobs.{name} must be a table")
         if set(raw) & _RESERVED:
             raise ValueError("reserved JobSpec fields are not implemented yet")
-        if set(raw) - _FIELDS:
+        # server_defs is st's own binding output, never operator input.
+        if set(raw) - _FIELDS - ({"server_defs"} if resolved else set()):
             raise ValueError("unknown JobSpec field")
         spec = {key: _names(raw.get(key, []), key) for key in ("mcp_servers", "skills")}
         connectors = raw.get("claude_ai_connectors", False)
@@ -58,6 +78,15 @@ def validate_specs(value, jobs):
             if name in _GATED_JOBS and set(verdicts) - set(LEGACY_VERDICTS):
                 raise ValueError(f"{name} verdicts may only narrow the gated legacy names")
             spec["verdicts"] = verdicts
+        defs = (raw.get("server_defs", {}) if resolved else
+                {n: job_servers[n] for n in spec["mcp_servers"] if n in job_servers})
+        if not isinstance(defs, dict) or set(defs) - set(spec["mcp_servers"]):
+            raise ValueError("job server definitions must be selected servers")
+        if defs:
+            if set(defs) - anonymous_read_servers(defs, spec):
+                raise ValueError("job-only servers must be anonymous read-only Quipu profiles "
+                                 "with an explicit mcp_tools read subset")
+            spec["server_defs"] = json.loads(json.dumps(defs))
         result[name] = spec
     return result
 
@@ -84,7 +113,7 @@ def selected(root, name):
     spec = bound.get("resolved")
     if not isinstance(spec, dict):
         raise ValueError("job tool profile is malformed")
-    parsed = validate_specs({rec["job"]: spec}, eph.JOBS)[rec["job"]]
+    parsed = validate_specs({rec["job"]: spec}, eph.JOBS, resolved=True)[rec["job"]]
     digest = hashlib.sha256(json.dumps(parsed, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     if digest != bound.get("sha256"):
         raise ValueError("job tool profile hash mismatch")
@@ -94,6 +123,11 @@ def selected(root, name):
 def filter_servers(servers, spec):
     if spec is None:
         return dict(servers)
+    defs = spec.get("server_defs", {})
+    if set(defs) & set(servers):
+        raise ValueError("job-only server names must not shadow crew servers: "
+                         + ", ".join(sorted(set(defs) & set(servers))))
+    servers = {**servers, **defs}
     missing = set(spec["mcp_servers"]) - set(servers)
     if missing:
         raise ValueError("JobSpec MCP servers are not provisioned: " + ", ".join(sorted(missing)))
