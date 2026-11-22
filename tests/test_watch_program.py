@@ -123,3 +123,11 @@ def test_sample_and_probe_cardinality_limits_refuse_without_collection(raw):
     with pytest.raises(WatchRefused, match='sample count'): WatchSpec.validate(raw)
     raw.update(window_seconds=100, sample_seconds=45, maximum={f'm{i}': 1 for i in range(33)})
     with pytest.raises(WatchRefused, match='bounded nonempty'): WatchSpec.validate(raw)
+
+
+def test_oversized_json_integer_is_unknown_or_refused_not_an_exception(raw, spec):
+    raw['maximum']['p99_seconds'] = 10 ** 1000
+    with pytest.raises(WatchRefused): WatchSpec.validate(raw)
+    rows = samples(spec); rows[0].metrics['p99_seconds'] = 10 ** 1000
+    assert evaluate_watch(spec, rows, now=1100, activation='ACTIVE').safety == 'UNKNOWN'
+    assert evaluate_watch(spec, samples(spec), now=10 ** 1000, activation='ACTIVE').safety == 'UNKNOWN'
