@@ -424,3 +424,16 @@ def test_busy_discard_does_not_consume_a_new_stop_outside_measured_snapshot(tmp_
     new = ev.persist('lead', 'worker', None, False)
     se.discard_busy(ev, 'lead', {'worker'}, snapshot)
     assert [e.id for e in ev.pending('lead')] == [new.id]
+
+
+def test_admin_stop_stale_ttl_only_for_administrator(monkeypatch):
+    from types import SimpleNamespace
+    from shantytown.stop_policy import admin_stop_stale_ttl
+    monkeypatch.delenv("ST_ADMIN_STOP_STALE_TTL", raising=False)
+    assert admin_stop_stale_ttl(SimpleNamespace(role="administrator")) == 300.0
+    assert admin_stop_stale_ttl(SimpleNamespace(role="lead")) is None
+    assert admin_stop_stale_ttl(None) is None
+    monkeypatch.setenv("ST_ADMIN_STOP_STALE_TTL", "60")
+    assert admin_stop_stale_ttl(SimpleNamespace(role="administrator")) == 60.0
+    monkeypatch.setenv("ST_ADMIN_STOP_STALE_TTL", "soon")
+    assert admin_stop_stale_ttl(SimpleNamespace(role="administrator")) is None
