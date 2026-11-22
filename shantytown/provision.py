@@ -410,8 +410,15 @@ def _project_codex_mcp(card: Agent, root, rendered: str, template: str | None = 
     from . import codex as codex_mod
     data = json.loads(rendered)
     servers = _codex_servers(data.get("mcpServers", data))
+    from .job_tools import selected as job_profile
+    profile = job_profile(root, card.name)
+    if profile is not None:
+        if config != Path(root) / "settings" / "codex" / f"agent-{card.name}" / "config.toml":
+            raise ProvisionError("job MCP projection requires job-owned Codex settings")
+        for name, names in profile["mcp_tools"].items():
+            servers[name] = dict(servers[name], enabled_tools=names)
     existing = config.read_text()
-    if template is not None:
+    if template is not None or profile is not None:
         current = tomllib.loads(existing)
         current.pop("mcp_servers", None)
         existing = codex_mod.dumps(current)
@@ -479,6 +486,11 @@ def preflight_credentials(card: Agent, root) -> None:
 
 def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) -> list[str]:
     ws = Path(card.workspace).expanduser()
+    from .job_tools import selected as job_profile, filter_manifest
+    try:
+        manifest = filter_manifest(manifest, job_profile(root, card.name))
+    except ValueError:
+        return ["job tool profile unresolved"]
     template = json.dumps({"mcpServers": manifest.mcp})
     try:
         from . import mcp_limits
@@ -1057,13 +1069,40 @@ def _drop_hooks_the_role_file_owns(cfg: dict, role_hooks: dict) -> None:
         hooks[event] = kept
 
 
+def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
+    """Bind task trust to consent bytes emitted by this provisioning call."""
+    from . import ephemeral as eph
+    if card.harness != "claude" or not eph.is_ephemeral_name(card.name):
+        return
+    with eph.lock(root):
+        rec = eph.read(root, card.name)
+        if not rec or rec.get("job") != "task":
+            return  # review/merge/triage retain their exact allowlist rail
+        if (rec.get("harness") != card.harness or not rec.get("workspace")
+                or Path(rec["workspace"]).resolve() != ws.resolve()
+                or rec.get("state") not in (eph.LAUNCHING, eph.LIVE)):
+            raise ProvisionError("task consent does not match the launching job")
+        path = ws / ".claude" / CONSENT_TEMPLATE
+        emitted = body.encode("utf-8")
+        if (path.is_symlink() or path.parent.is_symlink()
+                or path.read_bytes() != emitted):
+            raise ProvisionError("task consent differs from the bytes just provisioned")
+        # Task jobs have no per-PR allowlist to reapply. Previously their NULL
+        # kit hash made the trust guard reject st's own newly emitted file.
+        import hashlib
+        rec["kit_settings_sha256"] = hashlib.sha256(emitted).hexdigest()
+        eph.write(root, rec)
+
+
 def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:
     if card.harness == "codex":
         return  # Codex's config was refreshed above; it does not read this file.
     path = ws / ".claude" / CONSENT_TEMPLATE
     text = path.read_text() if path.is_file() else "{}"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(_workspace_capture(text, root, settings_path, card=card))
+    body = _workspace_capture(text, root, settings_path, card=card)
+    path.write_text(body)
+    _record_task_consent(card, root, ws, body)
 
 
 def headerless_quipu(servers: dict) -> list[str]:
@@ -1159,6 +1198,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                                                 harness=name_for(card, root))
         manifest = (tooling.load(root, last_good=True)
                     if instruction_cfg.source_document is not None else tooling.load(root))
+        from .job_tools import selected as job_profile, filter_manifest
+        profile = job_profile(root, card.name)
+        if manifest is not None:
+            manifest = filter_manifest(manifest, profile)
         if require_manifest and (manifest is None or not manifest.mcp):
             raise ProvisionError(
                 "registration requires a nonempty Quipu tooling manifest; "
@@ -1235,6 +1278,13 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         link_skills(ws)
         link_instructions(ws, card.harness)
 
+    if profile is not None:
+        from .job_tools import prune_skills
+        try:
+            prune_skills(ws, profile)
+        except ValueError as exc:
+            raise ProvisionError(str(exc)) from None
+
     # Codex does not read Claude Code's workspace consent file.  Its equivalent
     # self-healing channel is the config.toml selected by the card, so refresh
     # the workspace hooks here on every launch (aegis-jlmqn).  Prefer a per-agent
@@ -1292,7 +1342,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                           else load_secrets(root, agent=card.name))
     from . import mcp_limits
     try:
-        rendered = json.dumps(mcp_limits.project(json.loads(rendered), root, card.name), indent=2)
+        from .job_tools import filter_servers
+        selected_kit = json.loads(rendered)
+        selected_kit["mcpServers"] = filter_servers(selected_kit.get("mcpServers", {}), profile)
+        rendered = json.dumps(mcp_limits.project(selected_kit, root, card.name), indent=2)
         from .crew_credentials import project as project_credentials
         credential_kit = json.loads(rendered)
         credential_kit["mcpServers"] = project_credentials(
@@ -1300,7 +1353,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         rendered = json.dumps(credential_kit, indent=2)
     except (OSError, ValueError, TypeError) as exc:
         raise ProvisionError(f"invalid MCP containment policy: {exc}") from exc
-    if (bare := headerless_quipu(json.loads(rendered).get("mcpServers", {}))):
+    from .job_tools import anonymous_read_servers
+    effective_servers = json.loads(rendered).get("mcpServers", {})
+    anonymous = anonymous_read_servers(effective_servers, profile)
+    if (bare := [name for name in headerless_quipu(effective_servers) if name not in anonymous]):
         raise ProvisionError(
             f"cannot provision {card.name}: the kit declares a DIRECT quipu MCP "
             f"entry without headersHelper ({', '.join(bare)}). Quipu writes need a "
@@ -1341,11 +1397,14 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
                 card.role, root),
             card.role, root)
         (out / CONSENT_TEMPLATE).write_text(final)
+        _record_task_consent(card, root, ws, final)
     else:
         _provision_capture_without_kit(card, root, ws, settings_path)
 
     got = servers_in(target)
     want = sorted(manifest.mcp) if manifest is not None else servers_in_text(tmpl.read_text())
+    if profile is not None:
+        want = sorted(profile["mcp_servers"])
     if sorted(got) != sorted(want):
         raise ProvisionError(
             f"provisioned {card.name} but the written file lists {got}, not the "

@@ -99,3 +99,60 @@ def test_never_writes_through_a_symlink(job, tmp_path):
     with pytest.raises(eph.Refused):
         eph.reapply_attended_settings(root, rec["name"])
     assert target.read_text() == "{}"
+
+
+@pytest.mark.parametrize("with_kit", [True, False])
+def test_task_provisioning_records_only_the_bytes_it_emitted(job, with_kit):
+    from shantytown import provision as provisioning
+    from shantytown.protocols import Agent
+
+    root, ws, rec = job
+    rec.update(job="task", kit_settings_sha256=None)
+    eph.write(root, rec)
+    templates = root / "provision"
+    if with_kit:
+        templates.mkdir()
+        (templates / provisioning.MCP_TEMPLATE).write_text(json.dumps({"mcpServers": {}}))
+        (templates / "settings.local.json").write_text(json.dumps(PROVISIONED))
+    card = Agent(name=rec["name"], role="worker", harness="claude", workspace=str(ws))
+    provisioning.provision(card, root)
+    emitted = (ws / ".claude" / "settings.local.json").read_bytes()
+    current = eph.read(root, rec["name"])
+    assert current["kit_settings_sha256"] == hashlib.sha256(emitted).hexdigest()
+    assert eph.trust_surface_refusal(current, expected_servers=KIT) == ""
+    # Recording an emitted task file must not weaken the later trust check.
+    (ws / ".claude" / "settings.local.json").write_bytes(emitted + b" ")
+    assert "differs from the settings st wrote" in eph.trust_surface_refusal(
+        current, expected_servers=KIT)
+
+
+def test_task_consent_cannot_attest_another_workspace_or_changed_bytes(job, tmp_path):
+    from shantytown import provision as provisioning
+    from shantytown.protocols import Agent
+
+    root, ws, rec = job
+    rec.update(job="task", kit_settings_sha256=None)
+    eph.write(root, rec)
+    provision(ws)
+    card = Agent(name=rec["name"], role="worker", harness="claude", workspace=str(ws))
+    with pytest.raises(provisioning.ProvisionError, match="bytes just provisioned"):
+        provisioning._record_task_consent(card, root, ws, "{}")
+    with pytest.raises(provisioning.ProvisionError, match="launching job"):
+        provisioning._record_task_consent(card, root, tmp_path / "other", "{}")
+    assert eph.read(root, rec["name"])["kit_settings_sha256"] is None
+
+
+@pytest.mark.parametrize("change", [{"state": eph.DONE}, {"harness": "codex"}])
+def test_task_consent_rejects_completed_or_different_harness_jobs(job, change):
+    from shantytown import provision as provisioning
+    from shantytown.protocols import Agent
+
+    root, ws, rec = job
+    rec.update(job="task", kit_settings_sha256=None, **change)
+    eph.write(root, rec)
+    provision(ws)
+    card = Agent(name=rec["name"], role="worker", harness="claude", workspace=str(ws))
+    with pytest.raises(provisioning.ProvisionError, match="launching job"):
+        provisioning._record_task_consent(
+            card, root, ws, (ws / ".claude" / "settings.local.json").read_text())
+    assert eph.read(root, rec["name"])["kit_settings_sha256"] is None

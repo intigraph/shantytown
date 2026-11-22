@@ -822,14 +822,16 @@ def test_an_ANCHOR_bead_is_NOT_dispatchable():
     assert feed_check.dispatchable({"weaver"}, ready) == []
 
 
-def test_gt_escalation_is_STILL_dispatchable_and_that_is_deliberate():
-    """The 304-bead escalation glut distorts the OPEN pool, not this one —
-    measured 0 of 93 ready beads carry gt:escalation. Excluding it here would
-    imply a hazard this path never had. If escalations ever DO reach ready this
-    test is the thing that fails and forces the decision, rather than a silent
-    guard that was never exercised."""
+def test_gt_escalation_is_NOT_dispatchable_after_the_ops_record_ruling(monkeypatch):
+    """This test used to pin gt:escalation as dispatchable until someone made
+    the decision. aegis-8dda.1 (Sattler ruling A, 2026-11-22) made it:
+    escalation records are operations records owned by their producer, not
+    backlog work. The rollback switch restores the old behaviour exactly."""
+    monkeypatch.delenv("ST_OPS_RECORD_EXCLUSION", raising=False)
     ready = [{"id": "aegis-1", "title": "some check failed",
               "labels": ["gt:escalation", "severity:medium"]}]
+    assert feed_check.dispatchable({"weaver"}, ready) == []
+    monkeypatch.setenv("ST_OPS_RECORD_EXCLUSION", "0")
     assert [b[0] for b in feed_check.dispatchable({"weaver"}, ready)] == ["aegis-1"]
 
 

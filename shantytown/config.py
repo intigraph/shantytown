@@ -159,6 +159,7 @@ class Ephemeral:
     require_verified_identity: bool = False
     unattended_uid_ready: bool = False
     harness_by_job: dict = field(default_factory=dict)
+    jobs: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
     verdict_graph: str = ""         # registered committed graph IRI for the records
@@ -1192,7 +1193,8 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "harness_by_job",
-                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release"}
+                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs",
+                   "job_servers"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1234,9 +1236,15 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     if not isinstance(release, list) or not all(isinstance(x, str) and x for x in release):
         raise ConfigError(f"{path}: ephemeral.lane_release must be a list of strings")
     values["lane_release"] = tuple(release)
+    from .job_tools import validate_job_servers, validate_specs
+    try:
+        jobs = validate_specs(tbl.get("jobs", {}), EPHEMERAL_JOBS,
+                              validate_job_servers(tbl.get("job_servers", {})))
+    except ValueError as exc:
+        raise ConfigError(f"{path}: {exc}") from None
     return Ephemeral(unattended=unattended, require_verified_identity=verified,
                      unattended_uid_ready=uid_ready,
-                     harness_by_job=dict(by_job), **values)
+                     harness_by_job=dict(by_job), jobs=jobs, **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:

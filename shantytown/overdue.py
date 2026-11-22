@@ -15,7 +15,34 @@ from pathlib import Path
 import fcntl
 
 from .files import write_json_atomic
-from .inbox import is_message
+import os
+from .inbox import is_message, is_ops_record
+
+
+# A pending packet without a known receipt ID can only be confirmed by scanning
+# the recipient's whole inbox for its marker (~200 paged /query calls per
+# recipient on the live board). An absent result never authorizes a resend, so
+# re-scanning every tick cannot change the outcome, it only repeats the cost.
+# Back the scan off per packet: 15 min, doubling, capped at 24 h.
+# ST_OVERDUE_RECEIPT_BACKOFF=0 restores a scan on every tick.
+RECEIPT_RECHECK_BASE = 900.0
+RECEIPT_RECHECK_MAX = 86400.0
+
+
+def receipt_recheck_due(packet: dict, now: float) -> bool:
+    """True when a marker scan for this pending packet may run now."""
+    if os.environ.get("ST_OVERDUE_RECEIPT_BACKOFF", "1").strip() == "0":
+        return True
+    checked, checks = packet.get("receipt_checked_at"), packet.get("receipt_checks", 0)
+    if checked is None:
+        return True
+    for value in (checked, checks):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0:
+            raise ValueError("invalid overdue receipt re-check state")
+    if checked > now:
+        return True  # a clock step backwards never suppresses a check
+    wait = min(RECEIPT_RECHECK_MAX, RECEIPT_RECHECK_BASE * 2 ** min(int(checks), 16))
+    return now - checked >= wait
 
 
 @dataclass(frozen=True)
@@ -45,7 +72,7 @@ def findings(rows, now):
     for row in rows:
         if row.get("status") not in ("open", "in_progress", "blocked"):
             continue
-        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])):
+        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])) or is_ops_record(row):
             continue
         identifier, due = row.get("id"), row.get("due_at")
         if not isinstance(identifier, str) or not identifier or identifier in seen:
@@ -214,12 +241,19 @@ class OverdueAlerter:
             known_id = packet.get("receipt_id")
             if known_id is not None and (not isinstance(known_id,str) or not known_id):
                 raise ValueError("invalid known reminder receipt ID")
+            scan = known_id is None and self.receipt is not None
+            if scan and not receipt_recheck_due(packet, now.timestamp()):
+                continue
             already = (self.receipt(recipient,packet["marker"],known_id) if known_id is not None
                        else self.receipt(recipient,packet["marker"])) if self.receipt is not None else False
             if already and any(json.loads(key)[0] in ("unlock","spec") for key in packet["keys"]) and (self.ack is not None or self.spec_ack is not None) and not isinstance(already,str):
                 raise ValueError("unlock ACK requires a verified receipt ID")
             if not already:
                 self.log(f"overdue: {recipient} attempted receipt UNKNOWN; no resend")
+                if scan:
+                    packet["receipt_checked_at"] = now.timestamp()
+                    packet["receipt_checks"] = int(packet.get("receipt_checks", 0)) + 1
+                    write_json_atomic(self.path, ledger)
                 continue
             for key in packet["keys"]:
                 if key in live_keys or json.loads(key)[0] in ("unlock","spec"):

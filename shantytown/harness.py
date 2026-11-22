@@ -442,6 +442,12 @@ class ClaudeHarness:
         harness_options.warn_unsupported(card, self.name)
         chrome = "--chrome" if harness_options.chrome(card) else "--no-chrome"
         flags = chrome
+        from .job_tools import selected as job_profile
+        profile = job_profile(root, card.name)
+        if profile is not None:
+            flags += " --strict-mcp-config --mcp-config " + shlex.quote(str(Path(card.workspace) / ".mcp.json"))
+            if not profile["skills"]:
+                flags += " --disable-slash-commands"
         if self._remote_control(root):
             flags += f" --remote-control {card.name}"
         # --dangerously-skip-permissions is OPT-IN per agent (card.dangerous), never
@@ -460,6 +466,8 @@ class ClaudeHarness:
         if model:
             flags += f" --model {shlex.quote(model)}"
         model_env = f"SHANTY_MODEL={shlex.quote(model)} " if model else ""
+        if profile is not None and not profile["claude_ai_connectors"]:
+            model_env += "ENABLE_CLAUDEAI_MCP_SERVERS=false "
         # BOBBIN_ROLE is how yupana's policy guard resolves WHICH scope applies
         # (yupana#20: tenant is resolved --tenant, then BOBBIN_ROLE; scopes live
         # in .bobbin/config.toml under [yupana.policy.scopes.<role>] — the
