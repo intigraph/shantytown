@@ -526,6 +526,19 @@ def _only_tooling_block(base_text: str, path: Path) -> bool:
         return False
 
 
+def _bound_job_servers(rec: dict) -> set:
+    """Server names in the job's own bound spec, only when its recorded hash
+    still matches (fails closed to none: a hand-edited spec admits nothing)."""
+    bound = rec.get("jobspec")
+    spec = bound.get("resolved") if isinstance(bound, dict) else None
+    if not isinstance(spec, dict) or not isinstance(spec.get("server_defs"), dict):
+        return set()
+    digest = hashlib.sha256(json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if digest != bound.get("sha256"):
+        return set()
+    return set(spec["server_defs"]) & set(spec.get("mcp_servers") or ())
+
+
 def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) -> str:
     """Why the launcher must NOT accept Claude Code's folder-trust dialog for this
     job's worktree, or "" when it may (sattler ruling, aegis-e579, 11-21).
@@ -596,6 +609,10 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
             except (OSError, ValueError, AttributeError):
                 return ".mcp.json is unreadable"
             allowed = set(expected_servers if expected_servers is not None else ())
+            # The job-only servers st bound into THIS job's hashed spec (za4f.2:
+            # an anonymous quipu-read) are st's kit too; provisioning writes
+            # them into .mcp.json before the trust dialog appears.
+            allowed |= _bound_job_servers(rec)
             if not allowed or not servers <= allowed:
                 return ".mcp.json names servers outside the provisioned kit: " + \
                        ", ".join(sorted(servers - allowed)[:5] or ["(no kit to compare)"])
