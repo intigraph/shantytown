@@ -216,3 +216,12 @@ def test_sdk_ambiguous_label_edits_refuse_before_write(tmp_path):
         with pytest.raises(ValueError,match='ambiguous producer label'):
             run(['update','st-1',*flags],tracker,execute,lambda *a:None)
     assert not calls
+
+
+def test_explicit_ask_passes_through_without_work_capacity_read(tmp_path):
+    tracker, calls, notices, execute = fixture(tmp_path, 10)
+    tracker.capacity_rows = lambda owner: pytest.fail('Ask is not worker capacity')
+    args = ['create', 'Choose a color', '--assignee=worker', '--type', 'ask',
+            '--unblocks', 'work-1', '--default', 'Keep current', '--expires-at', '2026-12-01T00:00:00Z']
+    run(args, tracker, execute, lambda *a: notices.append(a))
+    assert calls == [args] and notices == []

@@ -34,6 +34,11 @@ def blocked_on_pattern(subject, target):
 MESSAGE_PATTERN = json.dumps(r"^\s*(inbox:|mail:)")
 
 
+def ask_record_filter(subject: str = "?s") -> str:
+    """Explicit Ask records belong to the overseer, never a crew count."""
+    return (f'FILTER NOT EXISTS {{ {subject} <{SEEDS}ontology/issueType> "ask" }} ')
+
+
 def ops_record_filter(subject: str = "?s") -> str:
     """SPARQL that drops operations records (aegis-8dda.1) from a count.
 
@@ -779,7 +784,8 @@ def queue_rows(proof, *, timeout=30):
                 branches.append(
                     f'{{ GRAPH {_iri(graph)} {{ ?s <{SEEDS}ontology/lane> {json.dumps(lane)} . '
                     f'?s <{SEEDS}ontology/status> ?status . FILTER(?status != "closed") '
-                    f'?s a <{SCHEMA}Action> }} BIND({json.dumps(graph)} AS ?graph) }}')
+                    f'?s a <{SCHEMA}Action> ' + ask_record_filter() +
+                    f'}} BIND({json.dumps(graph)} AS ?graph) }}')
         query = ('SELECT DISTINCT (STR(?s) AS ?subject) ?graph WHERE { '
                  + ' UNION '.join(branches) + ' } LIMIT 46')
         candidates = _query(proof, query, timeout)['rows']
@@ -1170,7 +1176,7 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
                 f"a <{SCHEMA}Action> . FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
                 'FILTER(STR(?owner) != "") } '
                 f'FILTER NOT EXISTS {{ ?s <{SCHEMA}keywords> "decision-needed" }} '
-                + ops_record_filter() + priority + "} }"
+                + ask_record_filter() + ops_record_filter() + priority + "} }"
             )
         query = (
             "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { "
@@ -1256,7 +1262,7 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
             f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?message . '
             f'FILTER(REGEX(STR(?message), {MESSAGE_PATTERN})) }} '
-            + ops_record_filter() +
+            + ask_record_filter() + ops_record_filter() +
             'FILTER NOT EXISTS { ' + blocked_on_pattern('?s', '?blocker') +
             f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
             'FILTER(?bs != "closed" && ?bs != "tombstone") } } '

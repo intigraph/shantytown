@@ -68,6 +68,7 @@ def test_all_display_fields_and_dependency_classification(monkeypatch):
         "updated_at": "2026-10-12T00:00:00Z", "close_reason": "retained reason",
         "rank": None, "due_at": None, "created_at": None,
         "labels": ("blocked:external",), "revision": None, "agent_context": None, "lane": None,
+        "issue_type": None, "unblocks": None, "default": None, "expires_at": None,
     }
     assert len(calls) == 1
     assert "LIMIT 10000" in calls[0] and "schema.org/parentItem" not in calls[0]
@@ -305,3 +306,18 @@ def test_historical_and_published_blockers_keep_the_same_native_classification(m
     result = seeds_item.read_item(value, 'test-one')
     assert result.open_blockers == ('test-blocker',)
     assert all('<' + iri + '>' in calls[0] for iri in seeds_item.BLOCKED_ON)
+
+
+def test_ask_metadata_is_preserved_by_exact_projection(monkeypatch):
+    source = rows(**{
+        seeds_item.SEEDS + "ontology/issueType": "ask",
+        seeds_item.SEEDS + "ontology/askDefault": "Keep the existing choice",
+    })
+    source += [
+        {"graph": GRAPH, "s": SUBJECT, "p": seeds_item.SEEDS + "ontology/unblocks", "o": seeds_item.SEEDS + "item/test-linked", "kind": "iri"},
+        {"graph": GRAPH, "s": SUBJECT, "p": seeds_item.SEEDS + "ontology/expiresAt", "o": "2026-12-01T00:00:00Z", "kind": seeds_item.XSD + "dateTime"},
+    ]
+    value, _ = tracker(monkeypatch, source)
+    item = seeds_item.read_item(value, "test-one")
+    assert (item.issue_type, item.unblocks, item.default, item.expires_at) == (
+        "ask", "test-linked", "Keep the existing choice", "2026-12-01T00:00:00Z")

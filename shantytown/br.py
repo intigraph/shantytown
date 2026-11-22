@@ -1,6 +1,8 @@
 """br — SQLite+JSONL tracker backend, beside the legacy bd adapter."""
 from __future__ import annotations
 
+from .ask_visibility import is_ask
+
 import json
 import os
 import re
@@ -134,7 +136,8 @@ class BrTracker(BeadsTracker):
             args.append(f"--status={status}")
         for key, value in fields.items():
             if value is not None:
-                args.append(f"--{key.replace('_', '-')}={value}")
+                flag = "type" if key == "issue_type" else key.replace("_", "-")
+                args.append(f"--{flag}={value}")
         if defer_until is not None:
             args.append(f"--defer={defer_until}")
         if selected is not None:
@@ -414,7 +417,7 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
         if row.get("assignee") in (agent, agent.split("/")[-1])
         and row.get("status") != "closed"
         and not is_message(row.get("title", ""))
-        and not is_ops_record(row)   # aegis-8dda.1
+        and not is_ops_record(row) and not is_ask(row)   # aegis-8dda.1
         and not is_unworkable(row)   # the ROW: deferral is a FIELD on br (aegis-vyc3aa)
     ]
     if not mine:

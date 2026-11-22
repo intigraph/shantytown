@@ -1,0 +1,5 @@
+Script started on 2026-11-22 16:15:55-05:00 [COMMAND="python3 docs/probes/overseer-asks/demo.py" <not executed on terminal>]
+before: {"ask": false, "haul": {"worker": ["test-ask", "test-work"]}, "plate_candidates": ["test-ask", "test-work"], "work_capacity": true}
+after: {"ask": true, "haul": {"worker": ["test-work"]}, "plate_candidates": ["test-work"], "work_capacity": false}
+
+Script done on 2026-11-22 16:15:55-05:00 [COMMAND_EXIT_CODE="0"]

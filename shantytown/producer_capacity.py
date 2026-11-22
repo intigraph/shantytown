@@ -22,7 +22,7 @@ VALUES = set(('title format type actor priority description body store quipu sta
               'acceptance model external-ref session due estimate labels set-labels parent '
               'agent-context slug deps workflow-run step visit notes design check-acceptance '
               'uncheck-acceptance add-acceptance if-revision rank before after add-label '
-              'remove-label transition-comment').split())
+              'remove-label transition-comment unblocks default expires-at').split())
 SHORT = {'-a':'--assignee', '-s':'--status', '-d':'--description', '-t':'--type',
          '-p':'--priority', '-e':'--estimate', '-l':'--labels'}
 
@@ -84,10 +84,10 @@ def proposed_fields(arguments, previous):
         if normalized not in ('0', '1', '2', '3', '4'):
             raise ValueError('unsupported producer priority')
         candidate['priority'] = int(normalized)
-    for flag, key in (('--title', 'title'), ('--status', 'status'), ('--defer', 'defer_until')):
+    for flag, key in (('--title', 'title'), ('--status', 'status'), ('--defer', 'defer_until'), ('--type', 'issue_type')):
         value = option(arguments, flag)
         if value is not None:
-            candidate[key] = value
+            candidate[key] = value.strip().lower() if key == 'issue_type' else value
     parsed = list(fields(arguments))
     replacements = [value for flag, value, _, _ in parsed if flag in ('--labels', '--set-labels')]
     labels = candidate.get('labels') or []

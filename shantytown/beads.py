@@ -20,6 +20,7 @@ import subprocess
 from pathlib import Path
 
 from . import stores
+from .ask_visibility import is_ask
 from .inbox import is_message, is_unworkable
 from .protocols import (BLOCKER_KIND_LABELS, WorkItem, blocker_kind,
                         _PLATE_RANK, is_blocked, plate_key)
@@ -294,6 +295,8 @@ class BeadsTracker:
             priority=_priority(d),
             rank=d.get("rank"), due_at=d.get("due_at"), created_at=d.get("created_at"),
             lane=d.get("lane"),
+            issue_type=d.get("issue_type"), unblocks=d.get("unblocks"),
+            default=d.get("default"), expires_at=d.get("expires_at"),
             blocker_kind=blocker_kind(d.get("labels")),
             labels=tuple(d.get("labels") or ()),
             agent_context=d.get("agent_context"),
@@ -539,6 +542,7 @@ def plate(tracker: "BeadsTracker", agent: str) -> "WorkItem | None":
         # uses. Measured need: `st mail -d` items titled "mail: ..." are open and
         # assigned on the live aegis store today, i.e. sitting on real plates.
         and not is_message(x.get("title", ""))
+        and not is_ask(x)
         # BLOCKED and DEFERRED are not workable, so serving either cycles the
         # agent: it burns a turn discovering that, stops, and the next stop hands
         # it back. Measured 2026-08-02: 16 blocked beads, all 16 assigned, all

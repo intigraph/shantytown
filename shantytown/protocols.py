@@ -302,6 +302,10 @@ class WorkItem:
     # Same-read discriminator for native operation admission; never mutated here.
     agent_context: str | None = None
     lane: str | None = None
+    issue_type: str | None = None
+    unblocks: str | None = None
+    default: str | None = None
+    expires_at: str | None = None
 
 
 @runtime_checkable

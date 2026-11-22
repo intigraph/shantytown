@@ -68,7 +68,7 @@ class StoreProof:
 
 GOVERNED_RELEASE_FIELDS = ('status', 'priority', 'labels', 'defer_until', 'title',
                            'notes', 'description', 'design', 'acceptance_criteria',
-                           'issue_type', 'due_at', 'parent', 'rank', 'external_ref',
+                           'issue_type', 'unblocks', 'default', 'expires_at', 'due_at', 'parent', 'rank', 'external_ref',
                            'blocker_kind', 'closed_at', 'close_reason')
 
 

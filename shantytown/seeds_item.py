@@ -26,6 +26,8 @@ FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
           SCHEMA + "description", SEEDS + "ontology/notes", SEEDS + "ontology/agentContext",
           SCHEMA + "scheduledTime", SCHEMA + "result",
           SCHEMA + "dateCreated", "http://www.w3.org/2002/12/cal/ical#due",
+          SEEDS + "ontology/issueType", SEEDS + "ontology/askDefault",
+          SEEDS + "ontology/expiresAt", SEEDS + "ontology/unblocks",
           SEEDS + "ontology/rank", SEEDS + "ontology/lane", *EDGES)
 TARGET_FIELDS = (TYPE, SCHEMA + "identifier", SCHEMA + "name", LABEL,
                  SEEDS + "ontology/status")
@@ -82,9 +84,13 @@ def _value(row):
         raise ValueError("unexpected item predicate")
     if kind == UNREPORTED:
         raise ValueError(f"item field {predicate} has a type the store did not report")
-    if predicate == TYPE or predicate in WIRE_EDGES:
+    if predicate == TYPE or predicate in WIRE_EDGES or predicate == SEEDS + "ontology/unblocks":
         if kind != "iri":
             raise ValueError("item reference is not an IRI")
+    elif predicate == SEEDS + "ontology/expiresAt":
+        if kind != XSD + "dateTime":
+            raise ValueError("Ask expiry type unsupported")
+        value = _time(value)
     elif predicate == SCHEMA + "version":
         if kind != XSD + "integer" or not re.fullmatch(r"[+]?\d+", value):
             raise ValueError("item revision type unreadable")
@@ -259,6 +265,10 @@ def read_item(tracker, identifier):
         unreadable_deps=sum(_is_placeholder_dep(d) for d in dependencies),
         rank=_one(facts, SEEDS + "ontology/rank"),
         lane=_one(facts, SEEDS + "ontology/lane"),
+        issue_type=_one(facts, SEEDS + "ontology/issueType"),
+        unblocks=(_one(facts, SEEDS + "ontology/unblocks") or "").removeprefix(SEEDS + "item/") or None,
+        default=_one(facts, SEEDS + "ontology/askDefault"),
+        expires_at=_one(facts, SEEDS + "ontology/expiresAt"),
         due_at=_one(facts, "http://www.w3.org/2002/12/cal/ical#due"),
         created_at=_one(facts, SCHEMA + "dateCreated"),
         labels=tuple(sorted(facts.get(SCHEMA + "keywords", set()))),
