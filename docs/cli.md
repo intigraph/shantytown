@@ -4176,3 +4176,12 @@ shape applies without guessing milestone labels or changing parent membership.
 Ordinary `st work defer` still requires its existing event and backstop checks.
 Open technical `blocks` edges also suppress native haul continuation; the next
 fresh blocker observation restores eligibility after closure.
+
+Overseer decisions use Seeds' `ask` item type. They carry `unblocks` (the linked
+item or epic id), `default` (the fallback text), and `expires_at` (the decision
+deadline). Create them with `sd create --type ask --unblocks ID --default TEXT
+--expires-at RFC3339 TITLE`; list them explicitly with `sd list --type ask`.
+They stay out of worker plates, hauls, capacity, reminders and ready counts even
+without a legacy ASK title or decision label. Expiry records a deadline; it does
+not execute the fallback. `st work item update ID --type ask --unblocks ID
+--default TEXT --expires-at RFC3339` and exact item reads retain these fields.

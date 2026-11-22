@@ -28,7 +28,8 @@ def label_names(labels):
 def is_ask(item):
     value = _fields(item)
     labels = label_names(value.get('labels'))
-    return (bool(ASK_LABELS & labels)
+    return (str(value.get("issue_type") or value.get("type") or "").strip().lower() == "ask"
+            or bool(ASK_LABELS & labels)
             or value.get('blocker_kind') == 'blocked:human'
             or str(value.get('title', '')).strip().startswith('ASK Stiwi'))
 
@@ -40,7 +41,7 @@ def refuse_deferral(item, changes):
     # Classification changes must not strand a newly recognised ASK on an
     # already deferred item. Reopening in the same request remains safe.
     classifying_deferred = (prospective.get('status') == 'deferred'
-                            and bool({'labels', 'title', 'blocker_kind'} & changes.keys())
+                            and bool({'labels', 'title', 'blocker_kind', 'issue_type', 'type'} & changes.keys())
                             and (is_ask(prospective)
                                  or changes.get('blocker_kind') == 'blocked:human'))
     if not deferring and not classifying_deferred:

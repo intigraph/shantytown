@@ -243,7 +243,7 @@ def command(args, tracker):
             raise ValueError("selected tracker cannot verify a close reason")
         fields = {"status": "closed", "close_reason": _body(args.reason_file).strip()}
     elif args.item_action == "update":
-        for key in ("status", "assignee", "priority", "lane", "rank"):
+        for key in ("status", "assignee", "priority", "lane", "rank", "issue_type", "unblocks", "default", "expires_at"):
             value = getattr(args, key, None)
             if value is not None:
                 fields[key] = value

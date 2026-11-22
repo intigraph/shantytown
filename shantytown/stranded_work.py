@@ -7,6 +7,8 @@ and checked process evidence. Release is separately admitted, off by default.
 """
 from __future__ import annotations
 
+from .ask_visibility import is_ask
+
 from contextlib import contextmanager
 from datetime import datetime
 import fcntl
@@ -38,12 +40,11 @@ def eligible(row, *, operator_stopped=False):
     labels = row.get('labels') or []
     # Deploy records are phase-CAS reservations, not crew capacity. Even a
     # drained-but-open record must retain its owner for the deploy census.
-    if not isinstance(labels, list) or is_deploy_operation(row) or is_ops_record(row):
+    if not isinstance(labels, list) or is_deploy_operation(row) or is_ops_record(row) or is_ask(row):
         return False
     if operator_stopped:
         # ASK/desk-class items are decisions held for a person, not capacity:
         # they stay with their owner and stay visible (Sattler, aegis-byt).
-        from .ask_visibility import is_ask
         return (row.get('status') in {'open', 'hooked', 'in_progress', 'blocked', 'deferred'}
                 and bool(owner(row)) and not is_message(row.get('title', ''))
                 and not is_ask(row)

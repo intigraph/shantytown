@@ -5,6 +5,8 @@ Cache bookkeeping belongs to the CLI, not the pure anchor resolver.
 """
 from __future__ import annotations
 
+from .ask_visibility import is_ask
+
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -58,7 +60,7 @@ def projected(tracker, owner, *, now=None, seen_changes=frozenset()):
                 raise ValueError("invalid decision identity")
             if row["id"] in seen: raise ValueError("duplicate decision identity")
             seen.add(row["id"])
-            if is_message(row["title"]) or any(str(label).lower()=="inbox" for label in row.get("labels",[])) or is_ops_record(row):
+            if is_message(row["title"]) or any(str(label).lower()=="inbox" for label in row.get("labels",[])) or is_ops_record(row) or is_ask(row):
                 continue
             if type(row.get("priority")) is not int or row["priority"] not in range(5):
                 raise ValueError("invalid decision priority")

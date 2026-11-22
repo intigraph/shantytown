@@ -1,0 +1,3 @@
+before: {"ask": false, "haul": {"worker": ["test-ask", "test-work"]}, "plate_candidates": ["test-ask", "test-work"], "work_capacity": true}
+after: {"ask": true, "haul": {"worker": ["test-work"]}, "plate_candidates": ["test-work"], "work_capacity": false}
+

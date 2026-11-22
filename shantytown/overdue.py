@@ -7,6 +7,8 @@ state and sends nothing. One digest per recipient per pass, then at most daily.
 """
 from __future__ import annotations
 
+from .ask_visibility import is_ask
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -72,7 +74,7 @@ def findings(rows, now):
     for row in rows:
         if row.get("status") not in ("open", "in_progress", "blocked"):
             continue
-        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])) or is_ops_record(row):
+        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])) or is_ops_record(row) or is_ask(row):
             continue
         identifier, due = row.get("id"), row.get("due_at")
         if not isinstance(identifier, str) or not identifier or identifier in seen:
