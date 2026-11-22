@@ -7060,7 +7060,11 @@ def _cmd_inbox(a) -> int:
       OK (0)           persisted (+ delivered live if the pane was there)
     """
     if getattr(a, 'ack_id', None) or getattr(a, 'defer_id', None):
-        return _inbox_dispose(a)
+        from . import inbox_count_cache
+        try:
+            return _inbox_dispose(a)
+        finally:
+            inbox_count_cache.invalidate(os.environ.get('SHANTY_AGENT'))
     if getattr(a, 'until', None) or getattr(a, 'reason', None):
         print('  refused: --until/--reason require --ack-id or --defer-id', file=sys.stderr)
         return REFUSED
@@ -7096,6 +7100,12 @@ def _cmd_inbox(a) -> int:
             print("  refused: no agent. `st inbox <you>` or set $SHANTY_AGENT.",
                   file=sys.stderr)
             return REFUSED
+        if getattr(a, "read", False) or getattr(a, "read_id", []):
+            from . import inbox_count_cache
+            try:
+                return _inbox_read(a, me)
+            finally:
+                inbox_count_cache.invalidate(me)  # aegis-dnw: an ack changes the count
         return _inbox_read(a, me)
 
     msg = " ".join(a.message)
@@ -7160,6 +7170,8 @@ def _cmd_inbox(a) -> int:
             print("  stopped-owner inbox flag UNKNOWN", file=sys.stderr)
     if getattr(a, "durable", False):
         result = _inbox_durable(a, agent, msg, panes, typed=typed, sender=sender)
+        from . import inbox_count_cache
+        inbox_count_cache.invalidate(agent)  # aegis-dnw: new mail changes the count
         # Inspect after persistence, including UNKNOWN: the new message must
         # not disappear behind an earlier empty ownership observation.
         if owned_work_flag:
@@ -7692,6 +7704,14 @@ def _inbox_read(a, me: str) -> int:
     """
     read_ids = getattr(a, "read_id", [])
     selected_only = False
+    from . import inbox_count_cache
+    # aegis-dnw: the status bar polls --count every 60 s; serve a fresh cached
+    # answer instead of ~8 store requests. Any change made here drops it.
+    if getattr(a, "count", False) and not read_ids:
+        cached = inbox_count_cache.get(me)
+        if cached is not None:
+            print(cached)
+            return OK
     try:
         # SAME DEFAULT AS THE DURABLE WRITE. The write side defaults to beads
         # (dearing, qdal.2); if the read side defaulted to files, a bare
@@ -7706,7 +7726,9 @@ def _inbox_read(a, me: str) -> int:
         selected_only = bool(read_ids) and not getattr(a, "count", False) and callable(select)
         counter = getattr(box, "unread_count", None)
         if getattr(a, "count", False) and callable(counter):
-            print(counter(me))
+            value = counter(me)
+            inbox_count_cache.put(me, value)
+            print(value)
             return OK
         view = getattr(box, "unread_view", None)
         total = None
@@ -7723,6 +7745,7 @@ def _inbox_read(a, me: str) -> int:
         return CANNOT_TELL
 
     if getattr(a, "count", False):
+        inbox_count_cache.put(me, len(unread))
         print(len(unread))
         return OK
 
