@@ -601,6 +601,7 @@ def test_sdk_repair_uses_stable_workflow_identity_and_reads_exact_p0(monkeypatch
     assert '--visit=1' in calls[0] and '--step=repair' in calls[0]
     assert any(s.startswith('--workflow-run=urn:shantytown:duty:') for s in calls[0])
     assert '--priority=0' in calls[0] and '--labels=orphaned-duty' in calls[0]
+    assert '--type=ops' in calls[0]
     with pytest.raises(ValueError, match='identity'):
         tracker.create_duty_issue(payload, target='admin', key='different')
     assert len(calls) == 2

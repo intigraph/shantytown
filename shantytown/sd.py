@@ -354,7 +354,7 @@ class SdTracker(BrTracker):
         title = 'P0 orphaned duty: ' + ident
         description = key + '\n' + json.dumps(payload, sort_keys=True)
         run = 'urn:shantytown:duty:' + hashlib.sha256(key.encode()).hexdigest()
-        result = self._bd('create', title, '--json', '--priority=0',
+        result = self._bd('create', title, '--json', '--type=ops', '--priority=0',
             '--assignee=' + target, '--labels=orphaned-duty',
             '--description=' + description, '--workflow-run=' + run,
             '--step=repair', '--visit=1')
