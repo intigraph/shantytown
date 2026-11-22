@@ -574,3 +574,31 @@ state directories or enables a missing capability. Use the earlier
 The resulting receipt remains `live: false`, `execution: refused`,
 `activation: gated`. No transport listener or protected execution callback is
 installed. Runtime activation remains gated on xu2; merge verbs are excluded.
+
+## Watch evidence evaluator (source interface)
+
+`shantytown.watch_program` validates immutable program data and evaluates
+qualified samples without I/O, launch, signing, compensation or item closure.
+It is not a long-running ephemeral agent or a second scheduler. Both future
+selected-source adapters must call `WatchSpec.validate`; there is no TOML or
+Quipu loader or fallback in this module.
+
+The source schema contains version, run ID, selected-source SHA256, native
+deployment receipt, frozen component identity, original start/window/cadence,
+and named finite nonnegative upper limits. The sample grid always includes
+the original end, even if cadence does not divide the window. Resuming uses
+that same grid. Missing, duplicate, reordered, nonfinite or future samples
+cannot pass, and a changed identity supersedes the run. An incomplete ended
+window is UNKNOWN. A measured bound breach survives another missing metric.
+
+The result separates safety, native activation and improvement. Configuration
+true is not an activation input. An inactive capability can have a safe watch,
+while improvement stays NOT_EVALUATED. An active capability needs positive,
+finite, admitted comparable before/after cohorts; a flat result is explicitly
+NO_IMPROVEMENT. Compensation always remains NOT_EXECUTED here.
+
+A controller must authenticate the reader evidence and deployment/authority
+receipts before calling this pure evaluator. Its strings and hashes do not
+authenticate a caller. Managed-unit collection, durable evidence, callbacks,
+signed non-review results and the shared Action executor remain separate
+integration gates. This source interface does not satisfy live watch acceptance.
