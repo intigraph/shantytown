@@ -32,6 +32,23 @@ def blocked_on_pattern(subject, target):
 
 
 MESSAGE_PATTERN = json.dumps(r"^\s*(inbox:|mail:)")
+
+
+def ops_record_filter(subject: str = "?s") -> str:
+    """SPARQL that drops operations records (aegis-8dda.1) from a count.
+
+    The same markers as inbox.is_ops_record: seeds issue type "ops" or a
+    producer label. Empty when ST_OPS_RECORD_EXCLUSION=0 (rollback).
+    """
+    from .inbox import OPS_RECORD_LABELS, OPS_RECORD_TYPES, _ops_exclusion_enabled
+    if not _ops_exclusion_enabled():
+        return ""
+    labels = ", ".join(json.dumps(label) for label in sorted(OPS_RECORD_LABELS))
+    kinds = ", ".join(json.dumps(kind) for kind in sorted(OPS_RECORD_TYPES))
+    return (f"FILTER NOT EXISTS {{ {subject} <{SCHEMA}keywords> ?opsLabel . "
+            f"FILTER(LCASE(STR(?opsLabel)) IN ({labels})) }} "
+            f"FILTER NOT EXISTS {{ {subject} <{SEEDS}ontology/issueType> ?opsKind . "
+            f"FILTER(LCASE(STR(?opsKind)) IN ({kinds})) }} ")
 FIELDS = {
     **{SEEDS + "ontology/" + native: public for native, public in (
         ("specVersion", "spec_version"), ("specPreviousVersion", "spec_previous_version"),
@@ -1153,7 +1170,7 @@ def unassigned_counts(proof, *, timeout: int = 30) -> tuple[int, int]:
                 f"a <{SCHEMA}Action> . FILTER NOT EXISTS {{ ?s <{SCHEMA}agent> ?owner . "
                 'FILTER(STR(?owner) != "") } '
                 f'FILTER NOT EXISTS {{ ?s <{SCHEMA}keywords> "decision-needed" }} '
-                + priority + "} }"
+                + ops_record_filter() + priority + "} }"
             )
         query = (
             "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { "
@@ -1239,6 +1256,7 @@ def ready_count(proof, *, timeout: int = 30, now=None) -> int:
             f'OPTIONAL {{ ?s <{SEEDS}ontology/deferUntil> ?legacy_due }} '
             f'FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?message . '
             f'FILTER(REGEX(STR(?message), {MESSAGE_PATTERN})) }} '
+            + ops_record_filter() +
             'FILTER NOT EXISTS { ' + blocked_on_pattern('?s', '?blocker') +
             f'?blocker <{SEEDS}ontology/status> ?bs . ?s a <{SCHEMA}Action> . '
             'FILTER(?bs != "closed" && ?bs != "tombstone") } } '
