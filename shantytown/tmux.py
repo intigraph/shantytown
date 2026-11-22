@@ -75,6 +75,19 @@ _CODEX_ATTEMPTS = 2
 _CODEX_DEADLINE_S = 25
 
 
+def _codex_submission_busy(screen: str) -> bool:
+    from . import triage
+    if triage.mid_flight(screen):
+        return True
+    # A tall composer/queue can hide Working while Codex still advertises Tab
+    # below its model footer (aegis-nlc0). Body/transcript mentions do not count.
+    rows = [row.strip() for row in triage.strip_attrs(screen).splitlines()
+            if row.strip()]
+    return (len(rows) >= 3 and rows[-1] == "tab to queue message"
+            and " · " in rows[-2]
+            and any(row.startswith("›") for row in rows[:-2]))
+
+
 def _codex_owned_input(screen: str, text: str) -> bool:
     """Retry Enter only while the rendered composer still contains our body.
 
@@ -897,7 +910,7 @@ class Tmux:
             # Enter leaves busy Codex text stranded; a later ownership retry can
             # correctly refuse when the UI wraps inside a word (aegis-8mcb).
             # Keep that strict retry matcher; select Tab on the initial send.
-            submit_key = "Tab" if triage.mid_flight(current) else "Enter"
+            submit_key = "Tab" if _codex_submission_busy(current) else "Enter"
             before = current
             self._refuse_in_mode(pane, sent=len(chunks))
         subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
@@ -997,7 +1010,7 @@ class Tmux:
 
     def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
         from . import triage
-        was_busy = triage.mid_flight(before)
+        was_busy = _codex_submission_busy(before)
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
         deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
@@ -1039,7 +1052,7 @@ class Tmux:
                 # the runtime may have exited or become unreadable meanwhile.
                 if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
-                busy = triage.mid_flight(screen)
+                busy = _codex_submission_busy(screen)
                 self._refuse_in_mode(pane, sent=1)
                 subprocess.run(self._cmd("send-keys", "-t", pane,
                                          "Tab" if busy else "Enter"), check=True)

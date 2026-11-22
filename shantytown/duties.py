@@ -254,7 +254,7 @@ class Duties:
         return result
 
     def tick(self, *, observe, live, administrator, ensure_issue, notify,
-             now=None, release=False, max_actions=10, host=None):
+             now=None, release=False, max_actions=10, host=None, resolve_issue=None):
         """One bounded pass, stable per-duty repair identity, no new scheduler."""
         now = time.time() if now is None else now
         if not math.isfinite(now) or now < 0 or not 1 <= max_actions <= 20:
@@ -283,6 +283,30 @@ class Duties:
                 evidence = observations[holder]
                 previous = states.get(ident, {})
                 if evidence.get('state') == 'live':
+                    if previous.get('repair') and not previous.get('repair_resolved'):
+                        if not release or actions >= max_actions:
+                            result.append((ident, 'repair resolution held; no write'))
+                        else:
+                            actions += 1
+                            try:
+                                if not callable(resolve_issue) or observe(holder) != evidence:
+                                    raise ValueError('duty recovery evidence changed or adapter unavailable')
+                                attempted = bool(previous.get('resolution_pending'))
+                                previous['resolution_pending'] = True
+                                states[ident] = previous
+                                write_json_atomic(statepath, states)  # BEFORE remote close.
+                                if resolve_issue(previous['intent'], previous['repair'],
+                                                 previous['intent_target'],
+                                                 f'{ident} holder {holder} live at registry revision {registry["revision"]}',
+                                                 reconcile_only=attempted) is not True:
+                                    raise ValueError('duty close readback UNKNOWN')
+                                previous.pop('resolution_pending', None)
+                                previous['repair_resolved'] = True
+                                result.append((ident, 'repair closed after verified live binding'))
+                            except Exception:
+                                report['complete'] = False
+                                report['unknown'] += 1
+                                result.append((ident, 'repair resolution UNKNOWN; intent retained'))
                     previous.update(active=False, checked_at=now)
                     states[ident] = previous
                     continue
@@ -310,7 +334,8 @@ class Duties:
                     # already transmitted intent under the same native key.
                     # Retain its exact payload and destination for recovery.
                     retained = {key: deepcopy(previous[key])
-                                for key in ('intent', 'intent_target') if key in previous}
+                                for key in ('intent', 'intent_target', 'repair', 'repair_state',
+                                            'resolution_pending') if key in previous}
                     previous = dict(holder=holder, generation=generation, since=since,
                                     **retained)
                 previous.update(active=True, evidence=evidence['state'], checked_at=now)
@@ -323,6 +348,11 @@ class Duties:
                     continue
                 report['orphaned'][row['kind']] += 1
                 result.append((ident, 'orphaned duty'))
+                if previous.get('resolution_pending'):
+                    report['complete'] = False
+                    report['unknown'] += 1
+                    result.append((ident, 'prior repair close UNKNOWN; no new repair write'))
+                    continue
                 if not release or actions >= max_actions:
                     continue
                 actions += 1

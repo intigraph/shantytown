@@ -260,6 +260,37 @@ def selected_settings(root, card, base):
     return str(target) if target.is_file() else base
 
 
+def _hide_tracked_skill(ws, path):
+    """Hide a skill the repository itself tracks (za4f.2 camayoc probe).
+
+    Only a directory whose every file is committed and unmodified qualifies:
+    it is repository content, not personal state, so removing it from this
+    job worktree loses nothing. The paths are marked skip-worktree first, so
+    the deletion is invisible to status/add/commit and cannot be published
+    by the job. An untracked, modified or ignored file keeps the refusal.
+    """
+    import shutil
+    import subprocess
+    rel = str(path.relative_to(ws))
+    def git(*args):
+        return subprocess.run(["git", "-C", str(ws), *args], capture_output=True,
+                              text=True, timeout=30)
+    listed = git("ls-files", "-z", "--", rel)
+    files = [f for f in listed.stdout.split("\0") if f]
+    if listed.returncode or not files:
+        return False
+    status = git("status", "--porcelain", "--ignored", "--untracked-files=all", "--", rel)
+    if status.returncode or status.stdout.strip():
+        return False
+    on_disk = {str(f.relative_to(ws)) for f in path.rglob("*") if f.is_file() or f.is_symlink()}
+    if on_disk - set(files):
+        return False
+    if git("update-index", "--skip-worktree", "--", *files).returncode:
+        return False
+    shutil.rmtree(path)
+    return True
+
+
 def prune_skills(workspace, spec):
     if spec is None:
         return
@@ -273,9 +304,12 @@ def prune_skills(workspace, spec):
         for path in directory.iterdir():
             if path.name in spec["skills"]:
                 continue
-            if not path.is_symlink():
+            if path.is_symlink():
+                path.unlink()
+            elif _hide_tracked_skill(ws, path):
+                continue
+            else:
                 raise ValueError("unselected workspace skill is not a provisioned link")
-            path.unlink()
     for name in spec["skills"]:
         if not (ws / ".claude" / "skills" / name / "SKILL.md").is_file():
             raise ValueError("selected job skill is not provisioned: " + name)

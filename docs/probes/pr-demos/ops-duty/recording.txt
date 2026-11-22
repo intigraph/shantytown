@@ -1,0 +1,8 @@
+Script started on 2026-11-22 06:07:31-05:00 [COMMAND="python3 docs/probes/pr-demos/ops-duty/demo.py" <not executed on terminal>]
+Synthetic board; production adapter; no resident commands.
+BASE 6c115c7fa034d46965201f98219ef7627e5cef4b
+{"created_type": "task (default)", "after_verified_recovery": "open", "foreign_target": "no resolver"}
+CANDIDATE 2a45a8ae45460978c33756417c23575238486c2b
+{"created_type": "ops", "after_verified_recovery": "closed", "foreign_target": "refused without write"}
+
+Script done on 2026-11-22 06:07:31-05:00 [COMMAND_EXIT_CODE="0"]

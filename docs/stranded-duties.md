@@ -63,6 +63,17 @@ one native idempotent P0 repair per duty and pages the live administrator.
 Refiring uses the same workflow identity, including a lost create reply.
 An acknowledged page does not mean the binding was repaired.
 
+New repair records use type `ops`, retaining their stable workflow identity,
+priority and labels. Install the supporting Seeds client before activating this
+producer revision; it does not retype existing records. In release mode, a fresh
+live holder observed again under the duty lock resolves the exact repair record
+with revision CAS. Changed ownership, priority, identity or ASK/desk disposition
+refuses closure. Shadow mode and the existing action budget retain the record.
+A journaled close intent precedes the remote write; later passes only reconcile
+an uncertain result, including across stop generations. A new stop cannot bypass
+that fence or mint another repair. Removing an inventory entry alone is not live
+recovery evidence and does not authorize this close path.
+
 P0/P1 duties become due after 30 minutes; other priorities after four hours.
 An independently recorded operator-stop time may establish that duration.
 Other down/held evidence starts a measured interval. UNKNOWN or live evidence
