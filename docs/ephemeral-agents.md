@@ -25,6 +25,36 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
 | Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
 
+## Signed controller launch bridge
+
+`recruit_launch.launch` is an internal controller library, without a CLI flag,
+listener or transport wiring. `ephemeral.recruitment_launch_ready` defaults to
+false and is separate from the protected UID gate. Enabling it belongs to the
+deployment's runtime activation decision; this source does not enable it.
+The ordinary scoped-recruiter CLI still refuses live launch and never borrows
+the controller's privilege path.
+
+The library accepts a fresh signed review-launch envelope and controller-owned
+context, not a prepared receipt. It verifies independent controller authority,
+consumes the protected persistent nonce and candidate claim, then enters the
+existing spawn transaction. That transaction retains its planner, cap,
+governor, job tools, worktree trust, ledger-before-card-before-launch and startup
+delivery checks. It preserves the exact signed PR head for a review.
+
+Protected key binding, custody, forge/check/verdict admission, expiry, quiet-time
+and maintenance holds, governor and selected capability are checked again
+before the ledger and at the existing launch seam. A final refusal uses the
+existing end path. The receiver requires a matching live native ledger before
+recording `launched`; a return code alone is insufficient. `refused` and
+`unknown` attempts remain terminal. A crash or lost launch response retains the
+nonce and candidate key; recovery never assumes that no job started.
+
+This does not connect the signed channel to execution, install keys or UIDs,
+enable recruitment or accept merge verbs. Connected preparation remains
+non-executable. Source tests use synthetic enrollment, forge and launcher
+fixtures with real signatures, SQLite state, planner, ledger and cards; they
+do not prove a deployed event-to-review launch.
+
 ## Lifecycle
 
 ### Review-to-enqueue custody (offline library)
@@ -141,6 +171,7 @@ merge_spacing_minutes = 10  # minimum gap between merge jobs on one repo
 unattended = false          # keep approval prompts; omission inherits the administrator card
 require_verified_identity = false # opt in after protected UID migration
 unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
+recruitment_launch_ready = false # separate signed-controller gate; no transport wiring
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into
