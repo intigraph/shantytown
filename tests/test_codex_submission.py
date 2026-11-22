@@ -316,3 +316,36 @@ def test_modern_busy_queue_never_claims_delivery(monkeypatch):
     with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
         panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+
+
+def test_busy_footer_queues_when_working_marker_is_offscreen(monkeypatch):
+    typed = OWNED + '\n  tab to queue message\n'
+    panes, calls = transport(monkeypatch, [BUSY, QUEUED], typed_frame=typed)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+
+
+def test_quoted_queue_hint_in_body_does_not_select_tab(monkeypatch):
+    typed = OWNED.replace(BODY, BODY + '\n  tab to queue message')
+    panes, calls = transport(monkeypatch, [READY, BUSY], typed_frame=typed)
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Enter']
+
+
+@pytest.mark.parametrize('screen', [
+    OWNED + '\n  tab to queue message\n' + READY,
+    OWNED.replace(FOOTER, '') + '\n  tab to queue message',
+    FOOTER + '\n  tab to queue message',
+])
+def test_queue_hint_requires_current_composer_and_footer_suffix(screen):
+    assert not tmux._codex_submission_busy(screen)
+
+
+def test_retry_uses_busy_footer_without_retyping(monkeypatch):
+    pending = OWNED + '\n  tab to queue message\n'
+    panes, calls = transport(monkeypatch, [READY, pending, pending, pending, QUEUED])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Enter', 'Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
