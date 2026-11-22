@@ -1,0 +1,9 @@
+Script started on 2026-11-22 12:10:38-05:00 [COMMAND="python3 docs/demos/recruit-protected-endpoint/run.py" <not executed on terminal>]
+Fixture only: synthetic root enrollment; real private Unix socket, signature and SQLite ledger.
+Default gate: controller recruitment activation is gated
+Enabled fixture: {"live": false, "state": "prepared"} ; signed frames = 1
+Wrong peer: controller channel peer UID mismatch
+Wrong-peer request bytes: 0
+No production connection, listener installation or job launch.
+
+Script done on 2026-11-22 12:10:38-05:00 [COMMAND_EXIT_CODE="0"]
