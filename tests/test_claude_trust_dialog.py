@@ -205,6 +205,32 @@ def test_an_extra_mcp_server_is_refused(job):
     assert "evil" in refusal(rec)
 
 
+
+def _bound(spec):
+    return {"resolved": spec, "sha256": hashlib.sha256(
+        json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()).hexdigest()}
+
+
+def test_a_job_only_server_bound_in_the_jobs_spec_may_be_trusted(job):
+    """za4f.2 / eph-review-5ef4df: provisioning writes the job's bound
+    quipu-read into .mcp.json; the guard refused it as outside the crew kit, so
+    a Claude job on a not-yet-trusted worktree root never started."""
+    ws, rec = job
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {k: {} for k in (*KIT, "quipu-read")}}))
+    assert "quipu-read" in refusal(rec)
+    spec = {"mcp_servers": [*KIT, "quipu-read"], "server_defs": {"quipu-read": {"url": "https://q.invalid/mcp"}}}
+    rec["jobspec"] = _bound(spec)
+    assert refusal(rec) == ""
+    # A spec edited after binding admits nothing extra; an unselected def neither.
+    rec["jobspec"] = dict(_bound(spec), sha256="0" * 64)
+    assert "quipu-read" in refusal(rec)
+    rec["jobspec"] = _bound({"mcp_servers": list(KIT), "server_defs": {"quipu-read": {}}})
+    assert "quipu-read" in refusal(rec)
+    # Any other server is still refused.
+    rec["jobspec"] = _bound(spec)
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {"quipu-read": {}, "evil": {}}}))
+    assert "evil" in refusal(rec)
+
 def test_a_skill_link_into_the_worktree_is_refused(job):
     ws, rec = job
     inside = ws / "planted"; inside.mkdir()

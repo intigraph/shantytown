@@ -119,6 +119,49 @@ def test_codex_profile_and_provisioning_never_rewrite_shared_config(tmp_path, mo
     assert (base.read_bytes(), base.stat().st_mtime_ns) == before
 
 
+
+def _codex_review_job(tmp_path, monkeypatch, codex_rules=True):
+    monkeypatch.setattr(CodexHarness, "provision", lambda *a, **kw: [])
+    ws = tmp_path / "ws"; ws.mkdir()
+    spec = jobs.validate_specs({"review": dict(mcp_servers=["bobbin"], skills=[])}, eph.JOBS)["review"]
+    policy = config.Ephemeral(jobs={"review": spec})
+    rec = {"name": "eph-review-a1b2c3", "job": "review", "harness": "codex", "repo": "intigraph/example",
+           "pr": 75, "workspace": str(ws), "state": eph.LAUNCHING, "jobspec": jobs.bind(policy, "review")}
+    if codex_rules:
+        rec["codex_rules"] = "/run/user/1000/shantytown/codex/eph-review-a1b2c3/rules/st-job.rules"
+    eph.write(tmp_path, rec)
+    base = tmp_path / "settings/codex/worker/config.toml"
+    base.parent.mkdir(parents=True)
+    base.write_text('[mcp_servers.bobbin]\nurl="http://bobbin.invalid/mcp"\n')
+    card = Agent(name=rec["name"], role="worker", harness="codex", workspace=str(ws))
+    return rec, card, base
+
+
+def test_codex_job_home_carries_the_attended_gh_read_rules(tmp_path, monkeypatch):
+    """za4f.2: a job-owned Codex config is the job's CODEX_HOME; without the
+    spawn's rules there, `gh pr diff <pr> --repo <repo>` waited on a prompt."""
+    rec, card, base = _codex_review_job(tmp_path, monkeypatch)
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    rules = target.parent / "rules" / eph.CODEX_RULES_FILE
+    assert rules.read_text() == eph.codex_job_rules(rec, unattended=False)
+    body = rules.read_text()
+    assert '["gh", "pr", ["view", "checks", "diff"], "75", "--repo", "intigraph/example"]' in body
+    assert 'pattern=["gh", "api"], decision="forbidden"' in body
+    assert stat_mode(rules) == 0o600
+    # Relaunch is idempotent; nothing broader is ever written.
+    assert Path(jobs.prepare_settings(tmp_path, card, str(base))) == target
+    assert rules.read_text() == body
+
+
+def test_codex_job_without_spawn_rules_gets_none(tmp_path, monkeypatch):
+    rec, card, base = _codex_review_job(tmp_path, monkeypatch, codex_rules=False)
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert not (target.parent / "rules").exists()
+
+
+def stat_mode(path):
+    return path.stat().st_mode & 0o777
+
 def test_profile_rejects_unknown_servers_and_retains_nonlink_skills(tmp_path):
     with pytest.raises(ValueError, match="not provisioned"):
         jobs.filter_servers({}, profile())
@@ -362,3 +405,44 @@ def test_a_genuine_crew_shadow_still_refuses_on_any_pass(present):
     spec = _job_server_spec()
     with pytest.raises(ValueError, match="shadow"):
         jobs.filter_servers({"quipu-read": present}, spec)
+
+
+def _git_repo(root):
+    import subprocess
+    run = lambda *a: subprocess.run(["git", "-C", str(root), *a], check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q")
+    run("config", "user.email", "fixture@example.invalid")
+    run("config", "user.name", "fixture")
+    return run
+
+
+def test_unselected_tracked_repo_skill_is_hidden_not_published(tmp_path):
+    run = _git_repo(tmp_path)
+    tracked = tmp_path / ".agents/skills/repo-skill"
+    (tracked / "agents").mkdir(parents=True)
+    (tracked / "SKILL.md").write_text("repo")
+    (tracked / "agents/openai.yaml").write_text("x: 1")
+    run("add", "-A"); run("commit", "-qm", "fixture")
+    jobs.prune_skills(tmp_path, profile())
+    assert not tracked.exists()
+    assert run("status", "--porcelain").stdout == ""
+    run("add", "-A")
+    assert run("diff", "--cached", "--name-only").stdout == ""
+
+
+@pytest.mark.parametrize("mutation", ["modified", "untracked", "outside-repo"])
+def test_tracked_skill_with_local_state_keeps_refusal(tmp_path, mutation):
+    root = tmp_path / "ws"; root.mkdir()
+    tracked = root / ".agents/skills/repo-skill"; tracked.mkdir(parents=True)
+    (tracked / "SKILL.md").write_text("repo")
+    if mutation != "outside-repo":
+        run = _git_repo(root)
+        run("add", "-A"); run("commit", "-qm", "fixture")
+        if mutation == "modified":
+            (tracked / "SKILL.md").write_text("local edit")
+        else:
+            (tracked / "notes.md").write_text("personal")
+    with pytest.raises(ValueError, match="not a provisioned link"):
+        jobs.prune_skills(root, profile())
+    assert (tracked / "SKILL.md").exists()
