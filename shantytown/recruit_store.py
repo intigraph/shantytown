@@ -192,6 +192,20 @@ class Store:
             if changed != 1:
                 raise IdentityError('controller handoff terminal or unknown')
 
+    def finish_execution(self, operation, *, state, job_digest=None):
+        """Retain the result of one controller launch attempt; never rearm it."""
+        if state not in ('launched', 'refused', 'unknown'):
+            raise IdentityError('controller execution outcome refused')
+        if state == 'launched' and (not isinstance(job_digest, str)
+                                   or not re.fullmatch('[0-9a-f]{64}', job_digest)):
+            raise IdentityError('controller execution digest refused')
+        with self.transaction():
+            changed = self.db.execute(
+                "UPDATE operations SET state=?,plan_digest=? WHERE id=? AND principal=? AND state='claimed'",
+                (state, job_digest, operation, self.principal)).rowcount
+            if changed != 1:
+                raise IdentityError('controller execution terminal or unknown')
+
     def close(self):
         if self.db is not None:
             self.db.close()

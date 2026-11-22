@@ -3947,13 +3947,18 @@ def _spawn_summary(a) -> str:
     return a.summary or ""
 
 
-def _cmd_spawn(a) -> int:
+def _cmd_spawn(a, *, recruitment=None) -> int:
     """`st agent spawn` — ephemeral, administrator-managed agents. Rules and the
     lifecycle are in ephemeral.py and docs/ephemeral-agents.md; this wires them
     to the real launcher, panes, tracker and event store."""
     import subprocess
     from . import ephemeral as eph
     from .protocols import Agent
+    if recruitment is not None:
+        from .recruit_launch import Admission
+        if not isinstance(recruitment, Admission):
+            print('  refused: controller admission context required', file=sys.stderr)
+            return REFUSED
     if a.report:
         from . import job_launch
         from .actor_identity import IdentityError
@@ -4008,6 +4013,14 @@ def _cmd_spawn(a) -> int:
             return OK
         actor = _spawn_actor(require_verified=policy.require_verified_identity)
         inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
+        if recruitment is not None:
+            try:
+                recruitment.bind(root=a.root, host=cfg.host_name, policy=policy,
+                    actor=actor, inside=inside, role_of=role_of,
+                    native_binding=lambda item: _spawn_item_work_request(a, item),
+                    gh=_gh_json, quipu=lambda: _spawn_quipu(a))
+            except Exception as error:
+                raise eph.Refused('controller launch identity unproved (' + type(error).__name__ + ')') from None
         if getattr(a, 'recruitment_prepare', False):
             from . import recruit_handoff
             admin, admin_dangerous = _spawn_administrator(files, cfg)
@@ -4146,14 +4159,19 @@ def _cmd_spawn(a) -> int:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
-                              head=head if a.job == "merge" or recruiter_scope else None, request_id=request_id)
+                              head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id)
+        if recruitment is not None:
+            try:
+                recruitment.request(req)
+            except Exception as error:
+                raise eph.Refused('controller launch request unproved (' + type(error).__name__ + ')') from None
         if recruiter_scope is not None:
             recruiter.cli_admit(req, policy=policy, gh=_gh_json,
                                 quipu=lambda: _spawn_quipu(a),
                                 binding=lambda item: _spawn_item_work_request(a, item))
         admin, admin_dangerous = _spawn_administrator(files, cfg)
         unattended = admin_dangerous if policy.unattended is None else policy.unattended
-        if recruiter_scope is not None and not unattended:
+        if (recruiter_scope is not None or recruitment is not None) and not unattended:
             raise eph.Refused('scoped recruitment requires a separate protected job UID, never attended identity sharing')
         if unattended and not policy.unattended_uid_ready:
             raise eph.Refused("unattended ephemeral launches are gated: "
@@ -4206,6 +4224,8 @@ def _cmd_spawn(a) -> int:
                                     'host': recruiter_scope.host, 'uid': recruiter_scope.uid, 'item': req.item,
                                     'repo': req.repo, 'pr': req.pr, 'head': req.head,
                                     'binding': 'chaski.github.work-request/v1'}
+            if recruitment is not None:
+                rec['recruiter'] = recruitment.attribution()
             if uid_launch:
                 rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
             from .job_tools import bind as bind_jobspec
@@ -4278,6 +4298,13 @@ def _cmd_spawn(a) -> int:
                     raise eph.Refused(f"job worktree {rec['workspace']} is not trusted: {why}")
             # LEDGER BEFORE CARD BEFORE LAUNCH: from here on every path ends in a
             # report and a teardown, including a launch that is refused.
+            if recruitment is not None:
+                try:
+                    recruitment.recheck(req, uid_launch)
+                    if _spawn_governor_refusal(a, probe) != '':
+                        raise eph.Refused('controller governor did not admit the review')
+                except Exception as error:
+                    raise eph.Refused('controller final admission unproved (' + type(error).__name__ + ')') from None
             eph.write(a.root, rec)
             files.root.mkdir(parents=True, exist_ok=True)
             (files.root / f"{rec['name']}.json").write_text(
@@ -4303,6 +4330,17 @@ def _cmd_spawn(a) -> int:
                       file=sys.stderr)
                 return REFUSED
         a._startup_delivered = False
+        if recruitment is not None:
+            try:
+                recruitment.recheck(req, uid_launch, existing=True)
+                if _spawn_governor_refusal(a, probe) != '':
+                    raise eph.Refused('controller governor did not admit the review')
+            except Exception as error:
+                _spawn_end(a, rec['name'], 'failed', 'controller final launch refused',
+                           'launch refused', detached=False)
+                print('  refused: controller launch recheck failed (' +
+                      type(error).__name__ + ')', file=sys.stderr)
+                return REFUSED
         rc = _launch(a, card, panes, _runtime(a, panes))
         if rc == REFUSED:
             _spawn_end(a, rec["name"], "failed", "launch refused (see the spawner's stderr)",

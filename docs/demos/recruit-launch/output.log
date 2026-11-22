@@ -1,0 +1,11 @@
+Script started on 2026-11-22 07:56:15-05:00 [COMMAND="python3 docs/demos/recruit-launch/run.py" <not executed on terminal>]
+BEFORE source dd142e855935d6d139a5488895b0d0551b96c3fd
+signed controller launch bridge: unavailable on base
+AFTER candidate source 4803a2a83e13a1244cfd2eba540cfbe46382473f
+SYNTHETIC enrollment, forge and launcher; real signature/store/planner/ledger/card
+default activation gate: REFUSED; launcher calls=0
+  spawned eph-review-abcdef: review on task-1 (claude), reports to fixture-admin, ends by 13:56Z
+{"state": "launched", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "fixture_launcher_calls": 1, "durable_states": [["launched"]]}
+reopen and replay: REFUSED; fixture launcher calls=1
+
+Script done on 2026-11-22 07:56:15-05:00 [COMMAND_EXIT_CODE="0"]
