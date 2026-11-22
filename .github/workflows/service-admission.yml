@@ -1,0 +1,36 @@
+name: Service admission
+
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  service-admission:
+    # Enable only after the trusted controller source and runner are installed,
+    # controls pass and the refusal replay succeeds. Missing runtime inputs
+    # then fail the job; they never grant admission. No candidate code checkout.
+    if: vars.SERVICE_ADMISSION_REQUIRED == 'true'
+    runs-on: [self-hosted, service-admission]
+    timeout-minutes: 5
+    steps:
+      - name: Verify current shared service admission
+        env:
+          ADMISSION_GATE: ${{ vars.AEGIS_SERVICE_ADMISSION_GATE }}
+          GH_TOKEN: ${{ github.token }}
+          ADMISSION_REPO: ${{ github.repository }}
+          ADMISSION_GROUP: ${{ github.event.merge_group.head_sha }}
+          ADMISSION_BASE: ${{ github.event.merge_group.base_sha }}
+          ADMISSION_REF: ${{ github.event.merge_group.head_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$ADMISSION_GATE" in /*) ;; *) echo 'Trusted gate path missing' >&2; exit 1 ;; esac
+          test -f "$ADMISSION_GATE"
+          test ! -L "$ADMISSION_GATE"
+          /usr/bin/python3 -I "$ADMISSION_GATE" \
+            --repo "$ADMISSION_REPO" --group "$ADMISSION_GROUP" \
+            --base "$ADMISSION_BASE" --ref "$ADMISSION_REF"
