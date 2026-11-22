@@ -330,3 +330,35 @@ def test_config_parses_job_servers(tmp_path):
         '[ephemeral.jobs.task.mcp_tools]\nquipu-read = ["quipu_query", "quipu_ask"]\n')
     cfg = config.load(tmp_path)
     assert cfg.ephemeral.jobs["task"]["server_defs"]["quipu-read"]["url"].endswith("/mcp")
+
+
+def test_refiltering_an_already_filtered_kit_keeps_the_admitted_job_server():
+    """za4f.2 live refusal: provision renders the filtered manifest and filters
+    it again (and Codex launch refilters the job-owned config), so the job's
+    own admitted definition must not read as a crew shadow on the second pass."""
+    spec = jobs.validate_specs(
+        {"review": {"mcp_servers": ["bobbin", "quipu-read"],
+                    "mcp_tools": {"quipu-read": ["quipu_query"]}}},
+        eph.JOBS, jobs.validate_job_servers({"quipu-read": dict(ANON)}))["review"]
+    crew = {"bobbin": {"type": "http", "url": "https://bobbin.example.invalid/mcp"},
+            "homelab": {"type": "http", "url": "https://homelab.example.invalid/mcp"}}
+    once = jobs.filter_servers(crew, spec)
+    assert set(once) == {"bobbin", "quipu-read"}
+    assert jobs.filter_servers(once, spec) == once
+    # The Codex rendering of the same endpoint (http_headers + enabled_tools).
+    codex = dict(once, **{"quipu-read": {"url": ANON["url"], "enabled_tools": ["quipu_query"],
+                                          "http_headers": {"X-Quipu-Client": "st-job"}}})
+    assert set(jobs.filter_servers(codex, spec)) == {"bobbin", "quipu-read"}
+
+
+@pytest.mark.parametrize("present", [
+    dict(ANON, url="https://other.invalid/mcp"),                       # different endpoint
+    dict(ANON, headersHelper="writer-helper"),                          # credential helper
+    dict(ANON, headers={"X-Quipu-Client": "st-job", "Authorization": "Bearer x"}),
+    dict(ANON, bearer_token_env_var="QUIPU_TOKEN"),                     # codex bearer
+    {"command": "quipu", "args": ["mcp"]},                              # stdio process
+])
+def test_a_genuine_crew_shadow_still_refuses_on_any_pass(present):
+    spec = _job_server_spec()
+    with pytest.raises(ValueError, match="shadow"):
+        jobs.filter_servers({"quipu-read": present}, spec)
