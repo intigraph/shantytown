@@ -1,0 +1,9 @@
+{
+  "shantytown/review_enqueue.py": "8fee3ea163dfcc4d2aa39e0401a736552c7ab60e8062989894ddd006cfab4e69",
+  "shantytown/job_review.py": "34865c672e0a53dbe49c374e8f348c129f6b284250b774cde3ac2d2458d7b2f4",
+  "shantytown/gate_verdict.py": "be8628af06d4a88fbdab2ce210b856a0d21adb0ed84cd338f40acdb3b08c201a",
+  "shantytown/recruit_store.py": "01d11bfc100c326834609224c4f1a131a8da46c55302c0a23b08d3cbb6b0b224",
+  "tests/demo_review_enqueue.py": "e1e294c004b4d70a1c6cec9464054b83784f526fda687ce9d2d459c0b7fd9daf",
+  "tests/test_job_review.py": "b188967c3f1f26e771bc37d9134c70464fd56ea3bdac9ce307f7f555b758cb31",
+  "tests/test_gate_verdict.py": "4dace57805543d4699fb0efd04fa3ed33c384de26176d3386da5fa3f705c476d"
+}

@@ -27,6 +27,36 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 
 ## Lifecycle
 
+### Review-to-enqueue custody (offline library)
+
+`review_enqueue.Store` is the first part of the deterministic review handoff.
+It is not connected to reporting, recruitment or a forge mutation. Existing
+merge-job behavior remains in place until the whole handoff is qualified.
+
+The controller must provision `<root>/ephemeral/review-enqueue` as its own
+private directory, outside the job UID's writable ancestry. Only a controller
+may supply the configured root and forge authority, protected job specification
+and UID-validated report. The store independently verifies the enrolled,
+signed exact-head APPROVE through `job_review.confirmed` before retaining an
+intent. An intent pins authority, repository, PR node/number, head, reviewer,
+signer, graph and review record. Repeated delivery returns that same intent;
+job teardown does not remove it.
+
+An intent starts `pending`. `begin` durably consumes one attempt before a
+future native adapter may mutate the remote; `finish` records `queued`,
+`refused` or `unknown` with its matching attempt token and receipt reference.
+A crash in `attempting`, an unknown result or a terminal refusal cannot reset
+to pending. Reconciliation is a separate operation; there is no automatic
+retry, cleanup or repair. Prepared files left by a crash block new custody
+until operator reconciliation. Capacity failure preserves existing evidence.
+
+Custody proves past review verification, not permission to merge. Native
+receipt compatibility, fresh revocation/head/CI checks, the shared
+versioned per-service order/hold gate across every admission producer, and a
+real approve-to-merge acceptance are still prerequisites for enabling this
+handoff or retiring merge recruitment. This library supplies no enqueue
+command, scheduler, signing-key enrollment or activation flag.
+
 ```
 spawn ─► admit (authority, cap, governor, merge lane) ─► ledger "live" + card
       ─► worktree (st repo worktree machinery, own branch) ─► _launch (the ONE launcher)

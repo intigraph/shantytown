@@ -1,0 +1,10 @@
+Script started on 2026-11-21 18:25:20-05:00 [COMMAND="env PYTHONPATH=.:tests python3 tests/demo_review_enqueue.py" <not executed on terminal>]
+verified APPROVE -> pending
+duplicate delivery -> same intent
+before any remote mutation -> attempting
+simulated controller exit; job teardown is independent
+reopened custody -> attempting
+second attempt -> REFUSED; remote reconciliation required
+remote mutations: 0; merge jobs spawned: 0 (offline fixture only)
+
+Script done on 2026-11-21 18:25:21-05:00 [COMMAND_EXIT_CODE="0"]
