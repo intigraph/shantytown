@@ -119,6 +119,49 @@ def test_codex_profile_and_provisioning_never_rewrite_shared_config(tmp_path, mo
     assert (base.read_bytes(), base.stat().st_mtime_ns) == before
 
 
+
+def _codex_review_job(tmp_path, monkeypatch, codex_rules=True):
+    monkeypatch.setattr(CodexHarness, "provision", lambda *a, **kw: [])
+    ws = tmp_path / "ws"; ws.mkdir()
+    spec = jobs.validate_specs({"review": dict(mcp_servers=["bobbin"], skills=[])}, eph.JOBS)["review"]
+    policy = config.Ephemeral(jobs={"review": spec})
+    rec = {"name": "eph-review-a1b2c3", "job": "review", "harness": "codex", "repo": "intigraph/example",
+           "pr": 75, "workspace": str(ws), "state": eph.LAUNCHING, "jobspec": jobs.bind(policy, "review")}
+    if codex_rules:
+        rec["codex_rules"] = "/run/user/1000/shantytown/codex/eph-review-a1b2c3/rules/st-job.rules"
+    eph.write(tmp_path, rec)
+    base = tmp_path / "settings/codex/worker/config.toml"
+    base.parent.mkdir(parents=True)
+    base.write_text('[mcp_servers.bobbin]\nurl="http://bobbin.invalid/mcp"\n')
+    card = Agent(name=rec["name"], role="worker", harness="codex", workspace=str(ws))
+    return rec, card, base
+
+
+def test_codex_job_home_carries_the_attended_gh_read_rules(tmp_path, monkeypatch):
+    """za4f.2: a job-owned Codex config is the job's CODEX_HOME; without the
+    spawn's rules there, `gh pr diff <pr> --repo <repo>` waited on a prompt."""
+    rec, card, base = _codex_review_job(tmp_path, monkeypatch)
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    rules = target.parent / "rules" / eph.CODEX_RULES_FILE
+    assert rules.read_text() == eph.codex_job_rules(rec, unattended=False)
+    body = rules.read_text()
+    assert '["gh", "pr", ["view", "checks", "diff"], "75", "--repo", "intigraph/example"]' in body
+    assert 'pattern=["gh", "api"], decision="forbidden"' in body
+    assert stat_mode(rules) == 0o600
+    # Relaunch is idempotent; nothing broader is ever written.
+    assert Path(jobs.prepare_settings(tmp_path, card, str(base))) == target
+    assert rules.read_text() == body
+
+
+def test_codex_job_without_spawn_rules_gets_none(tmp_path, monkeypatch):
+    rec, card, base = _codex_review_job(tmp_path, monkeypatch, codex_rules=False)
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert not (target.parent / "rules").exists()
+
+
+def stat_mode(path):
+    return path.stat().st_mode & 0o777
+
 def test_profile_rejects_unknown_servers_and_retains_nonlink_skills(tmp_path):
     with pytest.raises(ValueError, match="not provisioned"):
         jobs.filter_servers({}, profile())

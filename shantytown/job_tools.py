@@ -238,6 +238,16 @@ def prepare_settings(root, card, base):
         finally:
             temporary.unlink(missing_ok=True)
     if card.harness == "codex":
+        # The job-owned config makes its directory the job's CODEX_HOME, so
+        # the attended exec-policy rules st wrote at spawn (the exact per-PR
+        # gh reads and the guarded report) must live there too, or every gh
+        # read waits on an approval prompt nobody answers (za4f.2 probe
+        # eph-review-4f9d3e). Only a job whose spawn recorded rules gets them;
+        # this adds no permission beyond that same allowlist.
+        from . import ephemeral as eph
+        rec = eph.read(root, card.name)
+        if rec and rec.get("codex_rules"):
+            eph.write_codex_job_rules(rec, target.parent, unattended=False)
         from .harness import for_card
         for_card(card, root).provision(str(target), root, workspaces=(card.workspace,))
     return str(target)
