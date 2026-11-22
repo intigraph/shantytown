@@ -4,6 +4,7 @@
 *.md   text diff
 *.py   text diff
 *.toml text diff
+docs/probes/pr-demos/parent-death-state/output.log -text
 # Preserve raw terminal recording bytes and timing while keeping text reviewable.
 docs/demos/inbox-recovery/output.log whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 # Terminal recordings retain CRLF bytes for scriptreplay timing.
@@ -86,5 +87,3 @@ docs/demos/cli-knowledge-witness/output.log -text whitespace=cr-at-eol
 docs/demos/duty-cli-boundary/output.log -text whitespace=cr-at-eol
 # Preserve unused-notes regression demo terminal bytes.
 docs/demos/refill-unused-notes/output.log -text whitespace=cr-at-eol
-
-docs/probes/pr-demos/parent-death-state/output.log -text
