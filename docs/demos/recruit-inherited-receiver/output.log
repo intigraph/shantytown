@@ -1,0 +1,13 @@
+Script started on 2026-11-22 15:40:09-05:00 [COMMAND="python3 docs/demos/recruit-inherited-receiver/run.py" <not executed on terminal>]
+BEFORE source e7f9b54064d4abcc5eb51bdc00f853d0a7311ee5
+protected inherited receiver: unavailable on base
+AFTER candidate worktree (commit identity is supplied in caption)
+SYNTHETIC protected enrollment and launcher; REAL Unix socket/signature/SQLite/native spawn ledger
+default activation gate: REFUSED; accepted connections=0; launcher calls=0
+  spawned eph-review-abcdef: review on task-1 (claude), reports to fixture-admin, ends by 21:40Z
+{"state": "launched", "fixture_launcher_calls": 1, "durable_states": [["launched"]], "listener_retained": true}
+same signed request replay: REFUSED; fixture launcher calls=1
+wrong configured controller UID: REFUSED before accept; fixture launcher calls=1
+No live enrollment, socket installation, service or actual job launch.
+
+Script done on 2026-11-22 15:40:09-05:00 [COMMAND_EXIT_CODE="0"]
