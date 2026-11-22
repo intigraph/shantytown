@@ -43,6 +43,11 @@ _CHANGE_PAGES = 8
 # inbox, sd list/ready). Never above _MAX_AGE; 0 disables.
 _DEFAULT_STALE_TTL = 60.0
 _STALE_TTL = ContextVar("seeds_stale_ttl", default=0.0)
+# aegis-dnw: an explicit, wider ceiling one caller may ask for (the
+# administrator stop hook). Never above _EXTENDED_MAX_AGE; own writes still
+# invalidate, and ST_SEEDS_STALE_TTL=0 still turns the whole tier off.
+_EXTENDED_MAX_AGE = 300.0
+_STALE_CAP = ContextVar("seeds_stale_cap", default=None)
 _GENERATION = "ttl-generation"
 
 
@@ -58,9 +63,16 @@ def stale_ttl() -> float:
     return max(0.0, min(value, float(_MAX_AGE)))
 
 
+def _cap() -> float:
+    """The ceiling for this scope: stale_ttl(), or the explicit wider ttl."""
+    cap = _STALE_CAP.get()
+    return stale_ttl() if cap is None else (cap if stale_ttl() > 0 else 0.0)
+
+
 @contextmanager
-def stale_ok():
-    """Admit answers up to stale_ttl() old inside this block.
+def stale_ok(ttl=None):
+    """Admit answers up to stale_ttl() old (or an explicit ttl, at most
+    _EXTENDED_MAX_AGE) inside this block.
 
     For per-turn reads whose callers already tolerate a moving board (a stop
     hook, an inbox view, a plate listing). Any write made through st bumps a
@@ -68,10 +80,14 @@ def stale_ok():
     that overlapped a write is never published. Exact readers (projections,
     snapshots, direct/primary reads) never see this tier.
     """
-    token = _STALE_TTL.set(stale_ttl())
+    value, cap = stale_ttl(), None
+    if ttl is not None and value > 0:
+        value = cap = max(0.0, min(float(ttl), _EXTENDED_MAX_AGE))
+    token, cap_token = _STALE_TTL.set(value), _STALE_CAP.set(cap)
     try:
         yield
     finally:
+        _STALE_CAP.reset(cap_token)
         _STALE_TTL.reset(token)
 
 
@@ -153,7 +169,7 @@ def _stale_fence_age() -> float:
     if (ttl <= 0 or _DIRECT_READS.get() or _PROJECTION.get() is not None
             or _READ_SNAPSHOT.get()[0] or os.environ.get("ST_SEEDS_READ_CACHE") == "0"):
         return 0.0
-    return min(ttl, stale_ttl())
+    return min(ttl, _cap())
 
 
 def stale_lookup(parts, validate, *, ttl=None):
@@ -175,7 +191,7 @@ def stale_lookup(parts, validate, *, ttl=None):
         path = directory / ("ttlr-" + key + ".json")
         with _locked(directory, key):
             generation = [_GENERATION, _generation(directory)]
-            hit = _cached(path, generation, validate, max_age=min(ttl, stale_ttl()))
+            hit = _cached(path, generation, validate, max_age=min(ttl, _cap()))
     except _CACHE_ERRORS:
         return None, None
     if hit is not None:

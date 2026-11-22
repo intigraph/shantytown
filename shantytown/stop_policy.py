@@ -772,6 +772,20 @@ def stop_advice(root, card, payload=None):
     return runtime_update.emit(root, card, payload)
 
 
+def admin_stop_stale_ttl(card):
+    """Explicit stale ttl for an administrator's stop hook, else None (default tier).
+
+    ST_ADMIN_STOP_STALE_TTL (default 300; unreadable -> default tier).
+    """
+    if card is None or getattr(card, "role", "") != "administrator":
+        return None
+    raw = os.environ.get("ST_ADMIN_STOP_STALE_TTL", "300")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 def run(root, me: str, **kw) -> int:
     """Gather, decide, emit. Returns the process exit code (always 0 — a stop hook
     that exits non-zero is a stop hook that breaks the agent)."""
@@ -788,7 +802,9 @@ def run(root, me: str, **kw) -> int:
         # to stale_ttl() old (own writes invalidate) instead of one live
         # owner-row read per stop.
         from .seeds_read_cache import stale_ok
-        with stale_ok():
+        # aegis-dnw lever B (Sattler ruling): the administrator stops every
+        # 1.5-10 min, so a 60 s tier never hit; allow up to 300 s for that card.
+        with stale_ok(admin_stop_stale_ttl(card)):
             inp = gather(root, me, **kw)
         verdict = decide(inp)
         state = p0_ledger_update(inp, verdict)
