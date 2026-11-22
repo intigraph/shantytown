@@ -1,8 +1,8 @@
 """Existing controller preparation over one already-connected local channel.
 
-No listener, endpoint selector, configuration installer or launch callback.
-This is deliberately a preparation adapter: its durable receipt never authorizes
-later execution. Runtime wiring and activation remain separately gated.
+No listener, endpoint selector or configuration installer. Preparation never
+authorizes later execution. The distinct launch entry re-verifies a fresh signed
+request and the default-OFF launch gate; runtime wiring remains separately gated.
 """
 from __future__ import annotations
 
@@ -41,6 +41,31 @@ def prepare_connected(channel, *, timeout=5, **context):
     Admission uses its existing adapter ceilings; no job can launch here.
     The caller owns closing the socket, including after any refusal.
     """
+    return _connected(channel, timeout=timeout, operation=
+        lambda envelope, pin: recruit_handoff.prepare(envelope, **context),
+        launched=False, context=context)
+
+
+def launch_connected(channel, *, args, timeout=5, **context):
+    """One fresh signed review request through the existing native spawn path.
+
+    Only a verified controller may supply args/context and the connected socket.
+    This adds no listener or CLI route. Late/lost responses retain the durable
+    attempt; they never prove no job exists or authorize a retry.
+    """
+    from . import recruit_launch
+    recruit_controller.controller_authority(
+        policy=context['policy'], actor=context['actor'], inside=context['inside'],
+        role_of=context['role_of'])
+    if not context['policy'].recruitment_launch_ready:
+        raise IdentityError('controller recruitment activation is gated')
+    return _connected(channel, timeout=timeout, operation=
+        lambda envelope, pin: recruit_launch.launch(envelope, args=args,
+                                                    channel_binding=pin, **context),
+        launched=True, context=context)
+
+
+def _connected(channel, *, timeout, operation, launched, context):
     recruit_controller.controller_authority(
         policy=context['policy'], actor=context['actor'], inside=context['inside'],
         role_of=context['role_of'])
@@ -85,9 +110,13 @@ def prepare_connected(channel, *, timeout=5, **context):
         raise IdentityError('controller binding changed during channel read')
     if time.monotonic() >= deadline:
         raise IdentityError('controller channel expired before preparation')
-    receipt = recruit_handoff.prepare(envelope, **context)
+    receipt = operation(envelope, pin)
     try:
-        if (receipt.get('live') is not False or receipt.get('execution') != 'refused'
+        if launched:
+            if (receipt.get('state') not in ('launched', 'refused')
+                    or receipt.get('live') is not (receipt.get('state') == 'launched')):
+                raise ValueError
+        elif (receipt.get('live') is not False or receipt.get('execution') != 'refused'
                 or receipt.get('activation') != 'gated' or receipt.get('state') != 'prepared'):
             raise ValueError
         output = json.dumps(receipt, sort_keys=True, separators=(',', ':'),
@@ -106,5 +135,5 @@ def prepare_connected(channel, *, timeout=5, **context):
             sent += count
         channel.shutdown(socket.SHUT_WR)
     except Exception:
-        raise DeliveryUnknown('prepared controller result uncertain; retain durable state') from None
+        raise DeliveryUnknown('controller result uncertain; retain durable state') from None
     return receipt

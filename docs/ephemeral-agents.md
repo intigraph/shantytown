@@ -28,7 +28,14 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 ## Signed controller launch bridge
 
 `recruit_launch.launch` is an internal controller library, without a CLI flag,
-listener or transport wiring. `ephemeral.recruitment_launch_ready` defaults to
+listener or runtime wiring. `recruit_channel.launch_connected` consumes one fresh
+signed envelope from a trusted controller-owned connected Unix stream, checks
+the protected sender UID and invokes that same native spawn bridge. It shares
+the preparation channel's size/deadline bounds; it never accepts a prepared
+receipt as an execution request. Late/lost replies preserve the attempt and
+possible live job, so callers reconcile rather than resend. Neither entry
+installs a socket endpoint or starts a listener.
+`ephemeral.recruitment_launch_ready` defaults to
 false and is separate from the protected UID gate. Enabling it belongs to the
 deployment's runtime activation decision; this source does not enable it.
 The ordinary scoped-recruiter CLI still refuses live launch and never borrows
@@ -49,7 +56,7 @@ recording `launched`; a return code alone is insufficient. `refused` and
 `unknown` attempts remain terminal. A crash or lost launch response retains the
 nonce and candidate key; recovery never assumes that no job started.
 
-This does not connect the signed channel to execution, install keys or UIDs,
+This does not install keys or UIDs, select an endpoint, start a listener,
 enable recruitment or accept merge verbs. Connected preparation remains
 non-executable. Source tests use synthetic enrollment, forge and launcher
 fixtures with real signatures, SQLite state, planner, ledger and cards; they
@@ -171,7 +178,7 @@ merge_spacing_minutes = 10  # minimum gap between merge jobs on one repo
 unattended = false          # keep approval prompts; omission inherits the administrator card
 require_verified_identity = false # opt in after protected UID migration
 unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
-recruitment_launch_ready = false # separate signed-controller gate; no transport wiring
+recruitment_launch_ready = false # separate signed-controller gate; no runtime wiring
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into
