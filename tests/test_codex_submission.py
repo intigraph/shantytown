@@ -24,9 +24,15 @@ def transport(monkeypatch, frames, foreground='codex', typed_frame=None):
 
     def capture(_pane, **_kw):
         if not fresh_typed[0] and any('send-keys' in c and '-l' in c for c in calls):
-            fresh_typed[0] = True
-            current = typed_frame if typed_frame is not None else (
-                ('Working (1s • esc to interrupt)\n' if triage.mid_flight(initial) else '') + OWNED)
+            # A list models a composer repainted over several frames: each
+            # capture after typing takes the next one (aegis-4kdx).
+            if isinstance(typed_frame, list):
+                current = typed_frame.pop(0)
+                fresh_typed[0] = not typed_frame
+            else:
+                fresh_typed[0] = True
+                current = typed_frame if typed_frame is not None else (
+                    ('Working (1s • esc to interrupt)\n' if triage.mid_flight(initial) else '') + OWNED)
             if isinstance(current, Exception):
                 raise current
             return current
@@ -261,6 +267,30 @@ def test_finished_old_turn_gets_enter_and_new_turn_can_be_observed(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY], typed_frame=OWNED)
     assert panes.send('worker', BODY).pane == 'worker'
     assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Enter']
+
+
+def test_busy_composer_repainted_late_is_still_queued_not_stranded(monkeypatch):
+    # aegis-4kdx: a mid-turn Codex pane repainted the typed body after the
+    # first 0.5s sample. One early frame used to raise with NO key sent,
+    # leaving the relay TYPED in the composer and blocking later sends.
+    busy_unpainted = 'Working (1s • esc to interrupt)\n' + READY
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [BUSY, QUEUED],
+                             typed_frame=[busy_unpainted, busy_unpainted, busy_owned])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+    assert calls.count(('sleep', tmux._CODEX_TYPED_POLL_S)) >= 2
+
+
+def test_composer_never_showing_the_body_still_withholds_every_key(monkeypatch):
+    busy_unpainted = 'Working (1s • esc to interrupt)\n' + READY
+    panes, calls = transport(monkeypatch, [BUSY], typed_frame=[busy_unpainted] * 3)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='not observed'):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == []
+    assert calls.count(('sleep', tmux._CODEX_TYPED_POLL_S)) == tmux._CODEX_TYPED_POLLS - 1
 
 
 @pytest.mark.parametrize('frame', [READY, 'unreadable frame', subprocess.TimeoutExpired('tmux', 2)])

@@ -69,6 +69,13 @@ OPTION_KEYS = frozenset("123456789")
 _SEND_CHUNK = 512
 _SEND_CHUNK_GAP_S = 0.05
 _CODEX_SETTLE_S = 0.5
+# A busy Codex composer is repainted between streamed output, so the first
+# frame after typing can predate the typed body (aegis-4kdx). Poll for it,
+# bounded, rather than judge the whole delivery on one 0.5s sample: a single
+# early frame left the body typed in the composer with no key sent, and the
+# stranded text then blocked every later send to that pane.
+_CODEX_TYPED_POLL_S = 0.25
+_CODEX_TYPED_POLLS = 20
 _CODEX_POLL_S = 0.15
 _CODEX_POLLS = 8
 _CODEX_ATTEMPTS = 2
@@ -884,13 +891,22 @@ class Tmux:
             # of a submit. Read the settled chrome before choosing its key.
             time.sleep(_CODEX_SETTLE_S)
             from . import triage
-            try:
-                current = self.capture(pane, attrs=True, timeout=2)
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise PaneSubmissionUnverified(
-                    "UNVERIFIED: cannot observe Codex before initial submission") from exc
-            if (not self._confirmed_codex(pane, self.foreground(pane))
-                    or triage.input_state(current) != triage.INPUT_QUEUED):
+            for poll in range(_CODEX_TYPED_POLLS):
+                if poll:
+                    time.sleep(_CODEX_TYPED_POLL_S)
+                try:
+                    current = self.capture(pane, attrs=True, timeout=2)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    raise PaneSubmissionUnverified(
+                        "UNVERIFIED: cannot observe Codex before initial submission") from exc
+                # Identity is rechecked on every frame: a pane that stops being
+                # Codex mid-wait gets no key at all.
+                if not self._confirmed_codex(pane, self.foreground(pane)):
+                    raise PaneSubmissionUnverified(
+                        "UNVERIFIED: typed Codex input not observed before initial submission")
+                if triage.input_state(current) == triage.INPUT_QUEUED:
+                    break
+            else:
                 raise PaneSubmissionUnverified(
                     "UNVERIFIED: typed Codex input not observed before initial submission")
             # The first key submits the body just typed into the empty composer.
