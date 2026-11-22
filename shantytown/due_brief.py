@@ -50,7 +50,7 @@ def projected(tracker, owner, *, now=None, seen_changes=frozenset()):
         if len(rows)>=10000: raise ValueError("decision candidate cap reached")
         items=[]; changes=[]; seen=set()
         from .protocols import rank_order, time_order
-        from .inbox import is_message
+        from .inbox import is_message, is_ops_record
         for row in rows:
             if row.get("status") not in ("open","in_progress","blocked","deferred","hooked"):
                 continue
@@ -58,7 +58,7 @@ def projected(tracker, owner, *, now=None, seen_changes=frozenset()):
                 raise ValueError("invalid decision identity")
             if row["id"] in seen: raise ValueError("duplicate decision identity")
             seen.add(row["id"])
-            if is_message(row["title"]) or any(str(label).lower()=="inbox" for label in row.get("labels",[])):
+            if is_message(row["title"]) or any(str(label).lower()=="inbox" for label in row.get("labels",[])) or is_ops_record(row):
                 continue
             if type(row.get("priority")) is not int or row["priority"] not in range(5):
                 raise ValueError("invalid decision priority")

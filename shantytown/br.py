@@ -11,7 +11,7 @@ import tempfile
 from .beads import (BeadsTracker, _PLATE_RANK, _priority, plate_key,
                     ready_ids_or_none, name_the_blocker)
 from .protocols import is_blocked
-from .inbox import OperationClaimRefused, is_deploy_operation, drop_parked, is_message, is_unworkable
+from .inbox import OperationClaimRefused, is_deploy_operation, drop_parked, is_message, is_ops_record, is_unworkable
 from .protocols import BLOCKER_KIND_LABELS, WorkItem
 from .deferral_notes import MARKER_PREFIX, historical_notes, merge_deferral_notes
 
@@ -414,6 +414,7 @@ def _select_plate(tracker, agent, seen, failures, read_ready, warn):
         if row.get("assignee") in (agent, agent.split("/")[-1])
         and row.get("status") != "closed"
         and not is_message(row.get("title", ""))
+        and not is_ops_record(row)   # aegis-8dda.1
         and not is_unworkable(row)   # the ROW: deferral is a FIELD on br (aegis-vyc3aa)
     ]
     if not mine:

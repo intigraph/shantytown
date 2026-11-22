@@ -1909,6 +1909,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --report on a review: link to the posted review comment")
     sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
     sp.add_argument("--item", help="the work item this job reports on")
+    sp.add_argument("--quipu-node", action="append", default=[], metavar="IRI",
+                    help="exact Quipu node IRI to include in the bounded startup snapshot")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
     # dest is NOT `repo`: the top-level --repo is the tracker store directory.
     sp.add_argument("--repo", dest="pr_repo", default=None, metavar="OWNER/NAME",
@@ -4149,6 +4151,9 @@ def _cmd_spawn(a) -> int:
             # forbids sudo/controller sockets; do not silently reuse that path.
             raise eph.Refused('scoped recruiter controller handoff is not installed; no sudo launch permitted')
         uid_launch = None
+        if unattended and getattr(policy, "jobs", {}).get(req.job) is not None:
+            raise eph.Refused("JobSpec tool profiles need a qualified protected-UID projection; "
+                              "the operator-staged kit was left unchanged")
         if unattended:
             if not policy.require_verified_identity:
                 raise eph.Refused("unattended jobs require verified protected UID identity")
@@ -4173,6 +4178,10 @@ def _cmd_spawn(a) -> int:
                        "retried", detached=False)
         # Read once, outside the ledger lock: a job's sandbox has no network.
         item_ctx = _spawn_item_context(a, req.item)
+        from .job_context import collect as collect_job_context
+        graph_ctx = collect_job_context(a.root, req.item, getattr(a, "quipu_node", []))
+        from .job_context import current_comments
+        graph_ctx["comments"] = current_comments(lambda: _tracker(a), req.item)
         with eph.lock(a.root):
             rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                            administrator=admin, host=cfg.host_name, now=time.time(),
@@ -4186,7 +4195,10 @@ def _cmd_spawn(a) -> int:
                                     'binding': 'chaski.github.work-request/v1'}
             if uid_launch:
                 rec['uid_binding'] = {'uid': uid_launch[0]['uid'], 'sha256': uid_launch[1]}
+            from .job_tools import bind as bind_jobspec
+            rec["jobspec"] = bind_jobspec(policy, rec["job"])
             rec["item_context"] = item_ctx
+            rec["quipu_context"] = graph_ctx
             known = {h.name for h in harness_mod.all_harnesses()}
             if rec["harness"] not in known:
                 raise eph.Refused(f"unknown harness {rec['harness']!r}; one of "

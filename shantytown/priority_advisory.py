@@ -3,7 +3,7 @@
 # arming: library; dispatch, crew, Stop haul and tend are the callers.
 """
 from .ask_visibility import is_ask
-from .inbox import drop_parked, is_anchor, is_decision, is_message, is_unfeedable
+from .inbox import drop_parked, is_anchor, is_decision, is_message, is_ops_record, is_unfeedable
 
 
 def priority(row):
@@ -29,7 +29,7 @@ def workable(row):
     labels = row.get("labels") or []
     title = row.get("title") or ""
     return not (is_ask(row) or is_message(title) or is_decision(labels) or is_anchor(labels)
-                or is_unfeedable(title, labels) or row.get("blocked_by")
+                or is_unfeedable(title, labels) or is_ops_record(row) or row.get("blocked_by")
                 or row.get("blocked_count")
                 or any(l.startswith(("blocked:", "parked:")) for l in labels))
 

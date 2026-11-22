@@ -16,7 +16,7 @@ import fcntl
 
 from .files import write_json_atomic
 import os
-from .inbox import is_message
+from .inbox import is_message, is_ops_record
 
 
 # A pending packet without a known receipt ID can only be confirmed by scanning
@@ -72,7 +72,7 @@ def findings(rows, now):
     for row in rows:
         if row.get("status") not in ("open", "in_progress", "blocked"):
             continue
-        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])):
+        if is_message(row.get("title", "")) or any(str(label).lower() == "inbox" for label in (row.get("labels") or [])) or is_ops_record(row):
             continue
         identifier, due = row.get("id"), row.get("due_at")
         if not isinstance(identifier, str) or not identifier or identifier in seen:
