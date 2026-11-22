@@ -1146,6 +1146,16 @@ def _attended_review(store, monkeypatch):
     return root, rec
 
 
+@pytest.mark.parametrize('summary', ['', '  \n'])
+def test_empty_report_refuses_before_comment_or_terminal_write(store, monkeypatch, summary):
+    root, rec = _attended_review(store, monkeypatch)
+    monkeypatch.setattr(cli, '_spawn_post_review_comment', lambda *a: pytest.fail('empty report posted'))
+    monkeypatch.setattr(cli, '_spawn_write_verdict', lambda *a: pytest.fail('empty verdict written'))
+    assert _st(root, '--report', '--verdict', 'approve', '--head', 'a' * 40,
+               '--summary', summary) == cli.REFUSED
+    assert eph.read(root, rec['name'])['result'] is None
+
+
 def test_attended_report_refuses_a_summary_file_path(store, monkeypatch, tmp_path, capsys):
     """Ian's finding: an appended --summary-file <path> would publish any readable file."""
     root, rec = _attended_review(store, monkeypatch)

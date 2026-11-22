@@ -4047,6 +4047,8 @@ def _cmd_spawn(a) -> int:
                 print(f"would report {me}: {a.verdict}")
                 return OK
             summary = _spawn_summary(a)
+            if not summary.strip():
+                raise eph.Refused("--report needs a nonempty summary; use --summary '<summary>' directly")
             evidence = a.evidence
             if attended and a.verdict in ("approve", "request-changes") and not evidence:
                 evidence, posted = _spawn_post_review_comment(job, a.verdict, a.head, summary)

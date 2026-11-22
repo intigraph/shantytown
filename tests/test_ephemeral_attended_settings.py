@@ -94,10 +94,22 @@ def test_symlinked_settings_are_refused(tmp_path):
     assert elsewhere.read_text() == "{}"
 
 
+@pytest.mark.parametrize('job', ['task', 'triage', 'review', 'merge'])
+def test_codex_job_prompt_requires_direct_nonempty_report(tmp_path, job):
+    rec = dict(_rec(tmp_path, job=job, harness='codex'), administrator='boss',
+               deadline=1_800_000_000, max_turns=40, head='a' * 40)
+    text = eph.prompt(rec)
+    assert "--summary '<nonempty summary, under 1500 chars>'" in text
+    assert 'Do not wrap it in a heredoc' in text
+    assert '--summary-file -' not in text
+
+
 def test_attended_review_prompt_never_asks_the_job_to_comment(tmp_path):
     rec = dict(_rec(tmp_path), administrator="boss", deadline=1_800_000_000, max_turns=40)
     text = eph.prompt(rec)
     assert "gh pr comment" not in text and "git " not in text
-    assert "--summary-file -" in text
+    assert "--summary '<summary>'" in text
+    assert "Do not wrap it in a heredoc" in text
+    assert "--summary-file -" not in text
     protected = dict(rec, uid_binding={"uid": 10001, "sha256": "0" * 64})
     assert "gh pr comment" in eph.prompt(protected)  # UID jobs keep their reviewed prompt
