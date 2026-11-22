@@ -1,0 +1,8 @@
+Script started on 2026-11-22 04:57:33-05:00 [COMMAND="python3 docs/demos/recruit-channel/run.py" <not executed on terminal>]
+BASE 9d5ca5d2f4b28c54264d1425c1335415ce6208e4 connected controller preparation unavailable
+CANDIDATE real socket -> existing durable preparation: {"activation": "gated", "execution": "refused", "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "live": false, "name": "eph-review-abcdef", "nonce_durable": true, "operation": "b43b2d3c786596354b059a10106d6e3bf6596a9d3878e3cb4c5a4523c74d630f", "plan_sha256": "25bee288bbef311a8e05026938396e735e3b64e2f59b83344cf5ae076efa5050", "schema": "shantytown.recruitment-handoff/v1", "state": "prepared"}
+REOPENED durable operation: prepared
+SAME signed frame on a new connection: recruitment replay refused
+LIMIT: synthetic peer enrollment, key, custody, forge and launch capability; real sockets/store/planner. No listener, installation, native UID probe or job execution.
+
+Script done on 2026-11-22 04:57:33-05:00 [COMMAND_EXIT_CODE="0"]
