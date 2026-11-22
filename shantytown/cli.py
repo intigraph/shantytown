@@ -1919,8 +1919,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--checkout", type=Path, default=None,
                     help="local shared checkout to cut the worktree from "
                          "(default: $GT_ROOT/<name>, else a scratch dir)")
-    sp.add_argument("--verdict", choices=("approve", "request-changes", "merged", "blocked",
-                                          "done", "failed"))
+    # Validated against the job's bound JobSpec verdicts (legacy enum when absent).
+    sp.add_argument("--verdict", default=None, metavar="VERDICT")
     sp_sum = sp.add_mutually_exclusive_group()
     sp_sum.add_argument("--summary", default=None)
     sp_sum.add_argument("--summary-file", type=Path, default=None, help="file, or - for stdin")
@@ -3966,6 +3966,9 @@ def _cmd_spawn(a) -> int:
                     raise IdentityError('report root differs from protected job binding')
                 if not a.verdict:
                     raise IdentityError('job report requires a verdict')
+                if a.verdict not in eph.VERDICTS:
+                    # The protected rail refuses JobSpec profiles; legacy enum only.
+                    raise IdentityError('job report verdict is not a protected-rail verdict')
                 if a.dry_run:
                     print(f"would queue report for {spec['principal']}")
                     return OK
@@ -4034,6 +4037,14 @@ def _cmd_spawn(a) -> int:
             if not a.verdict:
                 raise eph.Refused("--report needs --verdict")
             job = eph.read(a.root, me) or {}
+            from . import job_tools
+            try:
+                allowed = eph.job_verdicts(job, job_tools.selected(a.root, me))
+            except ValueError as e:
+                raise eph.Refused(f"the job's bound profile is unreadable ({e}); report refused")
+            if a.verdict not in allowed:
+                raise eph.Refused(f"--verdict {a.verdict} is not one of this job's verdicts: "
+                                  + "|".join(allowed))
             if job.get("job") == "review" and a.verdict in ("approve", "request-changes"):
                 if not eph._SHA.fullmatch(a.head or ""):
                     raise eph.Refused("a review verdict needs --head <the 40-hex head you read>")

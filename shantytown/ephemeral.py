@@ -40,6 +40,19 @@ from typing import Callable
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
 VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+
+
+def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
+    """The verdicts this job may report: its JobSpec list, else the legacy enum.
+
+    `spec` is a hash-verified profile (job_tools.selected); without one the
+    record's own binding is used, which st wrote at spawn.
+    """
+    if spec is None:
+        bound = rec.get("jobspec") if isinstance(rec, dict) else None
+        spec = bound.get("resolved") if isinstance(bound, dict) else None
+    verdicts = spec.get("verdicts") if isinstance(spec, dict) else None
+    return tuple(verdicts) if verdicts else VERDICTS
 #: Fleet directive 10/21: ALL reviews on codex; important work on Claude.
 DEFAULT_HARNESS = {"review": "codex", "merge": "claude", "triage": "claude",
                    "task": "claude"}
@@ -773,7 +786,7 @@ def prompt(rec: dict) -> str:
     target = f" — {rec['repo']}#{rec['pr']}" if rec.get("repo") and rec.get("pr") else (
         f" — {rec['repo']}" if rec.get("repo") else "")
     fields = dict(rec, target=target, target_short=target,
-                  verdicts="|".join(VERDICTS),
+                  verdicts="|".join(job_verdicts(rec)),
                   deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
     # Protected jobs must never inherit the attended triage prompt's permission
     # to fix and publish. UID binding is controller ledger data, not an agent
@@ -781,6 +794,10 @@ def prompt(rec: dict) -> str:
     job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
                   else _JOBS["review_attended"] if attended_review(rec)
                   else _JOBS[rec["job"]])
+    custom = job_verdicts(rec) != VERDICTS
+    if custom:
+        job_prompt += (f"\nThis job's configured verdicts are {fields['verdicts']}; they replace "
+                       "any other verdict named above. Report blocked when you cannot finish.")
     from .job_context import render as render_context
     return ((_COMMON.format(**fields) + "\n" + job_prompt.format(**fields)).strip()
             + _item_block(rec) + render_context(rec.get("quipu_context")))
@@ -1120,11 +1137,23 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
                   now: float) -> dict:
     """Write the result ONCE. A second ending (a report racing a timeout) keeps
     the first result, so the administrator never hears two different stories."""
+    # Read transcripts OUTSIDE the ledger lock; stored only with the first result.
+    usage = None
+    prior = read(root, name)
+    if prior is not None and prior.get("result") is None:
+        try:
+            from . import job_usage
+            usage = job_usage.collect(prior, now=now)
+        except Exception as error:  # noqa: BLE001 - capture must never fail an ending
+            usage = {"captured_at": now, "state": "unknown",
+                     "reason": f"usage capture failed: {type(error).__name__}"}
     with lock(root):              # a report racing a reaper: one read-modify-write
         rec = read(root, name)
         if rec is None:
             raise Refused(f"no ledger entry for {name}")
         if rec.get("result") is None:
+            if usage is not None:
+                rec["usage"] = usage
             rec["result"] = {"verdict": verdict, "summary": summary[:1500],
                              "cause": cause, "at": now}
             rec["state"] = ENDING
