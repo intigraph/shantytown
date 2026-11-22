@@ -120,13 +120,48 @@ def selected(root, name):
     return parsed
 
 
+_ADMITTED_FIELDS = {"url", "type", "headers", "http_headers", "enabled_tools",
+                    "disabled_tools", "enabled", "startup_timeout_sec", "tool_timeout_sec"}
+
+
+def _admitted_headers(server):
+    merged = {}
+    for key in ("headers", "http_headers"):
+        fields = server.get(key, {})
+        if not isinstance(fields, dict):
+            return None
+        merged.update({str(k).lower(): v for k, v in fields.items()})
+    return merged
+
+
+def _same_admitted_server(present, admitted):
+    """True only for the job's own admitted definition after a prior pass.
+
+    Harness rendering may rename headers -> http_headers and add inert
+    transport controls; it never changes the endpoint or adds a credential
+    field, helper or process, so those still refuse as a crew shadow.
+    """
+    if not isinstance(present, dict) or set(present) - _ADMITTED_FIELDS:
+        return False
+    if present.get("url") != admitted.get("url"):
+        return False
+    headers = _admitted_headers(present)
+    return headers is not None and headers == _admitted_headers(admitted)
+
+
 def filter_servers(servers, spec):
     if spec is None:
         return dict(servers)
     defs = spec.get("server_defs", {})
-    if set(defs) & set(servers):
+    # A second pass over an already-filtered kit (provision renders the filtered
+    # manifest; Codex launch refilters the job-owned config) carries the job's
+    # own admitted definition, not a crew server. Only that exact anonymous
+    # endpoint passes; any other same-name server is a genuine shadow.
+    shadowed = sorted(name for name in set(defs) & set(servers)
+                      if not _same_admitted_server(servers[name], defs[name]))
+    if shadowed:
         raise ValueError("job-only server names must not shadow crew servers: "
-                         + ", ".join(sorted(set(defs) & set(servers))))
+                         + ", ".join(shadowed))
     servers = {**servers, **defs}
     missing = set(spec["mcp_servers"]) - set(servers)
     if missing:
