@@ -131,7 +131,11 @@ def _process_running(pid, *, samples=None, initial=None, clock=time.monotonic):
         raise
     else:
         identity = _stat_identity(raw)
-        running = identity['state'] != 'Z'  # Preserve the original non-Z predicate.
+        # proc_pid_stat(5): Z is zombie; X (and historical x) is dead.
+        # Exit can move Z -> X -> vanished between the wait and final sample.
+        # Every other state still counts as a survivor, including stopped and
+        # uninterruptible processes; an unreadable stat still raises UNKNOWN.
+        running = identity['state'] not in {'Z', 'X', 'x'}
         row.update(identity, observation='present', running=running)
         if initial and pid in initial:
             row['identity_changed'] = identity['starttime'] != initial[pid]
@@ -260,13 +264,28 @@ def test_predicate_samples_keep_deciding_stat_after_status_vanishes(monkeypatch)
         raise ProcessLookupError()
     monkeypatch.setattr(Path, 'read_text', read)
     samples = {}
-    # Diagnostic only: X still counts as running, preserving the old assertion.
-    assert _process_running(12345, samples=samples, initial={12345: 123}, clock=lambda: 7.)
+    assert not _process_running(12345, samples=samples, initial={12345: 123}, clock=lambda: 7.)
     row = samples[12345][-1]
     assert len(stat_reads) == 1
     assert row['state'] == 'X' and row['starttime'] == 999
     assert row['identity_changed'] is True and row['monotonic'] == 7.
     assert row['signals'] == 'UNKNOWN: ProcessLookupError'
+
+
+@pytest.mark.parametrize('state', ['R', 'S', 'D', 'T', 't', 'W', 'I', '?'])
+def test_live_stopped_or_unknown_kernel_state_remains_a_survivor(monkeypatch, state):
+    monkeypatch.setattr(Path, 'read_text', lambda path: _fake_proc_stat(12345, state))
+    assert _process_running(12345)
+
+
+def test_zombie_to_dead_transition_cannot_resurrect_a_survivor(monkeypatch):
+    states = iter(['Z', 'X', 'x'])
+    monkeypatch.setattr(Path, 'read_text', lambda path: _fake_proc_stat(12345, next(states)))
+    # The wait may finish on Z and the final survivor check observe X. Neither
+    # sample can execute or survive cancellation; no timing sleep is needed.
+    assert not _process_running(12345)
+    assert not _process_running(12345)
+    assert not _process_running(12345)
 
 
 def test_predicate_samples_are_bounded_and_preserve_zombie_and_vanished(monkeypatch):
