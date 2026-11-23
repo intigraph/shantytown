@@ -4410,6 +4410,15 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
                                     verified = job_review.confirmed(spec, result)
                             except (IdentityError, VerdictError, OSError, ValueError):
                                 pass
+                        if verified and verdict == 'approve':
+                            try:
+                                from . import review_enqueue
+                                cfg, config_error = config.load_or_default(Path(a.root))
+                                if config_error:
+                                    raise IdentityError('enqueue configuration unproved')
+                                review_enqueue.report(a.root, rec, spec, result, cfg.ephemeral)
+                            except Exception as error:  # preserve reporting and teardown
+                                problems.append(f"{rec['name']}: enqueue Action unproved ({type(error).__name__})")
                         if not verified:
                             verdict = 'blocked'
                             summary = 'Review signature/scope unproved; no controller signing fallback. ' + summary
