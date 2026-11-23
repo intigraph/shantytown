@@ -64,11 +64,28 @@ do not prove a deployed event-to-review launch.
 
 ## Lifecycle
 
-### Review-to-enqueue custody (offline library)
+### Review report to enqueue Action (default OFF)
 
-`review_enqueue.Store` is the first part of the deterministic review handoff.
-It is not connected to reporting, recruitment or a forge mutation. Existing
-merge-job behavior remains in place until the whole handoff is qualified.
+The protected mailbox reaper hands a verified APPROVE to
+`review_enqueue.report` before reporting and teardown. The handoff is disabled
+unless `[ephemeral] review_enqueue_enabled = true`; missing or malformed config
+never enables it. Existing merge-job behavior is unchanged.
+
+The controller also configures `review_enqueue_command` as an absolute adapter
+argv. There is no default executable and no shell expansion. The review cannot
+choose this command, its arguments, authority, state directory or receipt path.
+This slice supports the protected GitHub review rail only. Activation requires
+an installed native adapter that rechecks exact head, CI, signed review,
+revocation, and the shared service order/hold gates before enqueue. A test
+adapter is not native admission or runtime acceptance.
+
+`EnqueueAction` sends one JSON stdin object with schema
+`review-enqueue-action/v1`, intent ID, consumed attempt token and retained
+candidate. The adapter must return exactly schema, intent, attempt, state
+(`queued`, `refused` or `unknown`) and a bounded nonempty native receipt reference.
+A wrong identity, timeout, nonzero exit or malformed reply preserves UNKNOWN;
+no duplicate report retries it. The Action never issues a merge verb.
+An Action failure is reported separately and does not prevent job teardown.
 
 The controller must provision `<root>/ephemeral/review-enqueue` as its own
 private directory, outside the job UID's writable ancestry. Only a controller
@@ -91,8 +108,8 @@ Custody proves past review verification, not permission to merge. Native
 receipt compatibility, fresh revocation/head/CI checks, the shared
 versioned per-service order/hold gate across every admission producer, and a
 real approve-to-merge acceptance are still prerequisites for enabling this
-handoff or retiring merge recruitment. This library supplies no enqueue
-command, scheduler, signing-key enrollment or activation flag.
+handoff or retiring merge recruitment. No deployment config is enabled by this source change. There is no scheduler
+or signing-key enrollment in this handoff.
 
 ```
 spawn ─► admit (authority, cap, governor, merge lane) ─► ledger "live" + card

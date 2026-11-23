@@ -1,8 +1,8 @@
 """Controller custody for approved reviews, independent of job teardown.
 
-This is a storage contract, not an enqueue capability. Nothing imports it from
-the live report path yet. Native receipt compatibility and the shared service
-admission gate must qualify before that handoff can be enabled.
+The protected report path may invoke a configured enqueue Action only under an
+explicit default-OFF flag. Custody consumes one attempt before the adapter call;
+an uncertain reply never re-arms a possibly completed remote mutation.
 """
 from __future__ import annotations
 
@@ -196,3 +196,61 @@ class Store:
 
     def __exit__(self, *args):
         self.close()
+
+
+class EnqueueAction:
+    """Invoke the controller's native admission adapter, never a job command.
+
+    The adapter must recheck head, CI, review and shared service order/hold gates.
+    It receives only retained identity data on stdin; no shell or merge verb is
+    supplied by a review. Unknown outcomes require operator reconciliation.
+    """
+    def __init__(self, command):
+        self.command = tuple(command)
+        if not self.command or not Path(self.command[0]).is_absolute():
+            raise IdentityError('enqueue Action adapter unavailable')
+
+    def __call__(self, intent):
+        import subprocess
+        request = {'schema': 'review-enqueue-action/v1', 'intent': intent['id'],
+                   'attempt': intent['attempt'], 'candidate': intent['candidate']}
+        answer = subprocess.run(self.command, input=_bytes(request).decode(),
+                                capture_output=True, text=True, timeout=120)
+        if answer.returncode or len(answer.stdout.encode()) > MAX_BYTES:
+            raise IdentityError('enqueue Action outcome unproved')
+        result = json.loads(answer.stdout, object_pairs_hook=_unique)
+        if (not isinstance(result, dict)
+                or set(result) != {'schema', 'intent', 'attempt', 'state', 'receipt'}
+                or result['schema'] != 'review-enqueue-action/v1'
+                or result['intent'] != intent['id'] or result['attempt'] != intent['attempt']
+                or result['state'] not in ('queued', 'refused', 'unknown')
+                or not isinstance(result['receipt'], str) or not result['receipt']
+                or len(result['receipt']) > 2048):
+            raise IdentityError('enqueue Action receipt identity unproved')
+        return result['state'], result['receipt']
+
+
+def report(root, rec, spec, message, policy, *, quipu=None, action=None):
+    """Controller-only report handoff, before job teardown. OFF costs no reads."""
+    if not policy.review_enqueue_enabled or message.get('verdict') != 'approve':
+        return None
+    if (rec.get('job') != 'review' or rec.get('name') != spec['principal']
+            or spec.get('controller_root') != str(Path(root).resolve())
+            or spec.get('controller_uid') != os.geteuid()
+            or any(rec.get(k) != spec['review'][k] for k in ('repo', 'pr', 'head'))):
+        raise IdentityError('enqueue report/controller binding unproved')
+    adapter = action or EnqueueAction(policy.review_enqueue_command)
+    with Store(root) as store:
+        intent = store.retain('https://github.com', spec, message, quipu=quipu)
+        if intent['state'] != 'pending':
+            return intent
+        attempt = store.begin(intent['id'])
+        try:
+            state, receipt = adapter(attempt)
+        except Exception as error:
+            # Even a local timeout may follow a remote enqueue. Persist UNKNOWN
+            # and never repeat automatically, including after duplicate reports.
+            store.finish(intent['id'], attempt['attempt'], 'unknown',
+                         'adapter outcome unproved: ' + type(error).__name__)
+            raise
+        return store.finish(intent['id'], attempt['attempt'], state, receipt)
