@@ -891,8 +891,9 @@ The normal refresh lane must use `native_source_pin refresh -- ABSOLUTE_COMMAND`
 for its exclusive lease before chmod/fetch/merge or pin replacement. The existing
 refresher's guarded handoff checks the exact inherited lock inode, source root,
 caller and exclusive lock; an environment FD number alone grants nothing.
-An active reader defers a refresh tick. An absent pin preserves the old refresh
-lane but always refuses a native consumer; a malformed present pin refuses.
+An active reader defers a refresh tick. When both operator policies are absent,
+the old refresh lane is preserved; an absent canonical pin always refuses a
+native consumer, and a malformed present canonical pin refuses without fallback.
 
 Rollout must install both sides before adopting the canonical pin. Provision the
 lock with access only for the pinned source owner, protected controller and
@@ -911,3 +912,29 @@ either change. Unknown metadata refuses. It then measures the complete closure
 and prints a proposal; it never writes the operator pin. A mode change therefore
 continues to refuse native execution until the reviewed pin move/readback. The
 first pin/lock provisioning and canonical adoption are separate admitted steps.
+
+For first provisioning, the fixed root-protected
+`/etc/shantytown/recruitment-staged/native-enqueue-source.candidate.json` may
+supply the writer policy while the canonical pin is absent. Only the refresher
+consults it; consumers never do. A malformed present canonical pin refuses rather
+than falling back. The root-staged candidate grants only the same exclusive
+writer lease and must name the existing fixed lock, exact source owner/root,
+revision, entrypoint and full closure digest. It starts no controller or job.
+
+`measure-normalized-metadata-proposal --root PATH --owner UID` reads the complete
+closure without changing modes or pin bytes. Its tagged proposal hashes the
+future 0644 Git config metadata while admitting only the two declared current
+mode pairs; every other custody/closure check stays strict. After reviewed root
+staging and lock provisioning, the normal refresh verifies the same exclusive
+lease, performs the two exact normalizations and measures the actual closure.
+With only a staged candidate, that actual revision/digest must match the proposal
+or refresh refuses before its success heartbeat. Canonical adoption still needs
+the reviewed pin move and readback; absence continues refusing consumers even
+when writer normalization succeeds. No placeholder pin is needed or admitted.
+
+Recognized cache metadata also includes released numeric pytest tags such as
+`module.cpython-314-pytest-9.1.1.pyc`. These remain regular, single-link files
+under the excluded cache directory with known owners. Native isolated Python
+bypasses their bytecode through its separate cache prefix; the poisoned-bytecode
+control includes both ordinary and pytest-tagged poison. Arbitrary source,
+untagged bytecode, unknown tag text and redirects still refuse.

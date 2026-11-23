@@ -45,6 +45,7 @@ def source(tmp_path,monkeypatch):
                revision=proof['revision'],closure_sha256=proof['closure_sha256'],lock_file=str(lock))
     def write(value=value):policy.write_text(json.dumps(value))
     write();monkeypatch.setattr(pin,'PIN',policy);monkeypatch.setattr(pin,'LOCK',lock)
+    monkeypatch.setattr(pin,'STAGED_PIN',tmp_path/'staged.json')
     # Root-owned pin/lock installation is an explicit fixture seam, not a
     # production chown, sudo, enrollment or ownership relaxation.
     monkeypatch.setattr(adapter,'_operator_file',lambda p:os.open(p,os.O_RDONLY|os.O_NOFOLLOW))
@@ -186,6 +187,8 @@ def test_native_flags_bypass_a_real_poisoned_bytecode_cache(source):
     leaf.write_bytes(b'ALLOW=True \n');os.utime(leaf,ns=(before.st_atime_ns,before.st_mtime_ns))
     cache=Path(importlib.util.cache_from_source(str(leaf)));cache.parent.mkdir(mode=0o700)
     py_compile.compile(str(leaf),cfile=str(cache),doraise=True)
+    tagged=cache.with_name(cache.stem+'-pytest-9.1.1.pyc')
+    tagged.write_bytes(cache.read_bytes())  # Same executable poison, released pytest cache tag.
     leaf.write_bytes(original);os.utime(leaf,ns=(before.st_atime_ns,before.st_mtime_ns))
     proof=pin.measure(root,value['owner']);value.update({k:proof[k] for k in ('revision','closure_sha256')});write()
     ordinary=subprocess.run([sys.executable,'-I','-S','-B',str(native)],capture_output=True,text=True,check=True)
@@ -281,3 +284,67 @@ def test_metadata_normalizer_refuses_unknown_custody_before_changing_either_mode
         finally:
             if fault=='wrong-fd':os.close(fd)
     assert (gitdir.stat().st_mode,config.stat().st_mode)==modes
+
+
+def test_readonly_normalized_mode_proposal_matches_later_actual_measure(source):
+    root,_,value,_,_=source;gitdir=root/'.git';config=gitdir/'config'
+    gitdir.chmod(0o775);config.chmod(0o664)
+    before=(_meta_for_test(gitdir),_meta_for_test(config),config.read_bytes(),pin.PIN.read_bytes())
+    proposal=pin.measure(root,value['owner'],entrypoint=value['entrypoint'],normalized_metadata=True)
+    assert before==(_meta_for_test(gitdir),_meta_for_test(config),config.read_bytes(),pin.PIN.read_bytes())
+    with pytest.raises(IdentityError):pin.measure(root,value['owner'])
+    with pin.refreshing() as lease:actual=pin.normalize_refresh_metadata(lease.fd,root)
+    assert proposal==actual
+    print('Read-only proposal: metadata and pin unchanged; later actual closure matches')
+
+
+def _meta_for_test(path):
+    s=path.lstat()
+    return s.st_mode,s.st_uid,s.st_gid,s.st_ino,s.st_mtime_ns,s.st_ctime_ns
+
+
+def test_root_staged_proposal_grants_writer_lease_but_never_a_consumer(source,monkeypatch):
+    root,native,value,_,_=source
+    (root/'.git').chmod(0o775);(root/'.git'/'config').chmod(0o664)
+    proposal=pin.measure(root,value['owner'],entrypoint=value['entrypoint'],normalized_metadata=True)
+    staged=pin.PIN.with_name('staged.json');monkeypatch.setattr(pin,'STAGED_PIN',staged)
+    staged.write_text(json.dumps(dict(value,**{k:proposal[k] for k in ('revision','closure_sha256')})))
+    pin.PIN.unlink()
+    with pytest.raises(FileNotFoundError):
+        with pin.verified(native):pytest.fail('staged proposal authorized a consumer')
+    with pin.refreshing() as lease:
+        assert lease is not None
+        assert pin.normalize_refresh_metadata(lease.fd,root)==proposal
+    assert not pin.PIN.exists()
+    with pytest.raises(FileNotFoundError):
+        with pin.verified(native):pytest.fail('normalization silently adopted the proposal')
+    print('Root-staged candidate: writer EX/normalization VERIFIED; canonical pin absent; consumer REFUSED')
+
+
+@pytest.mark.parametrize('fault',['canonical-malformed','candidate-malformed','candidate-mismatch'])
+def test_bootstrap_never_falls_back_from_bad_canonical_or_uses_unknown_candidate(source,monkeypatch,fault):
+    root,native,value,_,_=source
+    (root/'.git').chmod(0o775);(root/'.git'/'config').chmod(0o664)
+    proposal=pin.measure(root,value['owner'],normalized_metadata=True)
+    staged=pin.PIN.with_name('staged.json');monkeypatch.setattr(pin,'STAGED_PIN',staged)
+    candidate=dict(value,**{k:proposal[k] for k in ('revision','closure_sha256')})
+    if fault=='candidate-malformed':candidate['owner']=True
+    staged.write_text(json.dumps(candidate))
+    if fault=='canonical-malformed':pin.PIN.write_text('{}')
+    else:pin.PIN.unlink()
+    if fault=='candidate-mismatch':(root/'lib'/'guard.py').write_text('ALLOW=True \n')
+    with pytest.raises((IdentityError,TypeError)):
+        with pin.refreshing() as lease:
+            assert lease is not None
+            pin.normalize_refresh_metadata(lease.fd,root)
+    assert not pin.PIN.exists() or pin.PIN.read_text()=='{}'
+
+
+@pytest.mark.parametrize('name',['guard.cpython-314-pytest-evil.pyc',
+    'guard.cpython-314-pytest-9.1.1.py','__init__.py','guard.pyc'])
+def test_recognized_pytest_cache_never_excludes_arbitrary_code(source,name):
+    root,native,_,_,_=source
+    cache=root/'lib'/'__pycache__';cache.mkdir(mode=0o700)
+    (cache/name).write_bytes(b'not verified source')
+    with pytest.raises(IdentityError):
+        with pin.verified(native):pytest.fail('arbitrary cache-directory code admitted')

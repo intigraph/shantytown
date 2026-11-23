@@ -25,6 +25,7 @@ import sys
 from .actor_identity import IdentityError
 
 PIN = Path('/etc/shantytown/native-enqueue-source.json')
+STAGED_PIN = Path('/etc/shantytown/recruitment-staged/native-enqueue-source.candidate.json')
 LOCK = Path('/etc/shantytown/native-source-custody/source.lock')
 MAX_FILES = 10000
 MAX_BYTES = 1024 * 1024 * 1024
@@ -94,9 +95,10 @@ def _root(root, owner):
         raise
 
 
-def measure(root, owner, *, entrypoint=None):
+def measure(root, owner, *, entrypoint=None, normalized_metadata=False):
     """Read a frozen checkout into a proposal. Never writes an operator pin."""
     root = Path(root)
+    _require(type(normalized_metadata) is bool, 'metadata proposal mode invalid')
     _require(type(owner) is int and 0 <= owner < 2**31, 'source owner invalid')
     directory = _root(root, owner)
     rows = []; total = 0; actual = set()
@@ -107,7 +109,7 @@ def measure(root, owner, *, entrypoint=None):
             meta = os.stat(name, dir_fd=fd, follow_symlinks=False)
             _require(stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1
                 and meta.st_uid in (0, owner)
-                and re.fullmatch(r'.+\.(?:cpython|pypy)-[0-9]+(?:\.opt-[0-9]+)?\.pyc', name),
+                and re.fullmatch(r'.+\.(?:cpython|pypy)-[0-9]+(?:\.opt-[0-9]+)?(?:-pytest-[0-9]+(?:\.[0-9]+){1,2})?\.pyc', name),
                 'non-cache code or redirect in excluded bytecode directory')
 
     def visit(fd, prefix=''):
@@ -174,8 +176,15 @@ def measure(root, owner, *, entrypoint=None):
         gitfd = os.open('.git', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                         dir_fd=directory)
         try:
-            _owner(os.fstat(gitfd), owner)
-            meta = os.stat('config', dir_fd=gitfd, follow_symlinks=False); _owner(meta, owner)
+            gitmeta = os.fstat(gitfd)
+            meta = os.stat('config', dir_fd=gitfd, follow_symlinks=False)
+            if normalized_metadata:
+                _require(gitmeta.st_uid == meta.st_uid == owner
+                    and stat.S_IMODE(gitmeta.st_mode) in (0o775, 0o755)
+                    and stat.S_IMODE(meta.st_mode) in (0o664, 0o644),
+                    'metadata proposal custody/modes UNKNOWN')
+            else:
+                _owner(gitmeta, owner); _owner(meta, owner)
             _require(stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1 and meta.st_size <= 65536,
                      'local Git config custody UNKNOWN')
             fd = os.open('config', os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=gitfd)
@@ -192,7 +201,8 @@ def measure(root, owner, *, entrypoint=None):
             total += len(raw)
             _require(total <= MAX_BYTES and len(rows) < MAX_FILES, 'source closure bound exhausted')
             rows.append(dict(path='.git/config', kind='file', owner=meta.st_uid,
-                mode=stat.S_IMODE(meta.st_mode), size=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
+                mode=0o644 if normalized_metadata else stat.S_IMODE(meta.st_mode),
+                size=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
         finally: os.close(gitfd)
         _require(_git(root, 'rev-parse', '--verify', 'HEAD').decode().strip() == revision,
                  'source revision changed during measurement')
@@ -201,9 +211,9 @@ def measure(root, owner, *, entrypoint=None):
                 file_count=len(rows), bytes=total)
 
 
-def policy(native=None):
+def _policy_file(path, native=None):
     from .review_enqueue_native import _operator_file
-    with os.fdopen(_operator_file(PIN), 'rb') as stream:
+    with os.fdopen(_operator_file(path), 'rb') as stream:
         raw = stream.read(4097)
     _require(len(raw) <= 4096, 'source pin exceeds bound')
     value = json.loads(raw, object_pairs_hook=_unique)
@@ -220,6 +230,20 @@ def policy(native=None):
     if native is not None:
         _require(Path(native) == Path(value['root']) / value['entrypoint'], 'native path differs from operator pin')
     return value
+
+
+def policy(native=None):
+    # Consumers ONLY use the canonical policy. A staged file is never authority.
+    return _policy_file(PIN, native)
+
+
+def _refresh_policy():
+    for path in (PIN, STAGED_PIN):
+        try: path.lstat()
+        except FileNotFoundError: continue
+        # Malformed/unprotected canonical policy refuses, never falls back.
+        return _policy_file(path)
+    return None
 
 
 @contextmanager
@@ -241,23 +265,23 @@ def verified(native):
 def refreshing():
     """The reviewed refresh lane uses EX before changing source or its pin."""
     from .review_enqueue_native import _operator_file
-    try: PIN.lstat()
-    except FileNotFoundError:
-        yield None  # No adopted pin: preserve the pre-existing refresh lane.
+    pin = _refresh_policy()
+    if pin is None:
+        yield None  # No operator policy: preserve the pre-existing refresh lane.
         return
-    pin = policy()
     _require(os.geteuid() in (0, pin['owner']), 'caller is not the pinned source owner')
     fd = _operator_file(pin['lock_file'])
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _require(policy() == pin, 'operator source pin changed before refresh')
+        _require(_refresh_policy() == pin, 'operator source pin changed before refresh')
         yield Lease(fd, pin)
     finally: os.close(fd)
 
 
 def check_refresh_fd(fd, root):
     from .review_enqueue_native import _operator_file
-    pin = policy()
+    pin = _refresh_policy()
+    _require(pin is not None, 'no operator refresh policy')
     _require(type(fd) is int and fd >= 3 and Path(root) == Path(pin['root'])
              and os.geteuid() in (0, pin['owner']), 'refresh caller/root/descriptor unproved')
     check = _operator_file(pin['lock_file'])
@@ -266,7 +290,7 @@ def check_refresh_fd(fd, root):
         _require((actual.st_dev, actual.st_ino) == (wanted.st_dev, wanted.st_ino),
                  'refresh descriptor differs from operator lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _require(policy() == pin, 'source pin changed during refresh handoff')
+        _require(_refresh_policy() == pin, 'source pin changed during refresh handoff')
     finally: os.close(check)
     return pin
 
@@ -292,7 +316,7 @@ def normalize_refresh_metadata(fd, root):
                  and stat.S_ISREG(configmeta.st_mode) and configmeta.st_nlink == 1
                  and stat.S_IMODE(configmeta.st_mode) in (0o664, 0o644),
                  'metadata normalization custody/modes UNKNOWN')
-        _require(policy() == pin, 'operator pin changed before metadata normalization')
+        _require(_refresh_policy() == pin, 'operator pin changed before metadata normalization')
         if stat.S_IMODE(gitmeta.st_mode) != 0o755:
             os.fchmod(gitfd, 0o755)
         if stat.S_IMODE(configmeta.st_mode) != 0o644:
@@ -301,7 +325,12 @@ def normalize_refresh_metadata(fd, root):
                  and _meta(os.stat('config', dir_fd=gitfd, follow_symlinks=False)) == _meta(os.fstat(configfd)),
                  'metadata identity changed during normalization')
         check_refresh_fd(fd, root)
-        return measure(root, pin['owner'], entrypoint=pin['entrypoint'])
+        proof = measure(root, pin['owner'], entrypoint=pin['entrypoint'])
+        try: PIN.lstat()
+        except FileNotFoundError:
+            _require(all(proof[k] == pin[k] for k in ('revision', 'closure_sha256')),
+                     'post-normalization closure differs from staged proposal')
+        return proof
     finally:
         if configfd is not None: os.close(configfd)
         if gitfd is not None: os.close(gitfd)
@@ -314,6 +343,9 @@ def main():
     measure_cmd = sub.add_parser('measure')
     measure_cmd.add_argument('--root', type=Path, required=True)
     measure_cmd.add_argument('--owner', type=int, required=True)
+    proposal_cmd = sub.add_parser('measure-normalized-metadata-proposal')
+    proposal_cmd.add_argument('--root', type=Path, required=True)
+    proposal_cmd.add_argument('--owner', type=int, required=True)
     check = sub.add_parser('check-refresh-fd')
     check.add_argument('--fd', type=int, required=True)
     check.add_argument('--root', type=Path, required=True)
@@ -326,6 +358,10 @@ def main():
     try:
         if args.command == 'measure':
             print(json.dumps(measure(args.root, args.owner), sort_keys=True))
+            return 0
+        if args.command == 'measure-normalized-metadata-proposal':
+            print(json.dumps({'kind': 'normalized-metadata-proposal',
+                'proof': measure(args.root, args.owner, normalized_metadata=True)}, sort_keys=True))
             return 0
         if args.command == 'check-refresh-fd':
             check_refresh_fd(args.fd, args.root)
