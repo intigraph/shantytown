@@ -3803,6 +3803,12 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
+    cfg, config_error = config.load_or_default(Path(a.root))
+    if config_error:
+        raise eph.Refused("merge retirement configuration unproved")
+    if cfg.ephemeral.review_enqueue_enabled:
+        raise eph.Refused("merge jobs are retired while review enqueue is enabled; "
+                          "use the verified review report Action")
     rec = eph.read(a.root, me)
     if rec is None or rec.get("job") != "merge":
         raise eph.Refused(eph.merge_gate(rec, a.head or "", {}, [], []))

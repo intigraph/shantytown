@@ -1,0 +1,8 @@
+Script started on 2026-11-23 03:47:14-05:00 [COMMAND="PYTHONPATH=. python3 tests/demo_merge_job_retirement.py" <not executed on terminal>]
+Offline plan probe: before f3e7f02015f5339bad8b8c87cbb38b8d9c8c372c and candidate source checkout
+before: merge job admitted (launching)
+after: REFUSED: merge jobs are retired while review enqueue is enabled; use the verified review report Action
+flag-OFF control: merge job admitted (launching)
+No ledger written, launch, forge read or remote mutation.
+
+Script done on 2026-11-23 03:47:14-05:00 [COMMAND_EXIT_CODE="0"]

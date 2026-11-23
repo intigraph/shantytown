@@ -69,7 +69,14 @@ do not prove a deployed event-to-review launch.
 The protected mailbox reaper hands a verified APPROVE to
 `review_enqueue.report` before reporting and teardown. The handoff is disabled
 unless `[ephemeral] review_enqueue_enabled = true`; missing or malformed config
-never enables it. Existing merge-job behavior is unchanged.
+never enables it. Enabling this handoff also retires new `merge` job admission
+and the legacy `st agent spawn --merge` command, including for a merge job
+launched before adoption. Both refuse before any forge read or merge attempt;
+existing job reporting and teardown remain available. A malformed configuration
+refuses the legacy command rather than falling back to defaults. With the flag
+OFF, the existing merge lane remains available until the native adapter and
+runtime acceptance qualify the replacement. No flag is changed by this source
+update.
 
 The controller also configures `review_enqueue_command` as an absolute adapter
 argv. There is no default executable and no shell expansion. The review cannot
