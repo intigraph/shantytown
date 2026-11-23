@@ -812,3 +812,42 @@ A timeout, process failure or mismatched reply is UNKNOWN, even if it resembles
 a refusal: a remote write may already have happened. The outer report custody
 retains that result without retry. No merge command or merge job is invoked.
 This source contract and offline process fixtures are not real queue acceptance.
+
+### Automatic trusted binding production
+
+An operator can instead select `python -m shantytown.review_enqueue_bindings`
+with the same `--root`, `--bindings` and `--native` arguments. This is another
+explicit process choice under the existing default-OFF flag; the prepared-record
+adapter above remains available. No deployment configuration is changed here.
+
+The private bindings directory must contain `repositories.json`, owned by the
+controller with no group/other access, with exactly this data shape:
+
+```json
+{"version": 1, "repositories": {"example/project": {"checkout": "/operator/checkout"}}}
+```
+
+At most 64 repositories qualify. A missing, unreadable, malformed, unlisted or
+relative checkout entry refuses before any classification. The controller
+provides a fetched checkout containing the exact objects; this process never
+fetches or runs a Git remote helper. A review cannot choose a path or author.
+
+For a consumed intent, the producer exclusively creates and fsyncs
+`<intent>.prepare.json` before any classification. The current pinned signed
+APPROVE and exact forge PR node/head supply identity and author. ONE normal
+native `classify` creates the private record with umask 077; its author, head,
+repository, number and main/squash/non-one-way scope must still match. The
+producer then writes and fsyncs the binding and uses the native adapter, which
+re-reads configuration, current PR and signed approval before enqueue. No
+content-review receipt is manufactured and no model merge job runs.
+
+A parallel call, crash, partial output, existing binding or consumed preparation
+claim refuses. Nothing resets or deletes the claim, overwrites old evidence or
+retries either classification or enqueue. Reconciliation is an operator action.
+Classification can consume the existing native scoring budget: the process is
+not a free read, and activation must measure its whole graph/forge/cost envelope.
+Its subprocess requests share a 100-second deadline (classification at most 45
+seconds), leaving margin before the outer 120-second Action timeout. Graph
+verification also consumes that elapsed allowance; no queue command starts
+after it is exhausted. These source controls do not establish a deployed
+end-to-end budget or real approve-to-merge acceptance.

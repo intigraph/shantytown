@@ -1,0 +1,7 @@
+Script started on 2026-11-23 04:08:49-05:00 [COMMAND="PYTHONPATH=.:tests python3 -m pytest -q -s --disable-warnings tests/test_review_enqueue_bindings.py::test_real_scoped_approval_is_checked_again_after_native_preparation" <not executed on terminal>]
+Verified signed APPROVE: queued; process calls: ['classify', 'enqueue']
+.Revoked after preparation: REFUSED; process calls: ['classify']
+.
+2 passed, 655 warnings in 0.43s
+
+Script done on 2026-11-23 04:08:50-05:00 [COMMAND_EXIT_CODE="0"]
