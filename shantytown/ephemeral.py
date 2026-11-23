@@ -292,6 +292,9 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     if refusal := cap_refusal(root, policy):
         raise Refused(refusal)
     if req.job == "merge":
+        if policy.review_enqueue_enabled:
+            raise Refused("merge jobs are retired while review enqueue is enabled; "
+                          "use the verified review report Action")
         if refusal := lane_refusal(root, req.repo, policy.merge_spacing_minutes, now):
             raise Refused(refusal)
     name = name or new_name(req.job)

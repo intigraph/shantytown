@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .answer import Answer
+from .owner_display_cache import shared_owner_display
 from .query_identity import read_headers, declared_read_operation
 from . import seeds_read_cache, seeds_push_read
 
@@ -127,7 +128,8 @@ def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> di
         headers=headers,
         method="POST",
     )
-    with urlopen(request, timeout=timeout) as response:
+    from .quipu_read_budget import open_read
+    with open_read(proof.quipu_url, request, timeout=timeout, opener=urlopen) as response:
         if response.status != 200:
             raise ValueError("plate query did not succeed")
         body = response.read(8 * 1024 * 1024 + 1)
@@ -430,6 +432,7 @@ def _retry_owner_projection(function):
 
 
 @declared_read_operation("owner-rows")
+@shared_owner_display(RenderShapeReads)
 @_retry_owner_projection
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,

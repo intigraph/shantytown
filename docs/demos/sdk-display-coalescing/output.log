@@ -1,0 +1,17 @@
+Script started on 2026-11-23 01:07:19-05:00 [COMMAND="bash docs/demos/sdk-display-coalescing/record.sh" <not executed on terminal>]
+BASE ddfc3b53113a92b660f1528e99ee9a0332f52f50
+SDK adapter source fixture; no real child process or remote store
+{"sd_source_sha256": "8355d6da12228d18a3f7e4c0ac5a9e53087f0cb5bfd7f9421aabf151980e8351"}
+{"mode": "ok", "callers": 8, "stubbed_child_dispatches": 8, "successful_answers": 8, "refusals": 0}
+{"exact_read_additional_dispatches": 1}
+{"mode": "failure", "callers": 8, "stubbed_child_dispatches": 8, "successful_answers": 0, "refusals": 8}
+{"exact_read_additional_dispatches": 1}
+CANDIDATE functional source 23a0d3ffd8bd0a98ec1923e00d23c5dec21a7e89
+SDK adapter source fixture; no real child process or remote store
+{"sd_source_sha256": "10f2c597d5f7207660c37010ea16190a5548ae314fa7eee8cce7a58f81ed8f2f"}
+{"mode": "ok", "callers": 8, "stubbed_child_dispatches": 1, "successful_answers": 8, "refusals": 0}
+{"exact_read_additional_dispatches": 1}
+{"mode": "failure", "callers": 8, "stubbed_child_dispatches": 1, "successful_answers": 0, "refusals": 8}
+{"exact_read_additional_dispatches": 1}
+
+Script done on 2026-11-23 01:07:21-05:00 [COMMAND_EXIT_CODE="0"]

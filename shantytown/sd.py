@@ -1321,9 +1321,9 @@ class SdTracker(BrTracker):
             identity_env = sorted((k, v) for k, v in env.items()
                                   if k.startswith(("SEEDS_", "SD_", "QUIPU_", "SHANTY_"))
                                   or k in ("HOME", "XDG_CONFIG_HOME", "USER"))
-            hit, publish = seeds_read_cache.stale_lookup(
-                ["sd", cmd, repo or os.getcwd(), sorted(pinned_config.items()) if pinned_config else [],
-                 identity_env], _valid)
+            cache_parts = ["sd", cmd, repo or os.getcwd(),
+                           sorted(pinned_config.items()) if pinned_config else [], identity_env]
+            hit, publish = seeds_read_cache.stale_lookup(cache_parts, _valid)
         if hit is not None:
             result = subprocess.CompletedProcess(cmd, 0, hit, "")
             from .tracker_result import observe
@@ -1332,25 +1332,61 @@ class SdTracker(BrTracker):
         # Reads retain their original route and budget. Optional signing
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
-        try:
-            if mutation(self._translate(args)) and not pinned_config:
-                asserted = actor
-                for i, arg in enumerate(args):
-                    if arg.startswith('--actor='):
-                        asserted = arg.partition('=')[2]
-                    elif arg == '--actor' and i + 1 < len(args):
-                        asserted = args[i + 1]
-                result = run(cmd, actor=actor, asserted_actor=asserted,
-                           identity_command=[self._bin, *self._location(), 'identity', '--json'],
-                           options=options, runner=subprocess.run)
-            else:
-                result = subprocess.run(cmd, **options)
-        finally:
-            # A write that timed out or raised may still have landed.
-            if not read_only:
-                seeds_read_cache.invalidate_stale()
-        if read_only and publish is not None and result.returncode == 0 and isinstance(result.stdout, str):
-            publish(result.stdout)
+        def execute():
+            try:
+                if mutation(self._translate(args)) and not pinned_config:
+                    asserted = actor
+                    for i, arg in enumerate(args):
+                        if arg.startswith('--actor='):
+                            asserted = arg.partition('=')[2]
+                        elif arg == '--actor' and i + 1 < len(args):
+                            asserted = args[i + 1]
+                    return run(cmd, actor=actor, asserted_actor=asserted,
+                               identity_command=[self._bin, *self._location(), 'identity', '--json'],
+                               options=options, runner=subprocess.run)
+                return subprocess.run(cmd, **options)
+            finally:
+                # A write that timed out or raised may still have landed.
+                if not read_only:
+                    seeds_read_cache.invalidate_stale()
+
+        if publish is not None:
+            from .seeds_read_flight import coalesce, SharedReadFailed
+
+            def lookup():
+                text, save = seeds_read_cache.stale_lookup(cache_parts, _valid)
+                cached = subprocess.CompletedProcess(cmd, 0, text, "") if text is not None else None
+
+                def save_result(result):
+                    if result.returncode == 0 and isinstance(result.stdout, str):
+                        save(result.stdout)
+
+                return cached, save_result if save is not None else None
+
+            class FailedRead(Exception):
+                def __init__(self, result):
+                    self.result = result
+
+            def fetch_read():
+                result = execute()
+                if result.returncode != 0:
+                    # The leader retains its actual child evidence. Recording
+                    # failure in the flight prevents each waiter spawning sd.
+                    raise FailedRead(result)
+                return result
+
+            try:
+                result = coalesce(seeds_read_cache._directory(), cache_parts, self.timeout,
+                                  lookup=lookup, fetch=fetch_read)
+            except FailedRead as error:
+                result = error.result
+            except SharedReadFailed as error:
+                # Adapter refusal, not an observed SDK exit: no child ran for
+                # this waiter and no cached success/empty stdout is claimed.
+                result = subprocess.CompletedProcess(cmd, 75, "",
+                    f"shared read refused before SDK dispatch: {error}")
+        else:
+            result = execute()
         from .tracker_result import observe
         observe(result)
         return result
