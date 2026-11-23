@@ -40,6 +40,32 @@ def _rec(root, **kw):
 
 # --- config -------------------------------------------------------------------
 
+def test_per_job_budgets_override_the_global_bounds(tmp_path):
+    """aegis-yddd: task jobs run long while reviews keep the short global budget."""
+    (tmp_path / "shantytown.toml").write_text(
+        "[ephemeral]\nlifetime_minutes = 10\nmax_turns = 2\n"
+        "[ephemeral.lifetime_minutes_by_job]\ntask = 60\n"
+        "[ephemeral.max_turns_by_job]\ntask = 40\n")
+    policy = config.load(tmp_path).ephemeral
+    assert eph.job_budget(policy, "lifetime_minutes", "task") == 60
+    assert eph.job_budget(policy, "max_turns", "task") == 40
+    assert eph.job_budget(policy, "lifetime_minutes", "review") == 10
+    assert eph.job_budget(policy, "max_turns", "review") == 2
+    task = _rec(tmp_path, job="task", policy=policy)
+    review = _rec(tmp_path, job="review", policy=policy, repo="o/r", pr=1)
+    assert task["deadline"] - task["spawned_at"] == 60 * 60 and task["max_turns"] == 40
+    assert review["deadline"] - review["spawned_at"] == 10 * 60 and review["max_turns"] == 2
+
+
+def test_per_job_budgets_refuse_unknown_jobs_and_bad_values(tmp_path):
+    (tmp_path / "shantytown.toml").write_text("[ephemeral.max_turns_by_job]\ntaks = 40\n")
+    with pytest.raises(config.ConfigError, match="unknown key"):
+        config.load(tmp_path)
+    (tmp_path / "shantytown.toml").write_text("[ephemeral.lifetime_minutes_by_job]\ntask = 0\n")
+    with pytest.raises(config.ConfigError, match="lifetime_minutes_by_job.task"):
+        config.load(tmp_path)
+
+
 def test_config_reads_and_refuses_the_ephemeral_table(tmp_path):
     (tmp_path / "shantytown.toml").write_text(
         "[ephemeral]\nmax_agents = 1\nlifetime_minutes = 30\n"

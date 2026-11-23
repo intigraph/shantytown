@@ -280,6 +280,13 @@ def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     return ""
 
 
+def job_budget(policy, key, job):
+    """lifetime_minutes / max_turns for one job type: the per-job table wins,
+    else the global [ephemeral] value (aegis-yddd)."""
+    by_job = getattr(policy, f"{key}_by_job", {}) or {}
+    return by_job.get(job, getattr(policy, key))
+
+
 def plan(req: Request, *, root, policy, actor, administrator, host, now,
          role_of, name=None, attempt=1, retry_of=None, recruiter_scope=None) -> dict:
     """Admit or refuse, and build the ledger record. Writes nothing."""
@@ -304,8 +311,9 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
         "host": host, "spawned_at": now,
-        "deadline": now + policy.lifetime_minutes * 60,
-        "max_turns": policy.max_turns, "max_context_k": policy.max_context_k,
+        "deadline": now + job_budget(policy, "lifetime_minutes", req.job) * 60,
+        "max_turns": job_budget(policy, "max_turns", req.job),
+        "max_context_k": policy.max_context_k,
         "turns": 0, "state": LAUNCHING, "attempt": attempt, "retry_of": retry_of,
         "workspace": None, "worktree_of": None, "result": None,
     }

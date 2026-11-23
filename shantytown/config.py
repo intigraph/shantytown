@@ -165,6 +165,10 @@ class Ephemeral:
     review_enqueue_attended_uid: int | None = None
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
+    # aegis-yddd (Stiwi 2026-11-23): per-job overrides of lifetime_minutes and
+    # max_turns, e.g. long task jobs while reviews stay short. Absent = global.
+    lifetime_minutes_by_job: dict = field(default_factory=dict)
+    max_turns_by_job: dict = field(default_factory=dict)
     jobs: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
@@ -1199,6 +1203,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
+                   "lifetime_minutes_by_job", "max_turns_by_job",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir"}
@@ -1258,6 +1263,17 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    budgets = {}
+    for key in ("lifetime_minutes_by_job", "max_turns_by_job"):
+        table = tbl.get(key, {})
+        if not isinstance(table, dict):
+            raise ConfigError(f"{path}: [ephemeral.{key}] must be a table")
+        _refuse_unknown(path, f"ephemeral.{key}", table, set(EPHEMERAL_JOBS))
+        for job, value in table.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ConfigError(f"{path}: ephemeral.{key}.{job} must be an integer >= 1, "
+                                  f"got {value!r}")
+        budgets[key] = dict(table)
     for key in ("verdict_graph", "verdict_signer", "verdict_key"):
         value = tbl.get(key, "")
         if not isinstance(value, str) or any(c in value for c in '"<>\\\n '):
@@ -1276,7 +1292,7 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     return Ephemeral(unattended=unattended, require_verified_identity=verified,
                      unattended_uid_ready=uid_ready,
                      recruitment_launch_ready=recruitment_ready,
-                     harness_by_job=dict(by_job), jobs=jobs, **values)
+                     harness_by_job=dict(by_job), jobs=jobs, **budgets, **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:
