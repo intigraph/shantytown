@@ -1,0 +1,13 @@
+Script started on 2026-11-23 01:48:46-05:00 [COMMAND="bash docs/demos/read-dispatch-budget/record.sh" <not executed on terminal>]
+BASE 556417ebfb6f749f274b07212fec0996add948ec
+Native direct-read source fixture; actual HTTP on a private loopback server
+{"source_sha256": "d15885f7e53b31c57243a927b4fc20259b931b42e4bb8bba38f379e0e85ed2f8"}
+{"configured_limit": 2, "processes": 3, "http_queries": 3, "populated_answers": 3, "pre_dispatch_refusals": 0}
+{"rollback_off_additional_http_queries": 1}
+CANDIDATE functional source b068c46ad6f37c6fbe40a302329338e672d27af2
+Native direct-read source fixture; actual HTTP on a private loopback server
+{"source_sha256": "f31ed7ebcb0416fe6cd107d0c27a42237a1cc63db35dccc856553bc501cee703"}
+{"configured_limit": 2, "processes": 3, "http_queries": 2, "populated_answers": 2, "pre_dispatch_refusals": 1}
+{"rollback_off_additional_http_queries": 1}
+
+Script done on 2026-11-23 01:48:48-05:00 [COMMAND_EXIT_CODE="0"]
