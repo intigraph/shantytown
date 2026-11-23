@@ -441,7 +441,12 @@ SDK `list`/`ready` display misses use the same flight primitive around the child
 dispatch. Their existing key still includes argv, working directory, pinned
 configuration and identity environment. A fresh child retains its exit status,
 stdout and stderr; a cached successful answer retains the existing stdout-only
-contract. Failed children and timeouts are not published. Store proof still runs
+contract. Failed children and timeouts are not published. The leader retains
+its actual failure status/stdout/stderr or timeout exception. Waiting readers
+receive an explicit adapter refusal (return code 75, no child dispatched), and
+later display calls observe the shared one-second backoff. That code describes
+the adapter refusal rather than an observed SDK exit. Exact reads bypass this
+shared display failure state. Store proof still runs
 before this seam. Coalescing child dispatch does not establish a shared HTTP
 request budget or prove the SDK's internal request count.
 

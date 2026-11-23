@@ -1351,7 +1351,7 @@ class SdTracker(BrTracker):
                     seeds_read_cache.invalidate_stale()
 
         if publish is not None:
-            from .seeds_read_flight import coalesce
+            from .seeds_read_flight import coalesce, SharedReadFailed
 
             def lookup():
                 text, save = seeds_read_cache.stale_lookup(cache_parts, _valid)
@@ -1363,8 +1363,28 @@ class SdTracker(BrTracker):
 
                 return cached, save_result if save is not None else None
 
-            result = coalesce(seeds_read_cache._directory(), cache_parts, self.timeout,
-                              lookup=lookup, fetch=execute)
+            class FailedRead(Exception):
+                def __init__(self, result):
+                    self.result = result
+
+            def fetch_read():
+                result = execute()
+                if result.returncode != 0:
+                    # The leader retains its actual child evidence. Recording
+                    # failure in the flight prevents each waiter spawning sd.
+                    raise FailedRead(result)
+                return result
+
+            try:
+                result = coalesce(seeds_read_cache._directory(), cache_parts, self.timeout,
+                                  lookup=lookup, fetch=fetch_read)
+            except FailedRead as error:
+                result = error.result
+            except SharedReadFailed as error:
+                # Adapter refusal, not an observed SDK exit: no child ran for
+                # this waiter and no cached success/empty stdout is claimed.
+                result = subprocess.CompletedProcess(cmd, 75, "",
+                    f"shared read refused before SDK dispatch: {error}")
         else:
             result = execute()
         from .tracker_result import observe
