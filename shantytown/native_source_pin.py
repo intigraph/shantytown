@@ -1,4 +1,4 @@
-"""Operator-pinned native checkout custody; no source/pin installation or repair.
+"""Operator-pinned native checkout custody; no source or pin installation.
 
 The closure includes every versioned file and local Git config. Non-versioned
 files refuse, except bytecode caches which native subprocess flags bypass.
@@ -271,6 +271,43 @@ def check_refresh_fd(fd, root):
     return pin
 
 
+def normalize_refresh_metadata(fd, root):
+    """Reviewed refresh only: normalize two metadata modes, return a proposal.
+
+    No operator pin is written. Both leaves qualify before either mutation;
+    content, owners and every other source mode remain unchanged.
+    """
+    pin = check_refresh_fd(fd, root)
+    directory = _root(Path(root), pin['owner'])
+    gitfd = configfd = None
+    try:
+        gitfd = os.open('.git', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                        os.O_CLOEXEC, dir_fd=directory)
+        configfd = os.open('config', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK |
+                           os.O_CLOEXEC, dir_fd=gitfd)
+        gitmeta, configmeta = os.fstat(gitfd), os.fstat(configfd)
+        _require(gitmeta.st_uid == configmeta.st_uid == pin['owner']
+                 and stat.S_ISDIR(gitmeta.st_mode)
+                 and stat.S_IMODE(gitmeta.st_mode) in (0o775, 0o755)
+                 and stat.S_ISREG(configmeta.st_mode) and configmeta.st_nlink == 1
+                 and stat.S_IMODE(configmeta.st_mode) in (0o664, 0o644),
+                 'metadata normalization custody/modes UNKNOWN')
+        _require(policy() == pin, 'operator pin changed before metadata normalization')
+        if stat.S_IMODE(gitmeta.st_mode) != 0o755:
+            os.fchmod(gitfd, 0o755)
+        if stat.S_IMODE(configmeta.st_mode) != 0o644:
+            os.fchmod(configfd, 0o644)
+        _require(_meta(os.stat('.git', dir_fd=directory, follow_symlinks=False)) == _meta(os.fstat(gitfd))
+                 and _meta(os.stat('config', dir_fd=gitfd, follow_symlinks=False)) == _meta(os.fstat(configfd)),
+                 'metadata identity changed during normalization')
+        check_refresh_fd(fd, root)
+        return measure(root, pin['owner'], entrypoint=pin['entrypoint'])
+    finally:
+        if configfd is not None: os.close(configfd)
+        if gitfd is not None: os.close(gitfd)
+        os.close(directory)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
@@ -280,6 +317,9 @@ def main():
     check = sub.add_parser('check-refresh-fd')
     check.add_argument('--fd', type=int, required=True)
     check.add_argument('--root', type=Path, required=True)
+    normalize = sub.add_parser('normalize-refresh-metadata')
+    normalize.add_argument('--fd', type=int, required=True)
+    normalize.add_argument('--root', type=Path, required=True)
     refresh = sub.add_parser('refresh')
     refresh.add_argument('argv', nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -290,6 +330,9 @@ def main():
         if args.command == 'check-refresh-fd':
             check_refresh_fd(args.fd, args.root)
             print('SOURCE_REFRESH_EXCLUSIVE_LEASE_VERIFIED')
+            return 0
+        if args.command == 'normalize-refresh-metadata':
+            print(json.dumps(normalize_refresh_metadata(args.fd, args.root), sort_keys=True))
             return 0
         argv = args.argv[1:] if args.argv[:1] == ['--'] else args.argv
         _require(argv and Path(argv[0]).is_absolute(), 'refresh requires explicit absolute operator command')

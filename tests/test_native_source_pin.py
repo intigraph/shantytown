@@ -238,3 +238,46 @@ def test_source_pin_demo_current_mutated_and_refresh_controls(source):
     with pytest.raises(IdentityError) as refused:
         with pin.verified(native):pytest.fail('changed source admitted')
     print('Same-size/same-mtime mutation:',str(refused.value))
+
+
+def test_reviewed_refresh_normalizes_only_metadata_and_returns_unadopted_proof(source):
+    root,native,value,write,_=source
+    gitdir=root/'.git';config=gitdir/'config'
+    gitdir.chmod(0o775);config.chmod(0o664)
+    before=config.read_bytes();old_pin=pin.PIN.read_bytes()
+    with pin.refreshing() as lease:
+        proof=pin.normalize_refresh_metadata(lease.fd,root)
+        assert (gitdir.stat().st_mode&0o777)==0o755
+        assert (config.stat().st_mode&0o777)==0o644
+        assert config.read_bytes()==before
+        assert pin.PIN.read_bytes()==old_pin
+        print('Exclusive refresh: metadata modes -> 0755/0644; config bytes and operator pin unchanged')
+        assert proof==pin.measure(root,value['owner'],entrypoint=value['entrypoint'])
+        assert pin.normalize_refresh_metadata(lease.fd,root)==proof
+    with pytest.raises(IdentityError):
+        with pin.verified(native):pytest.fail('normalization silently moved the operator pin')
+    print('Old operator pin: consumer REFUSED after metadata change')
+    value['closure_sha256']=proof['closure_sha256'];write()
+    with pin.verified(native):pass
+    print('Reviewed fixture pin replacement/readback: consumer VERIFIED')
+
+
+@pytest.mark.parametrize('fault',['wrong-fd','root','config-mode','dir-mode','hardlink','symlink'])
+def test_metadata_normalizer_refuses_unknown_custody_before_changing_either_mode(source,fault):
+    root,_,_,_,_=source;gitdir=root/'.git';config=gitdir/'config'
+    gitdir.chmod(0o775);config.chmod(0o664)
+    if fault=='config-mode':config.chmod(0o666)
+    if fault=='dir-mode':gitdir.chmod(0o777)
+    if fault=='hardlink':os.link(config,root.parent/'other-config')
+    if fault=='symlink':
+        original=root.parent/'config';config.rename(original);config.symlink_to(original)
+    modes=(gitdir.stat().st_mode,config.stat().st_mode)
+    with pin.refreshing() as lease:
+        fd=lease.fd
+        if fault=='wrong-fd':fd=os.open(root/'README.md',os.O_RDONLY)
+        try:
+            with pytest.raises((IdentityError,OSError)):
+                pin.normalize_refresh_metadata(fd,root.parent if fault=='root' else root)
+        finally:
+            if fault=='wrong-fd':os.close(fd)
+    assert (gitdir.stat().st_mode,config.stat().st_mode)==modes

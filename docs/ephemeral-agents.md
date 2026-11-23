@@ -902,3 +902,12 @@ permissions, measure afterward, and retain a mutated-file refusal control. Move
 pins only under the same exclusive lease, through the reviewed Gold/refresh
 lane with digest readback. No pin, ACL, owner, mode, source refresh, canonical
 admission or runtime flag is changed by this source slice.
+
+The reviewed refresh finalization calls `normalize-refresh-metadata --fd FD --root PATH`
+under its inherited exclusive lease, before publishing a successful refresh mark.
+Only `.git` 0775/0755 -> 0755 and its single-link regular `config`
+0664/0644 -> 0644 are admitted; both exact pinned owners/modes qualify before
+either change. Unknown metadata refuses. It then measures the complete closure
+and prints a proposal; it never writes the operator pin. A mode change therefore
+continues to refuse native execution until the reviewed pin move/readback. The
+first pin/lock provisioning and canonical adoption are separate admitted steps.
