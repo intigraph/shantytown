@@ -85,6 +85,11 @@ class QuipuEvents:
         self.timeout = timeout
 
     def _get(self, path: str) -> dict:
+        from .quipu_read_budget import admit, ReadBudgetRefused
+        try:
+            admit(self.server)
+        except ReadBudgetRefused as error:
+            raise EventsUnavailable(f"local read refused before HTTP: {error}") from error
         try:
             with urllib.request.urlopen(self.server + path, timeout=self.timeout) as r:
                 return json.loads(r.read())

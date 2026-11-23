@@ -566,6 +566,11 @@ class QuipuRegistry:
             headers={**request_headers(), **(
                 {"X-Quipu-Client": self.client_label} if self.client_label else {})},
         )
+        from .quipu_read_budget import admit, ReadBudgetRefused
+        try:
+            admit(self.server)
+        except ReadBudgetRefused as error:
+            raise QuipuQueryRejected(f"local read refused before HTTP: {error}") from error
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read())

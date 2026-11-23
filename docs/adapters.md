@@ -399,6 +399,30 @@ performance. The default `0` retains existing reads. Invalid setting values
 refuse. Live activation and measured acceptance require the upstream admission
 packet and normal deployment; enabling this flag alone cannot establish either.
 
+### Optional Python read-dispatch budget
+
+`ST_QUIPU_READS_PER_MINUTE` is off by default (`0`). A positive integer up to
+10,000 admits that many initial Python HTTP read dispatches per rolling sixty
+seconds, shared by processes using the same UID cache and configured HTTP origin.
+Origin spelling is normalized across endpoint paths and default ports. Normal
+and background reads share this allowance. Configure a value only with measured
+host demand and installed-path parity; this source does not activate a runtime
+setting or establish a fleet-wide limit.
+
+Covered seams are native Seeds candidate/field queries, watermark/change-feed
+reads, registry queries, event GETs and the bounded crew-rule HTTP worker's
+parent dispatch. Cache hits spend no charge. Failed attempts keep their charge.
+SDK child/internal HTTP, automatic transport redirect requests, other adapters,
+other origins and alternate UID/cache namespaces are outside this counter.
+This is a cooperative resource control, not authorization or a CPU-cost budget.
+
+A private locked ledger records timestamps only. Admission releases its lock
+before network work. Exhaustion, ledger contention, unsafe/corrupt state and
+clock regression refuse before dispatch; none means empty data or server
+unreachability. Limit changes retain existing charges. Quota refusals cannot
+fall back to an unfenced fetch. Setting the knob to `0` disables this optional
+admission tier; fresh/read-consistency requirements still apply.
+
 ### Owner-read cache consistency
 
 The optional Seeds read cache holds publication locks only while checking or
@@ -420,6 +444,35 @@ Waiting is bounded by the request timeout, capped at five seconds. An expired
 wait or unavailable flight refuses without launching a duplicate fetch. Exact readers never wait on
 these flights. `ST_SEEDS_STALE_TTL=0` or `ST_SEEDS_READ_CACHE=0` disables this tier
 and its coalescing; this is also the rollback.
+
+Ordinary anchor and crew plate presentation explicitly enter the owner-display
+scope. Complete native owner projections in that scope share one host-local
+bounded-staleness observation, including the fused roster shape guard. Keys
+include the endpoint, graph, owner/roster, all projection options and `ST_`
+configuration. Own writes invalidate the observation and prevent publication
+of an overlapping fetch. Incomplete projections retain their caveat and never
+become successful cached empty plates. Custom injected shape guards execute live.
+
+This display scope is separate from the general `stale_ok()` scope: inheriting
+that scope during a Stop or tend operation cannot opt a decision into cached
+owner rows. Tend, capacity admission, startup completeness checks and ordinary
+non-display plate reads retain their existing projection path. Explicit exact,
+direct and snapshot scopes bypass the display cache. `ST_SEEDS_STALE_TTL=0`
+or `ST_SEEDS_READ_CACHE=0` also disables it. The display's `Answer.how` names
+bounded staleness; freshness-sensitive actions must use the non-display reader.
+
+SDK `list`/`ready` display misses use the same flight primitive around the child
+dispatch. Their existing key still includes argv, working directory, pinned
+configuration and identity environment. A fresh child retains its exit status,
+stdout and stderr; a cached successful answer retains the existing stdout-only
+contract. Failed children and timeouts are not published. The leader retains
+its actual failure status/stdout/stderr or timeout exception. Waiting readers
+receive an explicit adapter refusal (return code 75, no child dispatched), and
+later display calls observe the shared one-second backoff. That code describes
+the adapter refusal rather than an observed SDK exit. Exact reads bypass this
+shared display failure state. Store proof still runs
+before this seam. Coalescing child dispatch does not establish a shared HTTP
+request budget or prove the SDK's internal request count.
 
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded

@@ -97,5 +97,10 @@ docs/demos/refill-unused-notes/output.log -text whitespace=cr-at-eol
 # Preserve job tool/context probe PTY bytes and replay timing.
 docs/probes/pr-demos/job-tool-context/output.log -text whitespace=cr-at-eol
 
+# Preserve SDK display fixture PTY bytes and replay timing.
+docs/demos/sdk-display-coalescing/output.log -text whitespace=cr-at-eol
+
+# Preserve initial read-budget fixture PTY bytes and replay timing.
+docs/demos/read-dispatch-budget/output.log -text whitespace=cr-at-eol
 # Preserve protected report Action fixture recording bytes.
 docs/demos/review-report-enqueue/output.txt -text whitespace=cr-at-eol

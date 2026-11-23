@@ -31,6 +31,9 @@ def post(url, body, headers, *, timeout, max_bytes):
         raise ValueError("HTTP request byte cap reached")
     if time.monotonic() >= deadline:
         raise TimeoutError("HTTP total deadline exceeded")
+    from .quipu_read_budget import admit
+    if admit(url) and time.monotonic() >= deadline:
+        raise TimeoutError("HTTP total deadline exceeded")
     with subprocess.Popen(
         [sys.executable, "-I", "-S", str(Path(__file__).resolve())],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
