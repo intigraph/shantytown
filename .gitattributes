@@ -7,6 +7,9 @@
 # Preserve the startup-anchor source fixture recording.
 docs/demos/startup-anchor-wait/output.log -text whitespace=cr-at-eol
 docs/demos/startup-anchor-wait/timing.log -text
+# Preserve verified-wake adapter fixture recording bytes and replay timing.
+docs/demos/recruit-adapter/output.log -text whitespace=cr-at-eol
+docs/demos/recruit-adapter/timing.log -text
 # Preserve the exact protected-listener fixture recording for scriptreplay.
 docs/demos/recruit-inherited-receiver/output.log -text whitespace=cr-at-eol
 docs/probes/pr-demos/parent-death-state/output.log -text
