@@ -1,5 +1,6 @@
 """Private controller fixtures; no production native command or forge calls."""
 import json
+from contextlib import contextmanager
 import os
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -36,6 +37,11 @@ def case(custody, monkeypatch):
         SimpleNamespace(ephemeral=config.Ephemeral(review_enqueue_enabled=True)), None))
     monkeypatch.setattr(adapter, 'controller_ready', lambda: None)
     monkeypatch.setattr(adapter, '_operator_file', lambda _: os.open('/dev/null', os.O_RDONLY))
+    monkeypatch.setattr(adapter.native_source_pin, 'policy', lambda *a: {})
+    @contextmanager
+    def verified(*a):
+        yield adapter.native_source_pin.Lease(-1, {})
+    monkeypatch.setattr(adapter.native_source_pin, 'verified', verified)
     monkeypatch.setattr(adapter.gate_verdict, 'trusted_signers', lambda: {candidate['signer']: 'pinned'})
     verdict = dict(approved=True, author_agent='author', approvals=[dict(
         record=candidate['record'], by=candidate['reviewer'])])
@@ -62,7 +68,8 @@ def test_exact_current_signed_review_reaches_only_native_enqueue(case):
                          attempt=case.request['attempt'], state='queued', receipt='MQ_fixture')
     assert len(case.calls) == 2
     argv = case.calls[-1]
-    assert argv[3] == 'enqueue' and argv[-2:] == ['--diff-bound', '--execute']
+    assert 'enqueue' in argv and argv[-2:] == ['--diff-bound', '--execute']
+    assert all(flag in argv for flag in ('-I', '-S', '-B', 'pycache_prefix=/dev/null'))
     assert '--expect-record' in argv and '--review-record' not in argv
     assert 'merge' not in argv  # Never mint a native content review or use a merge verb.
 

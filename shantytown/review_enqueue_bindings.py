@@ -60,7 +60,7 @@ def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
         return run(argv, **kwargs)
     intent = adapter.checked_attempt(request, root)
     candidate = intent['candidate']
-    os.close(adapter._operator_file(Path(native)))
+    adapter.native_source_pin.policy(Path(native))
     directory = _directory(Path(bindings), os.geteuid())
     try:
         checkout = _repository(directory, candidate['repo'])
@@ -74,10 +74,12 @@ def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
         _claim(directory, intent['id'], intent['attempt'])
         author = adapter.current_author(candidate, quipu=quipu, run=bounded)
         record_name = intent['id'] + '.record.json'
-        answer = bounded([sys.executable, '-I', str(native), 'classify', '--forge', 'github',
-            '--repo', candidate['repo'], '--pr', str(candidate['pr']), '--checkout', checkout,
-            '--author', author, '--output', str(Path(bindings) / record_name)],
-            capture_output=True, text=True, timeout=45, umask=0o077)
+        with adapter.native_source_pin.verified(Path(native)) as lease:
+            answer = bounded([sys.executable, '-I', '-S', '-B', '-X', 'pycache_prefix=/dev/null',
+                str(native), 'classify', '--forge', 'github', '--repo', candidate['repo'],
+                '--pr', str(candidate['pr']), '--checkout', checkout, '--author', author,
+                '--output', str(Path(bindings) / record_name)], capture_output=True, text=True,
+                timeout=45, umask=0o077, pass_fds=(lease.fd,))
         if answer.returncode:
             raise IdentityError('native classification unproved; no automatic retry')
         record = adapter._read(directory, record_name, owner=os.geteuid(), maximum=adapter.MAX_BINDING)
