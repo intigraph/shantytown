@@ -56,7 +56,7 @@ def test_human_draft_before_send_has_no_custody_or_keys(monkeypatch, tmp_path):
     assert records(tmp_path) == []
 
 
-def test_queue_is_unconfirmed_and_cannot_close_durable_pointer(monkeypatch, tmp_path, capsys):
+def test_busy_deferral_cannot_close_durable_pointer(monkeypatch, tmp_path, capsys):
     from shantytown import cli
     panes, calls = local(monkeypatch, tmp_path, [BUSY, QUEUED])
     box = FilesInbox(tmp_path / 'inbox')
@@ -67,8 +67,8 @@ def test_queue_is_unconfirmed_and_cannot_close_durable_pointer(monkeypatch, tmp_
     assert cli._inbox_durable(args, card, BODY, panes) == cli.OK
     assert len(box.unread('worker')) == 1
     assert 'UNVERIFIED' in capsys.readouterr().out
-    assert records(tmp_path)[0]['state'] == 'queued'
-    assert not any(c[-1] in ('C-e', 'C-u') for c in keys(calls))
+    assert records(tmp_path)[0]['state'] == 'deferred'
+    assert keys(calls) == []
 
 
 def test_no_persistence_means_no_typing(monkeypatch, tmp_path):
@@ -821,3 +821,69 @@ def test_clipped_foreign_queue_prevents_false_dequeue_without_authorizing_keys(t
     assert len(FilesEvents(tmp_path / 'events').pending('lead')) == 1
     assert len(f[-1].unread('worker')) == 1
     assert keys(f[1]) == []
+
+
+def test_busy_send_retains_body_without_typing_or_native_queue(monkeypatch, tmp_path):
+    panes, calls = local(monkeypatch, tmp_path, [BUSY, BUSY])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='deferred'):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+    [record] = records(tmp_path)
+    assert record['state'] == 'deferred'
+    assert record['text'] == BODY
+    assert not record['recovery_attempted']
+
+
+def test_deferred_body_is_sent_once_after_idle_with_durable_pointer(monkeypatch, tmp_path):
+    f = fixtures(tmp_path, monkeypatch, state='deferred', messages=[BODY])
+    panes, calls, card, reg, box = f
+    sent = []
+    monkeypatch.setattr(panes, 'send', lambda pane, body: sent.append((pane, body)))
+    observe(tmp_path, f, BUSY, 1000)
+    assert sent == []
+    assert len(box.unread('worker')) == 1
+    observe(tmp_path, f, READY, 1001)
+    assert sent == [('worker', BODY)]
+    assert box.unread('worker') == []
+    observe(tmp_path, f, READY, 1002)
+    assert sent == [('worker', BODY)]
+
+
+@pytest.mark.parametrize('screen', [OWNED.replace(BODY, 'Foreign draft'), IDLE_QUEUE])
+def test_deferred_recovery_does_not_submit_foreign_or_already_queued_body(monkeypatch, tmp_path, screen):
+    f = fixtures(tmp_path, monkeypatch, state='deferred', messages=[BODY])
+    panes = f[0]
+    sent = []
+    monkeypatch.setattr(panes, 'send', lambda *args: sent.append(args))
+    observe(tmp_path, f, screen, 1000)
+    assert sent == []
+    assert len(f[-1].unread('worker')) == 1
+
+
+def test_deferred_retry_requires_same_runtime_generation(monkeypatch, tmp_path):
+    f = fixtures(tmp_path, monkeypatch, state='deferred', messages=[BODY])
+    with delivery.Custody(tmp_path, 'worker') as custody:
+        record = next(custody.records())
+        record['runtime'] = 'old-runtime'
+        custody.save(record)
+    sent = []
+    monkeypatch.setattr(f[0], 'send', lambda *args: sent.append(args))
+    observe(tmp_path, f, READY, 1000)
+    assert sent == []
+    assert len(f[-1].unread('worker')) == 1
+
+
+def test_busy_deferral_requires_persistence_before_any_key(monkeypatch, tmp_path):
+    panes, calls = local(monkeypatch, tmp_path, [BUSY])
+    monkeypatch.setattr(delivery.Custody, 'save', lambda *_: (_ for _ in ()).throw(OSError('full')))
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+
+
+def test_busy_resend_of_native_queued_body_never_becomes_idle_retry(monkeypatch, tmp_path):
+    panes, calls = local(monkeypatch, tmp_path, [QUEUED])
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert keys(calls) == []
+    assert records(tmp_path)[0]['state'] == 'queued'

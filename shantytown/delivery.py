@@ -166,6 +166,10 @@ class Custody:
         from . import triage
         from .tmux import _codex_owned_input, _codex_queued
         record = self.record
+        if record['state'] == 'deferred':
+            # Nothing was typed. Keep the precise idle-retry state rather
+            # than deriving a native queue outcome from unrelated previews.
+            return
         self.finish('unknown')
         screen = panes.capture(self.pane, attrs=True, timeout=2)
         if _codex_queued(screen, record['text']):
@@ -530,9 +534,15 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
                 or panes.session_created(card.pane) != record['session']
                 or triage.mid_flight(screen)):
             continue
+        from .tmux import _codex_queued
+        if _codex_queued(screen, record['text']):
+            continue
+        if ('runtime' in record and (not record['runtime']
+                or panes.runtime_identity(card.pane) != record['runtime'])):
+            continue
         owned = _codex_owned_input(screen, record['text'])
         empty = triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER)
-        if not owned and not (record['state'] == 'cleared' and empty):
+        if not owned and not (record['state'] in ('cleared', 'deferred') and empty):
             continue
         with Custody(root, card.pane, socket) as custody:
             record['recovery_attempted'] = True
