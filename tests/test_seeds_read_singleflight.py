@@ -1,6 +1,7 @@
 """Concurrent display cache misses must share one actual wire fetch."""
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import time
 from urllib.error import HTTPError
 import os
 import subprocess
@@ -44,12 +45,33 @@ def test_exact_and_disabled_stale_reads_do_not_enter_singleflight(service, monke
     assert state['queries'] == 2
 
 
+def test_simultaneous_failed_fetches_share_one_refusal(service):
+    proof, state = service
+    state.update(fail_query=True, delay=.2)
+    barrier = threading.Barrier(8)
+
+    def caller():
+        with cache.stale_ok():
+            barrier.wait(timeout=5)
+            try:
+                read(proof)
+            except (HTTPError, RuntimeError):
+                return 'refused'
+            return 'unexpected success'
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        assert list(pool.map(lambda _: caller(), range(8))) == ['refused'] * 8
+    assert state['queries'] == 1
+
+
 def test_failed_flight_never_publishes_a_successful_empty_answer(service):
     proof, state = service
     state['fail_query'] = True
     with cache.stale_ok(), pytest.raises(HTTPError):
         read(proof)
     state['fail_query'] = False
+    # A subsequent success is admitted after the bounded failure backoff.
+    time.sleep(1.05)
     with cache.stale_ok():
         result = read(proof)
     assert result['rows'][0]['value'] == 'before'
@@ -130,3 +152,56 @@ def test_background_busy_refuses_before_waiting_on_a_held_flight(service, monkey
         with cache.stale_ok(), pytest.raises(quipu_busy.QuipuBusy):
             read(proof)
     assert state['queries'] == state['watermarks'] == 0
+
+
+def test_failure_does_not_block_another_key_in_the_same_stripe(tmp_path):
+    import hashlib
+    import json
+    from shantytown.seeds_read_flight import coalesce
+    stripe = lambda key: int(hashlib.sha256(json.dumps([key]).encode()).hexdigest()[:2], 16) % 64
+    first = 'first'
+    other = next(str(n) for n in range(1000) if stripe(str(n)) == stripe(first))
+    def fail():
+        raise RuntimeError('private failure details')
+    with pytest.raises(RuntimeError, match='private failure'):
+        coalesce(tmp_path, [first], 1, lookup=lambda: (None, None), fetch=fail)
+    assert coalesce(tmp_path, [other], 1, lookup=lambda: (None, None), fetch=lambda: 'ok') == 'ok'
+    from shantytown.seeds_read_flight import SharedReadFailed
+    with pytest.raises(SharedReadFailed):
+        coalesce(tmp_path, [first], 1, lookup=lambda: (None, None), fetch=fail)
+    assert 'private failure' not in next(tmp_path.glob('flight-*')).read_text()
+
+
+def test_failed_flight_is_shared_between_processes(service):
+    proof, state = service
+    state.update(fail_query=True, delay=.3)
+    script = """
+import sys
+from types import SimpleNamespace
+from shantytown import seeds_plate, seeds_read_cache
+from urllib.error import HTTPError
+sys.stdin.readline()
+try:
+    with seeds_read_cache.stale_ok():
+        seeds_plate._query(SimpleNamespace(quipu_url=sys.argv[1]), "SELECT failed-processes", 5)
+except (HTTPError, RuntimeError):
+    sys.exit(0)
+sys.exit(1)
+"""
+    children = [subprocess.Popen([sys.executable, '-c', script, proof.quipu_url],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=dict(os.environ))
+                for _ in range(4)]
+    try:
+        for child in children:
+            child.stdin.write('\n')
+            child.stdin.flush()
+        for child in children:
+            out, err = child.communicate(timeout=10)
+            assert child.returncode == 0, (out, err)
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+    assert state['queries'] == 1

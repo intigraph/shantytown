@@ -410,7 +410,11 @@ than returning a mixed result.
 Inside the explicitly bounded `stale_ok()` display tier, concurrent misses share
 one per-host flight. A waiter rechecks both the cached answer and write generation
 after acquiring the flight, and publishes only a successful complete result under
-that generation. Failed fetches never become empty cached answers. Flight locks
+that generation. Failed fetches never become empty cached answers. A failed leader records only
+a key hash and monotonic timestamp under the flight lock. Its waiting cohort
+receives a refusal instead of repeating the request; later callers back off for
+one second. Up to 64 recent failures per stripe are retained for 60 seconds;
+a full stripe refuses rather than evicting a live cohort outcome. Flight locks
 use 64 private stripes separate from publication locks; hash collisions may wait.
 Waiting is bounded by the request timeout, capped at five seconds. An expired
 wait or unavailable flight refuses without launching a duplicate fetch. Exact readers never wait on
