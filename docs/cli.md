@@ -46,6 +46,10 @@ reports `startup UNVERIFIED` and exits 2, leaving the process running and unread
 inbox pointers open. Inspect the pane before retrying; do not submit unrelated
 composer input. Once the exact-body Codex receipt confirms a new turn, later
 terminal scrolling cannot revoke that receipt or trigger a fallback relaunch.
+Codex ephemeral startup waits at most 60 seconds for the startup-anchor turn
+to finish with a confirmed empty composer before typing the job. Busy timeout
+or foreign/unknown composer input refuses without typing; uncertain sends are
+not retried by this wait. The ordinary submission guards still run afterward.
 
 ## Dispatch receipts
 

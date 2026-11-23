@@ -4,6 +4,9 @@
 *.md   text diff
 *.py   text diff
 *.toml text diff
+# Preserve the startup-anchor source fixture recording.
+docs/demos/startup-anchor-wait/output.log -text whitespace=cr-at-eol
+docs/demos/startup-anchor-wait/timing.log -text
 # Preserve the exact protected-listener fixture recording for scriptreplay.
 docs/demos/recruit-inherited-receiver/output.log -text whitespace=cr-at-eol
 docs/probes/pr-demos/parent-death-state/output.log -text

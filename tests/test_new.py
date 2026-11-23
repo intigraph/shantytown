@@ -972,3 +972,46 @@ def test_other_adapter_still_requires_visible_complete_startup_marker(codex_star
     assert not cli._deliver_startup_inbox(
         args, card, HiddenMarkerPanes(screen=READY), card.pane)
     assert [m.id for m in box.unread(card.name)] == [msg.id]
+
+
+@pytest.mark.parametrize('frames,delivered', [
+    (['busy', 'busy', 'idle'], True),
+    (['foreign'], False),
+    (['busy'], False),
+    (['busy', 'foreign'], False),
+    (['unknown'], False),
+])
+def test_codex_ephemeral_waits_for_anchor_idle_before_job(
+        codex_startup, monkeypatch, frames, delivered):
+    from dataclasses import replace
+    from shantytown import ephemeral
+    args, original, _ = codex_startup
+    card = replace(original, name='eph-review-abc123')
+    monkeypatch.setattr(ephemeral, 'read', lambda *a: {'name': card.name})
+    monkeypatch.setattr(ephemeral, 'prompt', lambda rec: 'the exact job')
+    monkeypatch.setattr(cli.time, 'sleep', lambda _: None)
+    screens = {
+        'busy': 'ST-STARTUP-ANCHOR-COMPLETE\nWorking (1s) · Running hooks\n› \n  model · esc to interrupt',
+        'idle': 'ST-STARTUP-ANCHOR-COMPLETE\n› \n  model · context left',
+        'foreign': '› operator text\n  model · context left',
+        'unknown': 'redrawing; composer not visible',
+    }
+
+    class Pane(CodexStartupPanes):
+        looks = 0
+        def capture(self, *a, **kw):
+            frame = frames[min(self.looks, len(frames)-1)]
+            self.looks += 1
+            return screens[frame]
+        def send(self, *a, **kw):
+            assert self.looks > 0, 'job typed before observing the startup turn'
+            assert frames[min(self.looks-1, len(frames)-1)] == 'idle'
+            return super().send(*a, **kw)
+
+    pane = Pane(screen=READY)
+    result = cli._deliver_startup_inbox(args, card, pane, card.pane)
+    assert bool(result) is delivered
+    assert len(pane.sent) == int(delivered)
+    assert pane.looks <= 121
+    if not delivered:
+        assert 'startup' in args._startup_failure
