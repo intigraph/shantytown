@@ -128,6 +128,8 @@ def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> di
         headers=headers,
         method="POST",
     )
+    from .quipu_read_budget import admit
+    admit(proof.quipu_url)
     with urlopen(request, timeout=timeout) as response:
         if response.status != 200:
             raise ValueError("plate query did not succeed")

@@ -29,6 +29,7 @@ from urllib.error import HTTPError, URLError
 
 from .query_identity import read_headers
 from . import quipu_busy
+from .quipu_read_budget import admit, ReadBudgetRefused
 
 _LIMIT = 1024 * 1024
 _ENTRIES = 64
@@ -288,6 +289,7 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
             request = Request(server.rstrip("/") + "/changes?" + urlencode(
                 {"since": cursor, "graph": graph, "limit": _CHANGE_TX_LIMIT,
                  "capture": "new_values"}), headers=headers)
+            admit(server)
             with opener(request, timeout=remaining) as response:
                 if response.status != 200:
                     raise ValueError("projection change feed unavailable")
@@ -532,6 +534,7 @@ def _watermark_once(server: str, timeout: int, opener) -> tuple[str, int]:
     headers = {"X-Quipu-Client": "seeds", **read_headers()}
     headers["X-Quipu-Operation"] = "cache-watermark"
     request = Request(server.rstrip("/") + "/watermark", headers=headers)
+    admit(server)
     with opener(request, timeout=min(timeout, 2)) as response:
         if response.status != 200:
             raise ValueError("watermark unavailable")
@@ -674,6 +677,8 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
             with _locked(directory, key):
                 _publish(directory, mark_path, None, before)
                 hit = _cached(path, before, validate, retain=_RETAIN_CANDIDATES.get())
+    except ReadBudgetRefused:
+        raise  # A quota refusal is not a cache failure or permission to drop the fence.
     except _CACHE_ERRORS:
         if _PROJECTION.get() is not None:
             return fetch()  # The outer scope certifies this uncached query.

@@ -399,6 +399,30 @@ performance. The default `0` retains existing reads. Invalid setting values
 refuse. Live activation and measured acceptance require the upstream admission
 packet and normal deployment; enabling this flag alone cannot establish either.
 
+### Optional Python read-dispatch budget
+
+`ST_QUIPU_READS_PER_MINUTE` is off by default (`0`). A positive integer up to
+10,000 admits that many initial Python HTTP read dispatches per rolling sixty
+seconds, shared by processes using the same UID cache and configured HTTP origin.
+Origin spelling is normalized across endpoint paths and default ports. Normal
+and background reads share this allowance. Configure a value only with measured
+host demand and installed-path parity; this source does not activate a runtime
+setting or establish a fleet-wide limit.
+
+Covered seams are native Seeds candidate/field queries, watermark/change-feed
+reads, registry queries, event GETs and the bounded crew-rule HTTP worker's
+parent dispatch. Cache hits spend no charge. Failed attempts keep their charge.
+SDK child/internal HTTP, automatic transport redirect requests, other adapters,
+other origins and alternate UID/cache namespaces are outside this counter.
+This is a cooperative resource control, not authorization or a CPU-cost budget.
+
+A private locked ledger records timestamps only. Admission releases its lock
+before network work. Exhaustion, ledger contention, unsafe/corrupt state and
+clock regression refuse before dispatch; none means empty data or server
+unreachability. Limit changes retain existing charges. Quota refusals cannot
+fall back to an unfenced fetch. Setting the knob to `0` disables this optional
+admission tier; fresh/read-consistency requirements still apply.
+
 ### Owner-read cache consistency
 
 The optional Seeds read cache holds publication locks only while checking or
