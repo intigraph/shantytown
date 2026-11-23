@@ -128,9 +128,8 @@ def _query_wire(proof, query: str, timeout: int, *, verbose: bool = False) -> di
         headers=headers,
         method="POST",
     )
-    from .quipu_read_budget import admit
-    admit(proof.quipu_url)
-    with urlopen(request, timeout=timeout) as response:
+    from .quipu_read_budget import open_read
+    with open_read(proof.quipu_url, request, timeout=timeout, opener=urlopen) as response:
         if response.status != 200:
             raise ValueError("plate query did not succeed")
         body = response.read(8 * 1024 * 1024 + 1)

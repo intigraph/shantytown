@@ -85,14 +85,13 @@ class QuipuEvents:
         self.timeout = timeout
 
     def _get(self, path: str) -> dict:
-        from .quipu_read_budget import admit, ReadBudgetRefused
+        from .quipu_read_budget import open_read, ReadBudgetRefused
         try:
-            admit(self.server)
-        except ReadBudgetRefused as error:
-            raise EventsUnavailable(f"local read refused before HTTP: {error}") from error
-        try:
-            with urllib.request.urlopen(self.server + path, timeout=self.timeout) as r:
+            with open_read(self.server, self.server + path, timeout=self.timeout,
+                           opener=urllib.request.urlopen) as r:
                 return json.loads(r.read())
+        except ReadBudgetRefused as error:
+            raise EventsUnavailable(f"local read refused: {error}") from error
         except urllib.error.HTTPError as e:
             # MUST precede the URLError arm — HTTPError subclasses it (the trap
             # quipu.py documents at length). An endpoint-shaped status means the

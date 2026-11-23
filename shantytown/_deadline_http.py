@@ -26,14 +26,18 @@ def post(url, body, headers, *, timeout, max_bytes):
         raise ValueError("invalid bounded HTTP budget")
     deadline = time.monotonic() + timeout
     packet = json.dumps({"url": url, "body": body, "headers": headers,
-                         "timeout": timeout, "max_bytes": max_bytes}).encode()
+                         "timeout": timeout, "max_bytes": max_bytes, "refuse_redirects": False}).encode()
     if len(packet) > MAX_REQUEST_BYTES:
         raise ValueError("HTTP request byte cap reached")
     if time.monotonic() >= deadline:
         raise TimeoutError("HTTP total deadline exceeded")
-    from .quipu_read_budget import admit
-    if admit(url) and time.monotonic() >= deadline:
-        raise TimeoutError("HTTP total deadline exceeded")
+    from .quipu_read_budget import admit, ReadBudgetRefused
+    if admit(url):
+        request = json.loads(packet)
+        request['refuse_redirects'] = True
+        packet = json.dumps(request).encode()
+        if time.monotonic() >= deadline:
+            raise TimeoutError("HTTP total deadline exceeded")
     with subprocess.Popen(
         [sys.executable, "-I", "-S", str(Path(__file__).resolve())],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
@@ -54,6 +58,8 @@ def post(url, body, headers, *, timeout, max_bytes):
             raise
     if time.monotonic() >= deadline:
         raise TimeoutError("HTTP total deadline exceeded")
+    if child.returncode == 3:
+        raise ReadBudgetRefused("budgeted HTTP redirect refused")
     if child.returncode:
         raise OSError("HTTP request unavailable")
     if len(body) > max_bytes:
@@ -64,7 +70,15 @@ def post(url, body, headers, *, timeout, max_bytes):
 def _worker():
     # No package imports/config discovery: the parent's already-attributed
     # request is the entire input. Never print exception text or headers.
-    from urllib.request import Request, urlopen
+    from urllib.request import Request, urlopen, HTTPRedirectHandler, build_opener
+
+    class RedirectRefused(Exception):
+        pass
+
+    class RefuseRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise RedirectRefused()
+
     try:
         raw = sys.stdin.buffer.read(MAX_REQUEST_BYTES + 1)
         if len(raw) > MAX_REQUEST_BYTES:
@@ -75,10 +89,14 @@ def _worker():
             return 2
         req = Request(request["url"], data=request["body"].encode(),
                       headers=request["headers"])
-        with urlopen(req, timeout=request["timeout"]) as response:
+        opener = (build_opener(RefuseRedirect()).open
+                  if request.get('refuse_redirects') else urlopen)
+        with opener(req, timeout=request["timeout"]) as response:
             body = response.read(limit + 1)
         sys.stdout.buffer.write(body)
         return 0
+    except RedirectRefused:
+        return 3
     except Exception:
         return 2
 

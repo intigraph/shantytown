@@ -29,7 +29,7 @@ from urllib.error import HTTPError, URLError
 
 from .query_identity import read_headers
 from . import quipu_busy
-from .quipu_read_budget import admit, ReadBudgetRefused
+from .quipu_read_budget import open_read, ReadBudgetRefused
 
 _LIMIT = 1024 * 1024
 _ENTRIES = 64
@@ -289,8 +289,7 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
             request = Request(server.rstrip("/") + "/changes?" + urlencode(
                 {"since": cursor, "graph": graph, "limit": _CHANGE_TX_LIMIT,
                  "capture": "new_values"}), headers=headers)
-            admit(server)
-            with opener(request, timeout=remaining) as response:
+            with open_read(server, request, timeout=remaining, opener=opener) as response:
                 if response.status != 200:
                     raise ValueError("projection change feed unavailable")
                 body = response.read(_LIMIT + 1)
@@ -534,8 +533,7 @@ def _watermark_once(server: str, timeout: int, opener) -> tuple[str, int]:
     headers = {"X-Quipu-Client": "seeds", **read_headers()}
     headers["X-Quipu-Operation"] = "cache-watermark"
     request = Request(server.rstrip("/") + "/watermark", headers=headers)
-    admit(server)
-    with opener(request, timeout=min(timeout, 2)) as response:
+    with open_read(server, request, timeout=min(timeout, 2), opener=opener) as response:
         if response.status != 200:
             raise ValueError("watermark unavailable")
         body = response.read(4097)
