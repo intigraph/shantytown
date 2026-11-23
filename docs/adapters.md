@@ -401,11 +401,25 @@ packet and normal deployment; enabling this flag alone cannot establish either.
 
 ### Owner-read cache consistency
 
-The optional Seeds read cache holds its file locks only while checking or
-publishing local entries. HTTP watermark and query requests run outside those
-locks. Concurrent misses may execute independently. An ordinary single query
-refuses a store replacement or a moving watermark rather than returning a
-mixed result.
+The optional Seeds read cache holds publication locks only while checking or
+publishing local entries. HTTP requests run outside those locks. Exact,
+projection, snapshot and direct reads retain their existing execution paths.
+An ordinary exact query refuses a store replacement or moving watermark rather
+than returning a mixed result.
+
+Inside the explicitly bounded `stale_ok()` display tier, concurrent misses share
+one per-host flight. A waiter rechecks both the cached answer and write generation
+after acquiring the flight, and publishes only a successful complete result under
+that generation. Failed fetches never become empty cached answers. A failed leader records only
+a key hash and monotonic timestamp under the flight lock. Its waiting cohort
+receives a refusal instead of repeating the request; later callers back off for
+one second. Up to 64 recent failures per stripe are retained for 60 seconds;
+a full stripe refuses rather than evicting a live cohort outcome. Flight locks
+use 64 private stripes separate from publication locks; hash collisions may wait.
+Waiting is bounded by the request timeout, capped at five seconds. An expired
+wait or unavailable flight refuses without launching a duplicate fetch. Exact readers never wait on
+these flights. `ST_SEEDS_STALE_TTL=0` or `ST_SEEDS_READ_CACHE=0` disables this tier
+and its coalescing; this is also the rollback.
 
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded

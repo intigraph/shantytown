@@ -2,11 +2,13 @@
 
 Hits share a one-second observation of (store_id, watermark_tx). Results are
 published only when that pair stayed unchanged across a successful fetch.
-Striped file locks protect local publication only; no HTTP runs under a lock.
+Striped publication locks protect local files only. Bounded-staleness misses
+share a separate bounded flight lock; exact readers never enter that seam.
 Single reads retry a moving transaction at most three times. Owner projections
 repair only changed entity fields and restart on membership/store changes,
-keeping exact answers despite unrelated commits. Cache storage failure retains
-a fenced uncached reader. Missing change-feed proof refuses the answer. A store
+keeping exact answers despite unrelated commits. Exact-cache storage failure
+retains a fenced uncached reader; unavailable display flights refuse the miss.
+Missing change-feed proof refuses the answer. A store
 replacement discards retained rows before starting a new complete projection.
 """
 from __future__ import annotations
@@ -594,17 +596,21 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     hit, publish = stale_lookup([server, query], validate)
     if hit is not None:
         return hit
-    # aegis-jve: a background caller does not ask a server that just said busy;
-    # every caller's busy answer (408/429/503) refreshes that per-host signal.
-    quipu_busy.gate(server)
-    try:
-        result = _read(server, query, timeout, opener=opener, fetch=fetch, validate=validate)
-    except HTTPError as error:
-        quipu_busy.observe(server, error)
-        raise
-    if publish is not None:
-        publish(result)
-    return result
+    def current():
+        # Recheck after any flight wait: another caller may have observed busy.
+        quipu_busy.gate(server)
+        try:
+            return _read(server, query, timeout, opener=opener, fetch=fetch, validate=validate)
+        except HTTPError as error:
+            quipu_busy.observe(server, error)
+            raise
+
+    if publish is None:
+        return current()
+    quipu_busy.gate(server)  # Background callers already know not to wait.
+    from .seeds_read_flight import coalesce
+    return coalesce(_directory(), [server, query], timeout,
+                    lookup=lambda: stale_lookup([server, query], validate), fetch=current)
 
 
 def _read(server: str, query: str, timeout: int, *, opener, fetch, validate):
