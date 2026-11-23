@@ -1,0 +1,12 @@
+# Synthetic bounds, not a production policy or activation grant.
+version = 1
+run_id = "fixture-watch"
+source_digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+deployment_receipt = "fixture-receipt"
+identity = "fixture-sha-pid-config"
+start = 1000
+window_seconds = 100
+sample_seconds = 45
+[maximum]
+p99_seconds = 2.0
+error_fraction = 0.01
