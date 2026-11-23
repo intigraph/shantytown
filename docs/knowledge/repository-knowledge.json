@@ -35,8 +35,8 @@
       "kind": "interface",
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
-      "summary": "Configuration resolves shantytown.toml and declared environment settings. Only an absent local file retains defaults; invalid declarations and read errors refuse. jobs.scheduler selects local execution or explicit Chaski delegation. Harness conversion validates model/browser preferences. inbox.store selects seed pointers or isolated Message storage. escalation_poller.carrier_enabled defaults false. Optional ephemeral.jobs bind exact tools, skills, connectors and verdicts; job_servers expose job-only anonymous readers. Unknown jobs, reserved fields and malformed profiles refuse; absent tables retain legacy behavior. ephemeral.recruitment_launch_ready is a strict boolean defaulting false, separate from UID readiness; it installs or wires no transport.",
-      "source_sha256": "2f0609f288d4bb942e643703e3f14715573eb9da7bb568709c39702515ad1fa6",
+      "summary": "Configuration resolves shantytown.toml and declared environment settings. Only an absent local file retains defaults; invalid declarations and read errors refuse. jobs.scheduler selects local execution or explicit Chaski delegation. Harness conversion validates model/browser preferences. inbox.store selects seed pointers or isolated Message storage. escalation_poller.carrier_enabled defaults false. Optional ephemeral.jobs bind exact tools, skills, connectors and verdicts; job_servers expose job-only anonymous readers. Unknown jobs, reserved fields and malformed profiles refuse; absent tables retain legacy behavior. ephemeral.recruitment_launch_ready is a strict boolean defaulting false, separate from UID readiness; it installs or wires no transport. ephemeral.review_enqueue_enabled defaults false and requires a configured absolute native adapter argv; no report may choose the command.",
+      "source_sha256": "d9d401a52ac442ea3daf87578bb79ed1ff09a3e5c02b9f6c3785f3a4bcfde43c",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"

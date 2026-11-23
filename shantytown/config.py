@@ -160,6 +160,8 @@ class Ephemeral:
     unattended_uid_ready: bool = False
     # Independent activation gate for the signed controller launch bridge.
     recruitment_launch_ready: bool = False
+    review_enqueue_enabled: bool = False
+    review_enqueue_command: tuple = ()
     harness_by_job: dict = field(default_factory=dict)
     jobs: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
@@ -1196,7 +1198,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs",
-                   "job_servers"}
+                   "job_servers", "review_enqueue_enabled", "review_enqueue_command"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1225,6 +1227,18 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     recruitment_ready = tbl.get("recruitment_launch_ready", False)
     if type(recruitment_ready) is not bool:
         raise ConfigError(f"{path}: ephemeral.recruitment_launch_ready must be true or false")
+    enqueue_enabled = tbl.get("review_enqueue_enabled", False)
+    enqueue_command = tbl.get("review_enqueue_command", [])
+    if type(enqueue_enabled) is not bool:
+        raise ConfigError(f"{path}: ephemeral.review_enqueue_enabled must be true or false")
+    if (not isinstance(enqueue_command, list) or len(enqueue_command) > 32
+            or any(not isinstance(x, str) or not x or len(x) > 4096
+                   or any(c in x for c in '\r\n\0') for x in enqueue_command)
+            or enqueue_command and not Path(enqueue_command[0]).is_absolute()
+            or enqueue_enabled and not enqueue_command):
+        raise ConfigError(f"{path}: ephemeral.review_enqueue_command needs an absolute adapter argv")
+    values['review_enqueue_enabled'] = enqueue_enabled
+    values['review_enqueue_command'] = tuple(enqueue_command)
     by_job = tbl.get("harness_by_job", {})
     if not isinstance(by_job, dict):
         raise ConfigError(f"{path}: [ephemeral.harness_by_job] must be a table")

@@ -1,0 +1,7 @@
+Script started on 2026-11-23 00:44:32-05:00 [COMMAND="python3 -m pytest -q -s --disable-warnings tests/test_review_report_enqueue.py::test_approve_report_enqueues_exactly_once_through_reaper" <not executed on terminal>]
+two signed APPROVE reports -> adapter calls: 1
+durable intent state: queued
+.
+1 passed, 625 warnings in 0.38s
+
+Script done on 2026-11-23 00:44:32-05:00 [COMMAND_EXIT_CODE="0"]
