@@ -437,6 +437,14 @@ direct and snapshot scopes bypass the display cache. `ST_SEEDS_STALE_TTL=0`
 or `ST_SEEDS_READ_CACHE=0` also disables it. The display's `Answer.how` names
 bounded staleness; freshness-sensitive actions must use the non-display reader.
 
+SDK `list`/`ready` display misses use the same flight primitive around the child
+dispatch. Their existing key still includes argv, working directory, pinned
+configuration and identity environment. A fresh child retains its exit status,
+stdout and stderr; a cached successful answer retains the existing stdout-only
+contract. Failed children and timeouts are not published. Store proof still runs
+before this seam. Coalescing child dispatch does not establish a shared HTTP
+request budget or prove the SDK's internal request count.
+
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded
 change feed. Query misses are published into the shared cache only after this
