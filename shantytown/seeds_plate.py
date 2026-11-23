@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .answer import Answer
+from .owner_display_cache import shared_owner_display
 from .query_identity import read_headers, declared_read_operation
 from . import seeds_read_cache, seeds_push_read
 
@@ -430,6 +431,7 @@ def _retry_owner_projection(function):
 
 
 @declared_read_operation("owner-rows")
+@shared_owner_display(RenderShapeReads)
 @_retry_owner_projection
 def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                feed_owners: tuple[str, ...] | None = None,

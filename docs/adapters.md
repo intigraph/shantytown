@@ -421,6 +421,22 @@ wait or unavailable flight refuses without launching a duplicate fetch. Exact re
 these flights. `ST_SEEDS_STALE_TTL=0` or `ST_SEEDS_READ_CACHE=0` disables this tier
 and its coalescing; this is also the rollback.
 
+Ordinary anchor and crew plate presentation explicitly enter the owner-display
+scope. Complete native owner projections in that scope share one host-local
+bounded-staleness observation, including the fused roster shape guard. Keys
+include the endpoint, graph, owner/roster, all projection options and `ST_`
+configuration. Own writes invalidate the observation and prevent publication
+of an overlapping fetch. Incomplete projections retain their caveat and never
+become successful cached empty plates. Custom injected shape guards execute live.
+
+This display scope is separate from the general `stale_ok()` scope: inheriting
+that scope during a Stop or tend operation cannot opt a decision into cached
+owner rows. Tend, capacity admission, startup completeness checks and ordinary
+non-display plate reads retain their existing projection path. Explicit exact,
+direct and snapshot scopes bypass the display cache. `ST_SEEDS_STALE_TTL=0`
+or `ST_SEEDS_READ_CACHE=0` also disables it. The display's `Answer.how` names
+bounded staleness; freshness-sensitive actions must use the non-display reader.
+
 Owner projections additionally certify their queried graphs from the oldest
 consumed query/cache observation to a fixed post-read watermark using the bounded
 change feed. Query misses are published into the shared cache only after this
