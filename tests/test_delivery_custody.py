@@ -887,3 +887,23 @@ def test_busy_resend_of_native_queued_body_never_becomes_idle_retry(monkeypatch,
         panes.send('worker', BODY)
     assert keys(calls) == []
     assert records(tmp_path)[0]['state'] == 'queued'
+
+
+def test_deferred_retry_waits_for_busy_footer_without_working_marker(monkeypatch, tmp_path):
+    f = fixtures(tmp_path, monkeypatch, state='deferred', messages=[BODY])
+    sent = []
+    monkeypatch.setattr(f[0], 'send', lambda *args: sent.append(args))
+    observe(tmp_path, f, READY + '\n  tab to queue message', 1000)
+    assert sent == []
+    assert not records(tmp_path)[0]['recovery_attempted']
+
+
+def test_idle_retry_that_finds_busy_pane_retains_untouched_retry(monkeypatch, tmp_path):
+    f = fixtures(tmp_path, monkeypatch, state='deferred', messages=[BODY])
+    monkeypatch.setattr(f[0], 'capture', lambda *a, **kw: BUSY)
+    observe(tmp_path, f, READY, 1000)
+    assert keys(f[1]) == []
+    [record] = records(tmp_path)
+    assert record['state'] == 'deferred'
+    assert not record['recovery_attempted']
+    assert len(f[-1].unread('worker')) == 1
