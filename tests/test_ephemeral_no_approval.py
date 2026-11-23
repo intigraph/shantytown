@@ -1,4 +1,6 @@
 """Bound jobs cannot answer an approval picker; refusal must stay automatic."""
+import tempfile
+
 import pytest
 from shantytown import ephemeral as eph, harness
 from shantytown.protocols import Agent
@@ -6,7 +8,13 @@ from shantytown.protocols import Agent
 
 @pytest.mark.parametrize('remote', [False, True])
 @pytest.mark.parametrize('job', ['task', 'triage', 'review', 'merge'])
-def test_bound_codex_job_never_prompts_without_widening_sandbox(tmp_path, remote, job):
+def test_bound_codex_job_never_prompts_without_widening_sandbox(tmp_path, monkeypatch, remote, job):
+    # The per-card Remote Control socket lives under XDG_RUNTIME_DIR (else
+    # ~/.cache); on hosted runners that path exceeds the 107-byte Unix socket
+    # ceiling. Pin a short runtime dir so the test exercises approval policy,
+    # not the runner's home-directory length.
+    short=tempfile.mkdtemp(prefix='st',dir='/tmp')
+    monkeypatch.setenv('XDG_RUNTIME_DIR',short)
     root=tmp_path/'.shanty';root.mkdir()
     (root/'shantytown.toml').write_text('[env]\nSHANTY_REMOTE_CONTROL = '+('"true"' if remote else '"false"')+'\n')
     cfg=root/'settings/codex/worker/config.toml'
