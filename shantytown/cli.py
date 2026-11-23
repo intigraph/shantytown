@@ -5422,6 +5422,14 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
 
     codex_observed = False
     screen = ""
+    if harness_mod.name_for(card, root=a.root) == "codex":
+        # aegis-5x2x: a fresh Codex pane renders "Working · Running hooks" while
+        # its SessionStart hooks run. Typing the first turn then makes the
+        # submission check record a busy "before" frame, which can never be
+        # observed as a new turn, and a job whose turn DID start was ended as
+        # "not delivered" (2 of 8 Codex spawns, 2026-11-23). Wait, bounded,
+        # for the startup work to settle; past the bound, send as before.
+        _wait_codex_startup_idle(panes, session)
     try:
         submitted = panes.send(session, attribute(prompt, "st startup"))
         if harness_mod.name_for(card, root=a.root) == "codex":
@@ -5448,6 +5456,8 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
                 if marker in screen:
                     break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
+        # The spawner reports this reason instead of a generic "not delivered".
+        a._startup_failure = f"{type(e).__name__}: {str(e)[:120]}"
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
@@ -5489,6 +5499,28 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     print(f"  startup inbox: delivered and closed {len(marked)} verified "
           f"pointer(s) for {card.name}{held_note}.")
     return True
+
+
+CODEX_STARTUP_IDLE_LOOKS = 60     # ~30s for SessionStart hooks to settle
+CODEX_STARTUP_IDLE_S = 0.5
+
+
+def _wait_codex_startup_idle(panes, session, *, looks=CODEX_STARTUP_IDLE_LOOKS,
+                             look_s=CODEX_STARTUP_IDLE_S, sleep=time.sleep) -> bool:
+    """True once the Codex pane shows no in-flight work, False if it is still
+    busy (or unreadable) after the bound. Read-only: never types or presses
+    a key, so giving up changes nothing about what the send would have done."""
+    from .tmux import _codex_submission_busy
+    for n in range(looks):
+        try:
+            screen = panes.capture(session, attrs=True)
+        except Exception:  # noqa: BLE001 -- an unreadable pane is not idle proof
+            screen = None
+        if screen is not None and not _codex_submission_busy(screen):
+            return True
+        if n + 1 < looks:
+            sleep(look_s)
+    return False
 
 
 def _verify_live_hooks(a, card, runtime, panes, session: str) -> int:
