@@ -62,3 +62,31 @@ def test_oversize_and_nonregular_input_refuse(tmp_path):
 def test_unknown_command_fields_cannot_smuggle_actions():
     value=evidence();value['revert_command']='touch forbidden'
     with pytest.raises(WatchRefused): replay(load_spec(EXAMPLES/'watch.toml'),value)
+
+
+@pytest.mark.parametrize('target', ['spec', 'evidence'])
+def test_nested_json_refuses_without_traceback(tmp_path, capsys, target):
+    nested=tmp_path/'nested.json'
+    nested.write_text('['*2000+'0'+']'*2000)
+    spec=nested if target=='spec' else EXAMPLES/'watch.json'
+    proof=nested if target=='evidence' else EXAMPLES/'inactive.json'
+    assert main(['--spec',str(spec),'--evidence',str(proof)]) == 2
+    assert 'refused' in json.loads(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize('target', ['spec', 'evidence'])
+def test_parser_recursion_is_a_refusal(monkeypatch, capsys, target):
+    import shantytown.watch_replay as adapter
+    original=adapter._json
+    def decode(raw):
+        if raw == 'nested-fixture':
+            raise RecursionError('decoder nesting ceiling')
+        return original(raw)
+    monkeypatch.setattr(adapter,'_json',decode)
+    if target=='spec':
+        monkeypatch.setattr(adapter,'_read',lambda path: 'nested-fixture')
+    else:
+        read=adapter._read
+        monkeypatch.setattr(adapter,'_read',lambda path: 'nested-fixture' if path.name=='inactive.json' else read(path))
+    assert adapter.main(['--spec',str(EXAMPLES/'watch.json'),'--evidence',str(EXAMPLES/'inactive.json')]) == 2
+    assert 'refused' in json.loads(capsys.readouterr().out)

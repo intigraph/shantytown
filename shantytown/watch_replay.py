@@ -93,7 +93,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result = replay(load_spec(args.spec), _json(_read(args.evidence)))
-    except (WatchRefused, ValueError, OSError, TypeError, OverflowError) as error:
+    except (WatchRefused, ValueError, OSError, TypeError, OverflowError, RecursionError) as error:
         print(json.dumps({'schema': 'shantytown.watch-replay/v1', 'refused': str(error)}))
         return 2
     print(json.dumps(result, sort_keys=True, allow_nan=False))
