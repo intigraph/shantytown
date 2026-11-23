@@ -956,3 +956,14 @@ under the excluded cache directory with known owners. Native isolated Python
 bypasses their bytecode through its separate cache prefix; the poisoned-bytecode
 control includes both ordinary and pytest-tagged poison. Arbitrary source,
 untagged bytecode, unknown tag text and redirects still refuse.
+
+## Codex jobs refuse interactive approval
+
+A controller-ledger-bound live or launching Codex job uses
+`approval_policy="never"` in both the local TUI and managed remote daemon.
+Unlisted commands that require approval refuse immediately; the job must report
+the original refusal or blocked evidence through its existing report command.
+No sandbox is widened and no extra command is allowed. Ordinary crew cards keep
+their operator-selected approval policy. This prevents an unattended job from
+waiting on a human picker after a sandbox-limited read fails. The policy does
+not make that read succeed or authorize a retry outside the sandbox.

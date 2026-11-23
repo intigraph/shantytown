@@ -1054,6 +1054,21 @@ class CodexHarness:
         # present, wired, and inert, which is the failure this repo keeps
         # naming. An agent whose stop events vanish is the aegis-nipg incident.
         flags = "--dangerously-bypass-hook-trust"
+        # A bound job has no human to answer approval (aegis-8et). Tighten
+        # approval only; keep its sandbox and exact command rules unchanged.
+        # Use the controller ledger, not a name prefix as job authority.
+        from . import ephemeral as eph
+        try:
+            job_record = eph.read(root, card.name) if root and eph.is_ephemeral_name(card.name) else None
+        except (OSError, ValueError, TypeError) as error:
+            raise Unsupported("job launch identity unreadable") from error
+        no_prompt = (isinstance(job_record, dict)
+                     and job_record.get("name") == card.name
+                     and job_record.get("harness") == "codex"
+                     and job_record.get("job") in ("task", "triage", "review", "merge")
+                     and job_record.get("state") in (eph.LAUNCHING, eph.LIVE))
+        if no_prompt:
+            flags += ' -c approval_policy="never"'
         daemon_start = ""
         from .session_storage import configured, Storage
         try:
@@ -1203,7 +1218,7 @@ class CodexHarness:
             #
             # Same contract as the TUI flag: opt-in on ONE card, never a default.
             # A card without `dangerous` keeps codex's sandbox exactly as before.
-            daemon_sandbox = ""
+            daemon_sandbox = '-c approval_policy="never" ' if no_prompt else ""
             if card.dangerous:
                 daemon_sandbox = ("-c sandbox_mode=\"danger-full-access\" "
                                   "-c approval_policy=\"never\" ")

@@ -375,7 +375,8 @@ def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
     commands retain normal sandbox policy.
     Codex runs an allowed command outside its sandbox without asking, which is
     what lets `st agent spawn --report` write st's ledger: no writable root is
-    opened to the job's other commands. Anything unlisted still prompts.
+    opened to the job's other commands. Bound Codex jobs use approval_policy=never;
+    anything unlisted that needs approval refuses rather than prompting.
     """
     if unattended or rec.get("harness") != "codex" or rec.get("uid_binding"):
         return None
