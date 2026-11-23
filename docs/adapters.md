@@ -412,8 +412,11 @@ setting or establish a fleet-wide limit.
 Covered seams are native Seeds candidate/field queries, watermark/change-feed
 reads, registry queries, event GETs and the bounded crew-rule HTTP worker's
 parent dispatch. Cache hits spend no charge. Failed attempts keep their charge.
-SDK child/internal HTTP, automatic transport redirect requests, other adapters,
-other origins and alternate UID/cache namespaces are outside this counter.
+With a positive budget, covered transports refuse automatic redirects before a
+second request is sent; the initial attempt retains its charge. With the budget
+off, ordinary redirect behavior is preserved. SDK child/internal HTTP, other
+adapters, other origins and alternate UID/cache namespaces remain outside this
+counter.
 This is a cooperative resource control, not authorization or a CPU-cost budget.
 
 A private locked ledger records timestamps only. Admission releases its lock

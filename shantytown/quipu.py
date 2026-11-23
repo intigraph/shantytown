@@ -566,14 +566,13 @@ class QuipuRegistry:
             headers={**request_headers(), **(
                 {"X-Quipu-Client": self.client_label} if self.client_label else {})},
         )
-        from .quipu_read_budget import admit, ReadBudgetRefused
+        from .quipu_read_budget import open_read, ReadBudgetRefused
         try:
-            admit(self.server)
-        except ReadBudgetRefused as error:
-            raise QuipuQueryRejected(f"local read refused before HTTP: {error}") from error
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with open_read(self.server, req, timeout=self.timeout,
+                           opener=urllib.request.urlopen) as resp:
                 body = json.loads(resp.read())
+        except ReadBudgetRefused as error:
+            raise QuipuQueryRejected(f"local read refused: {error}") from error
         except urllib.error.HTTPError as e:
             # The server ANSWERED with a 4xx/5xx — it is reachable; the query (or
             # server state) is the problem. Read the body for the engine's own

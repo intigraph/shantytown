@@ -118,10 +118,10 @@ def test_native_registry_events_and_deadline_share_the_same_charge(service, monk
     with seeds_read_cache.direct_reads():
         assert seeds_plate._query(proof, 'SELECT budget-positive', 5)['rows']
     registry = quipu.QuipuRegistry(proof.quipu_url, onto='https://example.test/')
-    with pytest.raises(quipu.QuipuQueryRejected, match='local read refused before HTTP'):
+    with pytest.raises(quipu.QuipuQueryRejected, match='local read refused'):
         registry._query('SELECT registry')
     events = quipu_events.QuipuEvents(proof.quipu_url, onto='https://example.test/')
-    with pytest.raises(EventsUnavailable, match='local read refused before HTTP'):
+    with pytest.raises(EventsUnavailable, match='local read refused'):
         events._get('/transactions?since=0')
     with pytest.raises(budget.ReadBudgetRefused):
         seeds_read_cache._watermark_once(proof.quipu_url, 5, lambda *a, **kw: pytest.fail('dispatched'))

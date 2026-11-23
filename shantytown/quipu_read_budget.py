@@ -2,7 +2,7 @@
 
 This is a cooperative resource cap, not authorization. No network work runs
 under the ledger lock. Failed attempts retain their admission charge. SDK child
-traffic and automatic transport redirects are outside this counter's coverage.
+traffic is outside this counter's coverage. Budgeted reads refuse redirects.
 """
 import fcntl
 import hashlib
@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 
 
 class ReadBudgetRefused(ValueError):
-    """No read was dispatched; this is neither an empty result nor server health."""
+    """A local read policy refusal, neither an empty result nor server health."""
 
 
 def admit(server):
@@ -81,3 +81,16 @@ def admit(server):
         raise
     except (OSError, ValueError, TypeError):
         raise ReadBudgetRefused('local Quipu read budget ledger unavailable; no read dispatched') from None
+
+
+def open_read(server, request, *, timeout, opener):
+    """Charge the initial dispatch and refuse uncharged redirect dispatches."""
+    if not admit(server):
+        return opener(request, timeout=timeout)
+    from urllib.request import HTTPRedirectHandler, build_opener
+
+    class RefuseRedirect(HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise ReadBudgetRefused('budgeted HTTP redirect refused')
+
+    return build_opener(RefuseRedirect()).open(request, timeout=timeout)
