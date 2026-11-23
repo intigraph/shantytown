@@ -1,0 +1,8 @@
+Script started on 2026-11-23 03:57:57-05:00 [COMMAND="PYTHONPATH=.:tests python3 -m pytest -q -s --disable-warnings tests/test_review_enqueue_native.py::test_adapter_rechecks_real_scoped_signature_and_quipu_revocation" <not executed on terminal>]
+Actual scoped signature + recorded verification: queued
+Native enqueue process calls: 1
+After verifier revocation: REFUSED; native calls remain 1
+.
+1 passed, 616 warnings in 0.56s
+
+Script done on 2026-11-23 03:57:58-05:00 [COMMAND_EXIT_CODE="0"]

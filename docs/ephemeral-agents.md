@@ -780,3 +780,42 @@ Triage follows the actual alert or failure subject and uses forge CI logs only
 when the item identifies a CI failure.
 
 Claude connector controls follow the [native settings reference](https://code.claude.com/docs/en/settings-reference#disableclaudeaiconnectors).
+
+### Native enqueue process adapter
+
+`python -m shantytown.review_enqueue_native --root ROOT --bindings DIRECTORY
+--native /operator/protected/pr-risk.py` implements the Action process protocol.
+All three paths come from controller configuration, never a review report.
+The flag remains OFF by default. The fixed canonical service-admission policy
+must already be adopted for this host and controller UID; absence refuses
+instead of entering the native helper's legacy policy-absent behavior.
+The native helper must be a root-owned regular file under root-owned,
+non-writable, non-symlink ancestry. Inert source delivery is not adoption.
+
+A trusted controller prepares two private single-link files in its private
+bindings directory for each consumed intent: `<intent>.binding.json` contains
+exactly `version: 1`, an absolute `checkout`, and the native classification's
+`record` ID; `<intent>.record.json` contains the unchanged native classification.
+They must be owned by the controller, inaccessible to job UIDs, and prepared
+through the normal classification path. This adapter does not fetch a checkout,
+classify, sign, create a native content review, generate bindings or install a
+policy. Automatic trusted binding production remains a separate integration
+step; missing bindings refuse. This version supports GitHub main/squash queue
+admission through the existing diff-bound native path only. Unsupported native
+admission requirements refuse; they are never relaxed.
+
+The adapter matches the consumed private custody attempt and classification to
+the candidate, reads the current PR node and head, then re-verifies the exact
+GateApproval with both local operator signer pins and Quipu's recorded signature
+verification. A revoked signer, CHANGES, unknown author, changed node/head or
+mismatched record refuses. It then runs ONE unchanged native `enqueue` execute
+with `--expect-record`; the native helper retains its record integrity, current
+CI, review, operator hold and shared service-order checks. Native review
+exemption does not waive the separately required signed job approval. A
+GateApproval is never converted into a native content-review receipt.
+
+Only an exact `ENQUEUE VERIFIED` record/head/entry response becomes `queued`.
+A timeout, process failure or mismatched reply is UNKNOWN, even if it resembles
+a refusal: a remote write may already have happened. The outer report custody
+retains that result without retry. No merge command or merge job is invoked.
+This source contract and offline process fixtures are not real queue acceptance.
