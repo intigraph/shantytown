@@ -124,5 +124,16 @@ class ProducerCoverage(unittest.TestCase):
         self.assertEqual(whole["scrub_guard_ephemeral_repos_total"], 0)
 
 
+class LegacyProducerCoverage(ProducerCoverage):
+    """The single-repository producer still emits produce-XXXXXXXX/source."""
+
+    def setUp(self):
+        super().setUp()
+        legacy = self.home / ".local/state/quipu-share-producer/produce-abcd1234"
+        self.root.rename(legacy)
+        self.root = legacy
+        self.scratch = legacy / "source"
+
+
 if __name__ == "__main__":
     unittest.main()
