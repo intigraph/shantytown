@@ -81,7 +81,7 @@ def test_any_changed_closure_or_unknown_custody_refuses(source,fault):
         with (root/'.git'/'config').open('a') as stream:stream.write('\n[include]\n path = /outside/config\n')
     elif fault=='symlink-escape':leaf.unlink();leaf.symlink_to('/outside/guard.py')
     elif fault=='hardlink':os.link(leaf,root.parent/'another-link')
-    with pytest.raises((IdentityError,OSError,subprocess.SubprocessError)): 
+    with pytest.raises((IdentityError,OSError,subprocess.SubprocessError)):
         with pin.verified(native):pytest.fail('mismatch admitted')
 
 
