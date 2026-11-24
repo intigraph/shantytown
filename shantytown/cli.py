@@ -2150,6 +2150,10 @@ def build_parser() -> argparse.ArgumentParser:
     tk = sub.add_parser("task", help="create a work item")
     tk.add_argument("title", nargs="+")
     tk.add_argument("-a", "--assignee")
+    tk.add_argument("--description", help="description used by the seed duplicate resolver")
+    tk.add_argument("--new-despite", action="append", default=[], metavar="ID",
+                    help="explicitly reject this near-duplicate seed (requires --because)")
+    tk.add_argument("--because", metavar="REASON", help="why a new seed is distinct; saved with it")
     tk.add_argument("--due", help="explicit due date (YYYY-MM-DD) or timezone-qualified instant")
     tk.add_argument("--queue-override", metavar="REASON",
                     help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
@@ -7986,7 +7990,13 @@ def _cmd_task(a) -> int:
     Step 1 of the three steps (create -> send -> fetch). The id is the whole
     reason step 2 has anything to say.
     """
+    from .sd import CreateRefused
     title = " ".join(a.title)
+    overrides = getattr(a, "new_despite", [])
+    because = getattr(a, "because", None)
+    if bool(overrides) != bool(because and because.strip()):
+        print("  refused: --new-despite and non-empty --because are required together", file=sys.stderr)
+        return REFUSED
     from .task_intake import deadline
     from .queue_policy import enabled as queue_enabled, intake, stage, reply, setting
     queue_plan = None
@@ -8065,9 +8075,22 @@ def _cmd_task(a) -> int:
                     return REFUSED
             deferred_owner = queue_refused is not None or queue_override is not None
             fields = {"assignee": None if refused or deferred_owner else a.assignee}
+            description = getattr(a, "description", None)
+            if description is not None:
+                fields["description"] = description
+            if overrides:
+                from .sd import SdTracker
+                if not isinstance(tracker, SdTracker):
+                    print("  refused: duplicate overrides require the Seeds intake gate", file=sys.stderr)
+                    return REFUSED
+                fields["new_despite"] = overrides
+                fields["because"] = because
             if due:
                 fields["due_at"] = due
             item = tracker.create(title, **fields)
+    except CreateRefused as e:
+        print(f"  refused: {e}", file=sys.stderr)
+        return REFUSED
     except Exception as e:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL

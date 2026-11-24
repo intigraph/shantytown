@@ -188,6 +188,15 @@ from priority or owner. This affects `st task`, not direct SDK creation or
 internal message records. The existing agent duplicate advisory still runs on
 admitted creates; a skipped or capped advisory is not proof of no duplicate.
 
+### Duplicate intake
+
+`st task TITLE --description TEXT` forwards the description to the Seeds intake
+resolver. Seeds refuses near-duplicates and names existing items to comment on.
+If the work is distinct, use `--new-despite ID --because "reason"` (repeat
+`--new-despite` for every candidate). The Seeds create transaction records the
+reason, candidates and related edges. These flags require the Seeds backend;
+resolver failure does not turn into an advisory or an automatic retry.
+
 ### Graph-ranked pickup after an anchor ends
 
 Deployments may enable `SHANTY_BACKLOG_PICKUP=1` after registering the reviewed
