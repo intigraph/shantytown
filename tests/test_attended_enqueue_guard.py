@@ -1,5 +1,6 @@
 """Regression guards for the closed attended Action request boundary."""
 import copy
+import sys
 
 import pytest
 
@@ -7,6 +8,9 @@ from test_job_review import job  # noqa: F401
 from test_review_enqueue import custody  # noqa: F401
 from test_attended_enqueue_adapter import prepared  # noqa: F401
 from shantytown import review_enqueue_attended as adapter
+
+pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux'),
+                                reason='Linux directory-FD custody backend')
 
 
 @pytest.mark.parametrize('fault', ['extra-field', 'schema', 'intent', 'attempt',
