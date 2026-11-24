@@ -4275,6 +4275,12 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             if refusal := _spawn_governor_refusal(a, probe):
                 raise eph.Refused(refusal)
             if policy.review_enqueue_enabled and eph.attended_review(rec):
+                from . import review_enqueue
+                try:
+                    review_enqueue.attended_directory(policy)
+                except Exception as error:
+                    raise eph.Refused('attended enqueue custody admission unproved ('
+                                      + type(error).__name__ + ')') from None
                 info = _gh_json(f"repos/{rec['repo']}/pulls/{rec['pr']}")
                 head = info.get('head', {}).get('sha') or ''
                 if (not eph._SHA.fullmatch(head) or info.get('state') != 'open'

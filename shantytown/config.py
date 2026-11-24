@@ -162,6 +162,8 @@ class Ephemeral:
     recruitment_launch_ready: bool = False
     review_enqueue_enabled: bool = False
     review_enqueue_command: tuple = ()
+    review_enqueue_attended_uid: int | None = None
+    review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
     jobs: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
@@ -1198,7 +1200,8 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs",
-                   "job_servers", "review_enqueue_enabled", "review_enqueue_command"}
+                   "job_servers", "review_enqueue_enabled", "review_enqueue_command",
+                   "review_enqueue_attended_uid", "review_enqueue_attended_dir"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1239,6 +1242,15 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
         raise ConfigError(f"{path}: ephemeral.review_enqueue_command needs an absolute adapter argv")
     values['review_enqueue_enabled'] = enqueue_enabled
     values['review_enqueue_command'] = tuple(enqueue_command)
+    attended_uid = tbl.get('review_enqueue_attended_uid')
+    attended_dir = tbl.get('review_enqueue_attended_dir', '')
+    if (attended_uid is not None and (type(attended_uid) is not int or attended_uid < 0)
+            or not isinstance(attended_dir, str) or len(attended_dir) > 4096
+            or any(c in attended_dir for c in '\r\n\0')
+            or attended_dir and (not Path(attended_dir).is_absolute() or '..' in Path(attended_dir).parts)):
+        raise ConfigError(f"{path}: attended enqueue needs an explicit UID and absolute private state path")
+    values['review_enqueue_attended_uid'] = attended_uid
+    values['review_enqueue_attended_dir'] = attended_dir
     by_job = tbl.get("harness_by_job", {})
     if not isinstance(by_job, dict):
         raise ConfigError(f"{path}: [ephemeral.harness_by_job] must be a table")

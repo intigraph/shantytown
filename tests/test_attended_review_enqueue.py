@@ -1,5 +1,7 @@
 """Attended signed report -> the existing durable Action, without a job UID."""
 import json
+import os
+from pathlib import Path
 import sys
 from types import SimpleNamespace
 
@@ -11,10 +13,23 @@ from test_review_enqueue import custody  # noqa: F401
 from test_gate_verdict import FakeQuipu, HEAD, NODE, GRAPH, SEED, SIGNER, NOW
 from shantytown import cli, ephemeral as eph, gate_verdict as gv, review_enqueue
 
+pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux'),
+                                reason='Linux directory-FD custody backend')
+
 
 def forge(pr=5):
     return dict(number=pr, node_id=NODE, state='open', head={'sha': HEAD},
                 base={'repo': {'full_name': 'o/n'}})
+
+
+def private_policy(root):
+    base = root.parent / 'attended'
+    base.mkdir(mode=0o700, exist_ok=True)
+    for name in ('intents', 'bindings'):
+        (base / name).mkdir(mode=0o700, exist_ok=True)
+    return SimpleNamespace(review_enqueue_enabled=True,
+        review_enqueue_command=('/test/adapter',), verdict_graph=GRAPH,
+        review_enqueue_attended_uid=os.geteuid(), review_enqueue_attended_dir=str(base))
 
 
 def signed(monkeypatch, principal, pr=5, *, q=None, now=NOW):
@@ -33,8 +48,8 @@ def test_attended_signed_approval_uses_one_durable_attempt(custody, monkeypatch)
     rec = dict(name=spec['principal'], job='review', state=eph.LIVE,
                harness='codex', repo='o/n', pr=5, head=HEAD)
     q = signed(monkeypatch, rec['name'])
-    policy = SimpleNamespace(review_enqueue_enabled=True,
-        review_enqueue_command=('/test/adapter',), verdict_graph=GRAPH)
+    policy = private_policy(root)
+    directory = Path(policy.review_enqueue_attended_dir) / 'intents'
     message = dict(verdict='approve', head=HEAD, signer=SIGNER)
     calls = []
     def action(intent):
@@ -57,8 +72,8 @@ def test_attended_lost_reply_does_not_rearm_after_new_signature(custody, monkeyp
     rec = dict(name=spec['principal'], job='review', state=eph.LIVE,
                harness='codex', repo='o/n', pr=5, head=HEAD)
     q = signed(monkeypatch, rec['name'])
-    policy = SimpleNamespace(review_enqueue_enabled=True,
-        review_enqueue_command=('/test/adapter',), verdict_graph=GRAPH)
+    policy = private_policy(root)
+    directory = Path(policy.review_enqueue_attended_dir) / 'intents'
     message = dict(verdict='approve', head=HEAD, signer=SIGNER)
     calls = []
     def lost(intent):
@@ -92,8 +107,8 @@ def test_attended_unproved_report_never_calls_action(custody, monkeypatch, fault
         gv.write(gv.GateApproval(repo='o/n', pr=5, pr_node=NODE, head=HEAD,
             outcome='changes', by='another-reviewer', recorded_at=gv.now_stamp(NOW),
             author_agent='lex'), quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
-    policy = SimpleNamespace(review_enqueue_enabled=True,
-        review_enqueue_command=('/test/adapter',), verdict_graph=GRAPH)
+    policy = private_policy(root)
+    directory = Path(policy.review_enqueue_attended_dir) / 'intents'
     with pytest.raises(review_enqueue.IdentityError):
         review_enqueue.report(root, rec, None, message, policy, quipu=q,
             gh=lambda _: info, action=lambda _: pytest.fail('unproved Action'))
@@ -111,10 +126,13 @@ pathlib.Path(__file__).with_suffix('.calls').write_text('enqueue\\n')
 print(json.dumps(dict(schema=r['schema'],intent=r['intent'],attempt=r['attempt'],state='queued',receipt='queue-entry')))
 ''')
     path = root / 'shantytown.toml'
+    policy = private_policy(root)
     text = path.read_text()
     text += '\nverdict_graph = ' + json.dumps(GRAPH)
     text += '\nverdict_signer = ' + json.dumps(SIGNER)
     text += '\nreview_enqueue_enabled = ' + ('false' if fault == 'off' else 'true')
+    text += '\nreview_enqueue_attended_uid = ' + str(os.geteuid())
+    text += '\nreview_enqueue_attended_dir = ' + json.dumps(policy.review_enqueue_attended_dir)
     if fault != 'command-unset':
         text += '\nreview_enqueue_command = ' + json.dumps([sys.executable, str(adapter)])
     path.write_text(text + '\n')
@@ -126,9 +144,7 @@ print(json.dumps(dict(schema=r['schema'],intent=r['intent'],attempt=r['attempt']
         return
     root, rec = _attended_review(store, monkeypatch)
     if fault != 'off': assert rec['head'] == HEAD
-    root.chmod(0o700)
-    (root / 'ephemeral').chmod(0o700)
-    (root / 'ephemeral' / 'review-enqueue').mkdir(mode=0o700)
+    shared_mode = root.stat().st_mode
     q = signed(monkeypatch, rec['name'], 3)
     monkeypatch.setattr(cli, '_spawn_quipu', lambda _: q)
     monkeypatch.setattr(gv, 'load_or_generate', lambda _: SEED)
@@ -155,5 +171,6 @@ print(json.dumps(dict(schema=r['schema'],intent=r['intent'],attempt=r['attempt']
     # Attended report requests detached teardown: ENDING is preserved until the
     # normal reaper verifies the pane/workspace teardown, rather than faking DONE.
     assert final['state'] == eph.ENDING and final['result']['verdict'] == 'approve'
+    assert root.stat().st_mode == shared_mode
     assert adapter.with_suffix('.calls').exists() is (fault is None), errors
     if fault is None: assert 'Enqueue verified: queue-entry' in final['result']['summary']
