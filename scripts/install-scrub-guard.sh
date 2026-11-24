@@ -219,7 +219,10 @@ is_ephemeral_producer_checkout() {
   [ "$physical" = "$dir" ] || return 1
   case "$physical" in "$prefix"*) ;; *) return 1 ;; esac
   rest="${physical#"$prefix"}"
-  [[ "$rest" =~ ^[^/]+/source-[A-Za-z0-9_]{8}/source$ ]] || return 1
+  # Both the repository dispatcher and the single-repository producer use
+  # private temporary clones; neither cleanup is lost persistent coverage.
+  [[ "$rest" =~ ^[^/]+/source-[A-Za-z0-9_]{8}/source$ ||
+     "$rest" =~ ^produce-[A-Za-z0-9_]{8}/source$ ]] || return 1
   root="${physical%/source}"
   [ "$(stat -c '%u:%a' -- "$root" 2>/dev/null)" = "$(id -u):700" ] || return 1
   common="$(realpath -e -- "$common" 2>/dev/null)" || return 1
