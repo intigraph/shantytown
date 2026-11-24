@@ -9,11 +9,12 @@ After: two cryptographically verified attended approvals for the same job and
 head, with different signature timestamps, invoke one adapter process handoff.
 A lost reply remains UNKNOWN after a later signed approval and does not retry.
 
-[Output](output.txt) and [timing](timing.txt) record the production custody code
+[Compressed output](output.log.gz) and [timing](timing.txt) record the production custody code
 with private signed RDF fixtures and a stub Action. Replay with util-linux:
 
 ```sh
-scriptreplay --log-out output.txt --log-timing timing.txt
+gzip -dc output.log.gz > output.log
+scriptreplay --log-out output.log --log-timing timing.txt
 ```
 
 The CLI regression separately exercises launch-head binding, report, configured

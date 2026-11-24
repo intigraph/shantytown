@@ -1,7 +1,0 @@
-Script started on 2026-11-24 02:10:53-05:00 [COMMAND="python -m pytest -q -s --disable-warnings tests/test_attended_review_enqueue.py::test_attended_signed_approval_uses_one_durable_attempt tests/test_attended_review_enqueue.py::test_attended_lost_reply_does_not_rearm_after_new_signature" <not executed on terminal>]
-two attended signed approvals, different timestamps -> one adapter call; queued
-.lost adapter reply, later signed approval -> one call; UNKNOWN retained
-.
-2 passed, 20 warnings in 1.13s
-
-Script done on 2026-11-24 02:10:54-05:00 [COMMAND_EXIT_CODE="0"]
