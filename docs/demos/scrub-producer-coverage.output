@@ -1,0 +1,7 @@
+Script started on 2026-11-24 01:27:00-05:00 [COMMAND="python3 docs/demos/scrub-producer-coverage.py --base-script scripts/.demo-base-install.sh --head-script scripts/install-scrub-guard.sh" <not executed on terminal>]
+base: producer cleanup: persistent 2 -> 1; missing 0
+base: real repository removal: persistent 1 -> 0
+candidate: producer cleanup: persistent 1 -> 1; missing 0
+candidate: real repository removal: persistent 1 -> 0
+
+Script done on 2026-11-24 01:27:00-05:00 [COMMAND_EXIT_CODE="0"]
