@@ -1,0 +1,15 @@
+Script started on 2026-11-22 23:26:17-05:00 [COMMAND="sh docs/demos/startup-anchor-wait/demo.sh" <not executed on terminal>]
+Same synthetic pane frames on base and candidate; no real job spawned.
+candidate source blob: b14945f79bdac2824fbb1ea086f41f77b9a75ebb
+  ⚠ startup inbox delivery failed for eph-review-abc123 (RuntimeError: startup turn is busy or composer foreign); 0 pointer(s) remain open.
+base e0a982d8fb74fafe870e2c6ad88c3b6d54b41188 busy/busy/idle delivered=False send_calls=1 observations=0
+  ⚠ startup inbox delivery failed for eph-review-abc123 (RuntimeError: startup turn is busy or composer foreign); 0 pointer(s) remain open.
+base e0a982d8fb74fafe870e2c6ad88c3b6d54b41188 foreign delivered=False send_calls=1 observations=0
+  ⚠ startup inbox delivery failed for eph-review-abc123 (RuntimeError: startup turn is busy or composer foreign); 0 pointer(s) remain open.
+base e0a982d8fb74fafe870e2c6ad88c3b6d54b41188 busy delivered=False send_calls=1 observations=0
+  startup anchor: verified context for eph-review-abc123.
+candidate busy/busy/idle delivered=True send_calls=1 observations=3
+candidate foreign delivered=False send_calls=0 observations=1
+candidate busy delivered=False send_calls=0 observations=121
+
+Script done on 2026-11-22 23:26:17-05:00 [COMMAND_EXIT_CODE="0"]

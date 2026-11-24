@@ -5447,6 +5447,29 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
     codex_observed = False
     screen = ""
     try:
+        if job is not None and harness_mod.name_for(card, root=a.root) == "codex":
+            # Startup-anchor hooks can still own the turn after its marker
+            # appears (aegis-5x2x). Wait before typing, never retry a send whose
+            # delivery is uncertain or submit somebody else's composer text.
+            from .tmux import _codex_submission_busy
+            from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+            deadline = time.monotonic() + 60
+            for look in range(121):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    a._startup_failure = "startup anchor remained busy after 60s; nothing typed"
+                    return False
+                before = panes.capture(session, history=200, attrs=True,
+                                       timeout=min(2, remaining))
+                if input_state(before) not in (INPUT_EMPTY, INPUT_PLACEHOLDER):
+                    a._startup_failure = "startup composer is not confirmed empty; nothing typed"
+                    return False
+                if not _codex_submission_busy(before):
+                    break
+                if look == 120:
+                    a._startup_failure = "startup anchor remained busy after 60s; nothing typed"
+                    return False
+                time.sleep(min(0.5, max(0, deadline - time.monotonic())))
         submitted = panes.send(session, attribute(prompt, "st startup"))
         if harness_mod.name_for(card, root=a.root) == "codex":
             from .protocols import SubmissionObserved
