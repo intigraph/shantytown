@@ -4100,6 +4100,20 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, evidence)
             if note or problem:
                 summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()
+            if attended and a.verdict == 'approve' and cfg.ephemeral.review_enqueue_enabled:
+                try:
+                    from . import review_enqueue
+                    if problem:
+                        raise eph.Refused('signed verdict was not written')
+                    message = dict(verdict=a.verdict, head=a.head,
+                        signer=policy.verdict_signer or f"st-review.{cfg.host_name or 'host'}")
+                    intent = review_enqueue.report(a.root, job, None, message, policy)
+                    if intent is None or intent['state'] != 'queued':
+                        raise eph.Refused('enqueue Action did not verify queued state')
+                    summary += '\n\nEnqueue verified: ' + intent['receipt']
+                except Exception as error:  # reporting and teardown remain mandatory
+                    problem = 'enqueue Action unproved (' + type(error).__name__ + ')'
+                    summary += '\n\n' + problem
             rec, problems = _spawn_end(a, me, a.verdict, summary, "report",
                                        detached=True)
             if problem:
@@ -4260,6 +4274,14 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                           reports_to=rec["administrator"])
             if refusal := _spawn_governor_refusal(a, probe):
                 raise eph.Refused(refusal)
+            if policy.review_enqueue_enabled and eph.attended_review(rec):
+                info = _gh_json(f"repos/{rec['repo']}/pulls/{rec['pr']}")
+                head = info.get('head', {}).get('sha') or ''
+                if (not eph._SHA.fullmatch(head) or info.get('state') != 'open'
+                        or info.get('number') != rec['pr']
+                        or info.get('base', {}).get('repo', {}).get('full_name') != rec['repo']):
+                    raise eph.Refused('attended review launch PR/head binding unproved')
+                rec['head'] = head
             shared = _spawn_checkout(rec)
             if a.dry_run:
                 if recruiter_scope is not None and a.json:
