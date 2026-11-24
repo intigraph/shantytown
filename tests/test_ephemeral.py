@@ -1398,3 +1398,70 @@ def test_report_without_a_profile_keeps_the_legacy_verdicts(store, monkeypatch, 
     monkeypatch.chdir(rec["workspace"])
     assert _st(root, "--report", "--verdict", "diagnosed", "--dry-run") == cli.REFUSED
     assert _st(root, "--report", "--verdict", "done", "--dry-run") == cli.OK
+
+
+@pytest.mark.parametrize('harness', ['claude', 'codex', 'opencode', 'agy'])
+def test_teardown_retires_only_ended_job_emitted_settings(tmp_path, harness):
+    from shantytown.harness import get
+    rec = _rec(tmp_path, name='eph-task-abcdef', harness=harness, state=eph.LIVE)
+    path = tmp_path / 'settings' / get(harness).agent_settings_name(rec['name'])
+    path.parent.mkdir(parents=True)
+    path.write_text('original configuration')
+    history = path.parent / 'session-history.keep'
+    history.write_text('retained')
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert done['settings_teardown'] == 'retired'
+    assert not path.exists()
+    assert path.with_name(path.name + '.retired').read_text() == 'original configuration'
+    assert history.read_text() == 'retained'
+
+
+def test_reap_repairs_done_job_settings_but_preserves_live_and_unknown(tmp_path):
+    from shantytown.harness import get
+    done = _rec(tmp_path, name='eph-task-abcdef', harness='codex', state=eph.DONE)
+    live = _rec(tmp_path, name='eph-task-123abc', harness='codex', state=eph.LIVE,
+                deadline=NOW + 1000)
+    paths = []
+    for name in (done['name'], live['name'], 'eph-task-999999'):
+        path = tmp_path / 'settings' / get('codex').agent_settings_name(name)
+        path.parent.mkdir(parents=True)
+        path.write_text(name)
+        paths.append(path)
+    dry = eph.reap(tmp_path, pane_alive=lambda _: True, end=lambda *a: None,
+                   now=NOW, dry_run=True)
+    assert any('would retire' in line for line in dry)
+    assert all(path.exists() for path in paths)
+    lines = eph.reap(tmp_path, pane_alive=lambda _: True, end=lambda *a: None, now=NOW)
+    assert any('settings retired' in line for line in lines)
+    assert not paths[0].exists() and all(p.exists() for p in paths[1:])
+    from shantytown.hook_bundles import emitted_role_files
+    _, unresolved = emitted_role_files(tmp_path, {live['name']: 'worker'})
+    assert unresolved == [paths[2]]  # unknown settings still trigger drift
+    assert eph.reap(tmp_path, pane_alive=lambda _: True, end=lambda *a: None, now=NOW) == []
+
+
+@pytest.mark.parametrize('obstacle', ['settings-link', 'parent-link', 'file-link', 'card', 'archive'])
+def test_settings_retirement_retains_uncertain_paths(tmp_path, obstacle):
+    rec = _rec(tmp_path, name='eph-task-abcdef', harness='codex', state=eph.DONE)
+    settings = tmp_path / 'settings'
+    target = tmp_path / 'outside'
+    target.mkdir()
+    if obstacle == 'settings-link':
+        settings.symlink_to(target, target_is_directory=True)
+    path = settings / 'codex' / ('agent-' + rec['name']) / 'config.toml'
+    if obstacle == 'parent-link':
+        path.parent.parent.mkdir(parents=True)
+        path.parent.symlink_to(target, target_is_directory=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if obstacle == 'file-link':
+        (target / 'config').write_text('original')
+        path.symlink_to(target / 'config')
+    else:
+        path.write_text('original')
+    if obstacle == 'card':
+        (tmp_path / 'crew').mkdir()
+        (tmp_path / 'crew' / (rec['name'] + '.json')).write_text('{}')
+    if obstacle == 'archive':
+        path.with_name(path.name + '.retired').write_text('previous')
+    assert eph.retire_settings(tmp_path, rec).startswith('kept (')
+    assert path.read_text() == 'original'

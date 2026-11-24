@@ -1,0 +1,9 @@
+Script started on 2026-11-24 00:06:37-05:00 [COMMAND="stty -onlcr && python3 docs/probes/pr-demos/ephemeral-settings/reproduce.py" <not executed on terminal>]
+BEFORE unknown-role hook files: 1
+DRY RUN: ['eph-task-abcdef: settings would retire']
+AFTER: ['eph-task-abcdef: settings retired']
+AFTER unknown-role hook files: 0
+Archived config preserved: True
+Job history preserved: True
+
+Script done on 2026-11-24 00:06:37-05:00 [COMMAND_EXIT_CODE="0"]
