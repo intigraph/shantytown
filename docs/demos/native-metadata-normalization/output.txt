@@ -1,0 +1,8 @@
+Script started on 2026-11-23 05:39:52-05:00 [COMMAND="python3 -m pytest -q -s tests/test_native_source_pin.py::test_reviewed_refresh_normalizes_only_metadata_and_returns_unadopted_proof" <not executed on terminal>]
+Exclusive refresh: metadata modes -> 0755/0644; config bytes and operator pin unchanged
+Old operator pin: consumer REFUSED after metadata change
+Reviewed fixture pin replacement/readback: consumer VERIFIED
+.
+1 passed in 0.20s
+
+Script done on 2026-11-23 05:39:53-05:00 [COMMAND_EXIT_CODE="0"]

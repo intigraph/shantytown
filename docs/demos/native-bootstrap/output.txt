@@ -1,0 +1,7 @@
+Script started on 2026-11-23 05:51:19-05:00 [COMMAND="python3 -m pytest -q -s tests/test_native_source_pin.py::test_readonly_normalized_mode_proposal_matches_later_actual_measure tests/test_native_source_pin.py::test_root_staged_proposal_grants_writer_lease_but_never_a_consumer" <not executed on terminal>]
+Read-only proposal: metadata and pin unchanged; later actual closure matches
+.Root-staged candidate: writer EX/normalization VERIFIED; canonical pin absent; consumer REFUSED
+.
+2 passed in 0.14s
+
+Script done on 2026-11-23 05:51:19-05:00 [COMMAND_EXIT_CODE="0"]
