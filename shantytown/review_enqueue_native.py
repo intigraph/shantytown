@@ -73,7 +73,7 @@ def controller_ready():
         raise IdentityError('native controller policy absent, off or host/UID mismatch')
 
 
-def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
+def checked_attempt(request, root):
     if (not isinstance(request, dict)
             or set(request) != {'schema', 'intent', 'attempt', 'candidate'}
             or request['schema'] != 'review-enqueue-action/v1'
@@ -93,6 +93,36 @@ def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
     candidate = intent['candidate']
     if candidate['authority'] != 'https://github.com':
         raise IdentityError('native Action authority unsupported')
+    return intent
+
+
+def current_author(candidate, *, quipu=None, run=subprocess.run):
+    # Explicit node-ID read binds the signed graph object to the current forge PR.
+    observed = run(['gh', 'api', 'repos/' + candidate['repo'] + '/pulls/' + str(candidate['pr'])],
+                   capture_output=True, text=True, timeout=30, check=True)
+    pr = json.loads(observed.stdout)
+    if (pr.get('node_id') != candidate['pr_node'] or pr.get('number') != candidate['pr']
+            or pr.get('head', {}).get('sha') != candidate['head'] or pr.get('state') != 'open'
+            or pr.get('base', {}).get('repo', {}).get('full_name') != candidate['repo']):
+        raise IdentityError('native forge PR/node/head binding unproved')
+    signers = gate_verdict.trusted_signers()
+    if candidate['signer'] not in signers:
+        raise IdentityError('job signer revoked or unpinned')
+    verdict = gate_verdict.approval(quipu or job_review.connection(), repo=candidate['repo'],
+        pr=candidate['pr'], node_id=candidate['pr_node'], head=candidate['head'],
+        graph=candidate['graph'], signers=signers)
+    if (verdict.get('approved') is not True
+            or not isinstance(verdict.get('author_agent'), str) or not verdict['author_agent']
+            or verdict['author_agent'].lower() == candidate['reviewer'].lower()
+            or not any(row.get('record') == candidate['record']
+                       and row.get('by') == candidate['reviewer'] for row in verdict.get('approvals', []))):
+        raise IdentityError('current independent signed APPROVE unproved')
+    return verdict['author_agent']
+
+
+def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
+    intent = checked_attempt(request, root)
+    candidate = intent['candidate']
     directory = _directory(Path(bindings), os.geteuid())
     try:
         binding = _read(directory, request['intent'] + '.binding.json',
@@ -115,24 +145,8 @@ def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
         raise IdentityError('native classification differs from approved candidate')
     native = Path(native)
     os.close(_operator_file(native))
-    # Explicit node-ID read binds the signed graph object to the current forge PR.
-    observed = run(['gh', 'api', 'repos/' + candidate['repo'] + '/pulls/' + str(candidate['pr'])],
-                   capture_output=True, text=True, timeout=30, check=True)
-    pr = json.loads(observed.stdout)
-    if (pr.get('node_id') != candidate['pr_node'] or pr.get('number') != candidate['pr']
-            or pr.get('head', {}).get('sha') != candidate['head'] or pr.get('state') != 'open'
-            or pr.get('base', {}).get('repo', {}).get('full_name') != candidate['repo']):
-        raise IdentityError('native forge PR/node/head binding unproved')
-    signers = gate_verdict.trusted_signers()
-    if candidate['signer'] not in signers:
-        raise IdentityError('job signer revoked or unpinned')
-    verdict = gate_verdict.approval(quipu or job_review.connection(), repo=candidate['repo'],
-        pr=candidate['pr'], node_id=candidate['pr_node'], head=candidate['head'],
-        graph=candidate['graph'], signers=signers)
-    if (verdict.get('approved') is not True or verdict.get('author_agent') != record.get('author')
-            or not any(row.get('record') == candidate['record']
-                       and row.get('by') == candidate['reviewer'] for row in verdict.get('approvals', []))):
-        raise IdentityError('current independent signed APPROVE unproved')
+    if current_author(candidate, quipu=quipu, run=run) != record['author']:
+        raise IdentityError('current independent signed APPROVE author differs')
     # ONE execute. The helper independently verifies record integrity, live CI,
     # head, native review requirements, holds and shared controller admission.
     # A refusal/timeout may follow a write; do not parse it as safe to retry.
