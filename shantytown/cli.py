@@ -435,8 +435,17 @@ def _default_bd_repo(a) -> str | None:
         return None
 
 
-def _plate(a, *, snapshot=False, require_complete=False, owners=None, tracker=None):
+def _plate(a, *, snapshot=False, require_complete=False, owners=None, tracker=None, display=False):
     """The plate reader matching the selected tracker."""
+    if display:
+        from .owner_display_cache import display_reads
+        with display_reads():
+            reader = _plate(a, snapshot=snapshot, require_complete=require_complete,
+                            owners=owners, tracker=tracker)
+        def read_display(who):
+            with display_reads():
+                return reader(who)
+        return read_display
     trk = tracker if tracker is not None else _tracker(a)
     if _backend(a) in BR_LIKE:
         from .br import plate as br_plate, plate_reader
@@ -3794,6 +3803,12 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
+    cfg, config_error = config.load_or_default(Path(a.root))
+    if config_error:
+        raise eph.Refused("merge retirement configuration unproved")
+    if cfg.ephemeral.review_enqueue_enabled:
+        raise eph.Refused("merge jobs are retired while review enqueue is enabled; "
+                          "use the verified review report Action")
     rec = eph.read(a.root, me)
     if rec is None or rec.get("job") != "merge":
         raise eph.Refused(eph.merge_gate(rec, a.head or "", {}, [], []))
@@ -8090,7 +8105,7 @@ def _resolve_anchor(a, me, *, require_complete=False):
         _mcp = ()
     _anchor_tracker = _tracker(a)
     p = do_anchor(me, registry, panes,
-                  plate=_plate(a, tracker=_anchor_tracker, snapshot=require_complete,
+                  plate=_plate(a, tracker=_anchor_tracker, display=not require_complete, snapshot=require_complete,
                                require_complete=require_complete, owners=[me]),
                   lead_status=_lead_status(registry, panes),
                   harness=_hn, mcp_preapproved=_mcp)
@@ -9053,7 +9068,7 @@ def _cmd_crew(a) -> int:
     from .seeds_plate import RenderShapeReads
     capacity_tracker.render_shape_reads = RenderShapeReads(inline_roster=True)
     try:
-        plate = _plate(a, snapshot=True, require_complete=True,
+        plate = _plate(a, snapshot=True, require_complete=True, display=True,
                        owners=[ag.name for ag in agents], tracker=capacity_tracker)
     except Exception:
         plate = unavailable_plate

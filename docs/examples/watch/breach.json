@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "run_id": "fixture-watch",
+  "source_digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "deployment_receipt": "fixture-receipt",
+  "now": 1100,
+  "activation": "INACTIVE",
+  "samples": [
+    {
+      "at": 1000,
+      "identity": "fixture-sha-pid-config",
+      "metrics": {
+        "p99_seconds": 3.0,
+        "error_fraction": 0.0
+      }
+    },
+    {
+      "at": 1045,
+      "identity": "fixture-sha-pid-config",
+      "metrics": {
+        "p99_seconds": 1.0,
+        "error_fraction": 0.0
+      }
+    },
+    {
+      "at": 1090,
+      "identity": "fixture-sha-pid-config",
+      "metrics": {
+        "p99_seconds": 1.0,
+        "error_fraction": 0.0
+      }
+    },
+    {
+      "at": 1100,
+      "identity": "fixture-sha-pid-config",
+      "metrics": {
+        "p99_seconds": 1.0,
+        "error_fraction": 0.0
+      }
+    }
+  ]
+}

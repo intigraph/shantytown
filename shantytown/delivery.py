@@ -166,6 +166,10 @@ class Custody:
         from . import triage
         from .tmux import _codex_owned_input, _codex_queued
         record = self.record
+        if record['state'] == 'deferred':
+            # Nothing was typed. Keep the precise idle-retry state rather
+            # than deriving a native queue outcome from unrelated previews.
+            return
         self.finish('unknown')
         screen = panes.capture(self.pane, attrs=True, timeout=2)
         if _codex_queued(screen, record['text']):
@@ -451,7 +455,7 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
     from . import triage
     from .events import FilesEvents
     from .tier import route_stop, deployment_catalog
-    from .tmux import _codex_owned_input
+    from .tmux import _codex_owned_input, _codex_submission_busy
     now = time.time() if now is None else now
     try:
         messages = box.unread(card.name)
@@ -528,11 +532,17 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
         if (not readable or record.get('pointer_state') != 'recorded'
                 or record.get('recovery_attempted') or record['session'] is None
                 or panes.session_created(card.pane) != record['session']
-                or triage.mid_flight(screen)):
+                or _codex_submission_busy(screen)):
+            continue
+        from .tmux import _codex_queued
+        if _codex_queued(screen, record['text']):
+            continue
+        if ('runtime' in record and (not record['runtime']
+                or panes.runtime_identity(card.pane) != record['runtime'])):
             continue
         owned = _codex_owned_input(screen, record['text'])
         empty = triage.input_state(screen) in (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER)
-        if not owned and not (record['state'] == 'cleared' and empty):
+        if not owned and not (record['state'] in ('cleared', 'deferred') and empty):
             continue
         with Custody(root, card.pane, socket) as custody:
             record['recovery_attempted'] = True
@@ -547,6 +557,11 @@ def supervise(root, reg, card, panes, box, screen, *, now=None, deadline=None):
             # another automated resend. No exception text/body enters the alert.
             with Custody(root, card.pane, socket) as custody:
                 custody.record = next(r for r in custody.records() if r['id'] == record['id'])
+                if custody.record['state'] == 'deferred':
+                    # The fresh send saw a busy pane before typing anything.
+                    # This observation did not consume the one actual retry.
+                    custody.record['recovery_attempted'] = False
+                    custody.save(custody.record)
                 custody.failed(panes)
         else:
             with Custody(root, card.pane, socket) as custody:
