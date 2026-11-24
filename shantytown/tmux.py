@@ -810,6 +810,18 @@ class Tmux:
                     claude_birth = self.session_created(pane)
             if codex:
                 from .triage import input_state, INPUT_EMPTY, INPUT_PLACEHOLDER
+                if (submit and custody is not None
+                        and _codex_submission_busy(before)
+                        and input_state(before) in (INPUT_EMPTY, INPUT_PLACEHOLDER)):
+                    # Native follow-up queues can survive turn completion or
+                    # reconnect without draining. Retain our untouched body for
+                    # tend's idle recovery instead of adding another Tab queue.
+                    custody.begin(text, self.session_created(pane),
+                                  runtime=self.runtime_identity(pane))
+                    custody.finish('queued' if _codex_queued(before, text) else 'deferred')
+                    _journal_send(pane, '<deferred:busy-codex:' + text + '>')
+                    raise PaneSubmissionUnverified(
+                        f'UNVERIFIED: busy Codex delivery to {pane} deferred; nothing typed')
                 if _codex_owned_input(before, text):
                     # An explicit resend can find the previous attempt stranded
                     # after a slow Stop hook. Submit only this exact body; never
