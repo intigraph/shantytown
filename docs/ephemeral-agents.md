@@ -858,3 +858,14 @@ seconds), leaving margin before the outer 120-second Action timeout. Graph
 verification also consumes that elapsed allowance; no queue command starts
 after it is exhausted. These source controls do not establish a deployed
 end-to-end budget or real approve-to-merge acceptance.
+
+### Retired job settings
+
+After authoritative teardown, the emitted per-agent configuration is renamed
+with a `.retired` suffix. Session history, rules, credentials and other files
+remain in the job home. The ordinary reap pass also repairs settings left by
+older completed jobs; its dry run reports the proposed retirement. It uses the
+job ledger, preserves live jobs and unknown settings, and refuses symlinked
+paths, surviving crew cards and existing retirement archives. This prevents
+ended jobs from appearing as unknown-role hook drift without hiding live hook
+failures.

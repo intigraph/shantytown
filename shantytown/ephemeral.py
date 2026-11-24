@@ -1295,6 +1295,46 @@ def _try_remove_workspace(rec: dict, root, git=_git) -> str:
         return f"kept (cleanup uncertain: {type(exc).__name__}): {rec.get('workspace')}"
 
 
+def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
+    """Retire the emitted config only; preserve job history, rules and secrets.
+
+    DONE is the lifecycle proof, not a name prefix or a missing pane. Never
+    follow settings symlinks or overwrite an earlier retirement archive.
+    """
+    from .harness import UnknownHarness, get as get_harness
+    name = rec.get("name")
+    if not is_ephemeral_name(name) or rec.get("state") != DONE:
+        return "kept (job termination unproven)"
+    root = Path(root)
+    card = root / "crew" / f"{name}.json"
+    if card.exists() or card.is_symlink():
+        return "kept (crew card still present)"
+    try:
+        rel = get_harness(rec["harness"]).agent_settings_name(name)
+        path = root / "settings" / rel
+        parent = root
+        if parent.is_symlink():
+            return "kept (settings symlink)"
+        for component in path.relative_to(root).parts[:-1]:
+            parent = parent / component
+            if parent.is_symlink():
+                return "kept (settings symlink)"
+        if path.is_symlink():
+            return "kept (settings symlink)"
+        if not path.exists():
+            return "none"
+        if not path.is_file():
+            return "kept (settings not a regular file)"
+        archive = path.with_name(path.name + ".retired")
+        if archive.exists() or archive.is_symlink():
+            return "kept (retirement archive exists)"
+        if not dry_run:
+            path.rename(archive)
+        return "would retire" if dry_run else "retired"
+    except (KeyError, ValueError, OSError, UnknownHarness) as error:
+        return f"kept (settings retirement uncertain: {type(error).__name__})"
+
+
 def teardown(root, name: str, *, kill_session, git=_git, now: float | None = None) -> dict:
     """Card first, then pane, then worktree. In that order so a tend pass that
     lands mid-teardown finds no card for the dead pane and cannot respawn it."""
@@ -1339,6 +1379,7 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
             results.append(dict(entry, result=_try_remove_workspace(owned, root, git=git)))
         rec['worktree_teardowns'] = results
         rec["state"] = DONE
+        rec["settings_teardown"] = retire_settings(root, rec)
         rec["torn_down_at"] = time.time() if now is None else now
         write(root, rec)
     return rec
@@ -1403,6 +1444,19 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
     does not (False) or cannot tell (None). A prompt seen on two ticks at least
     `prompt_wait_s` apart ends the job as blocked instead of idling to TTL."""
     out = []
+    # Repair configurations left by older teardown versions. Keep the same
+    # ledger lock as teardown/provisioning; never sweep arbitrary settings.
+    with lock(root):
+        for rec in records(root):
+            if rec.get("state") != DONE:
+                continue
+            result = retire_settings(root, rec, dry_run=dry_run)
+            if result != "none":
+                if not dry_run and rec.get("settings_teardown") != result:
+                    rec["settings_teardown"] = result
+                    write(root, rec)
+                if result in ("retired", "would retire") or result.startswith("kept"):
+                    out.append(f"{rec['name']}: settings {result}")
     for rec in live(root):
         name = rec["name"]
         if rec["state"] == ENDING:
