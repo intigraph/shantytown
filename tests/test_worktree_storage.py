@@ -223,3 +223,39 @@ def test_ambiguous_primary_alias_is_not_chosen(tmp_path):
     git('worktree', 'add', '-b', 'other-worker', str(tree))
     with pytest.raises(workspace.WorkspaceError, match='one shared checkout'):
         workspace._shared_repo(tree)
+
+
+@pytest.mark.parametrize('primary_name', ['archived-primary', 'project-wt'])
+def test_primary_inside_worktree_container_survives_linked_relocation(
+    tmp_path, monkeypatch, primary_name,
+):
+    import shutil
+
+    container = tmp_path / 'archive-wt'
+    container.mkdir()
+    fixture = tmp_path / 'fixture'
+    fixture.mkdir()
+    repo, tree, _ = identity_repository(fixture, 'ordinary')
+    # Put the primary itself directly under the legacy-looking container.
+    primary = container / primary_name
+    repo.rename(primary)
+    def git(*args):
+        return subprocess.run(
+            ['git', '-c', 'core.hooksPath=/dev/null', '-C', str(primary), *args],
+            check=True, capture_output=True, text=True,
+        )
+
+    git('worktree', 'repair', str(tree))
+    assert workspace._shared_repo(primary) == primary
+    assert workspace._shared_repo(tree) == primary
+    root = tmp_path / 'external'
+    target = storage.destination(root, primary, 'worker')
+    target.parent.mkdir(parents=True)
+    shutil.move(str(tree), str(target))
+    git('worktree', 'repair', str(target))
+    monkeypatch.setattr(storage, 'configured_root', lambda: root)
+    assert workspace.worktree_for(primary, 'worker') == target
+    assert workspace.worktree_for(target, 'worker') == target
+    assert workspace.ensure_worktree(
+        primary, 'worker', add=lambda *a: pytest.fail('duplicate add'),
+    ) == str(target)
