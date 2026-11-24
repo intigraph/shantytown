@@ -330,3 +330,13 @@ prepared Claude settings artifact. It identifies a pending/active retained
 generation; it is not an operator override or authority to import arbitrary
 paths. SessionStart must acknowledge the matching pending selection before
 Stop can ingest it. Codex and OpenCode receive no generated-writeback adapter.
+
+### Attended review enqueue custody
+
+`[ephemeral] review_enqueue_attended_uid` and `review_enqueue_attended_dir`
+select the controller UID and an existing private custody directory for attended
+reviews. The directory and its `intents` and `bindings` children need mode 0700
+and clean ancestry. `review_enqueue_enabled` defaults false and requires an
+absolute `review_enqueue_command` when enabled. See [attended review reports
+and enqueue](attended-review-enqueue.md) for enrollment, the ordinary native
+adapter, refusal behavior and the separate protected-job policy contract.
