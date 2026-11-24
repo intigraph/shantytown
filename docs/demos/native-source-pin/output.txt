@@ -1,0 +1,8 @@
+Script started on 2026-11-23 05:01:10-05:00 [COMMAND="PYTHONPATH=.:tests python3 -m pytest -q -s --disable-warnings tests/test_native_source_pin.py::test_source_pin_demo_current_mutated_and_refresh_controls" <not executed on terminal>]
+Current pinned source: VERIFIED; closure files: 4
+Refresh during native use: DEFERRED by exclusive lease
+Same-size/same-mtime mutation: native revision or full-code closure differs from operator pin
+.
+1 passed in 0.17s
+
+Script done on 2026-11-23 05:01:11-05:00 [COMMAND_EXIT_CODE="0"]

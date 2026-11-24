@@ -858,3 +858,90 @@ seconds), leaving margin before the outer 120-second Action timeout. Graph
 verification also consumes that elapsed allowance; no queue command starts
 after it is exhausted. These source controls do not establish a deployed
 end-to-end budget or real approve-to-merge acceptance.
+
+### Operator-pinned native source custody
+
+The native adapter accepts only `/etc/shantytown/native-enqueue-source.json`,
+installed through the reviewed operator delivery lane. It names the normal
+ownership-neutral checkout, its owner UID, exact Git revision, entrypoint and a
+full-code-closure SHA-256. It does not relocate or copy the native helper and
+never falls back to an unpinned path. The pin and lock metadata remain root-owned;
+source files may belong to the explicitly pinned operator UID. Unknown owners,
+group/other-writable code or metadata, changed revision and closure mismatch
+refuse before native execution.
+
+```json
+{"version":1,"root":"/operator/neutral-source","entrypoint":"scripts/pr-risk.py","owner":1000,"revision":"0000000000000000000000000000000000000000","closure_sha256":"0000000000000000000000000000000000000000000000000000000000000000","lock_file":"/etc/shantytown/native-source-custody/source.lock"}
+```
+
+This is a schema example, not an admissible deployed pin. Measure a frozen
+checkout with `python -m shantytown.native_source_pin measure --root PATH
+--owner UID`, then recompute and read back the digest after the reviewed
+Gold/refresh delivery. The closure covers every versioned file, file ownership,
+mode and content, internal file-link targets and local Git configuration. Missing
+or non-versioned files, hardlinks, external links, configuration includes and
+exhausted bounds refuse. The limit is 10,000 closure files and 1 GiB, including
+Git configuration; an exhausted measurement is UNKNOWN, never a partial pin.
+The interpreter, external executables, credentials and target repository
+profiles still require their existing runtime qualification.
+
+Only conventional tagged bytecode cache files are excluded. Native subprocesses
+use `-I -S -B -X pycache_prefix=/dev/null`: no user/site initialization, no cache
+writes and no cached local modules. A legacy or source file hidden in an excluded
+cache directory refuses. A real poisoned-cache control demonstrates that these
+flags load the pinned source instead.
+
+Consumers take the fixed root-protected lock shared, verify the complete source
+and pin, and retain the lease through execution. The native child inherits the
+lease FD, so killing its adapter parent does not release source custody early.
+The normal refresh lane must use `native_source_pin refresh -- ABSOLUTE_COMMAND`
+for its exclusive lease before chmod/fetch/merge or pin replacement. The existing
+refresher's guarded handoff checks the exact inherited lock inode, source root,
+caller and exclusive lock; an environment FD number alone grants nothing.
+An active reader defers a refresh tick. When both operator policies are absent,
+the old refresh lane is preserved; an absent canonical pin always refuses a
+native consumer, and a malformed present canonical pin refuses without fallback.
+
+Rollout must install both sides before adopting the canonical pin. Provision the
+lock with access only for the pinned source owner, protected controller and
+operator; job UIDs must fail the read/lock control. Keep the two accounts separate
+without granting new groups or sudo. Normalize only reviewed mutable Git metadata
+permissions, measure afterward, and retain a mutated-file refusal control. Move
+pins only under the same exclusive lease, through the reviewed Gold/refresh
+lane with digest readback. No pin, ACL, owner, mode, source refresh, canonical
+admission or runtime flag is changed by this source slice.
+
+The reviewed refresh finalization calls `normalize-refresh-metadata --fd FD --root PATH`
+under its inherited exclusive lease, before publishing a successful refresh mark.
+Only `.git` 0775/0755 -> 0755 and its single-link regular `config`
+0664/0644 -> 0644 are admitted; both exact pinned owners/modes qualify before
+either change. Unknown metadata refuses. It then measures the complete closure
+and prints a proposal; it never writes the operator pin. A mode change therefore
+continues to refuse native execution until the reviewed pin move/readback. The
+first pin/lock provisioning and canonical adoption are separate admitted steps.
+
+For first provisioning, the fixed root-protected
+`/etc/shantytown/recruitment-staged/native-enqueue-source.candidate.json` may
+supply the writer policy while the canonical pin is absent. Only the refresher
+consults it; consumers never do. A malformed present canonical pin refuses rather
+than falling back. The root-staged candidate grants only the same exclusive
+writer lease and must name the existing fixed lock, exact source owner/root,
+revision, entrypoint and full closure digest. It starts no controller or job.
+
+`measure-normalized-metadata-proposal --root PATH --owner UID` reads the complete
+closure without changing modes or pin bytes. Its tagged proposal hashes the
+future 0644 Git config metadata while admitting only the two declared current
+mode pairs; every other custody/closure check stays strict. After reviewed root
+staging and lock provisioning, the normal refresh verifies the same exclusive
+lease, performs the two exact normalizations and measures the actual closure.
+With only a staged candidate, that actual revision/digest must match the proposal
+or refresh refuses before its success heartbeat. Canonical adoption still needs
+the reviewed pin move and readback; absence continues refusing consumers even
+when writer normalization succeeds. No placeholder pin is needed or admitted.
+
+Recognized cache metadata also includes released numeric pytest tags such as
+`module.cpython-314-pytest-9.1.1.pyc`. These remain regular, single-link files
+under the excluded cache directory with known owners. Native isolated Python
+bypasses their bytecode through its separate cache prefix; the poisoned-bytecode
+control includes both ordinary and pytest-tagged poison. Arbitrary source,
+untagged bytecode, unknown tag text and redirects still refuse.

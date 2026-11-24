@@ -29,14 +29,14 @@ def prepared(case):
         calls.append(argv)
         if argv[:2] == ['gh','api']:
             return CompletedProcess(argv,0,json.dumps(case.pr),'')
-        if argv[3]=='classify':
+        if 'classify' in argv:
             assert kw['umask']==0o077 and kw['timeout']<=45
             path=Path(argv[argv.index('--output')+1])
             fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
             with os.fdopen(fd,'w') as stream:json.dump(case.record,stream)
             for callback in after_classify:callback(path)
             return CompletedProcess(argv,0,json.dumps({'id':case.record['id']}),'')
-        assert argv[3]=='enqueue'
+        assert 'enqueue' in argv
         return CompletedProcess(argv,0,'ENQUEUE VERIFIED '+json.dumps(dict(
             record=case.record['id'],head=case.candidate['head'],entry='MQ_fixture')),'')
     def execute():
@@ -47,7 +47,7 @@ def prepared(case):
 
 
 def kinds(prepared):
-    return [a[3] for a in prepared.calls if a[:2]!=['gh','api']]
+    return [('classify' if 'classify' in a else 'enqueue') for a in prepared.calls if a[:2]!=['gh','api']]
 
 
 def test_automatic_classification_and_native_enqueue_each_happen_once(prepared):
@@ -79,7 +79,7 @@ def test_unenrolled_or_unprotected_configuration_does_not_spend_or_enqueue(prepa
             SimpleNamespace(ephemeral=config.Ephemeral()),None))
     elif fault=='source':
         def refuse(_):raise IdentityError('unprotected source')
-        monkeypatch.setattr(producer.adapter,'_operator_file',refuse)
+        monkeypatch.setattr(producer.adapter.native_source_pin,'policy',refuse)
     with pytest.raises((IdentityError,OSError)):prepared.execute()
     assert prepared.calls==[]
     assert not list(prepared.directory.glob('*.prepare.json'))
@@ -113,7 +113,7 @@ def test_lost_process_reply_never_repeats_budget_or_mutation(prepared,phase):
     base=prepared.run
     def lost(argv,**kw):
         value=base(argv,**kw)
-        if len(argv)>3 and argv[3]==phase:raise TimeoutError('effect may have happened')
+        if phase in argv:raise TimeoutError('effect may have happened')
         return value
     with pytest.raises(TimeoutError):
         producer.execute(prepared.case.request,root=prepared.case.root,bindings=prepared.directory,
@@ -163,7 +163,7 @@ def test_failed_native_classification_never_writes_a_binding_or_enqueues(prepare
     base=prepared.run
     def run(argv,**kw):
         value=base(argv,**kw)
-        if len(argv)>3 and argv[3]=='classify':
+        if 'classify' in argv:
             if fault=='nonzero':return CompletedProcess(argv,1,'','private diagnostic')
             if fault=='no-output':Path(argv[argv.index('--output')+1]).unlink()
             if fault=='late-off':

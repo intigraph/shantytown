@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from . import config, gate_verdict, job_review, review_enqueue as custody
+from . import native_source_pin
 from .actor_identity import IdentityError
 from .recruit_store import _directory
 
@@ -144,15 +145,18 @@ def execute(request, *, root, bindings, native, quipu=None, run=subprocess.run):
             merge_method='squash').items()) or type(snap.get('one_way')) is not bool):
         raise IdentityError('native classification differs from approved candidate')
     native = Path(native)
-    os.close(_operator_file(native))
+    native_source_pin.policy(native)
     if current_author(candidate, quipu=quipu, run=run) != record['author']:
         raise IdentityError('current independent signed APPROVE author differs')
     # ONE execute. The helper independently verifies record integrity, live CI,
     # head, native review requirements, holds and shared controller admission.
     # A refusal/timeout may follow a write; do not parse it as safe to retry.
-    answer = run([sys.executable, '-I', str(native), 'enqueue', str(Path(bindings) / record_name),
-                  '--checkout', binding['checkout'], '--expect-record', record['id'],
-                  '--diff-bound', '--execute'], capture_output=True, text=True, timeout=120)
+    with native_source_pin.verified(native) as lease:
+        answer = run([sys.executable, '-I', '-S', '-B', '-X', 'pycache_prefix=/dev/null',
+                      str(native), 'enqueue', str(Path(bindings) / record_name),
+                      '--checkout', binding['checkout'], '--expect-record', record['id'],
+                      '--diff-bound', '--execute'], capture_output=True, text=True, timeout=120,
+                     pass_fds=(lease.fd,))
     lines = answer.stdout.splitlines()
     if answer.returncode or not lines or not lines[-1].startswith('ENQUEUE VERIFIED '):
         raise IdentityError('native queue outcome UNKNOWN; reconcile without retry')
