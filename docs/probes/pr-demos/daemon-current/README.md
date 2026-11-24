@@ -2,8 +2,8 @@
 
 The native updater can rewrite the shared `current` symlink through a card's
 temporary runtime home. On base `4ac176316eea10d55745d1f7c3f72a70e777acc6`,
-erasing that home leaves the selected payload missing. Source revision
-`0fe211d2` retains the same release through a relative pointer, so the payload
+erasing that home leaves the selected payload missing. Recorded source revision
+`eaf2c80fb820853ad8015af9b4ad4f0d9786bc58` retains the same release through a relative pointer, so the payload
 still resolves after the same cleanup.
 
 This is an isolated filesystem demonstration. Native updater behavior and mount
