@@ -615,6 +615,13 @@ installer lock are shared; socket, daemon control and session state remain
 separate per card. This keeps downloaded releases off the runtime filesystem
 and avoids duplicate payloads. Standalone CLI release sharing is unchanged.
 
+Provisioning retains `current` as a relative link to its selected persistent
+release under the native installer lock. The normal readiness command is wrapped
+so a native updater's absolute per-card runtime link is normalized after either
+success or failure. Removing the runtime home then leaves the shared release
+resolvable. A missing, external or RAM-backed selected release refuses; no
+fallback release is selected and no payload is deleted.
+
 On Linux, provisioning refuses a destination on tmpfs or ramfs, an unknown
 mount, an unexpected package link, or a destination with foreign ownership or
 nonprivate permissions. Existing real package directories migrate only after the normal sanctioned
