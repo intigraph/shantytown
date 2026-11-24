@@ -56,3 +56,37 @@ def test_selected_seeds_adapter_uses_native_due_flag_without_followup_mutation(m
     assert item.due_at == "2026-11-09T00:00:00Z"
     assert len(calls) == 1 and "--due=2026-11-09T00:00:00Z" in calls[0]
     assert not any("due-at" in arg for arg in calls[0])
+
+
+def test_duplicate_override_forwards_repeated_ids_and_reason_in_one_command(monkeypatch):
+    tracker = object.__new__(SdTracker)
+    calls = []
+    def native(*args):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout='{"id":"test-2"}', stderr="")
+    monkeypatch.setattr(tracker, "_bd", native)
+    tracker.create("same title", new_despite=["test-1", "test-3"], because="separate deployment",
+                   description="more detail")
+    assert len(calls) == 1
+    assert "--new-despite=test-1" in calls[0] and "--new-despite=test-3" in calls[0]
+    assert "--because=separate deployment" in calls[0]
+    assert "--description=more detail" in calls[0]
+
+
+def test_duplicate_refusal_retains_candidate_and_is_definite(monkeypatch, tmp_path, capsys):
+    from shantytown.sd import CreateRefused
+    tracker = object.__new__(SdTracker)
+    monkeypatch.setattr(tracker, "_bd", lambda *args: SimpleNamespace(
+        returncode=5, stdout="", stderr="near-duplicate: comment on test-1 instead"))
+    with pytest.raises(CreateRefused, match="comment on test-1"):
+        tracker.create("same title")
+    monkeypatch.setattr(cli, "_tracker", lambda a: tracker)
+    assert cli.main(["--root", str(tmp_path), "task", "same title"]) == cli.REFUSED
+    assert "comment on test-1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flags", [["--new-despite", "test-1"], ["--because", "why"],
+                                   ["--new-despite", "test-1", "--because", " "]])
+def test_partial_override_refuses_before_tracker(monkeypatch, tmp_path, flags):
+    monkeypatch.setattr(cli, "_tracker", lambda a: pytest.fail("must not read the tracker"))
+    assert cli.main(["--root", str(tmp_path), "task", "same title", *flags]) == cli.REFUSED

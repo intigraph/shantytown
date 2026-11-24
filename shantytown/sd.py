@@ -50,6 +50,10 @@ _READ_VERBS = frozenset({"show", "list", "ready", "where", "search", "count", "i
                          "identity", "doctor"})
 
 
+class CreateRefused(RuntimeError):
+    """Seeds refused create with exit 5; no new item was written."""
+
+
 class StoreUnproven(RuntimeError):
     """sd could not be shown to read the configured store."""
 
@@ -76,6 +80,30 @@ class SdTracker(BrTracker):
     """BrTracker over `sd`, pinned to one proven store."""
 
     _tool = "sd"
+
+    def create(self, title: str, **fields):
+        """Forward repeatable duplicate IDs as separate argv entries."""
+        overrides = fields.pop("new_despite", None)
+        args = ["create", title, "--json"]
+        for key, value in fields.items():
+            if value is not None:
+                flag = "due" if key == "due_at" else key.replace("_", "-")
+                args.append(f"--{flag}={value}")
+        args.extend(f"--new-despite={item}" for item in (overrides or []))
+        result = self._bd(*args)
+        if result.returncode == 5:
+            from .br import redact_cause
+            raise CreateRefused(redact_cause(result.stderr.strip() or result.stdout.strip()))
+        if result.returncode != 0:
+            from .beads import _bd_failure
+            raise _bd_failure("sd create", result, tool="sd")
+        value = json.loads(result.stdout)
+        if isinstance(value, list) and len(value) == 1:
+            value = value[0]
+        if not isinstance(value, dict) or not value.get("id"):
+            raise RuntimeError("sd create receipt UNKNOWN; read back before retrying")
+        return WorkItem(id=value["id"], title=title, status="open", assignee=fields.get("assignee"),
+                        due_at=fields.get("due_at"))
 
     def defer_read(self, item_id):
         """Deferral needs exact fields, not comments or reverse dependencies."""
