@@ -81,10 +81,11 @@ class Store:
     flock serializes controllers, and replace+fsync makes each transition
     durable before returning. Capacity exhaustion retains every old intent.
     """
-    def __init__(self, root):
+    def __init__(self, root, *, directory=None):
         if not sys.platform.startswith('linux'):
             raise IdentityError('enqueue custody requires Linux directory FDs')
-        self.directory = _directory(Path(root) / 'ephemeral' / 'review-enqueue', os.geteuid())
+        self.directory = _directory(Path(directory) if directory is not None else
+                                    Path(root) / 'ephemeral' / 'review-enqueue', os.geteuid())
 
     def _file(self, fd):
         meta = os.fstat(fd)
@@ -278,6 +279,22 @@ class EnqueueAction:
         return result['state'], result['receipt']
 
 
+def attended_directory(policy):
+    """Controller-configured state, never a job-supplied path or UID fallback."""
+    if not sys.platform.startswith('linux'):
+        raise IdentityError('attended custody requires the Linux directory-FD backend')
+    uid = getattr(policy, 'review_enqueue_attended_uid', None)
+    value = getattr(policy, 'review_enqueue_attended_dir', '')
+    if (type(uid) is not int or uid != os.geteuid() or not isinstance(value, str)
+            or not value or not Path(value).is_absolute() or '..' in Path(value).parts):
+        raise IdentityError('attended controller UID/private state is not configured')
+    base = Path(value)
+    for path in (base, base / 'intents', base / 'bindings'):
+        fd = _directory(path, uid)
+        os.close(fd)
+    return base
+
+
 def report(root, rec, spec, message, policy, *, quipu=None, action=None, gh=None):
     """Controller-only report handoff, before job teardown. OFF costs no reads."""
     if not policy.review_enqueue_enabled or message.get('verdict') != 'approve':
@@ -288,7 +305,8 @@ def report(root, rec, spec, message, policy, *, quipu=None, action=None, gh=None
             or any(rec.get(k) != spec['review'][k] for k in ('repo', 'pr', 'head'))):
         raise IdentityError('enqueue report/controller binding unproved')
     adapter = action or EnqueueAction(policy.review_enqueue_command)
-    with Store(root) as store:
+    directory = attended_directory(policy) / 'intents' if spec is None else None
+    with Store(root, directory=directory) as store:
         intent = (store.retain('https://github.com', spec, message, quipu=quipu)
                   if spec is not None else
                   store.retain_attended(rec, message, policy, quipu=quipu, gh=gh))
