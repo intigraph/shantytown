@@ -107,6 +107,7 @@ def test_codex_remote_control_is_explicit_and_attaches_to_managed_daemon(tmp_pat
         assert launch.index("codex remote-control stop") < launch.index("-m shantytown.codex_packages")
         assert launch.index("-m shantytown.codex_packages") < launch.index("-m shantytown.codex_ready")
         assert "--migrate-stopped" in launch
+        assert "--run -- " in launch
     else:
         assert "-m shantytown.codex_packages" not in launch
     daemon_standalone = daemon_home / "packages" / "standalone"

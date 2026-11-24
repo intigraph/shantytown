@@ -21,6 +21,96 @@ def test_fresh_private_packages_are_disk_backed_and_idempotent(tmp_path, disk):
     assert (link / "release").read_bytes() == b"payload"
 
 
+def test_native_current_rearm_survives_runtime_home_wipe(tmp_path, disk):
+    import shutil
+    home, durable = tmp_path / 'runtime' / 'card', tmp_path / 'disk' / 'daemon'
+    packages.prepare(home, durable)
+    binary = durable / 'releases' / 'version' / 'bin' / 'codex'
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b'persistent payload')
+    current = durable / 'current'
+    current.symlink_to(home / 'packages' / 'app-server-daemon' / 'releases' / 'version')
+    lock = durable / 'install.lock'
+    lock.write_bytes(b'preserve native lock')
+    inode = lock.stat().st_ino
+    # Native Remote Control rewrites current through its per-card /run view.
+    # The normal post-start provision must retain the selected release on disk.
+    packages.prepare(home, durable)
+    shutil.rmtree(home)
+    assert (current / 'bin' / 'codex').read_bytes() == b'persistent payload'
+    assert os.readlink(current) == 'releases/version'
+    assert lock.stat().st_ino == inode
+    assert lock.read_bytes() == b'preserve native lock'
+
+
+@pytest.mark.parametrize('exit_code', [0, 7])
+def test_readiness_wrapper_preserves_exit_and_stabilizes_native_rearm(
+        tmp_path, disk, monkeypatch, exit_code):
+    import shutil
+    import sys
+    home, durable = tmp_path / 'runtime' / 'card', tmp_path / 'disk' / 'daemon'
+    packages.prepare(home, durable)
+    release = durable / 'releases' / 'version'
+    release.mkdir(parents=True)
+    (release / 'payload').write_bytes(b'retained')
+    current = durable / 'current'
+    current.symlink_to('releases/version')
+    # A real child models the native updater even when readiness later fails.
+    code = ('import os,sys; os.unlink(sys.argv[1]); '
+            'os.symlink(sys.argv[2],sys.argv[1]); sys.exit(int(sys.argv[3]))')
+    alias = home / 'packages' / 'app-server-daemon' / 'releases' / 'version'
+    monkeypatch.setattr(sys, 'argv', ['codex-packages', '--home', str(home),
+        '--durable', str(durable), '--run', '--', sys.executable, '-c', code,
+        str(current), str(alias), str(exit_code)])
+    assert packages.main() == exit_code
+    shutil.rmtree(home)
+    assert (current / 'payload').read_bytes() == b'retained'
+    assert os.readlink(current) == 'releases/version'
+
+
+def test_current_outside_releases_refuses_without_selecting_a_fallback(tmp_path, disk):
+    home, durable = tmp_path / 'runtime', tmp_path / 'disk' / 'daemon'
+    packages.prepare(home, durable)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (durable / 'releases' / 'other').mkdir(parents=True)
+    current = durable / 'current'
+    current.symlink_to(outside)
+    with pytest.raises(RuntimeError, match='escapes'):
+        packages.prepare(home, durable)
+    assert current.is_symlink() and current.resolve() == outside
+    assert (durable / 'releases' / 'other').is_dir()
+
+
+def test_current_repair_preserves_a_busy_native_installer_lock(tmp_path, disk):
+    import fcntl
+    home, durable = tmp_path / 'runtime', tmp_path / 'disk' / 'daemon'
+    packages.prepare(home, durable)
+    release = durable / 'releases' / 'version'
+    release.mkdir(parents=True)
+    current = durable / 'current'
+    current.symlink_to(release)
+    with (durable / 'install.lock').open('a+b') as installer:
+        fcntl.flock(installer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(BlockingIOError):
+            packages.prepare(home, durable)
+    assert os.readlink(current) == str(release)
+
+
+def test_selected_ram_release_refuses_without_replacing_current(tmp_path, disk, monkeypatch):
+    home, durable = tmp_path / 'runtime', tmp_path / 'disk' / 'daemon'
+    packages.prepare(home, durable)
+    release = durable / 'releases' / 'version'
+    release.mkdir(parents=True)
+    current = durable / 'current'
+    current.symlink_to(release)
+    monkeypatch.setattr(packages, 'filesystem',
+                        lambda path: 'tmpfs' if path == release else 'ext4')
+    with pytest.raises(RuntimeError, match='RAM-backed'):
+        packages.prepare(home, durable)
+    assert os.readlink(current) == str(release)
+
+
 @pytest.mark.parametrize('mask', [0o002, 0o077])
 def test_fresh_home_shared_parent_is_explicitly_private_under_umask(tmp_path, disk, mask):
     home = tmp_path / 'runtime'

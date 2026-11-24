@@ -11,6 +11,7 @@ import time
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 
@@ -74,6 +75,47 @@ def prepare(home: Path, durable: Path) -> None:
     link.parent.mkdir(parents=True, exist_ok=True)
     if not link.is_symlink():
         link.symlink_to(durable, target_is_directory=True)
+    _stabilize_current(durable)
+
+
+def _stabilize_current(durable: Path) -> None:
+    """Retain the updater's selected release without retaining its runtime alias."""
+    current = durable / "current"
+    if not current.is_symlink():
+        if current.exists():
+            raise RuntimeError("daemon current must be a release symlink")
+        return  # a fresh package has not been installed yet
+    lock_path = durable / "install.lock"
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "a+b") as lock:
+        info = os.fstat(lock.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or info.st_nlink != 1):
+            raise RuntimeError("shared native install lock custody is UNKNOWN")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        before = current.lstat()
+        root = durable.resolve(strict=True)
+        releases = root / "releases"
+        selected = current.resolve(strict=True)
+        if (releases.is_symlink() or selected.parent != releases
+                or not selected.is_dir()):
+            raise RuntimeError("daemon current escapes its persistent releases")
+        if sys.platform.startswith("linux") and filesystem(selected) in {"tmpfs", "ramfs"}:
+            raise RuntimeError("selected daemon release is RAM-backed")
+        relative = os.path.relpath(selected, root)
+        if os.readlink(current) == relative:
+            return
+        # Native start rewrites current through the card's /run package link.
+        # Keep that exact release, under the SAME native updater lock, and
+        # atomically replace only the alias. No payload is selected or removed.
+        with tempfile.TemporaryDirectory(prefix=".current-", dir=durable) as temp:
+            staged = Path(temp) / "current"
+            staged.symlink_to(relative, target_is_directory=True)
+            after = current.lstat()
+            if (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns):
+                raise RuntimeError("daemon current changed during stabilization")
+            staged.replace(current)
 
 
 
@@ -316,10 +358,24 @@ def migrate_stopped(home: Path, durable: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", required=True, type=Path)
-    parser.add_argument("--migrate-stopped", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--migrate-stopped", action="store_true")
+    mode.add_argument("--run", action="store_true",
+                      help="retain a persistent current pointer after the readiness command")
     parser.add_argument("--durable", required=True, type=Path)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if bool(command) != args.run:
+        parser.error("--run requires a command after --")
     try:
+        if args.run:
+            prepare(args.home, args.durable)
+            try:
+                return subprocess.run(command, check=False).returncode
+            finally:
+                # A failed start can also leave an absolute runtime pointer.
+                prepare(args.home, args.durable)
         (migrate_stopped if args.migrate_stopped else prepare)(args.home, args.durable)
     except (OSError, RuntimeError, ValueError) as error:
         print(f"daemon package provisioning refused: {error}", file=sys.stderr)

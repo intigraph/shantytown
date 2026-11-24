@@ -104,7 +104,10 @@ if kind=='tui': sys.exit(0 if n>=4 else 17)
         # connecting daemon and our TUI double exits, just like the incident.
         prefix, tail = line.split(f"{shlex.quote(sys.executable)} -m shantytown.codex_ready --agent fixture -- ", 1)
         start, suffix = tail.split(" && ", 1)
-        legacy = f"{prefix}({start} || {start}) && {suffix}"
+        # The package-custody wrapper executes argv, so shell operators belong
+        # inside an explicit shell child rather than after its --run delimiter.
+        legacy_starts = shlex.quote(f"{start} || {start}")
+        legacy = f"{prefix}sh -c {legacy_starts} && {suffix}"
         old = subprocess.run(["sh", "-c", legacy], capture_output=True, text=True, timeout=8)
         assert old.returncode == 17
         assert [json.loads(x)['kind'] for x in log.read_text().splitlines()] == [
