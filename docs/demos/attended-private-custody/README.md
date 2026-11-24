@@ -1,8 +1,10 @@
 # Separate attended custody admission
 
 The same local probe runs against bridge revision
-`7731c3ccf25d04a59198fcde00291281aad4cb20` and the attended-contract source
-introduced by this change. Before: no separately configured attended custody
+`7731c3ccf25d04a59198fcde00291281aad4cb20` and attended-contract source
+`e5c03b9e017e9613fedca8eac7cbcaa2bc59561f`, rebased without code changes as
+`e89431bbaaf292869bdc2f9c02ec6c808d4ebb67` onto the landed bridge. Before:
+no separately configured attended custody
 admission. After: an explicit current UID and private 0700 directories admit;
 a different UID and a group-writable intent directory each refuse.
 
