@@ -18,7 +18,7 @@ import stat
 import sys
 
 from .actor_identity import IdentityError
-from . import job_review
+from . import job_review, gate_verdict
 from .recruit_store import _directory
 
 MAX_BYTES = 16384
@@ -41,7 +41,8 @@ def _unique(pairs):
 
 
 def _candidate(value):
-    if (not isinstance(value, dict) or set(value) != _FIELDS
+    if (not isinstance(value, dict) or set(value) not in (_FIELDS, _FIELDS | {'report_path'})
+            or ('report_path' in value and value['report_path'] != 'attended')
             or any(not isinstance(v, str) or not v or len(v) > 2048
                    for k, v in value.items() if k != 'pr')
             or type(value['pr']) is not int or value['pr'] <= 0
@@ -49,7 +50,12 @@ def _candidate(value):
             or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value['repo'])
             or not re.fullmatch('[0-9a-f]{40}', value['head'])):
         raise IdentityError('enqueue candidate identity refused')
-    return hashlib.sha256(_bytes(value)).hexdigest()
+    # Attended report signing predates custody and can produce a new timestamp
+    # after a crash. A fresh signature is not a fresh enqueue budget for the
+    # same job/PR/head. Protected candidates keep their existing exact identity.
+    identity = ({k: v for k, v in value.items() if k != 'record'}
+                if value.get('report_path') == 'attended' else value)
+    return hashlib.sha256(_bytes(identity)).hexdigest()
 
 
 def _checked(value, key):
@@ -145,6 +151,48 @@ class Store:
         policy, _ = job_review.policy(spec)
         candidate = {k: policy[k] for k in ('repo', 'pr', 'pr_node', 'head', 'signer', 'graph')}
         candidate.update(authority=authority, reviewer=spec['principal'], record=message['review']['record'])
+        return self._retain(candidate)
+
+    def retain_attended(self, rec, message, policy, *, quipu=None, gh=None):
+        """Reverify an attended controller-signed verdict; never model a job UID.
+
+        The caller has already established its job identity in the report CLI.
+        Fresh forge identity and the configured pinned signer are independent
+        of the review's supplied head and summary.
+        """
+        from . import ephemeral
+        if (not ephemeral.attended_review(rec) or rec.get('state') != ephemeral.LIVE
+                or message.get('verdict') != 'approve'
+                or not re.fullmatch('[0-9a-f]{40}', rec.get('head') or '')
+                or rec['head'] != message.get('head')):
+            raise IdentityError('attended review report/head binding unproved')
+        if gh is None:
+            from .cli import _gh_json
+            gh = _gh_json
+        info = gh(f"repos/{rec['repo']}/pulls/{rec['pr']}")
+        if (info.get('number') != rec['pr'] or info.get('state') != 'open'
+                or info.get('head', {}).get('sha') != rec['head']
+                or info.get('base', {}).get('repo', {}).get('full_name') != rec['repo']
+                or not isinstance(info.get('node_id'), str) or not info['node_id']):
+            raise IdentityError('attended forge PR/node/head binding unproved')
+        signer = message.get('signer')
+        graph = policy.verdict_graph
+        signers = gate_verdict.trusted_signers()
+        if not graph or not isinstance(signer, str) or signer not in signers:
+            raise IdentityError('attended verdict signer unpinned or graph absent')
+        result = gate_verdict.approval(quipu or job_review.connection(),
+            repo=rec['repo'], pr=rec['pr'], node_id=info['node_id'], head=rec['head'],
+            graph=graph, signers={signer: signers[signer]})
+        approvals = [r for r in result.get('approvals', [])
+                     if r.get('by') == rec['name'].lower()]
+        if result.get('approved') is not True or len(approvals) != 1:
+            raise IdentityError('attended independently signed APPROVE unproved')
+        candidate = dict(authority='https://github.com', repo=rec['repo'], pr=rec['pr'],
+            pr_node=info['node_id'], head=rec['head'], reviewer=rec['name'],
+            record=approvals[0]['record'], signer=signer, graph=graph, report_path='attended')
+        return self._retain(candidate)
+
+    def _retain(self, candidate):
         key = _candidate(candidate)
         with self._locked():
             old = self._read(key)
@@ -230,18 +278,20 @@ class EnqueueAction:
         return result['state'], result['receipt']
 
 
-def report(root, rec, spec, message, policy, *, quipu=None, action=None):
+def report(root, rec, spec, message, policy, *, quipu=None, action=None, gh=None):
     """Controller-only report handoff, before job teardown. OFF costs no reads."""
     if not policy.review_enqueue_enabled or message.get('verdict') != 'approve':
         return None
-    if (rec.get('job') != 'review' or rec.get('name') != spec['principal']
+    if spec is not None and (rec.get('job') != 'review' or rec.get('name') != spec['principal']
             or spec.get('controller_root') != str(Path(root).resolve())
             or spec.get('controller_uid') != os.geteuid()
             or any(rec.get(k) != spec['review'][k] for k in ('repo', 'pr', 'head'))):
         raise IdentityError('enqueue report/controller binding unproved')
     adapter = action or EnqueueAction(policy.review_enqueue_command)
     with Store(root) as store:
-        intent = store.retain('https://github.com', spec, message, quipu=quipu)
+        intent = (store.retain('https://github.com', spec, message, quipu=quipu)
+                  if spec is not None else
+                  store.retain_attended(rec, message, policy, quipu=quipu, gh=gh))
         if intent['state'] != 'pending':
             return intent
         attempt = store.begin(intent['id'])
