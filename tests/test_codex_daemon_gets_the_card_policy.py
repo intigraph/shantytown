@@ -68,3 +68,42 @@ def test_an_ORDINARY_card_leaves_the_sandbox_exactly_as_it_was(tmp_path):
     assert "--dangerously-bypass-approvals-and-sandbox" not in launch
     # and the daemon still starts, unchanged
     assert "codex remote-control start --json" in launch
+
+
+def test_an_attended_TASK_JOB_daemon_gets_its_narrow_profile(tmp_path, monkeypatch, request):
+    """aegis-za4f D1/D2. MEASURED 2026-11-25, codex-cli 0.161.0, `codex sandbox`:
+
+        workspace-write                      -> DNS-FAIL, ledger RO, git dir RO
+        + network_access + exact roots       -> DNS-OK, ledger OK, git dir OK;
+                                                $HOME, st state, seeds config RO
+
+    The spawner writes the profile into the job's own daemon home; the daemon
+    start line must carry it, and still never danger-full-access.
+    """
+    from shantytown import ephemeral as eph
+    from shantytown.codex_daemon import runtime_home
+    import tempfile
+    run = Path(tempfile.mkdtemp(prefix="st-", dir="/tmp"))  # socket path ceiling
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    import shutil
+    request.addfinalizer(lambda: shutil.rmtree(run, True))
+    name = "eph-task-a1b2c3"
+    rec = dict(job="task", harness="codex", name=name)
+    eph.write_codex_job_sandbox(rec, runtime_home(name), unattended=False,
+                                cache_home=tmp_path / "cache")
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text('[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    managed = cfg.parent / "packages" / "standalone" / "current" / "codex"
+    managed.parent.mkdir(parents=True)
+    managed.write_text("")
+    launch = CODEX.launch(Agent(name=name, role="worker", workspace=str(tmp_path / "w")),
+                          str(cfg), root=root)
+    assert "remote-control start -c 'sandbox_mode=\"workspace-write\"'" in launch
+    assert "sandbox_workspace_write.network_access=true" in launch
+    assert "read-budget-v1" in launch
+    assert "danger-full-access" not in launch and "approval_policy" not in launch
+    # A crew card in the same runtime dir still reads nothing.
+    (tmp_path / "crew").mkdir()
+    assert "sandbox_workspace_write" not in _launch(tmp_path / "crew", dangerous=False)

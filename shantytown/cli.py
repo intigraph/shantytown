@@ -4294,6 +4294,13 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                     raise eph.Refused('attended review launch PR/head binding unproved')
                 rec['head'] = head
             shared = _spawn_checkout(rec)
+            if rec["job"] == "task" and rec.get("repo") and shared is None and not uid_launch:
+                # aegis-za4f D4: a named repo that resolves no checkout used to
+                # fall back to a scratch dir silently, so a task job had no
+                # source to edit and could only report blocked. Refuse instead.
+                raise eph.Refused(f"--repo {rec['repo']} resolved no local checkout to cut "
+                                  "the job's worktree from; pass --checkout <path> or clone "
+                                  "it first. Not falling back to a scratch dir.")
             if a.dry_run:
                 if recruiter_scope is not None and a.json:
                     print(json.dumps({'schema': 'shantytown.recruitment-plan/v1', 'live': False,
@@ -4329,6 +4336,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 rules = eph.write_codex_job_rules(rec, runtime_home(rec["name"]),
                                                   unattended=unattended)
                 rec["codex_rules"] = str(rules) if rules else None
+                sandbox = eph.write_codex_job_sandbox(rec, runtime_home(rec["name"]),
+                                                      unattended=unattended)
+                rec["codex_sandbox"] = str(sandbox) if sandbox else None
             # What the trust guard compares against (aegis-e579): the exact base
             # commit the worktree was cut from, and the settings st just wrote.
             rec["kit_settings_sha256"] = eph.kit_settings_sha256(written)
@@ -5180,6 +5190,15 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         except ProvisionError as e:
             print(f"  refused: {e}", file=sys.stderr)
             return REFUSED
+        if not servers and _eph.is_ephemeral_name(card.name):
+            # aegis-za4f D3: a task job with no MCP kit cannot query Quipu or
+            # search code, and looks healthy on every surface. Refuse it.
+            _job = (_eph.read(a.root, card.name) or {}).get("job")
+            if _job == "task":
+                print(f"  refused: {card.name}: task job resolved NO MCP servers "
+                      f"(template {prov_mod.provision_dir(a.root)}; check "
+                      "[ephemeral.jobs.task] mcp_servers)", file=sys.stderr)
+                return REFUSED
         if servers:
             # Say what it CAN reach, parsed back out of the file we wrote — "the file
             # is there" was true for every broken render.

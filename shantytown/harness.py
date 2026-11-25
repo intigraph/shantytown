@@ -1207,6 +1207,15 @@ class CodexHarness:
             if card.dangerous:
                 daemon_sandbox = ("-c sandbox_mode=\"danger-full-access\" "
                                   "-c approval_policy=\"never\" ")
+            else:
+                # An attended ephemeral TASK job's narrow profile (aegis-za4f
+                # D1/D2): workspace-write plus network and exact writable
+                # roots, written by the spawner into this card's own daemon
+                # home. Every other card reads nothing here.
+                from .ephemeral import codex_daemon_sandbox_args
+                job_args = codex_daemon_sandbox_args(card.name, daemon_home)
+                if job_args:
+                    daemon_sandbox = " ".join(shlex.quote(x) for x in job_args) + " "
 
             # Start is idempotent for THIS card, then attach its TUI to its Unix
             # socket. The per-card identity prefix is load-bearing: it is the

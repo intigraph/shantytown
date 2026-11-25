@@ -311,14 +311,17 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         if refusal := lane_refusal(root, req.repo, policy.merge_spacing_minutes, now):
             raise Refused(refusal)
     name = name or new_name(req.job)
+    bounds = (getattr(policy, "limits", {}) or {}).get(req.job, {})
+    lifetime = bounds.get("lifetime_minutes", policy.lifetime_minutes)
+    max_turns = bounds.get("max_turns", policy.max_turns)
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
         "pr": req.pr, "checkout": req.checkout, "harness": harness_for(req, policy),
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
         "host": host, "spawned_at": now,
-        "deadline": now + policy.lifetime_minutes * 60,
-        "max_turns": policy.max_turns, "max_context_k": policy.max_context_k,
+        "deadline": now + lifetime * 60,
+        "max_turns": max_turns, "max_context_k": policy.max_context_k,
         "turns": 0, "state": LAUNCHING, "attempt": attempt, "retry_of": retry_of,
         "workspace": None, "worktree_of": None, "result": None,
     }
@@ -378,6 +381,18 @@ def attended_settings(rec: dict, *, unattended: bool) -> dict | None:
 _CODEX_FORBID = (("git",), ("gh", "pr", "comment"), ("gh", "pr", "merge"),
                  ("gh", "pr", "review"), ("gh", "api"), ("gh", "pr", "edit"))
 CODEX_RULES_FILE = "st-job.rules"
+#: A task job edits, commits and pushes ITS OWN branch, so it gets git
+#: (aegis-za4f D1). It still never pushes the base branch or rewrites history:
+#: these fail at once. A prefix rule cannot see every spelling of a refspec, so
+#: branch protection on the forge remains the boundary for main; these rules
+#: make the obvious forms fail loudly instead of reaching it.
+_CODEX_TASK_FORBID = (("git", "push", ["--force", "-f", "--force-with-lease", "--mirror",
+                                        "--delete", "-d"]),
+                      ("git", "push", "origin", ["main", "HEAD:main", "master", "HEAD:master",
+                                                 "+main", "+HEAD:main"]),
+                      ("git", ["reset", "rebase", "filter-branch", "filter-repo"]),
+                      ("gh", "pr", "comment"), ("gh", "pr", "merge"), ("gh", "pr", "review"),
+                      ("gh", "api"), ("gh", "pr", "edit"))
 
 
 def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
@@ -407,7 +422,7 @@ def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
                      "decision=\"allow\", justification=\"st job: guarded merge\")")
     lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--report\"], "
                  "decision=\"allow\", justification=\"st job: report its verdict\")")
-    for pattern in _CODEX_FORBID:
+    for pattern in (_CODEX_TASK_FORBID if rec["job"] == "task" else _CODEX_FORBID):
         lines.append(f"prefix_rule(pattern={q(list(pattern))}, decision=\"forbidden\", "
                      "justification=\"st job: not part of this job\")")
     return "\n".join(lines) + "\n"
@@ -637,6 +652,101 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
     return ""
 
 
+CODEX_SANDBOX_FILE = "st-job-sandbox.json"
+
+
+def codex_job_sandbox(rec: dict, *, unattended: bool, cache_home: Path | None = None) -> list | None:
+    """The daemon `-c` overrides an attended Codex TASK job needs (aegis-za4f D1/D2).
+
+    A job card is not `dangerous`, so its daemon keeps Codex's workspace-write
+    sandbox. MEASURED 2026-11-25 with `codex sandbox` (codex-cli 0.161.0):
+    workspace-write alone gives DNS-FAIL to the tracker and Quipu, a read-only
+    Quipu read-budget ledger, and a read-only git common dir, so the job can
+    neither read its item, query Quipu nor commit. Adding network access and
+    exactly these writable roots gives DNS-OK, LEDGER-OK and GITDIR-OK while
+    $HOME, st's own state and the seeds config stay read-only. It is the narrow
+    profile, never danger-full-access.
+
+    Writable roots: the read-budget ledger (quipu_read_budget.py) and the git
+    common dir of the checkout the job's worktree was cut from (a worktree's
+    index, refs and objects live there, outside the worktree itself).
+    Review, merge and triage keep the sandbox unchanged.
+    """
+    if unattended or rec.get("harness") != "codex" or rec.get("uid_binding"):
+        return None
+    if rec.get("job") != "task":
+        return None
+    cache = Path(cache_home or os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    roots = [str((cache / "shantytown" / "read-budget-v1").absolute())]
+    if rec.get("worktree_of"):
+        common = _git("rev-parse", "--path-format=absolute", "--git-common-dir",
+                      cwd=rec["worktree_of"])
+        if common.returncode != 0 or not common.stdout.strip():
+            raise Refused(f"cannot resolve the git dir of {rec['worktree_of']} for the job sandbox")
+        roots.append(common.stdout.strip())
+    return ["-c", 'sandbox_mode="workspace-write"',
+            "-c", "sandbox_workspace_write.network_access=true",
+            "-c", "sandbox_workspace_write.writable_roots=" + json.dumps(roots)]
+
+
+def write_codex_job_sandbox(rec: dict, home: Path, *, unattended: bool,
+                            cache_home: Path | None = None) -> Path | None:
+    """Write the job's daemon sandbox overrides into its own daemon home.
+
+    The daemon start line reads them (codex_daemon_sandbox_args). Same custody
+    as the rules file: the job's own home, never through a symlink, never over
+    different content. The read-budget ledger dir is created owner-only so its
+    first write inside the sandbox does not depend on a parent being writable.
+    """
+    args = codex_job_sandbox(rec, unattended=unattended, cache_home=cache_home)
+    if args is None:
+        return None
+    cache = Path(cache_home or os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    (cache / "shantytown" / "read-budget-v1").mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = Path(home) / CODEX_SANDBOX_FILE
+    for p in (Path(home), path):
+        if p.is_symlink():
+            raise Refused(f"{p} is a symlink; refusing to write the job sandbox through it")
+    body = json.dumps({"schema": "st-job-sandbox/v1", "name": rec["name"], "args": args},
+                      indent=2, sort_keys=True) + "\n"
+    if path.exists():
+        if path.read_text() == body:
+            return path
+        raise Refused(f"{path} already exists with another sandbox; not widening a job's permissions")
+    Path(home).mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(body)
+    return path
+
+
+_SANDBOX_ARG = re.compile(r'sandbox_mode="workspace-write"|sandbox_workspace_write\.network_access=true'
+                          r'|sandbox_workspace_write\.writable_roots=\[.*\]')
+
+
+def codex_daemon_sandbox_args(name: str, home: Path) -> list:
+    """The job's recorded daemon overrides, or [] for every other card.
+
+    Only an ephemeral card reads the file, and only the three exact keys pass:
+    a tampered file can never select danger-full-access or an approval policy.
+    """
+    if not is_ephemeral_name(name):
+        return []
+    path = Path(home) / CODEX_SANDBOX_FILE
+    if not path.is_file() or path.is_symlink():
+        return []
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        raise Refused(f"{path} is unreadable; refusing to guess the job sandbox") from None
+    args = data.get("args") if isinstance(data, dict) else None
+    if (data.get("name") != name or not isinstance(args, list) or len(args) % 2
+            or any(args[i] != "-c" or not isinstance(args[i + 1], str)
+                   or not _SANDBOX_ARG.fullmatch(args[i + 1]) for i in range(0, len(args), 2))):
+        raise Refused(f"{path} is not an st job sandbox; refusing to launch with it")
+    return args
+
+
 def _codex_config(settings_path) -> Path:
     path = Path(settings_path)
     from . import codex
@@ -769,6 +879,7 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
    not a reason to request broader credentials or try an unrelated tool.
 4. Report --verdict done with the diagnosis and evidence, or blocked with the exact missing evidence.""",
     "task": """JOB: do {item}'s acceptance criteria. Read it with `st work item show {item}`.
+{source}
 Commit on your own branch; open a PR if code changed (`st repo pr`). Never push to main.
 Report --verdict done with what changed and the PR link, or blocked.""",
 }
@@ -819,7 +930,11 @@ def _item_block(rec: dict) -> str:
 def prompt(rec: dict) -> str:
     target = f" — {rec['repo']}#{rec['pr']}" if rec.get("repo") and rec.get("pr") else (
         f" — {rec['repo']}" if rec.get("repo") else "")
-    fields = dict(rec, target=target, target_short=target,
+    source = (f"Your worktree is a checkout of {rec['repo'] or rec.get('worktree_of')}; edit source there."
+              if rec.get("worktree_of") else
+              "You have NO source worktree (a scratch dir). If the work needs code, report "
+              "--verdict blocked naming the repo; never edit another checkout.")
+    fields = dict(rec, target=target, target_short=target, source=source,
                   verdicts="|".join(job_verdicts(rec)),
                   deadline=time.strftime("%Y-%m-%dT%H:%M", time.gmtime(rec["deadline"])))
     # Protected jobs must never inherit the attended triage prompt's permission

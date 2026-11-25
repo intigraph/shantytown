@@ -166,6 +166,11 @@ class Ephemeral:
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
     jobs: dict = field(default_factory=dict)
+    # aegis-za4f D5: per-job-type bounds, {job: {"lifetime_minutes": n,
+    # "max_turns": n}}. A job type with no entry keeps the global bounds above,
+    # so a review keeps its short timebox while a task job can get enough turns
+    # to read, edit, test and open a PR.
+    limits: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
     verdict_graph: str = ""         # registered committed graph IRI for the records
@@ -1199,7 +1204,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
-                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs",
+                   "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
@@ -1267,6 +1272,22 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     if not isinstance(release, list) or not all(isinstance(x, str) and x for x in release):
         raise ConfigError(f"{path}: ephemeral.lane_release must be a list of strings")
     values["lane_release"] = tuple(release)
+    limits = tbl.get("limits", {})
+    if not isinstance(limits, dict):
+        raise ConfigError(f"{path}: [ephemeral.limits] must be a table")
+    _refuse_unknown(path, "ephemeral.limits", limits, set(EPHEMERAL_JOBS))
+    parsed_limits = {}
+    for job, bounds in limits.items():
+        if not isinstance(bounds, dict):
+            raise ConfigError(f"{path}: [ephemeral.limits.{job}] must be a table")
+        _refuse_unknown(path, f"ephemeral.limits.{job}", bounds,
+                        {"lifetime_minutes", "max_turns"})
+        for key, value in bounds.items():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ConfigError(f"{path}: ephemeral.limits.{job}.{key} must be an "
+                                  f"integer >= 1, got {value!r}")
+        parsed_limits[job] = dict(bounds)
+    values["limits"] = parsed_limits
     from .job_tools import validate_job_servers, validate_specs
     try:
         jobs = validate_specs(tbl.get("jobs", {}), EPHEMERAL_JOBS,

@@ -1494,3 +1494,34 @@ def test_settings_retirement_retains_uncertain_paths(tmp_path, obstacle):
         path.with_name(path.name + '.retired').write_text('previous')
     assert eph.retire_settings(tmp_path, rec).startswith('kept (')
     assert path.read_text() == 'original'
+
+
+def test_a_codex_task_job_gets_its_sandbox_profile_at_spawn(codex_store, monkeypatch, tmp_path):
+    """aegis-za4f D1/D2: the spawner writes the narrow daemon profile into the
+    job's own daemon home before launch, and records where."""
+    import tempfile, shutil
+    run = Path(tempfile.mkdtemp(prefix="st-", dir="/tmp"))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    try:
+        root, _panes, launched, _cfg, _seen = codex_store
+        assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+        (rec,) = eph.records(root)
+        from shantytown.codex_daemon import runtime_home
+        assert rec["codex_sandbox"] == str(runtime_home(rec["name"]) / eph.CODEX_SANDBOX_FILE)
+        args = eph.codex_daemon_sandbox_args(rec["name"], runtime_home(rec["name"]))
+        assert "sandbox_workspace_write.network_access=true" in args
+        assert not any("danger-full-access" in x for x in args)
+    finally:
+        shutil.rmtree(run, True)
+
+
+def test_a_task_job_whose_repo_resolves_no_checkout_is_refused_not_scratch(store, monkeypatch, capsys):
+    """aegis-za4f D4: a named repo with no local checkout used to fall back to a
+    scratch dir silently; the task job then had no source to edit."""
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: root / "no-such-checkout")
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1",
+               "--repo", "o/n") == cli.REFUSED
+    assert "resolved no local checkout" in capsys.readouterr().err
+    assert launched == [] and eph.records(root) == []

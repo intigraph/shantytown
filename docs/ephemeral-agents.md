@@ -213,7 +213,35 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 
 [ephemeral.harness_by_job]
 review = "codex"
+
+# Per-job-type bounds (aegis-za4f). A job type without an entry keeps the
+# global lifetime_minutes / max_turns above.
+[ephemeral.limits.task]
+lifetime_minutes = 90
+max_turns = 40
 ```
+
+### Attended Codex task jobs
+
+A task job edits source, so it needs more than a review's sandbox:
+
+- **Worktree.** `--repo owner/name` (or `--checkout <path>`) cuts the job's
+  worktree from that checkout. A task job whose named repo resolves no local
+  checkout is refused; it never falls back to a scratch dir. A task job with
+  no repo at all still gets a scratch dir, and its prompt says it has no source.
+- **Sandbox.** The job card is not `dangerous`, so its Codex daemon keeps
+  `workspace-write`. That alone has no DNS (no tracker or Quipu), a read-only
+  Quipu read-budget ledger and a read-only git common dir. The spawner writes
+  `st-job-sandbox.json` into the job's own daemon home. The daemon then starts
+  with `network_access=true` and exactly two writable roots: the read-budget
+  ledger and the git common dir of the source checkout. It never gets
+  `danger-full-access`. A tampered file refuses the launch.
+- **git.** Task jobs may run git on their own branch. Pushing main/master,
+  force pushes, branch deletion, reset, rebase, and `gh pr merge`/`gh api` are
+  exec-policy `forbidden`. Branch protection on the forge stays the boundary
+  for main.
+- **Kit.** A task job whose JobSpec resolves no MCP servers is refused at
+  launch, so it cannot run without Quipu or code search.
 
 `require_verified_identity` defaults to false while hosts migrate. In this
 compatibility mode, an administrator's environment identity or a human shell
