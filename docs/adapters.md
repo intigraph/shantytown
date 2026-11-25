@@ -428,6 +428,13 @@ admission tier; fresh/read-consistency requirements still apply.
 
 ### Owner-read cache consistency
 
+Complete owner displays have a separate invalidation generation from generic
+stale reads. A successful native `sd msg send` or `sd msg read` invalidates
+generic and mailbox observations while preserving the bounded board-owner
+display: message windows are outside that board. Board writes, unknown commands,
+failed commands and uncertain outcomes invalidate both generations. This does
+not change display TTLs, owner/graph/flag keys or exact admission reads.
+
 The optional Seeds read cache holds publication locks only while checking or
 publishing local entries. HTTP requests run outside those locks. Exact,
 projection, snapshot and direct reads retain their existing execution paths.
@@ -452,7 +459,7 @@ Ordinary anchor and crew plate presentation explicitly enter the owner-display
 scope. Complete native owner projections in that scope share one host-local
 bounded-staleness observation, including the fused roster shape guard. Keys
 include the endpoint, graph, owner/roster, all projection options and `ST_`
-configuration. Own writes invalidate the observation and prevent publication
+configuration. Affecting board or uncertain writes invalidate the observation and prevent publication
 of an overlapping fetch. Incomplete projections retain their caveat and never
 become successful cached empty plates. Custom injected shape guards execute live.
 

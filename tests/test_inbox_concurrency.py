@@ -1,4 +1,4 @@
-"""Private CAS-contending tracker controls; never calls a live SDK or pane."""
+"""Private CAS controls; native SDK cases use explicit temporary stores."""
 import json
 import subprocess
 import threading
@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from shantytown.inbox import TrackerInbox, FilesInbox
+from shantytown.inbox import TrackerInbox, FilesInbox, MessageGraphInbox
 from shantytown.protocols import WorkItem
 from shantytown.sd import SdTracker
 
@@ -171,13 +171,6 @@ def test_native_seeds_keyed_receipt_replay_after_ack_and_collision(tmp_path):
                    check=True, capture_output=True, text=True)
     tracker = SdTracker(repo=str(project), store=str(store), prefix='test')
     box = TrackerInbox(tracker, lambda: [])
-    with ThreadPoolExecutor(max_workers=12) as pool:
-        messages = list(pool.map(lambda i: box.deliver_once(
-            f'worker{i}', 'native private concurrency', 'native-broadcast', frm='sender'), range(12)))
-    assert len({m.id for m in messages}) == 12
-    for i, message in enumerate(messages):
-        again = box.deliver_once(f'worker{i}', 'native private concurrency', 'native-broadcast', frm='sender')
-        assert again.id == message.id
     first = box.deliver_once('worker', 'native private fixture', 'native-operation', frm='sender')
     tracker.update(first.id, status='closed')
     second = box.deliver_once('worker', 'native private fixture', 'native-operation', frm='sender')
@@ -185,6 +178,39 @@ def test_native_seeds_keyed_receipt_replay_after_ack_and_collision(tmp_path):
     with pytest.raises(RuntimeError, match='receipt|identity|content'):
         box.deliver_once('worker', 'changed', 'native-operation', frm='sender')
     assert tracker.get(first.id).title == 'inbox: native private fixture'
+
+
+@pytest.mark.real_store
+def test_native_window_explicit_recipient_keys_replay_after_ack(tmp_path):
+    import shutil
+    binary = shutil.which('sd')
+    if binary is None:
+        pytest.skip('native sd is unavailable')
+    project = tmp_path / 'project'
+    project.mkdir()
+    store = tmp_path / 'board.db'
+    subprocess.run([binary, 'init', '--prefix', 'test'], cwd=project,
+                   check=True, capture_output=True, text=True)
+    subprocess.run([binary, '--store', str(store), 'create', 'private bootstrap'], cwd=project,
+                   check=True, capture_output=True, text=True)
+    tracker = SdTracker(repo=str(project), store=str(store), prefix='test')
+    box = MessageGraphInbox(TrackerInbox(tracker, lambda: []), tracker)
+    # Identical mail belongs in message windows, not twelve near-duplicate work
+    # items. Native delivery keys are global: declare the distinct recipient
+    # operations up front, never replace a key after a refused send.
+    box.deliver_once('bootstrap', 'private message schema', 'native-warmup', frm='sender')
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        messages = list(pool.map(lambda i: box.deliver_once(
+            f'worker{i}', 'native private concurrency', f'native-broadcast-{i}', frm='sender'), range(12)))
+    assert len({m.id for m in messages}) == 12
+    for i, message in enumerate(messages):
+        again = box.deliver_once(f'worker{i}', 'native private concurrency', f'native-broadcast-{i}', frm='sender')
+        assert again.id == message.id
+    box.mark_read('worker0', [messages[0].id])
+    again = box.deliver_once('worker0', 'native private concurrency', 'native-broadcast-0', frm='sender')
+    assert again.id == messages[0].id and again.read
+    with pytest.raises(RuntimeError, match='CONFLICT'):
+        box.deliver_once('another-recipient', 'native private concurrency', 'native-broadcast-0', frm='sender')
 
 
 def test_receipt_readback_timeout_after_committed_create_never_resends():

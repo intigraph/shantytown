@@ -59,7 +59,7 @@ def shared_owner_display(shape_type):
                 return value
 
             def lookup():
-                return cache.stale_lookup(parts, validate)
+                return cache.stale_lookup(parts, validate, owner_display=True)
 
             hit, publish = lookup()
             if hit is None and publish is None:
