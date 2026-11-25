@@ -305,18 +305,47 @@ def owner_shape_supported(proof, agent: str | tuple[str, ...], *, timeout: int =
         proof, "ASK { " + " UNION ".join(branches) + " }", timeout)["result"]
 
 
+def _candidate_tail(only_specs: bool, messages_only: bool, include_messages: bool) -> str:
+    """Spec and message restrictions shared by every candidate arm."""
+    return ((f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
+            + (f"?s <{SCHEMA}name> ?title . "
+               f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
+               if messages_only else "" if include_messages else
+               f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
+               f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} "))
+
+
+def _owner_terms(agent: str) -> list[str]:
+    """Wire spellings of one owner: full and short name, literal and principal IRI."""
+    return [term for owner in dict.fromkeys((agent, agent.split("/")[-1]))
+            for term in (json.dumps(owner),
+                         _iri(SEEDS + "principal/" + quote(owner, safe="")))]
+
+
 def _unsupported_owner_branches(proof, agent):
     """The same counterexample relation for standalone and inbox admission."""
     if isinstance(agent, tuple):
         clauses = [_feed_owner_clause(agent)] if agent else []
     else:
         clauses = [f"?s <{SCHEMA}agent> {term} . "
-                   for owner in dict.fromkeys((agent, agent.split("/")[-1]))
-                   for term in (json.dumps(owner),
-                                _iri(SEEDS + "principal/" + quote(owner, safe="")))]
+                   for term in _owner_terms(agent)]
     if not clauses:
         return []
     known = '("open", "hooked", "in_progress", "blocked", "deferred", "closed", "tombstone")'
+    if not isinstance(agent, tuple):
+        # aegis-ygz F1: one arm per graph. The owner spellings bind through
+        # VALUES, and the two refusal conditions (an unknown status with no
+        # known one, or no plain status at all) are one condition: no plain
+        # known status. Both consumers are existential (ASK, any problem row),
+        # so the set is what matters; the old per-spelling, per-condition UNION
+        # arms cost the reader one scan of every owner item per arm.
+        owners = " ".join(_owner_terms(agent))
+        return [f"{{ GRAPH {_iri(graph)} {{ VALUES ?o {{ {owners} }} "
+                f"?s <{SCHEMA}agent> ?o . "
+                f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                f"FILTER NOT EXISTS {{ ?s <{SEEDS}ontology/status> ?good . "
+                f"FILTER(isLiteral(?good) && sameTerm(?good, STR(?good)) && ?good IN {known}) }} }} }}"
+                for graph in (proof.graph, proof.graph + "#seeds-ephemeral")]
     branches = []
     for graph in (proof.graph, proof.graph + "#seeds-ephemeral"):
         for clause in clauses:
@@ -334,25 +363,17 @@ def _unsupported_owner_branches(proof, agent):
                  f"FILTER(isLiteral(?any) && sameTerm(?any, STR(?any))) }} ",
                  True),
             ):
-                if isinstance(agent, tuple):
-                    # Admit bad states before joining variable roster owners.
-                    # The typed absence arm can use Quipu's indexed anti-join;
-                    # the other arm need not check types for every known state.
-                    # Only the typed arm is DISTINCT (FILTER EXISTS semantics).
-                    projection = "DISTINCT ?s" if missing_plain else "?s ?bad"
-                    type_check = "" if missing_plain else f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
-                    branches.append(
-                        f"{{ GRAPH {_iri(graph)} {{ "
-                        f"{{ SELECT {projection} WHERE {{ {candidate} }} }} "
-                        f"{clause}{type_check} }} }}")
-                    continue
-                # Keep the bound owner and status test in one relation. A
-                # type BGP or nested candidate group may materialize the whole
-                # Action class before applying that owner restriction.
-                candidate = candidate.replace(f"?s a <{SCHEMA}Action> . ", "")
-                branches.append(f"{{ GRAPH {_iri(graph)} {{ {clause} "
-                                f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
-                                f"{candidate} }} }}")
+                # Roster owners only (exact owners returned above). Admit bad
+                # states before joining variable roster owners. The typed
+                # absence arm can use Quipu's indexed anti-join; the other arm
+                # need not check types for every known state. Only the typed
+                # arm is DISTINCT (FILTER EXISTS semantics).
+                projection = "DISTINCT ?s" if missing_plain else "?s ?bad"
+                type_check = "" if missing_plain else f"FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                branches.append(
+                    f"{{ GRAPH {_iri(graph)} {{ "
+                    f"{{ SELECT {projection} WHERE {{ {candidate} }} }} "
+                    f"{clause}{type_check} }} }}")
     return branches
 
 
@@ -536,6 +557,20 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                 )
             if feed_owners is not None:
                 terms = [None] if feed_owners else []
+            if terms and None not in terms:
+                # aegis-ygz F1: exact owners bind every spelling and status
+                # through VALUES in one arm per graph. The solution bag is the
+                # same as one arm per (spelling, status); the reader paid one
+                # pass per arm, which put the plate past its 999ms deadline.
+                owner_clause = (f"VALUES ?o {{ {' '.join(terms)} }} ?s <{SCHEMA}agent> ?o . "
+                                f"VALUES ?st {{ {' '.join(json.dumps(s) for s in statuses)} }} "
+                                f"?s <{SEEDS}ontology/status> ?st . ")
+                terms = []
+                branches.append(
+                    f"{{ GRAPH {_iri(g)} {{ {owner_clause}FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
+                    + _candidate_tail(only_specs, messages_only, include_messages)
+                    + f"}} BIND({json.dumps(g)} AS ?graph) }}"
+                )
             for term in terms:
                 owner_clause = (_feed_owner_clause(feed_owners)
                                 if feed_owners is not None
@@ -547,12 +582,7 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     branches.append(
                         f"{{ GRAPH {_iri(g)} {{ ?s <{SEEDS}ontology/status> {status_term} . "
                         f"{owner_clause}FILTER EXISTS {{ ?s a <{SCHEMA}Action> }} "
-                        + (f"?s <{SEEDS}ontology/specVersion> ?specGeneration . " if only_specs else "")
-                        + (f"?s <{SCHEMA}name> ?title . "
-                           f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) "
-                           if messages_only else "" if include_messages else
-                         f"FILTER NOT EXISTS {{ ?s <{SCHEMA}name> ?title . "
-                         f"FILTER(REGEX(STR(?title), {MESSAGE_PATTERN})) }} ") + "} "
+                        + _candidate_tail(only_specs, messages_only, include_messages) + "} "
                         f"BIND({json.dumps(g)} AS ?graph) }}"
                     )
         if inline_owner_guard:

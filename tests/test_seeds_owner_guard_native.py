@@ -118,7 +118,16 @@ def test_absence_guard_preserves_bags_graphs_aliases_and_malformed_states(tmp_pa
                           ("worker", "worker", "other"), ("absent",), ()):
                 expected = read(reference(proof, owner))
                 actual = read(sp._unsupported_owner_branches(proof, owner))
-                assert actual == expected, owner
+                if isinstance(owner, tuple):
+                    assert actual == expected, owner
+                else:
+                    # aegis-ygz F1: an exact owner's guard is one arm per graph,
+                    # read only existentially (ASK, any problem row). The refused
+                    # subjects must be identical; UNION multiplicity is not kept.
+                    assert set(actual) == set(expected), owner
+                    assert set(actual) == {f"{graph}/{name}" for graph in (G, G + "#seeds-ephemeral")
+                                           for name in ("missing", "unknown", "number", "reference",
+                                                        "language", "two_unknown")}, owner
                 if owner == ("worker",):
                     assert actual[f"{G}/missing"] == 2  # two matching owner terms
                     assert actual[f"{G}/two_unknown"] == 4
