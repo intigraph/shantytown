@@ -8305,6 +8305,9 @@ def _cmd_anchor(a) -> int:
         return OK
     from . import crew_rules
     p.responsibilities = crew_rules.render(crew_rules.load(a.root, [p.me.role]))
+    if p.me.role == "administrator":
+        from . import orphan_directives
+        p.orphan_directives = orphan_directives.render(orphan_directives.load(a.root))
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),

@@ -100,6 +100,10 @@ class Anchoring:
     mcp_preapproved: tuple[str, ...] = ()
     decision_view: str = ""
     responsibilities: str = ""
+    # Administrator only: operator directives no work item tracks. Resolved by
+    # the CLI from a deployment-declared stored query; "" = not declared, so
+    # the section is absent rather than claiming none (orphan_directives).
+    orphan_directives: str = ""
 
     def render(self, *, now: datetime | None = None) -> str:
         L: list[str] = []
@@ -109,6 +113,9 @@ class Anchoring:
         L += [who + ".", "", "  DIRECTIVES",
               "    Check governing Directives in Quipu before acting; record new "
               "operator directives verbatim as Directive entities.", ""]
+        if self.orphan_directives:
+            L.extend(self.orphan_directives.splitlines())
+            L.append("")
 
         if self.responsibilities:
             L.extend(self.responsibilities.splitlines())

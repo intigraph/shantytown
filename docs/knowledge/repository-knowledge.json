@@ -84,7 +84,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "ddad3e27ecbbeff70d65511394a0e51d71c7516592fddfdf355be4baef484b4c",
+      "source_sha256": "7b3c2a38e1154edeac98a20329d3b9489b2556bf185cd3e84a5eb1d689924239",
       "properties": {
         "startHereOrder": 2
       }
