@@ -302,7 +302,7 @@ st work                       the item and the board
 st agent                      one agent
   new <agent>                 create an agent from a card
   spawn --ephemeral --job <review|merge|triage|task> --item <id> [--harness] [--repo R --pr N]
-                              an EPHEMERAL agent for one job, managed by the administrator:
+                              an EPHEMERAL agent for one job, managed by the administrator or a lead:
                               own worktree, deadline + turn/context budget, counted in the cap
                               and the governor, reports its verdict to the administrator and the
                               item, then is torn down. --list · --stop NAME · --retry NAME ·

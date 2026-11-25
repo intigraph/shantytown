@@ -2,9 +2,10 @@
 
 `st agent spawn --ephemeral` starts a short-lived, supervised agent for one job:
 review a PR, merge a PR, triage a red CI run, or do one small task. The
-administrator manages these agents, and they report back to it. This is step 3
+administrator or a lead manages these agents, and they report back to the
+administrator. This is step 3
 of the GitHub → quipu → chaski → st pipeline (aegis-c01c). chaski's routing
-rules call this command; the administrator can also run it by hand.
+rules call this command; the administrator or a lead can also run it by hand.
 
 ## Why polecats were retired, and what is different here
 
@@ -15,7 +16,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 
 | Gap                         | Rule here |
 |-----------------------------|-----------|
-| No owner                    | The card's `reports_to` is the administrator, and only the administrator (or a human shell) may spawn, stop or retry. An ephemeral agent cannot spawn another one. The check does not depend on `$SHANTY_AGENT`, which a pane can unset: a process whose working directory is inside a live job's workspace, or that descends from a job's tmux pane shell, *is* that job. |
+| No owner                    | The card's `reports_to` is the administrator, and only the administrator or a lead (or a human shell) may spawn, stop or retry (leads admitted by aegis-za4f; a worker is still refused). Scoped recruitment and the recruit controller keep the administrator-only boundary. An ephemeral agent cannot spawn another one. The check does not depend on `$SHANTY_AGENT`, which a pane can unset: a process whose working directory is inside a live job's workspace, or that descends from a job's tmux pane shell, *is* that job. |
 | Unbounded life              | Every job has a deadline (`lifetime_minutes`). The agent's Stop hook and every `st fleet tend` pass enforce it. Neither one is an agent poll. |
 | Unbounded spend             | A turn budget (`max_turns`) and a context budget (`max_context_k`) are checked at every Stop. The agent counts in the usage governor like any card and carries the `first` survival band, so a governor tier sheds it first. |
 | Unbounded fan-out           | `max_agents` caps how many ephemeral agents can be live on a host at once. The fleet governor's lane cap and its tier exclusions apply too. Over cap means **refused**, never queued in secret. |

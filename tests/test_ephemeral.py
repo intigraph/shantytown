@@ -355,6 +355,35 @@ def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
     assert "not the administrator" in capsys.readouterr().err and not launched
 
 
+def test_a_lead_can_spawn_and_stop(store, monkeypatch, capsys):
+    """aegis-za4f: leads manage ephemeral jobs too; cap and identity still apply."""
+    root, panes, launched = store
+    (root / "crew" / "lea.json").write_text(json.dumps({"role": "lead", "reports_to": "boss"}))
+    panes.verified_actor = "lea"
+    monkeypatch.setenv("SHANTY_AGENT", "lea")
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert len(launched) == 1
+    # The cap is unchanged for a lead: max_agents = 1 in the fixture.
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
+    assert "over cap" in capsys.readouterr().err
+    assert _st(root, "--stop", rec["name"]) == cli.OK
+    assert eph.read(root, rec["name"])["state"] == eph.DONE
+
+
+def test_lead_admission_is_opt_in_so_the_controller_boundary_stays_administrator():
+    """authority() defaults to administrator-only; only the job paths admit leads."""
+    roles = {"lea": "lead", "lex": "worker", "boss": "administrator"}.get
+    with pytest.raises(eph.Refused, match="not the administrator; ephemeral"):
+        eph.authority("lea", roles)
+    eph.authority("lea", roles, admit=eph.JOB_MANAGERS)
+    eph.authority("boss", roles)
+    with pytest.raises(eph.Refused, match="not the administrator or a lead"):
+        eph.authority("lex", roles, admit=eph.JOB_MANAGERS)
+    with pytest.raises(eph.Refused, match="ephemeral agent cannot spawn"):
+        eph.authority("eph-task-1a2b3c", lambda _n: "lead", admit=eph.JOB_MANAGERS)
+
+
 def test_administrator_stop_reports_and_tears_down_and_retry_respawns(store, capsys):
     root, panes, launched = store
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
