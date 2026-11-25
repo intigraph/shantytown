@@ -300,6 +300,10 @@ def store(tmp_path, monkeypatch):
     (root / "shantytown.toml").write_text("[ephemeral]\nmax_agents = 1\nunattended = false\nrequire_verified_identity = true\n")
     panes = NullPanes(live=set())
     monkeypatch.setattr(cli, "_panes", lambda a: panes)
+    # No test reaches the real forge. A test that needs an answer stubs its own.
+    def offline_gh(*args):
+        raise RuntimeError("offline fixture")
+    monkeypatch.setattr(cli, "_gh_json", offline_gh)
     from shantytown import actor_identity
     panes.verified_actor = 'boss'
     def authenticated():
@@ -1536,3 +1540,38 @@ def test_a_task_dry_run_previews_the_source_worktree_it_would_get(store, monkeyp
     out = capsys.readouterr().out
     assert "Your worktree is a checkout of o/n" in out and "NO source worktree" not in out
     assert launched == [] and eph.records(root) == []
+
+
+def test_a_task_job_uses_the_forges_canonical_repo_slug(store, monkeypatch, capsys, tmp_path):
+    """aegis-za4f: eph-task-596fe4 was spawned with --repo scbrown/shantytown, a
+    redirect to intigraph/shantytown. It did all its work, then `st repo pr`
+    refused the non-canonical slug. Spawn now records the canonical one."""
+    root, _panes, launched = store
+    checkout = tmp_path / "src"
+    (checkout / ".git").mkdir(parents=True)
+    seen = []
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: seen.append(name) or checkout)
+    monkeypatch.setattr(cli, "_gh_json", lambda path: {"full_name": "neworg/n"}
+                        if path == "repos/oldorg/n" else pytest.fail(path))
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--repo", "oldorg/n", "-n") == cli.OK
+    out = capsys.readouterr()
+    assert "it-1 — neworg/n" in out.out and "oldorg/n" not in out.out
+    assert "now neworg/n on the forge" in out.err
+
+
+def test_an_unreachable_forge_keeps_the_given_slug_and_says_so(store, monkeypatch, capsys, tmp_path):
+    root, _panes, launched = store
+    checkout = tmp_path / "src"
+    (checkout / ".git").mkdir(parents=True)
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--repo", "o/n", "-n") == cli.OK
+    out = capsys.readouterr()
+    assert "it-1 — o/n" in out.out
+    assert "could not confirm --repo o/n" in out.err
+
+
+def test_review_jobs_are_not_canonicalized_here(store, monkeypatch):
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_canonical_repo", lambda repo: pytest.fail("task jobs only"))
+    _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+        "--repo", "o/n", "--pr", "3", "-n")

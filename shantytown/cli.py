@@ -3646,6 +3646,30 @@ def _gh_json(*args):
     return json.loads(r.stdout)
 
 
+def _spawn_canonical_repo(repo: str) -> str:
+    """The forge's canonical owner/name for a task job's --repo (aegis-za4f).
+
+    A renamed or transferred repo answers under its old slug through a
+    redirect, but `st repo pr` requires the canonical slug, so a job spawned
+    with the old name did all its work and could not open its PR (measured on
+    eph-task-596fe4: scbrown/shantytown -> intigraph/shantytown). An
+    unreachable forge keeps the given slug and says so: it must not block
+    every spawn, and the PR step still refuses loudly on a mismatch.
+    """
+    try:
+        name = (_gh_json(f"repos/{repo}") or {}).get("full_name") or ""
+    except (RuntimeError, ValueError, OSError) as e:
+        print(f"  note: could not confirm --repo {repo} is canonical ({e}); using it as given",
+              file=sys.stderr)
+        return repo
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", name):
+        return repo
+    if name.lower() != repo.lower():
+        print(f"  note: --repo {repo} is now {name} on the forge; the job uses {name}",
+              file=sys.stderr)
+    return name
+
+
 def _spawn_verdict_policy(a):
     cfg, _err = config.load_or_default(Path(a.root))
     return cfg.ephemeral, cfg
@@ -4198,6 +4222,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
                               head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id)
+            if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
+                import dataclasses
+                req = dataclasses.replace(req, repo=_spawn_canonical_repo(req.repo))
         if recruitment is not None:
             try:
                 recruitment.request(req)
