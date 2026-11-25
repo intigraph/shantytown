@@ -165,8 +165,14 @@ class BrTracker(BeadsTracker):
                 if isinstance(error, dict) and error.get("code") == expected:
                     exception = UpdateConflict if r.returncode == 4 else UpdateIndeterminate
                     raise exception(error)
-            raise RuntimeError(
-                f"br update {item_id} failed: {r.stderr.strip()[:120]}")
+            raise TrackerUpdateError({
+                "code": "UPDATE_FAILED",
+                "message": (f"{self._tool} update {item_id} failed; outcome unproven, "
+                            "read back before retry"),
+                "details": {"backend": self._tool, "exit_code": r.returncode,
+                            "stdout": _close_diagnostic(r.stdout),
+                            "stderr": _close_diagnostic(r.stderr)},
+            })
 
 
 NOTES_SEPARATOR = "\n\n"
