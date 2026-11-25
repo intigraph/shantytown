@@ -95,6 +95,11 @@ def test_owner_scope_and_lean_fields_on_actual_request(monkeypatch):
     assert (
         "description" not in query and "notes" not in query and "retained" not in query
     )
+    # aegis-ygz F1: one candidate arm and one guard arm per graph. The old
+    # per-spelling, per-status arms (24 for one owner) cost the managed reader
+    # one pass each and put the plate past its 999ms deadline.
+    assert query.count(" UNION ") == 3, query
+    assert query.count("VALUES ?o ") == 4 and query.count("VALUES ?st ") == 2
 
 
 @pytest.mark.parametrize(
