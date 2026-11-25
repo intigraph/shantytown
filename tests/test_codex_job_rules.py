@@ -156,8 +156,93 @@ def test_non_pr_jobs_get_only_the_guarded_report_command(tmp_path, job):
             (["st", "agent", "spawn", "--report", "--verdict", "blocked", "--summary-file", "-"], "allow"),
             (["st", "agent", "spawn", "--merge"], None),
             (["gh", "pr", "view", "75", "--repo", "intigraph/example"], None),
-            (["git", "push"], "forbidden"),
+            *([(["git", "push"], "forbidden")] if job == "triage" else []),
         ]:
             result = subprocess.run([_codex(), "execpolicy", "check", "-r", str(path), *cmd],
                                     capture_output=True, text=True, check=True)
             assert json.loads(result.stdout).get("decision") == decision
+
+
+TASK = dict(job="task", harness="codex", name="eph-task-a1b2c3")
+
+
+@pytest.mark.skipif(_codex() is None, reason="needs a codex CLI with execpolicy")
+@pytest.mark.parametrize("cmd,decision", [
+    # aegis-za4f D1: a task job commits and pushes ITS OWN branch.
+    ("git status", None),
+    ("git diff origin/main", None),
+    ("git commit -m fix", None),
+    ("git push -u origin eph-task-a1b2c3", None),
+    # ...but never the base branch, never a rewrite, never a direct merge.
+    ("git push origin main", "forbidden"),
+    ("git push origin HEAD:main", "forbidden"),
+    ("git push --force origin eph-task-a1b2c3", "forbidden"),
+    ("git push -f", "forbidden"),
+    ("git reset --hard origin/main", "forbidden"),
+    ("git rebase main", "forbidden"),
+    ("gh pr merge 1 --squash", "forbidden"),
+    ("gh api repos/x/y", "forbidden"),
+])
+def test_task_jobs_get_git_on_their_own_branch_only(tmp_path, cmd, decision):
+    path = eph.write_codex_job_rules(TASK, tmp_path, unattended=False)
+    out = subprocess.run([_codex(), "execpolicy", "check", "-r", str(path), *cmd.split()],
+                         capture_output=True, text=True, check=True).stdout
+    assert json.loads(out).get("decision") == decision
+
+
+def test_task_sandbox_is_network_plus_exact_roots_never_full_access(tmp_path):
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    rec = dict(TASK, worktree_of=str(repo))
+    args = eph.codex_job_sandbox(rec, unattended=False, cache_home=tmp_path / "cache")
+    assert args[0::2] == ["-c", "-c", "-c"]
+    joined = " ".join(args)
+    assert 'sandbox_mode="workspace-write"' in joined
+    assert "sandbox_workspace_write.network_access=true" in joined
+    assert "danger-full-access" not in joined and "approval_policy" not in joined
+    roots = json.loads(args[-1].split("=", 1)[1])
+    assert roots == [str(tmp_path / "cache" / "shantytown" / "read-budget-v1"),
+                     str((repo / ".git").resolve())]
+
+
+@pytest.mark.parametrize("rec,unattended", [
+    (dict(TASK, job="review", repo="a/b", pr=1), False),
+    (dict(TASK, job="triage"), False),
+    (dict(TASK, harness="claude"), False),
+    (TASK, True),
+    (dict(TASK, uid_binding={"uid": 10001}), False),
+])
+def test_only_attended_codex_task_jobs_get_a_sandbox_profile(tmp_path, rec, unattended):
+    assert eph.codex_job_sandbox(rec, unattended=unattended, cache_home=tmp_path) is None
+    assert eph.write_codex_job_sandbox(rec, tmp_path / "home", unattended=unattended,
+                                       cache_home=tmp_path) is None
+
+
+def test_sandbox_file_round_trips_and_is_never_widened(tmp_path):
+    home = tmp_path / "home"
+    path = eph.write_codex_job_sandbox(TASK, home, unattended=False, cache_home=tmp_path / "c")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert (tmp_path / "c" / "shantytown" / "read-budget-v1").is_dir()
+    args = eph.codex_daemon_sandbox_args(TASK["name"], home)
+    assert args == eph.codex_job_sandbox(TASK, unattended=False, cache_home=tmp_path / "c")
+    # Another card never reads it, and a crew name never reads anything.
+    with pytest.raises(eph.Refused):
+        eph.codex_daemon_sandbox_args("eph-task-ffffff", home)  # the file names another job
+    assert eph.codex_daemon_sandbox_args("ellie", home) == []
+    # Same content is idempotent; different content refuses.
+    assert eph.write_codex_job_sandbox(TASK, home, unattended=False, cache_home=tmp_path / "c") == path
+    with pytest.raises(eph.Refused):
+        eph.write_codex_job_sandbox(TASK, home, unattended=False, cache_home=tmp_path / "other")
+
+
+@pytest.mark.parametrize("bad", ['sandbox_mode="danger-full-access"', 'approval_policy="never"',
+                                 "sandbox_workspace_write.network_access=true --dangerously-bypass"])
+def test_a_tampered_sandbox_file_refuses_rather_than_widens(tmp_path, bad):
+    home = tmp_path / "home"
+    eph.write_codex_job_sandbox(TASK, home, unattended=False, cache_home=tmp_path)
+    path = home / eph.CODEX_SANDBOX_FILE
+    data = json.loads(path.read_text())
+    data["args"][1] = bad
+    path.write_text(json.dumps(data))
+    with pytest.raises(eph.Refused):
+        eph.codex_daemon_sandbox_args(TASK["name"], home)
