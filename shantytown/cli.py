@@ -4311,7 +4311,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 print(f"would spawn {rec['name']} ({rec['job']} on {rec['item']}, "
                       f"{rec['harness']}, worktree of {shared or 'scratch'}, "
                       f"reports to {rec['administrator']})")
-                print(eph.prompt(rec))
+                # Preview the prompt the job would get: a real launch records
+                # the source checkout before the prompt is built (aegis-za4f).
+                print(eph.prompt(dict(rec, worktree_of=str(shared) if shared else None)))
                 return OK
             if uid_launch:
                 # Staged by the operator under the target UID. Never copy the

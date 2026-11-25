@@ -684,6 +684,17 @@ def codex_job_sandbox(rec: dict, *, unattended: bool, cache_home: Path | None = 
         if common.returncode != 0 or not common.stdout.strip():
             raise Refused(f"cannot resolve the git dir of {rec['worktree_of']} for the job sandbox")
         roots.append(common.stdout.strip())
+        # MEASURED 2026-11-25 (eph-task-450024, codex-cli 0.161.0): from inside
+        # a linked worktree, Codex keeps that worktree's OWN gitdir
+        # (<common>/worktrees/<name>) read-only even under a writable common
+        # dir, so `git add` cannot create index.lock. Naming the gitdir itself
+        # as a root makes it writable; nothing wider is opened.
+        if rec.get("workspace"):
+            own = _git("rev-parse", "--absolute-git-dir", cwd=rec["workspace"])
+            if own.returncode != 0 or not own.stdout.strip():
+                raise Refused(f"cannot resolve the git dir of {rec['workspace']} for the job sandbox")
+            if own.stdout.strip() not in roots:
+                roots.append(own.stdout.strip())
     return ["-c", 'sandbox_mode="workspace-write"',
             "-c", "sandbox_workspace_write.network_access=true",
             "-c", "sandbox_workspace_write.writable_roots=" + json.dumps(roots)]

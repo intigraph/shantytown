@@ -1291,6 +1291,18 @@ class CodexHarness:
         # one card, never a default anybody inherits (the pilot, aegis-qdal.5).
         if card.dangerous:
             flags += " --dangerously-bypass-approvals-and-sandbox"
+        elif not remote_control:
+            # A LOCAL launch runs the tools in THIS process, so an ephemeral
+            # task job's narrow sandbox profile must go on the TUI, not only on
+            # a daemon that is not started (aegis-za4f). MEASURED 2026-11-25:
+            # eph-task-450024 fell back to local Codex (its settings home has no
+            # Remote Control package) and `st work item show` failed
+            # StoreUnproven, the same no-network failure the profile fixes.
+            from .ephemeral import codex_daemon_sandbox_args
+            from .codex_daemon import runtime_home
+            job_args = codex_daemon_sandbox_args(card.name, runtime_home(card.name))
+            if job_args:
+                flags += " " + " ".join(shlex.quote(x) for x in job_args)
         # HONOUR THE CARD'S MODEL AT LAUNCH (GitHub #17/#9), same as claude.
         # `--model` is codex's long form of -m (shared_options.rs). Same
         # card -> role -> fleet ladder as ClaudeHarness: resolving in ONE helper

@@ -1525,3 +1525,14 @@ def test_a_task_job_whose_repo_resolves_no_checkout_is_refused_not_scratch(store
                "--repo", "o/n") == cli.REFUSED
     assert "resolved no local checkout" in capsys.readouterr().err
     assert launched == [] and eph.records(root) == []
+
+
+def test_a_task_dry_run_previews_the_source_worktree_it_would_get(store, monkeypatch, capsys, tmp_path):
+    root, _panes, launched = store
+    checkout = tmp_path / "src"
+    (checkout / ".git").mkdir(parents=True)
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--repo", "o/n", "-n") == cli.OK
+    out = capsys.readouterr().out
+    assert "Your worktree is a checkout of o/n" in out and "NO source worktree" not in out
+    assert launched == [] and eph.records(root) == []
