@@ -294,3 +294,54 @@ def test_an_unterminated_tooling_block_is_refused(job):
     agents = ws / "AGENTS.md"
     agents.write_text(agents.read_text() + f"\n{BEGIN}\nanything at all\n")
     assert "AGENTS.md" in refusal(rec)
+
+
+@pytest.fixture
+def tracked_mcp_job(tmp_path):
+    """A repository that commits its own .mcp.json. Provisioning replaces the
+    whole file with st's kit, so the tracked file differs from the base."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    git(tmp_path, "init", "-q", str(ws))
+    git(ws, "config", "user.email", "t@t"); git(ws, "config", "user.name", "t")
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {"repo-own": {"url": "http://repo.invalid"}}}))
+    (ws / "README").write_text("x\n")
+    git(ws, "add", "-A"); git(ws, "commit", "-qm", "main")
+    rec = {"workspace": str(ws), "worktree_base_sha": git(ws, "rev-parse", "HEAD")}
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {k: {} for k in KIT}}))
+    return ws, rec
+
+
+def test_a_tracked_mcp_json_replaced_by_the_kit_may_be_trusted(tracked_mcp_job):
+    _ws, rec = tracked_mcp_job
+    assert refusal(rec) == ""
+
+
+def test_a_tracked_mcp_json_still_holding_a_repo_server_is_refused(tracked_mcp_job):
+    ws, rec = tracked_mcp_job
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {**{k: {} for k in KIT}, "repo-own": {}}}))
+    assert "repo-own" in refusal(rec)
+
+
+def test_a_tracked_mcp_json_unchanged_from_the_base_is_still_held_to_the_kit(tracked_mcp_job):
+    """Unchanged bytes are main's own: the existing rule, nothing new admitted."""
+    ws, rec = tracked_mcp_job
+    git(ws, "checkout", "-q", "--", ".mcp.json")
+    assert refusal(rec) == ""
+
+
+def test_a_tracked_mcp_json_made_a_symlink_is_refused(tracked_mcp_job, tmp_path):
+    ws, rec = tracked_mcp_job
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"mcpServers": {k: {} for k in KIT}}))
+    (ws / ".mcp.json").unlink()
+    os.symlink(outside, ws / ".mcp.json")
+    assert "tracked trust surface differs" in refusal(rec)
+
+
+def test_other_tracked_changes_still_refuse_beside_a_kit_mcp_json(tracked_mcp_job):
+    ws, rec = tracked_mcp_job
+    (ws / ".claude").mkdir()
+    (ws / ".claude" / "settings.json").write_text('{"hooks": {}}\n')
+    git(ws, "add", ".claude/settings.json"); git(ws, "commit", "-qm", "pr")
+    assert ".claude/settings.json" in refusal(rec)
