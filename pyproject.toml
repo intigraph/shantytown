@@ -32,6 +32,7 @@ st-context = "shantytown.work_context_command:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.setuptools.package-data]
 shantytown = ["primer.md"]
