@@ -52,6 +52,7 @@ _STALE_TTL = ContextVar("seeds_stale_ttl", default=0.0)
 _EXTENDED_MAX_AGE = 300.0
 _STALE_CAP = ContextVar("seeds_stale_cap", default=None)
 _GENERATION = "ttl-generation"
+_OWNER_GENERATION = "owner-display-generation"
 
 
 def stale_ttl() -> float:
@@ -78,9 +79,10 @@ def stale_ok(ttl=None):
     _EXTENDED_MAX_AGE) inside this block.
 
     For per-turn reads whose callers already tolerate a moving board (a stop
-    hook, an inbox view, a plate listing). Any write made through st bumps a
-    host-wide generation and every older answer stops being served; a fetch
-    that overlapped a write is never published. Exact readers (projections,
+    hook, an inbox view, a plate listing). Work-board and uncertain writes
+    invalidate all older answers. Successful native message-window writes
+    preserve only complete owner displays, whose board has not changed.
+    A fetch overlapping an affecting write is never published. Exact readers (projections,
     snapshots, direct/primary reads) never see this tier.
     """
     value, cap = stale_ttl(), None
@@ -109,8 +111,8 @@ def exact_reads():
         _STALE_TTL.reset(token)
 
 
-def _generation(directory: Path) -> int:
-    path = directory / _GENERATION
+def _generation(directory: Path, name=_GENERATION) -> int:
+    path = directory / name
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -125,10 +127,10 @@ def _generation(directory: Path) -> int:
     return value
 
 
-def invalidate_stale() -> None:
-    """A write through st: no earlier answer is served again from either tier.
+def invalidate_stale(*, message_only=False) -> None:
+    """Invalidate stale reads; message-only writes preserve board owner displays.
 
-    Bumps the bounded-staleness generation and drops the shared watermark
+    Bumps the affected bounded-staleness generations and drops shared watermark
     observations, so the next exact read must observe the post-write
     watermark and cannot republish a pre-write answer. If the generation
     cannot be written, every bounded-staleness entry is removed instead;
@@ -145,13 +147,18 @@ def invalidate_stale() -> None:
         except OSError:
             pass
     try:
-        fd, temporary = tempfile.mkstemp(prefix="incoming-", dir=directory)
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(str(time.time_ns()).encode())
-            os.replace(temporary, directory / _GENERATION)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+        # Native message windows are outside the work board. Only a known
+        # successful window mutation may preserve a bounded owner display;
+        # every ordinary/uncertain write still invalidates both generations.
+        names = (_GENERATION,) if message_only else (_GENERATION, _OWNER_GENERATION)
+        for name in names:
+            fd, temporary = tempfile.mkstemp(prefix="incoming-", dir=directory)
+            try:
+                with os.fdopen(fd, "wb") as stream:
+                    stream.write(str(time.time_ns()).encode())
+                os.replace(temporary, directory / name)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
     except _CACHE_ERRORS:
         for entry in directory.glob("ttlr-*.json"):
             try:
@@ -175,7 +182,7 @@ def _stale_fence_age() -> float:
     return min(ttl, _cap())
 
 
-def stale_lookup(parts, validate, *, ttl=None):
+def stale_lookup(parts, validate, *, ttl=None, owner_display=False):
     """(hit, publish) for one bounded-staleness key; (None, None) when off.
 
     `publish(result)` stores a fresh answer only if no write bumped the
@@ -187,13 +194,18 @@ def stale_lookup(parts, validate, *, ttl=None):
             or stale_ttl() <= 0):
         return None, None
     key = hashlib.sha256(json.dumps(["stale-v1", *parts]).encode()).hexdigest()
+    name = _OWNER_GENERATION if owner_display else _GENERATION
+
+    def current_generation(directory):
+        return (_generation(directory, name) if owner_display else _generation(directory))
+
     try:
         directory = _directory()
         if not os.access(directory, os.W_OK):
             return None, None  # an invalidation could not land: tier off
         path = directory / ("ttlr-" + key + ".json")
         with _locked(directory, key):
-            generation = [_GENERATION, _generation(directory)]
+            generation = [name, current_generation(directory)]
             hit = _cached(path, generation, validate, max_age=min(ttl, _cap()))
     except _CACHE_ERRORS:
         return None, None
@@ -203,7 +215,7 @@ def stale_lookup(parts, validate, *, ttl=None):
     def publish(result):
         try:
             with _locked(directory, key):
-                if _generation(directory) == generation[1]:
+                if current_generation(directory) == generation[1]:
                     _publish(directory, path, generation, result)
         except _CACHE_ERRORS:
             pass

@@ -1,6 +1,7 @@
 """Only complete, explicitly stale display projections share a host observation."""
 from concurrent.futures import ThreadPoolExecutor
 import json
+import subprocess
 import threading
 import time
 
@@ -57,6 +58,74 @@ def clear_exact_entries():
     for pattern in ('read-*.json', 'mark-*.json'):
         for entry in cache._directory().glob(pattern):
             entry.unlink()
+
+
+@pytest.fixture
+def sdk_write(tmp_path, monkeypatch):
+    from shantytown import sd, actor_identity, advise_signing
+    tracker = sd.SdTracker(repo=str(tmp_path), prefix='fixture')
+    monkeypatch.setattr(tracker, 'prove_store', lambda: None)
+    monkeypatch.setattr(tracker, '_location', lambda: [])
+    monkeypatch.setattr(type(tracker), '_bin', property(lambda _: 'fixture-sdk'))
+    monkeypatch.setattr(actor_identity, 'config_environment', lambda: {})
+    monkeypatch.setattr(actor_identity, 'authenticated_actor', lambda: None)
+    monkeypatch.setattr(advise_signing, 'mutation', lambda _: False)
+    def write(*args, status=0, timeout=False):
+        def runner(cmd, **kw):
+            if timeout:
+                raise subprocess.TimeoutExpired(cmd, 1)
+            return subprocess.CompletedProcess(cmd, status, '{}', '')
+        monkeypatch.setattr(sd.subprocess, 'run', runner)
+        return tracker._bd(*args)
+    return write
+
+
+# Adapter-test admission: sdk_write replaces the runner before any call, so
+# these exercise the real dispatch seam without reaching an executable/store.
+@pytest.mark.real_store
+@pytest.mark.parametrize('operation', ['send', 'read'])
+def test_message_window_writes_keep_owner_display_but_invalidate_other_stale_reads(
+        owner_wire, sdk_write, operation):
+    with display_reads():
+        plate.owner_rows(PROOF, 'worker').exact()
+        _, publish = cache.stale_lookup(['generic-read'], lambda x: x)
+        publish('old mailbox')
+    before = owner_wire['queries']
+    clear_exact_entries()
+    sdk_write('msg', operation, '--json')
+    with display_reads():
+        assert cache.stale_lookup(['generic-read'], lambda x: x)[0] is None
+        plate.owner_rows(PROOF, 'worker').exact()
+    assert owner_wire['queries'] == before
+
+
+@pytest.mark.real_store
+@pytest.mark.parametrize('args', [('update', 'fixture-1'), ('msg', 'unknown-future-write')])
+def test_board_and_unknown_writes_still_invalidate_owner_display(owner_wire, sdk_write, args):
+    with display_reads():
+        plate.owner_rows(PROOF, 'worker').exact()
+    clear_exact_entries()
+    owner_wire['title'] = 'written board value'
+    sdk_write(*args)
+    with display_reads():
+        assert plate.owner_rows(PROOF, 'worker').exact()[0]['title'] == 'written board value'
+
+
+@pytest.mark.real_store
+@pytest.mark.parametrize('timeout', [False, True])
+def test_failed_or_uncertain_message_writes_still_invalidate_owner_display(
+        owner_wire, sdk_write, timeout):
+    with display_reads():
+        plate.owner_rows(PROOF, 'worker').exact()
+    clear_exact_entries()
+    owner_wire['title'] = 'after uncertain operation'
+    if timeout:
+        with pytest.raises(subprocess.TimeoutExpired):
+            sdk_write('msg', 'send', timeout=True)
+    else:
+        assert sdk_write('msg', 'send', status=3).returncode == 3
+    with display_reads():
+        assert plate.owner_rows(PROOF, 'worker').exact()[0]['title'] == 'after uncertain operation'
 
 
 def test_display_hit_own_write_invalidation_and_exact_admission(owner_wire):

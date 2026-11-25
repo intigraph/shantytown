@@ -1361,6 +1361,7 @@ class SdTracker(BrTracker):
         # observation belongs only to the actual Seeds mutation child.
         from .advise_signing import mutation, run
         def execute():
+            result = None
             try:
                 if mutation(self._translate(args)) and not pinned_config:
                     asserted = actor
@@ -1369,14 +1370,20 @@ class SdTracker(BrTracker):
                             asserted = arg.partition('=')[2]
                         elif arg == '--actor' and i + 1 < len(args):
                             asserted = args[i + 1]
-                    return run(cmd, actor=actor, asserted_actor=asserted,
+                    result = run(cmd, actor=actor, asserted_actor=asserted,
                                identity_command=[self._bin, *self._location(), 'identity', '--json'],
                                options=options, runner=subprocess.run)
-                return subprocess.run(cmd, **options)
+                else:
+                    result = subprocess.run(cmd, **options)
+                return result
             finally:
                 # A write that timed out or raised may still have landed.
                 if not read_only:
-                    seeds_read_cache.invalidate_stale()
+                    if (translated[:2] in (["msg", "send"], ["msg", "read"])
+                            and result is not None and result.returncode == 0):
+                        seeds_read_cache.invalidate_stale(message_only=True)
+                    else:
+                        seeds_read_cache.invalidate_stale()
 
         if publish is not None:
             from .seeds_read_flight import coalesce, SharedReadFailed
