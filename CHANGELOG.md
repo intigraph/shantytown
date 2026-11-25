@@ -7,6 +7,37 @@
 * `st crew --count` reuses a successful answer for 5 minutes (`SHANTY_CREW_COUNT_TTL`, 0 disables). Each fresh answer is a crew-wide plate read, and its only consumer is a status bar (aegis-t14).
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 
+## [0.22.0](https://github.com/intigraph/shantytown/compare/v0.21.0...v0.22.0) (2026-11-25)
+
+
+### Features
+
+* **ephemeral:** let leads spawn, stop and retry ephemeral jobs ([#725](https://github.com/intigraph/shantytown/issues/725)) ([cc04840](https://github.com/intigraph/shantytown/commit/cc04840ba84e1892d636cb016caece6f60cb9bab))
+* **recruiter:** compose verified-wake signed handoff ([#702](https://github.com/intigraph/shantytown/issues/702)) ([545e40f](https://github.com/intigraph/shantytown/commit/545e40f3b450b117fa3baa3c196a6c7b1e582631))
+
+
+### Bug Fixes
+
+* **ephemeral:** make attended Codex task jobs usable ([#726](https://github.com/intigraph/shantytown/issues/726)) ([34b80e1](https://github.com/intigraph/shantytown/commit/34b80e1efdd442d5c35e9b6935e502b409b8a514))
+* **ephemeral:** record the forge's canonical repo for task jobs ([#731](https://github.com/intigraph/shantytown/issues/731)) ([a37e999](https://github.com/intigraph/shantytown/commit/a37e9997f2e69c3a27703968e6a7b571c5d1f725))
+* **ephemeral:** record the forge's canonical repo for task jobs (aegis-za4f) ([a37e999](https://github.com/intigraph/shantytown/commit/a37e9997f2e69c3a27703968e6a7b571c5d1f725))
+* **ephemeral:** sandbox profile for local Codex task jobs and their worktree gitdir ([#728](https://github.com/intigraph/shantytown/issues/728)) ([28f5fcf](https://github.com/intigraph/shantytown/commit/28f5fcf2bcef7924a5bc025946cdb5b9be7af7e2))
+* prevent bound Codex jobs waiting on interactive approval ([#699](https://github.com/intigraph/shantytown/issues/699)) ([cfe8102](https://github.com/intigraph/shantytown/commit/cfe810202860a848622524a29ae58a5df6d1d31b))
+* **tracker:** keep the real refusal when an update fails ([#729](https://github.com/intigraph/shantytown/issues/729)) ([5f85d7e](https://github.com/intigraph/shantytown/commit/5f85d7e78fe20287f1e94a0f79b9085cb2f166c1))
+* **tracker:** keep the real refusal when an update fails (aegis-akze) ([5f85d7e](https://github.com/intigraph/shantytown/commit/5f85d7e78fe20287f1e94a0f79b9085cb2f166c1))
+
+
+### Performance Improvements
+
+* **cache:** preserve owner displays across message-window writes ([#723](https://github.com/intigraph/shantytown/issues/723)) ([5df529f](https://github.com/intigraph/shantytown/commit/5df529f94fd71ab52b75c390fd943a189f21cc4c))
+* **seeds:** one candidate arm and one guard arm per graph for exact owners ([#727](https://github.com/intigraph/shantytown/issues/727)) ([b420198](https://github.com/intigraph/shantytown/commit/b4201983c92f613c47c71384bcf60423e54d479e))
+* **seeds:** one candidate arm and one guard arm per graph for exact owners (aegis-ygz) ([b420198](https://github.com/intigraph/shantytown/commit/b4201983c92f613c47c71384bcf60423e54d479e))
+
+
+### Tests
+
+* make plain pytest find the tests package ([#730](https://github.com/intigraph/shantytown/issues/730)) ([f2fa4bf](https://github.com/intigraph/shantytown/commit/f2fa4bfb94a281f031a86beb93f260e5e21964ce))
+
 ## [0.21.0](https://github.com/intigraph/shantytown/compare/v0.20.0...v0.21.0) (2026-11-24)
 
 
