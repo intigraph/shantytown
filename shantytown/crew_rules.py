@@ -19,6 +19,11 @@ MAX_BYTES = 512 * 1024
 @declared_read_operation("role-responsibilities")
 def ask(root, name, params, *, limit=200, timeout=2):
     """One bounded named-query read. Refusal, overflow and malformed are UNKNOWN."""
+    return named_rows(root, name, params, limit=limit, timeout=timeout)
+
+
+def named_rows(root, name, params, *, limit, timeout=2):
+    """The undecorated bounded read; callers name their own read operation."""
     body = post(resolve_server(root=root) + "/ask",
                 json.dumps({"name": name, "params": params}),
                 {**request_headers(), "X-Quipu-Client": "st", **read_headers()},
