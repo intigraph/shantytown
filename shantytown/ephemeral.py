@@ -244,9 +244,11 @@ def authority(actor: str | None, role_of: Callable[[str], str | None], *,
         return
     if is_ephemeral_name(actor):
         raise Refused("an ephemeral agent cannot spawn, stop or retry ephemeral agents")
-    if role_of(actor) != "administrator":
-        raise Refused(f"{actor} is not the administrator; ephemeral agents are "
-                      "managed by the administrator (route the ask there)")
+    # Stiwi 2026-11-24: lane leads run their own ephemeral (Codex) jobs; only
+    # workers and ephemeral agents route the ask to a lead or the administrator.
+    if role_of(actor) not in ("administrator", "lead"):
+        raise Refused(f"{actor} is not the administrator or a lead; ephemeral agents are "
+                      "managed by the administrator and lane leads (route the ask there)")
 
 
 def cap_refusal(root, policy) -> str:

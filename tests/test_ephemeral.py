@@ -85,9 +85,9 @@ def test_administrator_and_opt_in_verified_authority():
     with pytest.raises(eph.Refused, match="verified"):
         eph.authority(None, roles, require_verified=True)
     eph.authority("boss", roles)
-    for who in ("lex", "lead1"):
-        with pytest.raises(eph.Refused, match="administrator"):
-            eph.authority(who, roles)
+    eph.authority("lead1", roles)  # lane leads run their own ephemeral jobs (Stiwi 2026-11-24)
+    with pytest.raises(eph.Refused, match="administrator"):
+        eph.authority("lex", roles)
     with pytest.raises(eph.Refused, match="cannot spawn"):
         eph.authority("eph-task-abcdef", lambda n: "administrator")
 
@@ -353,6 +353,15 @@ def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
     monkeypatch.setenv("SHANTY_AGENT", "lex")
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
     assert "not the administrator" in capsys.readouterr().err and not launched
+
+
+def test_a_lead_can_spawn(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    (root / "crew" / "lex.json").write_text(json.dumps({"role": "lead"}))
+    _panes.verified_actor = "lex"
+    monkeypatch.setenv("SHANTY_AGENT", "lex")
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert len(launched) == 1
 
 
 def test_administrator_stop_reports_and_tears_down_and_retry_respawns(store, capsys):
