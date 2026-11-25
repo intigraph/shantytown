@@ -569,6 +569,12 @@ def _shared_repo(repo: Path | str) -> Path:
     """Normalize to the SHARED checkout, tolerating being handed the worktree dir
     or the `<name>-wt` container (crew-worktree.sh does the same on the name)."""
     p = Path(repo).expanduser()
+    if (p / ".git").is_dir():
+        identity = _git_identity(p)
+        if identity is not None and identity[0] == identity[1]:
+            # A primary checkout may itself live inside a legacy -wt container.
+            # Git identity takes precedence over the directory-name heuristic.
+            return p
     if (p / ".git").is_file():
         identity = _git_identity(p)
         if identity is None:
