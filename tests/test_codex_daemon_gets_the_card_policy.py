@@ -107,3 +107,43 @@ def test_an_attended_TASK_JOB_daemon_gets_its_narrow_profile(tmp_path, monkeypat
     # A crew card in the same runtime dir still reads nothing.
     (tmp_path / "crew").mkdir()
     assert "sandbox_workspace_write" not in _launch(tmp_path / "crew", dangerous=False)
+
+
+def test_a_LOCAL_task_job_launch_carries_the_profile_on_the_tui(tmp_path, monkeypatch, request):
+    """aegis-za4f. MEASURED 2026-11-25: eph-task-450024's settings home had no
+    Remote Control package, so st fell back to LOCAL codex, where the tools run
+    in the TUI process. The profile sat only on a daemon that never started, and
+    `st work item show` failed StoreUnproven. The local launch must carry it."""
+    import shutil, tempfile
+    from shantytown import ephemeral as eph
+    from shantytown.codex_daemon import runtime_home
+    run = Path(tempfile.mkdtemp(prefix="st-", dir="/tmp"))
+    request.addfinalizer(lambda: shutil.rmtree(run, True))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    name = "eph-task-a1b2c3"
+    eph.write_codex_job_sandbox(dict(job="task", harness="codex", name=name),
+                                runtime_home(name), unattended=False,
+                                cache_home=tmp_path / "cache")
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text('[env]\nSHANTY_REMOTE_CONTROL = "true"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    cfg.parent.mkdir(parents=True)  # NO managed package: Remote Control falls back
+    launch = CODEX.launch(Agent(name=name, role="worker", workspace=str(tmp_path / "w")),
+                          str(cfg), root=root)
+    assert "remote-control start" not in launch, "this arm must be the local fallback"
+    assert "sandbox_workspace_write.network_access=true" in launch
+    assert "read-budget-v1" in launch
+    assert "danger-full-access" not in launch
+    assert "--dangerously-bypass-approvals-and-sandbox" not in launch
+
+
+def test_a_LOCAL_crew_launch_is_unchanged(tmp_path):
+    root = tmp_path / ".shanty"
+    root.mkdir()
+    (root / "shantytown.toml").write_text('[env]\nSHANTY_REMOTE_CONTROL = "false"\n')
+    cfg = root / "settings" / "codex" / "worker" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    launch = CODEX.launch(Agent(name="ellie", role="worker", workspace=str(tmp_path / "w")),
+                          str(cfg), root=root)
+    assert "sandbox_workspace_write" not in launch and "sandbox_mode" not in launch
