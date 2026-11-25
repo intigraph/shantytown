@@ -246,3 +246,22 @@ def test_a_tampered_sandbox_file_refuses_rather_than_widens(tmp_path, bad):
     path.write_text(json.dumps(data))
     with pytest.raises(eph.Refused):
         eph.codex_daemon_sandbox_args(TASK["name"], home)
+
+
+def test_a_linked_worktree_job_also_gets_its_own_gitdir_as_a_root(tmp_path):
+    """aegis-za4f. MEASURED 2026-11-25 (eph-task-450024): from inside a linked
+    worktree Codex keeps <common>/worktrees/<name> read-only even under a
+    writable common dir, so `git add` could not create index.lock. The gitdir
+    must be named explicitly."""
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)], check=True)
+    rec = dict(TASK, worktree_of=str(repo), workspace=str(wt))
+    args = eph.codex_job_sandbox(rec, unattended=False, cache_home=tmp_path / "cache")
+    roots = json.loads(args[-1].split("=", 1)[1])
+    common = str((repo / ".git").resolve())
+    assert roots[1] == common
+    assert roots[2].startswith(common + "/worktrees/") and len(roots) == 3
