@@ -588,7 +588,11 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         with the exact sha256 st recorded when it wrote it, a provisioned skill
         (.claude/skills or .agents/skills)
         that is a symlink resolving OUTSIDE the worktree, or an untracked
-        .mcp.json naming only the provisioned servers.
+        .mcp.json naming only the provisioned servers;
+      - a TRACKED .mcp.json is held to that same rule. Provisioning replaces
+        the whole file (render, then atomic replace: no merge), so a repository
+        that commits its own .mcp.json always differs from its base after
+        provisioning. What must hold is that the file now names only the kit.
     Content arriving from a pull request is tracked, so it lands in the first
     check; the second catches anything else dropped into the worktree.
     """
@@ -608,6 +612,21 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
             raise RuntimeError((r.stderr or "").strip()[:120])
         return r
 
+    def mcp_refusal(path):
+        try:
+            servers = set(json.loads(path.read_text()).get("mcpServers", {}))
+        except (OSError, ValueError, AttributeError):
+            return ".mcp.json is unreadable"
+        allowed = set(expected_servers if expected_servers is not None else ())
+        # The job-only servers st bound into THIS job's hashed spec (za4f.2:
+        # an anonymous quipu-read) are st's kit too; provisioning writes
+        # them into .mcp.json before the trust dialog appears.
+        allowed |= _bound_job_servers(rec)
+        if not allowed or not servers <= allowed:
+            return ".mcp.json names servers outside the provisioned kit: " + \
+                   ", ".join(sorted(servers - allowed)[:5] or ["(no kit to compare)"])
+        return ""
+
     try:
         changed = git("diff", "--name-only", base, *surface).stdout.split()
         # The ONE sanctioned edit to a tracked file: provisioning's tooling block
@@ -615,6 +634,10 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         changed = [rel for rel in changed
                    if not (rel in INSTRUCTION_FILES and _only_tooling_block(
                        git("show", f"{base}:{rel}").stdout, ws / rel))]
+        if ".mcp.json" in changed and not (ws / ".mcp.json").is_symlink():
+            if why := mcp_refusal(ws / ".mcp.json"):
+                return why
+            changed.remove(".mcp.json")
         if changed:
             return "tracked trust surface differs from the base commit: " + ", ".join(changed[:5])
         extra = git("ls-files", "--others", *surface).stdout.split()
@@ -636,18 +659,8 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
             if not path.is_symlink() or target == ws.resolve() or ws.resolve() in target.parents:
                 return f"{rel} is not a provisioned skill link"
         elif rel == ".mcp.json":
-            try:
-                servers = set(json.loads(path.read_text()).get("mcpServers", {}))
-            except (OSError, ValueError, AttributeError):
-                return ".mcp.json is unreadable"
-            allowed = set(expected_servers if expected_servers is not None else ())
-            # The job-only servers st bound into THIS job's hashed spec (za4f.2:
-            # an anonymous quipu-read) are st's kit too; provisioning writes
-            # them into .mcp.json before the trust dialog appears.
-            allowed |= _bound_job_servers(rec)
-            if not allowed or not servers <= allowed:
-                return ".mcp.json names servers outside the provisioned kit: " + \
-                       ", ".join(sorted(servers - allowed)[:5] or ["(no kit to compare)"])
+            if why := mcp_refusal(path):
+                return why
         else:
             return f"untracked {rel} is not part of st's kit"
     return ""
