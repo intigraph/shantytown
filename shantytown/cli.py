@@ -1894,7 +1894,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # aegis-c01c.2: ephemeral, administrator-managed agents for one job.
     sp = leaf("spawn", help="ephemeral agent for one job (review, merge, triage, task), "
-                            "managed by the administrator; docs/ephemeral-agents.md")
+                            "managed by the administrator or a lead; docs/ephemeral-agents.md")
     sp_mode = sp.add_mutually_exclusive_group(required=True)
     sp_mode.add_argument("--ephemeral", action="store_true",
                          help="spawn one: needs --job and --item")
@@ -4157,7 +4157,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             eph.authority(actor, role_of, require_verified=True, recruiter_scope=recruiter_scope,
                           request=proposed, root=a.root, host=cfg.host_name)
         else:
-            eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity)
+            eph.authority(inside or actor, role_of, require_verified=policy.require_verified_identity,
+                          admit=eph.JOB_MANAGERS)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
         if a.stop:

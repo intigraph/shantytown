@@ -221,11 +221,20 @@ def harness_for(req: Request, policy) -> str:
         req.job, DEFAULT_HARNESS[req.job])
 
 
+# Who may spawn, stop or retry ephemeral jobs (aegis-za4f, sattler ruling
+# 2026-11-25): the administrator and leads. ADMINISTRATOR_ONLY is the default
+# so other callers of authority(), such as the recruit controller, keep their
+# administrator boundary unless they opt in explicitly.
+ADMINISTRATOR_ONLY = ("administrator",)
+JOB_MANAGERS = ("administrator", "lead")
+
+
 def authority(actor: str | None, role_of: Callable[[str], str | None], *,
               require_verified: bool = False, recruiter_scope=None, request=None,
-              root=None, host=None) -> None:
-    """Administrators manage jobs; migration mode also admits a human shell.
-    With verified identity required, callers resolve the protected principal first."""
+              root=None, host=None, admit: tuple[str, ...] = ADMINISTRATOR_ONLY) -> None:
+    """The administrator (and, where the caller admits them, leads) manage jobs;
+    migration mode also admits a human shell. With verified identity required,
+    callers resolve the protected principal first."""
     if recruiter_scope is not None:
         from .recruiter import Scope
         from .actor_identity import IdentityError
@@ -244,9 +253,12 @@ def authority(actor: str | None, role_of: Callable[[str], str | None], *,
         return
     if is_ephemeral_name(actor):
         raise Refused("an ephemeral agent cannot spawn, stop or retry ephemeral agents")
-    if role_of(actor) != "administrator":
-        raise Refused(f"{actor} is not the administrator; ephemeral agents are "
-                      "managed by the administrator (route the ask there)")
+    if role_of(actor) not in admit:
+        if admit == ADMINISTRATOR_ONLY:
+            raise Refused(f"{actor} is not the administrator; ephemeral agents are "
+                          "managed by the administrator (route the ask there)")
+        raise Refused(f"{actor} is not the administrator or a lead; ephemeral agents are "
+                      "managed by the administrator or a lead (route the ask there)")
 
 
 def cap_refusal(root, policy) -> str:
@@ -285,7 +297,8 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     """Admit or refuse, and build the ledger record. Writes nothing."""
     validate(req)
     authority(actor, role_of, require_verified=policy.require_verified_identity,
-              recruiter_scope=recruiter_scope, request=req, root=root, host=host)
+              recruiter_scope=recruiter_scope, request=req, root=root, host=host,
+              admit=JOB_MANAGERS)
     if not administrator:
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")
