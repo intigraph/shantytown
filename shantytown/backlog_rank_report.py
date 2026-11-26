@@ -22,6 +22,13 @@ from .sd import StoreProof
 
 INTERVAL = 300
 LEDGER = "backlog_rank_attempt.json"
+# aegis-nwh: the validated query order refill consumes. Written only by a
+# successful observation and removed by every other attempt outcome, so an
+# UNKNOWN/timeout read leaves refill on today's order instead of a stale one.
+ORDER = "backlog_rank_order.json"
+# Attempts run at most every INTERVAL; an order older than three of them means
+# the sweep stopped running, and order evidence that old is not consumed.
+ORDER_MAX_AGE = 3 * INTERVAL
 
 
 def scope(ready, *, now=None):
@@ -52,9 +59,14 @@ def scope(ready, *, now=None):
 
 
 def observation(root, selected, total, proof, *, now, reader=None):
-    """A lean snapshot plus query witnesses is read-only evidence, not a CAS."""
+    """A lean snapshot plus query witnesses is read-only evidence, not a CAS.
+
+    Returns the log line and the validated query order (IDs). The order is
+    order only: refill re-previews and dispatch re-reads every item it picks.
+    """
     if not selected:
-        return "graph rank observation: 0 eligible ordinary unowned READY; no query or admission"
+        return ("graph rank observation: 0 eligible ordinary unowned READY; "
+                "no query or admission"), []
     if (not isinstance(proof, StoreProof) or not proof.graph or not proof.quipu_url
             or proof.quipu_url.rstrip("/") != resolve_server(root=root).rstrip("/")):
         raise ValueError("rank observation store identity UNKNOWN")
@@ -65,7 +77,7 @@ def observation(root, selected, total, proof, *, now, reader=None):
     rows = (reader or ask)(root, QUERY, params, limit=MAX_CANDIDATES + 1, timeout=2)
     if not isinstance(rows, list) or len(rows) != len(by_id):
         raise ValueError("rank observation coverage UNKNOWN")
-    seen, names = set(), []
+    seen, names, order = set(), [], []
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("rank observation row UNKNOWN")
@@ -80,13 +92,15 @@ def observation(root, selected, total, proof, *, now, reader=None):
             raise ValueError("rank observation snapshot changed")
         deferral_observation(row, now=now)
         seen.add(ident)
+        order.append(ident)
         if len(names) < 5:
             names.append(f"{ident} P{row['priority']}")
     coverage = ("complete supplied READY scope" if len(selected) == total
                 else "bounded window; remaining IDs not ranked")
     return (f"graph rank observation: {len(selected)}/{total} eligible ordinary unowned READY "
             f"({coverage}); query order: {', '.join(names)}; "
-            "advisory only, no dispatch/admission or global-order claim")
+            "consumed as refill in-lane order (unranked tail keeps priority order); "
+            "no dispatch/admission or global-order claim"), order
 
 
 def sweep(root, ready, store, *, log=print, reader=None, now=None):
@@ -118,5 +132,42 @@ def sweep(root, ready, store, *, log=print, reader=None, now=None):
     # Reserve the attempt BEFORE I/O; a crash or refusal never creates a poll loop.
     path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomic(path, {"at": stamp})
-    proof = store() if selected else None
-    log(observation(root, selected, total, proof, now=now, reader=reader))
+    target = path.parent / ORDER
+    try:
+        proof = store() if selected else None
+        line, order = observation(root, selected, total, proof, now=now, reader=reader)
+        if order:
+            write_json_atomic(target, {"at": stamp, "order": order,
+                                       "window": len(selected), "total": total})
+        else:
+            target.unlink(missing_ok=True)
+    except BaseException:
+        # UNKNOWN is not an order: refill must fall back to today's order.
+        target.unlink(missing_ok=True)
+        raise
+    log(line)
+
+
+def consumed_order(root, *, now=None):
+    """The last validated query order, or None (fallback) with the reason.
+
+    Never raises: a missing, stale, future or malformed record is UNKNOWN and
+    the caller keeps today's order. It is never an empty candidate list.
+    """
+    stamp = (now or datetime.now(timezone.utc)).timestamp()
+    try:
+        record = json.loads((Path(root) / "notify" / ORDER).read_text())
+    except FileNotFoundError:
+        return None, "no current graph rank"
+    except (OSError, ValueError) as exc:
+        return None, f"graph rank UNKNOWN ({type(exc).__name__})"
+    at = record.get("at") if isinstance(record, dict) else None
+    order = record.get("order") if isinstance(record, dict) else None
+    if (type(at) not in (int, float) or not math.isfinite(at) or at > stamp
+            or not isinstance(order, list) or not order
+            or not all(isinstance(i, str) and i for i in order)
+            or len(set(order)) != len(order) or len(order) > MAX_CANDIDATES):
+        return None, "graph rank UNKNOWN (malformed record)"
+    if stamp - at > ORDER_MAX_AGE:
+        return None, f"graph rank stale ({stamp - at:.0f}s)"
+    return order, f"graph rank {QUERY} {len(order)} ranked, {stamp - at:.0f}s old"
