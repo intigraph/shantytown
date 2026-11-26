@@ -558,6 +558,21 @@ def _only_tooling_block(base_text: str, path: Path) -> bool:
         return False
 
 
+def _created_tooling_block(path: Path) -> bool:
+    """Is this untracked instruction file exactly what provisioning writes from
+    an empty base: a regular file with one terminated tooling block and nothing
+    else? An empty file, a symlink, text outside the block or an unreadable
+    file is False."""
+    from .tooling import BEGIN
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError):
+        return False
+    return text.count(BEGIN) == 1 and _only_tooling_block("", path)
+
+
 def _bound_job_servers(rec: dict) -> set:
     """Server names in the job's own bound spec, only when its recorded hash
     still matches (fails closed to none: a hand-edited spec admits nothing)."""
@@ -661,6 +676,13 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         elif rel == ".mcp.json":
             if why := mcp_refusal(path):
                 return why
+        elif rel in INSTRUCTION_FILES:
+            # A repository that tracks no instruction file (intigraph/tambo,
+            # aegis-47ca): provisioning creates it from empty, so it is
+            # untracked and its ONLY content may be st's tooling block —
+            # the same rule as a tracked file whose base is empty.
+            if not _created_tooling_block(path):
+                return f"untracked {rel} holds more than st's tooling block"
         else:
             return f"untracked {rel} is not part of st's kit"
     return ""
