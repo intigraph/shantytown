@@ -296,7 +296,7 @@ can only fall back. A runtime size never switches on a host whose config says
 `max_agents = 0`. `status` is a read anyone may run, like `--list`; every
 change needs spawn authority. `resume` and `size` kick the queue the same way
 a job end does, so there is still no poller. `pool` is a mode of `spawn`
-rather than a new `st agent pool` leaf, because the command surface is pinned
+rather than a new leaf command under `st agent`, because the command surface is pinned
 (`shantytown/surface.py`).
 
 **Per-job concurrency.** `[ephemeral.limits.<job>] max_concurrent = n` caps

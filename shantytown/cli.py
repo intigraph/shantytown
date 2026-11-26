@@ -1904,7 +1904,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="launch queued tickets into free slots (the job end paths run this)")
     sp_mode.add_argument("--pool", nargs="+", metavar="ACTION",
                          help="manage the ephemeral pool: status | size N|config | pause | "
-                              "drain | resume (aegis-za4f.3)")
+                              "drain | resume")
     sp_mode.add_argument("--stop", metavar="NAME", help="end a job now: report, tear down")
     sp_mode.add_argument("--retry", metavar="NAME", help="end it if live, spawn the same job again")
     sp_mode.add_argument("--report", action="store_true",
