@@ -19,7 +19,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | No owner                    | The card's `reports_to` is the administrator, and only the administrator or a lead (or a human shell) may spawn, stop or retry (leads admitted by aegis-za4f; a worker is still refused). Scoped recruitment and the recruit controller keep the administrator-only boundary. An ephemeral agent cannot spawn another one. The check does not depend on `$SHANTY_AGENT`, which a pane can unset: a process whose working directory is inside a live job's workspace, or that descends from a job's tmux pane shell, *is* that job. |
 | Unbounded life              | Every job has a deadline (`lifetime_minutes`). The agent's Stop hook and every `st fleet tend` pass enforce it. Neither one is an agent poll. |
 | Unbounded spend             | A turn budget (`max_turns`) and a context budget (`max_context_k`) are checked at every Stop. The agent counts in the usage governor like any card and carries the `first` survival band, so a governor tier sheds it first. |
-| Unbounded fan-out           | `max_agents` caps how many ephemeral agents can be live on a host at once. The fleet governor's lane cap and its tier exclusions apply too. Over cap means **refused**, never queued in secret. |
+| Unbounded fan-out           | `max_agents` caps how many ephemeral agents can be live on a host at once. The fleet governor's lane cap and its tier exclusions apply too. Over cap, a fresh `--ephemeral` spawn is **queued as a visible ticket** (`--list`, `st crew`) and launched when a job ends; retries, recruitment and `max_agents = 0` are still refused. See [The spawn queue](#the-spawn-queue). |
 | Silent exit                 | Every ending writes a result to the ledger, comments on the work item and sends one `ephemeral-result` event to the administrator. That includes a clean report, a timeout, a budget hit, a dead pane, an undelivered job and a manual stop. The event is keyed, so a retried report is never sent twice. The administrator's drain renders it as a **finished job** (verdict + item), never as a stopped crew member to re-dispatch. An ephemeral agent's per-turn stops send no crew stop event at all. |
 | Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. Delivered means the job's turn STARTED, not that its text landed: on Claude Code st checks the composer is empty, types the job with no Enter, waits to see it in the box (a long job shows as `[Pasted text #1 +N lines]`), presses Enter as its own keystroke and waits to see the turn start (busy marker, spinner, context-left drop or the job echoed). It presses Enter again, up to three times, only while the box holds just the job, and never on text it did not type. A pane whose job did not start is ended at once as `launch failed`, with the reason. |
 | Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
@@ -175,7 +175,9 @@ defaults per deployment.
 
 ```
 st agent spawn --ephemeral --job review --item aegis-x --repo owner/name --pr 12 [--checkout PATH]
-st agent spawn --list [--json]          # live + recent jobs (also in `st crew` and the admin's `st anchor`)
+st agent spawn --list [--json]          # live + recent jobs and queued tickets (also in `st crew` and the admin's `st anchor`)
+st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 highest (default: the item's)
+st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
 st agent spawn --ephemeral --job merge --item aegis-y --repo owner/name --pr 12 [--head SHA]
@@ -190,6 +192,44 @@ Codex jobs, heredocs, pipes and shell wrappers can fail to match the report-only
 permission and leave the ledger read-only. An empty summary is refused before
 publishing a verdict or ending the job. Existing stdin reports remain supported
 for callers that can supply stdin without wrapping the command.
+
+## The spawn queue
+
+aegis-cui. Before it, a spawn over the cap was refused and the work was lost
+unless a human retried it. Now a fresh `st agent spawn --ephemeral` whose ONLY
+refusal is the cap writes a ticket and exits 0:
+
+```
+  QUEUED q-3f9a1c2b4d5e: task on aegis-x (P2), position 1; over cap: 2/2 ... It launches when a job ends
+```
+
+`--dry-run` prints `would queue ...` and writes nothing. A ticket records the
+job kind, item, repo/PR/checkout, harness, priority, requester and
+`enqueued_at`, one JSON file per ticket under `<root>/ephemeral/queue/`.
+Every other refusal (authority, no administrator, merge lane, governor,
+`max_agents = 0`) still refuses, as do `--retry` and scoped recruitment.
+
+**Drain on job end, no poller.** Every end path frees its slot and kicks the
+queue: `--stop` and the reaper after their synchronous teardown, `--report`
+from its detached teardown once the pane is gone. The drain
+(`st agent spawn --drain`, started in its own session) claims the
+highest-priority (0 first, unranked last), oldest ticket and runs it through
+the full spawn path as its requester, so authority, governor and trust checks
+apply again at launch. A ticket whose item is closed or no longer exists is
+dropped, never launched, and kept with its reason under `queue/dropped/`; an
+item the tracker cannot read keeps its ticket queued. A ticket the spawn
+refuses at launch is dropped the same way with the refusal as its reason.
+A retry's superseded job does not drain: that slot is the retry's.
+
+**Crash semantics: exactly-once launch, never lost.** The claim marks the
+ticket with the drainer's pid. The spawn writes the ledger record carrying
+`ticket` and deletes the ticket file in the same `lock()` step. The next claim
+first recovers: a claimed ticket a ledger record names is settled, never
+relaunched; one with no record whose claimer is dead (or older than
+`LAUNCH_GRACE_S`) goes back to queued with its age. A launch that dies after
+its ledger write is an ordinary LAUNCHING job the reaper already ends.
+
+Not yet: pool resize, pause/drain admin commands, TTLs, per-track shares.
 
 ## Configuration
 

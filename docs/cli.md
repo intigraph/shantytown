@@ -305,8 +305,9 @@ st agent                      one agent
                               an EPHEMERAL agent for one job, managed by the administrator or a lead:
                               own worktree, deadline + turn/context budget, counted in the cap
                               and the governor, reports its verdict to the administrator and the
-                              item, then is torn down. --list · --stop NAME · --retry NAME ·
-                              --report (by the agent) · --reap (tend). docs/ephemeral-agents.md
+                              item, then is torn down. Over cap it QUEUES a ticket (--priority N)
+                              that the job end paths drain. --list · --stop NAME · --retry NAME ·
+                              --report (by the agent) · --reap (tend) · --drain. docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]
                               convert one agent to another harness: writes the card (with a
