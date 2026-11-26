@@ -27,6 +27,22 @@ def ordered(rows):
                       r.get('due_at'), r.get('created_at')), r['id']))
 
 
+def ranked(rows, order):
+    """Apply the stored rank_v2 order (aegis-nwh) without starving the tail.
+
+    Rows in the query's bounded window come first in query order; every other
+    row keeps today's ordered() order after them. lane_sequence keeps this
+    order inside Next (laned, then unlaned) and uses it only as the tie-break
+    under Now/Later oldest-first, so the ruled lane split is unchanged. No
+    order (UNKNOWN, stale, absent) returns today's order exactly.
+    """
+    if not order:
+        return list(rows)
+    position = {ident: i for i, ident in enumerate(order)}
+    head = sorted((r for r in rows if r['id'] in position), key=lambda r: position[r['id']])
+    return head + [r for r in rows if r['id'] not in position]
+
+
 # aegis-6vto.6 (Stiwi 2026-11-11, two-week trial): about 20% of live capacity
 # for Now (interrupts and new asks), 60% for Next in rank order, 20% for Later
 # oldest-first. Unused Now share works Next. A missing lane is UNLANED (6vto.4
@@ -152,7 +168,14 @@ class Refiller:
         if after in free:
             index = free.index(after) + 1
             free = free[index:] + free[:index]
-        rows = ordered(ready)
+        from .backlog_rank_report import consumed_order
+        order, rank_source = consumed_order(self.root)
+        rows = ranked(ordered(ready), order)
+        if free:
+            consumed = [r['id'] for r in rows if order and r['id'] in order]
+            self.log(f"auto-refill order: {rank_source}"
+                     + (f"; consumed head {', '.join(consumed[:5])}" if consumed
+                        else "; today's priority order"))
         fallback = {*free, *owned_idle, *pending,
                     *(_owner(row) for row in active if _owner(row))}
         census = 'fallback'
@@ -170,7 +193,7 @@ class Refiller:
         split = dict(members=len(live), census=census, quota=quota, occupied_before=dict(occupied),
                      waiting={name: sum(1 for r in rows if (lane(r) or 'next') == name)
                               for name in LANES},
-                     served=dict(now=0, next=0, later=0))
+                     served=dict(now=0, next=0, later=0), rank=rank_source)
         reserved = {entry['item'] for entry in pending.values()}
         delivered, observations = [], {}
         waiting = {}

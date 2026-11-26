@@ -383,3 +383,127 @@ def test_split_occupancy_never_exceeds_live_members(tmp_path, monkeypatch):
     split = json.loads((state / 'state.json').read_text())['split']
     assert split['occupied_before'] == dict(now=0, next=1, later=0) and split['members'] == 2
     assert calls == [('n1', 'a')]
+
+
+# aegis-nwh: refill consumes the stored seeds_work_rank_v2 order inside a lane.
+from datetime import datetime, timezone
+from shantytown import backlog_rank_report as rank_report
+from shantytown.refill import ranked
+from shantytown.sd import StoreProof
+
+RANK_NOW = datetime(2026, 11, 8, 11, tzinfo=timezone.utc)
+RANK_PROOF = StoreProof('--quipu', None, 'https://example.test', 'test', 'urn:test:board')
+
+
+def rank_sweep(tmp_path, monkeypatch, candidates, reader, *, when=RANK_NOW):
+    monkeypatch.setattr(rank_report, 'deployment_default', lambda root, key: '1')
+    monkeypatch.setattr(rank_report, 'resolve_server', lambda **kw: RANK_PROOF.quipu_url)
+    logs = []
+    rank_report.sweep(tmp_path, candidates, lambda: RANK_PROOF, now=when,
+                      log=logs.append, reader=reader)
+    return logs
+
+
+def query_order(ids):
+    """A rank_v2 reader that returns the window in the given (graph) order."""
+    def reader(root, name, params, **bounds):
+        assert name == 'seeds_work_rank_v2'
+        chosen = [params[k] for k in sorted(params) if k.startswith('id')]
+        assert sorted(chosen) == sorted(ids)
+        return [dict(id=i, revision=1, priority=1, status='open', assignee=None,
+                     created_at='2026-11-01T00:00:00Z', due_at=None,
+                     sampled_at=params['now'], deferral_observation='UNKNOWN') for i in ids]
+    return reader
+
+
+def rank_rows():
+    base = dict(created_at='2026-11-01T00:00:00Z')
+    return [row('a', lane='next', **base), row('b', lane='next', **base),
+            row('c', lane='next', **base), row('u', **base)]
+
+
+def refill_calls(tmp_path, monkeypatch, rows, free, when=RANK_NOW):
+    monkeypatch.setattr(rank_report, 'datetime',
+                        type('Clock', (datetime,), {'now': classmethod(lambda cls, tz=None: when)}))
+    f, calls = feeder(tmp_path, monkeypatch, rows, free=free)
+    logs = []
+    f.log = logs.append
+    f.sweep()
+    return calls, logs, json.loads((tmp_path / 'refill/state.json').read_text())['split']
+
+
+def test_refill_pick_follows_rank_v2_within_next_lane(tmp_path, monkeypatch):
+    rows = rank_rows()
+    logs = rank_sweep(tmp_path, monkeypatch, rows, query_order(['c', 'a', 'b', 'u']))
+    assert 'consumed as refill in-lane order' in logs[0] and 'advisory only' not in logs[0]
+    calls, refill_logs, split = refill_calls(tmp_path, monkeypatch, rows, ('w1', 'w2', 'w3'))
+    # Today's order would be a, b, c; the graph order is c, a, b. Laned Next
+    # still precedes unlaned: the lane model is unchanged.
+    assert [item for item, _ in calls] == ['c', 'a', 'b']
+    assert split['rank'].startswith('graph rank seeds_work_rank_v2 4 ranked')
+    assert any('consumed head c, a, b, u' in line for line in refill_logs)
+
+
+def test_unranked_tail_keeps_todays_order_after_the_window():
+    rows = ordered([row('p0', priority=0), row('t2', priority=2), row('t1', priority=1),
+                    row('r1', priority=1), row('r0', priority=1)])
+    assert [r['id'] for r in rows] == ['p0', 'r0', 'r1', 't1', 't2']
+    # Window ranked r1 before p0; everything outside keeps today's order after.
+    assert [r['id'] for r in ranked(rows, ['r1', 'p0'])] == ['r1', 'p0', 'r0', 't1', 't2']
+    assert [r['id'] for r in ranked(rows, None)] == [r['id'] for r in rows]
+
+
+def test_later_lane_stays_oldest_first_rank_only_breaks_ties():
+    old = dict(created_at='2026-01-01T00:00:00Z')
+    new = dict(created_at='2026-11-01T00:00:00Z')
+    rows = ranked([row('l-new', lane='later', **new), row('l-old', lane='later', **old),
+                   row('l-old2', lane='later', **old)], ['l-new', 'l-old2', 'l-old'])
+    seq = lane_sequence(rows, quotas(3), dict(now=0, next=0, later=0))
+    assert [r['id'] for _, r in seq] == ['l-old', 'l-old2', 'l-new']
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'coverage'])
+def test_unknown_query_falls_back_to_todays_order_never_empty(tmp_path, monkeypatch, failure):
+    rows = rank_rows()
+    rank_sweep(tmp_path, monkeypatch, rows, query_order(['c', 'a', 'b', 'u']))
+    assert (tmp_path / 'notify' / rank_report.ORDER).exists()
+    def broken(*a, **kw):
+        if failure == 'timeout':
+            raise TimeoutError('fixture timeout')
+        return []
+    later = RANK_NOW.replace(minute=10)
+    with pytest.raises((TimeoutError, ValueError)):
+        rank_sweep(tmp_path, monkeypatch, rows, broken, when=later)
+    # The failed attempt removed the previous order rather than leaving it live.
+    assert not (tmp_path / 'notify' / rank_report.ORDER).exists()
+    calls, logs, split = refill_calls(tmp_path, monkeypatch, rows, ('w1', 'w2', 'w3', 'w4'), later)
+    assert [item for item, _ in calls] == ['a', 'b', 'c', 'u']
+    assert split['rank'] == 'no current graph rank'
+    assert any("today's priority order" in line for line in logs)
+
+
+@pytest.mark.parametrize('record', [
+    'not json', '[]', '{"at": 1}', '{"at": true, "order": ["c"]}',
+    '{"at": 1e30, "order": ["c"]}', '{"at": 0, "order": ["c"]}',
+    '{"at": %d, "order": ["c", "c"]}' % RANK_NOW.timestamp(),
+    '{"at": %d, "order": []}' % RANK_NOW.timestamp(),
+])
+def test_stale_future_or_malformed_order_is_unknown_not_consumed(tmp_path, monkeypatch, record):
+    path = tmp_path / 'notify' / rank_report.ORDER
+    path.parent.mkdir()
+    path.write_text(record)
+    order, reason = rank_report.consumed_order(tmp_path, now=RANK_NOW)
+    assert order is None and ('UNKNOWN' in reason or 'stale' in reason)
+    calls, _, _ = refill_calls(tmp_path, monkeypatch, rank_rows(), ('w1',))
+    assert calls == [('a', 'w1')]
+
+
+def test_fresh_order_is_consumed_and_can_fail(tmp_path):
+    # The check says yes on a fresh record and no once it ages past the bound.
+    path = tmp_path / 'notify' / rank_report.ORDER
+    path.parent.mkdir()
+    path.write_text(json.dumps({'at': RANK_NOW.timestamp(), 'order': ['c', 'a']}))
+    assert rank_report.consumed_order(tmp_path, now=RANK_NOW)[0] == ['c', 'a']
+    from datetime import timedelta
+    stale = RANK_NOW + timedelta(seconds=rank_report.ORDER_MAX_AGE + 1)
+    assert rank_report.consumed_order(tmp_path, now=stale)[0] is None

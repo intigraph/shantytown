@@ -138,6 +138,26 @@ select the deterministic window; the stored query chooses the displayed order.
 The log labels the selected/eligible counts and says when other IDs were omitted.
 It does not present a bounded window as the global board order.
 
+### Refill consumes that order (aegis-nwh)
+
+A successful observation writes its validated ID order to
+`notify/backlog_rank_order.json`; every other attempt outcome (timeout,
+coverage or witness mismatch, wrong store, empty scope) removes that file. On
+each tick, auto-refill reads the order. It skips the order if the file is
+absent, malformed, from the future or older than three attempt intervals
+(15 minutes). Otherwise it reorders its candidates: IDs in the ranked window
+come first in query order, and every other candidate keeps today's
+priority/rank order after them, so the bounded window never starves the tail.
+The lane split keeps Stiwi's ruling. Inside Next, laned items still come
+before unlaned ones and each group follows the query order. Now and Later stay
+oldest-first, and the query order only breaks ties there. If no order can be
+consumed, refill uses today's order exactly; this path never produces an empty
+candidate list. The order is order only. Preview and normal dispatch still
+re-read and gate every item.
+
+The tick logs `auto-refill order: <source>; consumed head ...` (or `today's
+priority order`). `refill/state.json` records the same source as `split.rank`.
+
 Every returned ID must be covered exactly once, match the observed scheduling
 metadata and sampled clock, and carry a positive native revision. The lean
 snapshot has no revision witness: this is an observation, never CAS or admission
