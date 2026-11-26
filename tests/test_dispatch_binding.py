@@ -446,3 +446,65 @@ def test_pending_recovery_refuses_mismatched_submission_witness(world, field, va
     assert tracker.get('work-1').assignee is None
     assert not binding.reconcile(row['id'])['execution_authorized']
     assert len(panes.sent) == 1
+
+
+# --- aegis-647r: already in_progress for the SAME worker ----------------------
+# Measured wedge (five receipts, 2026-11): st go to the holder minted a fresh
+# receipt, the holder's submission was never proved, and the worker's own
+# --reconcile then read state=prepared, missing=[submission, assignment],
+# execution_authorized=false for work it natively owned.
+
+@pytest.mark.parametrize('drops', [True, False])
+def test_held_item_refuses_before_minting_a_receipt(world, drops):
+    from shantytown.dispatch import AlreadyAssigned, AlreadyHeld
+    root, d, binding, tracker, panes = world
+    tracker.update('work-1', status='in_progress', assignee='worker')
+    held = tracker.get('work-1')
+    panes._drops = drops
+    for dry_run in (True, False):
+        with pytest.raises(AlreadyHeld) as refused:
+            d.go('work-1', 'worker', note='re-nudge', dry_run=dry_run)
+        assert isinstance(refused.value, AlreadyAssigned)  # the CLI's REFUSED path
+        assert 'no receipt minted, nothing sent' in str(refused.value)
+    assert not list(root.glob('dispatch-receipts/*.json'))
+    assert panes.sent == [] and tracker.get('work-1') == held
+
+
+def test_held_item_with_its_assigned_receipt_still_replays_authorized(world):
+    """The refusal must be able to say yes: an assigned receipt covering the
+    held item's current scope replays, sends nothing new and stays authorized."""
+    root, d, binding, tracker, panes = world
+    p = d.go('work-1', 'worker')
+    assert tracker.get('work-1').status == 'in_progress'
+    again = d.go('work-1', 'worker')
+    assert again.replayed and again.receipt_id == p.receipt_id and len(panes.sent) == 1
+    assert binding.reconcile(p.receipt_id)['execution_authorized']
+    assert len(list(root.glob('dispatch-receipts/*.json'))) == 1
+
+
+def test_held_item_with_a_pending_receipt_keeps_its_reconcile_path(world):
+    """A pending receipt is not shadowed by the new refusal: prepare() still
+    names it for reconciliation rather than minting a second one."""
+    root, d, binding, tracker, panes = world
+    panes._drops = True
+    with pytest.raises(SendUnverified):
+        d.go('work-1', 'worker')
+    row = binding.store.pending('work-1')
+    tracker.update('work-1', status='in_progress', assignee='worker')
+    with pytest.raises(ReceiptConflict) as refused:
+        d.go('work-1', 'worker')
+    assert row['id'] in str(refused.value)
+    assert [r.stem for r in root.glob('dispatch-receipts/*.json')] == [row['id']]
+
+
+def test_cli_go_to_holder_is_a_clean_refusal(tmp_path, monkeypatch, capsys):
+    root = tmp_path / '.shanty'
+    (root / 'crew').mkdir(parents=True)
+    (root / 'crew/worker.json').write_text(json.dumps(dict(pane='%5', harness='codex')))
+    (root / 'items').mkdir()
+    (root / 'items/work-1.json').write_text(json.dumps(
+        dict(title='bounded work', status='in_progress', assignee='worker')))
+    monkeypatch.setattr(cli, 'Tmux', lambda *a, **k: ReceivingPanes(screen=''))
+    assert cli.main(['--root', str(root), 'go', 'work-1', 'worker']) == cli.REFUSED
+    assert 'already in_progress for worker' in capsys.readouterr().err
+    assert not list(root.glob('dispatch-receipts/*.json'))

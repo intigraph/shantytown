@@ -138,6 +138,21 @@ class Binding:
             self.assign(plan)
         return self.reconcile(ident)
 
+    def held_without_receipt(self, plan):
+        """True when the worker already holds the item and no receipt covers it.
+
+        Read-only. Any existing receipt for this item (an assigned one whose
+        scope still matches, or a pending one) keeps its own replay/reconcile
+        path in prepare(); only a FRESH mint for already-held work is refused,
+        because that receipt can only wedge (aegis-647r).
+        """
+        item = plan.binding_item
+        if (item is None or (item.status or '').strip() != 'in_progress'
+                or (item.assignee or '').strip() != plan.agent):
+            return False
+        return (self.store.find(self.scope(plan)) is None
+                and self.store.pending(plan.item_id) is None)
+
     def prepare(self, plan):
         scope = self.scope(plan)
         with self.store.lock(plan.item_id):
