@@ -3454,13 +3454,21 @@ def _runtime(a, panes):
     return ClaudeRuntime(panes, _default_settings(a.root, agents), root=a.root)
 
 
-def _observe_live(runtime, panes, session, card=None, *, trust_guard=None) -> bool:
+def _observe_live(runtime, panes, session, card=None, *, trust_guard=None,
+                  note=None) -> bool:
     """Poll capture() until the runtime is OBSERVED live, or give up (-> 2).
 
     This proves the PROCESS came up — NOT that hooks fired. The hooks guarantee is
     enforced at COMPOSITION (the string provably carried --settings), not by pane
     inspection (arnold: that is GT's unanswerable 'did I get primed?'). A green
-    verify here must never be read as 'hooks registered'."""
+    verify here must never be read as 'hooks registered'.
+
+    ``note(why)``, when given, receives the cause of a launch this function
+    stopped short of: a refused or unselectable trust dialog. Those used to go
+    to stderr only, so the job ledger said "job prompt not delivered to the
+    pane" for all of them and every investigation re-derived the cause from a
+    pane capture (aegis-za4f.2, za4f.12, 47ca, 8et: 9 Claude jobs 11-21..26)."""
+    note = note or (lambda why: None)
     answered = False
     chrome_answered = False
     attempts = _LIVE_ATTEMPTS
@@ -3493,6 +3501,7 @@ def _observe_live(runtime, panes, session, card=None, *, trust_guard=None) -> bo
                 # that are not main's or st's. Press nothing; could-not-tell.
                 print(f"  first-run TRUST prompt in {session} — REFUSED: {refusal}. "
                       f"Nothing pressed.", file=sys.stderr)
+                note(f"folder-trust dialog refused: {refusal}; nothing pressed")
                 if _LIVE_DELAY:
                     time.sleep(_LIVE_DELAY)
                 continue
@@ -3508,6 +3517,8 @@ def _observe_live(runtime, panes, session, card=None, *, trust_guard=None) -> bo
             elif not _accept_unnumbered_trust(runtime, panes, session):
                 print(f"  could not select the trust row in {session}; nothing "
                       f"pressed, left for a human.", file=sys.stderr)
+                note("folder-trust dialog: the accepting row was never selected; "
+                     "nothing pressed")
         # THE CHROME CONSENT GATE (aegis-neffw), and it is the trust gate's twin.
         # Live-fire 2026-08-05: `claude --chrome` shows the folder-trust dialog,
         # then a SECOND screen consenting to the browser integration, and that one
@@ -4483,6 +4494,7 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                       file=sys.stderr)
                 return REFUSED
         a._startup_delivered = False
+        a._startup_failure = ""
         if recruitment is not None:
             try:
                 recruitment.recheck(req, uid_launch, existing=True)
@@ -4496,7 +4508,10 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 return REFUSED
         rc = _launch(a, card, panes, _runtime(a, panes))
         if rc == REFUSED:
-            _spawn_end(a, rec["name"], "failed", "launch refused (see the spawner's stderr)",
+            # Name the cause when the launcher recorded one: stderr is gone by
+            # the time anyone reads the ledger (aegis-8et).
+            why = getattr(a, "_startup_failure", "") or "see the spawner's stderr"
+            _spawn_end(a, rec["name"], "failed", f"launch refused ({why})",
                        "launch refused", detached=False)
             return REFUSED
         if not a._startup_delivered:
@@ -5467,7 +5482,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # never turn a successful launch into a failure.
     _launched_now(a, card.name, runtime.settings_path(card))
     ledger_ok = _record_launch_unretirement(a, card)
-    if _observe_live(runtime, panes, session, card, trust_guard=_job_trust_guard(a, card)):
+    def note(why):
+        if not getattr(a, "_startup_failure", ""):
+            a._startup_failure = why
+    if _observe_live(runtime, panes, session, card, trust_guard=_job_trust_guard(a, card),
+                     note=note):
         verified = _verify_live_hooks(a, card, runtime, panes, session)
         from . import ephemeral as _eph
         if verified == OK:
@@ -5494,6 +5513,8 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             print(f"  ephemeral {card.name}: hooks unverifiable here; delivering the "
                   "job anyway (tend enforces its deadline).", file=sys.stderr)
             a._startup_delivered = bool(_deliver_startup_inbox(a, card, panes, session))
+        else:
+            note(f"launch hooks not verified (rc {verified}); job withheld")
         # Process hooks are a separate fact from the first submitted turn.
         # A stranded startup body must not inherit the earlier hooks' success.
         if verified == OK and not getattr(a, '_startup_delivered', False):
@@ -5507,7 +5528,10 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # prompt) from "unknown" — both are could-not-tell (2), but they need
     # different human actions (live-fire found the consent case).
     final = panes.capture(session)
+    if getattr(runtime, "trust_prompt", None) and runtime.trust_prompt(final):
+        note("the agent never came up: the folder-trust dialog is still showing")
     if getattr(runtime, "waiting_for_human", None) and runtime.waiting_for_human(final):
+        note("the agent never came up: a first-run prompt is waiting on a human")
         print(f"  could not tell: {card.name} ({session}) is WAITING ON A PROMPT "
               f"(first-run consent), not up yet. Answer it: `st agent log {card.name}` to "
               f"see it, then `st attach {card.name}`.", file=sys.stderr)
@@ -5533,6 +5557,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     # Printing it costs nothing.
     print(f"  {unobserved_launch_report(card.name, card.harness, session)}",
           file=sys.stderr)
+    note("the agent was never observed live after launch; nothing typed")
     return CANNOT_TELL
 
 
@@ -5738,12 +5763,15 @@ def _deliver_startup_inbox(a, card, panes, session: str) -> bool | None:
                 if marker in screen:
                     break
     except Exception as e:  # noqa: BLE001 -- keep the pointers as the recovery
+        a._startup_failure = f"startup delivery failed ({type(e).__name__}: {str(e)[:120]})"
         print(f"  ⚠ startup inbox delivery failed for {card.name} "
               f"({type(e).__name__}: {str(e)[:100]}); {len(unread)} pointer(s) "
               f"remain open.", file=sys.stderr)
         return
     if not codex_observed and (marker not in screen or input_stranded(screen)
             or (anchor and job is None and session_anchor.BANNER not in screen)):
+        a._startup_failure = ("startup marker never read back"
+                              if marker not in screen else "startup input stranded in the composer")
         print(f"  ⚠ startup inbox delivery not verified for {card.name} "
               f"(complete marker absent or input stranded); {len(unread)} "
               f"pointer(s) remain open.", file=sys.stderr)
