@@ -257,7 +257,9 @@ def test_profiled_protected_launch_refuses_before_touching_operator_staging(tmp_
     monkeypatch.setattr(cli, "_spawn_inside", lambda *a, **kw: None)
     monkeypatch.setattr(job_launch, "select", lambda *a, **kw: pytest.fail("staging must stay untouched"))
     monkeypatch.setattr(cli, "_launch", lambda *a, **kw: pytest.fail("must not launch"))
-    rc = cli.main(["--root", str(root), "agent", "spawn", "--ephemeral", "--job", "task", "--item", "fixture-item"])
+    monkeypatch.setattr(cli, "_gh_json", lambda path: {})
+    rc = cli.main(["--root", str(root), "agent", "spawn", "--ephemeral", "--job", "task", "--item", "fixture-item",
+                   "--repo", "o/n"])
     assert rc == cli.REFUSED
     assert "qualified protected-UID projection" in capsys.readouterr().err
     assert eph.records(root) == []

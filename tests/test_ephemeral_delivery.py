@@ -273,8 +273,16 @@ def spawn(tmp_path, monkeypatch):
         monkeypatch.setattr(eph, "deliver", _fast(eph.deliver))
         monkeypatch.delenv("SHANTY_AGENT", raising=False)
         monkeypatch.setenv("GT_ROOT", str(tmp_path / "gt"))
+        monkeypatch.setattr(cli, "_gh_json", lambda path: {})
+        src = tmp_path / "fixture-src"
+        if not src.exists():
+            import subprocess
+            subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+            subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t",
+                            "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        monkeypatch.setattr(cli, "_resolve_repo", lambda name: src)
         rc = cli.main(["--root", str(root), "agent", "spawn", "--ephemeral", "--job",
-                       "task", "--item", "it-1"])
+                       "task", "--item", "it-1", "--repo", "o/n"])
         (rec,) = eph.records(root)
         return rc, rec, panes
     return run

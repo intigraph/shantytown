@@ -4322,6 +4322,15 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         else:
             if not a.ephemeral or not a.job or not a.item:
                 raise eph.Refused("spawn needs --ephemeral --job <kind> --item <id>")
+            # A task job without --repo gets no source worktree, then burns its
+            # whole slot discovering it (eph-task-9a5fba on za4f.15, 72e750 on
+            # xc7, and 2g7f before them). Refused here, before the request is
+            # built, so an over-cap spawn cannot queue a repo-less ticket either.
+            if a.job == "task" and not a.pr_repo:
+                raise eph.Refused(
+                    "a task job needs --repo OWNER/NAME (and --checkout PATH for a "
+                    "non-default clone); no ticket was queued"
+                    + ("; --checkout without --repo names no repository" if a.checkout else ""))
             head, request_id = a.head, None
             if a.job == "merge" and a.pr_repo and a.pr:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
