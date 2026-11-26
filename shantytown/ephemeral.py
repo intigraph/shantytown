@@ -197,6 +197,7 @@ class Request:
     checkout: str | None = None      # local shared checkout for the worktree
     head: str | None = None          # merge: the exact head the item pins (aegis-c01c.7)
     request_id: str | None = None    # merge: chaski's work request id, for lane release
+    track: str | None = None         # work track for share routing (aegis-fye); None = roadmap
 
 
 def validate(req: Request) -> None:
@@ -217,6 +218,8 @@ def validate(req: Request) -> None:
                       "or route it through an item carrying chaski's work request")
     if req.request_id is not None and not re.fullmatch(r"[0-9a-f]{64}", req.request_id):
         raise Refused("request_id must be chaski's 64-hex work request id")
+    if req.track is not None and req.track not in TRACKS:
+        raise Refused(f"unknown track {req.track!r}; one of {', '.join(TRACKS)}")
 
 
 def harness_for(req: Request, policy) -> str:
@@ -266,15 +269,39 @@ def authority(actor: str | None, role_of: Callable[[str], str | None], *,
                       "managed by the administrator or a lead (route the ask there)")
 
 
-def cap_refusal(root, policy) -> str:
+def harness_cap(policy, harness: str) -> int:
+    """This harness's slot cap (aegis-fye). Unset = the single host cap, so a
+    host that configures nothing routes exactly as before."""
+    caps = getattr(policy, "max_agents_by_harness", {}) or {}
+    return caps.get(harness, policy.max_agents)
+
+
+def harness_off(policy, harness: str | None) -> bool:
+    """A harness explicitly capped at 0 is OFF: a ticket for it would sit in the
+    queue forever with no slot that could ever take it, so it is refused instead."""
+    return harness is not None and policy.max_agents > 0 and harness_cap(policy, harness) <= 0
+
+
+def cap_refusal(root, policy, harness: str | None = None) -> str:
     cap = policy.max_agents
     if cap <= 0:
         return "ephemeral spawning is off ([ephemeral] max_agents = 0)"
+    if harness_off(policy, harness):
+        return (f"{harness} ephemeral spawning is off "
+                f"([ephemeral.max_agents_by_harness] {harness} = 0)")
     running = live(root)
     if len(running) >= cap:
         names = ", ".join(r["name"] for r in running)
         return (f"over cap: {len(running)}/{cap} ephemeral agent(s) live ({names}); "
                 "stop one or raise [ephemeral] max_agents")
+    if harness is not None:
+        hcap = harness_cap(policy, harness)
+        mine = [r for r in running if r.get("harness") == harness]
+        if len(mine) >= hcap:
+            names = ", ".join(r["name"] for r in mine)
+            return (f"over {harness} cap: {len(mine)}/{hcap} {harness} ephemeral agent(s) "
+                    f"live ({names}); stop one or raise "
+                    f"[ephemeral.max_agents_by_harness] {harness}")
     return ""
 
 
@@ -307,8 +334,10 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     if not administrator:
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")
-    if refusal := cap_refusal(root, policy):
-        raise (OverCap if policy.max_agents > 0 else Refused)(refusal)
+    harness = harness_for(req, policy)
+    if refusal := cap_refusal(root, policy, harness):
+        over = policy.max_agents > 0 and not harness_off(policy, harness)
+        raise (OverCap if over else Refused)(refusal)
     if req.job == "merge":
         if policy.review_enqueue_enabled:
             raise Refused("merge jobs are retired while review enqueue is enabled; "
@@ -321,7 +350,8 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     max_turns = bounds.get("max_turns", policy.max_turns)
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
-        "pr": req.pr, "checkout": req.checkout, "harness": harness_for(req, policy),
+        "pr": req.pr, "checkout": req.checkout, "harness": harness,
+        "track": req.track or DEFAULT_TRACK,
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
         "host": host, "spawned_at": now,
@@ -377,7 +407,7 @@ def ticket_for(req: Request, *, harness: str, priority: int | None,
     return {
         "id": f"{TICKET_PREFIX}{token()}", "job": req.job, "item": req.item,
         "repo": req.repo, "pr": req.pr, "checkout": req.checkout, "head": req.head,
-        "harness": harness, "priority": priority,
+        "harness": harness, "track": req.track or DEFAULT_TRACK, "priority": priority,
         "requester": requester or "operator", "enqueued_at": now,
         "state": QUEUED, "claimed_by": None, "claimed_at": None,
     }
@@ -463,11 +493,83 @@ def _pid_alive(pid) -> bool:
     return True
 
 
+# --- routing (aegis-fye) -------------------------------------------------------
+#
+# Slice 1 drained priority-then-age into ANY free slot, so a codex ticket could
+# take the slot a claude cap had left and a burst of backlog tickets could fill
+# the host ahead of ops work. Two rules, both OFF unless configured:
+#   harness : a ticket only launches into its own harness's capacity
+#             ([ephemeral.max_agents_by_harness], default the single cap).
+#   track   : the track furthest below its configured share of live slots
+#             drains first ([ephemeral.track_shares]); then priority, then age.
+# With neither configured every ticket has the same deficit and every harness
+# the host cap, so the order is slice 1's exactly.
+
+TRACKS = ("ops", "short-term", "roadmap", "backlog")
+DEFAULT_TRACK = "roadmap"
+#: The quarter plan's split, documented as the suggested config. NOT applied
+#: unless a host sets [ephemeral.track_shares]: routing is unchanged by default.
+SUGGESTED_TRACK_SHARES = {"ops": 20, "short-term": 15, "roadmap": 50, "backlog": 15}
+
+
+def track_of(rec: dict) -> str:
+    return rec.get("track") or DEFAULT_TRACK
+
+
+def track_deficits(running: list[dict], shares: dict) -> dict:
+    """{track: configured share minus current share of live jobs}. Empty
+    shares = routing off = every track at 0, which leaves priority-then-age."""
+    total = sum(shares.values()) if shares else 0
+    if total <= 0:
+        return {t: 0.0 for t in TRACKS}
+    n = len(running)
+    return {t: shares.get(t, 0) / total
+            - (sum(1 for r in running if track_of(r) == t) / n if n else 0.0)
+            for t in TRACKS}
+
+
+def route(ts: list[dict], running: list[dict], *, cap: int, harness_caps: dict,
+          shares: dict) -> list[dict]:
+    """Queued tickets that could launch NOW, best first. Pure: the caller reads
+    the queue and the live jobs. A ticket whose harness is at its own cap is
+    not a candidate however free the host is."""
+    if cap <= 0 or len(running) >= cap:
+        return []
+    by_harness = {}
+    for r in running:
+        by_harness[r.get("harness")] = by_harness.get(r.get("harness"), 0) + 1
+    deficit = track_deficits(running, shares)
+    ready = [t for t in ts if t.get("state") == QUEUED
+             and by_harness.get(t.get("harness"), 0) < harness_caps.get(t.get("harness"), cap)]
+    return sorted(ready, key=lambda t: (-deficit.get(track_of(t), 0.0),) + _order(t))
+
+
+def drain_plan(ts: list[dict], running: list[dict], **routing) -> list[dict]:
+    """The tickets a drain would launch, in order, as each launch fills a slot.
+    For --dry-run; item states are not consulted."""
+    running, ts, out = list(running), list(ts), []
+    while (ready := route(ts, running, **routing)):
+        out.append(ready[0])
+        running.append(ready[0])
+        ts.remove(ready[0])
+    return out
+
+
+def routing(policy) -> dict:
+    """route()'s keyword arguments from [ephemeral]. An unset harness cap is
+    absent here and route() gives it the host cap."""
+    return {"cap": policy.max_agents,
+            "harness_caps": dict(getattr(policy, "max_agents_by_harness", {}) or {}),
+            "shares": dict(getattr(policy, "track_shares", {}) or {})}
+
+
 def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
-               pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive
+               pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
+               harness_caps: dict | None = None, shares: dict | None = None
                ) -> tuple[dict | None, list[str]]:
-    """Recover interrupted claims, then claim the highest-priority oldest ticket
-    whose item is open, if a slot is free. Caller holds lock().
+    """Recover interrupted claims, then claim the best routed ticket (track
+    share, priority, age; within its harness's capacity) whose item is open, if
+    a slot is free. Caller holds lock().
 
     item_state(item) answers "open", "closed", "missing" or "unknown". Closed and
     missing tickets are dropped, never launched; unknown ones stay queued and are
@@ -484,11 +586,9 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
               or now - (t.get("claimed_at") or 0) > LAUNCH_GRACE_S):
             release(root, t["id"])
             lines.append(f"{t['id']}: claimer gone before launch; back in the queue")
-    if cap <= 0 or len(live(root)) >= cap:
-        return None, lines
-    for t in tickets(root):
-        if t.get("state") != QUEUED:
-            continue
+    candidates = route(tickets(root), live(root), cap=cap,
+                       harness_caps=harness_caps or {}, shares=shares or {})
+    for t in candidates:
         state = item_state(t["item"])
         if state in ("closed", "missing"):
             lines.append(drop(root, t["id"], f"item {t['item']} is {state}", now))
@@ -525,6 +625,7 @@ def render_tickets(ts: list[dict], now: float) -> list[str]:
         p = t.get("priority")
         age = int(max(0, now - (t.get("enqueued_at") or now)) // 60)
         out.append(f"{t['id']}  queued #{n}  {t['job']:<6} {t['item']}  "
+                   f"{t.get('harness', '?')}  {track_of(t)}  "
                    f"P{p if p is not None else '?'}  by {t.get('requester')}  "
                    f"waiting {age}m" + ("  (launching)" if t.get("state") == CLAIMED else ""))
     return out
@@ -1881,7 +1982,7 @@ def render(recs: list[dict], now: float, *, recent: int = 5) -> list[str]:
     for r in running:
         target = f" {r['repo']}#{r['pr']}" if r.get("pr") else ""
         lines.append(f"{r['name']:<20} {r['job']:<7} {r['item']}{target} · {r['harness']} · "
-                     f"{r['state']} · turn {r.get('turns', 0)}/{r['max_turns']} · {_left(r, now)}")
+                     f"{track_of(r)} · {r['state']} · turn {r.get('turns', 0)}/{r['max_turns']} · {_left(r, now)}")
     done = sorted((r for r in recs if r.get("state") == DONE),
                   key=lambda r: r.get("ended_at") or 0, reverse=True)[:recent]
     for r in done:

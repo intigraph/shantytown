@@ -306,8 +306,9 @@ st agent                      one agent
                               own worktree, deadline + turn/context budget, counted in the cap
                               and the governor, reports its verdict to the administrator and the
                               item, then is torn down. Over cap it QUEUES a ticket (--priority N)
-                              that the job end paths drain. --list · --stop NAME · --retry NAME ·
-                              --report (by the agent) · --reap (tend) · --drain. docs/ephemeral-agents.md
+                              that the job end paths drain, routed by harness cap and --track
+                              share. --list · --stop NAME · --retry NAME · --report (by the
+                              agent) · --reap (tend) · --drain. docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]
                               convert one agent to another harness: writes the card (with a
