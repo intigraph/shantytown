@@ -29,7 +29,8 @@ def _rec(root, **kw):
     req = eph.Request(job=job, item=kw.pop("item", "it-1"),
                       repo=kw.pop("repo", None), pr=kw.pop("pr", None),
                       head=kw.pop("head", "a" * 40 if job == "merge" else None),
-                      request_id=kw.pop("request_id", None))
+                      request_id=kw.pop("request_id", None),
+                      harness=kw.pop("harness", None), track=kw.pop("track", None))
     rec = eph.plan(req, root=root, policy=kw.pop("policy", _policy(max_agents=10)), actor="boss",
                    administrator="boss", host=None, now=kw.pop("now", NOW),
                    role_of=lambda n: "administrator" if n == "boss" else None, name=kw.pop("name", None))
@@ -1784,3 +1785,146 @@ def test_an_ephemeral_agent_cannot_drain_the_queue(store, monkeypatch, capsys):
     monkeypatch.setenv("SHANTY_AGENT", "eph-task-abcdef")
     assert _st(root, "--drain") == cli.REFUSED
     assert "cannot drain" in capsys.readouterr().err
+
+
+# --- routing by harness and track (aegis-fye) -----------------------------------
+
+def _tk(root, item, *, harness="claude", track=None, priority=2, at=NOW, tid):
+    t = eph.ticket_for(eph.Request(job="task", item=item, track=track), harness=harness,
+                       priority=priority, requester="boss", now=at, token=lambda: tid)
+    eph.enqueue(root, t)
+    return t
+
+
+def _drain_all(root, **routing):
+    order = []
+    while True:
+        with eph.lock(root):
+            t, _ = eph.claim_next(root, item_state=lambda i: "open", now=NOW + 9, **routing)
+        if t is None:
+            return order
+        order.append(t["item"])
+        with eph.lock(root):
+            _rec(root, item=t["item"], ticket=t["id"], harness=t["harness"],
+                 track=t.get("track"))
+            eph.settle(root, t["id"])
+
+
+def test_config_reads_harness_caps_and_track_shares_and_refuses_bad_ones(tmp_path):
+    toml = tmp_path / "shantytown.toml"
+    toml.write_text("[ephemeral]\nmax_agents = 3\n")
+    e = config.load(tmp_path).ephemeral
+    # Nothing configured: no harness caps, shares off.
+    assert e.max_agents_by_harness == {} and e.track_shares == {}
+    assert eph.harness_cap(e, "codex") == 3
+    toml.write_text("[ephemeral]\nmax_agents = 3\n[ephemeral.max_agents_by_harness]\ncodex = 1\n"
+                    "[ephemeral.track_shares]\nops = 20\nshort-term = 15\nroadmap = 50\nbacklog = 15\n")
+    e = config.load(tmp_path).ephemeral
+    assert eph.harness_cap(e, "codex") == 1 and eph.harness_cap(e, "claude") == 3
+    assert e.track_shares == eph.SUGGESTED_TRACK_SHARES
+    for bad, why in (("[ephemeral.track_shares]\nroadmp = 50\n", "unknown key"),
+                     ("[ephemeral.track_shares]\nops = -1\n", "integer >= 0"),
+                     ("[ephemeral.track_shares]\nops = 0\n", "share > 0"),
+                     ("[ephemeral.max_agents_by_harness]\ncodex = true\n", "integer >= 0")):
+        toml.write_text("[ephemeral]\nmax_agents = 3\n" + bad)
+        with pytest.raises(config.ConfigError, match=why):
+            config.load(tmp_path)
+
+
+def test_with_nothing_configured_drain_order_is_slice_one_exactly(tmp_path):
+    """Regression: mixed harnesses and tracks, no caps or shares configured,
+    must drain in plain priority-then-age order, as before aegis-fye."""
+    specs = [("it-a", "codex", "backlog", 2, 1), ("it-b", "claude", "ops", 1, 3),
+             ("it-c", "codex", None, 1, 2), ("it-d", "claude", "roadmap", None, 0),
+             ("it-e", "claude", "short-term", 0, 4)]
+    for n, (item, h, tr, p, at) in enumerate(specs):
+        _tk(tmp_path, item, harness=h, track=tr, priority=p, at=NOW + at, tid=f"{n:012x}")
+    expected = [t["item"] for t in eph.tickets(tmp_path)]     # slice 1's _order
+    assert expected == ["it-e", "it-c", "it-b", "it-a", "it-d"]
+    assert _drain_all(tmp_path, **eph.routing(_policy(max_agents=10))) == expected
+
+
+def test_a_codex_ticket_never_launches_into_claude_capacity(tmp_path):
+    policy = _policy(max_agents=3, max_agents_by_harness={"codex": 1})
+    _rec(tmp_path, name="eph-task-c0dec1", harness="codex")
+    # The codex ticket is the oldest and highest priority, and two host slots
+    # are free: it still waits, and the claude ticket behind it launches.
+    _tk(tmp_path, "it-codex", harness="codex", priority=0, at=NOW, tid="a" * 12)
+    _tk(tmp_path, "it-claude", harness="claude", priority=3, at=NOW + 5, tid="b" * 12)
+    assert _drain_all(tmp_path, **eph.routing(policy)) == ["it-claude"]
+    (left,) = eph.tickets(tmp_path)
+    assert left["item"] == "it-codex" and left["state"] == eph.QUEUED
+    # A direct codex spawn is over ITS cap even with host room, so it queues.
+    with pytest.raises(eph.OverCap, match="over codex cap: 1/1"):
+        _rec(tmp_path, harness="codex", policy=policy)
+    _rec(tmp_path, harness="claude", policy=policy)           # claude still has room
+    # The codex job ends: now the codex ticket has a slot... but the host is
+    # full (3/3 live), so it must wait for that too.
+    rec = eph.read(tmp_path, "eph-task-c0dec1")
+    eph.write(tmp_path, dict(rec, state=eph.DONE))
+    assert _drain_all(tmp_path, **eph.routing(policy)) == ["it-codex"]
+
+
+def test_a_harness_capped_at_zero_is_refused_not_queued(tmp_path):
+    policy = _policy(max_agents=3, max_agents_by_harness={"codex": 0})
+    with pytest.raises(eph.Refused, match="codex ephemeral spawning is off") as off:
+        _rec(tmp_path, harness="codex", policy=policy)
+    assert not isinstance(off.value, eph.OverCap)
+
+
+def test_with_shares_configured_the_under_share_track_drains_first(tmp_path):
+    shares = eph.SUGGESTED_TRACK_SHARES
+    # Live: two roadmap jobs. roadmap is at 100% of live slots against a 50%
+    # share; ops (20%) is the furthest below. An ops ticket of LOWER priority
+    # and younger age goes first; without shares it would go last.
+    _rec(tmp_path, name="eph-task-a00001", track="roadmap")
+    _rec(tmp_path, name="eph-task-a00002", track="roadmap")
+    _tk(tmp_path, "it-road", track="roadmap", priority=0, at=NOW, tid="1" * 12)
+    _tk(tmp_path, "it-back", track="backlog", priority=1, at=NOW + 1, tid="2" * 12)
+    _tk(tmp_path, "it-ops", track="ops", priority=3, at=NOW + 2, tid="3" * 12)
+    live = eph.live(tmp_path)
+    off = eph.route(eph.tickets(tmp_path), live, cap=10, harness_caps={}, shares={})
+    assert [t["item"] for t in off] == ["it-road", "it-back", "it-ops"]
+    on = eph.drain_plan(eph.tickets(tmp_path), live, cap=4, harness_caps={}, shares=shares)
+    # ops first (20% under). Then with ops 1/3, backlog 0/3 is 15% under while
+    # roadmap 2/3 is 17% over: backlog before the higher-priority roadmap.
+    assert [t["item"] for t in on] == ["it-ops", "it-back"]
+    assert _drain_all(tmp_path, cap=10, harness_caps={}, shares=shares) == [
+        "it-ops", "it-back", "it-road"]
+
+
+def test_list_shows_harness_and_track_on_tickets_and_live_jobs(store, capsys):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--track", "ops") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+               "--harness", "codex", "--track", "backlog") == cli.OK
+    capsys.readouterr()
+    assert _st(root, "--list") == cli.OK
+    out = capsys.readouterr().out
+    assert "· claude · ops · " in out
+    assert "it-2  codex  backlog  P" in out
+    (live,) = eph.live(root)
+    assert live["track"] == "ops"
+    (t,) = eph.tickets(root)
+    assert (t["harness"], t["track"]) == ("codex", "backlog")
+
+
+def test_cli_codex_ticket_waits_while_claude_capacity_is_free(codex_store, monkeypatch, capsys):
+    """The DONE demo: max_agents 2, codex capped at 1. One codex job live, a
+    second codex spawn queues although a slot is free; a claude spawn takes it."""
+    root, _panes, launched, _cfg, _seen = codex_store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 2\nunattended = false\nrequire_verified_identity = true\n"
+        "[ephemeral.max_agents_by_harness]\ncodex = 1\n")
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--harness", "codex") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--harness", "codex") == cli.OK
+    assert "over codex cap: 1/1" in capsys.readouterr().out
+    assert len(launched) == 1
+    assert _st(root, "--drain", "--dry-run") == cli.OK
+    assert "would drain 0 of 1 queued ticket(s) into 1 free slot(s)" in capsys.readouterr().out
+    assert _st(root, "--drain") == cli.OK
+    assert len(launched) == 1 and eph.tickets(root)[0]["item"] == "it-2"
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3", "--harness", "claude") == cli.OK
+    assert len(launched) == 2 and {r["harness"] for r in eph.live(root)} == {"codex", "claude"}

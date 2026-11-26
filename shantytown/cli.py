@@ -1929,6 +1929,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--quipu-node", action="append", default=[], metavar="IRI",
                     help="exact Quipu node IRI to include in the bounded startup snapshot")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
+    sp.add_argument("--track", default=None, choices=("ops", "short-term", "roadmap", "backlog"),
+                    help="work track for queue shares ([ephemeral.track_shares]; default roadmap)")
     # dest is NOT `repo`: the top-level --repo is the tracker store directory.
     sp.add_argument("--repo", dest="pr_repo", default=None, metavar="OWNER/NAME",
                     help="GitHub repository the job works on")
@@ -4247,7 +4249,7 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             req = eph.Request(job=old["job"], item=old["item"], harness=old["harness"],
                               repo=old.get("repo"), pr=old.get("pr"),
                               checkout=old.get("checkout"), head=old.get("head"),
-                              request_id=old.get("request_id"))
+                              request_id=old.get("request_id"), track=old.get("track"))
             retry_of = a.retry
         else:
             if not a.ephemeral or not a.job or not a.item:
@@ -4257,7 +4259,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
-                              head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id)
+                              head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id,
+                              track=getattr(a, "track", None))
             if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
                 import dataclasses
                 req = dataclasses.replace(req, repo=_spawn_canonical_repo(req.repo))
@@ -4550,11 +4553,12 @@ def _spawn_enqueue(a, req, policy, actor, over) -> int:
     ahead = sum(1 for t in eph.tickets(a.root) if eph._order(t) < eph._order(ticket))
     p = "?" if priority is None else priority
     if a.dry_run:
-        print(f"would queue {req.job} on {req.item} (P{p}, {ticket['harness']}, "
+        print(f"would queue {req.job} on {req.item} (P{p}, {ticket['harness']}, {ticket['track']}, "
               f"requested by {ticket['requester']}) at position {ahead + 1}: {over}")
         return OK
     eph.enqueue(a.root, ticket)
-    print(f"  QUEUED {ticket['id']}: {req.job} on {req.item} (P{p}), position {ahead + 1}; "
+    print(f"  QUEUED {ticket['id']}: {req.job} on {req.item} (P{p}, {ticket['harness']}, "
+          f"{ticket['track']}), position {ahead + 1} by priority; "
           f"{over}. It launches when a job ends; `st agent spawn --list` shows the queue.")
     return OK
 
@@ -4570,16 +4574,19 @@ def _spawn_drain(a, policy) -> int:
     if a.dry_run:
         free = max(0, policy.max_agents - len(eph.live(a.root)))
         queued = eph.tickets(a.root)
-        print(f"would drain {min(free, len(queued))} of {len(queued)} queued ticket(s) "
+        order = eph.drain_plan(queued, eph.live(a.root), **eph.routing(policy))
+        print(f"would drain {len(order)} of {len(queued)} queued ticket(s) "
               f"into {free} free slot(s)")
-        for line in eph.render_tickets(queued[:free], time.time()):
+        for line in eph.render_tickets(order, time.time()):
             print("  " + line)
         return OK
     rc = OK
     seen = set()
     while True:
         with eph.lock(a.root):
-            ticket, notes = eph.claim_next(a.root, cap=policy.max_agents, now=time.time(),
+            r = eph.routing(policy)
+            ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
+                                           harness_caps=r["harness_caps"], shares=r["shares"],
                                            item_state=lambda i: _spawn_item_state(a, i))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
@@ -4589,7 +4596,7 @@ def _spawn_drain(a, policy) -> int:
         argv = ["--root", str(a.root), "agent", "spawn", "--ephemeral",
                 "--job", ticket["job"], "--item", ticket["item"]]
         for flag, key in (("--repo", "repo"), ("--pr", "pr"), ("--checkout", "checkout"),
-                          ("--harness", "harness"), ("--head", "head")):
+                          ("--harness", "harness"), ("--head", "head"), ("--track", "track")):
             if ticket.get(key) is not None:
                 argv += [flag, str(ticket[key])]
         ns = _parse_args(argv)

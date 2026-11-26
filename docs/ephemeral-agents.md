@@ -178,6 +178,7 @@ defaults per deployment.
 st agent spawn --ephemeral --job review --item aegis-x --repo owner/name --pr 12 [--checkout PATH]
 st agent spawn --list [--json]          # live + recent jobs and queued tickets (also in `st crew` and the admin's `st anchor`)
 st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 highest (default: the item's)
+st agent spawn --ephemeral ... --track ops    # work track for queue shares: ops | short-term | roadmap | backlog (default roadmap)
 st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
@@ -205,7 +206,7 @@ refusal is the cap writes a ticket and exits 0:
 ```
 
 `--dry-run` prints `would queue ...` and writes nothing. A ticket records the
-job kind, item, repo/PR/checkout, harness, priority, requester and
+job kind, item, repo/PR/checkout, harness, track, priority, requester and
 `enqueued_at`, one JSON file per ticket under `<root>/ephemeral/queue/`.
 Every other refusal (authority, no administrator, merge lane, governor,
 `max_agents = 0`) still refuses, as do `--retry` and scoped recruitment.
@@ -230,7 +231,29 @@ relaunched; one with no record whose claimer is dead (or older than
 `LAUNCH_GRACE_S`) goes back to queued with its age. A launch that dies after
 its ledger write is an ordinary LAUNCHING job the reaper already ends.
 
-Not yet: pool resize, pause/drain admin commands, TTLs, per-track shares.
+### Routing by harness and track
+
+aegis-fye. Slice 1 drained into ANY free slot. Two routing rules now apply at
+drain and at admission; both are OFF unless configured, and with neither
+configured the drain order is slice 1's exactly (priority, then age).
+
+- **Harness.** A ticket only launches into capacity for its own harness.
+  `[ephemeral.max_agents_by_harness]` caps each harness; a harness with no
+  entry is capped by `max_agents` alone, and `max_agents` still bounds the
+  host total. A spawn over its harness's cap queues like any over-cap spawn,
+  so a codex ticket waits while claude capacity is free (and is not taken by
+  a claude ticket's slot either). A harness capped at `0` is off: its spawns
+  are refused, never queued, because nothing could ever drain them.
+- **Track.** Every ticket and job carries a track (`--track`, default
+  `roadmap`). With `[ephemeral.track_shares]` set, the drain picks the track
+  furthest below its share of live jobs, then priority, then age. Shares are
+  weights (normalised to their sum); a track with no entry has share 0.
+
+`--list` shows harness and track on each live job and ticket;
+`--drain --dry-run` prints the routed launch order.
+
+Not yet: the Codex overflow trigger (aegis-za4f.14), pool resize, pause/drain
+admin commands, TTLs.
 
 ## Configuration
 
@@ -254,6 +277,18 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 
 [ephemeral.harness_by_job]
 review = "codex"
+
+# Per-harness slot caps (aegis-fye). Unset = max_agents for that harness; 0 = off.
+[ephemeral.max_agents_by_harness]
+codex = 1
+
+# Queue drain shares per track (aegis-fye). OFF unless this table exists. The
+# quarter plan's split (ephemeral.SUGGESTED_TRACK_SHARES):
+[ephemeral.track_shares]
+ops = 20
+short-term = 15
+roadmap = 50
+backlog = 15
 
 # Per-job-type bounds (aegis-za4f). A job type without an entry keeps the
 # global lifetime_minutes / max_turns above.

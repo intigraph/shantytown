@@ -165,6 +165,14 @@ class Ephemeral:
     review_enqueue_attended_uid: int | None = None
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
+    # aegis-fye: per-harness slot caps, {harness: n}. A harness with no entry is
+    # capped by max_agents alone, so an unset table routes exactly as before; 0
+    # turns that harness off. The host-wide max_agents still bounds the total.
+    max_agents_by_harness: dict = field(default_factory=dict)
+    # aegis-fye: queue drain shares per work track, {track: weight}. Empty = OFF
+    # (priority-then-age). The quarter plan's split is ops 20, short-term 15,
+    # roadmap 50, backlog 15 (ephemeral.SUGGESTED_TRACK_SHARES), opt-in only.
+    track_shares: dict = field(default_factory=dict)
     jobs: dict = field(default_factory=dict)
     # aegis-za4f D5: per-job-type bounds, {job: {"lifetime_minutes": n,
     # "max_turns": n}}. A job type with no entry keeps the global bounds above,
@@ -1206,7 +1214,8 @@ _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k
                    "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
-                   "review_enqueue_attended_uid", "review_enqueue_attended_dir"}
+                   "review_enqueue_attended_uid", "review_enqueue_attended_dir",
+                   "max_agents_by_harness", "track_shares"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1288,6 +1297,28 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
                                   f"integer >= 1, got {value!r}")
         parsed_limits[job] = dict(bounds)
     values["limits"] = parsed_limits
+    by_harness = tbl.get("max_agents_by_harness", {})
+    if not isinstance(by_harness, dict):
+        raise ConfigError(f"{path}: [ephemeral.max_agents_by_harness] must be a table")
+    for harness, cap in by_harness.items():
+        if isinstance(cap, bool) or not isinstance(cap, int) or cap < 0:
+            raise ConfigError(f"{path}: ephemeral.max_agents_by_harness.{harness} must be an "
+                              f"integer >= 0, got {cap!r}")
+    values["max_agents_by_harness"] = dict(by_harness)
+    from .ephemeral import TRACKS
+    shares = tbl.get("track_shares", {})
+    if not isinstance(shares, dict):
+        raise ConfigError(f"{path}: [ephemeral.track_shares] must be a table")
+    # A misspelt track would silently get no share at all; refuse it.
+    _refuse_unknown(path, "ephemeral.track_shares", shares, set(TRACKS))
+    for track, share in shares.items():
+        if isinstance(share, bool) or not isinstance(share, int) or share < 0:
+            raise ConfigError(f"{path}: ephemeral.track_shares.{track} must be an "
+                              f"integer >= 0, got {share!r}")
+    if shares and sum(shares.values()) <= 0:
+        raise ConfigError(f"{path}: ephemeral.track_shares needs at least one share > 0 "
+                          "(remove the table to turn shares off)")
+    values["track_shares"] = dict(shares)
     from .job_tools import validate_job_servers, validate_specs
     try:
         jobs = validate_specs(tbl.get("jobs", {}), EPHEMERAL_JOBS,
