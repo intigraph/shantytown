@@ -156,6 +156,7 @@ from .plate_capacity import PlateFull, CapacityUnknown
 import argparse
 import contextlib
 import dataclasses
+import functools
 import json
 import os
 import sys
@@ -3961,7 +3962,19 @@ def _spawn_checkout_refusal(req) -> str:
         if r.returncode == 0:
             remotes = sorted({line.split()[1] for line in r.stdout.splitlines()
                               if len(line.split()) >= 2})
-    return eph.checkout_refusal(req.checkout, req.repo, exists=path.is_dir(), remotes=remotes)
+    return eph.checkout_refusal(req.checkout, req.repo, exists=path.is_dir(), remotes=remotes,
+                                canonical=functools.cache(_forge_full_name))
+
+
+def _forge_full_name(slug: str) -> str | None:
+    """The forge's canonical owner/name for a GitHub slug, or None when it
+    cannot tell. Quiet: the checkout check's refusal already says when the
+    forge could not answer, so a note per remote would only repeat it."""
+    try:
+        name = (_gh_json(f"repos/{slug}") or {}).get("full_name") or ""
+    except (RuntimeError, ValueError, OSError, AttributeError):
+        return None
+    return name if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", name) else None
 
 
 def _spawn_item_comment(a):

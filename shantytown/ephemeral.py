@@ -561,13 +561,20 @@ def cancel(root, tid: str, actor: str | None, now: float) -> str:
 
 
 def checkout_refusal(checkout: str | None, repo: str | None, *, exists: bool,
-                     remotes: list[str] | None) -> str:
+                     remotes: list[str] | None, canonical=None) -> str:
     """Why --checkout cannot carry this job, or "" (aegis-za4f.16).
 
     q-ecb33cbe0cca queued --checkout ~/gt/tambo, a path that did not
     exist, and only failed when a drain tried to launch it. Pure: the caller
     reads whether the path exists and its remote URLs (None = not a git
-    checkout). A remote matching --repo by owner/name on any host admits."""
+    checkout). A remote matching --repo by owner/name on any host admits.
+
+    `canonical(slug)` maps a GitHub owner/name to the forge's canonical slug,
+    or None when it cannot tell (aegis-za4f.16.1). --repo is canonicalized
+    (scbrown/tambo -> intigraph/tambo) but ~/gt/caboodle's origin still says
+    git@github.com:scbrown/tambo.git, a redirect to the same repo, and the raw
+    comparison refused it. Both sides go through the same mapping, and only
+    on a raw mismatch, so a matching checkout never costs a forge call."""
     if not checkout:
         return ""
     if not exists:
@@ -577,13 +584,36 @@ def checkout_refusal(checkout: str | None, repo: str | None, *, exists: bool,
     if not repo:
         return ""
     from .forgejo import parse_remote
-    want = repo.strip().lower().removesuffix(".git")
-    for url in remotes:
-        parsed = parse_remote(url)
-        if parsed and f"{parsed[1]}/{parsed[2]}".lower() == want:
+
+    def norm(slug):
+        return (slug or "").strip().lower().removesuffix(".git")
+
+    want = {norm(repo)}
+    parsed = [(url, parse_remote(url)) for url in remotes]
+    for _url, p in parsed:
+        if p and norm(f"{p[1]}/{p[2]}") in want:
             return ""
+    unresolved = []
+    if canonical is not None:
+        if (c := canonical(repo.strip())):
+            want.add(norm(c))
+        for url, p in parsed:
+            # Only GitHub answers for GitHub's moved-repo redirects; asking it
+            # about a slug on another forge could match an unrelated repo.
+            if not p or p[0].lower() != "github.com":
+                continue
+            slug = f"{p[1]}/{p[2]}"
+            if norm(slug) in want:
+                return ""
+            c = canonical(slug)
+            if c is None:
+                unresolved.append(url)
+            elif norm(c) in want:
+                return ""
+    note = (f"; the forge could not confirm where {', '.join(unresolved)} points"
+            if unresolved else "")
     return (f"--checkout {checkout} has no remote for --repo {repo} "
-            f"(remotes: {', '.join(remotes) or 'none'})")
+            f"(remotes: {', '.join(remotes) or 'none'}){note}")
 
 
 def _pid_alive(pid) -> bool:

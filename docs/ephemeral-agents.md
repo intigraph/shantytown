@@ -230,7 +230,11 @@ A retry's superseded job does not drain: that slot is the retry's.
 
 **Bad checkout refused at admission.** An explicit `--checkout` that does not
 exist, is not a git checkout, or has no remote naming `--repo` (owner/name, any
-host) is refused before a ticket is queued or a worktree is cut.
+host) is refused before a ticket is queued or a worktree is cut. A GitHub remote
+that still uses a repo's pre-move slug (`git@github.com:scbrown/tambo.git` for
+`intigraph/tambo`) is admitted: on a raw mismatch, both `--repo` and each GitHub
+remote are mapped through the forge's canonical name before comparing. A forge
+that cannot answer leaves the mismatch refused, and the refusal says so.
 
 **Cancel.** `st agent spawn --stop <ticket>` moves a queued or claimed ticket to
 `<root>/ephemeral/queue-removed/<ticket>.json`, rewritten as an unclaimed queued

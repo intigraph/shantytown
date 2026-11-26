@@ -2047,6 +2047,68 @@ def test_checkout_refusal_admits_a_matching_remote_on_any_host():
     assert "does not exist" in eph.checkout_refusal("/c", "o/n", exists=False, remotes=None)
 
 
+
+# --- aegis-za4f.16.1: a pre-move remote URL still names the moved repo ---------
+
+MOVED = {"scbrown/tambo": "intigraph/tambo", "intigraph/tambo": "intigraph/tambo",
+         "scbrown/bobbin": "intigraph/bobbin", "intigraph/bobbin": "intigraph/bobbin",
+         "o/other": "o/other"}
+
+
+def test_a_pre_move_remote_is_admitted_for_the_moved_repo():
+    canon = MOVED.get
+    for repo in ("intigraph/tambo", "scbrown/tambo", "Intigraph/Tambo"):
+        assert eph.checkout_refusal("/c", repo, exists=True, canonical=canon,
+                                    remotes=["git@github.com:scbrown/tambo.git"]) == "", repo
+    assert eph.checkout_refusal("/c", "intigraph/bobbin", exists=True, canonical=canon,
+                                remotes=["https://github.com/scbrown/bobbin"]) == ""
+
+
+def test_a_remote_for_another_repo_is_still_refused_after_canonicalizing():
+    asked = []
+    def canon(slug):
+        asked.append(slug)
+        return MOVED.get(slug)
+    why = eph.checkout_refusal("/c", "intigraph/tambo", exists=True, canonical=canon,
+                               remotes=["git@github.com:o/other.git"])
+    assert "no remote for --repo intigraph/tambo" in why and "could not confirm" not in why
+    assert "o/other" in asked
+    # A non-GitHub remote is never sent to GitHub's redirect map.
+    asked.clear()
+    assert eph.checkout_refusal("/c", "intigraph/tambo", exists=True, canonical=canon,
+                                remotes=["ssh://git@forge.local/scbrown/tambo.git"]) != ""
+    assert "scbrown/tambo" not in asked
+    assert "does not exist" in eph.checkout_refusal("/c", "intigraph/tambo", exists=False,
+                                                    remotes=None, canonical=canon)
+
+
+def test_an_unanswering_forge_refuses_and_says_it_could_not_confirm():
+    why = eph.checkout_refusal("/c", "intigraph/tambo", exists=True, canonical=lambda s: None,
+                               remotes=["git@github.com:scbrown/tambo.git"])
+    assert "could not confirm where git@github.com:scbrown/tambo.git points" in why
+
+
+def test_a_matching_remote_never_asks_the_forge():
+    assert eph.checkout_refusal("/c", "intigraph/tambo", exists=True,
+                                canonical=lambda s: pytest.fail(s),
+                                remotes=["git@github.com:intigraph/tambo.git"]) == ""
+
+
+def test_spawn_admits_a_checkout_whose_origin_predates_the_move(store, monkeypatch, capsys, tmp_path):
+    """The live probe: --repo scbrown/tambo canonicalizes to intigraph/tambo and
+    ~/gt/caboodle's origin is git@github.com:scbrown/tambo.git."""
+    root, _panes, launched = store
+    caboodle = _checkout_with_origin(tmp_path / "caboodle", "git@github.com:scbrown/tambo.git")
+    monkeypatch.setattr(cli, "_gh_json", lambda path: {"full_name": MOVED[path.removeprefix("repos/")]})
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--repo", "scbrown/tambo",
+               "--checkout", str(caboodle), "-n") == cli.OK
+    out = capsys.readouterr()
+    assert "no remote for" not in out.err and "intigraph/tambo" in out.out
+    other = _checkout_with_origin(tmp_path / "other", "git@github.com:o/other.git")
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--repo", "scbrown/tambo",
+               "--checkout", str(other), "-n") == cli.REFUSED
+    assert "no remote for --repo intigraph/tambo" in capsys.readouterr().err
+
 def test_stop_cancels_a_queued_ticket_reversibly(store, monkeypatch, capsys):
     root, _panes, launched = store
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
