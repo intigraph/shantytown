@@ -408,13 +408,18 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
 #   recover : the next claim_next() looks at every claimed ticket. A ledger
 #             record carrying its id means it launched: the ticket is deleted,
 #             never relaunched. No record and a dead (or stale) claimer means the
-#             claimer died before launching: the ticket goes back to queued.
+#             claimer died before launching: the ticket goes back to queued,
+#             once (MAX_RECOVERIES); a second dead claim drops it, visibly.
 # A launch that dies after the ledger write is an ordinary LAUNCHING job, which
 # the reaper already ends and reports (LAUNCH_GRACE_S); it is not relaunched.
 
 TICKET_PREFIX = "q-"
 _TICKET = re.compile(r"q-[0-9a-f]{12}")
 QUEUED, CLAIMED = "queued", "claimed"
+#: A claim whose claimer died is revived this many times, then dropped.
+MAX_RECOVERIES = 1
+#: How long a dropped ticket stays on --list.
+DROPPED_VISIBLE_S = 24 * 3600
 #: Priority a ticket sorts at when neither --priority nor the item gave one:
 #: after every real tracker priority (0 is the highest, bd's convention).
 UNRANKED = 99
@@ -490,11 +495,13 @@ def settle(root, tid: str) -> None:
         pass
 
 
-def release(root, tid: str) -> None:
-    """Back to queued, keeping its age: the claimer found no slot after all."""
+def release(root, tid: str, *, recovered: bool = False) -> None:
+    """Back to queued, keeping its age: the claimer found no slot after all.
+    `recovered` counts a dead claimer, which claim_next() tolerates only once."""
     t = read_ticket(root, tid)
     if t is not None:
-        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None))
+        n = (t.get("recoveries") or 0) + (1 if recovered else 0)
+        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None, recoveries=n))
 
 
 def drop(root, tid: str, reason: str, now: float) -> str:
@@ -510,6 +517,73 @@ def drop(root, tid: str, reason: str, now: float) -> str:
                               indent=2, sort_keys=True))
     _ticket_path(root, tid).unlink()
     return f"dropped {tid} ({t['job']} on {t['item']}): {reason}"
+
+
+def dropped(root, now: float, within: float = DROPPED_VISIBLE_S) -> list[dict]:
+    """Tickets dropped in the last `within` seconds, newest first, so --list
+    shows a ticket that failed instead of letting it vanish (aegis-za4f.16)."""
+    out = []
+    for p in (queue_dir(root) / "dropped").glob(f"{TICKET_PREFIX}*.json"):
+        try:
+            t = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if now - (t.get("dropped_at") or 0) <= within:
+            out.append(t)
+    return sorted(out, key=lambda t: -(t.get("dropped_at") or 0))
+
+
+def removed_dir(root) -> Path:
+    """Where a cancelled ticket goes: the directory sattler moved
+    q-ecb33cbe0cca to by hand, so the supported verb and the manual fix agree."""
+    return ledger_dir(root) / "queue-removed"
+
+
+def cancel(root, tid: str, actor: str | None, now: float) -> str:
+    """Move a queued or claimed ticket aside, reversibly: the file is kept
+    whole under queue-removed/ and moving it back requeues it. Caller holds
+    lock(). Refuses a ticket that is not in the queue."""
+    t = read_ticket(root, tid)
+    if t is None:
+        raise Refused(f"{tid} is not in the spawn queue")
+    d = removed_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{tid}.json"
+    # Kept as a QUEUED ticket, so restoring is a plain move back: a requeued
+    # ticket must not look claimed by whoever held it when it was cancelled.
+    out.write_text(json.dumps(dict(t, state=QUEUED, claimed_by=None, claimed_at=None,
+                                   cancelled_at=now, cancelled_by=actor or "operator",
+                                   cancelled_from=t.get("state")),
+                              indent=2, sort_keys=True))
+    _ticket_path(root, tid).unlink()
+    return (f"cancelled {tid} ({t['job']} on {t['item']}, was {t.get('state')}); kept at {out}. "
+            f"To requeue: mv {out} {queue_dir(root)}/")
+
+
+def checkout_refusal(checkout: str | None, repo: str | None, *, exists: bool,
+                     remotes: list[str] | None) -> str:
+    """Why --checkout cannot carry this job, or "" (aegis-za4f.16).
+
+    q-ecb33cbe0cca queued --checkout ~/gt/tambo, a path that did not
+    exist, and only failed when a drain tried to launch it. Pure: the caller
+    reads whether the path exists and its remote URLs (None = not a git
+    checkout). A remote matching --repo by owner/name on any host admits."""
+    if not checkout:
+        return ""
+    if not exists:
+        return f"--checkout {checkout} does not exist"
+    if remotes is None:
+        return f"--checkout {checkout} is not a git checkout"
+    if not repo:
+        return ""
+    from .forgejo import parse_remote
+    want = repo.strip().lower().removesuffix(".git")
+    for url in remotes:
+        parsed = parse_remote(url)
+        if parsed and f"{parsed[1]}/{parsed[2]}".lower() == want:
+            return ""
+    return (f"--checkout {checkout} has no remote for --repo {repo} "
+            f"(remotes: {', '.join(remotes) or 'none'})")
 
 
 def _pid_alive(pid) -> bool:
@@ -615,8 +689,15 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
             lines.append(f"{t['id']}: already launched; ticket settled, not relaunched")
         elif (not pid_alive(t.get("claimed_by"))
               or now - (t.get("claimed_at") or 0) > LAUNCH_GRACE_S):
-            release(root, t["id"])
-            lines.append(f"{t['id']}: claimer gone before launch; back in the queue")
+            # Once, not forever (aegis-za4f.16): q-ecb33cbe0cca's launch killed
+            # every claimer, and each drain revived it, claimed it first and
+            # died again, so nothing launched for ~4h behind one ticket.
+            if (t.get("recoveries") or 0) >= MAX_RECOVERIES:
+                lines.append(drop(root, t["id"], "claimer died before launch "
+                                  f"{(t.get('recoveries') or 0) + 1} times; not retried", now))
+            else:
+                release(root, t["id"], recovered=True)
+                lines.append(f"{t['id']}: claimer gone before launch; back in the queue")
     candidates = route(tickets(root), live(root), cap=cap,
                        harness_caps=harness_caps or {}, shares=shares or {})
     for t in candidates:
@@ -660,6 +741,12 @@ def render_tickets(ts: list[dict], now: float) -> list[str]:
                    f"P{p if p is not None else '?'}  by {t.get('requester')}  "
                    f"waiting {age}m" + ("  (launching)" if t.get("state") == CLAIMED else ""))
     return out
+
+
+def render_dropped(ts: list[dict], now: float) -> list[str]:
+    return [f"{t['id']}  failed     {t['job']:<6} {t['item']}  "
+            f"{int(max(0, now - (t.get('dropped_at') or now)) // 60)}m ago: {t.get('reason')}"
+            for t in ts]
 
 
 # --- attended job permissions (aegis-e579 option B) ---------------------------
