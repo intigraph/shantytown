@@ -54,7 +54,9 @@ def _outside_dispatch_protocol(source):
         "panes": {"send", "exists", "capture"},
         "handoff": {"preview", "record"},
         # Completion is the no-send recovery boundary, separate from Tracker.
-        "binding": {"prepare", "confirm_submission", "submitted", "assign", "complete"},
+        # held_without_receipt is a read-only pre-mint check (aegis-647r).
+        "binding": {"prepare", "confirm_submission", "submitted", "assign", "complete",
+                    "held_without_receipt"},
         "updates": {"items"},  # staged field dictionary, not a backend
     }
     invalid = []
