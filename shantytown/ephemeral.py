@@ -1779,6 +1779,31 @@ def worktree_holds_work(dest: Path, base: str = "origin/main", git=_git) -> bool
     return ahead.returncode != 0 or ahead.stdout.strip() not in ("0", "")
 
 
+def push_stranded_work(rec: dict, base: str = "origin/main", git=_git) -> str:
+    """A task job ending blocked/failed pushes its own branch first, so committed
+    work is never local-only (aegis-za4f.15: two jobs ended BLOCKED with their
+    commits unpushed behind a failed `st repo pr`). Returns a one-line note for
+    the report, or "" when there is nothing to push. Never force, never main."""
+    ws, name = rec.get("workspace"), rec.get("name")
+    if rec.get("job") != "task" or not ws or not name or not Path(ws).is_dir():
+        return ""
+    branch = f"wt/{name}"
+    try:
+        current = git("-C", ws, "symbolic-ref", "--quiet", "--short", "HEAD")
+        if current.returncode or current.stdout.strip() != branch:
+            return f"branch NOT pushed: worktree is not on {branch}"
+        ahead = git("-C", ws, "rev-list", "--count", f"{base}..HEAD")
+        if ahead.returncode == 0 and ahead.stdout.strip() == "0":
+            return ""
+        pushed = git("-C", ws, "push", "origin", f"HEAD:refs/heads/{branch}")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"branch {branch} NOT pushed ({type(exc).__name__}); work is local-only"
+    if pushed.returncode:
+        tail = " ".join((pushed.stderr or "").split())[-200:]
+        return f"branch {branch} NOT pushed (git push exit {pushed.returncode}: {tail}); work is local-only"
+    return f"pushed {branch} to origin so the committed work is not local-only"
+
+
 def remove_workspace(rec: dict, root, git=_git) -> str:
     """'removed', 'kept (holds work)' or 'none'. Never discards output."""
     ws = rec.get("workspace")

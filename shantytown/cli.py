@@ -4163,6 +4163,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 evidence, posted = _spawn_post_review_comment(job, a.verdict, a.head, summary)
                 if posted:
                     summary = (summary.rstrip() + "\n\n" + posted).strip()
+            if a.verdict in ("blocked", "failed"):
+                if pushed := eph.push_stranded_work({**job, "name": me}):
+                    summary = (summary.rstrip() + "\n\n" + pushed).strip()
             note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, evidence)
             if note or problem:
                 summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()

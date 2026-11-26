@@ -30,15 +30,53 @@ class Indeterminate(Refused):
     """A create may have committed; never suggest a blind retry."""
 
 
+class GitHubError(Refused):
+    """A failed `gh api` call, with the call, exit status, HTTP status and a
+    redacted stderr tail. aegis-za4f.15: two jobs stranded committed work behind
+    an opaque "GitHub API failed; outcome unverified" that named no call and no
+    status, so nobody could tell an unpushed branch (commits/<ref> 404/422) from
+    missing job credentials (gh exits 4) from a real outage."""
+
+    def __init__(self, method, path, returncode, status, stderr):
+        self.method, self.path, self.returncode = method, path, returncode
+        self.status, self.stderr = status, stderr
+        super().__init__(f"GitHub API failed: {method} {path} -> exit {returncode}, "
+                         f"HTTP {status if status is not None else 'none'}"
+                         + (f"; stderr: {stderr}" if stderr else "")
+                         + "; outcome unverified")
+
+    def detail(self):
+        return {"call": f"gh api --method {self.method} {self.path}",
+                "exit": self.returncode, "http_status": self.status, "stderr": self.stderr}
+
+
+# gh echoes neither tokens nor request bodies on error, but a proxy or a future
+# gh might; redact every GitHub token shape and auth header before it reaches a
+# job report that is posted on an item.
+_SECRET = (re.compile(r"(?i:authorization)\s*:\s*(?:(?i:bearer|token|basic)\s+)?\S+"),
+           re.compile(r"(?i:token)\s*[:=]\s*\S+"),
+           re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}"))
+_HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\)")
+
+
+def _redact(text):
+    text = text or ""
+    for pattern in _SECRET:
+        text = pattern.sub("[redacted]", text)
+    return " ".join(text.split())[-400:]
+
+
 def github(path, body=None, *, method=None):
-    argv = ["gh", "api", "--method", method or ("GET" if body is None else "POST"), path]
+    method = method or ("GET" if body is None else "POST")
+    argv = ["gh", "api", "--method", method, path]
     if body is not None:
         argv += ["--input", "-"]
     result = subprocess.run(argv, input=json.dumps(body) if body is not None else None,
                             capture_output=True, text=True, timeout=45)
     if result.returncode:
-        # Errors may include URLs or request contents: retain category, not credentials.
-        raise Refused("GitHub API failed; inventory/write outcome is unverified")
+        status = _HTTP_STATUS.search(result.stderr or "")
+        raise GitHubError(method, path, result.returncode,
+                          int(status[1]) if status else None, _redact(result.stderr))
     try:
         return json.loads(result.stdout)
     except ValueError as error:
@@ -212,8 +250,38 @@ def verify_origin(checkout, repo, api):
         raise Refused(fix) from error
 
 
+# What st itself writes into a job worktree (aegis-za4f.15). Jobs stranded
+# committed work because preflight refused this kit as "uncommitted changes":
+# directories admit any untracked content, files admit only themselves, and the
+# instruction files admit only a change confined to st's tooling block.
+SCRATCH_DIRS = {b".work", b".task-notes"}
+KIT_DIRS = {b".claude", b".agents", b".codex", b".bobbin"}
+KIT_FILES = {b".mcp.json", b".shantytown-tooling.json"}
+KIT_INSTRUCTIONS = {b"AGENTS.md", b"CLAUDE.md"}
+
+
+def _without_tooling_block(text):
+    from .tooling import BEGIN, END
+    pattern = re.compile(r"\n*" + re.escape(BEGIN) + r".*?" + re.escape(END) + r"\n*", re.S)
+    return pattern.sub("\n", text).rstrip()
+
+
+def _only_tooling_block_changed(checkout_root, checkout, name):
+    """True only when the working file differs from HEAD inside st's projected
+    block and nowhere else. Any other edit is real source and must be committed."""
+    path = checkout_root / name
+    if not stat.S_ISREG(path.lstat().st_mode):
+        return False
+    shown = subprocess.run(["git", "-C", str(checkout), "show", "HEAD:" + name],
+                           capture_output=True, timeout=30)
+    if shown.returncode:
+        return False
+    head, work = shown.stdout.decode(), path.read_bytes().decode()
+    return head != work and _without_tooling_block(head) == _without_tooling_block(work)
+
+
 def require_clean_source(checkout):
-    """Permit only untracked private scratch directories; never print their names."""
+    """Permit only private scratch and st's own provisioning; never print names."""
     refusal = "commit candidate changes before PR preflight"
     try:
         result = subprocess.run(
@@ -232,7 +300,13 @@ def require_clean_source(checkout):
         checkout_root = Path(checkout) / git(checkout, "rev-parse", "--show-cdup")
         checked = set()
         for record in raw[:-1].split(b"\0"):
-            # Every tracked/index status (including renames and conflicts),
+            if record.startswith(b" M ") and record[3:] in KIT_INSTRUCTIONS:
+                # Worktree-only modification (never staged): st's tooling block.
+                if not _only_tooling_block_changed(checkout_root, checkout,
+                                                   record[3:].decode("ascii")):
+                    raise Refused(refusal)
+                continue
+            # Every other tracked/index status (including renames and conflicts),
             # unknown status and malformed record refuses regardless of path.
             if not record.startswith(b"?? "):
                 raise Refused(refusal)
@@ -240,18 +314,23 @@ def require_clean_source(checkout):
             parts = path.split(b"/")
             if parts[-1] == b"":  # Git keeps nested repositories as directories.
                 parts.pop()
-            if (b"/" not in path or parts[0] not in {b".work", b".task-notes"}
-                    or any(part in {b"", b".", b".."} for part in parts)):
+            if any(part in {b"", b".", b".."} for part in parts):
+                raise Refused(refusal)
+            if path in KIT_FILES:
+                want = stat.S_ISREG
+            elif b"/" in path and parts[0] in SCRATCH_DIRS | KIT_DIRS:
+                want = stat.S_ISDIR
+            else:
                 raise Refused(refusal)
             root = parts[0]
             if root not in checked:
                 # lstat inspects the root itself; no private content or link
                 # target is opened, even when a root has been replaced.
                 mode = (checkout_root / root.decode("ascii")).lstat().st_mode
-                if not stat.S_ISDIR(mode):
+                if not want(mode):
                     raise Refused(refusal)
                 checked.add(root)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         raise Refused(refusal) from None
 
 
@@ -263,7 +342,16 @@ def candidate(checkout, repo, base, api):
         raise Refused("candidate cannot be the base branch")
     require_clean_source(checkout)
     head = git(checkout, "rev-parse", "HEAD")
-    remote_head = api(f"repos/{repo}/commits/{quote(head_ref, safe='')}").get("sha")
+    try:
+        remote_head = api(f"repos/{repo}/commits/{quote(head_ref, safe='')}").get("sha")
+    except GitHubError as error:
+        # GitHub answers an unpublished branch with 404/422, which used to surface
+        # as "outcome unverified" on a healthy API (aegis-za4f.15). It is a
+        # definite answer: the branch is not on the remote.
+        if error.status in (404, 422):
+            raise Refused("push the exact candidate branch and fetch its base before "
+                          f"preflight (GitHub has no branch {head_ref})") from error
+        raise
     base_sha = api(f"repos/{repo}/commits/{quote(base, safe='')}").get("sha")
     if head != remote_head or not isinstance(base_sha, str):
         raise Refused("push the exact candidate branch and fetch its base before preflight")
@@ -338,6 +426,28 @@ def dispositions(checkout, repo, candidate, review, decisions, api):
     return sorted(by_number.values(), key=lambda d: d["number"])
 
 
+def _created_matches(result, repo, candidate):
+    return (isinstance(result, dict) and isinstance(result.get("head"), dict)
+            and isinstance(result.get("base"), dict)
+            and result["head"].get("sha") == candidate["head"]
+            and result["base"].get("sha") == candidate["base"]
+            and type(result.get("number")) is int and result["number"] > 0
+            and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
+
+
+def _read_back_created(api, repo, candidate):
+    """The one open PR for the candidate head, verified like a POST response, or
+    None. Any read-back failure or ambiguity is None: the caller stays UNKNOWN."""
+    try:
+        numbers = candidate_prs(api, repo, candidate["head_ref"])
+        if len(numbers) != 1:
+            return None
+        detail = api(f"repos/{repo}/pulls/{numbers[0]}")
+    except (Refused, OSError, subprocess.SubprocessError):
+        return None
+    return detail if _created_matches(detail, repo, candidate) else None
+
+
 def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
         create=False, draft=False, dry_run=False, api=None, patch_api=None):
     from . import pr_lineage
@@ -407,17 +517,23 @@ def run(checkout, repo, base, bead, body, title, decisions, *, bead_families=(),
                                             "head": first_candidate["head_ref"],
                                             "base": base, "draft": draft})
     except (Refused, OSError, subprocess.SubprocessError) as error:
-        raise Indeterminate("create outcome unknown; inspect remote PR before retrying") from error
+        if isinstance(error, GitHubError) and error.status is not None \
+                and 400 <= error.status < 500 and error.status not in (408, 429):
+            # GitHub rejected the request itself (validation, permission): nothing
+            # was created, and the call/status/stderr say why.
+            raise
+        # A lost response or 5xx may still have committed. Read back before
+        # calling it unverified (aegis-za4f.15): an open PR for this exact head
+        # and base IS the created PR.
+        result = _read_back_created(api, repo, first_candidate)
+        if result is None:
+            raise Indeterminate(f"create outcome unknown ({error}); read-back found no "
+                                "verified PR for this head; inspect remote PR before "
+                                "retrying") from error
     # Every field is still untrusted JSON after a successful POST. A non-object
     # head/base or missing number must not escape as AttributeError/KeyError and
     # lose the fact that the write may have committed (Wu's post-write control).
-    valid = (isinstance(result, dict) and isinstance(result.get("head"), dict)
-             and isinstance(result.get("base"), dict)
-             and result["head"].get("sha") == first_candidate["head"]
-             and result["base"].get("sha") == first_candidate["base"]
-             and type(result.get("number")) is int and result["number"] > 0
-             and result.get("html_url") == f"https://github.com/{repo}/pull/{result['number']}")
-    if not valid:
+    if not _created_matches(result, repo, first_candidate):
         raise Indeterminate("create outcome/head/base unverified; inspect remote PR before retrying")
     try:
         lineage_receipts = pr_lineage.retire(api, patch_api, repo, lineage, result,
@@ -487,9 +603,19 @@ def command(args):
         return 0
     except Indeterminate as error:
         print(f"PR creation outcome UNKNOWN: {error}", file=sys.stderr)
-        print(json.dumps({"refused": str(error), "created": None, "outcome": "indeterminate"}))
+        print(json.dumps({"refused": str(error), "created": None, "outcome": "indeterminate",
+                          **_github_detail(error)}))
         return 2
     except (Refused, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"PR preflight refused: {error}", file=sys.stderr)
-        print(json.dumps({"refused": str(error), "created": False}))
+        print(json.dumps({"refused": str(error), "created": False, **_github_detail(error)}))
         return 2
+
+
+def _github_detail(error):
+    """The failing gh call, for a job to paste into its report (aegis-za4f.15)."""
+    while error is not None:
+        if isinstance(error, GitHubError):
+            return {"github": error.detail()}
+        error = error.__cause__
+    return {}
