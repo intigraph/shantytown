@@ -317,7 +317,7 @@ st agent                      one agent
                               and the governor, reports its verdict to the administrator and the
                               item, then is torn down. Over cap it QUEUES a ticket (--priority N)
                               that the job end paths drain, routed by harness cap and --track
-                              share. --list · --stop NAME · --retry NAME · --report (by the
+                              share. --list · --stop NAME|TICKET · --retry NAME · --report (by the
                               agent) · --reap (tend) · --drain. docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]

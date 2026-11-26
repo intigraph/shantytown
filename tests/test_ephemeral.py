@@ -1935,3 +1935,135 @@ def test_task_prompt_says_push_and_open_by_hand_when_repo_pr_fails():
     task = eph._JOBS["task"]
     assert "If `st repo pr` refuses or fails" in task
     assert "git push -u origin HEAD" in task and "gh pr create" in task
+
+
+# --- queue recovery (aegis-za4f.16) ---------------------------------------------
+#
+# q-ecb33cbe0cca (--checkout a path that did not exist) killed every drain that
+# claimed it; each drain revived the dead claim, took it first, and died again,
+# so nothing launched for ~4h behind one ticket.
+
+def test_a_dead_claim_is_revived_once_then_dropped_visibly(tmp_path):
+    _ticket(tmp_path, "it-bad", 0, NOW, "f" * 12)
+    _ticket(tmp_path, "it-good", 3, NOW, "1" * 12)
+    open_, dead = (lambda i: "open"), (lambda p: False)
+    first, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW, pid=1)
+    assert first["item"] == "it-bad"
+    # The claimer died once: revived (and reclaimed: it is still first).
+    again, notes = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 1,
+                                  pid=2, pid_alive=dead)
+    assert again["item"] == "it-bad" and "back in the queue" in notes[0]
+    # It died again: dropped with its reason, and the good ticket is claimed.
+    nxt, notes = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 2,
+                                pid=3, pid_alive=dead)
+    assert nxt["item"] == "it-good"
+    assert any("claimer died before launch 2 times" in n for n in notes)
+    (gone,) = eph.dropped(tmp_path, NOW + 3)
+    assert gone["id"] == "q-" + "f" * 12
+    line = eph.render_dropped([gone], NOW + 3)[0]
+    assert "failed" in line and "claimer died" in line and "(launching)" not in line
+
+
+def test_a_stale_claim_by_a_live_pid_is_also_recovered(tmp_path):
+    _ticket(tmp_path, "it-1", 0, NOW, "2" * 12)
+    eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW, pid=1)
+    t, notes = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open",
+                              now=NOW + eph.LAUNCH_GRACE_S + 1, pid_alive=lambda p: True)
+    assert t is not None and "back in the queue" in notes[0]
+
+
+def _two_queued(store, monkeypatch, bad_item="it-bad"):
+    root, panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (first,) = eph.records(root)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", bad_item, "--priority", "0") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-good", "--priority", "3") == cli.OK
+    assert _st(root, "--stop", first["name"]) == cli.OK
+    return root, panes, launched
+
+
+def test_one_crashing_ticket_fails_and_the_drain_launches_the_next(store, monkeypatch, capsys):
+    root, panes, launched = _two_queued(store, monkeypatch)
+
+    real = cli._spawn_item_context
+
+    def crash(a, item):
+        # Before the ledger record, where the incident's launch died.
+        if item == "it-bad":
+            raise FileNotFoundError("/nonexistent/checkout")
+        return real(a, item)
+    monkeypatch.setattr(cli, "_spawn_item_context", crash)
+    assert _st(root, "--drain") != cli.OK          # the crash is reported, not raised
+    err = capsys.readouterr().err
+    assert "launch crashed: FileNotFoundError" in err
+    assert [r["item"] for r in eph.live(root)] == ["it-good"]
+    assert eph.tickets(root) == []
+    assert _st(root, "--list") == cli.OK
+    listing = capsys.readouterr().out
+    assert "failed" in listing and "it-bad" in listing and "(launching)" not in listing
+
+
+def test_a_dead_claim_ahead_of_a_good_ticket_does_not_block_the_drain(store, monkeypatch, capsys):
+    root, _panes, launched = _two_queued(store, monkeypatch)
+    (bad,) = [t for t in eph.tickets(root) if t["item"] == "it-bad"]
+    # Already revived once and its claimer dead again: the 4h incident's state.
+    eph._put(root, dict(bad, state=eph.CLAIMED, claimed_by=999_999_999,
+                        claimed_at=__import__("time").time(), recoveries=1))
+    assert _st(root, "--drain") == cli.OK
+    assert [r["item"] for r in eph.live(root)] == ["it-good"]
+    assert "claimer died before launch" in capsys.readouterr().err
+
+
+def test_a_missing_checkout_is_refused_at_queue_time(store, capsys, tmp_path):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+               "--repo", "o/n", "--checkout", str(tmp_path / "nonexistent")) == cli.REFUSED
+    assert "does not exist" in capsys.readouterr().err
+    assert eph.tickets(root) == []
+
+
+def test_a_checkout_without_the_repos_remote_is_refused(store, capsys, tmp_path):
+    root, _panes, launched = store
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    other = _checkout_with_origin(tmp_path / "other", "git@github.com:o/other.git")
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+               "--checkout", str(plain)) == cli.REFUSED
+    assert "not a git checkout" in capsys.readouterr().err
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+               "--repo", "o/n", "--checkout", str(other)) == cli.REFUSED
+    assert "no remote for --repo o/n" in capsys.readouterr().err
+    assert launched == []
+
+
+def test_checkout_refusal_admits_a_matching_remote_on_any_host():
+    ok = eph.checkout_refusal("/c", "Stiwi/Goldblum", exists=True,
+                              remotes=["ssh://git@forge.local:2222/stiwi/goldblum.git"])
+    assert ok == ""
+    assert eph.checkout_refusal(None, "o/n", exists=False, remotes=None) == ""
+    assert "does not exist" in eph.checkout_refusal("/c", "o/n", exists=False, remotes=None)
+
+
+def test_stop_cancels_a_queued_ticket_reversibly(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    (t,) = eph.tickets(root)
+    eph._put(root, dict(t, state=eph.CLAIMED, claimed_by=1, claimed_at=NOW))
+    capsys.readouterr()
+    assert _st(root, "--stop", t["id"]) == cli.OK
+    assert f"cancelled {t['id']}" in capsys.readouterr().out
+    assert eph.tickets(root) == []
+    assert _st(root, "--list") == cli.OK
+    assert t["id"] not in capsys.readouterr().out
+    kept = eph.removed_dir(root) / f"{t['id']}.json"
+    assert json.loads(kept.read_text())["state"] == eph.QUEUED
+    # Reversible: moving the file back requeues it, unclaimed.
+    kept.rename(eph.queue_dir(root) / kept.name)
+    (back,) = eph.tickets(root)
+    assert back["id"] == t["id"] and back["state"] == eph.QUEUED
+    # A ticket not in the queue is refused, not silently "cancelled".
+    assert _st(root, "--stop", "q-" + "0" * 12) == cli.REFUSED

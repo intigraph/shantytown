@@ -181,6 +181,7 @@ st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 high
 st agent spawn --ephemeral ... --track ops    # work track for queue shares: ops | short-term | roadmap | backlog (default roadmap)
 st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
+st agent spawn --stop q-3f9a1c2b4d5e    # cancel a queued or claimed ticket: moved aside to ephemeral/queue-removed/
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
 st agent spawn --ephemeral --job merge --item aegis-y --repo owner/name --pr 12 [--head SHA]
 st agent spawn --report --verdict done --summary 'Nonempty result'   # run BY the ephemeral agent
@@ -221,14 +222,30 @@ apply again at launch. A ticket whose item is closed or no longer exists is
 dropped, never launched, and kept with its reason under `queue/dropped/`; an
 item the tracker cannot read keeps its ticket queued. A ticket the spawn
 refuses at launch is dropped the same way with the refusal as its reason.
+A ticket whose launch raises instead of refusing is dropped the same way
+(`launch crashed: <error>`) and the drain goes on to the next ticket: one bad
+ticket never ends a drain (aegis-za4f.16). Tickets dropped in the last 24h show
+on `--list` as `failed` with their reason.
 A retry's superseded job does not drain: that slot is the retry's.
+
+**Bad checkout refused at admission.** An explicit `--checkout` that does not
+exist, is not a git checkout, or has no remote naming `--repo` (owner/name, any
+host) is refused before a ticket is queued or a worktree is cut.
+
+**Cancel.** `st agent spawn --stop <ticket>` moves a queued or claimed ticket to
+`<root>/ephemeral/queue-removed/<ticket>.json`, rewritten as an unclaimed queued
+ticket with `cancelled_at`/`cancelled_by`. Moving the file back into `queue/`
+requeues it. A claimer already past its ledger write still launches its job;
+stop that job by name.
 
 **Crash semantics: exactly-once launch, never lost.** The claim marks the
 ticket with the drainer's pid. The spawn writes the ledger record carrying
 `ticket` and deletes the ticket file in the same `lock()` step. The next claim
 first recovers: a claimed ticket a ledger record names is settled, never
 relaunched; one with no record whose claimer is dead (or older than
-`LAUNCH_GRACE_S`) goes back to queued with its age. A launch that dies after
+`LAUNCH_GRACE_S`) goes back to queued with its age ONCE (`MAX_RECOVERIES`); a
+second dead claim drops it with its reason, so a ticket that kills its claimer
+cannot block the queue or show `(launching)` forever. A launch that dies after
 its ledger write is an ordinary LAUNCHING job the reaper already ends.
 
 ### Routing by harness and track

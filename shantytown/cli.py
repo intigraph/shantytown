@@ -3932,6 +3932,27 @@ def _spawn_forge_refusal(req) -> str:
     return eph.forge_refusal(req.job, req.repo, origin)
 
 
+def _spawn_checkout_refusal(req) -> str:
+    """Refuse an explicit --checkout that is not an existing git checkout with
+    a remote for --repo, before anything is queued or cut (aegis-za4f.16)."""
+    import subprocess
+    from . import ephemeral as eph
+    if not req.checkout:
+        return ""
+    path = Path(req.checkout).expanduser()
+    remotes = None
+    if path.is_dir():
+        try:
+            r = subprocess.run(["git", "-C", str(path), "remote", "-v"],
+                               capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as error:
+            return f"--checkout {req.checkout}: git could not read it ({type(error).__name__})"
+        if r.returncode == 0:
+            remotes = sorted({line.split()[1] for line in r.stdout.splitlines()
+                              if len(line.split()) >= 2})
+    return eph.checkout_refusal(req.checkout, req.repo, exists=path.is_dir(), remotes=remotes)
+
+
 def _spawn_item_comment(a):
     from .work_item import _comments, exact
 
@@ -4084,6 +4105,7 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             else:
                 lines = eph.render(recs, time.time())
                 lines += eph.render_tickets(queued, time.time())
+                lines += eph.render_dropped(eph.dropped(a.root, time.time()), time.time())
                 print("\n".join("  " + line for line in lines) if lines
                       else "  no ephemeral jobs.")
             return OK
@@ -4226,6 +4248,15 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                           admit=eph.JOB_MANAGERS)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
+        if a.stop and eph._TICKET.fullmatch(a.stop):
+            # A queued or claimed ticket is not a job yet (aegis-za4f.16): the
+            # stop that refused q-ecb33cbe0cca now cancels it, reversibly.
+            if a.dry_run:
+                print(f"would cancel queued ticket {a.stop}")
+                return OK
+            with eph.lock(a.root):
+                print(f"  {eph.cancel(a.root, a.stop, actor, time.time())}")
+            return OK
         if a.stop:
             rec = eph.read(a.root, a.stop)
             if rec is None or rec.get("state") == eph.DONE:
@@ -4270,6 +4301,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         # Before superseding a retried original, reading context, taking the
         # ledger lock or cutting a worktree: a foreign forge costs nothing.
         if refusal := _spawn_forge_refusal(req):
+            raise eph.Refused(refusal)
+        if refusal := _spawn_checkout_refusal(req):
             raise eph.Refused(refusal)
         if recruitment is not None:
             try:
@@ -4602,19 +4635,29 @@ def _spawn_drain(a, policy) -> int:
                           ("--harness", "harness"), ("--head", "head"), ("--track", "track")):
             if ticket.get(key) is not None:
                 argv += [flag, str(ticket[key])]
-        ns = _parse_args(argv)
-        ns.root, ns.registry = a.root, getattr(a, "registry", None)
-        ns.repo = getattr(a, "repo", None)
-        ns._ticket = ticket
-        out = _cmd_spawn(ns)
-        if getattr(ns, "_ticket_requeued", False):
+        ns, crash = None, None
+        try:
+            ns = _parse_args(argv)
+            ns.root, ns.registry = a.root, getattr(a, "registry", None)
+            ns.repo = getattr(a, "repo", None)
+            ns._ticket = ticket
+            out = _cmd_spawn(ns)
+        except (Exception, SystemExit) as error:  # noqa: BLE001
+            # One ticket's launch must never end the drain (aegis-za4f.16):
+            # q-ecb33cbe0cca's crash left it claimed, the next drain revived
+            # it first, and nothing launched behind it for ~4h. It fails here,
+            # with its reason, and the drain moves on.
+            crash = f"launch crashed: {type(error).__name__}: {str(error)[:200]}"
+            out = CANNOT_TELL
+        if ns is not None and getattr(ns, "_ticket_requeued", False):
             return rc                     # no slot after all; the next end drains
         with eph.lock(a.root):
             left = eph.read_ticket(a.root, ticket["id"])
             if left is not None and left.get("claimed_at") == ticket["claimed_at"]:
                 # Refused before its ledger record: it can never launch as asked.
-                why = getattr(ns, "_ticket_refused", None) or f"spawn returned {out}"
-                print(f"  queue: {eph.drop(a.root, ticket['id'], 'launch refused: ' + why, time.time())}",
+                why = crash or "launch refused: " + (getattr(ns, "_ticket_refused", None)
+                                                     or f"spawn returned {out}")
+                print(f"  queue: {eph.drop(a.root, ticket['id'], why, time.time())}",
                       file=sys.stderr)
         if out != OK:
             rc = out
