@@ -372,8 +372,13 @@ def price_description(result, bead):
     """Display Camayoc's projection without repricing or changing receipts."""
     costs = result.get('costs') or {}
     groups = [g for g in costs.get('groups', []) if g.get('bead') == bead]
+    from . import cost_plan_share
+    measured = cost_plan_share.describe(result.get('plan_share'), bead)
     if not groups:
-        return 'API-equivalent USD: UNKNOWN (' + costs.get('reason', 'no priced request projection') + ')'
+        # Plan share is measured from account readings, not from Camayoc's
+        # per-request prices, so a missing price projection does not hide it.
+        line = 'API-equivalent USD: UNKNOWN (' + costs.get('reason', 'no priced request projection') + ')'
+        return line + ('\n' + measured if measured else '')
     lines = ['API-equivalent USD; current published rates, not an invoice:']
     for group in groups:
         dollars = group.get('usd')
@@ -383,7 +388,7 @@ def price_description(result, bead):
         for reason, count in sorted(group.get('unknown_reasons', {}).items()):
             lines.append(f'    {reason}: {count} request(s)')
     lines.append('Price table SHA-256: ' + str(costs.get('price_table_sha256', 'UNKNOWN')))
-    lines.append('Plan share USD: UNKNOWN (' + costs.get('plan_share_reason', 'no measured allocation') + ')')
+    lines.append(measured or 'Plan share USD: UNKNOWN (' + costs.get('plan_share_reason', 'no measured allocation') + ')')
     return '\n'.join(lines)
 
 
@@ -422,6 +427,9 @@ def metrics(result):
             lines.append(f"st_bead_api_equivalent_known_usd{{{label}}} {group['known_usd']}")
         if group.get('tokens', 0):
             lines.append(f"st_bead_priced_token_share{{{label}}} {group['priced_tokens'] / group['tokens']}")
+    if result.get('plan_share') is not None:
+        from . import cost_plan_share
+        lines.extend(cost_plan_share.metrics(result['plan_share']).splitlines())
     lines.append(f'st_bead_cost_last_success_timestamp_seconds {time.time()}')
     return '\n'.join(lines) + '\n'
 
@@ -560,6 +568,13 @@ def _run_locked(args, config):
 
 def _run_selected(args, config, graph_state):
     result, records, method = retrieve(args.root, config)
+    if config.get('plan_share'):
+        from . import cost_plan_share
+        declared = [b for b in method['params']['bindings'] if b.get('basis') != INFERRED_HELD]
+        # Every declared focus fleet-wide, so a concurrent one outside the
+        # sampled sources still marks the account as shared.
+        everyone = bindings(args.root, config['rig'], records)
+        result = {**result, 'plan_share': cost_plan_share.project(args.root, config, declared, everyone)}
     from . import cost_coverage
     result = {**result, 'cost_coverage': cost_coverage.completed(records, args.bead)}
     unreadable = [u['bead'] for u in result.get('unresolved_items', []) if u['reason'] == 'unreadable']

@@ -51,8 +51,45 @@ Daily rows join Camayoc's prices by exact harness/session/agent/request ID and
 retain the catalogue hash, known subtotal and priced-request count. A missing
 price leaves the complete daily dollar total unknown while preserving tokens.
 Session correction still replaces its prior rows rather than adding them.
-These are API-equivalent estimates at published rates, not invoices. Plan share
-stays unknown until measured account-window allocation is available.
+These are API-equivalent estimates at published rates, not invoices.
+
+## Plan share
+
+Flat plans have no per-token bill. With an explicit `plan_share` block in
+`cost.json`, `st work cost ITEM` and the cost metrics add a **measured** plan
+share for each declared focus interval:
+
+```json
+"plan_share": {
+  "readings_file": "/path/to/account-window-readings.jsonl",
+  "plans": {"acct-a": {"usd": 200, "period_days": 30,
+                       "window": "seven_day", "window_days": 7}}
+}
+```
+
+Each readings line is `{"account", "window", "ts", "pct", "resets_at"}`: the
+deployment's own scrape of the account's window utilization (for Claude, the
+series behind `claude_usage_utilization_pct`). Plan share is the account's
+utilization points burned between the readings bracketing the focus, times the
+plan's price for one window (`usd * window_days / period_days / 100` per point).
+The denominator is the account's own meter, so no token census is assumed.
+
+It is reported only when the measured interval is provably the item's alone.
+Otherwise the interval is UNKNOWN, with its reason: the focus is still open; no
+reading within 900 s brackets it; the window reset (or its reset time is
+unknown) or utilization fell between readings; the agent's launch stamp
+(`governor/account-launches/`) postdates the focus, so its account then is
+unknown; another declared focus anywhere in the fleet overlaps the measured
+interval on that account; any other agent is stamped on that account, or was
+launched during the interval onto an account we cannot name; or the account has
+no declared plan price. Account use outside st is invisible to this check, so
+declare plans only for accounts dedicated to the crew.
+
+`st_bead_plan_share_usd{rig,bead,agent,account,window,interval_start}` is
+emitted only for measured intervals; an UNKNOWN interval has no sample, never a
+zero. Display shows the known subtotal over measured/total intervals when any
+interval is UNKNOWN. Without the block, Camayoc's `plan_share_reason` is shown
+unchanged. Closure receipts are unaffected.
 
 Codex display discovery includes the durable session directory used by harness
 launches, matches the recorded workspace, and deduplicates symlinks. It does not
