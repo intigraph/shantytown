@@ -1928,3 +1928,10 @@ def test_cli_codex_ticket_waits_while_claude_capacity_is_free(codex_store, monke
     assert len(launched) == 1 and eph.tickets(root)[0]["item"] == "it-2"
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3", "--harness", "claude") == cli.OK
     assert len(launched) == 2 and {r["harness"] for r in eph.live(root)} == {"codex", "claude"}
+
+
+def test_task_prompt_says_push_and_open_by_hand_when_repo_pr_fails():
+    """A failed `st repo pr` must not strand committed work local-only."""
+    task = eph._JOBS["task"]
+    assert "If `st repo pr` refuses or fails" in task
+    assert "git push -u origin HEAD" in task and "gh pr create" in task

@@ -1274,6 +1274,8 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
     "task": """JOB: do {item}'s acceptance criteria. Read it with `st work item show {item}`.
 {source}
 Commit on your own branch; open a PR if code changed (`st repo pr`). Never push to main.
+If `st repo pr` refuses or fails, do not stop with work only on disk: `git push -u origin HEAD`,
+then `gh pr create` with the same title and body, and put the refusal text in your report.
 Report --verdict done with what changed and the PR link, or blocked.""",
 }
 
