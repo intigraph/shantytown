@@ -3382,6 +3382,13 @@ symlink replacing either root refuses, as do unrelated untracked paths and every
 tracked, staged, deleted, renamed or conflicted change, including under those
 roots. No ignore/configuration change or force option is needed.
 
+st's own job-worktree provisioning is also admitted (aegis-za4f.15): untracked
+content under `.claude/`, `.agents/`, `.codex/` and `.bobbin/`, the untracked
+regular files `.mcp.json` and `.shantytown-tooling.json`, and an unstaged
+`AGENTS.md`/`CLAUDE.md` change confined to the `shantytown:tooling` block. An
+edit outside that block, a staged instruction file, or any other path still
+refuses.
+
 The forge's canonical repository slug and stable ID are checked before creation.
 A renamed slug refuses before POST and names the canonical slug; update the
 requested repository and its matching origin deliberately, then run preflight
@@ -3395,9 +3402,16 @@ or a redirect race refuses before POST and names a concrete `git remote set-url`
 fix. The requested repository must still be the forge's canonical slug.
 This command never rewrites remotes or silently migrates aliases. A
 repository identity change during preflight also refuses before POST. A lost or
-malformed response after POST remains UNKNOWN (exit 2, `created: null`) and is
-reported on stderr as well as JSON stdout. Inspect the canonical repository for
-the exact PR before retrying; the command never automatically repeats a create.
+malformed response after POST is first read back: one open PR for the candidate
+head with the exact head and base SHAs is reported as created. Otherwise it
+remains UNKNOWN (exit 2, `created: null`) and is reported on stderr as well as
+JSON stdout. A 4xx rejection of the create (other than 408/429) is a definite
+refusal. Inspect the canonical repository for the exact PR before retrying; the
+command never automatically repeats a create. Every failed `gh api` call is named
+in the refusal and in the JSON `github` field (call, exit, HTTP status, redacted
+stderr). A branch GitHub does not have (404/422 on its commit) refuses as "push
+the exact candidate branch", not as an unverified outcome. A task job that reports
+`blocked` or `failed` pushes its `wt/<job>` branch first and says so in the report.
 
 ```sh
 st repo pr example/project --checkout /path/to/own/worktree --bead project-abc
