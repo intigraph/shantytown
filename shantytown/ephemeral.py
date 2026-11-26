@@ -399,8 +399,9 @@ def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
     """The Codex exec-policy rules an attended job needs, or None (aegis-e579 B).
 
     Review/merge use the exact per-PR allowlist from the Claude settings.
-    Task/triage get only the controller-guarded report command: their work
-    commands retain normal sandbox policy.
+    Task/triage get the controller-guarded report command, and a task job the
+    exact read of its own item; their other work commands retain normal
+    sandbox policy.
     Codex runs an allowed command outside its sandbox without asking, which is
     what lets `st agent spawn --report` write st's ledger: no writable root is
     opened to the job's other commands. Bound Codex jobs use approval_policy=never;
@@ -423,6 +424,16 @@ def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
                      "decision=\"allow\", justification=\"st job: guarded merge\")")
     lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--report\"], "
                  "decision=\"allow\", justification=\"st job: report its verdict\")")
+    item = str(rec.get("item") or "")
+    if rec["job"] == "task" and _ITEM.fullmatch(item):
+        # aegis-kxu: the task prompt's first instruction is this exact read, and
+        # Codex task jobs eph-task-4e5ee7/ac37d2 both sat idle on its approval
+        # prompt until a human pressed y. The id is a literal token (the _ITEM
+        # charset has no glob or shell metacharacter), so another item, a
+        # wildcard and every write verb still prompt. Trailing flags are safe:
+        # `show` returns after the read and never consults update flags.
+        lines.append(f"prefix_rule(pattern=[\"st\", \"work\", \"item\", \"show\", {q(item)}], "
+                     "decision=\"allow\", justification=\"st job: read its own item\")")
     for pattern in (_CODEX_TASK_FORBID if rec["job"] == "task" else _CODEX_FORBID):
         lines.append(f"prefix_rule(pattern={q(list(pattern))}, decision=\"forbidden\", "
                      "justification=\"st job: not part of this job\")")
