@@ -79,6 +79,11 @@ class Refused(Exception):
     """A spawn/stop/retry/report the rules do not allow. The message is the reason."""
 
 
+class OverCap(Refused):
+    """Refused only because every slot is taken. A fresh spawn turns this into a
+    queued ticket (aegis-cui); every other refusal still refuses."""
+
+
 # --- naming + the ledger ------------------------------------------------------
 
 def is_ephemeral_name(name: str | None) -> bool:
@@ -300,7 +305,7 @@ def cap_refusal(root, policy) -> str:
     if len(running) >= cap:
         names = ", ".join(r["name"] for r in running)
         return (f"over cap: {len(running)}/{cap} ephemeral agent(s) live ({names}); "
-                "refused, not queued. Stop one or raise [ephemeral] max_agents")
+                "stop one or raise [ephemeral] max_agents")
     return ""
 
 
@@ -334,7 +339,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")
     if refusal := cap_refusal(root, policy):
-        raise Refused(refusal)
+        raise (OverCap if policy.max_agents > 0 else Refused)(refusal)
     if req.job == "merge":
         if policy.review_enqueue_enabled:
             raise Refused("merge jobs are retired while review enqueue is enabled; "
@@ -356,6 +361,204 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         "turns": 0, "state": LAUNCHING, "attempt": attempt, "retry_of": retry_of,
         "workspace": None, "worktree_of": None, "result": None,
     }
+
+
+# --- the spawn queue (aegis-cui) ----------------------------------------------
+#
+# Before this, a spawn over the cap was refused and the work was lost unless a
+# human retried it. Now a fresh --ephemeral spawn that fails ONLY on the cap
+# leaves a ticket here, and the job end paths (report / stop / reap) drain it:
+# no poller, no timer. One JSON file per ticket under ephemeral/queue/, every
+# write under the ledger lock() and atomic (os.replace).
+#
+# Crash semantics -- exactly-once launch, never lost:
+#   claim   : under lock, the ticket is marked claimed by (pid, claimed_at).
+#   launch  : the spawn writes its ledger record carrying `ticket` and deletes
+#             the ticket file IN THE SAME lock() section.
+#   recover : the next claim_next() looks at every claimed ticket. A ledger
+#             record carrying its id means it launched: the ticket is deleted,
+#             never relaunched. No record and a dead (or stale) claimer means the
+#             claimer died before launching: the ticket goes back to queued.
+# A launch that dies after the ledger write is an ordinary LAUNCHING job, which
+# the reaper already ends and reports (LAUNCH_GRACE_S); it is not relaunched.
+
+TICKET_PREFIX = "q-"
+_TICKET = re.compile(r"q-[0-9a-f]{12}")
+QUEUED, CLAIMED = "queued", "claimed"
+#: Priority a ticket sorts at when neither --priority nor the item gave one:
+#: after every real tracker priority (0 is the highest, bd's convention).
+UNRANKED = 99
+#: Item statuses that mean "nothing left to do": their tickets are dropped.
+CLOSED_STATUSES = ("closed", "tombstone")
+
+
+def queue_dir(root) -> Path:
+    return ledger_dir(root) / "queue"
+
+
+def _ticket_path(root, tid: str) -> Path:
+    if not _TICKET.fullmatch(tid or ""):
+        raise Refused(f"{tid!r} is not a queue ticket id")
+    return queue_dir(root) / f"{tid}.json"
+
+
+def ticket_for(req: Request, *, harness: str, priority: int | None,
+               requester: str | None, now: float,
+               token: Callable[[], str] = lambda: secrets.token_hex(6)) -> dict:
+    return {
+        "id": f"{TICKET_PREFIX}{token()}", "job": req.job, "item": req.item,
+        "repo": req.repo, "pr": req.pr, "checkout": req.checkout, "head": req.head,
+        "harness": harness, "priority": priority,
+        "requester": requester or "operator", "enqueued_at": now,
+        "state": QUEUED, "claimed_by": None, "claimed_at": None,
+    }
+
+
+def _put(root, ticket: dict) -> None:
+    p = _ticket_path(root, ticket["id"])
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(ticket, indent=2, sort_keys=True))
+    os.replace(tmp, p)
+
+
+def enqueue(root, ticket: dict) -> None:
+    """Caller holds lock(): the cap check that found no slot and this write are
+    one step, or a slot freed in between would sit idle behind a ticket."""
+    _put(root, ticket)
+
+
+def _order(t: dict):
+    p = t.get("priority")
+    return (p if isinstance(p, int) else UNRANKED, t.get("enqueued_at") or 0, t["id"])
+
+
+def tickets(root) -> list[dict]:
+    """Every ticket, in drain order: priority (0 first), then age."""
+    out = []
+    for p in queue_dir(root).glob(f"{TICKET_PREFIX}*.json"):
+        try:
+            out.append(json.loads(p.read_text()))
+        except (OSError, ValueError):
+            continue
+    return sorted(out, key=_order)
+
+
+def read_ticket(root, tid: str) -> dict | None:
+    try:
+        return json.loads(_ticket_path(root, tid).read_text())
+    except FileNotFoundError:
+        return None
+
+
+def settle(root, tid: str) -> None:
+    """The ticket became a ledger record. Caller holds lock() and has just
+    written that record with rec["ticket"] = tid."""
+    try:
+        _ticket_path(root, tid).unlink()
+    except FileNotFoundError:
+        pass
+
+
+def release(root, tid: str) -> None:
+    """Back to queued, keeping its age: the claimer found no slot after all."""
+    t = read_ticket(root, tid)
+    if t is not None:
+        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None))
+
+
+def drop(root, tid: str, reason: str, now: float) -> str:
+    """Remove a ticket that must never launch, keeping it and its reason under
+    queue/dropped/ as the log. Returns the line to print."""
+    t = read_ticket(root, tid)
+    if t is None:
+        return f"{tid}: already gone"
+    d = queue_dir(root) / "dropped"
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{tid}.json"
+    out.write_text(json.dumps(dict(t, state="dropped", dropped_at=now, reason=reason),
+                              indent=2, sort_keys=True))
+    _ticket_path(root, tid).unlink()
+    return f"dropped {tid} ({t['job']} on {t['item']}): {reason}"
+
+
+def _pid_alive(pid) -> bool:
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
+               pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive
+               ) -> tuple[dict | None, list[str]]:
+    """Recover interrupted claims, then claim the highest-priority oldest ticket
+    whose item is open, if a slot is free. Caller holds lock().
+
+    item_state(item) answers "open", "closed", "missing" or "unknown". Closed and
+    missing tickets are dropped, never launched; unknown ones stay queued and are
+    skipped this pass, so a tracker hiccup does not lose work."""
+    lines = []
+    launched = {r.get("ticket") for r in records(root) if r.get("ticket")}
+    for t in tickets(root):
+        if t.get("state") != CLAIMED:
+            continue
+        if t["id"] in launched:
+            settle(root, t["id"])
+            lines.append(f"{t['id']}: already launched; ticket settled, not relaunched")
+        elif (not pid_alive(t.get("claimed_by"))
+              or now - (t.get("claimed_at") or 0) > LAUNCH_GRACE_S):
+            release(root, t["id"])
+            lines.append(f"{t['id']}: claimer gone before launch; back in the queue")
+    if cap <= 0 or len(live(root)) >= cap:
+        return None, lines
+    for t in tickets(root):
+        if t.get("state") != QUEUED:
+            continue
+        state = item_state(t["item"])
+        if state in ("closed", "missing"):
+            lines.append(drop(root, t["id"], f"item {t['item']} is {state}", now))
+            continue
+        if state != "open":
+            lines.append(f"{t['id']}: item {t['item']} state unknown; kept queued")
+            continue
+        claimed = dict(t, state=CLAIMED, claimed_by=os.getpid() if pid is None else pid,
+                       claimed_at=now)
+        _put(root, claimed)
+        return claimed, lines
+    return None, lines
+
+
+def kick_drain(root) -> bool:
+    """Start a drain in its own session if anything is queued. The end paths
+    call this after a slot frees; it returns at once so an ending job (or a tend
+    pass) never waits on the next launch. SHANTY_AGENT is dropped: the drain
+    launches as each ticket's requester, never as the job that just ended."""
+    if not any(queue_dir(root).glob(f"{TICKET_PREFIX}*.json")):
+        return False
+    env = {k: v for k, v in os.environ.items() if k != "SHANTY_AGENT"}
+    subprocess.Popen([sys.executable, "-c",
+                      "import sys; from shantytown.cli import main; sys.exit(main(sys.argv[1:]))",
+                      "--root", str(root), "agent", "spawn", "--drain"],
+                     start_new_session=True, stdin=subprocess.DEVNULL, cwd=str(root),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    return True
+
+
+def render_tickets(ts: list[dict], now: float) -> list[str]:
+    out = []
+    for n, t in enumerate(ts, 1):
+        p = t.get("priority")
+        age = int(max(0, now - (t.get("enqueued_at") or now)) // 60)
+        out.append(f"{t['id']}  queued #{n}  {t['job']:<6} {t['item']}  "
+                   f"P{p if p is not None else '?'}  by {t.get('requester')}  "
+                   f"waiting {age}m" + ("  (launching)" if t.get("state") == CLAIMED else ""))
+    return out
 
 
 # --- attended job permissions (aegis-e579 option B) ---------------------------
@@ -1721,12 +1924,14 @@ def render(recs: list[dict], now: float, *, recent: int = 5) -> list[str]:
 
 def summary_line(root, now: float | None = None) -> str:
     running = live(root)
-    if not running:
+    queued = len(tickets(root))
+    if not running and not queued:
         return ""
     now = time.time() if now is None else now
     return (f"{len(running)} ephemeral job(s) live: "
             + ", ".join(f"{r['name']} ({r['job']} {r['item']}, {_left(r, now)})"
                         for r in running)
+            + (f"; {queued} queued" if queued else "")
             + " — `st agent spawn --list|--stop|--retry`")
 
 
@@ -1745,6 +1950,8 @@ def main(argv: list[str] | None = None) -> int:
     from .tmux import Tmux, declared_socket
     panes = Tmux(socket=declared_socket(a.root))
     teardown(a.root, a.name, kill_session=panes.kill_session)
+    # The report path's slot frees HERE, after the pane is gone (aegis-cui).
+    kick_drain(a.root)
     return 0
 
 

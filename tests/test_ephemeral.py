@@ -92,12 +92,14 @@ def test_administrator_and_opt_in_verified_authority():
         eph.authority("eph-task-abcdef", lambda n: "administrator")
 
 
-def test_over_cap_is_refused_not_queued_and_done_jobs_free_the_slot(tmp_path):
+def test_over_cap_is_overcap_spawning_off_is_refused_and_done_jobs_free_the_slot(tmp_path):
     _rec(tmp_path, name="eph-task-000001")
-    with pytest.raises(eph.Refused, match="over cap: 1/1"):
+    with pytest.raises(eph.OverCap, match="over cap: 1/1"):
         _rec(tmp_path, policy=_policy(max_agents=1))
-    with pytest.raises(eph.Refused, match="off"):
+    # Spawning switched off is a refusal, never a queue: nothing would drain it.
+    with pytest.raises(eph.Refused, match="off") as off:
         _rec(tmp_path, policy=_policy(max_agents=0))
+    assert not isinstance(off.value, eph.OverCap)
     rec = eph.read(tmp_path, "eph-task-000001")
     rec["state"] = eph.DONE
     eph.write(tmp_path, rec)
@@ -336,7 +338,7 @@ def _st(root, *args):
     return cli.main(["--root", str(root), "agent", "spawn", *args])
 
 
-def test_spawn_launches_a_supervised_card_then_refuses_over_cap(store, capsys):
+def test_spawn_launches_a_supervised_card_then_queues_over_cap(store, capsys):
     root, panes, launched = store
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
@@ -345,9 +347,9 @@ def test_spawn_launches_a_supervised_card_then_refuses_over_cap(store, capsys):
     assert card["dangerous"] is False and card["harness"] == "claude"
     assert launched[0].name == rec["name"]
     assert Path(rec["workspace"]).is_dir()
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
-    assert "over cap" in capsys.readouterr().err
-    assert len(launched) == 1
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert "QUEUED q-" in capsys.readouterr().out
+    assert len(launched) == 1 and len(eph.records(root)) == 1
 
 
 def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
@@ -369,8 +371,10 @@ def test_a_lead_can_spawn_and_stop(store, monkeypatch, capsys):
     (rec,) = eph.records(root)
     assert len(launched) == 1
     # The cap is unchanged for a lead: max_agents = 1 in the fixture.
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
-    assert "over cap" in capsys.readouterr().err
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert "QUEUED" in capsys.readouterr().out and len(launched) == 1
+    (t,) = eph.tickets(root)
+    assert t["requester"] == "lea"
     assert _st(root, "--stop", rec["name"]) == cli.OK
     assert eph.read(root, rec["name"])["state"] == eph.DONE
 
@@ -1635,3 +1639,148 @@ def test_a_task_job_on_a_forgejo_repo_is_not_refused_by_the_forge_check(
     assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1",
                "--repo", "stiwi/goldblum", "-n") == cli.OK
     assert "not GitHub" not in capsys.readouterr().err
+
+
+# --- the spawn queue (aegis-cui) ----------------------------------------------
+
+def _ticket(root, item, priority, at, tid):
+    t = eph.ticket_for(eph.Request(job="task", item=item), harness="claude",
+                       priority=priority, requester="boss", now=at, token=lambda: tid)
+    eph.enqueue(root, t)
+    return t
+
+
+def _launch_as_ledger(root, t):
+    """What a successful spawn does with a claimed ticket, in one lock step."""
+    with eph.lock(root):
+        _rec(root, item=t["item"], ticket=t["id"])
+        eph.settle(root, t["id"])
+
+
+def test_drain_order_is_priority_then_age(tmp_path):
+    _ticket(tmp_path, "it-low", 2, NOW + 1, "0" * 11 + "1")
+    _ticket(tmp_path, "it-p1-new", 1, NOW + 3, "0" * 11 + "2")
+    _ticket(tmp_path, "it-p1-old", 1, NOW + 2, "0" * 11 + "3")
+    _ticket(tmp_path, "it-unranked", None, NOW, "0" * 11 + "4")
+    order = []
+    while True:
+        t, _ = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW + 5)
+        if t is None:
+            break
+        order.append(t["item"])
+        _launch_as_ledger(tmp_path, t)
+    assert order == ["it-p1-old", "it-p1-new", "it-low", "it-unranked"]
+    assert eph.tickets(tmp_path) == []
+
+
+def test_a_full_pool_claims_nothing_and_the_ticket_waits(tmp_path):
+    _rec(tmp_path, name="eph-task-000001")
+    _ticket(tmp_path, "it-2", 1, NOW, "a" * 12)
+    t, _ = eph.claim_next(tmp_path, cap=1, item_state=lambda i: "open", now=NOW)
+    assert t is None and eph.tickets(tmp_path)[0]["state"] == eph.QUEUED
+
+
+@pytest.mark.parametrize("state", ["closed", "missing"])
+def test_a_closed_or_missing_items_ticket_is_dropped_not_launched(tmp_path, state):
+    _ticket(tmp_path, "it-gone", 0, NOW, "b" * 12)
+    _ticket(tmp_path, "it-open", 3, NOW, "c" * 12)
+    t, notes = eph.claim_next(tmp_path, cap=10, now=NOW,
+                              item_state=lambda i: state if i == "it-gone" else "open")
+    assert t["item"] == "it-open"
+    assert any(f"item it-gone is {state}" in n for n in notes)
+    dropped = json.loads((eph.queue_dir(tmp_path) / "dropped" / f"q-{'b' * 12}.json").read_text())
+    assert dropped["reason"] == f"item it-gone is {state}"
+    assert [x["id"] for x in eph.tickets(tmp_path)] == [t["id"]]
+
+
+def test_an_unreadable_item_keeps_its_ticket_and_launches_nothing(tmp_path):
+    _ticket(tmp_path, "it-1", 0, NOW, "d" * 12)
+    t, notes = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "unknown", now=NOW)
+    assert t is None and "kept queued" in notes[0]
+    assert eph.tickets(tmp_path)[0]["state"] == eph.QUEUED
+
+
+def test_a_crash_between_dequeue_and_launch_neither_loses_nor_double_launches(tmp_path):
+    """Semantics (ephemeral.py, the spawn queue): exactly-once launch. The ledger
+    record carries the ticket id and is written in the lock step that deletes
+    the ticket; recovery reads the ledger before reviving a dead claim."""
+    _ticket(tmp_path, "it-1", 0, NOW, "e" * 12)
+    open_ = lambda i: "open"
+    first, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW, pid=4242)
+    # The claimer is alive (still launching): nobody else takes it.
+    again, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 1,
+                              pid_alive=lambda p: True)
+    assert again is None
+    # Crash BEFORE the ledger write: the claim is revived, not lost.
+    revived, notes = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 2,
+                                    pid=4343, pid_alive=lambda p: False)
+    assert revived["id"] == first["id"] and "back in the queue" in notes[0]
+    # Crash AFTER the ledger write but before the ticket was deleted: the
+    # ledger says it launched, so the ticket is settled and never relaunched.
+    _rec(tmp_path, item="it-1", ticket=first["id"])
+    after, notes = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 3,
+                                  pid_alive=lambda p: False)
+    assert after is None and "not relaunched" in notes[0]
+    assert eph.tickets(tmp_path) == []
+    assert [r["ticket"] for r in eph.records(tmp_path)] == [first["id"]]
+
+
+def test_over_cap_spawn_queues_lists_and_drains_on_job_end(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    items = {"it-1": "open", "it-2": "open", "it-3": "closed"}
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: items.get(i, "missing"))
+    drains = []
+    def drain_now(r):
+        drains.append(r)
+        return cli.main(["--root", str(r), "agent", "spawn", "--drain"])
+    monkeypatch.setattr(eph, "kick_drain", drain_now)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (first,) = eph.records(root)
+    capsys.readouterr()
+    # --dry-run says what would queue and writes nothing.
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--priority", "1",
+               "--dry-run") == cli.OK
+    assert "would queue task on it-2 (P1" in capsys.readouterr().out
+    assert eph.tickets(root) == []
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3", "--priority", "0") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--priority", "1") == cli.OK
+    out = capsys.readouterr().out
+    assert out.count("QUEUED q-") == 2 and len(launched) == 1
+    assert _st(root, "--list") == cli.OK
+    listing = capsys.readouterr().out
+    assert "queued #1  task   it-3" in listing and "queued #2  task   it-2" in listing
+    assert _st(root, "--list", "--json") == cli.OK
+    js = json.loads(capsys.readouterr().out)
+    assert [j["item"] for j in js if j["state"] == "queued"] == ["it-3", "it-2"]
+    # The job ends: its slot drains the queue. it-3 outranks it-2 but its item
+    # is closed, so it is dropped and it-2 launches in the freed slot.
+    assert _st(root, "--stop", first["name"]) == cli.OK
+    assert drains and len(launched) == 2
+    err = capsys.readouterr().err
+    assert "item it-3 is closed" in err
+    (second,) = eph.live(root)
+    assert second["item"] == "it-2" and second["ticket"].startswith("q-")
+    assert second["spawned_by"] == "boss"
+    assert eph.tickets(root) == []
+
+
+def test_a_drained_ticket_the_spawn_refuses_is_dropped_with_its_reason(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    (first,) = eph.records(root)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--stop", first["name"]) == cli.OK
+    monkeypatch.setattr(cli, "_spawn_governor_refusal", lambda a, card: "governor: held")
+    assert _st(root, "--drain") == cli.REFUSED
+    assert "launch refused: governor: held" in capsys.readouterr().err
+    assert eph.tickets(root) == [] and len(launched) == 1
+
+
+def test_an_ephemeral_agent_cannot_drain_the_queue(store, monkeypatch, capsys):
+    root, panes, _launched = store
+    panes.verified_actor = "eph-task-abcdef"
+    monkeypatch.setenv("SHANTY_AGENT", "eph-task-abcdef")
+    assert _st(root, "--drain") == cli.REFUSED
+    assert "cannot drain" in capsys.readouterr().err

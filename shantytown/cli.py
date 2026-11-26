@@ -4,7 +4,7 @@
     · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
             · jobs [list|check|run|history]
-    agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
+    agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap|--drain] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
             · roles [--check|set|band|sync] · init · hold gaming [--clear|--status|--probe]
@@ -1898,7 +1898,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode = sp.add_mutually_exclusive_group(required=True)
     sp_mode.add_argument("--ephemeral", action="store_true",
                          help="spawn one: needs --job and --item")
-    sp_mode.add_argument("--list", action="store_true", help="live and recent jobs")
+    sp_mode.add_argument("--list", action="store_true", help="live and recent jobs, and the queue")
+    sp_mode.add_argument("--drain", action="store_true",
+                         help="launch queued tickets into free slots (the job end paths run this)")
     sp_mode.add_argument("--stop", metavar="NAME", help="end a job now: report, tear down")
     sp_mode.add_argument("--retry", metavar="NAME", help="end it if live, spawn the same job again")
     sp_mode.add_argument("--report", action="store_true",
@@ -1922,6 +1924,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --report on a review: link to the posted review comment")
     sp.add_argument("--job", choices=("review", "merge", "triage", "task"))
     sp.add_argument("--item", help="the work item this job reports on")
+    sp.add_argument("--priority", type=int, default=None,
+                    help="queue priority if over cap, 0 highest (default: the item's)")
     sp.add_argument("--quipu-node", action="append", default=[], metavar="IRI",
                     help="exact Quipu node IRI to include in the bounded startup snapshot")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
@@ -3962,8 +3966,10 @@ def _spawn_keep_pane(a, panes, session, name):
     return path
 
 
-def _spawn_end(a, name, verdict, summary, cause, *, detached):
-    """Every ending goes through here: result once, report, teardown."""
+def _spawn_end(a, name, verdict, summary, cause, *, detached, drain=True):
+    """Every ending goes through here: result once, report, teardown. A
+    synchronous teardown frees its slot here, so it kicks the queue (aegis-cui);
+    a detached one kicks it from the teardown process once the pane is gone."""
     from . import ephemeral as eph
     from .events import FilesEvents
     events = FilesEvents(Path(a.root) / "events")
@@ -3998,6 +4004,8 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached):
                                schedule_teardown=schedule, now=time.time())
     if lane := _spawn_lane_release(a, rec):
         problems = [*problems, lane]
+    if drain and not detached:
+        eph.kick_drain(a.root)
     # A synchronous teardown has rewritten the ledger; hand back what it says.
     return (rec if detached else eph.read(a.root, name) or rec), problems
 
@@ -4065,15 +4073,29 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
     try:
         if a.list:
             recs = eph.records(a.root)
+            queued = eph.tickets(a.root)
             if a.json:
-                print(json.dumps(recs, indent=2, sort_keys=True))
+                # A queued ticket is a job in state "queued" whose name is its
+                # ticket id: the list stays one list of jobs for its readers.
+                print(json.dumps(recs + [dict(t, name=t["id"]) for t in queued],
+                                 indent=2, sort_keys=True))
             else:
                 lines = eph.render(recs, time.time())
+                lines += eph.render_tickets(queued, time.time())
                 print("\n".join("  " + line for line in lines) if lines
                       else "  no ephemeral jobs.")
             return OK
-        actor = _spawn_actor(require_verified=policy.require_verified_identity)
-        inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
+        if a.drain:
+            return _spawn_drain(a, policy)
+        ticket = getattr(a, "_ticket", None)
+        if ticket is not None:
+            # A drained ticket launches as its requester, who passed authority
+            # when it was queued; plan() checks that authority again below.
+            actor = None if ticket["requester"] == "operator" else ticket["requester"]
+            inside = None
+        else:
+            actor = _spawn_actor(require_verified=policy.require_verified_identity)
+            inside = _spawn_inside(a, principal=actor if policy.require_verified_identity else None)
         if recruitment is not None:
             try:
                 recruitment.bind(root=a.root, host=cfg.host_name, policy=policy,
@@ -4288,8 +4310,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             # a fresh protected slot. Attended compatibility behavior is intact.
             raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
+            # drain=False: this slot is the retry's, not the queue's.
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
-                       "retried", detached=False)
+                       "retried", detached=False, drain=False)
         # Read once, outside the ledger lock: a job's sandbox has no network.
         item_ctx = _spawn_item_context(a, req.item)
         from .job_context import collect as collect_job_context
@@ -4297,11 +4320,24 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         from .job_context import current_comments
         graph_ctx["comments"] = current_comments(lambda: _tracker(a), req.item)
         with eph.lock(a.root):
-            rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
-                           administrator=admin, host=cfg.host_name, now=time.time(),
-                           role_of=role_of, attempt=attempt, retry_of=retry_of,
-                           name=uid_launch[0]['principal'] if uid_launch else None,
-                           recruiter_scope=recruiter_scope)
+            try:
+                rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
+                               administrator=admin, host=cfg.host_name, now=time.time(),
+                               role_of=role_of, attempt=attempt, retry_of=retry_of,
+                               name=uid_launch[0]['principal'] if uid_launch else None,
+                               recruiter_scope=recruiter_scope)
+            except eph.OverCap as over:
+                if ticket is not None:
+                    # Raced for the slot and lost: the same ticket, same age.
+                    eph.release(a.root, ticket["id"])
+                    a._ticket_requeued = True
+                    raise
+                if (not a.ephemeral or a.retry or recruiter_scope is not None
+                        or recruitment is not None):
+                    raise
+                return _spawn_enqueue(a, req, policy, actor, over)
+            if ticket is not None:
+                rec["ticket"] = ticket["id"]
             if recruiter_scope is not None:
                 rec['recruiter'] = {'principal': recruiter_scope.principal,
                                     'host': recruiter_scope.host, 'uid': recruiter_scope.uid, 'item': req.item,
@@ -4415,6 +4451,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 except Exception as error:
                     raise eph.Refused('controller final admission unproved (' + type(error).__name__ + ')') from None
             eph.write(a.root, rec)
+            if ticket is not None:
+                eph.settle(a.root, ticket["id"])     # same lock as the ledger write
             files.root.mkdir(parents=True, exist_ok=True)
             (files.root / f"{rec['name']}.json").write_text(
                 json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
@@ -4472,8 +4510,104 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         # launch) are a note, not a failure: tend enforces the deadline.
         return OK
     except eph.Refused as e:
+        if getattr(a, "_ticket", None) is not None:
+            a._ticket_refused = str(e)
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+
+
+def _spawn_item_state(a, item) -> str:
+    """open | closed | missing | unknown, for the drain (aegis-cui). Only a
+    definite answer drops a ticket: a tracker that cannot tell keeps it."""
+    from .tracker_result import ItemNotFound
+    from .work_item import exact
+    try:
+        found = exact(_tracker(a), item)
+    except ItemNotFound:
+        return "missing"
+    except LookupError as e:
+        # The files tracker's definite miss. bd's LookupError also covers
+        # "could not tell", so only this exact wording counts as absence.
+        return "missing" if str(e).startswith("no such item") else "unknown"
+    except Exception:  # noqa: BLE001 — unreadable is unknown, never absent
+        return "unknown"
+    from .ephemeral import CLOSED_STATUSES
+    return "closed" if (found.status or "").lower() in CLOSED_STATUSES else "open"
+
+
+def _spawn_enqueue(a, req, policy, actor, over) -> int:
+    """Over cap: queue a ticket instead of refusing. Caller holds the ledger lock."""
+    from . import ephemeral as eph
+    priority = a.priority
+    if priority is None:
+        try:
+            from .work_item import exact
+            priority = exact(_tracker(a), req.item).priority
+        except Exception:  # noqa: BLE001 — no priority sorts it last, by age
+            priority = None
+    ticket = eph.ticket_for(req, harness=eph.harness_for(req, policy), priority=priority,
+                            requester=actor, now=time.time())
+    ahead = sum(1 for t in eph.tickets(a.root) if eph._order(t) < eph._order(ticket))
+    p = "?" if priority is None else priority
+    if a.dry_run:
+        print(f"would queue {req.job} on {req.item} (P{p}, {ticket['harness']}, "
+              f"requested by {ticket['requester']}) at position {ahead + 1}: {over}")
+        return OK
+    eph.enqueue(a.root, ticket)
+    print(f"  QUEUED {ticket['id']}: {req.job} on {req.item} (P{p}), position {ahead + 1}; "
+          f"{over}. It launches when a job ends; `st agent spawn --list` shows the queue.")
+    return OK
+
+
+def _spawn_drain(a, policy) -> int:
+    """Launch queued tickets while slots are free (aegis-cui). Run by the job
+    end paths through eph.kick_drain; there is no poller. Each ticket goes
+    through the full spawn path as its requester; see ephemeral.py for the
+    crash semantics."""
+    from . import ephemeral as eph
+    if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
+        raise eph.Refused("an ephemeral agent cannot drain the spawn queue")
+    if a.dry_run:
+        free = max(0, policy.max_agents - len(eph.live(a.root)))
+        queued = eph.tickets(a.root)
+        print(f"would drain {min(free, len(queued))} of {len(queued)} queued ticket(s) "
+              f"into {free} free slot(s)")
+        for line in eph.render_tickets(queued[:free], time.time()):
+            print("  " + line)
+        return OK
+    rc = OK
+    seen = set()
+    while True:
+        with eph.lock(a.root):
+            ticket, notes = eph.claim_next(a.root, cap=policy.max_agents, now=time.time(),
+                                           item_state=lambda i: _spawn_item_state(a, i))
+        for note in notes:
+            print(f"  queue: {note}", file=sys.stderr)
+        if ticket is None or ticket["id"] in seen:
+            return rc
+        seen.add(ticket["id"])
+        argv = ["--root", str(a.root), "agent", "spawn", "--ephemeral",
+                "--job", ticket["job"], "--item", ticket["item"]]
+        for flag, key in (("--repo", "repo"), ("--pr", "pr"), ("--checkout", "checkout"),
+                          ("--harness", "harness"), ("--head", "head")):
+            if ticket.get(key) is not None:
+                argv += [flag, str(ticket[key])]
+        ns = _parse_args(argv)
+        ns.root, ns.registry = a.root, getattr(a, "registry", None)
+        ns.repo = getattr(a, "repo", None)
+        ns._ticket = ticket
+        out = _cmd_spawn(ns)
+        if getattr(ns, "_ticket_requeued", False):
+            return rc                     # no slot after all; the next end drains
+        with eph.lock(a.root):
+            left = eph.read_ticket(a.root, ticket["id"])
+            if left is not None and left.get("claimed_at") == ticket["claimed_at"]:
+                # Refused before its ledger record: it can never launch as asked.
+                why = getattr(ns, "_ticket_refused", None) or f"spawn returned {out}"
+                print(f"  queue: {eph.drop(a.root, ticket['id'], 'launch refused: ' + why, time.time())}",
+                      file=sys.stderr)
+        if out != OK:
+            rc = out
 
 
 def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
