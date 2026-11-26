@@ -1902,6 +1902,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode.add_argument("--list", action="store_true", help="live and recent jobs, and the queue")
     sp_mode.add_argument("--drain", action="store_true",
                          help="launch queued tickets into free slots (the job end paths run this)")
+    sp_mode.add_argument("--pool", nargs="+", metavar="ACTION",
+                         help="manage the ephemeral pool: status | size N|config | pause | "
+                              "drain | resume (aegis-za4f.3)")
     sp_mode.add_argument("--stop", metavar="NAME", help="end a job now: report, tear down")
     sp_mode.add_argument("--retry", metavar="NAME", help="end it if live, spawn the same job again")
     sp_mode.add_argument("--report", action="store_true",
@@ -4107,7 +4110,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
     if err:
         print(f"  refused: {err}", file=sys.stderr)
         return REFUSED
-    policy = cfg.ephemeral
+    # The administrator's runtime pool size (aegis-za4f.3) applies to every
+    # cap read below: admission, queue routing and --drain alike.
+    policy = eph.pooled(cfg.ephemeral, eph.pool_state(a.root))
     files = FilesRegistry(Path(a.root) / "crew")
 
     def role_of(name):
@@ -4133,6 +4138,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 print("\n".join("  " + line for line in lines) if lines
                       else "  no ephemeral jobs.")
             return OK
+        if getattr(a, "pool", None) == ["status"]:
+            # A read, like --list: anyone may see the pool; changing it needs authority.
+            return _spawn_pool(a, cfg, None)
         if a.drain:
             return _spawn_drain(a, policy)
         ticket = getattr(a, "_ticket", None)
@@ -4272,6 +4280,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                           admit=eph.JOB_MANAGERS)
         if a.reap:
             return _spawn_reap(a, dry_run=a.dry_run)
+        if getattr(a, "pool", None):
+            return _spawn_pool(a, cfg, actor)
         if a.stop and eph._TICKET.fullmatch(a.stop):
             # A queued or claimed ticket is not a job yet (aegis-za4f.16): the
             # stop that refused q-ecb33cbe0cca now cancels it, reversibly.
@@ -4627,6 +4637,55 @@ def _spawn_enqueue(a, req, policy, actor, over) -> int:
     return OK
 
 
+def _spawn_pool(a, cfg, actor) -> int:
+    """`st agent spawn --pool ...` (aegis-za4f.3): see and manage the pool.
+    Authority was checked by the caller: administrator or lead, never a job."""
+    from . import ephemeral as eph
+    action, *rest = a.pool
+    now = time.time()
+    policy = eph.pooled(cfg.ephemeral, eph.pool_state(a.root))
+    if action == "status" and not rest:
+        for line in eph.pool_status(a.root, policy, cfg.ephemeral.max_agents, now):
+            print("  " + line)
+        return OK
+    if action == "size" and len(rest) == 1:
+        if rest[0] == "config":
+            size = None
+        else:
+            try:
+                size = int(rest[0])
+            except ValueError:
+                size = 0
+            if size < 1:
+                raise eph.Refused(f"--pool size takes an integer >= 1 or `config`, not "
+                                  f"{rest[0]!r}; `--pool pause` or `--pool drain` stops launches")
+        if cfg.ephemeral.max_agents <= 0:
+            raise eph.Refused("ephemeral spawning is off ([ephemeral] max_agents = 0); "
+                              "a runtime pool size cannot switch it on")
+        change = {"size": size}
+        verb = f"size {size}" if size is not None else f"size back to config ({cfg.ephemeral.max_agents})"
+    elif action == "pause" and not rest:
+        change, verb = {"paused": True}, "paused: spawns queue, nothing launches"
+    elif action == "drain" and not rest:
+        change, verb = {"draining": True}, "draining: no new work admitted, live jobs finish"
+    elif action == "resume" and not rest:
+        change, verb = {"paused": False, "draining": False}, "resumed"
+    else:
+        raise eph.Refused(f"unknown --pool action {' '.join(a.pool)!r}; one of status, "
+                          "size N|config, pause, drain, resume")
+    if a.dry_run:
+        print(f"  would set the ephemeral pool {verb}")
+        return OK
+    with eph.lock(a.root):
+        eph.set_pool(a.root, actor=actor, now=now, **change)
+    print(f"  ephemeral pool {verb} (by {actor or 'operator'})")
+    if action in ("resume", "size"):
+        # Freed or added capacity goes to the queue now, the same kick a job
+        # end gives: still no poller.
+        eph.kick_drain(a.root)
+    return OK
+
+
 def _spawn_drain(a, policy) -> int:
     """Launch queued tickets while slots are free (aegis-cui). Run by the job
     end paths through eph.kick_drain; there is no poller. Each ticket goes
@@ -4638,7 +4697,11 @@ def _spawn_drain(a, policy) -> int:
     if a.dry_run:
         free = max(0, policy.max_agents - len(eph.live(a.root)))
         queued = eph.tickets(a.root)
-        order = eph.drain_plan(queued, eph.live(a.root), **eph.routing(policy))
+        pool = eph.pool_state(a.root)
+        order = ([] if pool["paused"] or pool["draining"]
+                 else eph.drain_plan(queued, eph.live(a.root), **eph.routing(policy)))
+        if reason := eph.pool_refusal(pool):
+            print(f"  {reason}")
         print(f"would drain {len(order)} of {len(queued)} queued ticket(s) "
               f"into {free} free slot(s)")
         for line in eph.render_tickets(order, time.time()):
@@ -4651,6 +4714,7 @@ def _spawn_drain(a, policy) -> int:
             r = eph.routing(policy)
             ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
                                            harness_caps=r["harness_caps"], shares=r["shares"],
+                                           job_caps=r["job_caps"],
                                            item_state=lambda i: _spawn_item_state(a, i))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
@@ -4756,6 +4820,23 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
 
     lines = eph.reap(a.root, pane_alive=panes.exists, end=end, now=time.time(),
                      dry_run=dry_run, prompting=prompting)
+    # Queue TTL (aegis-za4f.3) rides the same tend sweep: no poller of its own.
+    try:
+        cfg, _err = config.load_or_default(Path(a.root))
+        ttl = cfg.ephemeral.queue_ttl_minutes
+        if dry_run:
+            lines += [f"would report {t['id']} past queue TTL ({ttl}m)"
+                      for t in eph.overdue(a.root, ttl, time.time())]
+        elif eph.overdue(a.root, ttl, time.time()):
+            from .events import FilesEvents
+            admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
+            with eph.lock(a.root):
+                lines += eph.report_overdue(
+                    a.root, admin, ttl, time.time(),
+                    persist_event=FilesEvents(Path(a.root) / "events").persist,
+                    comment=_spawn_item_comment(a))
+    except Exception as error:  # noqa: BLE001 — a TTL read must never stop the reap
+        problems.append(f"queue TTL check unproved ({type(error).__name__})")
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
     for problem in problems:

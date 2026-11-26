@@ -180,6 +180,7 @@ st agent spawn --list [--json]          # live + recent jobs and queued tickets 
 st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 highest (default: the item's)
 st agent spawn --ephemeral ... --track ops    # work track for queue shares: ops | short-term | roadmap | backlog (default roadmap)
 st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
+st agent spawn --pool status|size N|pause|drain|resume   # see and manage the pool (below)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --stop q-3f9a1c2b4d5e    # cancel a queued or claimed ticket: moved aside to ephemeral/queue-removed/
 st agent spawn --retry eph-review-1a2b3c   # new agent, same job, attempt+1 (max 3)
@@ -273,8 +274,42 @@ configured the drain order is slice 1's exactly (priority, then age).
 `--list` shows harness and track on each live job and ticket;
 `--drain --dry-run` prints the routed launch order.
 
-Not yet: the Codex overflow trigger (aegis-za4f.14), pool resize, pause/drain
-admin commands, TTLs.
+Not yet: the Codex overflow trigger (aegis-za4f.14).
+
+### Pool management
+
+aegis-za4f.3. The administrator (or a lead) sees and manages the pool at
+runtime without editing `shantytown.toml`:
+
+```
+st agent spawn --pool status        # size, live/size, paused|draining, per-harness and per-job use, queue, TTL breaches
+st agent spawn --pool size 4        # runtime pool size, replacing [ephemeral] max_agents
+st agent spawn --pool size config   # back to the toml cap
+st agent spawn --pool pause         # nothing launches; fresh spawns still QUEUE (no work lost)
+st agent spawn --pool drain         # nothing launches and fresh spawns are REFUSED; live jobs finish, queued tickets are held
+st agent spawn --pool resume        # clear pause/drain and kick the queue
+```
+
+The state is one file, `<root>/ephemeral/pool.json`, written under the ledger
+lock. A missing or unreadable file is the config's pool, so a corrupt override
+can only fall back. A runtime size never switches on a host whose config says
+`max_agents = 0`. `status` is a read anyone may run, like `--list`; every
+change needs spawn authority. `resume` and `size` kick the queue the same way
+a job end does, so there is still no poller. `pool` is a mode of `spawn`
+rather than a new `st agent pool` leaf, because the command surface is pinned
+(`shantytown/surface.py`).
+
+**Per-job concurrency.** `[ephemeral.limits.<job>] max_concurrent = n` caps
+live jobs of one type. Over it, a spawn queues like any over-cap spawn, and
+the drain skips that job's tickets while other job types launch.
+
+**Queue TTL.** `[ephemeral] queue_ttl_minutes` (default 240, `0` = off). A
+ticket queued longer than that is reported once, by the `st fleet tend` reap
+sweep: a stop event to the administrator (`ephemeral-queue-ttl`) and a comment
+on its item. It is marked `OVERDUE` on `--list` and **stays queued**, because a
+TTL makes a stuck queue visible and never throws work away. If neither report
+leg lands, the ticket stays unmarked and the next sweep tries again, so a
+breach is never silent.
 
 ## Configuration
 
@@ -289,6 +324,7 @@ unattended = false          # keep approval prompts; omission inherits the admin
 require_verified_identity = false # opt in after protected UID migration
 unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
 recruitment_launch_ready = false # separate signed-controller gate; no runtime wiring
+queue_ttl_minutes = 240     # report a ticket queued this long, once; it stays queued; 0 = off (aegis-za4f.3)
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into
@@ -316,6 +352,7 @@ backlog = 15
 [ephemeral.limits.task]
 lifetime_minutes = 90
 max_turns = 40
+max_concurrent = 1          # live task jobs at once; over it, spawns queue (aegis-za4f.3)
 ```
 
 ### Attended Codex task jobs
