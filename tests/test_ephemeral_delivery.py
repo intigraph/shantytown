@@ -9,6 +9,7 @@ shows it saying NO."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -259,7 +260,7 @@ def spawn(tmp_path, monkeypatch):
     monkeypatch.setattr(eph, "LOOK_S", 0.0)
     monkeypatch.setattr(cli.time, "sleep", lambda s: None)
 
-    def run(claude):
+    def run(claude, launch=None):
         panes = _SpawnPane(claude)
         monkeypatch.setattr(cli, "_panes", lambda a: panes)
 
@@ -267,7 +268,7 @@ def spawn(tmp_path, monkeypatch):
             panes.new_session(card.pane)
             a._startup_delivered = bool(cli._deliver_startup_inbox(a, card, panes, card.pane))
             return cli.CANNOT_TELL
-        monkeypatch.setattr(cli, "_launch", fake_launch)
+        monkeypatch.setattr(cli, "_launch", launch or fake_launch)
         monkeypatch.setattr(cli, "_runtime", lambda a, p: None)
         monkeypatch.setattr(eph, "deliver", _fast(eph.deliver))
         monkeypatch.delenv("SHANTY_AGENT", raising=False)
@@ -346,3 +347,26 @@ def test_delivery_submits_when_the_paste_lands_mid_row():
     ok, why = _deliver(pane, _job(), attempts=1)
     assert ok, why
     assert pane.submits == 1
+
+
+def test_spawn_records_the_launchers_cause_not_the_generic_one(spawn):
+    """aegis-8et: a trust-dialog refusal reached only stderr, so the ledger read
+    "job prompt not delivered to the pane" for 9 Claude jobs and nobody could
+    classify them without a pane capture. The cause _launch records is the
+    ledger's summary."""
+    from shantytown.runtime import ClaudeRuntime
+    real = ClaudeRuntime.__new__(ClaudeRuntime)
+    dialog = (" Quick safety check: Is this a project you created or one you trust?\n"
+              " ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n")
+
+    def refused_launch(a, card, panes_, runtime, **kw):
+        panes_.new_session(card.pane)
+        rt = SimpleNamespace(is_live=lambda s: False, trust_prompt=real.trust_prompt)
+        pane = SimpleNamespace(capture=lambda *x, **k: dialog)
+        cli._observe_live(rt, pane, card.pane, trust_guard=lambda: "untracked AGENTS.md",
+                          note=lambda why: setattr(a, "_startup_failure", why))
+        return cli.CANNOT_TELL
+    rc, rec, _panes = spawn(ClaudePane(), refused_launch)
+    assert rc == cli.CANNOT_TELL and rec["result"]["cause"] == "launch failed"
+    assert "folder-trust dialog refused: untracked AGENTS.md" in rec["result"]["summary"]
+    assert "job prompt not delivered" not in rec["result"]["summary"]

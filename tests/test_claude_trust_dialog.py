@@ -389,3 +389,34 @@ def test_an_untracked_instruction_symlink_is_refused(no_instructions_job, tmp_pa
     (ws / "AGENTS.md").unlink()
     os.symlink(elsewhere, ws / "AGENTS.md")
     assert "AGENTS.md" in refusal(rec)
+
+
+# --- the cause reaches the ledger, not only stderr (aegis-8et) -----------------
+# 9 Claude jobs 11-21..26 were refused at this dialog and every ledger row read
+# "job prompt not delivered to the pane"; each investigation re-derived the cause
+# from a pane capture. The refusal reason must be handed to the caller.
+
+def test_a_refused_guard_names_its_cause(monkeypatch):
+    no_sleep(monkeypatch)
+    seen = []
+    assert not cli._observe_live(runtime(), ScriptedPanes(NEW_NO), "job",
+                                 trust_guard=lambda: "untracked AGENTS.md is not part of st's kit",
+                                 note=seen.append)
+    assert seen and "folder-trust dialog refused" in seen[0]
+    assert "untracked AGENTS.md" in seen[0]
+
+
+def test_an_unselectable_trust_row_names_its_cause(monkeypatch):
+    no_sleep(monkeypatch)
+    seen = []
+    assert not cli._observe_live(runtime(), ScriptedPanes(NEW_NO, frozen=True), "job",
+                                 note=seen.append)
+    assert seen and "never selected" in seen[0]
+
+
+def test_an_accepted_dialog_records_no_cause(monkeypatch):
+    no_sleep(monkeypatch)
+    seen = []
+    assert cli._observe_live(runtime(), ScriptedPanes(NEW_NO), "job",
+                             trust_guard=lambda: "", note=seen.append)
+    assert seen == []
