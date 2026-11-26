@@ -3912,6 +3912,20 @@ def _spawn_checkout(rec) -> Path | None:
     return None
 
 
+def _spawn_forge_refusal(req) -> str:
+    """Refuse a GitHub-only job (review/merge) whose --repo lives on another
+    forge, before anything is cut or launched (aegis-maw). The forge is read
+    from the origin of the checkout the job would be cut from; no checkout or
+    no origin is CANNOT TELL and admits, as before this check existed."""
+    from . import ephemeral as eph
+    if req.job not in eph.GITHUB_ONLY_JOBS or not req.repo:
+        return ""
+    from .workspace import git_origin
+    checkout = _spawn_checkout({"checkout": req.checkout, "repo": req.repo})
+    origin = git_origin(checkout) if checkout is not None and checkout.exists() else None
+    return eph.forge_refusal(req.job, req.repo, origin)
+
+
 def _spawn_item_comment(a):
     from .work_item import _comments, exact
 
@@ -4225,6 +4239,10 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
                 import dataclasses
                 req = dataclasses.replace(req, repo=_spawn_canonical_repo(req.repo))
+        # Before superseding a retried original, reading context, taking the
+        # ledger lock or cutting a worktree: a foreign forge costs nothing.
+        if refusal := _spawn_forge_refusal(req):
+            raise eph.Refused(refusal)
         if recruitment is not None:
             try:
                 recruitment.request(req)

@@ -214,6 +214,37 @@ def validate(req: Request) -> None:
         raise Refused("request_id must be chaski's 64-hex work request id")
 
 
+# Review and merge jobs read and act on the PR through `gh` only. Spawned at a
+# Forgejo repo, a review job spent a whole slot and then ended BLOCKED on a 404
+# (sattler, 2026-11-23: stiwi/goldblum#1218). The forge is knowable before
+# anything is cut, so the refusal belongs at admission (aegis-maw).
+GITHUB_ONLY_JOBS = ("review", "merge")
+_GITHUB_HOSTS = ("github.com", "www.github.com")
+
+
+def forge_refusal(job: str, repo: str | None, remote_url: str | None) -> str:
+    """Why a GitHub-only job cannot run against this repo, or "".
+
+    `remote_url` is the origin of the checkout the job would be cut from. An
+    unknown remote is not proof of a foreign forge, so it admits (the caller
+    may probe GitHub itself); only a remote naming another host refuses.
+    """
+    if job not in GITHUB_ONLY_JOBS or not repo or not remote_url:
+        return ""
+    from .forgejo import parse_remote
+    parsed = parse_remote(remote_url)
+    if parsed is None or parsed[0].lower() in _GITHUB_HOSTS:
+        return ""
+    return foreign_forge_line(job, repo, parsed[0])
+
+
+def foreign_forge_line(job: str, repo: str, forge: str) -> str:
+    return (f"--repo {repo} is hosted on {forge}, not GitHub; ephemeral {job} jobs "
+            f"read GitHub only, so this one would spend a slot and end blocked. "
+            f"Refused before any worktree or pane: route the PR to a crew reviewer "
+            f"(st go <item> <agent>) instead")
+
+
 def harness_for(req: Request, policy) -> str:
     if req.harness:
         return req.harness
