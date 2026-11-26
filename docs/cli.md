@@ -98,6 +98,16 @@ acknowledged custody does not qualify. Never resend or claim manually. Changed r
 cards or sessions cannot reuse the receipt. Older tracker adapters retain the
 legacy path and do not emit bound execution receipts.
 
+`st go ITEM WORKER` for an item already `in_progress` for that same worker,
+with no receipt covering its current scope and none pending, refuses (exit 1)
+before minting a receipt; `--dry-run` refuses identically. Nothing is written
+or sent, and the worker proceeds on the native assignment it already holds.
+A fresh receipt for work the worker already holds would tell that worker to wait
+for authorization. When its submission to the busy holder could not be proven,
+it stayed `prepared` and wedged the worker. To send such an item again, release
+it to open first. An assigned receipt whose scope still matches replays as
+before, and a pending receipt keeps its `--reconcile`/`--complete` path.
+
 If observation was interrupted, the dispatcher can explicitly complete the
 original receipt on the worker's declared host:
 

@@ -367,6 +367,29 @@ class AlreadyAssigned(Exception):
         )
 
 
+class AlreadyHeld(AlreadyAssigned):
+    """The SAME worker already holds this item in_progress and no receipt covers it.
+
+    A bound dispatch to work the worker already holds would mint a fresh receipt
+    whose body tells that worker to stop until execution_authorized is true. When
+    the submission to a busy holder cannot be proved, that receipt stays prepared
+    forever and the worker is wedged on work it natively owns (aegis-647r, five
+    receipts in two weeks). Refusing before minting is the clean answer: nothing
+    is written, nothing is sent, no prepared receipt is left behind. Replaying a
+    receipt that already covers this exact scope is unaffected.
+    """
+
+    def __init__(self, item_id: str, worker: str):
+        Exception.__init__(
+            self,
+            f"{item_id} is already in_progress for {worker}, and no dispatch receipt "
+            f"covers its current scope; no receipt minted, nothing sent. {worker} "
+            f"holds the native assignment and proceeds on it. To send it again, "
+            f"release the item to open first; to finish an earlier attempt, reconcile "
+            f"that receipt (st go {item_id} {worker} --receipt <id> --reconcile).")
+        self.item_id, self.holder, self.requested = item_id, worker, worker
+
+
 class RepoolRefused(Exception):
     """Repool hands WORKABLE work back to the pool — it neither revives a
     terminal state nor clears a decision. Maps to exit 1: nothing written.
@@ -806,6 +829,10 @@ class Dispatcher:
            quipu_nodes: list | None = None) -> Plan:
         p = self.plan(item_id, agent_name, note, quipu_nodes=quipu_nodes,
                       reassign=reassign, include_handoff=True)
+        # Before the dry-run return, so the preview refuses what the real run
+        # refuses; before triage and send, so a refusal mints nothing.
+        if self.binding is not None and self.binding.held_without_receipt(p):
+            raise AlreadyHeld(item_id, agent_name)
         if dry_run:
             return p
         # #1: consult triage BEFORE any write. A REFUSE/CLEAR/RESTART here means
