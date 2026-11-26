@@ -1581,6 +1581,66 @@ def test_review_jobs_are_not_canonicalized_here(store, monkeypatch):
         "--repo", "o/n", "--pr", "3", "-n")
 
 
+# --- aegis-maw: GitHub-only jobs refuse a foreign forge at admission ----------
+
+def _checkout_with_origin(path, url):
+    import subprocess
+    subprocess.run(["git", "init", "-q", str(path)], check=True)
+    subprocess.run(["git", "-C", str(path), "remote", "add", "origin", url], check=True)
+    return path
+
+
+def test_forge_refusal_names_the_forge_only_for_github_only_jobs():
+    forgejo = "ssh://git@forge.local:2222/stiwi/goldblum.git"
+    line = eph.forge_refusal("review", "stiwi/goldblum", forgejo)
+    assert "hosted on forge.local, not GitHub" in line and "st go" in line
+    assert eph.forge_refusal("merge", "stiwi/goldblum", forgejo)
+    assert eph.forge_refusal("task", "stiwi/goldblum", forgejo) == ""
+    assert eph.forge_refusal("review", "o/n", "git@github.com:o/n.git") == ""
+    assert eph.forge_refusal("review", "o/n", "https://github.com/o/n") == ""
+    assert eph.forge_refusal("review", "o/n", None) == ""      # cannot tell admits
+
+
+def test_a_review_on_a_forgejo_repo_refuses_before_any_worktree_or_pane(
+        store, monkeypatch, capsys, tmp_path):
+    """sattler 2026-11-23: a review job on stiwi/goldblum#1218 spent a slot and
+    ended BLOCKED on a 404. It now refuses at spawn, leaving nothing behind."""
+    root, panes, launched = store
+    checkout = _checkout_with_origin(tmp_path / "goldblum",
+                                     "ssh://git@forge.local:2222/stiwi/goldblum.git")
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    monkeypatch.setattr(eph, "provision_worktree",
+                        lambda *a, **k: pytest.fail("no worktree may be cut"))
+    rc = _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+             "--repo", "stiwi/goldblum", "--pr", "1218")
+    assert rc == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "refused: --repo stiwi/goldblum is hosted on forge.local, not GitHub" in err
+    assert launched == [] and eph.records(root) == [] and eph.free_slots(root) == 1
+    assert not (root / "crew").joinpath("eph-review").exists()
+    assert [p.name for p in (root / "crew").iterdir()] == ["boss.json"]
+
+
+def test_a_review_on_a_github_repo_still_spawns_dry_run(store, monkeypatch, capsys, tmp_path):
+    root, _panes, launched = store
+    checkout = _checkout_with_origin(tmp_path / "n", "git@github.com:o/n.git")
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    assert _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--harness", "claude",
+               "--repo", "o/n", "--pr", "3", "-n") == cli.OK
+    assert "not GitHub" not in capsys.readouterr().err
+
+
+def test_a_task_job_on_a_forgejo_repo_is_not_refused_by_the_forge_check(
+        store, monkeypatch, capsys, tmp_path):
+    root, _panes, launched = store
+    checkout = _checkout_with_origin(tmp_path / "goldblum",
+                                     "ssh://git@forge.local:2222/stiwi/goldblum.git")
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: checkout)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1",
+               "--repo", "stiwi/goldblum", "-n") == cli.OK
+    assert "not GitHub" not in capsys.readouterr().err
+
+
 # --- the spawn queue (aegis-cui) ----------------------------------------------
 
 def _ticket(root, item, priority, at, tid):
