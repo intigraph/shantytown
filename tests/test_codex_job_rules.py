@@ -265,3 +265,54 @@ def test_a_linked_worktree_job_also_gets_its_own_gitdir_as_a_root(tmp_path):
     common = str((repo / ".git").resolve())
     assert roots[1] == common
     assert roots[2].startswith(common + "/worktrees/") and len(roots) == 3
+
+
+OWN = dict(TASK, item="aegis-x1")
+OWN_READ = ('prefix_rule(pattern=["st", "work", "item", "show", "aegis-x1"], '
+            'decision="allow", justification="st job: read its own item")')
+
+
+def test_task_job_rules_allow_the_exact_read_of_its_own_item():
+    # aegis-kxu: before, the only allow was --report, so the prompt's first
+    # command (`st work item show <own item>`) stopped on an approval prompt.
+    body = eph.codex_job_rules(OWN, unattended=False)
+    assert OWN_READ in body
+    assert body.count('decision="allow"') == 2
+    assert '"*"' not in body and "aegis-x1*" not in body
+
+
+@pytest.mark.parametrize("rec", [
+    dict(OWN, job="triage"), dict(OWN, job="review", repo="a/b", pr=1),
+    dict(OWN, job="merge", repo="a/b", pr=1),
+    dict(OWN, item="aegis-*"), dict(OWN, item="aegis-x1 aegis-y2"), dict(OWN, item="$(id)"),
+    dict(OWN, item=""), TASK,
+])
+def test_no_item_read_rule_outside_a_task_job_with_a_literal_item(rec):
+    body = eph.codex_job_rules(rec, unattended=False)
+    assert "read its own item" not in body and '"show"' not in body
+
+
+def test_claude_task_job_is_unaffected():
+    assert eph.codex_job_rules(dict(OWN, harness="claude"), unattended=False) is None
+    assert eph.attended_settings(dict(OWN, harness="claude"), unattended=False) == \
+        eph.attended_settings(dict(TASK, harness="claude"), unattended=False)
+
+
+@pytest.mark.skipif(_codex() is None, reason="needs a codex CLI with execpolicy")
+@pytest.mark.parametrize("cmd,decision", [
+    ("st work item show aegis-x1", "allow"),
+    ("st work item show aegis-x1 --result-json", "allow"),
+    ("st work item show aegis-x2", None),
+    ("st work item show aegis-x10", None),
+    ("st work item show aegis-*", None),
+    ("st work item show *", None),
+    ("st work item update aegis-x1 --status in_progress", None),
+    ("st work item close aegis-x1", None),
+    ("st work item comment aegis-x1", None),
+    ("st work item aegis-x1 show", None),
+])
+def test_codex_admits_only_the_own_item_read(tmp_path, cmd, decision):
+    path = eph.write_codex_job_rules(OWN, tmp_path, unattended=False)
+    out = subprocess.run([_codex(), "execpolicy", "check", "-r", str(path), *cmd.split()],
+                         capture_output=True, text=True, check=True).stdout
+    assert json.loads(out).get("decision") == decision
