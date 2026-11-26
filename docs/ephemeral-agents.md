@@ -280,6 +280,9 @@ A task job edits source, so it needs more than a review's sandbox:
   force pushes, branch deletion, reset, rebase, and `gh pr merge`/`gh api` are
   exec-policy `forbidden`. Branch protection on the forge stays the boundary
   for main.
+- **Own item.** The prompt tells the job to `st work item show <item>`, so the
+  rules allow exactly that command for the job's own item id, a literal token.
+  Another item, a wildcard, and update/comment/close still need approval.
 - **Kit.** A task job whose JobSpec resolves no MCP servers is refused at
   launch, so it cannot run without Quipu or code search.
 
