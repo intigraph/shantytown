@@ -3832,13 +3832,22 @@ unknown until a real hook payload is observed; fixtures do not establish it.
 
 A rendered API message containing `safeguards` takes priority over every other
 error category. It records a hold for that launch and durably notifies the
-canonical administrator, with request IDs extracted from the rendered message.
+agent's stop recipient, with request IDs extracted from the rendered message.
+The recipient is chosen exactly as an ordinary stop's is (`route_stop`, with the
+same live-lead check): the card's lead. The administrator receives it only when
+the agent has no lead, when the lead is down or unreachable (the event rises and
+is marked ROSE), or when the route cannot be read (a loud fallback, so a routing
+read never loses the notice). That fallback covers every routing step, including the off-host lead read
+from Quipu and the liveness probe: any error there still records the hold and
+notifies the administrator. The scheduled `tend` safeguard reconciliation,
+which only resumes a notification the hook never attempted, still reports to the
+administrator.
 The hold also prevents ordinary input and automatic cycles when the pane has no
 banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
 does not clear a safeguard hold. Rate-limit and authentication failures enter the
 existing `limited` and `auth-dead` supervision paths; a later successful Stop can
-retire these transient signals. Other errors produce a durable administrator
-inbox notice. Notification work runs asynchronously with a bounded timeout and
+retire these transient signals. Other errors produce a durable inbox notice to
+the same recipient. Notification work runs asynchronously with a bounded timeout and
 never asks the model to continue. Launch verification checks the running
 process's selected settings against its recorded launch snapshot; a newly
 rewritten settings file is not proof that an old process loaded the hook.
