@@ -2640,7 +2640,8 @@ clear even if a peer is UNKNOWN (including before its first probe). That peer
 remains UNKNOWN in diagnostics and per-reason metrics. The aggregate is UNKNOWN
 only when no detector supplies a healthy observation and at least one is unknown.
 `aegis_quiet_time_detector_active{reason="media"}` identifies
-the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
+the cause; `aegis_quiet_time_hold_active` is the combined launch-hold decision
+(full-effect detectors only). Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.
 
@@ -2649,6 +2650,24 @@ separately from routine budget advice. Failed pane deliveries remain pending.
 An unknown detector or failed slowdown verification warns the administrator;
 a continuous hold lasting 30 minutes warns once and never clears automatically.
 Before honouring a hold copied from notes, run `st fleet hold all --status`.
+Each detector declares its hold `effect`. `full` (the default, and the only effect
+gaming accepts) holds launches, dispatch and respawns. `no-heavy-builds` holds none of
+them: agents keep launching and working, and only heavy local builds (cargo
+build/test/clippy and the other heavy-work wrappers) are refused. A media session
+needs only the CPU kept free; under a full hold, 20 minutes of playback refused ~15
+drain jobs and stalled every PR lane. `st fleet hold all --status` exits 1 (defer
+heavy work) while any hold, throttle or builds-only hold is active, and also while a
+builds-only detector is UNKNOWN: builds fail closed, launches do not. The separate
+gauge `aegis_quiet_time_build_hold_active` carries that same decision for an external
+build policy (Yupana). It is its own metric, not an `effect` label on
+`aegis_quiet_time_hold_active`, so existing rules on the launch-hold series do not
+start matching film playback. A builds-only hold does not CPU-throttle crew panes
+(`aegis_quiet_time_throttled` stays 0): the rule is "still do work, just refrain from
+heavy builds", and the heavy builds are refused outright instead. A builds-only hold,
+an UNKNOWN builds-only detector, and the lift of either are announced to crew panes
+like any other hold.
+Changing `effect` does not discard a detector's current observation.
+
 With the default 120-second lift delay and minute probes, a continuously negative
 media signal clears within 180 seconds. A message saying one reason ended does
 not override another active reason or the budget governor.
@@ -2693,6 +2712,7 @@ enter_delay = 0
 grace = 0
 lift_delay = 120
 lift_rule = "inactive"
+effect = "no-heavy-builds"   # playback needs CPU, not an idle fleet
 ```
 
 The HTTP reader issues a bounded read-only GET, refuses redirects, and matches

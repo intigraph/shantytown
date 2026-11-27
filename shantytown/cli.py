@@ -15916,7 +15916,9 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     # Initial clear is not a lift event. Once any state has reached the
     # coordinator, changes (including recovery from UNKNOWN) must reach it too.
     ledger = Path(a.root) / "notify" / "gaming_hold.json"
-    if status.state in {"off", "clear"} and not ledger.exists():
+    builds = (tuple(getattr(status, "build_reasons", ()))
+              + tuple(n + '?' for n in getattr(status, "build_unknown", ())))
+    if status.state in {"off", "clear"} and not builds and not ledger.exists():
         return []
     if status.state == "off":
         status = (quiet_time_mod.Status((("quiet_time", quiet_time_mod.Observation("clear")),))
@@ -15924,7 +15926,7 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     key = ('game_present_idle' if status.game_present_idle and status.state != 'manual'
            else 'held' if status.held else status.state)
     if isinstance(status, quiet_time_mod.Status):
-        key += ':' + ','.join(status.reasons)
+        key += ':' + ','.join(status.reasons) + (';builds=' + ','.join(builds) if builds else '')
     try:
         return creel_advisory_mod.Alerter(
             Path(a.root), reg if reg is not None else _registry(a),
@@ -16039,8 +16041,11 @@ def _cmd_hold(a) -> int:
         # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
         # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
         # compile holds no dispatch, but a build must still defer through it, or it starts
-        # during a real launch's pre-reaper shader phase.
-        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
+        # during a real launch's pre-reaper shader phase. A builds-only hold (media,
+        # aegis-nh4) defers it too, and an UNKNOWN builds-only detector fails closed
+        # here while launches carry on.
+        return CANNOT_TELL if status.state == "unknown" else int(
+            getattr(status, "builds_held", status.throttled))
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
 
 

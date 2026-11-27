@@ -318,3 +318,171 @@ def test_status_exit_defers_heavy_work_while_throttled(tmp_path, monkeypatch, st
     monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
     assert cli.main(['--root', str(tmp_path), 'hold', 'gaming', '--status']) == rc
     assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--status']) == rc
+
+
+# aegis-nh4: a media hold refuses heavy builds only; launches, dispatch and respawns go on.
+BUILDS_ONLY = 'effect = "no-heavy-builds"\n'
+
+
+@pytest.mark.parametrize('command', ['new', 'start', 'cycle'])
+def test_builds_only_hold_admits_launches_and_feed(tmp_path, monkeypatch, capsys, command):
+    from shantytown.feed_check import governor_admits
+    configure(tmp_path, BUILDS_ONLY)
+    quiet.manual(tmp_path, 'media')
+    status = quiet.read(tmp_path)
+    assert not status.held and not status.refusal and status.build_reasons == ('media',)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    cli.main(['--root', str(tmp_path), command, 'worker'])
+    assert 'GOVERNOR HOLD' not in capsys.readouterr().err
+    gate = governor_admits(tmp_path)
+    assert gate is None or not gate(None)
+
+
+def test_builds_only_hold_refuses_heavy_builds_naming_the_hold(tmp_path, monkeypatch, capsys):
+    configure(tmp_path, BUILDS_ONLY)
+    proc = tmp_path / 'proc'
+    process(proc, 1, 'Plex')
+    monkeypatch.setattr(gaming, 'read', lambda *a, **k: gaming.Status('clear', observed=1000))
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    status = quiet.probe(tmp_path, proc=proc, now=1000)
+    assert status.builds_held and 'media' in status.build_refusal and 'Retry' in status.build_refusal
+    text = quiet.metrics(status)
+    assert 'aegis_quiet_time_hold_active 0' in text
+    assert 'aegis_quiet_time_build_hold_active 1' in text
+    monkeypatch.setattr(quiet, 'read', lambda root, now=None: quiet._collect(root, now=1010))
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--status']) == 1
+    assert 'HEAVY BUILDS HELD — media' in capsys.readouterr().out
+    # Playback stops: builds still wait out lift_delay (60s here), then proceed.
+    (proc / '1' / 'cmdline').unlink()
+    assert quiet.probe(tmp_path, proc=proc, now=1030).builds_held
+    lifted = quiet.probe(tmp_path, proc=proc, now=1100)
+    assert not lifted.builds_held and not lifted.build_refusal
+    monkeypatch.setattr(quiet, 'read', lambda root, now=None: quiet._collect(root, now=1100))
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--status']) == 0
+    assert 'aegis_quiet_time_build_hold_active 0' in quiet.metrics(lifted)
+
+
+def test_unknown_builds_only_detector_fails_builds_closed_not_launches(tmp_path, monkeypatch, capsys):
+    configure(tmp_path, BUILDS_ONLY)
+    monkeypatch.setattr(gaming, 'read', lambda *a, **k: gaming.Status('clear', observed=1000))
+    status = quiet.read(tmp_path, now=1000)        # media never probed: UNKNOWN
+    assert status.state == 'clear' and not status.held and not status.launch_unknown
+    assert status.builds_held and 'UNKNOWN' in status.build_refusal
+    assert 'aegis_quiet_time_build_hold_active 1' in quiet.metrics(status)
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    assert cli.main(['--root', str(tmp_path), 'hold', 'all', '--status']) == 1
+    from shantytown.feed_check import governor_admits
+    gate = governor_admits(tmp_path)
+    assert gate is None or not gate(None)
+
+
+def test_gaming_keeps_full_hold_alongside_builds_only_media(tmp_path, monkeypatch, capsys):
+    configure(tmp_path, BUILDS_ONLY)
+    quiet.manual(tmp_path, 'media')
+    gaming.manual(tmp_path)
+    status = quiet.read(tmp_path)
+    assert status.reasons == ('gaming',) and status.build_reasons == ('media',)
+    assert 'launches, dispatch and respawns held' in status.refusal
+    monkeypatch.setattr(cli, '_warn_if_no_store', lambda a: None)
+    assert cli.main(['--root', str(tmp_path), 'new', 'worker']) == 1
+    assert 'gaming' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('extra, message', [
+    ('effect = "quiet"\n', 'effect must be one of'),
+    ('effect = 1\n', 'effect must be one of'),
+    ('\n[[quiet_time.detector]]\nname = "gaming"\nkind = "steam"\neffect = "no-heavy-builds"\n',
+     'gaming.effect must be full'),
+])
+def test_effect_is_validated(tmp_path, extra, message):
+    configure(tmp_path, extra)
+    with pytest.raises(config.ConfigError, match=message):
+        config.load(tmp_path)
+
+
+def test_effect_defaults_full_and_does_not_invalidate_observations(tmp_path):
+    configure(tmp_path)
+    assert {s.name: s.effect for s in config.load(tmp_path).quiet_time.detectors} == {
+        'gaming': 'full', 'media': 'full'}
+    spec = config.load(tmp_path).quiet_time.detectors[1]
+    import dataclasses
+    assert quiet.fingerprint(spec) == quiet.fingerprint(dataclasses.replace(spec, effect='no-heavy-builds'))
+
+
+def test_builds_only_hold_and_its_lift_are_announced(tmp_path):
+    from shantytown import quiet_notice
+    class Reg:
+        def all(self):
+            return self
+        def exact(self):
+            return []
+    class Panes:
+        def exists(self, pane):
+            return True
+    media = quiet.Status((('gaming', gaming.Status('clear')), ('media', quiet.Observation('manual'))),
+                         (('media', 'no-heavy-builds'),))
+    quiet_notice.sweep(tmp_path, media, Reg(), Panes(), push=lambda *a: True, page=lambda *a: True, now=1)
+    data = json.loads((tmp_path / 'notify' / 'quiet_time_delivery.json').read_text())
+    assert data['key'] == 'builds:media' and data['message'].startswith('QUIET-TIME HEAVY BUILDS HELD')
+    clear = quiet.Status((('gaming', gaming.Status('clear')), ('media', quiet.Observation('clear'))),
+                         (('media', 'no-heavy-builds'),))
+    quiet_notice.sweep(tmp_path, clear, Reg(), Panes(), push=lambda *a: True, page=lambda *a: True, now=2)
+    data = json.loads((tmp_path / 'notify' / 'quiet_time_delivery.json').read_text())
+    assert data['key'] == 'clear' and data['message'].startswith('QUIET-TIME HOLD LIFTED')
+
+
+def test_builds_only_unknown_has_its_own_notice_key_and_lift(tmp_path):
+    # builds:media -> media UNKNOWN renders HEAVY BUILDS HELD; recording it as
+    # "clear" would swallow the real lift that follows.
+    from shantytown import quiet_notice
+    class Reg:
+        def all(self):
+            return self
+        def exact(self):
+            return []
+    class Panes:
+        def exists(self, pane):
+            return True
+    effects = (('media', 'no-heavy-builds'),)
+    gaming_clear = ('gaming', gaming.Status('clear'))
+    path = tmp_path / 'notify' / 'quiet_time_delivery.json'
+    sweep = lambda status, now: quiet_notice.sweep(
+        tmp_path, status, Reg(), Panes(), push=lambda *a: True, page=lambda *a: True, now=now)
+    sweep(quiet.Status((gaming_clear, ('media', quiet.Observation('manual'))), effects), 1)
+    sweep(quiet.Status((gaming_clear, ('media', quiet.Observation('unknown'))), effects), 2)
+    data = json.loads(path.read_text())
+    assert data['key'] == 'builds-unknown:media'
+    assert data['message'].startswith('QUIET-TIME HEAVY BUILDS HELD')
+    sweep(quiet.Status((gaming_clear, ('media', quiet.Observation('clear'))), effects), 3)
+    data = json.loads(path.read_text())
+    assert data['key'] == 'clear' and data['message'].startswith('QUIET-TIME HOLD LIFTED')
+
+
+def test_builds_only_hold_does_not_throttle_crew(tmp_path):
+    # "Still do work, just refrain from heavy builds": media must not slow every
+    # crew pane, only refuse builds. A full-effect media detector still throttles.
+    media = quiet.Observation('manual')
+    builds_only = quiet.Status((('gaming', gaming.Status('clear')), ('media', media)),
+                               (('media', 'no-heavy-builds'),))
+    assert not builds_only.throttled and builds_only.builds_held
+    assert 'crew CPU throttled' not in builds_only.render()
+    text = quiet.metrics(builds_only)
+    assert 'aegis_quiet_time_throttled 0' in text
+    full = quiet.Status((('gaming', gaming.Status('clear')), ('media', media)))
+    assert full.throttled and 'aegis_quiet_time_throttled 1' in quiet.metrics(full)
+    # A shader compile still throttles alongside a builds-only hold, and says so.
+    shader = quiet.Status((('gaming', gaming.Status('shader')), ('media', media)),
+                          (('media', 'no-heavy-builds'),))
+    assert shader.throttled and 'crew CPU throttled' in shader.render()
+
+
+def test_launch_hold_series_keeps_its_unlabelled_meaning(tmp_path):
+    # Existing rules query `aegis_quiet_time_hold_active == 1`; a builds-only hold
+    # must not add a series under that name, or those rules fire on a film.
+    status = quiet.Status((('gaming', gaming.Status('clear')), ('media', quiet.Observation('manual'))),
+                          (('media', 'no-heavy-builds'),))
+    lines = [l for l in quiet.metrics(status).splitlines() if not l.startswith('#')]
+    assert [l for l in lines if l.startswith('aegis_quiet_time_hold_active')] == [
+        'aegis_quiet_time_hold_active 0']
+    assert 'aegis_quiet_time_build_hold_active 1' in lines
+    assert 'aegis_quiet_time_detector_active{reason="media"} 1' in lines

@@ -22,6 +22,11 @@ class Detector:
     lift_delay: float = 120
     lift_rule: str = 'inactive'
     options: dict = field(default_factory=dict)
+    # What an active hold refuses (aegis-nh4). "full" holds launches, dispatch and
+    # respawns. "no-heavy-builds" leaves all of those running and refuses only heavy
+    # local builds: 20 minutes of Plex under a full hold refused ~15 drain jobs and
+    # stalled every PR lane, yet playback only needs cargo kept off the CPU.
+    effect: str = 'full'
 
 
 @dataclass(frozen=True)
@@ -29,7 +34,9 @@ class Policy:
     detectors: tuple[Detector, ...] = (Detector('gaming', 'steam', None, grace=300, lift_rule='absent'),)
 
 
-COMMON = {'name', 'kind', 'enabled', 'enter_delay', 'grace', 'lift_delay', 'lift_rule'}
+COMMON = {'name', 'kind', 'enabled', 'enter_delay', 'grace', 'lift_delay', 'lift_rule', 'effect'}
+FULL, NO_HEAVY_BUILDS = 'full', 'no-heavy-builds'
+EFFECTS = (FULL, NO_HEAVY_BUILDS)
 OPTIONS = {
     'steam': {'game_executable', 'game_arguments', 'shader_executable', 'shader_grace',
               'steam_appinfo', 'lift_app_types', 'lift_appids'},
@@ -73,6 +80,12 @@ def parse(raw: dict) -> Policy:
             raise ValueError(f'quiet_time.{name}.lift_rule must be absent or inactive')
         if kind == 'steam' and (lift != 'absent' or times['enter_delay']):
             raise ValueError('Steam presence is authoritative: absent lift_rule and zero enter_delay required')
+        effect = row.get('effect', FULL)
+        if not isinstance(effect, str) or effect not in EFFECTS:
+            raise ValueError(f'quiet_time.{name}.effect must be one of {", ".join(EFFECTS)}')
+        if kind == 'steam' and effect != FULL:
+            # The operator's gaming rule is to shed agents, not merely builds.
+            raise ValueError('quiet_time.gaming.effect must be full')
         options = {k: v for k, v in row.items() if k in OPTIONS[kind]}
         if kind in {'process', 'steam'}:
             patterns = (options.get('arguments', []) if kind == 'process' else
@@ -127,7 +140,8 @@ def parse(raw: dict) -> Policy:
             if bool(options.get('token_ini_section')) != bool(options.get('token_ini_key')):
                 raise ValueError('http_json token_ini_section and token_ini_key must be supplied together')
             number(options.get('timeout', 5), name + '.timeout', 10, positive=True)
-        found[name] = Detector(name, kind, enabled, **times, lift_rule=lift, options=options)
+        found[name] = Detector(name, kind, enabled, **times, lift_rule=lift, options=options,
+                               effect=effect)
     if len(found) > 16:
         raise ValueError("quiet_time supports at most 16 detectors including gaming")
     return Policy(tuple(found.values()))

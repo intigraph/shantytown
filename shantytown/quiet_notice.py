@@ -17,7 +17,7 @@ NOTICE_MARK = ' Re-check st fleet hold all --status before honouring hold notes;
 
 
 # How each quiet-time render begins (quiet_time.Status.render, gaming render).
-_NOTICE_STARTS = ('GOVERNOR HOLD', 'QUIET-TIME HOLD LIFTED',
+_NOTICE_STARTS = ('GOVERNOR HOLD', 'QUIET-TIME HOLD LIFTED', 'QUIET-TIME HEAVY BUILDS HELD',
                   'quiet-time observation UNKNOWN', 'quiet-time detection off')
 
 
@@ -72,8 +72,17 @@ def sweep(root, status, reg, panes, *, slowdown_unknown=False, now=None,
         reasons = tuple(getattr(status, 'reasons', ('gaming',) if status.held else ()))
         entries = getattr(status, 'entries', (('gaming', status),))
         unknown = any(value.state == 'unknown' for _, value in entries)
+        builds = tuple(getattr(status, 'build_reasons', ()))
+        build_unknown = tuple(getattr(status, 'build_unknown', ()))
+        # A builds-only hold is a transition crew must hear about (cargo will be
+        # refused), and its end is a lift, but it never starts the long-hold page.
+        # An UNKNOWN builds-only detector also renders HEAVY BUILDS HELD, so it is its
+        # own key: folded into clear, builds:media -> media UNKNOWN recorded a held
+        # message under a clear key, and the later real lift was never announced.
         key = ('held:' + ','.join(reasons) if status.held else
-               'unknown' if status.state == 'unknown' else 'clear')
+               'unknown' if status.state == 'unknown' else
+               'builds:' + ','.join(builds) if builds else
+               'builds-unknown:' + ','.join(build_unknown) if build_unknown else 'clear')
         old = data.get('key', data.get('legacy_held'))
         if key != old or 'key' not in data:
             data['held_since'] = (data.get('held_since', now)
@@ -83,7 +92,7 @@ def sweep(root, status, reg, panes, *, slowdown_unknown=False, now=None,
             data['warned'] = False
             # Initial clear is no event. A real lift reaches every live pane,
             # including workers who only saw another worker's hold notes.
-            if old is not None or status.held or key == 'unknown':
+            if old is not None or status.held or key == 'unknown' or builds or build_unknown:
                 cards = reg.all().exact()
                 data['pending'] = sorted(c.name for c in cards
                                          if c.pane and panes.exists(c.pane))
