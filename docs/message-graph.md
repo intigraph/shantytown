@@ -57,8 +57,8 @@ of its own, only the shapes it requires and reacts to in Quipu.
 |------|------|--------------|
 | Quipu | Storage: the weekly message windows above. Unchanged. | Any knowledge of what a message is. |
 | Chaski | The message shapes it needs, and every lifecycle step as a reaction to message facts: escalating unread mail, expiry, alert de-duplication, freezing old windows, and onward notification (a phone push, a notice to an administrator). | A command, API or library for senders. Its interface is the shapes. |
-| Seeds | The `sd msg` verbs, kept for beads compatibility. They validate against Chaski's shapes, write message facts and read them back. | Lifecycle. No timer, no escalation and no expiry policy lives in Seeds. |
-| Shantytown | A pluggable message backend behind the existing `Inbox` protocol. `st inbox`, `st sling` and the capacity notices call the protocol only. Chaski-shaped facts are one backend. The seed inbox stays another until the legacy drain reaches zero. | A second signing or credential path (D5 still holds for writes). |
+| Seeds | The `sd msg` verbs, kept for beads compatibility, and the write credential. They validate against Chaski's shapes, write message facts and read them back. | Lifecycle. No timer, no escalation and no expiry policy lives in Seeds. Agent identity: Seeds writes for the agent `st` names. |
+| Shantytown | Agent identity: `st` says who the sender and the recipient are. A pluggable message backend behind the existing `Inbox` protocol. `st inbox`, `st sling` and the capacity notices call the protocol only. Chaski-shaped facts are one backend. The seed inbox stays another until the legacy drain reaches zero. | A Quipu write credential. Message writes reuse the Seeds credential. |
 
 A sender writes a fact. Chaski sees it on the change feed and reacts. Nothing
 calls Chaski.
@@ -105,14 +105,24 @@ does: it reacts to graph changes and handles deadlines and expiry.
    messages in live windows. Today it exceeds 30 seconds.
 5. Seeds contains no message lifecycle code.
 
-### Open points (with recommendation)
+### Settled on 2026-11-27 (Stiwi)
 
-1. **Who writes the facts for `st`.** Recommended: `sd msg`, so `st` holds no
-   Quipu write credential. The cost is that every sending host needs a current
-   `sd`.
-2. **Immediate delivery into a pane.** Recommended: it stays in `st`,
-   unchanged. Chaski reads the change feed at most once a minute today, which
-   is right for escalation and expiry but too slow for a live nudge.
+1. **Write credential.** `st` holds no Quipu write credential. Message writes
+   reuse the Seeds credential.
+2. **Agent identity.** `st` owns it. `st` names the sending and receiving
+   agents, and Seeds writes on behalf of the identity `st` supplies. Seeds
+   does not decide who an agent is.
+3. **No polling.** Chaski reads Quipu's committed change stream
+   (`/changes/stream`) by default, so a reaction follows a message fact
+   promptly. Polling remains only as the rollback path.
+
+### Open point (with recommendation)
+
+**Live delivery into a pane.** With the stream, a Chaski reaction can trigger
+it promptly. Recommended: `st` keeps the pane mechanics, because it owns the
+panes. Whether the trigger is the sender's own call, a Chaski reaction or
+both is for the implementing design to settle, with one rule: a message is
+never shown twice to the same session.
 
 ## Graph layout
 
