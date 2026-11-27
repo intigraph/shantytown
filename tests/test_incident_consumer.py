@@ -3,9 +3,12 @@ import json
 import os
 import stat
 
+from pathlib import Path
+
 import pytest
 
-from shantytown.incident_consumer import Consumed, consume
+import shantytown.incident_consumer as consumer
+from shantytown.incident_consumer import Consumed, consume, consume_event
 from shantytown.incident_report import Refusal
 from tests.test_incident_report import envelope, report
 
@@ -25,8 +28,25 @@ def run(journal, record=None, frozen=None, spec=None, verified=True):
                    jobspec=spec or envelope(), journal=journal, verified=verified)
 
 
+EVENT = Path(__file__).parent / 'fixtures' / 'incident_consumer' / 'triage-event.json'
+
+
 def files(journal):
     return sorted(os.listdir(journal))
+
+
+def intent_files(journal):
+    return [f for f in files(journal) if not f.startswith('refusal-')]
+
+
+def refusals(journal):
+    return [json.loads(open(os.path.join(journal, f)).read()) for f in files(journal) if f.startswith('refusal-')]
+
+
+def assert_refusal_recorded(journal, reason):
+    """No intent record, and exactly one refusal record naming the reason."""
+    assert intent_files(journal) == []
+    assert [r['reason'] for r in refusals(journal)] == [reason]
 
 
 def test_verified_matching_report_journals_the_shadow_intents_once(journal):
@@ -53,12 +73,13 @@ def test_the_same_run_with_a_changed_report_is_refused_and_the_record_is_kept(jo
     changed['summary'] = 'A different conclusion'
     assert run(journal, record=changed) == Refusal('run-rebound')
     assert open(first.journal_path, 'rb').read() == before
+    assert [r['reason'] for r in refusals(journal)] == ['run-rebound']
 
 
 @pytest.mark.parametrize('flag', [False, None, 1, 'yes', 'True'])
 def test_only_an_exactly_verified_record_is_read(journal, flag):
     assert run(journal, verified=flag) == Refusal('unverified-record')
-    assert files(journal) == []
+    assert_refusal_recorded(journal, 'unverified-record')
 
 
 @pytest.mark.parametrize('change', [
@@ -71,7 +92,7 @@ def test_a_report_about_another_incident_is_refused(journal, change):
     frozen = copy.deepcopy(FROZEN)
     change(frozen)
     assert run(journal, frozen=frozen) == Refusal('incident-binding')
-    assert files(journal) == []
+    assert_refusal_recorded(journal, 'incident-binding')
 
 
 @pytest.mark.parametrize('frozen', [
@@ -80,17 +101,20 @@ def test_a_report_about_another_incident_is_refused(journal, change):
 ])
 def test_a_malformed_frozen_input_is_refused(journal, frozen):
     assert consume(report(), frozen=frozen, jobspec=envelope(), journal=journal, verified=True) == Refusal('frozen-input')
-    assert files(journal) == []
+    assert_refusal_recorded(journal, 'frozen-input')
 
 
-def test_validator_refusals_pass_through_and_write_nothing(journal):
+def test_validator_refusals_pass_through_and_are_recorded(journal):
     partial = report()
     partial['report']['coverage'] = 'partial'
     assert run(journal, record=partial) == Refusal('invalid-report-or-spec')
     forged = envelope()
     forged['sha256'] = '0' * 64
     assert isinstance(run(journal, spec=forged), Refusal)
-    assert files(journal) == []
+    assert intent_files(journal) == []
+    recorded = refusals(journal)
+    assert len(recorded) == 2 and recorded[0]['reason'] == 'invalid-report-or-spec'
+    assert all(r['run_id'] == 'run-1' for r in recorded)
 
 
 def test_an_unknown_verdict_has_no_intents_but_is_still_recorded(journal):
@@ -113,7 +137,9 @@ def test_an_unsafe_journal_directory_is_refused(tmp_path):
     os.chmod(open_dir, 0o777)
     assert run(str(open_dir)) == Refusal('journal-dir')
     assert run(str(tmp_path / 'missing')) == Refusal('journal-dir')
+    assert consume_event(EVENT.read_bytes(), journal=str(link), verified=True) == Refusal('journal-dir')
     assert os.listdir(target) == []
+    assert sorted(os.listdir(open_dir)) == []
 
 
 def test_the_module_imports_nothing_that_could_execute_or_reach_out():
@@ -126,4 +152,64 @@ def test_the_module_imports_nothing_that_could_execute_or_reach_out():
             imported |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add(node.module)
-    assert imported == {'dataclasses', 'hashlib', 'json', 'os', 'stat', 'tempfile', 'shantytown.incident_report'}
+    assert imported == {'dataclasses', 'hashlib', 'json', 'os', 're', 'stat', 'tempfile', 'shantytown.incident_report'}
+
+
+def test_the_same_refusal_twice_is_one_refusal_record(journal):
+    assert run(journal, verified=False) == run(journal, verified=False) == Refusal('unverified-record')
+    assert_refusal_recorded(journal, 'unverified-record')
+    record = refusals(journal)[0]
+    assert set(record) == {'version', 'kind', 'reason', 'record_sha256', 'frozen_sha256', 'run_id'}
+    assert 'Measured scope defect' not in open(os.path.join(journal, files(journal)[0])).read()
+
+
+def test_a_replayed_recorded_event_is_one_intent_record(journal):
+    raw = EVENT.read_bytes()
+    first = consume_event(raw, journal=journal, verified=True)
+    again = consume_event(raw, journal=journal, verified=True)
+    assert isinstance(first, Consumed) and not first.replay
+    assert again.replay and again.intents == first.intents
+    assert [i.action for i in first.intents] == ['comment-item', 'file-followup']
+    assert files(journal) == [os.path.basename(first.journal_path)]
+
+
+@pytest.mark.parametrize('raw', [b'', b'not json', b'[]', b'{"kind":"incident_report"}',
+                                 json.dumps({**json.loads(EVENT.read_bytes()), 'kind': 'other'}).encode(),
+                                 b' ' * (consumer.RECORD_CAP + 1)])
+def test_a_malformed_event_is_refused_and_recorded(journal, raw):
+    assert consume_event(raw, journal=journal, verified=True) == Refusal('event-shape')
+    assert_refusal_recorded(journal, 'event-shape')
+
+
+@pytest.mark.parametrize('onset', ['2026-11-22T04:00:00.000Z', '2026-11-22T04:00:00.0Z'])
+def test_an_equal_onset_spelled_differently_binds(journal, onset):
+    raw = report()
+    raw['report']['incident']['onset'] = onset
+    assert isinstance(run(journal, record=raw), Consumed)
+
+
+def test_onsets_that_differ_past_microseconds_do_not_bind(journal):
+    raw = report()
+    raw['report']['incident']['onset'] = '2026-11-22T04:00:00.0000001Z'
+    assert run(journal, record=raw) == Refusal('incident-binding')
+
+
+def test_a_garbage_record_at_the_final_path_refuses_unreadable(journal):
+    first = run(journal)
+    with open(first.journal_path, 'wb') as handle:
+        handle.write(b'{truncated')
+    assert run(journal) == Refusal('journal-unreadable')
+    assert open(first.journal_path, 'rb').read() == b'{truncated'
+    assert [r['reason'] for r in refusals(journal)] == ['journal-unreadable']
+
+
+def test_an_oversized_record_is_refused_before_it_is_written(journal, monkeypatch):
+    monkeypatch.setattr(consumer, 'RECORD_CAP', 64)
+    assert run(journal) == Refusal('record-too-large')
+    assert_refusal_recorded(journal, 'record-too-large')
+
+
+def test_no_pending_files_survive_a_consume(journal):
+    run(journal)
+    run(journal, verified=False)
+    assert not [f for f in files(journal) if f.startswith('.pending-')]

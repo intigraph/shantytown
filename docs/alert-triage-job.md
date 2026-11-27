@@ -90,25 +90,41 @@ write reconciliation, admission and execution remain controller responsibilities
 
 `incident_consumer.consume(record, frozen=..., jobspec=..., journal=..., verified=True)`
 takes ONE report record that the signed reader has already verified and returns
-the shadow intents, journaled once. `verified` must be exactly `True`; the caller
-that read `st-gate-verdicts` and checked the signature sets it, this module does
-not authenticate. It then:
+the shadow intents, journaled once. `consume_event(raw, journal=..., verified=True)`
+takes the serialized event form, a JSON object of exactly `kind: "incident_report"`,
+`record`, `frozen` and `jobspec` (at most 1 MiB), so a recorded event can be
+replayed; `tests/fixtures/incident_consumer/triage-event.json` is one. `verified`
+must be exactly `True`; the caller that read `st-gate-verdicts` and checked the
+signature sets it, this module does not authenticate. It then:
 
-1. requires the frozen launch input to have exactly `version: 1`, `item`,
+1. requires a journal directory that is a real directory owned by the caller and
+   not writable by group or others, otherwise `journal-dir` (the only refusal
+   that is not recorded: there is nowhere safe to write it);
+2. requires the frozen launch input to have exactly `version: 1`, `item`,
    `fingerprint_kind`, `fingerprint` and `onset_utc`;
-2. runs `incident_report.validate` and `plan` unchanged;
-3. binds the report to THIS incident: `incident.source`, `fingerprint`, `onset`
+3. runs `incident_report.validate` and `plan` unchanged;
+4. binds the report to THIS incident: `incident.source`, `fingerprint`, `onset`
    and `carrier_item` must equal the frozen `fingerprint_kind`, `fingerprint`,
-   `onset_utc` and `item`, otherwise `incident-binding`;
-4. writes `<sha256(run_id)>.json` (mode 0600, created exclusively by a hard link)
-   into a journal directory that must be a real directory owned by the caller and
-   not writable by group or others. The same run twice returns the same intents
-   with `replay=True` and one file; the same run with different content refuses
-   `run-rebound` and leaves the first record unchanged.
+   `onset_utc` and `item`, otherwise `incident-binding`. Onsets compare as the
+   same instant: `04:00:00Z` equals `04:00:00.000Z`, trailing fraction zeros aside;
+5. writes `<sha256(run_id)>.json` (mode 0600, fsynced, created exclusively by a
+   hard link, at most 1 MiB or `record-too-large`). The same run twice returns the
+   same intents with `replay=True` and one file; the same run with different
+   content refuses `run-rebound` and leaves the first record unchanged; a record
+   that cannot be parsed refuses `journal-unreadable` and is left for an operator.
+
+Refusals and UNKNOWN are recorded, not dropped. An `unknown` verdict journals an
+intent record with no intents. Every refusal after step 1 writes
+`refusal-<sha256>.json` once, keyed by reason plus the digests of the record and
+the frozen input, holding `reason`, `record_sha256`, `frozen_sha256` and the
+`run_id` when one is readable, never the untrusted record itself. The same
+refusal twice is one record. Files starting `.pending-` are crash leftovers of an
+interrupted write; readers ignore dot-files.
 
 It imports no launcher, signer, executor, queue or network code, and creates no
 seed, comment or job. The journal is H2's input (signed verdict -> fix-seed
 executor), not an action. Source proof: `python -m pytest -q tests/test_incident_consumer.py`
-(22 tests; breaking the binding, the `verified` check, the rebound check or the
-symlink check each turns tests red). No runtime activation, no chaski route yet.
-
+(breaking the binding, the `verified` check, the rebound check, the symlink check,
+refusal recording, onset normalisation or the size cap each turns tests red; the
+fsyncs are durability only and no test detects their removal). No runtime
+activation, no chaski route yet.

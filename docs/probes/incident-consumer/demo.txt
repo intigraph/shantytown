@@ -1,6 +1,8 @@
-first : ['comment-item', 'file-followup'] replay = False
-again : ['comment-item', 'file-followup'] replay = True | files = 1
+event        : ['comment-item', 'file-followup'] replay = False
+replayed     : ['comment-item', 'file-followup'] replay = True | intent files = 1
 other incident : Refusal(reason='incident-binding')
 unverified     : Refusal(reason='unverified-record')
+unverified x2  : Refusal(reason='unverified-record')
 rebound run    : Refusal(reason='run-rebound')
-journal files  : 1 (still one)
+garbage event  : Refusal(reason='event-shape')
+intent files   : 1 (still one) | refusal records : 4 (one per distinct refusal)
