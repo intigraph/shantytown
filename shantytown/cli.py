@@ -5601,6 +5601,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
                   + type(exc).__name__ + ')', file=sys.stderr)
             return CANNOT_TELL
     # A bounded manifest must never launch before its private parent is ready.
+    # subprocess is imported HERE because the except below names it, and that
+    # clause is only evaluated when preparation fails: without the import a
+    # failed preparation raised NameError after the pane existed, crashing the
+    # spawn and leaving a LAUNCHING job at a bare shell (aegis-5x2x c10).
+    import subprocess
     from . import mcp_limits
     try:
         if not uid_launch:
