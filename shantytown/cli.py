@@ -4538,6 +4538,9 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             files.root.mkdir(parents=True, exist_ok=True)
             (files.root / f"{rec['name']}.json").write_text(
                 json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
+        # One Shuttle run per job, started once the ledger exists so every path
+        # from here (including a refused launch) ends it (aegis-za4f.19.1).
+        eph.run_begin(a.root, rec["name"])
         card = files.get(rec["name"])
         panes = _panes(a)
         if (rec.get("harness") == "codex" and not rec.get("uid_binding")
