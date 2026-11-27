@@ -292,3 +292,99 @@ def test_a_failing_second_lead_does_not_repage_the_first(tmp_path):
         assert mk().sweep(agents) == []
     assert len(pushed) == 1 and "kelly" not in pushed[0]
     assert any("kelly unreadable" in m for m in logged)
+
+
+# --- tend wiring: the alerters are built the way _tend_once builds them -----
+
+def _tend_alerter_calls():
+    """Every `notify_mod.<Alerter>(...)` call inside cli._tend_once, by AST.
+
+    Review of #798 at bed24818: tend passed `catalog=` to IdleFleetAlerter and
+    StalledAlerter, which take no such keyword. The TypeError was swallowed by
+    _sweep as "the stalled sweep CRASHED", silently disarming the worker stall
+    self-heal and the idle-fleet alert, and no test constructs these the way
+    tend does, so nothing went red.
+    """
+    import ast
+    import inspect
+
+    from shantytown import cli
+    tree = ast.parse(inspect.getsource(cli._tend_once))
+    calls = []
+    for node in ast.walk(tree):
+        f = getattr(node, "func", None)
+        if (isinstance(node, ast.Call) and isinstance(f, ast.Attribute)
+                and isinstance(f.value, ast.Name) and f.value.id == "notify_mod"
+                and f.attr[:1].isupper()):
+            calls.append(node)
+    return calls
+
+
+def _unbindable(call):
+    import ast
+    import inspect
+
+    from shantytown import notify
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(
+            k.arg is None for k in call.keywords):
+        return None                      # a splat cannot be checked statically
+    sig = inspect.signature(getattr(notify, call.func.attr))
+    try:
+        sig.bind(*[None] * len(call.args),
+                 **{k.arg: None for k in call.keywords})
+    except TypeError as exc:
+        return f"{call.func.attr} line {call.lineno}: {exc}"
+    return None
+
+
+def test_every_alerter_tend_builds_accepts_the_arguments_tend_passes():
+    calls = _tend_alerter_calls()
+    names = {c.func.attr for c in calls}
+    # Vacuity guard: if the AST walk stops finding the calls, this test would
+    # pass on anything.
+    assert {"IdleFleetAlerter", "StalledAlerter", "LeadStallAlerter"} <= names
+    bad = [m for m in map(_unbindable, calls) if m]
+    assert bad == []
+
+
+def test_the_wiring_check_says_no_to_an_unknown_keyword():
+    import ast
+    (call,) = [n for n in ast.walk(ast.parse(
+        "notify_mod.StalledAlerter(r, g, p, t, log=l, verdict_for=v, catalog=c)"))
+        if isinstance(n, ast.Call)]
+    assert "catalog" in _unbindable(call)
+
+
+def test_lead_stall_alerter_default_reads_are_the_tend_ones(tmp_path, monkeypatch):
+    # Every other test injects in_progress/ready/live_jobs; tend does not, so
+    # a wrong default would surface only as a swallowed CRASHED line.
+    from shantytown import ephemeral, feed_check
+    seen = {}
+
+    def tend_active(root, reg, *, roles=None, owners=None):
+        seen["active"] = (root, roles)
+        return [{"id": "aegis-gqi0", "assignee": "crew/ellie"}]
+
+    def tend_ready(root, reg, owners):
+        seen["ready"] = (root, list(owners))
+        return [{"id": "aegis-r2", "assignee": "crew/ellie"}]
+
+    def live(root):
+        seen["live"] = root
+        return []
+
+    monkeypatch.setattr(feed_check, "tend_active", tend_active)
+    monkeypatch.setattr(feed_check, "tend_ready", tend_ready)
+    monkeypatch.setattr(ephemeral, "live", live)
+    reg = _Reg([ADMIN, LEAD])
+    panes = _Panes({"p-s": "", "p-e": IDLE})
+    clock = {"t": 1000.0}
+    pushed = []
+    mk = lambda: LeadStallAlerter(
+        tmp_path, reg, panes, _Runtime(),
+        push=lambda r, p, m: pushed.append(m) or "sattler",
+        threshold_min=15, now=lambda: clock["t"])
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == ["ellie"]
+    assert seen == {"active": (tmp_path, ("lead",)),
+                    "ready": (tmp_path, ["ellie"]), "live": tmp_path}
+    assert len(pushed) == 1 and "aegis-r2" in pushed[0]
