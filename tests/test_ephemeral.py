@@ -2018,6 +2018,33 @@ def test_config_reads_harness_caps_and_track_shares_and_refuses_bad_ones(tmp_pat
             config.load(tmp_path)
 
 
+def test_model_by_harness_pins_the_job_model_without_moving_crew_workers(tmp_path):
+    """aegis-j550: opencode jobs run a local model while claude jobs and every
+    crew worker keep theirs. Before, the only lever was [model.by_role] worker."""
+    from shantytown import harness
+    from shantytown.files import FilesRegistry
+    toml = tmp_path / "shantytown.toml"
+    toml.write_text("[model.by_role]\nworker = \"crew-model\"\n"
+                    "[ephemeral]\nmax_agents = 3\n"
+                    "[ephemeral.model_by_harness]\nopencode = \"ollama/gemma4:12b\"\n")
+    policy = config.load(tmp_path).ephemeral
+    assert policy.model_by_harness == {"opencode": "ollama/gemma4:12b"}
+    local = _rec(tmp_path, harness="opencode", policy=policy, workspace=str(tmp_path))
+    hosted = _rec(tmp_path, harness="claude", policy=policy, workspace=str(tmp_path))
+    assert local["model"] == "ollama/gemma4:12b" and hosted["model"] is None
+    cards = tmp_path / "crew"
+    cards.mkdir()
+    for rec in (local, hosted):
+        (cards / f"{rec['name']}.json").write_text(
+            json.dumps(eph.card_for(rec, unattended=False)))
+    agents = FilesRegistry(cards)
+    # The job card's model is the most specific rung, so it beats by_role...
+    assert harness.resolve_model(agents.get(local["name"]), tmp_path) == "ollama/gemma4:12b"
+    # ...and a harness with no entry falls through to the deployment, as before.
+    assert "model" not in eph.card_for(hosted, unattended=False)
+    assert harness.resolve_model(agents.get(hosted["name"]), tmp_path) == "crew-model"
+
+
 def test_with_nothing_configured_drain_order_is_slice_one_exactly(tmp_path):
     """Regression: mixed harnesses and tracks, no caps or shares configured,
     must drain in plain priority-then-age order, as before aegis-fye."""
