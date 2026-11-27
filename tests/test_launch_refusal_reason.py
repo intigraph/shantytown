@@ -115,6 +115,19 @@ def test_maintenance_window_records_its_reason(launch, monkeypatch, capsys):
              ledger_has="maintenance window 'w-1' is draining")
 
 
+def test_unreadable_window_records_why_the_job_was_not_started(launch, monkeypatch, capsys):
+    """CANNOT_TELL, not REFUSED, but the spawner ends the job as `job not started:
+    <why>` from the same record, so it must not fall back to the generic text."""
+    def boom(root):
+        raise cli.window_mod.WindowUnreadable("lease file is not valid JSON")
+    monkeypatch.setattr(cli.window_mod, "active", boom)
+    assert launch() == cli.CANNOT_TELL
+    why = launch.args._startup_failure
+    assert "maintenance window unreadable (lease file is not valid JSON)" in why
+    assert GENERIC not in why and "\n" not in why
+    assert "could not tell: lease file is not valid JSON" in capsys.readouterr().err
+
+
 def test_account_admission_refusal_records_its_reason(launch, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_account_launch_refusal",
                         lambda a, c, **k: "account primary is at its cap 3/2")

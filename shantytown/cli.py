@@ -2794,7 +2794,7 @@ def _refuse_gaming(a, status) -> int:
     return REFUSED
 
 
-def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
+def _bounded_cause(exc: BaseException | str, limit: int = 400) -> str:
     """An exception's message for stderr: one line, bounded, bearer-redacted.
 
     The type name alone hid WHY a write failed (aegis-epi). The message can
@@ -14325,6 +14325,11 @@ def _window_launch_gate(a) -> int | None:
         lease = window_mod.active(Path(a.root))
     except window_mod.WindowUnreadable as exc:
         print(f"  could not tell: {exc}; relaunch held fail-closed", file=sys.stderr)
+        # Not REFUSED, but the spawner ends the job as `job not started: <why>` from
+        # the same record, so the ledger names this cause too (aegis-8et).
+        a._startup_failure = _bounded_cause(
+            f"maintenance window unreadable ({exc}); relaunch held fail-closed",
+            _LAUNCH_REFUSAL_LEDGER_MAX)
         return CANNOT_TELL
     if lease is None:
         return None
