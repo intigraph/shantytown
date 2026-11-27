@@ -387,6 +387,11 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         # Paused holds launches but keeps taking work, so it is over-cap (a
         # fresh spawn queues); draining takes no new work at all.
         raise (Refused if pool["draining"] else OverCap)(refusal)
+    # Disk below its floor QUEUES (aegis-xa6w): the work is fine, the host just
+    # has nowhere to put its worktree yet. OverCap is the queueing refusal.
+    from . import disk
+    if refusal := disk.read(policy, root).refusal():
+        raise OverCap(refusal)
     if refusal := cap_refusal(root, policy, harness, req.job):
         over = policy.max_agents > 0 and not harness_off(policy, harness)
         raise (OverCap if over else Refused)(refusal)
@@ -730,7 +735,8 @@ def routing(policy) -> dict:
 def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
                harness_caps: dict | None = None, shares: dict | None = None,
-               job_caps: dict | None = None) -> tuple[dict | None, list[str]]:
+               job_caps: dict | None = None,
+               disk_hold: str = "") -> tuple[dict | None, list[str]]:
     """Recover interrupted claims, then claim the best routed ticket (track
     share, priority, age; within its harness's capacity) whose item is open, if
     a slot is free. Caller holds lock().
@@ -760,6 +766,9 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
     pool = pool_state(root)
     if pool["paused"] or pool["draining"]:
         return None, lines + [pool_refusal(pool) + "; nothing launched"]
+    if disk_hold:
+        # Claiming would only bounce off plan()'s disk gate and requeue.
+        return None, lines + [disk_hold + "; nothing launched"]
     candidates = route(tickets(root), live(root), cap=cap,
                        harness_caps=harness_caps or {}, shares=shares or {},
                        job_caps=job_caps or {})

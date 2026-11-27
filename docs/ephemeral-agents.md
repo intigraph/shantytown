@@ -312,6 +312,20 @@ TTL makes a stuck queue visible and never throws work away. If neither report
 leg lands, the ticket stays unmarked and the next sweep tries again, so a
 breach is never silent.
 
+**Disk floor** (aegis-xa6w). `[ephemeral] disk_floor_gb` (default `0` = off) is
+the free space, in GB, the filesystem worktrees land on must keep. That path is
+`disk_path` when set, else the mounted worktree storage root, else the st root.
+Below the floor a fresh spawn **queues** with the reason `disk below floor: <N>G
+free on <path>, floor <F>G` and the drain launches nothing; it re-reads the disk
+before every claim, so a drain stops at the floor it is filling towards. A full
+disk is exactly when no job ends to drain the queue, so the `st fleet tend` reap
+sweep kicks the drain once space is back. A floor whose filesystem cannot be
+read (`lost`) holds like `low`. `st crew --governor` prints the line
+`disk ok|low|lost <free>G free/floor <F>G/<total>G on <path>` (and `disk` in
+its JSON) whenever a floor is set, and nothing when none is. Rollback: set
+`disk_floor_gb = 0` and run `st agent spawn --pool resume` to drain anything it
+held.
+
 ## Configuration
 
 ```toml
@@ -326,6 +340,9 @@ require_verified_identity = false # opt in after protected UID migration
 unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
 recruitment_launch_ready = false # separate signed-controller gate; no runtime wiring
 queue_ttl_minutes = 240     # report a ticket queued this long, once; it stays queued; 0 = off (aegis-za4f.3)
+disk_floor_gb = 0           # free GB to keep on the worktree filesystem; below it spawns queue; 0 = off (aegis-xa6w)
+                            # rollback: disk_floor_gb = 0, then `st agent spawn --pool resume`
+disk_path = ""              # absolute path to watch; "" = worktree storage root, else the st root
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into

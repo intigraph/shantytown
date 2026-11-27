@@ -184,6 +184,12 @@ class Ephemeral:
     # administrator and on its item, once, by the tend reap sweep. It stays
     # queued: the TTL makes a stuck queue visible, it never discards work. 0 = off.
     queue_ttl_minutes: int = 240
+    # aegis-xa6w: free-space floor, in GB, on the filesystem worktrees land on
+    # (shantytown/disk.py). Below it a spawn queues and the drain holds; tend
+    # drains once space returns. 0 = off. disk_path overrides the watched path
+    # (default: the worktree storage root, else the st root).
+    disk_floor_gb: int = 0
+    disk_path: str = ""
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
     verdict_graph: str = ""         # registered committed graph IRI for the records
@@ -1220,7 +1226,8 @@ _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
-                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes"}
+                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes",
+                   "disk_floor_gb", "disk_path"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1228,16 +1235,23 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     _refuse_unknown(path, "ephemeral", tbl, _EPHEMERAL_KEYS)
     values = {}
     for key in ("max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                "merge_spacing_minutes", "queue_ttl_minutes"):
+                "merge_spacing_minutes", "queue_ttl_minutes", "disk_floor_gb"):
         value = tbl.get(key, getattr(Ephemeral, key))
         # max_agents and spacing may be 0 (off / no gap), and a zero queue TTL
         # means no TTL; a zero lifetime or budget would end every job at its
         # first stop, which is a typo.
-        floor = 0 if key in ("max_agents", "merge_spacing_minutes", "queue_ttl_minutes") else 1
+        floor = 0 if key in ("max_agents", "merge_spacing_minutes", "queue_ttl_minutes",
+                             "disk_floor_gb") else 1
         if isinstance(value, bool) or not isinstance(value, int) or value < floor:
             raise ConfigError(f"{path}: ephemeral.{key} must be an integer >= {floor}, "
                               f"got {value!r}")
         values[key] = value
+    disk_path = tbl.get("disk_path", "")
+    if (not isinstance(disk_path, str) or any(c in disk_path for c in "\r\n\0")
+            or disk_path and not Path(disk_path).is_absolute()):
+        raise ConfigError(f"{path}: ephemeral.disk_path must be an absolute path, "
+                          f"got {disk_path!r}")
+    values["disk_path"] = disk_path
     unattended = tbl.get("unattended")
     if unattended is not None and not isinstance(unattended, bool):
         raise ConfigError(f"{path}: ephemeral.unattended must be true or false")

@@ -2187,3 +2187,132 @@ def test_other_jobs_without_repo_are_not_held_to_the_task_rule(store, capsys, jo
     root, _panes, _launched = store
     _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude", "-n")
     assert "a task job needs --repo" not in capsys.readouterr().err
+
+
+# --- disk floor (aegis-xa6w) ----------------------------------------------------
+
+from collections import namedtuple
+
+from shantytown import disk as disk_mod
+
+_Usage = namedtuple("_Usage", "total used free")
+
+
+def _disk(monkeypatch, free_gb, total_gb=2200):
+    state = {"free": free_gb}
+    def usage(path):
+        if state["free"] is None:
+            raise PermissionError(path)
+        g = disk_mod.GB
+        return _Usage(total_gb * g, (total_gb - state["free"]) * g, state["free"] * g)
+    monkeypatch.setattr(disk_mod.shutil, "disk_usage", usage)
+    return state
+
+
+def test_disk_reading_says_no_below_the_floor_and_when_blind(tmp_path, monkeypatch):
+    state = _disk(monkeypatch, 55)
+    off = disk_mod.read(_policy(), tmp_path)
+    assert off.state == "off" and not off.holds and off.refusal() == ""
+    low = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert low.state == "low" and low.holds
+    assert "disk below floor: 55G free" in low.refusal() and "floor 100G" in low.refusal()
+    assert low.line().startswith("disk low 55G free/floor 100G/2200G on ")
+    state["free"] = 150
+    ok = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert ok.state == "ok" and ok.refusal() == "" and ok.line().startswith("disk ok 150G")
+    # Blind holds: a floor we cannot read is not a floor we are above.
+    state["free"] = None
+    lost = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert lost.state == "lost" and lost.holds and "unreadable" in lost.refusal()
+    assert lost.line().startswith("disk lost floor 100G")
+
+
+def test_disk_path_overrides_the_watched_filesystem(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(disk_mod.shutil, "disk_usage",
+                        lambda p: seen.append(str(p)) or _Usage(1, 0, 1))
+    disk_mod.read(_policy(disk_floor_gb=1, disk_path="/srv/fleet"), tmp_path)
+    assert seen == ["/srv/fleet"]
+
+
+def test_config_reads_and_refuses_the_disk_floor(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        "[ephemeral]\ndisk_floor_gb = 100\ndisk_path = \"/srv/fleet\"\n")
+    cfg = config.load(tmp_path)
+    assert cfg.ephemeral.disk_floor_gb == 100 and cfg.ephemeral.disk_path == "/srv/fleet"
+    assert config.Ephemeral().disk_floor_gb == 0          # off unless configured
+    for bad in ("disk_floor_gb = -1", "disk_floor_gb = true", 'disk_path = "relative/x"'):
+        (tmp_path / "shantytown.toml").write_text(f"[ephemeral]\n{bad}\n")
+        with pytest.raises(config.ConfigError, match="disk_"):
+            config.load(tmp_path)
+
+
+def test_plan_queues_below_the_disk_floor(tmp_path, monkeypatch):
+    state = _disk(monkeypatch, 55)
+    req = eph.Request(job="task", item="it-1", repo="o/n")
+    kw = dict(root=tmp_path, policy=_policy(max_agents=10, disk_floor_gb=100), actor="boss",
+              administrator="boss", host=None, now=NOW,
+              role_of=lambda n: "administrator" if n == "boss" else None)
+    with pytest.raises(eph.OverCap, match="disk below floor"):
+        eph.plan(req, **kw)
+    state["free"] = 500
+    assert eph.plan(req, **kw)["item"] == "it-1"
+
+
+def test_claim_next_holds_on_disk(tmp_path):
+    eph.enqueue(tmp_path, eph.ticket_for(eph.Request(job="task", item="it-1", repo="o/n"),
+                                         harness="claude", priority=1, requester="boss", now=NOW))
+    t, notes = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW,
+                              disk_hold="disk below floor: x")
+    assert t is None and notes == ["disk below floor: x; nothing launched"]
+    t, _ = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW)
+    assert t is not None
+
+
+def test_spawn_below_disk_floor_queues_named_and_launches_when_space_returns(
+        store, monkeypatch, capsys):
+    root, _panes, launched = store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 2\nunattended = false\nrequire_verified_identity = true\n"
+        "disk_floor_gb = 100\n")
+    state = _disk(monkeypatch, 55)
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    kicks = []
+    def drain_now(r):
+        kicks.append(r)
+        return cli.main(["--root", str(r), "agent", "spawn", "--drain"])
+    monkeypatch.setattr(eph, "kick_drain", drain_now)
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    out = capsys.readouterr().out
+    assert "QUEUED q-" in out and "disk below floor: 55G free" in out
+    assert launched == [] and len(eph.tickets(root)) == 1
+    # The drain holds while the disk does, and the ticket stays queued.
+    assert _st(root, "--drain") == cli.OK
+    assert "disk below floor" in capsys.readouterr().err
+    assert launched == [] and len(eph.tickets(root)) == 1
+    # tend while still low: no kick.
+    assert cli._spawn_reap(cli._parse_args(["--root", str(root), "agent", "spawn", "--reap"]),
+                           quiet=True) in (cli.OK, cli.CANNOT_TELL)
+    assert kicks == []
+    # Space is back: the next tend sweep drains, with no pool pause/resume.
+    state["free"] = 400
+    cli._spawn_reap(cli._parse_args(["--root", str(root), "agent", "spawn", "--reap"]),
+                    quiet=True)
+    assert kicks and len(launched) == 1 and eph.tickets(root) == []
+    (rec,) = eph.live(root)
+    assert rec["item"] == "it-1" and rec["ticket"].startswith("q-")
+
+
+def test_crew_governor_prints_the_disk_line(tmp_path, monkeypatch, capsys):
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\ndisk_floor_gb = 100\n")
+    state = _disk(monkeypatch, 55)
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk low 55G free/floor 100G/2200G" in capsys.readouterr().out
+    state["free"] = 300
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk ok 300G free/floor 100G" in capsys.readouterr().out
+    # No floor: the bar output is unchanged (no disk line at all).
+    (tmp_path / "shantytown.toml").write_text("")
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk" not in capsys.readouterr().out

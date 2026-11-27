@@ -899,6 +899,8 @@ def _crew_account_governor(a):
             snap['governors'][name].update(
                 windows={w: _window_wire(b) for w, b in _governor_windows(g).items()},
                 effect=g.evaluate(persist=False).effect())
+        if (disk := _crew_disk_line(a)) is not None:
+            snap['disk'] = disk.wire()
         print(json.dumps(snap))
         return OK
     counts = fleet.counts()
@@ -921,7 +923,8 @@ def _crew_account_governor(a):
                                            _governor_windows(governors[name]).items()},
                                   effect=v.effect())
                                   for name, v in verdicts.items()},
-                              balance=_balance_wire(fleet))))
+                              balance=_balance_wire(fleet),
+                              disk=(d.wire() if (d := _crew_disk_line(a)) else None))))
     else:
         if not governors:
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
@@ -947,6 +950,8 @@ def _crew_account_governor(a):
             print('  ' + warning)
         if fleet.errors:
             print('  ' + fleet.fallback())
+        if (disk := _crew_disk_line(a)) is not None:
+            print(disk.line())
     return CANNOT_TELL if fleet.errors else OK
 
 
@@ -4707,10 +4712,13 @@ def _spawn_drain(a, policy) -> int:
         free = max(0, policy.max_agents - len(eph.live(a.root)))
         queued = eph.tickets(a.root)
         pool = eph.pool_state(a.root)
-        order = ([] if pool["paused"] or pool["draining"]
+        from . import disk as disk_mod
+        disk_hold = disk_mod.read(policy, a.root).refusal()
+        order = ([] if pool["paused"] or pool["draining"] or disk_hold
                  else eph.drain_plan(queued, eph.live(a.root), **eph.routing(policy)))
-        if reason := eph.pool_refusal(pool):
-            print(f"  {reason}")
+        for reason in (eph.pool_refusal(pool), disk_hold):
+            if reason:
+                print(f"  {reason}")
         print(f"would drain {len(order)} of {len(queued)} queued ticket(s) "
               f"into {free} free slot(s)")
         for line in eph.render_tickets(order, time.time()):
@@ -4718,12 +4726,16 @@ def _spawn_drain(a, policy) -> int:
         return OK
     rc = OK
     seen = set()
+    from . import disk as disk_mod
     while True:
+        # Re-read every pass: each launch provisions a worktree, so the drain
+        # that filled the disk to its floor must stop there (aegis-xa6w).
+        disk_hold = disk_mod.read(policy, a.root).refusal()
         with eph.lock(a.root):
             r = eph.routing(policy)
             ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
                                            harness_caps=r["harness_caps"], shares=r["shares"],
-                                           job_caps=r["job_caps"],
+                                           job_caps=r["job_caps"], disk_hold=disk_hold,
                                            item_state=lambda i: _spawn_item_state(a, i))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
@@ -4846,6 +4858,13 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
                     comment=_spawn_item_comment(a))
     except Exception as error:  # noqa: BLE001 — a TTL read must never stop the reap
         problems.append(f"queue TTL check unproved ({type(error).__name__})")
+    # Disk back above its floor (aegis-xa6w). No job end may come to drain a
+    # queue the disk held -- a full disk is exactly when nothing launched -- so
+    # the tend sweep kicks it, and only when a ticket could launch right now.
+    try:
+        lines += _spawn_disk_kick(a, dry_run=dry_run)
+    except Exception as error:  # noqa: BLE001 — a disk read must never stop the reap
+        problems.append(f"disk floor check unproved ({type(error).__name__})")
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
     for problem in problems:
@@ -4853,6 +4872,37 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
     if not lines and not quiet:
         print("  ephemeral: nothing to reap")
     return CANNOT_TELL if problems else OK
+
+
+def _spawn_disk_kick(a, *, dry_run=False) -> list[str]:
+    """Kick the queue drain when the disk floor no longer holds it."""
+    from . import disk as disk_mod
+    from . import ephemeral as eph
+    cfg, _err = config.load_or_default(Path(a.root))
+    policy = eph.pooled(cfg.ephemeral, eph.pool_state(a.root))
+    reading = disk_mod.read(policy, a.root)
+    if reading.state != disk_mod.OK:
+        return []
+    pool = eph.pool_state(a.root)
+    if pool["paused"] or pool["draining"]:
+        return []
+    if not eph.route(eph.tickets(a.root), eph.live(a.root), **eph.routing(policy)):
+        return []
+    if dry_run:
+        return ["would kick the queue drain: disk is above its floor"]
+    eph.kick_drain(a.root)
+    return [f"queue drain kicked: {reading.line()}"]
+
+
+def _crew_disk_line(a):
+    """`st crew --governor`'s disk line (aegis-xa6w), or None when no floor is set.
+
+    Off prints nothing so a host that never set a floor keeps its bar output
+    byte-identical."""
+    from . import disk as disk_mod
+    cfg, _err = config.load_or_default(Path(a.root))
+    reading = disk_mod.read(cfg.ephemeral, a.root)
+    return None if reading.state == disk_mod.OFF else reading
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
@@ -9485,7 +9535,10 @@ def _cmd_crew(a) -> int:
         if peer_errors:
             print("lost " + "; ".join(peer_errors))
             return CANNOT_TELL
-        return _crew_governor(a)
+        rc = _crew_governor(a)
+        if (disk := _crew_disk_line(a)) is not None:
+            print(disk.line())
+        return rc
     if rules := getattr(a, "check_alert_keepers", None):
         return _check_alert_keepers(a, rules)
     # A self-cycle request exists before tend stops the pane and persists while
