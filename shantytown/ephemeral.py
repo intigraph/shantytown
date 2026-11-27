@@ -2161,6 +2161,38 @@ def push_stranded_work(rec: dict, base: str = "origin/main", git=_git) -> str:
     return f"pushed {branch} to origin so the committed work is not local-only"
 
 
+def clear_ignored_cargo_targets(dest: Path, git=_git) -> list[str]:
+    """Delete gitignored cargo target/ dirs in a worktree kept for its work.
+
+    aegis-g68w.32: ~30 of a 36 GB /srv/fleet loss was target/ dirs left in ended
+    eph-job worktrees that were kept because they held a dirty file, so their
+    rebuildable debris outlived the job. Only a directory git itself reports as
+    wholly ignored (never one holding a tracked or merely-untracked path), named
+    target, carrying cargo's CACHEDIR.TAG or sitting beside a Cargo.toml, and
+    resolving inside the worktree without a symlink is removed. Uncertain = keep."""
+    listed = git("-C", str(dest), "ls-files", "-z", "--others", "--ignored",
+                 "--exclude-standard", "--directory")
+    if listed.returncode != 0:
+        return []
+    root = dest.resolve()
+    cleared = []
+    for rel in listed.stdout.split("\0"):
+        rel = rel.rstrip("/")
+        if not rel or Path(rel).name != "target":
+            continue
+        path = dest / rel
+        if any(p.is_symlink() for p in [path, *path.parents] if p != dest and dest in p.parents):
+            continue
+        if not path.is_dir() or root not in path.resolve().parents:
+            continue
+        if not ((path / "CACHEDIR.TAG").is_file() or (path.parent / "Cargo.toml").is_file()):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            cleared.append(rel)
+    return cleared
+
+
 def remove_workspace(rec: dict, root, git=_git) -> str:
     """'removed', 'kept (holds work)' or 'none'. Never discards output."""
     ws = rec.get("workspace")
@@ -2185,7 +2217,9 @@ def remove_workspace(rec: dict, root, git=_git) -> str:
             or branch.stdout.strip() != f"wt/{rec['name']}"):
         return f"kept (worktree identity uncertain or branch changed): {dest}"
     if worktree_holds_work(dest, git=git):
-        return f"kept (holds work): {dest}"
+        cleared = clear_ignored_cargo_targets(dest, git=git)
+        note = f"; cleared {len(cleared)} ignored cargo target/" if cleared else ""
+        return f"kept (holds work): {dest}{note}"
     r = git("-C", shared, "worktree", "remove", "--force", str(dest))
     if r.returncode != 0:
         return f"kept (git worktree remove failed: {(r.stderr or '').strip()[:120]})"

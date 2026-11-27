@@ -2318,3 +2318,60 @@ def test_other_jobs_without_repo_are_not_held_to_the_task_rule(store, capsys, jo
     root, _panes, _launched = store
     _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude", "-n")
     assert "a task job needs --repo" not in capsys.readouterr().err
+
+
+def _cargo_target(tree, rel='target'):
+    target = tree / rel
+    (target / 'debug').mkdir(parents=True)
+    (target / 'CACHEDIR.TAG').write_text('Signature: 8a477f597d28d172789f06886806bc55\n')
+    (target / 'debug' / 'big.rlib').write_bytes(b'\0' * 4096)
+    return target
+
+
+def test_a_kept_worktree_loses_its_ignored_cargo_target_but_not_its_work(tmp_path):
+    # aegis-g68w.32 fix A: a worktree kept for a dirty file used to keep its
+    # rebuildable target/ too, ~30 GB of /srv/fleet across ended eph jobs.
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    _, tree = _job_tree(tmp_path, rec['name'], 'project')
+    (tree / '.gitignore').write_text('target/\n')
+    (tree / 'tracked.txt').write_text('output\n')          # the agent's work
+    (tree / 'notes.txt').write_text('untracked work\n')    # untracked, not ignored
+    top = _cargo_target(tree)
+    nested = _cargo_target(tree, 'wasm/explorer/target')   # nested crate, as observed
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    [entry] = done['worktree_teardowns']
+    assert entry['result'].startswith('kept (holds work)')
+    assert 'cleared 2 ignored cargo target/' in entry['result']
+    assert not top.exists() and not nested.exists()
+    assert (tree / 'tracked.txt').read_text() == 'output\n'
+    assert (tree / 'notes.txt').read_text() == 'untracked work\n'
+    assert (tree / '.gitignore').read_text() == 'target/\n'
+
+
+@pytest.mark.parametrize('case', ['not-ignored', 'tracked-inside', 'not-cargo', 'symlink'])
+def test_a_target_that_is_not_wholly_ignored_cargo_debris_is_kept(tmp_path, case):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    _, tree = _job_tree(tmp_path, rec['name'], 'project')
+    (tree / 'tracked.txt').write_text('output\n')
+    if case == 'not-ignored':
+        target = _cargo_target(tree)                       # untracked work, not debris
+    elif case == 'tracked-inside':
+        (tree / '.gitignore').write_text('target/\n')
+        target = _cargo_target(tree)
+        _git('add', '-f', 'target/CACHEDIR.TAG', cwd=tree)
+    elif case == 'not-cargo':
+        (tree / '.gitignore').write_text('target/\n')
+        target = tree / 'target'
+        target.mkdir()
+        (target / 'deploy.yaml').write_text('not rebuildable\n')
+    else:
+        (tree / '.gitignore').write_text('target\n')
+        outside = _cargo_target(tmp_path, 'elsewhere')
+        target = tree / 'target'
+        target.symlink_to(outside)
+    eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert target.exists() or target.is_symlink()
+    if case == 'symlink':
+        assert (tmp_path / 'elsewhere' / 'debug' / 'big.rlib').exists()
+    elif case != 'not-cargo':
+        assert (target / 'debug' / 'big.rlib').exists()

@@ -138,7 +138,13 @@ cases. Teardown deletes the card **before** it kills the pane, so a tend pass
 can never find a dead pane with a live card and respawn it. A worktree that
 holds commits or uncommitted changes is **kept**, and the result says so,
 because discarding an agent's output is the data-loss class `cleanup_worktree`
-exists to refuse.
+exists to refuse. A kept tree still loses its gitignored cargo `target/`
+directories (rebuildable debris, about 30 GB of fleet disk at one count): only a
+directory git reports as wholly ignored, named `target`, carrying cargo's
+`CACHEDIR.TAG` or sitting next to a `Cargo.toml`, and reached without a symlink is
+deleted. Tracked files and untracked files that are not ignored are never
+touched. When this happens the outcome reads `kept (holds work): … ; cleared N
+ignored cargo target/`.
 
 Worktrees provisioned later by `st repo worktree` or `st go --worktree` for an
 active job are recorded in its ledger before creation. Teardown checks these
