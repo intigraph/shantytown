@@ -4182,8 +4182,8 @@ def _spawn_result_route(a, panes):
     spawner's card, whether its pane is live, and a live wake into that pane.
     Each one fails toward the administrator or toward "not delivered", never
     toward a silent success."""
-    from .attribution import ST_TEND, attribute
-    from .tmux import PaneNotAgent
+    from .attribution import ST_JOB_RESULT, attribute
+    from .tmux import PaneNotAgent, PaneSubmissionUnverified
     try:
         reg = _registry(a)
     except Exception:  # noqa: BLE001 -- no registry: result_recipient says UNKNOWN
@@ -4199,14 +4199,15 @@ def _spawn_result_route(a, panes):
         return bool(card.pane) and panes.exists(card.pane)
 
     def wake(name, text):
+        # text is eph.wake_text: st's own headline, no agent summary, so st
+        # may sign it. Signing the summary would launder a PR-shaped string.
         card = card_of(name)
         if card is None or not is_up(card):
             return False
-        line = " ".join(text.split())
-        message = (f"Your ephemeral job finished: {line[:400]} "
-                   f"(full result on the item; it is also in your stop events)")
         try:
-            panes.send(card.pane, attribute(message, ST_TEND))
+            panes.send(card.pane, attribute(" ".join(text.split()), ST_JOB_RESULT))
+        except PaneSubmissionUnverified:
+            return None           # typed, submit unconfirmed: never resend
         except PaneNotAgent:
             # A shell, not an agent: typing would EXECUTE it (aegis-ikj4t).
             return False

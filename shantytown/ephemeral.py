@@ -2255,14 +2255,30 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
     return rec
 
 
-def report_text(rec: dict) -> str:
+def report_head(rec: dict) -> str:
+    """The result's headline, built from ledger fields st owns. It carries no
+    agent-authored text, which is what lets st sign it (wake_text)."""
     r = rec["result"]
     target = f" {rec['repo']}#{rec['pr']}" if rec.get("pr") else ""
     head = (f"[ephemeral {rec['job']}{target}] {rec['name']} ({rec['harness']}, "
             f"attempt {rec.get('attempt', 1)}): {r['verdict'].upper()}")
     if r["cause"] != "report":
         head += f" — ended by {r['cause']}"
-    return head + ("\n\n" + r["summary"] if r["summary"] else "")
+    return head
+
+
+def report_text(rec: dict) -> str:
+    r = rec["result"]
+    return report_head(rec) + ("\n\n" + r["summary"] if r["summary"] else "")
+
+
+def wake_text(rec: dict) -> str:
+    """The live wake typed into a spawner's pane: a pointer, never the summary.
+    The summary is the job agent's own words (for a review job, shaped by the
+    PR it read); the wake is signed by st, so it must hold only what st wrote.
+    The summary stays in the durable event and the item comment, unsigned."""
+    return (f"{report_head(rec)} for {rec['item']}. Read the result in your "
+            f"stop events or on the item comment.")
 
 
 #: Crew roles whose own job's result goes back to them, not to the
@@ -2315,7 +2331,9 @@ def notify(rec: dict, *, persist_event, comment, card_of=None, is_up=None,
 
     The event is durable and drains at the recipient's next stop; an IDLE
     recipient never stops again, so `wake(name, text)` also types a pointer
-    into its pane. That live wake is what ellie never got (aegis-0dh5)."""
+    into its pane. That live wake is what ellie never got (aegis-0dh5).
+    wake returns True (delivered), False (not typed) or None (typed, submit
+    unconfirmed); the text it is given is wake_text, never the summary."""
     problems = []
     text = report_text(rec)
     to, why = result_recipient(rec, card_of=card_of, is_up=is_up)
@@ -2328,11 +2346,21 @@ def notify(rec: dict, *, persist_event, comment, card_of=None, is_up=None,
         problems.append(f"result event for {to} NOT written ({type(exc).__name__})")
     if wake is not None and to != rec["administrator"]:
         try:
-            if not wake(to, detail):
+            woke = wake(to, wake_text(rec))
+        except Exception as exc:  # noqa: BLE001
+            woke = False
+            problems.append(f"live wake of spawner {to} NOT delivered ({type(exc).__name__})")
+        else:
+            if woke is None:
+                # The keys went in but the submit was not confirmed: the text
+                # may well be in the pane, so "NOT delivered" would be a lie,
+                # and a resend could type it twice.
+                problems.append(f"live wake of spawner {to} UNVERIFIED (typed, "
+                                "submit not confirmed; not resent); the durable "
+                                "event is pending")
+            elif not woke:
                 problems.append(f"live wake of spawner {to} NOT delivered; "
                                 "the durable event is pending")
-        except Exception as exc:  # noqa: BLE001
-            problems.append(f"live wake of spawner {to} NOT delivered ({type(exc).__name__})")
     try:
         comment(rec["item"], text)
     except Exception as exc:  # noqa: BLE001
@@ -2555,12 +2583,36 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
     return rec
 
 
+def claim_wake(root, name: str, now: float) -> bool:
+    """True exactly once per job. The result event is keyed, so a second
+    ending (a report racing a reap) writes nothing new, but a pane is not a
+    keyed store: without this claim the same wake is typed into the spawner's
+    prompt again. Claimed before the send, so a crash mid-send never doubles."""
+    with lock(root):
+        rec = read(root, name)
+        if rec is None or rec.get("woken_at") is not None:
+            return False
+        rec["woken_at"] = now
+        write(root, rec)
+    return True
+
+
+def _wake_once(root, name: str, wake):
+    def once(to, text):
+        if not claim_wake(root, name, time.time()):
+            return True           # already woken by the first ending; not a fault
+        return wake(to, text)
+    return once
+
+
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
            persist_event, comment, schedule_teardown, now: float,
            card_of=None, is_up=None, wake=None) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
     # The run ends on the RECORDED result: a second ending keeps the first story.
     run_end(root, name, rec["result"]["verdict"])
+    if wake is not None:
+        wake = _wake_once(root, name, wake)
     problems = notify(rec, persist_event=persist_event, comment=comment,
                       card_of=card_of, is_up=is_up, wake=wake)
     schedule_teardown(name)
