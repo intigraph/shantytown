@@ -2032,9 +2032,13 @@ now records them itself:
   "operator-verbatim"`, written through the same governed `/knot` path the
   registry uses, so a SHACL refusal is a failure, not a success.
 - The local spool (`<root>/operator-messages/`) is written first. Its key is
-  `om-<UTC>-<sha256 prefix>`: receive timestamp plus content hash. The same text
-  to the same recipient over the same channel within 10 minutes of a spooled
-  copy is a redelivery and writes nothing. The hook and `st inbox` never wait on
+  `om-<UTC>-<sha256 prefix>`: receive timestamp plus content hash. The same
+  `st inbox` text to the same recipient within 10 minutes of a spooled copy is
+  a redelivery and writes nothing. A pane prompt is never deduped: the hook
+  fires once per prompt, so typing "go" twice is two records (identical prompts
+  in one second take a `-2`, `-3` key suffix). A hook with `SHANTY_AGENT` unset
+  still spools, with no `a:recipient`; a corrupt spool file is skipped and
+  reported UNKNOWN, never deleted. The hook and `st inbox` never wait on
   Quipu: they spool and hand the write to a detached flush. A failed write leaves
   the statement owed and the text on disk; `st work directive flush` retries
   idempotently.
@@ -2046,7 +2050,11 @@ now records them itself:
 - Not every message is a directive. `st work directive mark <key>` confirms one (it
   adds `a:Directive`). `st work directive track <key> <seed>` or
   `st task "..." --directive <key|IRI>` confirms it and writes
-  `a:trackedBy a:<seed>`.
+  `a:trackedBy a:<seed>`. `--directive` takes only an st-captured `om-...` key
+  (or an IRI ending in one) and is refused before the seed is created
+  otherwise; a Directive minted by hand in Quipu has no spool record and gets
+  its `trackedBy` through the governed write path directly. A link that is
+  refused after creation exits REFUSED, one still owed to Quipu CANNOT_TELL.
 - The administrator's `st anchor` lists messages to review, directives with no
   seed after `SHANTY_DIRECTIVE_TRACK_MINUTES`, and spooled writes still owed.
   `st work directive` (`list`) prints all of it.

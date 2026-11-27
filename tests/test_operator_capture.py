@@ -24,9 +24,9 @@ class Writer:
         self.calls.append((record.key, statement))
 
 
-def capture(root, writer, text=TEXT, at=AT):
+def capture(root, writer, text=TEXT, at=AT, channel="inbox"):
     return oc.capture(root, text, recipient="sattler", session="sess-1",
-                      channel="pane-prompt", received_at=at, writer=writer)
+                      channel=channel, received_at=at, writer=writer)
 
 
 def test_one_message_one_node_verbatim_with_real_utc(tmp_path):
@@ -35,7 +35,7 @@ def test_one_message_one_node_verbatim_with_real_utc(tmp_path):
     assert w.calls == [(record.key, "message")]
     assert record.text == TEXT
     assert record.received_at == "2026-11-27T04:45:12Z"
-    assert (record.recipient, record.session, record.channel) == ("sattler", "sess-1", "pane-prompt")
+    assert (record.recipient, record.session, record.channel) == ("sattler", "sess-1", "inbox")
     assert not record.directive and record.owed() == []
     ttl = oc.turtle(ONTO, record, "message")
     assert "a:OperatorMessage" in ttl and "a:Directive" not in ttl
@@ -75,11 +75,46 @@ def test_same_text_to_another_recipient_is_a_new_message(tmp_path):
     w = Writer()
     capture(tmp_path, w)
     oc.capture(tmp_path, TEXT, recipient="ellie", session="sess-1",
-               channel="pane-prompt", received_at=AT + timedelta(seconds=5), writer=w)
+               channel="inbox", received_at=AT + timedelta(seconds=5), writer=w)
     assert sorted(r.recipient for r in oc.records(tmp_path)) == ["ellie", "sattler"]
 
 
-@pytest.mark.parametrize("name", ["aegis-x1.", "x.", "-x", "X1", ""])
+@pytest.mark.parametrize("later", [timedelta(0), timedelta(seconds=0.4), timedelta(seconds=3)])
+def test_a_repeated_pane_prompt_is_two_records(tmp_path, later):
+    """A prompt hook is never redelivered: "go" typed twice was typed twice."""
+    w, env = Writer(), {"SHANTY_AGENT": "sattler"}
+    for when in (AT, AT + later):
+        assert oc.hook(tmp_path, json.dumps({"prompt": "go", "session_id": "s1"}),
+                       env=env, now=when, writer=w) is not None
+    found = oc.records(tmp_path)
+    assert [r.text for r in found] == ["go", "go"]
+    assert len({r.key for r in found}) == 2 and len(w.calls) == 2
+
+
+def test_hook_without_an_agent_identity_still_spools(tmp_path, capsys):
+    record = oc.hook(tmp_path, json.dumps({"prompt": TEXT}), env={}, now=AT, writer=Writer())
+    assert record.text == TEXT and record.recipient == ""
+    assert "a:recipient" not in oc.turtle(ONTO, record, "message")
+    assert "UNKNOWN" in capsys.readouterr().err
+
+
+def test_a_corrupt_spool_record_is_skipped_and_reported_unknown(tmp_path, monkeypatch, capsys):
+    from shantytown.cli import CANNOT_TELL
+    good = capture(tmp_path, Writer())
+    bad = oc.spool_dir(tmp_path) / "om-20261127T000000Z-0000000000000000.json"
+    bad.write_text("{not json")
+    (oc.spool_dir(tmp_path) / "om-20261127T000001Z-0000000000000001.json").write_text('{"x": 1}')
+    seen = []
+    assert [r.key for r in oc.records(tmp_path, seen)] == [good.key] and len(seen) == 2
+    assert any("UNKNOWN (2)" in line for line in oc.notices(tmp_path, now=AT))
+    monkeypatch.setattr(oc, "_default_writer", lambda root: Writer())
+    assert _directive(tmp_path, "list") == 0
+    assert "UNKNOWN" in capsys.readouterr().out
+    assert _directive(tmp_path, "flush") == CANNOT_TELL     # cannot vouch for the corrupt one
+    assert bad.exists()                                      # never deleted
+
+
+@pytest.mark.parametrize("name", ["aegis-x1.", "x.", "-x", "X1"])
 def test_a_name_that_would_break_turtle_is_refused(tmp_path, name):
     record = capture(tmp_path, Writer())
     with pytest.raises(oc.CaptureRefused):
@@ -164,9 +199,10 @@ def test_hook_captures_operator_and_skips_st_deliveries(tmp_path):
     assert len(oc.records(tmp_path)) == 1
 
 
-def test_refuses_without_a_recipient_identity(tmp_path):
+def test_an_invalid_recipient_name_is_refused(tmp_path):
     with pytest.raises(oc.CaptureRefused):
-        oc.capture(tmp_path, TEXT, recipient="", session="", channel="inbox", received_at=AT)
+        oc.capture(tmp_path, TEXT, recipient="Not A Name", session="", channel="inbox",
+                   received_at=AT)
 
 
 def test_hook_is_administrator_only():
@@ -186,9 +222,6 @@ def test_hook_spools_and_hands_the_write_to_a_detached_flush(tmp_path, monkeypat
                   now=AT, spawn=lambda root, key: spawned.append(key))
     assert spawned == [got.key] and inline.calls == []
     assert oc.load(tmp_path, got.key).owed() == ["message"]
-    assert oc.hook(tmp_path, json.dumps({"prompt": TEXT}), env={"SHANTY_AGENT": "sattler"},
-                   now=AT + timedelta(minutes=1), spawn=lambda r, k: spawned.append(k)) is None
-    assert spawned == [got.key]
 
 
 def test_detached_flush_entry_point_delivers_one_record(tmp_path, monkeypatch):
@@ -289,3 +322,30 @@ def test_st_task_directive_links_the_new_seed(tmp_path, monkeypatch, capsys):
     assert linked.directive and len(linked.tracked_by) == 1, (rc, out)
     seed = linked.tracked_by[0]
     assert seed in out.out and w.calls[-1] == (record.key, f"tracked:{seed}")
+
+
+def test_st_task_directive_refuses_an_unlinkable_ref_before_creating(tmp_path, monkeypatch, capsys):
+    from shantytown import cli
+    created = []
+    monkeypatch.setattr(cli, "_tracker", lambda a: created.append(1) or (_ for _ in ()).throw(AssertionError))
+    rc = cli.main(["--root", str(tmp_path), "task", "x",
+                   "--directive", "http://aegis.gastown.local/ontology/stiwi-directive-hand-minted"])
+    assert rc == cli.REFUSED and not created
+    assert "not an operator message key" in capsys.readouterr().err
+
+
+def test_st_task_directive_link_refused_after_create_exits_refused(tmp_path, monkeypatch):
+    from shantytown import cli
+    record = capture(tmp_path, Writer())
+    monkeypatch.setattr(oc, "track", lambda *a, **k: (_ for _ in ()).throw(oc.CaptureRefused("no")))
+    rc = cli.main(["--root", str(tmp_path), "task", "x", "--directive", record.key])
+    assert rc == cli.REFUSED
+
+
+def test_st_task_directive_link_still_owed_exits_cannot_tell(tmp_path, monkeypatch):
+    from shantytown import cli
+    record = capture(tmp_path, Writer())
+    monkeypatch.setattr(oc, "_default_writer", lambda root: Writer(fail=99))
+    rc = cli.main(["--root", str(tmp_path), "task", "x", "--directive", record.key])
+    assert rc == cli.CANNOT_TELL
+    assert oc.load(tmp_path, record.key).tracked_by

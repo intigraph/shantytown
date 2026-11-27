@@ -2176,7 +2176,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
     tk.add_argument("--directive", metavar="KEY|IRI",
                     help="a captured operator message this seed tracks: writes "
-                         "Directive trackedBy <seed> (st work directive)")
+                         "Directive trackedBy <seed> (st work directive). Only "
+                         "st-captured om-... keys (or IRIs ending in one) link; "
+                         "a hand-minted Quipu Directive is refused")
     tk.add_argument("-n", "--dry-run", action="store_true")
 
     dv = leaf("directive", help="operator messages st captured verbatim: "
@@ -8487,6 +8489,11 @@ def _cmd_task(a) -> int:
             queue_plan = intake(_tracker(a).queue_rows())
         elif getattr(a, "queue_override", None) is not None:
             raise ValueError("--queue-override applies only when the queue policy is enforce")
+        if getattr(a, "directive", None):
+            # Refuse an unlinkable --directive before anything is created: a
+            # seed minted for a link that then fails is the half-done state.
+            from . import operator_capture
+            operator_capture.resolve(a.root, a.directive)
     except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED
@@ -8575,6 +8582,9 @@ def _cmd_task(a) -> int:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
     print(f"  {item.id}    {item.title}")
+    # The link's outcome reaches the exit code: it used to print "link refused"
+    # and still return OK, so no check could see it (review of #764).
+    directive_rc = OK
     if getattr(a, "directive", None):
         # aegis-za4f.20: naming the seed for a directive IS the link; st writes
         # it so the trackedBy edge never waits on someone remembering.
@@ -8584,8 +8594,11 @@ def _cmd_task(a) -> int:
             owed = record.owed()
             print(f"  {record.key} trackedBy {item.id}"
                   + (f" (spooled; Quipu write pending: {', '.join(owed)})" if owed else ""))
+            if owed:
+                directive_rc = CANNOT_TELL
         except operator_capture.CaptureRefused as error:
             print(f"  {item.id} CREATED; directive link refused: {error}", file=sys.stderr)
+            directive_rc = REFUSED
     if refused:
         print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
         return REFUSED
@@ -8613,7 +8626,7 @@ def _cmd_task(a) -> int:
                   "Read back before retrying.", file=sys.stderr)
             return CANNOT_TELL
         print(f"  {item.id} assigned to {a.assignee} by recorded queue override")
-    return OK
+    return directive_rc
 
 
 def _lead_status(registry, panes):

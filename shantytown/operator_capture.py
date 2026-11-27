@@ -17,11 +17,15 @@ a seed to it (`st work directive track`, `st task --directive`), which also writ
 
 The LOCAL SPOOL is written before any network call, so a Quipu failure never
 loses the text. Its file name is the record key (receive timestamp + content
-hash). A REDELIVERY is the same text to the same recipient over the same channel
-within REDELIVERY_WINDOW of an already-spooled copy: it writes nothing. The
-window exists because keying on the capture instant alone deduped only within
-one second, and a retried hook or a resent inbox line arrives with a later clock
-(review of #764). Every Quipu statement is derived from the spooled record and
+hash). A REDELIVERY is the same inbox text to the same recipient within
+REDELIVERY_WINDOW of an already-spooled copy: it writes nothing. The window
+exists because keying on the capture instant alone deduped only within one
+second, and a resent inbox line arrives with a later clock (review of #764).
+The window applies to the inbox channel ONLY: a UserPromptSubmit hook fires
+once per prompt and is never redelivered, so an operator who types "go" twice
+typed it twice, and folding the second into the first would drop text (second
+review of #764). Two identical prompts in one second get a "-2", "-3" key
+suffix rather than colliding. Every Quipu statement is derived from the spooled record and
 is idempotent (same subject IRI, same triples), so `st work directive flush` can
 retry a failed write as often as it likes.
 
@@ -56,7 +60,8 @@ SOURCE_KIND = "operator-verbatim"         # existing vocabulary on operator dire
 # early ("a:x. .") and the write would stay owed forever, so a name must end on
 # a letter, digit or underscore.
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9_])?\Z")
-_KEY = re.compile(r"om-\d{8}T\d{6}Z-[0-9a-f]{16}\Z")
+_KEY = re.compile(r"om-\d{8}T\d{6}Z-[0-9a-f]{16}(?:-[1-9][0-9]{0,2})?\Z")
+REDELIVERED_CHANNELS = frozenset({"inbox"})
 # st's own pane deliveries carry the attribution marker (attribution.attribute):
 # "[from sattler] ...", "[from st startup] ...". Those are crew traffic, not the
 # operator typing, and capturing them would bury the operator's words.
@@ -147,15 +152,27 @@ def load(root, key: str) -> Record:
     return Record(**data)
 
 
-def records(root) -> list[Record]:
+def records(root, unreadable: list | None = None) -> list[Record]:
+    """Every readable spooled record. One corrupt file used to raise out of
+    here and take down `list`, the anchor notice and every flush with it, so a
+    record that will not parse is skipped and its file name appended to
+    `unreadable` for the caller to report as UNKNOWN (never deleted)."""
     out = []
     for path in sorted(spool_dir(root).glob("om-*.json")):
-        out.append(Record(**json.loads(path.read_text(encoding="utf-8"))))
+        try:
+            out.append(Record(**json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError, TypeError):
+            if unreadable is not None:
+                unreadable.append(path.name)
     return out
 
 
 def resolve(root, ref: str) -> str:
-    """A key, or a Directive IRI / a:-name ending in one (what --directive accepts)."""
+    """A spool key, or an IRI / a:-name whose last segment is one.
+
+    Only messages st captured are linkable: a Directive minted by hand in Quipu
+    (e.g. a:stiwi-directive-...) has no spool record, so it is refused here and
+    gets its trackedBy through the governed write path directly."""
     tail = ref.strip().rstrip("/").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
     tail = tail.split(":", 1)[-1] if tail.startswith("a:") else tail
     _path(root, tail)
@@ -176,8 +193,8 @@ def turtle(onto: str, record: Record, statement: str) -> str:
                 f"  rdfs:comment {_literal(record.text)} ;\n"
                 f"  a:sourceKind {_literal(SOURCE_KIND)} ;\n"
                 f"  a:receivedAt {_literal(record.received_at)}^^xsd:dateTime ;\n"
-                f"  a:recipient a:{record.recipient} ;\n"
-                f"  a:sessionId {_literal(record.session)} ;\n"
+                + (f"  a:recipient a:{record.recipient} ;\n" if record.recipient else "")
+                + f"  a:sessionId {_literal(record.session)} ;\n"
                 f"  a:sourceChannel {_literal(record.channel)} .\n")
     elif statement == "directive":
         body = f"{s} a a:Directive .\n"
@@ -203,9 +220,10 @@ def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]
     deletes a record. Error text is reduced to the exception class, because a
     remote error can carry an authority URL.
     """
-    keys = [key] if key else [r.key for r in records(root)]
+    unreadable: list[str] = []
+    keys = [key] if key else [r.key for r in records(root, unreadable)]
     write = writer
-    done, failed = 0, []
+    done, failed = 0, [f"{name}: unreadable spool record (UNKNOWN)" for name in unreadable]
     for k in keys:
         record = load(root, k)
         for statement in record.owed():
@@ -229,6 +247,8 @@ def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]
 
 
 def _redelivered(root, text: str, recipient: str, channel: str, when: datetime) -> bool:
+    if channel not in REDELIVERED_CHANNELS:
+        return False
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     for path in spool_dir(root).glob(f"om-*-{digest}.json"):
         stamp = datetime.strptime(path.name[3:19], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
@@ -261,21 +281,32 @@ def capture(root, text: str, *, recipient: str, session: str, channel: str,
     """
     if not isinstance(text, str) or not text.strip():
         raise CaptureRefused("empty operator message")
-    if not _NAME.fullmatch(recipient or ""):
+    # An unknown recipient is spooled with recipient "" (no a:recipient triple)
+    # rather than refused: refusing lost the text silently when a hook ran
+    # without SHANTY_AGENT (review of #764). A name that IS given must be one.
+    if recipient and not _NAME.fullmatch(recipient):
         raise CaptureRefused(f"recipient is not an agent name: {recipient!r}")
     when = _utc(received_at or datetime.now(timezone.utc))
-    record = Record(key=key_for(text, when), text=text,
-                    received_at=f"{when:%Y-%m-%dT%H:%M:%SZ}", recipient=recipient,
+    base = key_for(text, when)
+    record = Record(key=base, text=text,
+                    received_at=f"{when:%Y-%m-%dT%H:%M:%SZ}", recipient=recipient or "",
                     session=str(session or ""), channel=channel)
-    data = json.dumps(record.__dict__, ensure_ascii=False, indent=1).encode("utf-8")
+    redelivers = channel in REDELIVERED_CHANNELS
     with _locked(root):
         if _redelivered(root, text, record.recipient, channel, when):
             return None
-        try:
-            # O_EXCL backs the lock: the first delivery creates the file.
-            fd = os.open(_path(root, record.key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        except FileExistsError:
-            return None
+        for n in range(1, 1000 if not redelivers else 2):
+            record.key = base if n == 1 else f"{base}-{n}"
+            try:
+                # O_EXCL backs the lock: the first delivery creates the file.
+                fd = os.open(_path(root, record.key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except FileExistsError:
+                if redelivers:
+                    return None
+        else:
+            raise CaptureRefused(f"999 identical prompts in one second at {base}")
+        data = json.dumps(record.__dict__, ensure_ascii=False, indent=1).encode("utf-8")
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
@@ -319,8 +350,9 @@ def track_minutes(root) -> int:
 
 def notices(root, *, now: datetime | None = None) -> list[str]:
     """The administrator's notice lines; [] when there is nothing to say."""
+    unreadable: list[str] = []
     try:
-        found = records(root)
+        found = records(root, unreadable)
     except FileNotFoundError:
         return []
     except Exception:
@@ -342,6 +374,9 @@ def notices(root, *, now: datetime | None = None) -> list[str]:
         lines += [f"  OPERATOR MESSAGES TO REVIEW ({len(unreviewed)}): "
                   "`st work directive mark <key>` if it gives an instruction.",
                   "    " + ", ".join(unreviewed[:8]) + (f" (+{len(unreviewed) - 8} more)" if len(unreviewed) > 8 else "")]
+    if unreadable:
+        lines += [f"  OPERATOR MESSAGES UNKNOWN ({len(unreadable)}): spool record(s) unreadable, "
+                  "kept on disk: " + ", ".join(unreadable[:8])]
     owed = [r.key for r in found if r.owed()]
     if owed:
         lines += [f"  OPERATOR CAPTURE SPOOLED ({len(owed)}): Quipu write pending. "
@@ -361,6 +396,9 @@ def hook(root, stdin_text: str, *, env=None, now=None, writer=None,
     text = payload.get("prompt") if isinstance(payload, dict) else None
     if not isinstance(text, str) or not text.strip() or _ATTRIBUTED.match(text):
         return None
+    if not env.get("SHANTY_AGENT"):
+        print("operator_capture: SHANTY_AGENT unset; spooled with recipient UNKNOWN",
+              file=sys.stderr)
     record = capture(root, text, recipient=env.get("SHANTY_AGENT", ""),
                      session=payload.get("session_id") or env.get("CLAUDE_SESSION_ID", ""),
                      channel="pane-prompt", received_at=now, writer=writer,
