@@ -181,7 +181,8 @@ import re
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
-from .query_identity import declared_query_identity, declared_command
+from .query_identity import (declared_query_identity, declared_command,
+                             background_invocation, background_reads)
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -2974,6 +2975,9 @@ def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
     # a.cmd/a.group come from argparse choices, so they are registered verbs.
     with declared_command(a.cmd, getattr(a, "group", None), registered=True):
+        if background_invocation(a):
+            with background_reads():
+                return _main(a, argv)
         return _main(a, argv)
 
 
