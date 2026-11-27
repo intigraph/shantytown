@@ -1094,6 +1094,30 @@ def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
         eph.write(root, rec)
 
 
+def _record_job_mcp(card: Agent, root, ws: Path, rendered: str) -> None:
+    """Record the sha256 of the .mcp.json just published into an ephemeral
+    job's workspace, so the trust guard admits exactly st's own bytes.
+
+    The guard used to admit any .mcp.json whose server NAMES were the kit's,
+    so a planted file reusing a kit name with its own command would have been
+    trusted (aegis-8et). No record, or a record for another workspace, records
+    nothing: the guard then refuses the file, failing closed."""
+    from . import ephemeral as eph
+    if not eph.is_ephemeral_name(card.name):
+        return
+    import hashlib
+    with eph.lock(root):
+        rec = eph.read(root, card.name)
+        if (not rec or not rec.get("workspace")
+                or Path(rec["workspace"]).resolve() != ws.resolve()):
+            return
+        target = ws / ".mcp.json"
+        if target.is_symlink() or target.read_bytes() != rendered.encode("utf-8"):
+            return
+        rec["kit_mcp_sha256"] = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+        eph.write(root, rec)
+
+
 def _provision_capture_without_kit(card: Agent, root, ws: Path, settings_path) -> None:
     if card.harness == "codex":
         return  # Codex's config was refreshed above; it does not read this file.
@@ -1374,6 +1398,7 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
             temporary.replace(target)
         finally:
             temporary.unlink(missing_ok=True)
+    _record_job_mcp(card, root, ws, rendered)
     _project_codex_mcp(card, root, rendered, template)
     if card.harness == "agy":
         from .agy import project_mcp
