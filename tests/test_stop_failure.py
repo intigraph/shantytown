@@ -399,3 +399,56 @@ def test_route_recipient_falls_back_loudly_when_the_lead_card_is_missing(tmp_pat
     to, rose, note = stop_failure.route_recipient(registry, "w", lambda n: True)
     assert (to, rose) == ("admin", True) and "UNKNOWN" in note
     assert "fell back to administrator" in capsys.readouterr().err
+
+
+# Review of #762: a routing read that raises something outside the lookup
+# family (Quipu down for an off-host lead, a tmux error in the liveness probe)
+# escaped to main's outer except BEFORE capture(), so the safeguard-blocked hold
+# was never written and nobody was told. Both must fall back to the
+# administrator with the hold intact.
+def _main_with_broken_route(tmp_path, monkeypatch, capsys, break_at):
+    import io
+    from shantytown import routing_identity, stop_event
+    setup_root(tmp_path)
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    registry.set(Agent(name="fixture-lead", role="lead", pane="lead-pane", reports_to="admin"))
+    registry.set(Agent(name=CARD.name, role="worker", pane=CARD.pane, reports_to="fixture-lead"))
+    box = FilesInbox(tmp_path / "inbox")
+    def boom(*a, **kw):
+        raise RuntimeError("fixture backend down")
+    def lead_is_up(reg, panes):
+        return boom if break_at == "probe" else (lambda name: True)
+    if break_at == "remote-lead":
+        monkeypatch.setattr(routing_identity, "with_remote_lead", boom)
+    monkeypatch.setenv("SHANTY_AGENT", CARD.name)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setattr(stop_failure.sys, "stdin", io.StringIO(json.dumps(
+        {**PAYLOAD, "hook_event_name": "StopFailure"})))
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: box)
+    monkeypatch.setattr(stop_event, "_lead_is_up", lead_is_up)
+    monkeypatch.setattr(stop_event, "_plate_of", lambda root, name: ("fixture-item", "in_progress", []))
+    assert stop_failure.main(["--root", str(tmp_path)]) == 0
+    return box, FilesEvents(tmp_path / "events"), capsys.readouterr().err
+
+
+@pytest.mark.parametrize("break_at", ["probe", "remote-lead"])
+def test_route_error_keeps_the_hold_and_tells_the_administrator(tmp_path, monkeypatch, capsys, break_at):
+    box, events, err = _main_with_broken_route(tmp_path, monkeypatch, capsys, break_at)
+    assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
+    assert len(box.unread("admin")) == 1 and box.unread("fixture-lead") == []
+    [event] = events.pending("admin")
+    assert event.rose and "RuntimeError" in event.detail
+    assert "fell back to administrator" in err
+    assert "stop-failure UNKNOWN" not in err  # not swallowed by main's outer except
+
+
+def test_route_recipient_falls_back_when_the_liveness_probe_raises(tmp_path, capsys):
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    registry.set(Agent(name="fixture-lead", role="lead", reports_to="admin"))
+    registry.set(Agent(name="w", role="worker", reports_to="fixture-lead"))
+    def probe(name):
+        raise OSError("fixture tmux socket gone")
+    to, rose, note = stop_failure.route_recipient(registry, "w", probe)
+    assert (to, rose) == ("admin", True) and "OSError" in note

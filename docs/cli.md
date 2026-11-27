@@ -3771,7 +3771,9 @@ The recipient is chosen exactly as an ordinary stop's is (`route_stop`, with the
 same live-lead check): the card's lead. The administrator receives it only when
 the agent has no lead, when the lead is down or unreachable (the event rises and
 is marked ROSE), or when the route cannot be read (a loud fallback, so a routing
-read never loses the notice). The scheduled `tend` safeguard reconciliation,
+read never loses the notice). That fallback covers every routing step, including the off-host lead read
+from Quipu and the liveness probe: any error there still records the hold and
+notifies the administrator. The scheduled `tend` safeguard reconciliation,
 which only resumes a notification the hook never attempted, still reports to the
 administrator.
 The hold also prevents ordinary input and automatic cycles when the pane has no
