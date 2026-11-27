@@ -145,8 +145,8 @@ lists every command and its exit codes.
   respect busy sessions.
 - **Software delivery:** connect planning, implementation and review to your
   repository's CI and delivery rules.
-- **Scheduled and event work:** declare cron, interval or event jobs and
-  arrange regular `st fleet tend` passes with your host scheduler.
+- **Scheduled and event work:** declare a scheduled job in Quipu with
+  `st work jobs new` (Chaski fires it); cron and interval job files are refused.
 - **Governor:** inspect account/window quota observations, live caps and
   session ceilings. Eligible handoffs retain their guards, and a gaming-session pause prevents
   new local work from starting.
@@ -172,8 +172,8 @@ can supply external event-driven work. These integrations are optional and need
 
 - Use Linux or macOS with `tmux`, Python 3.11+ and an authenticated agent CLI.
 - Choose the tracker and registry that fit your project; Quipu is an optional backend.
-- Configure the host scheduler to call `st fleet tend` for recurring work.
-  Jobs run on a pass, within its cadence, rather than at an exact second.
+- Configure the host scheduler to call `st fleet tend` regularly. Scheduled
+  jobs are Quipu declarations fired by Chaski, not cron entries or tend timers.
 - Review credentials, account limits and approval mode before unattended work.
 
 ## What's next

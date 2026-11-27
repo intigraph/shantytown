@@ -25,10 +25,10 @@ store. You choose which information can be shared with its tools.
 ## Work by hand, on a schedule or after an event
 
 Dispatch directly with `st go`, or declare a [scheduled or event job](jobs.md).
-Jobs can use cron expressions, intervals or event sources. A host scheduler
-must call `st fleet tend` regularly: Shantytown evaluates due work during each
-pass and records its result. The scheduler cadence bounds when a job fires;
-it is not a real-time clock.
+A scheduled job is declared in Quipu with one command, `st work jobs new`,
+and Chaski fires it; Shantytown does not run cron jobs, and a job file with a
+`cron` or `every` trigger is refused. Event and manual file jobs are deprecated
+and still run on `st fleet tend` passes during a migration window.
 
 [Workflows and events](workflows.md) describe the optional Quipu event path.
 External Chaski reactions and signed Shuttle workflows can feed the same

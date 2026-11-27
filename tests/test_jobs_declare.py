@@ -69,6 +69,45 @@ def test_weekly_declaration_is_the_shape_the_reader_admits():
     assert _weekly(message="other").job.revision != job.revision
 
 
+def _turtle_literal_value(turtle, predicate):
+    """Decode one STRING_LITERAL_QUOTE by the Turtle grammar, which forbids
+    UCHAR escapes of surrogate code points (json's emoji spelling)."""
+    import re
+    m = re.search(r"<" + re.escape(predicate) + r'> "((?:[^"\\]|\\.)*)"', turtle)
+    assert m, predicate
+    ech = {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f", '"': '"', "'": "'", "\\": "\\"}
+
+    def one(e):
+        body = e.group(0)[1:]
+        if body[0] in "uU":
+            cp = int(body[1:], 16)
+            assert not 0xD800 <= cp <= 0xDFFF, f"Turtle forbids surrogate escape {e.group(0)}"
+            return chr(cp)
+        return ech[body]
+    return re.sub(r"\\(?:u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)", one, m.group(1))
+
+
+@pytest.mark.parametrize("message", ["podcast \U0001F600 for caf\u00e9", 'tab\tquote" back\\slash'])
+def test_a_message_outside_ascii_is_a_legal_turtle_literal_that_decodes_to_itself(message):
+    turtle = _weekly(message=message).turtle
+    assert turtle.isascii()
+    assert _turtle_literal_value(turtle, q.SCHEMA + "description") == message
+
+
+def test_the_turtle_check_rejects_the_old_surrogate_pair_spelling():
+    # The check above must be able to fail: json's ensure_ascii spelling of an
+    # emoji is exactly what broke the write.
+    spelled = json.dumps("\U0001F600")      # "\ud83d\ude00"
+    old = f'<{q.SCHEMA}description> {spelled} .\n'
+    with pytest.raises(AssertionError, match="surrogate"):
+        _turtle_literal_value(old, q.SCHEMA + "description")
+
+
+def test_a_message_holding_a_lone_surrogate_is_refused_before_anything_is_written():
+    with pytest.raises(q.JobRefused, match="surrogate"):
+        _weekly(message="bad \udcff bytes")
+
+
 def test_interval_declaration_uses_an_exact_duration():
     decl = q.declare_rows("tick", host="mac", owner="o", zone="UTC", inbox="lex",
                           message="x", every_s=6 * 3600 + 30)

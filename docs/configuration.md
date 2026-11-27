@@ -37,6 +37,33 @@ to opt into carrier records. This field defaults to `false`, accepts only a TOML
 boolean, and has no environment override. The producer must read this root's
 configuration; schema support alone does not activate a producer.
 
+**`[jobs]` — where job declarations live.** File job config is deprecated
+(directive crew/scheduled-jobs); see [scheduled jobs](jobs.md).
+
+```toml
+[jobs]
+graph = "urn:example:scheduled-jobs"  # Quipu graph of job declarations; "" (default) = none
+timed_files = "refuse"                # "refuse" (default) or "migrate"
+scheduler = "local"                   # "local" (default) or "chaski"
+```
+
+- `graph` must be an absolute IRI. Once it is set, `st work jobs list` and
+  `check` read only that graph, with no TOML fallback, and `st work jobs new`
+  writes there. The tend pass also stops running **every** file job, including
+  event (`on`), `when` and `manual` ones, and names the ignored files each pass.
+  **Do not set `graph` on a host whose event or manual file jobs are still
+  live** until the Chaski consumer that fires graph jobs exists (aegis-6vf.11):
+  those jobs stop firing on the next pass and nothing replaces them.
+- `timed_files` governs `cron`/`every` job files. `"refuse"` refuses them (the
+  refusal names `st work jobs new`). `"migrate"` keeps a host's existing timed
+  files firing, with a warning on every pass and every `st work jobs` read, so a
+  host measured to have live ones does not lose them silently on deploy. Remove
+  the setting once the host's timed files have been moved and deleted.
+- `scheduler = "chaski"` skips tend's local job evaluator entirely; see
+  [delegating a host's scheduler to Chaski](jobs.md#delegate-a-hosts-scheduler-to-chaski).
+
+An unknown `[jobs]` key, or any other value for these three, is refused.
+
 Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
 `[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
 `[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.

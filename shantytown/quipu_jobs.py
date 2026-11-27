@@ -328,6 +328,10 @@ def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
         raise JobRefused(f"inbox agent {inbox!r} is not an agent name")
     if not isinstance(message, str) or not message.strip():
         raise JobRefused("an inbox job needs a nonempty --message")
+    if any(0xD800 <= ord(c) <= 0xDFFF for c in message):
+        # A lone surrogate (undecodable argv bytes) has no Turtle spelling, so
+        # it would only surface as an unknown-outcome write error.
+        raise JobRefused("--message holds an undecodable character (a lone surrogate)")
     if not isinstance(owner, str) or not owner.strip():
         raise JobRefused("a job needs an owner (--owner)")
     if (weekly is None) == (every_s is None):
@@ -384,9 +388,22 @@ def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
         if iri:
             return f"<{o}>"
         lexical = ("true" if o else "false") if isinstance(o, bool) else o
-        return json.dumps(lexical, ensure_ascii=True) + ("" if dt == X + "string" else f"^^<{dt}>")
+        return _turtle_string(lexical) + ("" if dt == X + "string" else f"^^<{dt}>")
     turtle = "".join(f"<{s}> <{p}> {term(o, iri, dt)} .\n" for s, p, o, iri, dt in triples)
     return Declaration(decoded, turtle, body)
+
+
+def _turtle_string(lexical: str) -> str:
+    """A Turtle STRING_LITERAL_QUOTE spelling of ``lexical``, ASCII-only.
+
+    json.dumps(ensure_ascii=True) wrote an emoji as a surrogate pair
+    (\\ud83d\\ude00); Turtle UCHAR forbids surrogate code points, so a weekly
+    job whose message held one failed its write with an unknown outcome. Each
+    non-ASCII character is spelled as one \\u or \\U escape of its own code point.
+    """
+    return "".join(c if ord(c) < 0x80 else
+                   (f"\\u{ord(c):04X}" if ord(c) <= 0xFFFF else f"\\U{ord(c):08X}")
+                   for c in json.dumps(lexical, ensure_ascii=False))
 
 
 class JobCatalogue:

@@ -16,6 +16,11 @@ declaration in one command. Job files under `<root>/jobs/` are **deprecated**:
   graph. They never fall back to TOML. The tend pass also stops running file
   jobs, so nothing runs that the read surface cannot show. It names the
   ignored files on every pass, and `list` names them too.
+  **Do not set `[jobs] graph` on a host whose event (`on`) or manual file jobs
+  are still live** until the Chaski consumer that fires graph jobs exists
+  (aegis-6vf.11). Those jobs stop on the next tend pass and nothing fires them.
+  `run` and `history` also refuse in graph mode, so the ledger history of the
+  old file jobs is no longer shown by `st work jobs history`.
 
 **Migration gate.** A host that still has live cron/every job files sets
 `[jobs] timed_files = "migrate"` before it deploys this change. Its timed files
