@@ -77,8 +77,12 @@ class Status:
     def throttled(self):
         """Crew CPU slowdown applies. A superset of held: gaming's `shader` state
         (a Steam precompile with no game) throttles without holding dispatch
-        (aegis-da2tfj)."""
-        return any(getattr(s, 'throttled', s.held) for _, s in self.entries)
+        (aegis-da2tfj). A builds-only detector (media) never throttles: the
+        operator's media rule is "still do work, just refrain from heavy builds", and
+        throttling every crew pane under it slowed the fleet while the render said
+        only builds were held (aegis-nh4 review)."""
+        return any(getattr(s, 'throttled', s.held) for n, s in self.entries
+                   if self.effect(n) == FULL)
 
     @property
     def build_refusal(self):
@@ -93,7 +97,6 @@ class Status:
             return (f"QUIET-TIME HEAVY BUILDS HELD — {', '.join(self.build_unknown)} UNKNOWN; heavy "
                     'local builds refused until a probe reads it. Launches continue.')
         return ''
-
 
     @property
     def state(self):
@@ -127,7 +130,7 @@ class Status:
                 if self.state == 'clear' else 'quiet-time detection off')
         if self.build_refusal and not self.held:
             text = self.build_refusal + (' ' + text if self.state == 'unknown' else '')
-        if self.throttled and not self.held and not self.build_reasons:
+        if self.throttled and not self.held:
             text += ' Steam shader compile with no game: crew CPU throttled, dispatch NOT held.'
         if self.game_present_idle:
             text += ' game_present_idle — weak activity evidence never lifts gaming.'
@@ -266,18 +269,21 @@ def metrics(status):
     entries = status.entries if isinstance(status, Status) else (('gaming', status),)
     text = gaming.metrics(dict(entries).get('gaming', gaming.Status()))
     text += '# TYPE aegis_quiet_time_hold_active gauge\n'
-    # Per effect (aegis-nh4). full = launches, dispatch and respawns held; no-heavy-builds
-    # = heavy local builds refused, which a full hold, a throttle or an UNKNOWN builds-only
-    # detector also implies, so a build gate watches this one series and fails closed.
-    text += f'aegis_quiet_time_hold_active{{effect="full"}} {int(status.held)}\n'
-    text += (f'aegis_quiet_time_hold_active{{effect="no-heavy-builds"}} '
+    text += f'aegis_quiet_time_hold_active {int(status.held)}\n'
+    # The build hold is its OWN gauge (aegis-nh4). Labelling the launch-hold series by
+    # effect instead made every existing `aegis_quiet_time_hold_active == 1` rule match
+    # the build series too, so long-hold alerts would fire on a film. It is 1 under a
+    # full hold, a throttle or an UNKNOWN builds-only detector as well, so a build gate
+    # (the Yupana policy) watches this one series and fails closed.
+    text += '# HELP aegis_quiet_time_build_hold_active Heavy local builds (cargo) refused.\n'
+    text += '# TYPE aegis_quiet_time_build_hold_active gauge\n'
+    text += (f'aegis_quiet_time_build_hold_active '
              f'{int(getattr(status, "builds_held", status.held or getattr(status, "throttled", False)))}\n')
     text += '# HELP aegis_quiet_time_throttled Crew CPU slowdown applies (a hold, or a shader compile).\n'
     text += '# TYPE aegis_quiet_time_throttled gauge\n'
     text += f'aegis_quiet_time_throttled {int(getattr(status, "throttled", status.held))}\n'
     for name, value in entries:
-        effect = status.effect(name) if isinstance(status, Status) else FULL
-        text += f'aegis_quiet_time_detector_active{{reason="{name}",effect="{effect}"}} {int(value.held)}\n'
+        text += f'aegis_quiet_time_detector_active{{reason="{name}"}} {int(value.held)}\n'
         text += f'aegis_quiet_time_probe_ok{{reason="{name}"}} {int(value.state not in {"unknown", "off"})}\n'
         text += f'aegis_quiet_time_probe_timestamp_seconds{{reason="{name}"}} {value.observed}\n'
     return text

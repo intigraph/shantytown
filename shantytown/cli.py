@@ -15916,7 +15916,8 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     # Initial clear is not a lift event. Once any state has reached the
     # coordinator, changes (including recovery from UNKNOWN) must reach it too.
     ledger = Path(a.root) / "notify" / "gaming_hold.json"
-    builds = getattr(status, "build_reasons", ())
+    builds = (tuple(getattr(status, "build_reasons", ()))
+              + tuple(n + '?' for n in getattr(status, "build_unknown", ())))
     if status.state in {"off", "clear"} and not builds and not ledger.exists():
         return []
     if status.state == "off":
