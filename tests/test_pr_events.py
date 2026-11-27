@@ -28,7 +28,47 @@ def _ev(job="task", item="it-1", head=HEAD, pr=7, repo="o/n", reason=None, **ove
     return ev
 
 
+# The forge as the drain re-reads it (aegis-fl6). By default each PR is open at
+# the last head _write put in the file, so the drain tests above the stale
+# section see the PR the emitter saw; FORGE overrides one PR's reading.
+FORGE: dict = {}
+REVIEWS: dict = {}
+NOTICES: list = []
+_LAST_HEAD: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _forge(monkeypatch):
+    FORGE.clear()
+    REVIEWS.clear()
+    NOTICES.clear()
+    _LAST_HEAD.clear()
+    reads = []
+
+    def read(repo, pr):
+        reads.append((repo, pr))
+        got = FORGE.get((repo, pr))
+        if isinstance(got, BaseException):
+            raise got
+        return got or {"state": "open", "merged": False,
+                       "head": {"sha": _LAST_HEAD.get((repo, pr), HEAD)}}
+    monkeypatch.setattr(cli, "_drain_event_pr", read)
+
+    def reviews(repo, pr):
+        got = REVIEWS.get((repo, pr), [])
+        if isinstance(got, BaseException):
+            raise got
+        return got
+    monkeypatch.setattr(cli, "_drain_event_reviews", reviews)
+    monkeypatch.setattr(cli, "_drain_event_notice",
+                        lambda a, ev, body: NOTICES.append((ev["item"], ev["pr"], body)) or [])
+    return reads
+
+
 def _write(path, *events):
+    for e in events:
+        if isinstance(e, dict) and "repo" in e and "pr" in e and "head" in e:
+            _LAST_HEAD[(e["repo"], e["pr"])] = e["head"]
     path.write_text("".join((e if isinstance(e, str) else json.dumps(e)) + "\n"
                             for e in events))
     return path
@@ -280,3 +320,166 @@ def test_a_head_less_hand_spawned_job_does_not_settle_a_new_head():
     assert pe.in_flight(ev, [], [ticket], since=100.0) == "q-1"
     exact = {**hand, "name": "eph-merge-x", "head": NEWER, "spawned_at": 1.0}
     assert pe.in_flight(ev, [exact], [], since=100.0) == "eph-merge-x"
+
+
+# --- the PR re-read just before the spawn (aegis-fl6) ------------------------
+# The emitter only emits OPEN PRs, but the file keeps every line: a drain off
+# for hours replayed events for quipu#1350, camayoc#291 and seeds#344 after
+# they had merged, and spawned review and merge jobs for each.
+
+def test_an_event_for_a_merged_pr_is_consumed_not_spawned(store, tmp_path, capsys):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="review"))
+    # A merged PR reads closed too; the merged flag is what names it merged.
+    FORGE[("o/n", 7)] = {"state": "closed", "merged": True, "head": {"sha": HEAD}}
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == [] and eph.records(root) == [] and eph.tickets(root) == []
+    assert "stale review o/n#7@aaaaaaaaaaaa: merged" in capsys.readouterr().out
+    (rec,) = pe.settled(root).values()
+    assert rec["outcome"] == "stale" and rec["detail"] == "stale: merged"
+    # Consumed: the next drain does not read the forge for it again.
+    FORGE.clear()
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+    assert "already settled 1" in capsys.readouterr().out
+
+
+def test_an_event_for_a_merged_pr_still_reading_open_is_not_spawned(store, tmp_path):
+    # The sabotage pin for the merged test: state alone must not be the check.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    FORGE[("o/n", 7)] = {"state": "open", "merged": True, "head": {"sha": HEAD}}
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+
+
+def test_an_event_for_a_closed_pr_is_not_spawned(store, tmp_path, capsys):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    FORGE[("o/n", 7)] = {"state": "closed", "merged": False, "head": {"sha": HEAD}}
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+    assert "stale task o/n#7@aaaaaaaaaaaa: closed" in capsys.readouterr().out
+
+
+def test_an_event_whose_head_moved_is_not_spawned(store, tmp_path, capsys):
+    # The file's last line is this head, so the in-file superseded check
+    # cannot see the push; only the forge can.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    FORGE[("o/n", 7)] = {"state": "open", "merged": False, "head": {"sha": NEWER}}
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+    assert "head moved to bbbbbbbbbbbb" in capsys.readouterr().out
+    (rec,) = pe.settled(root).values()
+    assert rec["outcome"] == "stale"
+
+
+def test_an_open_pr_at_the_event_head_spawns(store, tmp_path, _forge):
+    # The control: the re-read must not refuse the case it exists to let by.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    FORGE[("o/n", 7)] = {"state": "open", "merged": False, "head": {"sha": HEAD}}
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1 and _forge == [("o/n", 7)]
+
+
+def test_a_failed_re_read_spawns_nothing_and_settles_nothing(store, tmp_path, capsys):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(item="it-1", pr=7), _ev(item="it-2", pr=8))
+    FORGE[("o/n", 7)] = RuntimeError("gh api repos/o/n/pulls/7 failed: HTTP 502")
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    err = capsys.readouterr().err
+    assert "cannot re-read o/n#7" in err and "HTTP 502" in err
+    # Fail closed for the whole tick: pr 8 is not spawned either.
+    assert launched == [] and eph.tickets(root) == []
+    assert pe.settled(root) == {}
+    # Next tick, the forge answers and the events spawn.
+    FORGE.clear()
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1
+
+
+def test_stale_is_pure_and_names_each_cause():
+    ev = _ev()
+    assert pe.stale(ev, {"state": "open", "merged": False, "head": {"sha": HEAD}}) == ""
+    assert pe.stale(ev, {"state": "closed", "merged": True, "head": {"sha": HEAD}}) == "merged"
+    assert pe.stale(ev, {"state": "closed", "head": {"sha": HEAD}}).startswith("closed")
+    assert pe.stale(ev, {"state": "open", "head": {"sha": NEWER}}).startswith("head moved")
+    # A reading with no head is not "the same head".
+    assert pe.stale(ev, {"state": "open"}).startswith("head moved")
+
+
+# --- the review/fix round cap (aegis-fl6 added scope) ------------------------
+
+def _cr(n, start=1):
+    return [{"id": i, "state": "CHANGES_REQUESTED", "body": "fix it"}
+            for i in range(start, start + n)]
+
+
+def test_three_change_requests_cap_a_fix_event_with_one_notice(store, tmp_path, capsys):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="task"))
+    REVIEWS[("o/n", 7)] = _cr(3)
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == [] and eph.tickets(root) == []
+    assert "review cap reached, lead ruling needed" in capsys.readouterr().out
+    (notice,) = NOTICES
+    assert notice[:2] == ("it-1", 7) and "lead ruling needed" in notice[2]
+    (rec,) = pe.settled(root).values()
+    assert rec["outcome"] == "capped"
+    # Next tick: consumed, nothing posted again.
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(NOTICES) == 1 and launched == []
+
+
+def test_the_notice_is_posted_once_per_round_not_per_event(store, tmp_path):
+    # A fixer's new head re-arms review; the capped PR must not post again.
+    root, _panes, launched = store
+    REVIEWS[("o/n", 7)] = _cr(3)
+    _write(tmp_path / "ev.jsonl", _ev(job="task", head=HEAD))
+    assert _st(root, "--drain-events", str(tmp_path / "ev.jsonl")) == cli.OK
+    events = _write(tmp_path / "ev.jsonl", _ev(job="task", head=HEAD),
+                    _ev(job="review", head=NEWER))
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == [] and len(NOTICES) == 1
+
+
+def test_two_change_requests_still_spawn_the_fix(store, tmp_path):
+    # The control: under the cap the loop runs.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="task"))
+    REVIEWS[("o/n", 7)] = _cr(2)
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1 and NOTICES == []
+
+
+def test_a_merge_event_is_never_capped(store, tmp_path):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    REVIEWS[("o/n", 7)] = _cr(5)
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert NOTICES == [] and pe.settled(root) != {}
+    assert next(iter(pe.settled(root).values()))["outcome"] != "capped"
+
+
+def test_a_failed_reviews_read_spawns_nothing(store, tmp_path, capsys):
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev(job="review"))
+    REVIEWS[("o/n", 7)] = RuntimeError("HTTP 502")
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    assert launched == [] and pe.settled(root) == {}
+    assert "cannot read reviews of o/n#7" in capsys.readouterr().err
+
+
+def test_review_cap_counts_every_head_and_a_ruling_resets_it():
+    assert pe.review_cap(_cr(2)) == (2, "")
+    assert pe.review_cap(_cr(3)) == (3, "3")
+    approve = [{"id": 9, "state": "APPROVED", "body": "lgtm"}]
+    assert pe.review_cap(_cr(3) + approve)[0] == 3      # an approval is not a ruling
+    ruling = [{"id": 10, "state": "COMMENTED", "body": "Lead ruling: ship it, pr-risk/accepted"}]
+    assert pe.review_cap(_cr(3) + ruling) == (0, "")
+    # A ruling before the cap is not one; after it the count starts again.
+    assert pe.review_cap(ruling + _cr(3))[0] == 3
+    again = pe.review_cap(_cr(3) + ruling + _cr(3, start=20))
+    assert again == (3, "22")

@@ -41,7 +41,7 @@ LEDGER = "pr-events.jsonl"
 # Outcomes that end an event. "refused" (dates the first refusal),
 # "spawning" (intent, written before the spawn) and "malformed" (a bad line
 # already reported, keyed by line_id) are also written; none settles an event.
-SETTLING = ("admitted", "superseded", "expired")
+SETTLING = ("admitted", "superseded", "expired", "stale", "capped")
 # How long a pending event is offered again before it expires. Without a bound
 # a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
 # re-spawned on every drain and held exit 2 forever (review of #776), so a
@@ -119,6 +119,60 @@ def current_heads(events: list[dict]) -> dict[tuple[str, int], str]:
     requirement: lines are appended in observation order. A line appended out
     of order would supersede the newer head it came after."""
     return {(e["repo"], e["pr"]): e["head"] for e in events}
+
+
+def stale(ev: dict, pr: dict) -> str:
+    """Why the PR as the forge reads it NOW (GET /repos/R/pulls/N) makes this
+    event stale, or "". The emitter only emits OPEN PRs, but the file keeps
+    every line, so a drain that was off for hours replayed events for PRs
+    merged since and spawned review and merge jobs for them (aegis-fl6:
+    quipu#1350, camayoc#291, seeds#344). Merged is checked apart from state
+    because a merged PR also reads closed, and the ledger should say which."""
+    if pr.get("merged") or pr.get("merged_at"):
+        return "merged"
+    if pr.get("state") != "open":
+        return f"closed (state {pr.get('state')!r})"
+    sha = (pr.get("head") or {}).get("sha")
+    if sha != ev["head"]:
+        return f"head moved to {str(sha)[:12]}"
+    return ""
+
+
+# Automated review/fix rounds per PR before a lead must rule (aegis-fl6 added
+# scope). Without a cap a reviewer and a fixer that never converge loop on one
+# PR, each round a fresh pair of Claude jobs. Merge events are never capped.
+REVIEW_CAP = 3
+CAPPED_JOBS = ("review", "task")
+# A review whose body carries one of these, submitted once the cap is
+# reached, is the lead ruling that resumes the loop.
+RULING_MARKS = ("pr-risk/accepted", "lead ruling")
+
+
+def review_cap(reviews: list, cap: int = REVIEW_CAP) -> tuple[int, str]:
+    """(REQUEST-CHANGES verdicts counted, key of the round that hit the cap).
+    Every head counts: a fixer pushing a new head is exactly the loop being
+    capped. A ruling review after the cap starts the count again, so a lead
+    can buy three more rounds. The key is the capping review's id, "" while
+    under the cap; the notice is posted once per key, not once per tick."""
+    count, key = 0, ""
+    for r in reviews if isinstance(reviews, list) else []:
+        if not isinstance(r, dict):
+            continue
+        body = str(r.get("body") or "").lower()
+        if count >= cap and any(m in body for m in RULING_MARKS):
+            count, key = 0, ""
+            continue
+        if r.get("state") == "CHANGES_REQUESTED":
+            count += 1
+            if count == cap:
+                key = str(r.get("id") or r.get("node_id") or f"round-{cap}")
+    return count, key
+
+
+def cap_notices(root) -> set[tuple[str, int, str]]:
+    """(repo, pr, key) of each lead-ruling notice already posted."""
+    return {(r.get("repo"), r.get("pr"), r.get("notice")) for r in _ledger(root)
+            if r.get("outcome") == "capped" and r.get("notice")}
 
 
 def ledger_path(root) -> Path:
@@ -212,7 +266,8 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
     return None
 
 
-def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:
+def settle(root, ev: dict, outcome: str, now: float, detail: str = "",
+           notice: str = "") -> None:
     """Append-only, one line per settled event: a crash mid-drain loses at most
     the line being written, and the event is offered again next drain."""
     p = ledger_path(root)
@@ -222,6 +277,8 @@ def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:
            "outcome": outcome, "at": now}
     if detail:
         rec["detail"] = detail[:300]
+    if notice:
+        rec["notice"] = notice
     with open(p, "a") as fh:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
 

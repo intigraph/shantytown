@@ -4862,7 +4862,12 @@ def _spawn_drain_events(a) -> int:
 
     Settled (never offered again): admitted (launched or QUEUED over cap),
     superseded (the PR has a newer head in the file, so the step is stale).
-    Pending (offered again next drain): refused (governor, pool, authority,
+    stale (the PR re-read just before the spawn is merged, closed or at
+    another head: aegis-fl6; a failed re-read spawns nothing and ends the
+    drain), capped (a review or task event on a PR with pr_events.REVIEW_CAP
+    REQUEST-CHANGES verdicts since the last lead ruling: one "lead ruling
+    needed" notice per capping round, on the item and the PR; merge events
+    are never capped). Pending (offered again next drain): refused (governor, pool, authority,
     a merge pin mismatch), crashed, or no item to report on. A refusal is
     not dropped: the cap and the governor are the brakes, not this loop.
     Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
@@ -4876,7 +4881,8 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
+    counts = {"admitted": 0, "superseded": 0, "stale": 0, "capped": 0, "pending": 0,
+              "expired": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -4923,6 +4929,40 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
                 continue
+            try:
+                pr = _drain_event_pr(ev["repo"], ev["pr"])
+            except Exception as error:  # noqa: BLE001
+                # Fail closed: an unread PR may be merged, and spawning blind
+                # is the replay aegis-fl6 fixes. The forge is likely down for
+                # every later event too, so this tick ends; nothing is
+                # settled and the next drain reads again.
+                rc = CANNOT_TELL
+                print(f"  events: cannot re-read {ev['repo']}#{ev['pr']} "
+                      f"({type(error).__name__}: {str(error)[:200]}); "
+                      "spawned nothing more this drain", file=sys.stderr)
+                break
+            why = pe.stale(ev, pr if isinstance(pr, dict) else {})
+            if why:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "stale", time.time(), f"stale: {why}")
+                counts["stale"] += 1
+                print(f"  stale {label}: {why}; not spawned")
+                continue
+            if ev["job"] in pe.CAPPED_JOBS:
+                try:
+                    reviews = _drain_event_reviews(ev["repo"], ev["pr"])
+                except Exception as error:  # noqa: BLE001
+                    # Same fail-closed rule: an unread cap may be reached.
+                    rc = CANNOT_TELL
+                    print(f"  events: cannot read reviews of {ev['repo']}#{ev['pr']} "
+                          f"({type(error).__name__}: {str(error)[:200]}); "
+                          "spawned nothing more this drain", file=sys.stderr)
+                    break
+                rounds, key = pe.review_cap(reviews)
+                if rounds >= pe.REVIEW_CAP:
+                    counts["capped"] += 1
+                    _drain_event_capped(a, pe, ev, label, rounds, key)
+                    continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -4950,9 +4990,71 @@ def _spawn_drain_events(a) -> int:
                                      detail or "spawn refused (reason above)")
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
+          f"stale {counts['stale']}, capped {counts['capped']}, pending {counts['pending']}, expired {counts['expired']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
+
+
+def _drain_event_pr(repo: str, pr: int) -> dict:
+    """The PR as the forge reads it now, for the drain's stale check. Its own
+    seam so tests stub the forge rather than shell out."""
+    return _gh_json(f"repos/{repo}/pulls/{int(pr)}")
+
+
+def _drain_event_reviews(repo: str, pr: int) -> list:
+    """The PR's reviews, oldest first, for the round cap. 100 per page covers
+    a capped PR many times over; the cap needs only three."""
+    return _gh_json(f"repos/{repo}/pulls/{int(pr)}/reviews?per_page=100")
+
+
+def _drain_event_notice(a, ev, body) -> list[str]:
+    """Post the lead-ruling notice on the item and the PR. Returns the legs
+    that failed; each leg is best effort so one unreachable side still lets
+    the other carry the notice."""
+    import subprocess
+    failed = []
+    try:
+        _spawn_item_comment(a)(ev["item"], body)
+    except Exception as error:  # noqa: BLE001
+        failed.append(f"item comment: {type(error).__name__}: {str(error)[:120]}")
+    try:
+        r = subprocess.run(["gh", "pr", "comment", str(int(ev["pr"])), "--repo", ev["repo"],
+                            "--body-file", "-"], input=body, capture_output=True,
+                           text=True, timeout=60)
+        if r.returncode != 0:
+            failed.append(f"PR comment: {(r.stderr or r.stdout or '').strip()[:120]}")
+    except (OSError, subprocess.SubprocessError) as error:
+        failed.append(f"PR comment: {error}")
+    return failed
+
+
+def _drain_event_capped(a, pe, ev, label, rounds, key) -> None:
+    """Consume a review/fix event past the round cap and ask the lead to rule,
+    once per capping round: a later head's event on the same capped PR is
+    consumed silently, so the notice is not repeated on every tick."""
+    print(f"  capped {label}: {rounds} REQUEST-CHANGES rounds; review cap reached, "
+          "lead ruling needed")
+    if a.dry_run:
+        return
+    posted = (ev["repo"], ev["pr"], key) in pe.cap_notices(a.root)
+    notice = ""
+    if not posted:
+        body = (f"review cap reached: lead ruling needed. {ev['repo']}#{ev['pr']} has "
+                f"{rounds} REQUEST-CHANGES verdicts, the automated limit of "
+                f"{pe.REVIEW_CAP}. st will not spawn another review or fix job for it "
+                "until a lead rules: a review whose body says `pr-risk/accepted` or "
+                "`lead ruling` resumes the loop. Merge events are not capped.")
+        failed = _drain_event_notice(a, ev, body)
+        for leg in failed:
+            print(f"  events: lead-ruling notice for {label} not posted ({leg})",
+                  file=sys.stderr)
+        # Posted once when either leg landed; with both down, the next
+        # capped event for this PR tries again.
+        if len(failed) < 2:
+            notice = key
+    pe.settle(a.root, ev, "capped", time.time(),
+              f"review cap reached: {rounds} REQUEST-CHANGES, lead ruling needed",
+              notice=notice)
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:

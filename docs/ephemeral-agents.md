@@ -278,6 +278,21 @@ not the signed controller `recruit_*` path.
   step is stale. The new head's own events re-arm it. "Newer" means later in
   the file, so the emitter must append lines in observation order. A line
   appended out of order supersedes the newer head before it.
+- **Stale** (settled): just before the spawn the drain re-reads the PR
+  (`GET /repos/R/pulls/N`) and skips the event, recording `stale: merged`,
+  `stale: closed` or `stale: head moved`, when the PR is merged, is not open,
+  or its head is not the event's head. The emitter only emits open PRs, but
+  the file keeps every line, so a drain that was off for hours otherwise
+  replays events for PRs merged since (aegis-fl6). If the re-read fails the
+  drain fails closed: nothing more is spawned that drain, nothing is settled,
+  and it exits 2.
+- **Capped** (settled): a review or task event on a PR with 3
+  REQUEST-CHANGES verdicts (`pr_events.REVIEW_CAP`, counted across every head)
+  is not spawned. The drain posts one "review cap reached: lead ruling needed"
+  notice on the item and the PR per capping round, not per tick. A review whose
+  body says `pr-risk/accepted` or `lead ruling`, submitted after the cap,
+  starts the count again. Merge events are never capped. A failed read of the
+  reviews fails closed like the PR re-read.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
   to report on. A refusal is not dropped: the first one is dated in the ledger.
