@@ -7,6 +7,6 @@ and #678's validator and planner are called by nothing.
 After: `PYTHONPATH=. python docs/probes/incident-consumer/demo.py` (recorded in `demo.txt`). The recorded
 event `tests/fixtures/incident_consumer/triage-event.json` fed twice gives the same two shadow intents and ONE
 intent file. A report about another incident, an unverified record (twice), a changed report for the same
-run and a garbage event are each refused AND recorded: four `refusal-*.json` records (the repeated
-unverified refusal is one record), holding reason and digests only. The intent journal stays at one file.
+run, an event carrying a forged spec and a garbage event are each refused AND recorded: five
+`refusal-*.json` records (the repeated unverified refusal is one record), holding reason and digests only. The intent journal stays at one file.
 Synthetic fixtures only; nothing is launched, signed, queued or sent.

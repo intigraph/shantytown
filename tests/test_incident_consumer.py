@@ -181,7 +181,10 @@ def test_a_replayed_recorded_event_is_one_intent_record(journal):
 
 @pytest.mark.parametrize('raw', [b'', b'not json', b'[]', b'{"kind":"incident_report"}',
                                  json.dumps({**json.loads(EVENT.read_bytes()), 'kind': 'other'}).encode(),
-                                 b' ' * (consumer.RECORD_CAP + 1)])
+                                 b' ' * (consumer.RECORD_CAP + 1),
+                                 # json.loads raises RecursionError here, not ValueError; under
+                                 # the cap, so it once escaped as an unrecorded poison event.
+                                 pytest.param(b'[' * 200000, id='deeply-nested')])
 def test_a_malformed_event_is_refused_and_recorded(journal, raw):
     assert event(raw, journal) == Refusal('event-shape')
     assert_refusal_recorded(journal, 'event-shape')
@@ -298,3 +301,33 @@ def test_a_journal_write_fault_is_fatal_not_dropped_and_redelivery_consumes_once
     assert isinstance(got, Consumed) and not got.replay
     assert len(intent_files(journal)) == 1
     assert not [f for f in files(journal) if f.startswith('.pending-')]
+
+
+def test_a_value_too_deep_to_serialize_or_repr_still_digests():
+    class Deep(list):
+        """Stands in for nesting deep enough that json.dumps and repr both recurse out."""
+        def __repr__(self):
+            raise RecursionError('maximum recursion depth exceeded')
+
+    deep = Deep([object()])  # object() makes json.dumps fail, so the repr fallback runs
+    assert consumer._digest(deep) == consumer._digest(Deep([object(), 1]))  # by type name, not a raise
+
+
+def test_a_directory_fsync_fault_after_the_link_raises_and_redelivery_replays(journal, monkeypatch):
+    import errno
+    real_open = os.open
+
+    def broken_open(path, flags, *args, **kwargs):
+        if path == journal and flags == os.O_RDONLY:  # the directory fsync, after the link
+            raise OSError(errno.EIO, 'Input/output error')
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', broken_open)
+    with pytest.raises(OSError):
+        event(EVENT.read_bytes(), journal)
+    assert len(intent_files(journal)) == 1  # the link succeeded: the record is in place
+    monkeypatch.setattr(os, 'open', real_open)
+    got = event(EVENT.read_bytes(), journal)
+    assert isinstance(got, Consumed) and got.replay
+    assert [i.action for i in got.intents] == ['comment-item', 'file-followup']
+    assert len(intent_files(journal)) == 1

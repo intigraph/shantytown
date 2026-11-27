@@ -132,10 +132,16 @@ record itself. The same refusal twice is one record; the same record refused und
 two different specs is two.
 
 A journal write that fails (`ENOSPC`, `EIO`, `EXDEV` from the link or an fsync)
-is **fatal**: the `OSError` propagates, nothing is journaled (not even a refusal,
-since the journal itself failed) and no `.pending-` file is left. The event source
-must treat the exception as not consumed and redeliver. A redelivery after the
-fault is consumed normally, once. Files starting `.pending-` are crash leftovers of an
+is **fatal**: the `OSError` propagates and no `.pending-` file is left. The event
+source must treat the exception as not consumed and redeliver. A fault before the
+link journals nothing (not even a refusal, since the journal itself failed), and the
+redelivery is consumed normally, once. A fault in the directory fsync *after* the
+link succeeded leaves the record in place and still raises; the redelivery then
+returns `replay=True` with the same intents. A malformed event includes one nested
+too deeply to parse (`json.loads` raises `RecursionError`, not `ValueError`): it is
+refused as `event-shape` and recorded like any other. Each distinct refused record
+or garbage event writes its own refusal file, so the journal is unbounded under
+hostile input; accepted for the H1 shadow, and H2 must bound it. Files starting `.pending-` are crash leftovers of an
 interrupted write; readers ignore dot-files.
 
 It imports no launcher, signer, executor, queue or network code, and creates no

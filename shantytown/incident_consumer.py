@@ -24,11 +24,16 @@ Refusals are keyed by (reason, record, frozen, jobspec): the same record refused
 two different specs leaves two records.
 
 A journal write that fails (ENOSPC, EIO, EXDEV from os.link or fsync) is FATAL: the
-OSError propagates to the caller and nothing is journaled, not even a refusal, since
-the journal is the thing that failed. Raising is the loud form; returning a Refusal
-here would be the silent drop this module exists to prevent. The event source must
-treat the exception as not-consumed and redeliver; a redelivery after the fault is
-consumed normally, once.
+OSError propagates to the caller. Raising is the loud form; returning a Refusal here
+would be the silent drop this module exists to prevent. The event source must treat
+the exception as not-consumed and redeliver. A fault before the link journals nothing,
+not even a refusal, since the journal is the thing that failed; the redelivery is
+consumed normally, once. A fault in the directory fsync AFTER the link has succeeded
+leaves the record in place (possibly not yet durable) and still raises; the
+redelivery then finds it and returns replay=True with the same intents.
+
+Each distinct refused record or garbage event writes its own refusal file, so the
+journal is unbounded under hostile input. Accepted for H1 shadow; H2 must bound it.
 
 Known limits, accepted for H1: the directory check is lstat-then-use, so a
 caller that swaps its own private directory between check and write races
@@ -66,11 +71,19 @@ def _canonical(value) -> str:
 
 
 def _digest(value) -> str:
-    """SHA256 of the canonical form; a value JSON cannot carry is digested by repr, marked."""
+    """SHA256 of the canonical form; a value JSON cannot carry is digested by repr, marked.
+
+    Too deep to serialize or repr (both recurse and raise RecursionError): digested by
+    type name only. Such values then share one key, which collapses their refusal
+    records into one; that is a lost distinction, not a lost refusal.
+    """
     try:
         wire = _canonical(value)
-    except (TypeError, ValueError):
-        wire = 'unserializable:' + repr(value)
+    except (TypeError, ValueError, RecursionError):
+        try:
+            wire = 'unserializable:' + repr(value)
+        except RecursionError:
+            wire = 'unrepresentable:' + type(value).__name__
     return hashlib.sha256(wire.encode()).hexdigest()
 
 
@@ -210,7 +223,10 @@ def consume_event(raw: bytes, *, frozen, jobspec, journal: str, verified) -> Con
     if isinstance(raw, (bytes, bytearray)) and len(raw) <= RECORD_CAP:
         try:
             event = json.loads(raw)
-        except ValueError:
+        # json.loads raises RecursionError, not ValueError, on deep nesting (b"[" * 200000
+        # is 200 KB, under the cap). Uncaught, it read as "not consumed, redeliver": a
+        # poison event that was never recorded.
+        except (ValueError, RecursionError):
             event = None
     if not (isinstance(event, dict) and set(event) == EVENT_KEYS and event['kind'] == 'incident_report'):
         marker = {'unparsed_event_sha256': hashlib.sha256(bytes(raw) if isinstance(raw, (bytes, bytearray))
