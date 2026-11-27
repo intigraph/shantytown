@@ -140,3 +140,46 @@ def test_files_comment_write_fault_preserves_entire_item(tmp_path, monkeypatch):
         work_item.command(args(item.id, "comment", file=body), tracker)
     assert len(calls) == 1
     assert target.read_bytes() == before
+
+
+class _AdmissionTracker(FilesTracker):
+    """FilesTracker that carries agent_context the way native sd reads do."""
+    context = None
+
+    def get(self, item_id):
+        from dataclasses import replace
+        return replace(super().get(item_id), agent_context=self.context)
+
+
+def _admission(phase):
+    import json
+    return json.dumps({"deploy_admission": {
+        "schema": "aegis.deploy-admission/v1", "phase": phase}})
+
+
+@pytest.mark.parametrize("context,match", [
+    (_admission("planned"), "phase is planned.*cancel"),
+    (_admission("inflight"), "phase is inflight.*resolve"),
+    ('{"deploy_admission": "garbled"}', "phase is UNKNOWN"),
+    ("{not json", "agent context is UNKNOWN"),
+])
+def test_close_refuses_open_deploy_admission(tmp_path, context, match):
+    # aegis-1z0: aegis-pwqj was closed while "planned" and held all CD.
+    tracker = _AdmissionTracker(tmp_path / "items")
+    item = tracker.create("deploy operation", labels=["deploy-operation"])
+    tracker.context = context
+    body = tmp_path / "reason.txt"; body.write_text("done")
+    with pytest.raises(ValueError, match=match):
+        work_item.command(args(item.id, "close", reason_file=body), tracker)
+    assert tracker.get(item.id).status == "open"
+
+
+@pytest.mark.parametrize("context", [
+    _admission("drained"), _admission("cancelled"), None, '{"other": 1}'])
+def test_close_admits_terminal_or_absent_admission(tmp_path, context):
+    tracker = _AdmissionTracker(tmp_path / "items")
+    item = tracker.create("deploy operation")
+    tracker.context = context
+    body = tmp_path / "reason.txt"; body.write_text("done")
+    work_item.command(args(item.id, "close", reason_file=body), tracker)
+    assert tracker.get(item.id).status == "closed"

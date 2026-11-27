@@ -20,6 +20,43 @@ def exact(tracker, item_id):
     return item
 
 
+ADMISSION_TERMINAL = frozenset({"drained", "cancelled"})
+
+
+def refuse_open_admission(item):
+    """Refuse to close an item whose deploy admission is still open (aegis-1z0).
+
+    aegis-pwqj was closed while its admission phase was "planned"; closing
+    the item did not release the record, so aegis-cd kept refusing every
+    service on a "competing INFLIGHT operation" for over an hour. After the
+    close, deploy_admission.py cancel refused too, because it does not cancel
+    a closed item. The admission has to reach a terminal phase first. An
+    unreadable record could be holding CD just the same, so it is refused too.
+    """
+    raw = getattr(item, "agent_context", None)
+    if raw is None or raw == "":
+        return
+    try:
+        context = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, RecursionError):
+        context = None
+    if not isinstance(context, dict):
+        raise ValueError(f"{item.id}: agent context is UNKNOWN; cannot prove no deploy "
+                         "admission is open, so close is refused")
+    if "deploy_admission" not in context:
+        return
+    admission = context["deploy_admission"]
+    current = admission.get("phase") if isinstance(admission, dict) else None
+    if current in ADMISSION_TERMINAL:
+        return
+    hint = ("cancel it first (deploy_admission.py cancel) or resolve it"
+            if current == "planned" else "resolve it first (deploy_admission.py resolve)")
+    raise ValueError(
+        f"{item.id}: deploy admission phase is {current or 'UNKNOWN'!s}, not terminal; "
+        f"closing the item does not release it and CD keeps refusing on it; {hint}, "
+        "then close")
+
+
 def _body(path):
     phase("INPUT")
     if path is None:
@@ -241,7 +278,8 @@ def command(args, tracker):
         from .files import FilesTracker
         if not isinstance(tracker, (BrTracker, FilesTracker)):
             raise ValueError("selected tracker cannot verify a close reason")
-        fields = {"status": "closed", "close_reason": _body(args.reason_file).strip()}
+        refuse_open_admission(item)
+        fields ={"status": "closed", "close_reason": _body(args.reason_file).strip()}
     elif args.item_action == "update":
         for key in ("status", "assignee", "priority", "lane", "rank", "issue_type", "unblocks", "default", "expires_at"):
             value = getattr(args, key, None)
