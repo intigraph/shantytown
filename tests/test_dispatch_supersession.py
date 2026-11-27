@@ -3,8 +3,8 @@ import pytest
 
 from shantytown import cli
 from shantytown.dispatch import DispatchedButUntracked, SendUnverified
-from shantytown.dispatch_receipts import (ReceiptConflict, assignment_supersession,
-                                         prepared_supersession)
+from shantytown.dispatch_receipts import (ReceiptConflict, RetirementRefused,
+                                         assignment_supersession, prepared_supersession)
 from shantytown.protocols import SubmissionObserved
 from test_dispatch_binding import world, snapshot
 
@@ -68,6 +68,43 @@ def test_prepared_retirement_refuses_unreleased_or_unknown_native_state(world, m
     assert binding.store.read(old['id'])['state'] == 'prepared'
     # Lock creation is already present from preparation, so no ledger write.
     assert snapshot(root) == before and len(panes.sent) == 1
+
+
+def test_a_known_ineligible_native_state_is_named_not_called_unknown(world, monkeypatch, capsys):
+    """aegis-5q2r: deferred + assigned is a measured state; say so and what is needed."""
+    import json
+    root, dispatcher, binding, tracker, panes = world
+    old = prepared(world)
+    tracker.update('work-1', assignee='worker', defer_until='2099-01-01T00:00:00Z')
+    with pytest.raises(RetirementRefused) as refused:
+        binding.supersede(old['id'], dry_run=True)
+    text = str(refused.value)
+    assert 'UNKNOWN' not in text
+    for part in ("'worker'", '2099-01-01T00:00:00Z', 'needs status open, no assignee and no defer',
+                 old['id']):
+        assert part in text, text
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: dispatcher.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('refusal dispatched'))
+    before = snapshot(root)
+    code = cli.main(['--root', str(root), 'go', 'work-1', 'worker', '--supersede',
+                     '--receipt', old['id'], '-n'])
+    err = capsys.readouterr().err
+    assert code == cli.REFUSED and 'refused: prepared retirement refused' in err, err
+    assert binding.store.read(old['id'])['state'] == 'prepared' and snapshot(root) == before
+
+
+def test_an_unreadable_or_foreign_native_row_stays_unknown(world):
+    _, _, binding, tracker, _ = world
+    old = prepared(world)
+    current = dict(id='work-1', revision=tracker.get('work-1').revision,
+                   status='open', assignee=None)
+    for bad in [None, current | dict(id='other'), current | dict(revision='7')]:
+        with pytest.raises(ReceiptConflict) as unknown:
+            prepared_supersession(old, bad)
+        assert not isinstance(unknown.value, RetirementRefused)
+        assert 'UNKNOWN' in str(unknown.value)
 
 
 @pytest.mark.parametrize('flag', ['--dry-run', '-n'])

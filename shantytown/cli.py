@@ -9033,6 +9033,7 @@ def _cmd_go(a) -> int:
     if (getattr(a, 'reconcile', False) or getattr(a, 'supersede', False)
             or getattr(a, 'complete', False) or getattr(a, 'receipt', None)):
         from .dispatch_binding import binding_for
+        from .dispatch_receipts import RetirementRefused
         try:
             if not getattr(a, 'receipt', None):
                 raise ValueError('--reconcile, --complete or --supersede requires --receipt')
@@ -9065,6 +9066,9 @@ def _cmd_go(a) -> int:
                       if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
             print(json.dumps(result, indent=2))
             return OK
+        except RetirementRefused as error:
+            print(f'  refused: {error}', file=sys.stderr)
+            return REFUSED
         except (Closed, Blocked, HasOpenBlocker, AlreadyAssigned, GovernorRefused,
                 PlateFull, CapacityUnknown) as error:
             print(f'  refused: {error}', file=sys.stderr)
