@@ -290,12 +290,38 @@ def _duration(seconds: int) -> str:
     return "P" + (f"{d}D" if d else "") + (f"T{clock}" if clock else "")
 
 
+# Fixed activation anchor for every declaration. A Monday at UTC midnight, so
+# --every slots land on whole multiples of the interval since a known instant
+# and the weekly anchor is the first matching slot in its zone at or after it.
+ANCHOR_EPOCH = datetime(2026, 1, 5, tzinfo=dt_timezone.utc)
+
+
+def _weekly_anchor(tz: ZoneInfo, weekday: int, hhmm: str) -> datetime:
+    """The first unambiguous weekly slot at or after ANCHOR_EPOCH. A slot that
+    falls in a DST gap or fold that week is skipped by whole weeks, because the
+    reader refuses such an anchor with only "ambiguous or nonexistent"."""
+    hour, minute = int(hhmm[:2]), int(hhmm[3:])
+    local = ANCHOR_EPOCH.astimezone(tz)
+    day = local.date() + timedelta(days=(weekday - local.weekday()) % 7)
+    for _ in range(106):
+        naive = datetime(day.year, day.month, day.day, hour, minute)
+        stamps = {naive.replace(tzinfo=tz, fold=f).timestamp() for f in (0, 1)}
+        slot = naive.replace(tzinfo=tz)
+        if (len(stamps) == 1 and slot >= ANCHOR_EPOCH and
+                datetime.fromtimestamp(slot.timestamp(), tz).replace(tzinfo=None) == naive):
+            return slot
+        day += timedelta(days=7)
+    raise JobRefused(f"{WEEKDAYS[weekday]} {hhmm} never exists unambiguously in {tz.key}")
+
+
 def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
                  message: str, weekly: tuple[int, str] | None = None,
-                 every_s: int | None = None, enabled: bool = True,
-                 now: datetime | None = None) -> Declaration:
+                 every_s: int | None = None, enabled: bool = True) -> Declaration:
     """One inbox job's declaration: weekly civil time in `zone`, or a fixed
-    interval. There is no cron form here either."""
+    interval. There is no cron form here either. The output is a pure function
+    of the arguments: the `-n` dry run IS what gets written, revision included
+    (an anchor taken from the clock made the reviewed Turtle differ from the
+    written one)."""
     if not _NAME.fullmatch(name or ""):
         raise JobRefused(f"job name {name!r}: lowercase letters, digits, - and _ only")
     if not _AGENT.fullmatch(inbox or ""):
@@ -311,22 +337,16 @@ def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise JobRefused(f"unknown timezone {zone!r}") from exc
     host_iri = _host_iri(host)
-    now = (now or datetime.now(dt_timezone.utc)).replace(microsecond=0)
     if weekly is not None:
         weekday, hhmm = weekly
         if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", hhmm or ""):
             raise JobRefused(f"time {hhmm!r} must be HH:MM (24-hour)")
-        local = now.astimezone(tz)
-        day = local.date() + timedelta(days=(weekday - local.weekday()) % 7)
-        first = datetime(day.year, day.month, day.day, int(hhmm[:2]), int(hhmm[3:]), tzinfo=tz)
-        if first <= local:
-            day += timedelta(days=7)
-            first = datetime(day.year, day.month, day.day, int(hhmm[:2]), int(hhmm[3:]), tzinfo=tz)
-        anchor, duration, cadence = first.isoformat(), "P7D", f"weekly:{weekday}:{hhmm}"
+        anchor = _weekly_anchor(tz, weekday, hhmm).isoformat()
+        duration, cadence = "P7D", f"weekly:{weekday}:{hhmm}"
     else:
         if isinstance(every_s, bool) or not isinstance(every_s, int) or every_s < 60:
             raise JobRefused("--every must be at least sixty seconds")
-        anchor = now.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        anchor = ANCHOR_EPOCH.strftime("%Y-%m-%dT%H:%M:%SZ")
         duration, cadence = _duration(every_s), f"every:{every_s}"
     host_key = host if _NAME.fullmatch(host) else hashlib.sha256(host_iri.encode()).hexdigest()[:12]
     job = f"{JOB_PREFIX}{host_key}:{name}"
@@ -403,13 +423,22 @@ class JobCatalogue:
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise JobsUnavailable(f"write outcome unknown ({exc}); read back before retrying") from exc
         if not isinstance(out, dict) or out.get('error'):
-            raise JobRefused(f"quipu refused the declaration: {str(out)[:200]}")
+            # An error answer can follow a committed write: unknown, not refused.
+            raise JobsUnavailable(f"quipu answered the write with an error, outcome "
+                                  f"unknown: {str(out)[:200]}; read back before retrying")
         if out.get('conforms') is False:   # a SHACL refusal has no "error" key (aegis-0v97)
             issues = "; ".join(f"{i.get('path', '?')}: {i.get('message', '?')}"
                                for i in (out.get('issues') or [])[:3])
             raise JobRefused(f"quipu refused the declaration (SHACL): {issues or out}")
-        # HTTP 200 alone does not prove the write: the job must read back.
-        back = [job for job in self.read() if job.iri == new.iri]
+        # HTTP 200 alone does not prove the write: the job must read back. The
+        # write may already have committed, so ANY failure from here on is an
+        # unknown outcome, never "refused, nothing written": a racing writer, a
+        # name conflict or a malformed neighbour makes read() raise JobRefused.
+        try:
+            back = [job for job in self.read() if job.iri == new.iri]
+        except (JobRefused, JobsUnavailable) as exc:
+            raise JobsUnavailable(f"wrote {new.iri} but could not read it back "
+                                  f"({exc}); read back before retrying") from exc
         if len(back) != 1 or back[0].revision != new.revision:
             raise JobsUnavailable(f"{new.iri} revision {new.revision} did not read back")
         return back[0]

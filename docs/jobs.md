@@ -13,11 +13,21 @@ declaration in one command. Job files under `<root>/jobs/` are **deprecated**:
   window, and every `st work jobs` read prints a deprecation warning. Move them
   to Quipu and delete the file.
 - Once `[jobs] graph` is set, `st work jobs list` and `check` read only the
-  graph. They never fall back to TOML.
+  graph. They never fall back to TOML. The tend pass also stops running file
+  jobs, so nothing runs that the read surface cannot show. It names the
+  ignored files on every pass, and `list` names them too.
 
-The tend-pass cron/interval evaluator is still in the source, but no job file
-can reach it. It will be deleted once every host has been measured free of
-timed job files.
+**Migration gate.** A host that still has live cron/every job files sets
+`[jobs] timed_files = "migrate"` before it deploys this change. Its timed files
+then keep firing, and every tend pass and every `st work jobs` read warns that
+they are still firing. The default is `"refuse"`. Measure each host first:
+`ls <root>/jobs/*.toml` and look for `cron` or `every`. Move each job with
+`st work jobs new`, delete the file, then remove the setting. The cron/interval
+evaluator stays in the source only for this window. It will be deleted once
+every host has been measured free of timed job files.
+
+A refused timed file binds no duty, so it does not make the host's duty
+inventory incomplete. Any other broken job file still does.
 
 ## Declare a scheduled job
 
@@ -44,8 +54,11 @@ the review. Run the same command without `-n` to write it. The command:
 4. reads the job back and succeeds only if the same revision is there.
 
 Exit 0 means the job was written and read back. Exit 1 means it was refused and
-nothing was written. Exit 2 means the outcome is unknown, because the write may
-have been committed: run `st work jobs list` before you retry.
+nothing was written: an input refusal, an existing job, missing write
+credentials, or a SHACL `conforms: false`. Exit 2 means the outcome is unknown,
+because the write may have been committed. That covers a transport failure, an
+error answer from Quipu, and any failure to read the job back, including a graph
+that no longer decodes. Run `st work jobs list` before you retry.
 
 `--weekly DAY HH:MM` is local time in `--tz` (default UTC). `--every 6h` is a
 fixed interval of at least sixty seconds. There is no cron syntax. `--host`
@@ -55,8 +68,12 @@ to `$SHANTY_AGENT`. `--disabled` declares a job that is listed but never fired.
 The declaration uses the schema.org/Quechua profile described below. The job is
 a `schema:Action` named `urn:shantytown:job:<host>:<name>`. Its `schema:target`
 is `urn:shantytown:inbox:<agent>` and its `schema:description` holds the message.
-Revisions are content hashes, so a dry run and the real write produce the same
-revision. Chaski's generic inbox action reads these fields (aegis-6vf.11 is the
+The declaration is a pure function of the command's arguments, and it never
+reads the clock. The activation anchor is fixed: for `--every`, intervals
+count from 2026-01-05T00:00:00Z. For `--weekly`, the anchor is the first such
+slot in the zone after that instant. A slot that falls in a DST gap or fold
+that week is moved to the next week where it exists exactly once. The revision is
+a content hash, so the `-n` output you review is byte-for-byte what is written. Chaski's generic inbox action reads these fields (aegis-6vf.11 is the
 Chaski/Quipu side). No emitter entry, shuttle config, deliver-script branch or
 manifest hash is edited by hand.
 

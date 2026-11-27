@@ -15170,8 +15170,18 @@ def _jobs_sweep(a) -> list[str]:
     so neither a broken file nor a crashing job can reach respawn."""
     # Tend's governor path can fall back to defaults after a configuration
     # error. Never let that fallback reactivate a delegated local scheduler.
-    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+    cfg = config.load(Path(a.root))
+    if cfg.jobs_scheduler == "chaski":
         return []
+    if cfg.jobs_graph:
+        # Once a deployment names its jobs graph, `list` and `check` show only
+        # Quipu. Firing file jobs here too would run work no read surface
+        # shows, so they stay unrun and are named on every pass instead.
+        from . import jobs as jobs_mod
+        names = jobs_mod.file_job_names(a.root)
+        return [f"⚠ job files NOT run because [jobs] graph is set (job config "
+                f"lives in Quipu): {', '.join(names)}; move them with `st work "
+                f"jobs new` and delete the files"] if names else []
     return _jobs_runner(a).sweep()
 
 
@@ -15291,6 +15301,12 @@ def _cmd_jobs(a) -> int:
     if verb == "new":
         return _cmd_jobs_new(a)
     if getattr(a, "graph", None):
+        names = jobs_mod.file_job_names(a.root)
+        if names:
+            # Not shown below and not run by tend in graph mode; say so rather
+            # than let a file job look like it still exists.
+            print(f"  ⚠ job files not shown (reading Quipu graph {a.graph}): "
+                  f"{', '.join(names)}", file=sys.stderr)
         return _cmd_declared_jobs(a, verb)
     if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
         print("refused: local job evaluation and execution are delegated to Chaski; "
@@ -15305,6 +15321,8 @@ def _cmd_jobs(a) -> int:
         print(f"  ⚠ refused {e}", file=sys.stderr)
     if jobs or errors:
         print(f"  ⚠ {jobs_mod.FILE_DEPRECATION}", file=sys.stderr)
+    if any(j.trigger.kind in ("cron", "every") for j in jobs) and jobs_mod.timed_migration(a.root):
+        print(f"  ⚠ {jobs_mod.TIMED_MIGRATION}", file=sys.stderr)
     if verb == "history":
         rows = jobs_mod.read_ledger(a.root, a.name, a.limit)
         if not rows:
