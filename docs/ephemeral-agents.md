@@ -298,6 +298,8 @@ not the signed controller `recruit_*` path.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
   to report on. A refusal is not dropped: the first one is dated in the ledger.
+  A task event for an item that already has a live or queued task job is
+  pending too (aegis-bmu3), and it runs once that job ends.
 - **Expired** (settled): still pending 24h after its first refusal
   (`pr_events.PENDING_TTL_S`). It is printed and recorded, then never offered
   again, so a permanent refusal (a pin mismatch, a closed PR) cannot hold exit 2
@@ -306,8 +308,8 @@ not the signed controller `recruit_*` path.
   already has this job, repo and PR, and either the exact head (merge records
   keep it) or, for head-less review and task records, a spawn or enqueue time
   at or after the event's own `spawning` intent line. This covers a drain that
-  crashed after the spawn but before it settled; the spawn path does not refuse
-  a duplicate itself. A job spawned before the attempt, such as a hand-spawned
+  crashed after the spawn but before it settled; for review and merge jobs the
+  spawn path does not refuse a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.

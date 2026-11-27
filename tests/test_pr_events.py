@@ -132,8 +132,15 @@ def test_a_new_head_re_arms_the_same_job(store, tmp_path, monkeypatch):
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    # aegis-bmu3: one task job per item. While the first head's job is live the
+    # new head's event is refused and stays pending, queuing no duplicate...
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert len(launched) == 1 and eph.tickets(root) == []
+    assert NEWER not in {r["head"] for r in pe.settled(root).values()}
+    # ...and once that job ends, the same job re-arms for the new head.
+    (first,) = eph.live(root)
+    assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    # The second head's event is admitted (queued: the first job holds the slot).
     assert len(launched) + len(eph.tickets(root)) == 2
 
 
@@ -234,8 +241,13 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    # aegis-bmu3: held pending, not settled against the old head's live job.
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert NEWER not in {r["head"] for r in pe.settled(root).values()}
+    (first,) = eph.live(root)
+    assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(eph.tickets(root)) == 1
+    assert len(launched) + len(eph.tickets(root)) == 2
     (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
     assert "in flight" not in new.get("detail", "")
 
