@@ -1,9 +1,15 @@
-"""Opt-in local projection reads through the Seeds SDK, never a second applier."""
+"""Opt-in local projection reads through the Seeds SDK, never a second applier.
+
+A refusal is reported once and latched for the binding, and the caller takes
+its direct read. Without the latch a hung or unconfigured reader cost up to 5s
+on every one of the ~15 reads a single `st anchor` makes (aegis-fzu).
+"""
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import sys
 
 from .query_identity import sdk_subprocess_options
 
@@ -16,6 +22,31 @@ def enabled() -> bool:
 
 
 _REASON_MAX = 300
+
+#: (quipu_url, graph) -> refusal text, for this process only. A long-lived
+#: process must not be pinned to direct reads by one old refusal forever, but
+#: st commands are short; a fresh command retries the projection.
+_REFUSED: dict[tuple[str, str], str] = {}
+
+
+def _binding(proof) -> tuple[str, str]:
+    return (str(getattr(proof, "quipu_url", "") or ""), str(getattr(proof, "graph", "") or ""))
+
+
+def refused(proof) -> str | None:
+    """The latched refusal for this binding, if the projection already said no."""
+    return _REFUSED.get(_binding(proof))
+
+
+def fall_back(proof, refusal) -> None:
+    """Say, once per binding, that the projection refused and a direct read follows."""
+    binding = _binding(proof)
+    if binding in _REFUSED:
+        return
+    reason = " ".join(str(refusal).split())[:_REASON_MAX] or type(refusal).__name__
+    _REFUSED[binding] = reason
+    print(f"st: seeds push read refused ({reason}); falling back to direct Quipu reads",
+          file=sys.stderr)
 
 
 def _refusal(stderr) -> str:
