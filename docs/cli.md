@@ -323,7 +323,8 @@ st agent                      one agent
                               share. A task job REFUSES without --repo OWNER/NAME (also when
                               only --checkout is given): it would get no source worktree, and
                               nothing is queued or launched. --list · --stop NAME|TICKET · --retry NAME
-                              · --report (by the agent) · --reap (tend) · --drain.
+                              · --report (by the agent) · --reap (tend) · --drain
+                              · --drain-events FILE (chaski pr-lifecycle events, idempotent).
                               docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]

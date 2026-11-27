@@ -187,6 +187,7 @@ st agent spawn --list [--json]          # live + recent jobs and queued tickets 
 st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 highest (default: the item's)
 st agent spawn --ephemeral ... --track ops    # work track for queue shares: ops | short-term | roadmap | backlog (default roadmap)
 st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
+st agent spawn --drain-events FILE [-n] # one spawn per unseen chaski pr-lifecycle event (below)
 st agent spawn --pool status|size N|pause|drain|resume   # see and manage the pool (below)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --stop q-3f9a1c2b4d5e    # cancel a queued or claimed ticket: moved aside to ephemeral/queue-removed/
@@ -235,6 +236,42 @@ A ticket whose launch raises instead of refusing is dropped the same way
 ticket never ends a drain (aegis-za4f.16). Tickets dropped in the last 24h show
 on `--list` as `failed` with their reason.
 A retry's superseded job does not drain: that slot is the retry's.
+
+## PR lifecycle events from chaski
+
+aegis-za4f.21. Every PR step (review a new head, fix REQUEST-CHANGES, merge at
+green and approved) used to wait for the administrator to notice and spawn it
+by hand; on quipu#1354 that produced a merge job before CI was green and an
+approval for a stale head. Chaski's `pr-lifecycle` emitter now appends one
+JSONL line per needed action, and `st agent spawn --drain-events FILE` (run by
+chaski or a timer, as an administrator or lead) recruits the job:
+
+```
+{"event_id": "<sha256 of repo|pr|head|job>", "repo": "intigraph/quipu", "pr": 1354,
+ "head": "<40-hex>", "job": "review|task|merge", "item": "<id or null>",
+ "reason": "new-head-unreviewed|changes-requested|green-and-approved|ci-red",
+ "observed_at": "<UTC>"}
+```
+
+Each unseen event becomes exactly
+`--ephemeral --job J --item I --repo R --pr N --head H --track roadmap`, through
+the same path a typed spawn takes, so the cap, the governor, authority and the
+merge job's own re-verification all apply. It is a local consumer of a file,
+not the signed controller `recruit_*` path.
+
+- **Idempotent on event_id.** Settled events are appended to
+  `<root>/ephemeral/pr-events.jsonl` and never offered again. An `event_id`
+  that is not `sha256(repo|pr|head|job)`, or any malformed field, skips that
+  line with its reason; the rest of the file still drains.
+- **Admitted** (settled): launched, or QUEUED over the cap. The ticket then
+  carries it, as for any queued spawn.
+- **Superseded** (settled): the file holds a newer head for that PR, so the
+  step is stale. The new head's own events re-arm it.
+- **Pending** (offered again next drain, exit 2): the spawn refused (governor,
+  pool, authority, a merge pin mismatch) or crashed, or the event names no item
+  to report on. A refusal is never dropped.
+- A `merge` event whose reason is not `green-and-approved` is refused as an
+  emitter bug. `--dry-run` prints the spawns and settles nothing.
 
 **Bad checkout refused at admission.** An explicit `--checkout` that does not
 exist, is not a git checkout, or has no remote naming `--repo` (owner/name, any
