@@ -36,7 +36,7 @@
       "source": "shantytown/config.py",
       "subject": "http://aegis.gastown.local/ontology/code/shantytown/shantytown%2Fconfig.py",
       "summary": "Configuration resolves shantytown.toml and declared environment settings; only an absent local file retains defaults. Invalid declarations and read errors refuse. Scheduler, harness, inbox and escalation settings select explicit adapters. Optional ephemeral job profiles bind tools, skills, connectors and verdicts; anonymous job readers remain isolated. Per-job-type limits override global lifetime and turn bounds and cap concurrency; a queue TTL flags stale tickets. Optional per-harness slot caps sit under the host-wide cap; opt-in per-track shares weight the spawn queue. Unknown jobs or tracks, reserved fields and malformed profiles, limits, caps or shares refuse. Recruitment launch readiness is a strict default-false boolean separate from UID readiness. Review enqueue defaults OFF and requires an absolute controller-selected adapter argv. Attended enqueue requires an explicit controller UID and private absolute custody directory; protected-job policy stays separate.",
-      "source_sha256": "4cf046e5964bb63ca57364c412b157957a9171bbec6a6ae4cb6ce39d9d81da53",
+      "source_sha256": "398b6630e7972af1822c28fe1af7c065e3a356222f826ee00a7a2a7124516f16",
       "properties": {
         "interfaceKind": "file-format",
         "publicName": "shantytown.toml and SHANTY_* settings"
