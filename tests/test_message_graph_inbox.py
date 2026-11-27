@@ -1,5 +1,6 @@
 """[inbox] store = "message-graph": new mail goes to message windows
-through `sd msg`, never to a board seed; readers union legacy seeds + windows."""
+through `sd msg`, never to a board seed, and is read only from the windows
+(the legacy-seed dual read was dropped in rollout phase 5)."""
 from pathlib import Path
 
 import pytest
@@ -53,39 +54,9 @@ class FakeMsgTracker:
         return Answer.complete_read([{"id": i, "marked": True} for i in ids], how="fixture read receipts")
 
 
-class FakeLegacy:
-    """The TrackerInbox surface MessageGraphInbox delegates to."""
-
-    def __init__(self, unread):
-        self._unread = list(unread)
-        self.marked = []
-
-    def unread(self, me):
-        return [m for m in self._unread if not m.read]
-
-    def unread_count(self, me):
-        return len(self.unread(me))
-
-    def unread_view(self, me, *, limit=100, oldest_first=False):
-        u = self.unread(me)
-        return len(u), u[:limit]
-
-    def unread_selected(self, me, ids):
-        return [m for m in self.unread(me) if m.id in ids]
-
-    def find_delivery(self, me, marker):
-        return None
-
-    def mark_read(self, me, ids=None):
-        hit = [m for m in self.unread(me) if ids is None or m.id in ids]
-        self.marked += [m.id for m in hit]
-        self._unread = [m for m in self._unread if m.id not in {h.id for h in hit}]
-        return [Message(id=m.id, to=m.to, body=m.body, read=True) for m in hit]
-
-
-def _box(legacy_unread=()):
+def _box():
     trk = FakeMsgTracker()
-    return MessageGraphInbox(FakeLegacy(legacy_unread), trk), trk
+    return MessageGraphInbox(trk), trk
 
 
 def test_delivery_goes_to_a_message_window_never_a_seed():
@@ -100,25 +71,42 @@ def test_delivery_goes_to_a_message_window_never_a_seed():
         box.deliver_once("wu", "x", key="bad key!")
 
 
-def test_unread_unions_legacy_seeds_and_window_messages():
-    legacy = [Message(id="sd-w1", to="wu", body="old seed mail")]
-    box, _ = _box(legacy)
-    box.deliver("wu", "new window mail", frm="grant")
+def test_unread_reads_only_window_messages_for_this_recipient():
+    box, trk = _box()
+    first = box.deliver("wu", "older window mail", frm="grant")
+    second = box.deliver("wu", "newer window mail", frm="grant")
     box.deliver("tim", "not for wu", frm="grant")
-    ids = [m.id for m in box.unread("wu")]
-    assert ids[0] == "sd-w1" and len(ids) == 2 and ids[1].startswith("msg-")
+    assert [m.id for m in box.unread("wu")] == [first.id, second.id]
     assert box.unread_count("wu") == 2
+    total, view = box.unread_view("wu", limit=1)
+    assert total == 2 and [m.id for m in view] == [second.id]
     total, view = box.unread_view("wu", limit=1, oldest_first=True)
-    assert total == 2 and [m.id for m in view] == ["sd-w1"]
+    assert total == 2 and [m.id for m in view] == [first.id]
+    assert trk.created == []
 
 
-def test_mark_read_closes_legacy_seeds_and_marks_window_messages():
-    legacy = [Message(id="sd-w1", to="wu", body="old")]
-    box, trk = _box(legacy)
+@pytest.mark.parametrize("operation", ["mark_read", "unread_selected", "get_message",
+                                       "find_delivery_receipt"])
+def test_a_board_seed_id_is_refused_never_resolved_against_the_board(operation):
+    """Phase 5: no dual read. A legacy seed id must not be silently skipped
+    (an ack would report success) nor read as absent (a receipt check would
+    authorize a resend); it is refused before anything is marked."""
+    box, trk = _box()
+    mine = box.deliver("wu", "window mail", frm="grant")
+    call = {"mark_read": lambda: box.mark_read("wu", [mine.id, "aegis-w1"]),
+            "unread_selected": lambda: box.unread_selected("wu", ["aegis-w1"]),
+            "get_message": lambda: box.get_message("wu", "aegis-w1"),
+            "find_delivery_receipt": lambda: box.find_delivery_receipt("wu", "M", "aegis-w1")}
+    with pytest.raises(RuntimeError, match="not a message-window id"):
+        call[operation]()
+    assert trk.read_calls == [] and trk.show_calls == [] and box.unread_count("wu") == 1
+
+
+def test_mark_read_marks_window_messages_append_only():
+    box, trk = _box()
     new = box.deliver("wu", "new", frm="grant")
-    marked = box.mark_read("wu", ["sd-w1", new.id])
-    assert {m.id for m in marked} == {"sd-w1", new.id}
-    assert box._legacy.marked == ["sd-w1"]
+    marked = box.mark_read("wu", [new.id])
+    assert [m.id for m in marked] == [new.id] and marked[0].read
     assert trk.read_calls == [[new.id]]
     assert box.unread("wu") == []
     # Marking an already-read window message again is a quiet no-op.
@@ -129,14 +117,15 @@ def test_mark_read_closes_legacy_seeds_and_marks_window_messages():
         box.mark_read("wu", [other.id])
 
 
-def test_mark_all_read_covers_both_stores():
-    box, trk = _box([Message(id="sd-w1", to="wu", body="old")])
-    box.deliver("wu", "new", frm="grant")
+def test_mark_all_read_marks_every_window_message():
+    box, trk = _box()
+    box.deliver("wu", "one", frm="grant")
+    box.deliver("wu", "two", frm="grant")
     assert len(box.mark_read("wu")) == 2
     assert box.unread_count("wu") == 0
 
 
-def test_find_delivery_reads_windows_first_then_legacy():
+def test_find_delivery_reads_windows_only():
     box, _ = _box()
     box.deliver_once("wu", "MARK-1 body", key="k1", frm="grant")
     assert box.find_delivery("wu", "MARK-1").body == "MARK-1 body"

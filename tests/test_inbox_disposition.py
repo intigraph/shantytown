@@ -170,7 +170,7 @@ def test_native_exact_receipt_reader_and_message_graph_no_mailbox_scan(tmp_path,
         calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps(row), '')
     monkeypatch.setattr(tracker, '_bd', execute)
-    native = MessageGraphInbox(None, tracker)
+    native = MessageGraphInbox(tracker)
     message = native.get_message('lead', 'msg-exact')
     assert message.read and message.body == 'native'
     assert calls == [('msg', 'show', 'msg-exact', '--all-windows', '--json')]

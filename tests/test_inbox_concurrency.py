@@ -194,7 +194,7 @@ def test_native_window_explicit_recipient_keys_replay_after_ack(tmp_path):
     subprocess.run([binary, '--store', str(store), 'create', 'private bootstrap'], cwd=project,
                    check=True, capture_output=True, text=True)
     tracker = SdTracker(repo=str(project), store=str(store), prefix='test')
-    box = MessageGraphInbox(TrackerInbox(tracker, lambda: []), tracker)
+    box = MessageGraphInbox(tracker)
     # Identical mail belongs in message windows, not twelve near-duplicate work
     # items. Native delivery keys are global: declare the distinct recipient
     # operations up front, never replace a key after a refused send.

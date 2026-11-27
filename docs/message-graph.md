@@ -2,8 +2,9 @@
 
 **Status:** source slices exist; the storage flip and native acceptance remain
 gated. The default remains the seed inbox. Expiry is implemented in `sd msg`
-(aegis-9qx, below). Ack, escalation and legacy migration are not implemented
-by the window reader. Every term marked
+(aegis-9qx, below). Ack and escalation are not implemented by the window
+reader. Legacy migration found nothing to move and the dual read is gone
+(rollout phases 4-5, aegis-4wn). Every term marked
 *proposed* still needs the admission step in
 [Vocabulary](#vocabulary-proposed-not-admitted) before any code writes it.
 
@@ -175,8 +176,8 @@ sends new mail there, including the two capacity notices that used to create
 seeds directly. Reads are a separate append-only `schema:dateRead` mark.
 Ack, expiry, escalation and alert dedupe are still to come. Existing inbox
 seeds are not migrated: a bulk move was rehearsed on a store copy and
-measured not worth its cost, so they stay readable through the
-dual read.
+measured not worth its cost, so they stayed readable through the
+dual read until the open count reached zero (phase 5 below).
 
 ## Rollout
 
@@ -197,6 +198,12 @@ Each phase has its own item, its own before/after probe and its own rollback.
 4. **Legacy migration** (below).
 5. **Drop dual read** and the exclusion predicates once a full-board count of
    `inbox:`/`mail:` seeds that are not closed is zero.
+   *Done for the dual read (aegis-4wn).* `MessageGraphInbox` reads windows
+   only and refuses a non-window id rather than resolving it against the
+   board: "absent" would authorize a resend, and an ack would close a seed
+   through the inbox. The exclusion predicates stay: the default store is
+   still `seed`, and on that store they are what keeps mail off plates.
+   They go when the seed inbox store itself is retired.
 6. **Expiry, escalation and freeze** run as a scheduled tend step, after the
    freeze command has been rehearsed on a copy.
 
@@ -226,6 +233,18 @@ nothing. The cost of moving them can be measured and decided separately.
    messages carrying `legacySeed`, and check the per-recipient counts against
    the export manifest. The inverse is rehearsed on a store copy before the live
    run.
+
+### Phase 4 result (2026-11-27, aegis-4wn)
+
+Counted from the export query, not a board view: every non-closed seed in
+`https://seeds.local/project/aegis` (open 353, in_progress 50, deferred 53,
+blocked 2, hooked 0; none truncated) matched against `^\s*(inbox:|mail:)`
+gave **0**; `#seeds-ephemeral` held 0 triples. The same filter over closed
+seeds matched 3, so it can say yes. With nothing open the export is empty,
+the dry run maps nothing, no message is written, no seed is closed, and
+per-recipient legacy unread counts are 0 before and after, so steps 3-5
+are vacuous. `sd count --by type` was task 235, feature 30, epic 28, bug 26
+(total 319) and is untouched by this change.
 
 ## Out of scope
 

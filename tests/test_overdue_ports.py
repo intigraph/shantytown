@@ -19,9 +19,7 @@ class Tracker:
 
 
 def inbox(rows):
-    legacy = SimpleNamespace(find_delivery_receipt=lambda *args: None,
-                             find_delivery=lambda *args: None)
-    return MessageGraphInbox(legacy, Tracker(rows))
+    return MessageGraphInbox(Tracker(rows))
 
 
 def row(**changes):
@@ -55,13 +53,12 @@ def test_duplicate_and_capped_receipts_refuse_and_absent_remains_read_only():
     assert inbox([]).find_delivery_receipt('worker', '[overdue:fixture]', 'msg-1') is None
 
 
-def test_legacy_exact_receipt_stays_on_existing_reader():
-    calls = []
+def test_legacy_seed_receipt_is_unknown_not_absent_after_phase_5():
+    # The dual read is gone; answering None for a board id would read as
+    # "never delivered" and authorize a resend.
     box = inbox([])
-    value = Message(id='example-1', to='worker', body='[overdue:fixture] work', frm='sender')
-    box._legacy.find_delivery_receipt = lambda *args: calls.append(args) or value
-    assert box.find_delivery_receipt('worker', '[overdue:fixture]', 'example-1') is value
-    assert calls == [('worker', '[overdue:fixture]', 'example-1')]
+    with pytest.raises(RuntimeError, match='not a message-window id'):
+        box.find_delivery_receipt('worker', '[overdue:fixture]', 'example-1')
     assert box._tracker.calls == []
 
 

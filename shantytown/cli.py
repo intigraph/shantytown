@@ -521,14 +521,15 @@ def _raw_inbox(a, default="files"):
         legacy = TrackerInbox(trk, lambda: br_items(trk),
                               lambda: br_items(trk, include_closed=True),
                               items_for=getattr(trk, "inbox_items", None))
-        # [inbox] store: "message-graph" sends NEW mail through
-        # `sd msg` into the message windows and reads legacy seeds + windows.
-        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        # [inbox] store: "message-graph" sends and reads mail only through
+        # `sd msg` message windows (the legacy-seed dual read was dropped in
+        # rollout phase 5). Only a tracker that speaks `sd msg` can; anything
+        # else stays on seeds.
         from .config import load_or_default
         cfg, _ = load_or_default(Path(a.root))
         if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
             from .inbox import MessageGraphInbox
-            return MessageGraphInbox(legacy, trk)
+            return MessageGraphInbox(trk)
         return legacy
     return FilesInbox(Path(a.root) / "inbox")
 

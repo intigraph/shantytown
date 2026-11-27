@@ -878,23 +878,31 @@ class TrackerInbox:
 
 
 class MessageGraphInbox:
-    """`[inbox] store = "message-graph"`: NEW mail goes through
-    `sd msg` into the per-week message windows, never into the board graph.
+    """`[inbox] store = "message-graph"`: mail goes through `sd msg` into the
+    per-week message windows, never into the board graph, and is read only from
+    there (marked read by an append-only `sd msg read`; nothing is closed or
+    deleted).
 
-    Reading unions the legacy inbox seeds (still closed by mark_read, exactly as
-    before) with window messages (marked read by an append-only `sd msg read`;
-    nothing is closed or deleted). Message ids tell the two apart: windows use
-    `msg-…`, seeds use the board prefix. Rollback is the config flip back to
-    "seed"; window messages stay readable with `sd msg list`.
+    Rollout phase 5 (docs/message-graph.md, aegis-4wn) dropped the dual read of
+    legacy `inbox:` seeds: a full-board count of non-closed legacy inbox seeds
+    was zero on 2026-11-27, so the union only cost a board query per read. A
+    non-window id (the board prefix, not `msg-…`) is refused rather than
+    resolved against the board: answering "absent" for it would let a caller
+    resend, and acking it would close a work seed through the inbox.
     """
 
-    def __init__(self, legacy: "TrackerInbox", tracker):
-        self._legacy = legacy
+    def __init__(self, tracker):
         self._tracker = tracker
 
     @staticmethod
     def _is_window(msg_id: str) -> bool:
         return msg_id.startswith("msg-")
+
+    def _window_only(self, ids) -> None:
+        legacy = [i for i in ids if not self._is_window(i)]
+        if legacy:
+            raise RuntimeError(f"refused: {', '.join(legacy)} not a message-window id; "
+                               "legacy inbox seeds are no longer read (message-graph phase 5)")
 
     def _as_message(self, me: str, v: dict) -> Message:
         return Message(id=v["id"], to=v.get("to") or me, body=v.get("text", ""),
@@ -922,8 +930,7 @@ class MessageGraphInbox:
         return Message(id=v["id"], to=to, body=body, frm=frm, read=v.get("read_at") is not None)
 
     def get_message(self, me, receipt_id):
-        if not self._is_window(receipt_id):
-            return self._legacy.get_message(me, receipt_id)
+        self._window_only([receipt_id])
         row = self._tracker.get_message(receipt_id).exact()
         if row.get('id') != receipt_id or row.get('to') != me:
             raise ValueError('receipt recipient or identity differs')
@@ -937,9 +944,7 @@ class MessageGraphInbox:
                    if str(v.get("text", "")).startswith(marker + " ")]
         if len(matches) > 1:
             raise RuntimeError("ambiguous durable delivery: multiple receipts")
-        if matches:
-            return matches[0]
-        return self._legacy.find_delivery(me, marker)
+        return matches[0] if matches else None
 
     def find_delivery_receipt(self, me: str, marker: str, receipt_id: str) -> Message | None:
         """Read an exact retained native receipt; never normalize a missing owner.
@@ -947,8 +952,7 @@ class MessageGraphInbox:
         Both read and unread messages count as delivery. Missing/malformed
         identity is UNKNOWN, not evidence that another send is safe.
         """
-        if not self._is_window(receipt_id):
-            return self._legacy.find_delivery_receipt(me, marker, receipt_id)
+        self._window_only([receipt_id])
         name = me.split("/")[-1]
         # Delivery evidence never expires: an old receipt must still be found.
         rows = self._tracker.list_messages(name, unread=False, all_windows=True,
@@ -967,26 +971,21 @@ class MessageGraphInbox:
         return self._as_message(name, value)
 
     def unread(self, me: str) -> list[Message]:
-        return self._legacy.unread(me) + self._window_unread(me)
+        return self._window_unread(me)
 
     def unread_count(self, me: str) -> int:
-        return self._legacy.unread_count(me) + len(self._window_unread(me))
+        return len(self._window_unread(me))
 
     def unread_view(self, me: str, *, limit=100, oldest_first=False):
-        total, legacy = self._legacy.unread_view(me, limit=limit, oldest_first=oldest_first)
         window = self._window_unread(me)
         if not oldest_first:
             window = list(reversed(window))
-        merged = (legacy + window) if oldest_first else (window + legacy)
-        return total + len(window), merged[:limit]
+        return len(window), window[:limit]
 
     def unread_selected(self, me: str, ids: list[str]) -> list[Message]:
-        legacy_ids = [i for i in ids if not self._is_window(i)]
-        wanted = {i for i in ids if self._is_window(i)}
-        found = self._legacy.unread_selected(me, legacy_ids) if legacy_ids else []
-        if wanted:
-            found += [m for m in self._window_unread(me) if m.id in wanted]
-        return found
+        self._window_only(ids)
+        wanted = set(ids)
+        return [m for m in self._window_unread(me) if m.id in wanted] if wanted else []
 
     # A named acknowledgment (the live-delivery pointer close on every durable
     # send, --ack-id) used to list the recipient's unread AND full history over
@@ -1034,12 +1033,11 @@ class MessageGraphInbox:
     def mark_read(self, me: str, ids: list[str] | None = None) -> list[Message]:
         if ids is None:
             window = self._window_unread(me)
-            marked = self._legacy.mark_read(me, None)
         else:
-            legacy_ids = [i for i in ids if not self._is_window(i)]
-            wanted = [i for i in dict.fromkeys(ids) if self._is_window(i)]
+            self._window_only(ids)
+            wanted = list(dict.fromkeys(ids))
             window = self._window_to_mark(me, wanted) if wanted else []
-            marked = self._legacy.mark_read(me, legacy_ids) if legacy_ids else []
+        marked = []
         if window:
             self._tracker.read_messages([m.id for m in window], all_windows=True).exact()
             marked += [Message(id=m.id, to=m.to, body=m.body, frm=m.frm, read=True) for m in window]
