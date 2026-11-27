@@ -28,6 +28,11 @@ def _ev(job="task", item="it-1", head=HEAD, pr=7, repo="o/n", reason=None, **ove
     return ev
 
 
+def _end_all(root):
+    for r in eph.live(root):
+        eph.write(root, {**r, "state": eph.DONE})
+
+
 def _write(path, *events):
     path.write_text("".join((e if isinstance(e, str) else json.dumps(e)) + "\n"
                             for e in events))
@@ -132,16 +137,18 @@ def test_a_new_head_re_arms_the_same_job(store, tmp_path, monkeypatch):
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
-    # aegis-bmu3: one task job per item. While the first head's job is live the
-    # new head's event is refused and stays pending, queuing no duplicate...
-    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    # The first head's task still runs on this PR, so the second is held back
+    # (aegis-8et: two task jobs on one branch race their pushes). It is
+    # deferred before the aegis-bmu3 one-task-per-item refusal: no exit 2, no
+    # ticket, and not settled against the old head...
+    assert _st(root, "--drain-events", str(path)) == cli.OK
     assert len(launched) == 1 and eph.tickets(root) == []
     assert NEWER not in {r["head"] for r in pe.settled(root).values()}
-    # ...and once that job ends, the same job re-arms for the new head.
+    # ...and re-armed: it launches once that job ends.
     (first,) = eph.live(root)
     assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(launched) + len(eph.tickets(root)) == 2
+    assert len(launched) == 2
 
 
 def test_no_item_stays_pending_and_says_why(store, tmp_path, capsys):
@@ -241,15 +248,16 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
-    # aegis-bmu3: held pending, not settled against the old head's live job.
-    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
-    assert NEWER not in {r["head"] for r in pe.settled(root).values()}
+    # Held back while the old head's task runs (deferred, not refused), and
+    # NOT settled against it.
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert [r for r in pe.settled(root).values() if r["head"] == NEWER] == []
     (first,) = eph.live(root)
     assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(launched) + len(eph.tickets(root)) == 2
     (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
-    assert "in flight" not in new.get("detail", "")
+    assert new["outcome"] == "admitted" and "in flight" not in new.get("detail", "")
+    assert len(launched) == 2
 
 
 def test_a_malformed_line_holds_exit_2_once_not_forever(store, tmp_path, capsys):
@@ -376,3 +384,64 @@ def test_an_open_pr_at_the_event_head_still_spawns(store, tmp_path, monkeypatch)
     events = _write(tmp_path / "ev.jsonl", _ev())
     assert _st(root, "--drain-events", str(events)) == cli.OK
     assert len(launched) == 1
+
+
+# --- a job someone else launched (aegis-8et) ---------------------------------
+# On 11-27 the drain launched a second job for 9 steps the administrator had
+# already spawned by hand: in_flight() only knew the drain's own attempts.
+
+def _hand_spawn(root, job="task", head=HEAD, pr=7, item="it-1"):
+    assert _st(root, "--ephemeral", "--job", job, "--item", item, "--repo", "o/n",
+               "--pr", str(pr), "--head", head) == cli.OK
+    (rec,) = [r for r in eph.live(root) if r["job"] == job and r["pr"] == pr]
+    return rec
+
+
+def test_a_hand_spawned_job_is_not_launched_twice_by_the_drain(store, tmp_path, capsys):
+    root, _panes, launched = store
+    _hand_spawn(root)
+    assert len(launched) == 1
+    capsys.readouterr()
+    assert _st(root, "--drain-events", str(_write(tmp_path / "ev.jsonl", _ev()))) == cli.OK
+    assert len(launched) == 1                      # no second job
+    assert "  deferred " in capsys.readouterr().out
+    assert pe.settled(root) == {}                  # head-less record: never settles the event
+
+
+def test_the_deferred_event_runs_once_the_hand_spawned_job_ends(store, tmp_path):
+    root, _panes, launched = store
+    rec = _hand_spawn(root)
+    path = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    eph.write(root, {**eph.read(root, rec["name"]), "state": eph.DONE})
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 2                      # it was held back, not dropped
+    assert [r["outcome"] for r in pe.settled(root).values()] == ["admitted"]
+
+
+def test_a_job_on_another_pr_or_of_another_kind_does_not_hold_the_event(store, tmp_path, monkeypatch, capsys):
+    # The inverse: occupied() must be able to say no, or the drain stalls.
+    root, _panes, launched = store
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    # Another item: aegis-bmu3 would refuse a second task on it-1 by itself,
+    # and that refusal would hide whether occupied() held the event back.
+    _hand_spawn(root, pr=8, item="it-2")           # holds the one slot
+    assert _st(root, "--ephemeral", "--job", "review", "--item", "it-1", "--repo", "o/n",
+               "--pr", "7", "--head", HEAD) == cli.OK          # queued as a ticket
+    capsys.readouterr()
+    assert _st(root, "--drain-events", str(_write(tmp_path / "ev.jsonl", _ev()))) == cli.OK
+    assert "  deferred " not in capsys.readouterr().out
+    assert [r["outcome"] for r in pe.settled(root).values()] == ["admitted"]
+    assert len(launched) + len(eph.tickets(root)) == 3
+
+
+def test_occupied_matches_exact_heads_and_holds_head_less_ones():
+    ev = pe.parse(json.dumps(_ev(job="merge", head=NEWER)))
+    exact = {"name": "eph-merge-x", "job": "merge", "repo": "o/n", "pr": 7, "head": NEWER}
+    other_head = {**exact, "name": "eph-merge-old", "head": HEAD}
+    head_less = {**exact, "name": "eph-merge-hl", "head": None}
+    assert pe.occupied(ev, [other_head], []) is None
+    assert pe.occupied(ev, [other_head, head_less], []) == ("eph-merge-hl", False)
+    assert pe.occupied(ev, [head_less, exact], []) == ("eph-merge-x", True)
+    assert pe.occupied(ev, [], [{"id": "q-1", "job": "merge", "repo": "o/n", "pr": 7}]) == ("q-1", False)
+    assert pe.occupied(ev, [{**exact, "repo": "o/other"}], []) is None
