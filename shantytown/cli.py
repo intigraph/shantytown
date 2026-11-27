@@ -4729,6 +4729,16 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         # from here (including a refused launch) ends it (aegis-za4f.19.1).
         eph.run_begin(a.root, rec["name"])
         card = files.get(rec["name"])
+        if not rec.get("uid_binding"):
+            try:
+                _ensure_job_role_settings(a.root, card)
+            except Exception as e:  # noqa: BLE001 -- the ledger exists: end it, never strand it
+                _spawn_end(a, rec["name"], "failed",
+                           f"role settings not emitted: {type(e).__name__}: {e}",
+                           "launch refused", detached=False)
+                print(f"  refused: {rec['name']}: role settings not emitted ({e})",
+                      file=sys.stderr)
+                return REFUSED
         panes = _panes(a)
         if (rec.get("harness") == "codex" and not rec.get("uid_binding")
                 and not rec.get("codex_trust_config")):
@@ -4790,6 +4800,36 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             a._ticket_refused = str(e)
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+
+
+def _ensure_job_role_settings(root, card) -> list[Path]:
+    """Emit the job harness's role artifact when this store has never had one.
+
+    MEASURED (aegis-j550, sattler 2026-11-27T16:50Z): the first live
+    `--harness agy` review refused "could not materialize settings for
+    eph-review-c22037 (role worker)". `st fleet roles set` emits settings only
+    for (harness, role) pairs some crew card names, and no crew card ran agy, so
+    settings/agy/worker/settings.json had never existed and no job on that
+    harness could launch. opencode would have hit the same refusal. The repair
+    the error names (`roles set` on the job card) works, but job cards are
+    minted per spawn and torn down after, so no operator can run it ahead of time.
+
+    ONLY WHEN ABSENT: an existing role file is shared with live crew agents on
+    that harness, and re-rendering it here would rewrite their hooks under them.
+    The emitter and provisioning are the same ones `roles set` uses, so a job
+    gets exactly the artifact a crew card on that harness would get. Workspace
+    hook projection stays with workspace provisioning, as it does for crew.
+    """
+    harness_name = harness_mod.name_for(card, root=root)
+    program = harness_mod.get(harness_name)
+    if (Path(root) / "settings" / program.settings_name(card.role)).is_file():
+        return []
+    written = _emit_role_settings(Path(root), {card.role}, harness_name=harness_name)
+    for path in written:
+        print(f"  hooks   {path}")
+        for note in program.provision(str(path), root=root, workspaces=()):
+            print(f"  ⚠ {note}", file=sys.stderr)
+    return written
 
 
 def _spawn_item_state(a, item) -> str:
