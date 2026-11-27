@@ -25,7 +25,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. Delivered means the job's turn STARTED, not that its text landed: on Claude Code st checks the composer is empty, types the job with no Enter, waits to see it in the box (a long job shows as `[Pasted text #1 +N lines]`), presses Enter as its own keystroke and waits to see the turn start (busy marker, spinner, context-left drop or the job echoed). It presses Enter again, up to three times, only while the box holds just the job, and never on text it did not type. A pane whose job did not start is ended at once as `launch failed`, with the reason. |
 | Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
-| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
+| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) unless Quipu's stored query `repo_review_mode` says that repo's review mode is `none` (a missing fact, an unknown value or an unreadable query is `non-author`: fail closed; a policy change is a graph write, never a deploy), and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
 
 ## Signed controller launch bridge
 
@@ -138,7 +138,13 @@ cases. Teardown deletes the card **before** it kills the pane, so a tend pass
 can never find a dead pane with a live card and respawn it. A worktree that
 holds commits or uncommitted changes is **kept**, and the result says so,
 because discarding an agent's output is the data-loss class `cleanup_worktree`
-exists to refuse.
+exists to refuse. A kept tree still loses its gitignored cargo `target/`
+directories (rebuildable debris, about 30 GB of fleet disk at one count): only a
+directory git reports as wholly ignored, named `target`, carrying cargo's
+`CACHEDIR.TAG` or sitting next to a `Cargo.toml`, and reached without a symlink is
+deleted. Tracked files and untracked files that are not ignored are never
+touched. When this happens the outcome reads `kept (holds work): … ; cleared N
+ignored cargo target/`.
 
 Worktrees provisioned later by `st repo worktree` or `st go --worktree` for an
 active job are recorded in its ledger before creation. Teardown checks these
@@ -157,7 +163,7 @@ without `--repo` is refused (below).
 | Job      | Default harness | Prompt contract |
 |----------|-----------------|-----------------|
 | `review` | codex (fleet directive: reviews on codex) | Independent, non-author review of `--repo/--pr` at the exact head. Post one verdict comment on the PR (APPROVE / REQUEST CHANGES with findings), then `--report --verdict V --head SHA --evidence URL`; st signs the verdict into Quipu. Never push, never merge. |
-| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
+| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and, unless the repo's Quipu review mode is `none`, a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
 | `triage` | claude | Find the cause of a red check. Comment the diagnosis on the item. Attended jobs may propose a fix on a branch and PR, never onto main. Protected UID jobs receive the read-only alert-triage instructions below. |
 
 Protected triage jobs (a controller ledger record with `uid_binding`) investigate
@@ -173,12 +179,11 @@ before enabling unattended launches. This change does not enable that gate.
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 
-`[ephemeral.model_by_harness]` pins the model a job's harness runs, for
-example `opencode = "ollama/gemma4:12b"` to send opencode jobs to a local
-model (aegis-j550). Job cards are role `worker`, so `[model.by_role] worker`
-would move every crew worker too; this table moves only ephemeral jobs on that
-harness. The value is written onto the job card, the most specific rung of
-model resolution. A harness with no entry passes no model, as before.
+`[ephemeral.model_by_harness]` names the model a job runs on each harness
+(aegis-jsp0). Spawn copies it onto the job card, so the launch passes `--model`
+and exports `SHANTY_MODEL` from that one value, and the job's Quipu writes carry
+`X-Quipu-Model`. A harness with no entry gets no model: the harness default runs
+and nothing is declared, so write provenance stays visibly partial.
 
 ## Administrator surface
 
@@ -188,6 +193,7 @@ st agent spawn --list [--json]          # live + recent jobs and queued tickets 
 st agent spawn --ephemeral ... --priority 0   # over cap: queue priority, 0 highest (default: the item's)
 st agent spawn --ephemeral ... --track ops    # work track for queue shares: ops | short-term | roadmap | backlog (default roadmap)
 st agent spawn --drain [-n]             # launch queued tickets into free slots (the end paths run this)
+st agent spawn --drain-events FILE [-n] # one spawn per unseen chaski pr-lifecycle event (below)
 st agent spawn --pool status|size N|pause|drain|resume   # see and manage the pool (below)
 st agent spawn --stop eph-review-1a2b3c # result "stopped", report, teardown
 st agent spawn --stop q-3f9a1c2b4d5e    # cancel a queued or claimed ticket: moved aside to ephemeral/queue-removed/
@@ -236,6 +242,58 @@ A ticket whose launch raises instead of refusing is dropped the same way
 ticket never ends a drain (aegis-za4f.16). Tickets dropped in the last 24h show
 on `--list` as `failed` with their reason.
 A retry's superseded job does not drain: that slot is the retry's.
+
+## PR lifecycle events from chaski
+
+aegis-za4f.21. Every PR step (review a new head, fix REQUEST-CHANGES, merge at
+green and approved) used to wait for the administrator to notice and spawn it
+by hand; on quipu#1354 that produced a merge job before CI was green and an
+approval for a stale head. Chaski's `pr-lifecycle` emitter now appends one
+JSONL line per needed action, and `st agent spawn --drain-events FILE` (run by
+chaski or a timer, as an administrator or lead) recruits the job:
+
+```
+{"event_id": "<sha256 of repo|pr|head|job>", "repo": "intigraph/quipu", "pr": 1354,
+ "head": "<40-hex>", "job": "review|task|merge", "item": "<id or null>",
+ "reason": "new-head-unreviewed|changes-requested|green-and-approved|ci-red",
+ "observed_at": "<UTC>"}
+```
+
+Each unseen event becomes exactly
+`--ephemeral --job J --item I --repo R --pr N --head H --track roadmap`, through
+the same path a typed spawn takes, so the cap, the governor, authority and the
+merge job's own re-verification all apply. It is a local consumer of a file,
+not the signed controller `recruit_*` path.
+
+- **Idempotent on event_id.** Settled events are appended to
+  `<root>/ephemeral/pr-events.jsonl` and never offered again. An `event_id`
+  that is not `sha256(repo|pr|head|job)`, or any malformed field, skips that
+  line with its reason; the rest of the file still drains. The first sighting
+  of a bad line exits 2 and is recorded by the sha256 of its text. Later drains
+  still print it but exit clean, because an append-only file keeps the line
+  forever.
+- **Admitted** (settled): launched, or QUEUED over the cap. The ticket then
+  carries it, as for any queued spawn.
+- **Superseded** (settled): the file holds a newer head for that PR, so the
+  step is stale. The new head's own events re-arm it. "Newer" means later in
+  the file, so the emitter must append lines in observation order. A line
+  appended out of order supersedes the newer head before it.
+- **Pending** (offered again next drain, exit 2): the spawn refused (governor,
+  pool, authority, a merge pin mismatch) or crashed, or the event names no item
+  to report on. A refusal is not dropped: the first one is dated in the ledger.
+- **Expired** (settled): still pending 24h after its first refusal
+  (`pr_events.PENDING_TTL_S`). It is printed and recorded, then never offered
+  again, so a permanent refusal (a pin mismatch, a closed PR) cannot hold exit 2
+  forever. A new head re-arms the step.
+- **Already in flight** (settled as admitted): a live job or queued ticket
+  already has this job, repo and PR, and either the exact head (merge records
+  keep it) or, for head-less review and task records, a spawn or enqueue time
+  at or after the event's own `spawning` intent line. This covers a drain that
+  crashed after the spawn but before it settled; the spawn path does not refuse
+  a duplicate itself. A job spawned before the attempt, such as a hand-spawned
+  task on an older head, never matches, so it cannot settle a new head's event.
+- A `merge` event whose reason is not `green-and-approved` is refused as an
+  emitter bug. `--dry-run` prints the spawns and settles nothing.
 
 **Bad checkout refused at admission.** An explicit `--checkout` that does not
 exist, is not a git checkout, or has no remote naming `--repo` (owner/name, any
@@ -343,13 +401,13 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 [ephemeral.harness_by_job]
 review = "codex"
 
+# The model each harness's jobs run and declare (aegis-jsp0). Unset = none.
+[ephemeral.model_by_harness]
+claude = "claude-opus-5-5"
+
 # Per-harness slot caps (aegis-fye). Unset = max_agents for that harness; 0 = off.
 [ephemeral.max_agents_by_harness]
 codex = 1
-
-# Per-harness job model (aegis-j550). Unset = no model on the job card.
-[ephemeral.model_by_harness]
-opencode = "ollama/gemma4:12b"
 
 # Queue drain shares per track (aegis-fye). OFF unless this table exists. The
 # quarter plan's split (ephemeral.SUGGESTED_TRACK_SHARES):

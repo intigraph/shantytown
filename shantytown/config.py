@@ -165,15 +165,16 @@ class Ephemeral:
     review_enqueue_attended_uid: int | None = None
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
+    # aegis-jsp0: the model a job runs, {harness: model}. Spawn copies it onto
+    # the job card, so the launch passes --model AND exports SHANTY_MODEL from
+    # that one value (X-Quipu-Model). Keyed by harness so a claude slug never
+    # reaches a codex job. No entry = no model: the harness default runs and
+    # nothing is declared, so provenance stays visibly partial.
+    model_by_harness: dict = field(default_factory=dict)
     # aegis-fye: per-harness slot caps, {harness: n}. A harness with no entry is
     # capped by max_agents alone, so an unset table routes exactly as before; 0
     # turns that harness off. The host-wide max_agents still bounds the total.
     max_agents_by_harness: dict = field(default_factory=dict)
-    # aegis-j550: per-harness model, {harness: model}. Ephemeral cards are role
-    # `worker`, so without this the only way to point opencode jobs at a local
-    # model was [model.by_role] worker, which moves every crew worker with them.
-    # A harness with no entry passes no model, exactly as before.
-    model_by_harness: dict = field(default_factory=dict)
     # aegis-fye: queue drain shares per work track, {track: weight}. Empty = OFF
     # (priority-then-age). The quarter plan's split is ops 20, short-term 15,
     # roadmap 50, backlog 15 (ephemeral.SUGGESTED_TRACK_SHARES), opt-in only.
@@ -323,6 +324,11 @@ class Config:
     # per-week message windows, and readers union the legacy seeds with them.
     # Rollback is setting it back to "seed"; window messages stay readable.
     inbox_store: str = "seed"
+    # [inbox] operators: the human operator names (aegis-vpy). A crew or job
+    # process can never SIGN as one of these: `[from <operator>]` carries an
+    # authority no agent has, so the name is attributable only through the
+    # operator's own channel or a protected-UID identity bound to it.
+    inbox_operators: tuple[str, ...] = ()
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -570,6 +576,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
                   ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
                   inbox_store=_inbox_store(path, _table(path, data, "inbox")),
+                  inbox_operators=_inbox_operators(path, _table(path, data, "inbox")),
                   path=path)
 
 
@@ -585,12 +592,20 @@ def _escalation_poller(path: Path, tbl: dict) -> bool:
 
 
 def _inbox_store(path: Path, tbl: dict) -> str:
-    _refuse_unknown(path, "inbox", tbl, {"store"})
+    _refuse_unknown(path, "inbox", tbl, {"store", "operators"})
     store = tbl.get("store", "seed")
     if store not in INBOX_STORES:
         raise ConfigError(f"{path}: inbox.store must be one of {', '.join(INBOX_STORES)}, "
                           f"not {store!r}")
     return store
+
+
+def _inbox_operators(path: Path, tbl: dict) -> tuple[str, ...]:
+    names = tbl.get("operators", [])
+    if (not isinstance(names, list)
+            or not all(isinstance(n, str) and n.strip() for n in names)):
+        raise ConfigError(f"{path}: inbox.operators must be a list of names")
+    return tuple(n.strip() for n in names)
 
 
 def _jobs_scheduler(path: Path, tbl: dict) -> str:
@@ -1221,11 +1236,11 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job", "model_by_harness",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
-                   "max_agents_by_harness", "model_by_harness", "track_shares", "queue_ttl_minutes"}
+                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1283,6 +1298,15 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    by_harness_model = tbl.get("model_by_harness", {})
+    if not isinstance(by_harness_model, dict):
+        raise ConfigError(f"{path}: [ephemeral.model_by_harness] must be a table")
+    for harness, model in by_harness_model.items():
+        if (not isinstance(model, str) or not model.strip()
+                or any(c in model for c in '\r\n\0')):
+            raise ConfigError(f"{path}: ephemeral.model_by_harness.{harness} must be a "
+                              f"model name (a non-empty string), got {model!r}")
+    values["model_by_harness"] = dict(by_harness_model)
     for key in ("verdict_graph", "verdict_signer", "verdict_key"):
         value = tbl.get(key, "")
         if not isinstance(value, str) or any(c in value for c in '"<>\\\n '):
@@ -1316,16 +1340,6 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
             raise ConfigError(f"{path}: ephemeral.max_agents_by_harness.{harness} must be an "
                               f"integer >= 0, got {cap!r}")
     values["max_agents_by_harness"] = dict(by_harness)
-    models = tbl.get("model_by_harness", {})
-    if not isinstance(models, dict):
-        raise ConfigError(f"{path}: [ephemeral.model_by_harness] must be a table")
-    for harness, model in models.items():
-        # The value lands on a launch command line; refuse anything that is not
-        # one plain token rather than trust shell quoting to absorb it.
-        if not isinstance(model, str) or not model.strip() or any(c.isspace() for c in model):
-            raise ConfigError(f"{path}: ephemeral.model_by_harness.{harness} must be a "
-                              f"model name, got {model!r}")
-    values["model_by_harness"] = dict(models)
     from .ephemeral import TRACKS
     shares = tbl.get("track_shares", {})
     if not isinstance(shares, dict):
