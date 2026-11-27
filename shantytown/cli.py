@@ -2012,6 +2012,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp_mode.add_argument("--list", action="store_true", help="live and recent jobs, and the queue")
     sp_mode.add_argument("--drain", action="store_true",
                          help="launch queued tickets into free slots (the job end paths run this)")
+    sp_mode.add_argument("--drain-events", type=Path, default=None, metavar="JSONL",
+                         help="spawn one job per unseen chaski pr-lifecycle event in JSONL "
+                              "(idempotent on event_id; a refused spawn stays pending)")
     sp_mode.add_argument("--pool", nargs="+", metavar="ACTION",
                          help="manage the ephemeral pool: status | size N|config | pause | "
                               "drain | resume")
@@ -4305,6 +4308,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             return _spawn_pool(a, cfg, None)
         if a.drain:
             return _spawn_drain(a, policy)
+        if getattr(a, "drain_events", None) is not None:
+            return _spawn_drain_events(a)
         ticket = getattr(a, "_ticket", None)
         if ticket is not None:
             # A drained ticket launches as its requester, who passed authority
@@ -4855,6 +4860,129 @@ def _spawn_pool(a, cfg, actor) -> int:
         # end gives: still no poller.
         eph.kick_drain(a.root)
     return OK
+
+
+def _spawn_drain_events(a) -> int:
+    """`st agent spawn --drain-events <jsonl>` (aegis-za4f.21): chaski's
+    pr-lifecycle emitter writes one line per PR step needed; each unseen
+    event_id becomes the ordinary `--ephemeral` spawn, as whoever runs this.
+
+    Settled (never offered again): admitted (launched or QUEUED over cap),
+    superseded (the PR has a newer head in the file, so the step is stale).
+    Pending (offered again next drain): refused (governor, pool, authority,
+    a merge pin mismatch), crashed, or no item to report on. A refusal is
+    not dropped: the cap and the governor are the brakes, not this loop.
+    Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
+    printed, so a permanent refusal cannot hold exit 2 forever."""
+    from . import ephemeral as eph
+    from . import pr_events as pe
+    if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
+        raise eph.Refused("an ephemeral agent cannot drain PR events")
+    try:
+        events, problems = pe.read(a.drain_events)
+    except OSError as e:
+        raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
+    rc = OK
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
+    with pe.lock(a.root):
+        reported = pe.malformed_seen(a.root)
+        for lid, problem in problems:
+            if lid in reported:
+                # Reported once already; it stays in the append-only file
+                # but must not hold exit 2 on every later drain.
+                print(f"  events: skipped {problem} (reported before)", file=sys.stderr)
+                continue
+            print(f"  events: skipped {problem}", file=sys.stderr)
+            rc = CANNOT_TELL
+            if not a.dry_run:
+                pe.note_malformed(a.root, lid, problem, time.time())
+            reported.add(lid)
+        done = pe.settled(a.root)
+        refused = pe.first_refused(a.root)
+        tried = pe.attempted(a.root)
+        heads = pe.current_heads(events)
+        seen = set()
+        for ev in events:
+            eid = ev["event_id"]
+            if eid in done or eid in seen:
+                continue
+            seen.add(eid)
+            label = f"{ev['job']} {ev['repo']}#{ev['pr']}@{ev['head'][:12]}"
+            if heads[(ev["repo"], ev["pr"])] != ev["head"]:
+                # A push moved the PR on: reviewing or merging this head is
+                # the stale-approval failure quipu#1354 hit. The new head's
+                # own events re-arm it.
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "superseded", time.time(), "newer head observed")
+                counts["superseded"] += 1
+                print(f"  superseded {label}: the PR has a newer head")
+                continue
+            if ev["item"] is None:
+                rc = CANNOT_TELL
+                _drain_event_pending(a, pe, ev, label, refused, counts,
+                                     "no work item named in the PR; a job must report on an item")
+                continue
+            running = (pe.in_flight(ev, eph.live(a.root), eph.tickets(a.root), tried[eid])
+                       if eid in tried else None)
+            if running:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "admitted", time.time(), f"already in flight as {running}")
+                counts["admitted"] += 1
+                print(f"  admitted {label}: already in flight as {running}")
+                continue
+            spawn = pe.argv(ev)
+            if a.dry_run:
+                counts["admitted"] += 1
+                print(f"  would spawn {' '.join(spawn)}  ({ev['reason']})")
+                continue
+            if eid not in tried:
+                pe.settle(a.root, ev, "spawning", time.time())
+            ns, out, detail = None, CANNOT_TELL, ""
+            try:
+                ns = _parse_args(["--root", str(a.root), "agent", "spawn", *spawn])
+                ns.root, ns.registry = a.root, getattr(a, "registry", None)
+                ns.repo = getattr(a, "repo", None)
+                out = _cmd_spawn(ns)
+            except (Exception, SystemExit) as error:  # noqa: BLE001
+                # One event's crash must not end the drain, the lesson of
+                # aegis-za4f.16 for queued tickets.
+                detail = f"launch crashed: {type(error).__name__}: {str(error)[:200]}"
+            if out == OK:
+                pe.settle(a.root, ev, "admitted", time.time(), ev["reason"])
+                counts["admitted"] += 1
+                print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
+            else:
+                rc = CANNOT_TELL
+                _drain_event_pending(a, pe, ev, label, refused, counts,
+                                     detail or "spawn refused (reason above)")
+    verb = "would admit" if a.dry_run else "admitted"
+    print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
+          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
+          f"{len({e['event_id'] for e in events} & set(done))}")
+    return rc
+
+
+def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
+    """Leave an event pending, or expire it once it has been pending for
+    pe.PENDING_TTL_S. The first refusal is dated in the ledger so the clock
+    survives across drains; the expiry is printed and recorded, never silent."""
+    now = time.time()
+    first = refused.get(ev["event_id"])
+    if a.dry_run:
+        counts["pending"] += 1
+        print(f"  pending {label}: {why}", file=sys.stderr)
+        return
+    if first is None:
+        pe.settle(a.root, ev, "refused", now, why)
+        first = refused[ev["event_id"]] = now
+    if now - first >= pe.PENDING_TTL_S:
+        pe.settle(a.root, ev, "expired", now, f"pending since {first:.0f}: {why}")
+        counts["expired"] += 1
+        print(f"  expired {label}: pending {(now - first) / 3600:.0f}h, last: {why}; "
+              "not offered again (a new head re-arms the step)", file=sys.stderr)
+        return
+    counts["pending"] += 1
+    print(f"  pending {label}: {why}; offered again next drain", file=sys.stderr)
 
 
 def _spawn_drain(a, policy) -> int:
