@@ -212,6 +212,36 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
     return None
 
 
+def occupied(ev: dict, live: list[dict], tickets: list[dict]) -> tuple[str, bool] | None:
+    """(name, exact) of ANY live job or queued ticket already doing this
+    event's job on this PR, whoever launched it, or None.
+
+    in_flight() only answers for the drain's own earlier attempts, so a job the
+    administrator spawned by hand for the same step was invisible: on 11-27
+    (aegis-8et) 9 of 10 concurrent duplicate jobs were a hand spawn plus a drain
+    spawn of the same job/repo/PR 29-91 s apart, three were stopped by hand,
+    and two pairs returned opposite verdicts on one head.
+
+    exact=True: the record keeps this very head, so it IS this event's step and
+    the event may settle as admitted. exact=False: a head-less review/task
+    record. It may be on an older head, so it must NOT settle the event (the
+    stale-head failure of the #776 review); the caller only holds the event
+    back until that job ends. Two concurrent task jobs on one PR branch would
+    also race their pushes. A record on a different explicit head is another
+    step and does not count."""
+    loose = None
+    for r in [*live, *tickets]:
+        if (r.get("job"), r.get("repo"), r.get("pr")) != (ev["job"], ev["repo"], ev["pr"]):
+            continue
+        name = r.get("name") or r.get("id") or "?"
+        if r.get("head") is not None:
+            if r["head"] == ev["head"]:
+                return name, True
+            continue
+        loose = loose or name
+    return (loose, False) if loose else None
+
+
 def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:
     """Append-only, one line per settled event: a crash mid-drain loses at most
     the line being written, and the event is offered again next drain."""

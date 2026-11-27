@@ -292,6 +292,15 @@ not the signed controller `recruit_*` path.
   crashed after the spawn but before it settled; the spawn path does not refuse
   a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
+- **Already running** (aegis-8et): ANY live job or queued ticket with the same
+  job, repo and PR, whoever launched it, including a hand spawn by the
+  administrator. If its record keeps this exact head, the event settles as
+  admitted. A head-less review or task record may be on an older head, so the
+  event is **deferred** instead: it is not settled and not dated as a refusal,
+  so it neither expires nor exits 2, and the first drain after that job ends
+  offers it again. On 11-27, 9 of 10 concurrent duplicate jobs were a hand
+  spawn plus a drain spawn of the same step 29-91 s apart. Two task jobs on
+  one PR branch would also race their pushes.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 

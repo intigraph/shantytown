@@ -4906,7 +4906,7 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "deferred": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -4953,6 +4953,19 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
                 continue
+            busy = pe.occupied(ev, eph.live(a.root), eph.tickets(a.root))
+            if busy and busy[1]:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "admitted", time.time(), f"already running as {busy[0]}")
+                counts["admitted"] += 1
+                print(f"  admitted {label}: already running as {busy[0]}")
+                continue
+            if busy:
+                # Unsettled and undated: not a refusal, so it neither expires
+                # nor holds exit 2; the next drain after that job ends offers it.
+                counts["deferred"] += 1
+                print(f"  deferred {label}: {busy[0]} is already doing this job on the PR")
+                continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -4980,7 +4993,7 @@ def _spawn_drain_events(a) -> int:
                                      detail or "spawn refused (reason above)")
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
+          f"pending {counts['pending']}, deferred {counts['deferred']}, expired {counts['expired']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
 
