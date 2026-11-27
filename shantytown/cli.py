@@ -5195,7 +5195,7 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0,
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "deferred": 0,
               "launch-failed": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
@@ -5243,6 +5243,21 @@ def _spawn_drain_events(a) -> int:
                     pe.settle(a.root, ev, "admitted", time.time(), f"already in flight as {running}")
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
+                continue
+            # Checked before the forge re-read: a busy PR costs no gh call, and
+            # the re-read below still runs before any spawn.
+            busy = pe.occupied(ev, eph.live(a.root), eph.tickets(a.root))
+            if busy and busy[1]:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "admitted", time.time(), f"already running as {busy[0]}")
+                counts["admitted"] += 1
+                print(f"  admitted {label}: already running as {busy[0]}")
+                continue
+            if busy:
+                # Unsettled and undated: not a refusal, so it neither expires
+                # nor holds exit 2; the next drain after that job ends offers it.
+                counts["deferred"] += 1
+                print(f"  deferred {label}: {busy[0]} is already doing this job on the PR")
                 continue
             stale = _drain_event_pr_stale(ev)
             if stale:
@@ -5296,7 +5311,7 @@ def _spawn_drain_events(a) -> int:
                 _drain_event_pending(a, pe, ev, label, refused, counts, why)
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, "
+          f"pending {counts['pending']}, deferred {counts['deferred']}, expired {counts['expired']}, "
           f"launch-failed {counts['launch-failed']}, capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
