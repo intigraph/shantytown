@@ -7,6 +7,7 @@ not read back.
 """
 import io
 import json
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -67,6 +68,65 @@ def test_weekly_declaration_is_the_shape_the_reader_admits():
     # Same inputs, same revision: a reviewed dry run is what gets written.
     assert _weekly().job.revision == job.revision
     assert _weekly(message="other").job.revision != job.revision
+
+
+_UCHAR_OR_ECHAR = re.compile(r'\\(?:u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))')
+
+
+def _turtle_literal_value(turtle, predicate):
+    """Decode one STRING_LITERAL_QUOTE as a Turtle parser must, refusing what
+    Turtle forbids. A UCHAR naming a surrogate code point is not a character."""
+    lexical = re.search(rf'<{re.escape(predicate)}> "((?:[^"\\]|\\.)*)"', turtle).group(1)
+
+    def one(m):
+        if m.group(3) is not None:
+            return {"t": "\t", "b": "\b", "n": "\n", "r": "\r", "f": "\f",
+                    '"': '"', "'": "'", "\\": "\\"}[m.group(3)]
+        cp = int(m.group(1) or m.group(2), 16)
+        assert not 0xD800 <= cp <= 0xDFFF, f"Turtle forbids surrogate UCHAR U+{cp:04X}"
+        return chr(cp)
+    return _UCHAR_OR_ECHAR.sub(one, lexical)
+
+
+@pytest.mark.parametrize("message", [
+    "weekly podcast \N{GRINNING FACE} \N{MUSICAL SCORE}",    # non-BMP: was a surrogate pair
+    'caf\u00e9 "quoted" back\\slash',
+    "line one\nline two\ttab\x01bell",
+])
+def test_a_message_round_trips_through_the_turtle_literal(message):
+    decl = _weekly(message=message)
+    assert _turtle_literal_value(decl.turtle, q.SCHEMA + "description") == message
+    assert not re.search(r"\\u[dD][89a-fA-F]", decl.turtle)
+
+
+def test_an_undecodable_message_is_refused_before_anything_is_written():
+    # argv bytes that are not UTF-8 reach Python as lone surrogates
+    # (surrogateescape); they have no UTF-8 form to write.
+    with pytest.raises(q.JobRefused, match="undecodable"):
+        _weekly(message="bad \udcff byte")
+
+
+def test_the_undecodable_refusal_quotes_an_excerpt_not_the_whole_message():
+    long_message = "x" * 200 + "\udcff" + "TAIL-MARKER" + "y" * 200
+    with pytest.raises(q.JobRefused) as refused:
+        _weekly(message=long_message)
+    text = str(refused.value)
+    assert "U+DCFF at offset 200" in text
+    assert len(text) < 150, text
+
+
+def test_new_writes_a_non_bmp_message_as_valid_turtle(tmp_path, monkeypatch, capsys):
+    fake = _Quipu()
+    fake.pending = _weekly(message="go \N{GRINNING FACE}").body["rows"]
+    monkeypatch.setenv("QUIPU_SERVER", "http://quipu.example.invalid")
+    monkeypatch.setattr(quipu_auth, "write_headers", lambda server: {})
+    monkeypatch.setattr(q.urllib.request, "urlopen", fake)
+    assert cli.main(["--root", str(tmp_path), "work", "jobs", "--graph", GRAPH, "new", "podcast",
+                     "--weekly", "tue", "09:17", "--tz", "America/New_York", "--host", "mac",
+                     "--inbox", "lex", "--message", "go \N{GRINNING FACE}",
+                     "--owner", "hammond"]) == cli.OK
+    (written,) = fake.writes
+    assert _turtle_literal_value(written, q.SCHEMA + "description") == "go \N{GRINNING FACE}"
 
 
 def test_interval_declaration_uses_an_exact_duration():
