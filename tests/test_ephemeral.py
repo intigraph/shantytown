@@ -241,6 +241,85 @@ def test_report_reaches_the_administrator_even_when_the_comment_fails(tmp_path):
     assert len(events.pending("boss")) == 1
 
 
+class _Card:
+    def __init__(self, name, role, pane="p", retired=None):
+        self.name, self.role, self.pane, self.retired = name, role, pane, retired
+
+
+def _route(cards, up):
+    return (lambda n: cards.get(n)), (lambda card: card.name in up)
+
+
+def test_a_leads_job_result_goes_to_the_lead_not_the_administrator(tmp_path):
+    """aegis-0dh5 replay: ellie spawned the job, sattler administers. The DONE
+    must reach ellie's events AND pane; sattler must not get it."""
+    rec = _rec(tmp_path, spawned_by="ellie")
+    eph.record_result(tmp_path, rec["name"], "done", "PR #9", "report", NOW)
+    events = FilesEvents(tmp_path / "events")
+    woke = []
+    card_of, is_up = _route({"ellie": _Card("ellie", "lead")}, {"ellie"})
+    problems = eph.notify(eph.read(tmp_path, rec["name"]), persist_event=events.persist,
+                          comment=lambda *a: None, card_of=card_of, is_up=is_up,
+                          wake=lambda name, text: woke.append((name, text)) or True)
+    assert problems == []
+    got = events.pending("ellie")
+    assert len(got) == 1 and "DONE" in got[0].detail and not got[0].rose
+    assert events.pending("boss") == []
+    assert len(woke) == 1 and woke[0][0] == "ellie" and "PR #9" in woke[0][1]
+
+
+def test_an_administrators_own_job_still_goes_to_the_administrator(tmp_path):
+    rec = _rec(tmp_path)                       # spawned_by == administrator == boss
+    eph.record_result(tmp_path, rec["name"], "done", "", "report", NOW)
+    events = FilesEvents(tmp_path / "events")
+    woke = []
+    card_of, is_up = _route({"boss": _Card("boss", "administrator")}, {"boss"})
+    eph.notify(eph.read(tmp_path, rec["name"]), persist_event=events.persist,
+               comment=lambda *a: None, card_of=card_of, is_up=is_up,
+               wake=lambda *a: woke.append(a) or True)
+    assert len(events.pending("boss")) == 1 and woke == []
+
+
+@pytest.mark.parametrize("cards,up,why", [
+    ({"ellie": _Card("ellie", "lead")}, set(), "is down"),
+    ({}, set(), "unknown"),
+    ({"ellie": _Card("ellie", "lead", retired=True)}, {"ellie"}, "not live crew"),
+    ({"ellie": _Card("ellie", "administrator")}, {"ellie"}, "not live crew"),
+])
+def test_a_spawner_that_cannot_hear_it_falls_back_to_the_administrator(tmp_path, cards, up, why):
+    rec = _rec(tmp_path, spawned_by="ellie")
+    eph.record_result(tmp_path, rec["name"], "done", "", "report", NOW)
+    events = FilesEvents(tmp_path / "events")
+    woke = []
+    card_of, is_up = _route(cards, up)
+    eph.notify(eph.read(tmp_path, rec["name"]), persist_event=events.persist,
+               comment=lambda *a: None, card_of=card_of, is_up=is_up,
+               wake=lambda *a: woke.append(a) or True)
+    got = events.pending("boss")
+    assert len(got) == 1 and why in got[0].detail and got[0].rose
+    assert events.pending("ellie") == [] and woke == []
+
+
+def test_an_undelivered_live_wake_is_named_and_the_event_still_lands(tmp_path):
+    rec = _rec(tmp_path, spawned_by="ellie")
+    eph.record_result(tmp_path, rec["name"], "done", "", "report", NOW)
+    events = FilesEvents(tmp_path / "events")
+    card_of, is_up = _route({"ellie": _Card("ellie", "lead")}, {"ellie"})
+    problems = eph.notify(eph.read(tmp_path, rec["name"]), persist_event=events.persist,
+                          comment=lambda *a: None, card_of=card_of, is_up=is_up,
+                          wake=lambda *a: False)
+    assert problems and "live wake of spawner ellie NOT delivered" in problems[0]
+    assert len(events.pending("ellie")) == 1
+
+
+def test_no_route_readers_means_the_administrator(tmp_path):
+    """The old call shape, and an unreadable registry, never route nowhere."""
+    rec = _rec(tmp_path, spawned_by="ellie")
+    assert eph.result_recipient(rec)[0] == "boss"
+    boom = lambda n: (_ for _ in ()).throw(OSError("registry down"))
+    assert eph.result_recipient(rec, card_of=boom, is_up=lambda c: True)[0] == "boss"
+
+
 def test_teardown_removes_the_card_before_the_pane(tmp_path):
     rec = _rec(tmp_path)
     scratch = eph.ledger_dir(tmp_path) / "scratch" / rec["name"]

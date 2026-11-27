@@ -4177,6 +4177,43 @@ def _spawn_item_comment(a):
     return comment
 
 
+def _spawn_result_route(a, panes):
+    """The readers eph.notify routes a job's result with (aegis-0dh5): the
+    spawner's card, whether its pane is live, and a live wake into that pane.
+    Each one fails toward the administrator or toward "not delivered", never
+    toward a silent success."""
+    from .attribution import ST_TEND, attribute
+    from .tmux import PaneNotAgent
+    try:
+        reg = _registry(a)
+    except Exception:  # noqa: BLE001 -- no registry: result_recipient says UNKNOWN
+        return None, None, None
+
+    def card_of(name):
+        try:
+            return reg.get(name)
+        except LookupError:
+            return None
+
+    def is_up(card):
+        return bool(card.pane) and panes.exists(card.pane)
+
+    def wake(name, text):
+        card = card_of(name)
+        if card is None or not is_up(card):
+            return False
+        line = " ".join(text.split())
+        message = (f"Your ephemeral job finished: {line[:400]} "
+                   f"(full result on the item; it is also in your stop events)")
+        try:
+            panes.send(card.pane, attribute(message, ST_TEND))
+        except PaneNotAgent:
+            # A shell, not an agent: typing would EXECUTE it (aegis-ikj4t).
+            return False
+        return True
+    return card_of, is_up, wake
+
+
 def _spawn_keep_pane(a, panes, session, name):
     """Save a failed job's last screen before its pane is killed (aegis-e579).
 
@@ -4233,10 +4270,12 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached, drain=True):
         current = eph.read(a.root, name) or rec
         lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
         return current, [lane] if lane else []
+    card_of, is_up, wake = _spawn_result_route(a, panes)
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
-                               schedule_teardown=schedule, now=time.time())
+                               schedule_teardown=schedule, now=time.time(),
+                               card_of=card_of, is_up=is_up, wake=wake)
     if lane := _spawn_lane_release(a, rec):
         problems = [*problems, lane]
     if drain and not detached:
