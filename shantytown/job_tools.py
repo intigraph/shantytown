@@ -188,15 +188,25 @@ def filter_manifest(manifest, spec):
 
 def settings_target(root, card):
     base = Path(root) / "settings"
-    return (base / "codex" / f"agent-{card.name}" / "config.toml" if card.harness == "codex"
-            else base / f"{card.name}.job.settings.json")
+    if card.harness == "codex":
+        return base / "codex" / f"agent-{card.name}" / "config.toml"
+    if card.harness == "agy":
+        # agy keeps a native launch-settings.json beside its canonical file, so
+        # each job gets its own directory rather than sharing settings/.
+        return base / "agy" / f"job-{card.name}" / "settings.json"
+    return base / f"{card.name}.job.settings.json"
 
 
 def prepare_settings(root, card, base):
     spec = selected(root, card.name)
     if spec is None:
         return base
-    if card.harness not in ("claude", "codex"):
+    # agy takes the Claude-shaped canonical file: its hook adapter (agy_hooks)
+    # runs these PreToolUse hooks on every call_mcp_tool, translated to
+    # mcp__<server>__<tool>, and denies on any refusal or adapter error. Its
+    # server set is the workspace kit, which provisioning filters by this same
+    # profile. opencode has no such gate yet, so it still refuses.
+    if card.harness not in ("claude", "codex", "agy"):
         raise ValueError("job tool profile is not supported by this harness")
     from . import codex
     source = Path(base).read_text()
@@ -237,6 +247,13 @@ def prepare_settings(root, card, base):
             temporary.replace(target)
         finally:
             temporary.unlink(missing_ok=True)
+    if card.harness == "agy":
+        # Point the workspace hook projection and the native launch file at this
+        # job-owned canonical file; agy's SessionStart refuses a mismatch.
+        if not card.workspace:
+            raise ValueError("agy job tool profile requires the job workspace")
+        from .harness import for_card
+        for_card(card, root).provision(str(target), root, workspaces=(card.workspace,))
     if card.harness == "codex":
         # The job-owned config makes its directory the job's CODEX_HOME, so
         # the attended exec-policy rules st wrote at spawn (the exact per-PR
