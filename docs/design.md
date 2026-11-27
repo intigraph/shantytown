@@ -128,6 +128,14 @@ The **files** adapter is not a toy. It's the proof the abstraction holds — if 
 directory of markdown, it works for someone with no tracker at all, and that's the whole generality
 claim.
 
+**New seeds reach the administrator.** Each fleet tend pass reads the board in creation order
+past a stored cursor (`shantytown/seed_notify.py`, state in `notify/new-seeds.json`), so a seed is
+seen whoever created it. A burst is held until it has been quiet for two minutes (ten at most) and
+then delivered as ONE notice: id, title, priority, labels, creator and the three most similar open
+items by word overlap, for the administrator to rank, reject, modify or link. Inbox pointers and
+ephemeral job reports are skipped; the first pass baselines and announces nothing; an undelivered
+notice is retried, never ledgered.
+
 ## Panes
 
 `tmux.py` is the floor and the reference:

@@ -3333,7 +3333,7 @@ def _record_launch_unretirement(a, card) -> bool:
 # fleet owner host only (aegis-1g55ji); everything else in a tend pass is host-local.
 FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
                 "blocked-stale", "deferral-sweep", "unblocked-events",
-                "blocked-misstatus")
+                "new-seeds", "blocked-misstatus")
 
 
 def runs_fleet_sweeps(cfg, owner_unreachable: bool = False) -> bool:
@@ -16412,6 +16412,15 @@ def _tend_once(a, quiet: bool = False) -> int:
         if unblocked:
             print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
                   f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
+        # NEW SEEDS (Stiwi 2026-11-27): every new non-pointer seed reaches the
+        # administrator in ONE batched notice with its likely duplicates, so it is
+        # ranked, linked, modified or rejected instead of piling up unranked.
+        from . import seed_notify as seed_notify_mod
+        announced = _fleet_sweep("new-seeds", seed_notify_mod.NewSeedNotifier(
+            Path(a.root), _registry(a), panes, log=_log).sweep)
+        if announced:
+            print(f"  🌱 announced {len(announced)} new seed(s) to the administrator: "
+                  f"{', '.join(announced)}", file=sys.stderr)
         misstatused = _fleet_sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())
