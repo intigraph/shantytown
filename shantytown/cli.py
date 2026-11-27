@@ -16417,7 +16417,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # ranked, linked, modified or rejected instead of piling up unranked.
         from . import seed_notify as seed_notify_mod
         announced = _fleet_sweep("new-seeds", seed_notify_mod.NewSeedNotifier(
-            Path(a.root), _registry(a), panes, log=_log).sweep)
+            Path(a.root), _registry(a), panes, log=_log,
+            stand_in=bool(owner_down)).sweep)
         if announced:
             print(f"  🌱 announced {len(announced)} new seed(s) to the administrator: "
                   f"{', '.join(announced)}", file=sys.stderr)

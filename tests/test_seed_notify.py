@@ -138,3 +138,89 @@ def test_related_ignores_closed_and_unrelated_items():
              {"id": "u", "status": "open", "title": "gpu fan curve"},
              {"id": "o", "status": "open", "title": "notify administrator about seeds"}]
     assert [r[0] for r in related(row, board)] == ["o"]
+
+
+def test_a_seed_stamped_before_the_cursor_but_listed_after_a_flush_is_announced(tmp_path):
+    # Review of the first version: cursor = newest flushed created_at, and any row
+    # stamped before it was skipped, so a late-listed seed (clock skew, slow commit,
+    # a store added to tracker.repos) was never announced.
+    world = _baselined(tmp_path)
+    world.board.append(_row("aegis-new", "fresh seed", world.now + timedelta(seconds=30)))
+    assert world.tick(tmp_path, 30 + seed_notify.WINDOW) == ["aegis-new"]
+    world.board.append(_row("aegis-late", "skewed host seed", world.now - timedelta(minutes=10)))
+    assert world.tick(tmp_path, seed_notify.WINDOW) == ["aegis-late"]
+    assert len(world.msgs) == 2 and "• aegis-new" not in world.msgs[1]
+    assert world.tick(tmp_path, 3600) == []                # still announced once each
+
+
+def test_a_row_older_than_the_lookback_stays_out(tmp_path):
+    world = _baselined(tmp_path)
+    cursor = T0 - timedelta(days=1)                          # newest EXISTING row
+    world.board.append(_row("aegis-ancient", "imported long ago",
+                            cursor - timedelta(seconds=seed_notify.LOOKBACK + 3600)))
+    assert world.tick(tmp_path, 10 * seed_notify.WINDOW) == []
+
+
+def test_creator_comes_from_the_real_sd_list_field(tmp_path):
+    # Shape captured from `sd list --json` on 2026-11-27: the creator is created_by.
+    world = _baselined(tmp_path)
+    world.board.append({
+        "acceptance_criteria": None, "assignee": None, "close_reason": None,
+        "closed_at": None, "created_at": _iso(world.now + timedelta(seconds=1)),
+        "created_by": "franklin", "defer_until": None, "dependency_count": 0,
+        "dependent_count": 0, "description": "", "id": "aegis-g68w.29",
+        "issue_type": "task", "labels": [], "priority": 2, "status": "open",
+        "title": "captured row", "updated_at": _iso(world.now)})
+    assert world.tick(tmp_path, seed_notify.WINDOW + 5) == ["aegis-g68w.29"]
+    assert "by franklin" in world.msgs[0] and "UNKNOWN" not in world.msgs[0]
+
+
+def test_corrupt_state_is_kept_logged_and_recovered_without_losing_the_batch(tmp_path):
+    world = _baselined(tmp_path)
+    world.board.append(_row("aegis-p", "pending when the file broke",
+                            world.now + timedelta(seconds=1)))
+    assert world.tick(tmp_path, 10) == []                   # pending, not yet flushed
+    path = tmp_path / "notify" / "new-seeds.json"
+    path.write_text("{not json")
+    logs = []
+    notifier = NewSeedNotifier(tmp_path, None, None, push=lambda r, p, m: world.msgs.append(m) or "s",
+                               rows=lambda: list(world.board),
+                               now=lambda: world.now + timedelta(seconds=seed_notify.WINDOW),
+                               log=logs.append)
+    assert notifier.sweep() == ["aegis-p"]                 # a silent re-baseline drops it
+    assert any("UNUSABLE" in line for line in logs)
+    assert (tmp_path / "notify" / "new-seeds.json.corrupt").read_text() == "{not json"
+
+
+def test_a_missing_state_file_still_baselines_quietly(tmp_path):
+    logs = []
+    notifier = NewSeedNotifier(tmp_path, None, None, push=lambda *a: "s",
+                               rows=lambda: list(EXISTING), now=lambda: T0, log=logs.append)
+    assert notifier.sweep() == []
+    assert not any("UNUSABLE" in line for line in logs)
+
+
+def test_a_stand_in_host_does_not_announce_and_the_owner_catches_up(tmp_path):
+    world = _baselined(tmp_path)
+    world.board.append(_row("aegis-s", "made while the owner was down",
+                            world.now + timedelta(seconds=1)))
+    stand_in = NewSeedNotifier(tmp_path / "standin", None, None,
+                               push=lambda *a: world.msgs.append(a) or "s",
+                               rows=lambda: list(world.board),
+                               now=lambda: world.now + timedelta(hours=1), stand_in=True)
+    assert stand_in.sweep() == [] and world.msgs == []
+    assert world.tick(tmp_path, 3600) == ["aegis-s"]       # owner, back, announces it once
+
+
+def test_a_burst_over_the_cap_names_every_seed_across_notices(tmp_path):
+    world = _baselined(tmp_path)
+    n = seed_notify.LISTED_CAP + 3
+    for i in range(n):
+        world.board.append(_row(f"aegis-c{i:02d}", f"cap item {i}", world.now + timedelta(seconds=1)))
+    first = world.tick(tmp_path, seed_notify.WINDOW + 5)
+    assert len(first) == seed_notify.LISTED_CAP
+    assert "3 more new seed(s) follow" in world.msgs[0]
+    second = world.tick(tmp_path, seed_notify.MAX_WAIT)
+    assert sorted(first + second) == [f"aegis-c{i:02d}" for i in range(n)]
+    for i in range(n):
+        assert sum(f"• aegis-c{i:02d} " in m for m in world.msgs) == 1

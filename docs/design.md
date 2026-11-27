@@ -134,7 +134,11 @@ seen whoever created it. A burst is held until it has been quiet for two minutes
 then delivered as ONE notice: id, title, priority, labels, creator and the three most similar open
 items by word overlap, for the administrator to rank, reject, modify or link. Inbox pointers and
 ephemeral job reports are skipped; the first pass baselines and announces nothing; an undelivered
-notice is retried, never ledgered.
+notice is retried, never ledgered. The cursor is a floor minus a seven-day lookback and the seen set
+dedupes, so a seed stamped before the last flush but listed after it (clock skew, a slow commit, a
+newly added store) is still announced. A notice names at most 20 seeds and holds the rest for the
+next one. A corrupt state file is kept aside, logged, and recovered by re-announcing the last day;
+a stand-in host (owner unreachable) announces nothing, and the owner catches up when it returns.
 
 ## Panes
 

@@ -31,20 +31,39 @@ unreachable administrator pane leaves the batch for the next pass.
 
 The first pass has no cursor. It records the newest creation time and notifies
 nothing: announcing the whole existing backlog as "new" would be one useless wall.
+
+The cursor is a FLOOR minus LOOKBACK, not a hard edge, and the seen set (not the
+cursor) is what dedupes. The first version skipped every row stamped before the
+cursor, so a seed whose created_at precedes the last flush but first reaches the
+listing after it (clock skew between creating hosts, a slow commit, a store newly
+added to tracker.repos, an imported item) was never announced. Only a row stamped
+more than LOOKBACK before the cursor is still out of reach.
+
+A notice lists at most LISTED_CAP seeds; the rest stay pending for the next pass,
+so every seed is NAMED to the administrator, never just counted.
+
+State that is unreadable is not the same as state that is missing. Missing means
+first run: baseline. Corrupt is moved aside, logged, and recovered by announcing
+the last RECOVER_LOOKBACK again: a duplicate notice is cheaper than a lost seed.
+
+A stand-in host (owner unreachable) does NOT announce. Its notify state is its
+own, so when the owner returned it re-announced every seed the stand-in had sent.
+The owner's cursor already covers the outage, so it catches up on return.
 """
 from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 WINDOW = 120            # quiet seconds that close a burst
 MAX_WAIT = 600          # a steady trickle still flushes at least this often
 RELATED_TOP = 3
 RELATED_MIN = 0.2       # Jaccard floor; below it a "match" is shared filler words
-LISTED_CAP = 20         # items spelled out in one notice; the rest are counted
-SEEN_CAP = 2000
+LISTED_CAP = 20         # items spelled out in one notice; the rest wait a pass
+LOOKBACK = 7 * 86400    # how far before the cursor a late-listed seed still counts
+RECOVER_LOOKBACK = 86400
 _WORD = re.compile(r"[a-z0-9][a-z0-9_-]{2,}")
 _STOP = frozenset(
     "the and for with from that this into when then than not are was were its "
@@ -114,11 +133,11 @@ def _creator(row: dict) -> str:
     return "UNKNOWN"
 
 
-def render(entries: list[dict], now: datetime) -> str:
+def render(entries: list[dict], now: datetime, held: int = 0) -> str:
     count = len(entries)
     lines = [f"🌱 NEW SEEDS ({count}) — rank, reject (close with reason), modify, or link "
              f"each one this cycle:"]
-    for entry in entries[:LISTED_CAP]:
+    for entry in entries:
         priority = entry.get("priority")
         lines.append(
             f"• {entry['id']} P{priority if priority is not None else '?'} "
@@ -128,8 +147,8 @@ def render(entries: list[dict], now: datetime) -> str:
             lines.append(f"    ≈ {rid} ({score}) {rtitle[:80]}")
         if not entry.get("related"):
             lines.append("    ≈ no likely duplicate on the board")
-    if count > LISTED_CAP:
-        lines.append(f"… and {count - LISTED_CAP} more created in this burst.")
+    if held:
+        lines.append(f"… {held} more new seed(s) follow in the next notice.")
     lines.append("≈ is word overlap with open items: a lead to check, not a verdict. "
                  "Act with `st work item update <id> --rank/--priority`, "
                  "`st work item close <id>`, or a dependency link.")
@@ -137,7 +156,8 @@ def render(entries: list[dict], now: datetime) -> str:
 
 
 class NewSeedNotifier:
-    def __init__(self, root, reg, panes, *, push=None, rows=None, now=None, log=None):
+    def __init__(self, root, reg, panes, *, push=None, rows=None, now=None, log=None,
+                 stand_in=False):
         self._root = root
         self.path = Path(root) / "notify" / "new-seeds.json"
         self._reg, self._panes = reg, panes
@@ -145,26 +165,47 @@ class NewSeedNotifier:
         self._rows = rows
         self._now = now
         self._log = log or (lambda msg: None)
+        self._stand_in = stand_in
 
     def _clock(self) -> datetime:
         return self._now() if self._now else datetime.now(timezone.utc)
 
     def _load(self) -> dict | None:
+        """The saved state; None when there is none yet (first run).
+
+        Raises ValueError when a file exists but cannot be used, so the caller can
+        say so instead of silently re-baselining over a pending batch."""
         try:
-            state = json.loads(self.path.read_text())
-        except (OSError, ValueError):
+            text = self.path.read_text()
+        except FileNotFoundError:
             return None
-        if not isinstance(state, dict) or not isinstance(state.get("cursor"), str):
-            return None
-        state.setdefault("pending", [])
-        state.setdefault("seen", [])
+        except OSError as e:
+            raise ValueError(f"unreadable: {e!r}") from e
+        state = json.loads(text)        # a JSONDecodeError is a ValueError
+        if not isinstance(state, dict) or not isinstance(state.get("cursor"), str) \
+                or _time(state["cursor"]) is None:
+            raise ValueError("no usable cursor")
+        pending = state.get("pending") or []
+        seen = state.get("seen") or {}
+        if isinstance(seen, list):      # the first format kept bare ids
+            seen = {str(i): state["cursor"] for i in seen}
+        if not isinstance(pending, list) or not isinstance(seen, dict):
+            raise ValueError("pending/seen malformed")
+        state["pending"], state["seen"] = pending, seen
         return state
 
     def _save(self, state: dict) -> None:
         from .files import write_json_atomic
-        state["seen"] = state["seen"][-SEEN_CAP:]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         write_json_atomic(self.path, state)
+
+    @staticmethod
+    def _baseline(created, at: datetime) -> dict:
+        """State whose cursor is `at`: rows up to it (back to the floor) are known."""
+        floor = at - timedelta(seconds=LOOKBACK)
+        return {"cursor": at.isoformat(), "pending": [],
+                "seen": {str(row["id"]): t.isoformat() for t, row in created
+                         if floor <= t <= at}}
 
     def _board(self) -> list[dict]:
         if self._rows is not None:
@@ -178,6 +219,10 @@ class NewSeedNotifier:
 
     def sweep(self) -> list[str]:
         """Return the ids carried by a notice that landed on this pass, else []."""
+        if self._stand_in:
+            self._log("new-seeds: standing in for an unreachable owner; not announcing, "
+                      "the owner's cursor catches up when it returns")
+            return []
         now = self._clock()
         try:
             board = self._board()
@@ -187,21 +232,30 @@ class NewSeedNotifier:
         created = [(t, row) for row in board
                    if isinstance(row, dict) and row.get("id")
                    and (t := _time(row.get("created_at"))) is not None]
-        state = self._load()
+        try:
+            state = self._load()
+        except ValueError as e:
+            aside = self.path.with_name(self.path.name + ".corrupt")
+            try:
+                self.path.replace(aside)
+            except OSError:
+                pass
+            since = now - timedelta(seconds=RECOVER_LOOKBACK)
+            self._log(f"new-seeds: state file {self.path} is UNUSABLE ({e}); kept as {aside}; "
+                      f"re-announcing seeds since {since.isoformat()} rather than lose any")
+            state = self._baseline(created, since)
         if state is None:
             newest = max((t for t, _ in created), default=now)
-            # Items AT the cursor are not "after" it but are not new either.
-            self._save({"cursor": newest.isoformat(), "pending": [],
-                        "seen": [str(row["id"]) for t, row in created if t == newest]})
+            self._save(self._baseline(created, newest))
             self._log(f"new-seeds: baseline at {newest.isoformat()}; existing items not announced")
             return []
-
         cursor = _time(state["cursor"]) or now
+        floor = cursor - timedelta(seconds=LOOKBACK)
         known = set(state["seen"]) | {p["id"] for p in state["pending"]}
         for at, row in sorted(created, key=lambda c: c[0]):
-            if at < cursor or row["id"] in known or excluded(row):
+            if at < floor or str(row["id"]) in known or excluded(row):
                 continue
-            known.add(row["id"])
+            known.add(str(row["id"]))
             state["pending"].append({
                 "id": str(row["id"]), "at": at.isoformat(),
                 "title": row.get("title") or "", "priority": row.get("priority"),
@@ -218,19 +272,28 @@ class NewSeedNotifier:
             return []
 
         by_id = {str(row.get("id")): row for _, row in created}
+        state["pending"].sort(key=lambda p: _time(p["at"]) or now)
+        batch, held = state["pending"][:LISTED_CAP], state["pending"][LISTED_CAP:]
         entries = []
-        for pending in state["pending"]:
+        for pending in batch:
             row = by_id.get(pending["id"], pending)
             entries.append({**pending, "related": related(row, board)})
         from .notify import push_to_admin
         push = self._push or push_to_admin
-        if not push(self._reg, self._panes, render(entries, now)):
+        if not push(self._reg, self._panes, render(entries, now, held=len(held))):
             self._log(f"new-seeds: notice for {len(entries)} seed(s) did not land; retry next pass")
             self._save(state)
             return []
-        ids = [p["id"] for p in state["pending"]]
-        state["seen"].extend(ids)
-        state["cursor"] = max(times).isoformat()
-        state["pending"] = []
+        ids = [p["id"] for p in batch]
+        for p in batch:
+            state["seen"][p["id"]] = p["at"]
+        flushed = max(_time(p["at"]) or now for p in batch)
+        cursor = max(cursor, flushed)
+        state["cursor"] = cursor.isoformat()
+        state["pending"] = held
+        # A seen id older than the floor can never be a candidate again.
+        floor = cursor - timedelta(seconds=LOOKBACK)
+        state["seen"] = {i: t for i, t in state["seen"].items()
+                         if (_time(t) or cursor) >= floor}
         self._save(state)
         return ids
