@@ -474,6 +474,41 @@ write an `aegis:VerifierRegistration` in ROOT (`aegis:verifier` = the signer
 id, `aegis:publicKey` = the key's public half, `aegis:attests
 "github-pr-gate-approval"`). Set `lane_release` when chaski's receiver runs.
 
+## One Shuttle run per job (aegis-za4f.19.1)
+
+Every job is one Shuttle workflow run, named after the job (`eph-task-…`).
+`shantytown/job_runs.py` holds the definitions and the lifecycle:
+
+- **start** once the ledger is written at spawn (`st-ephemeral-task-v1`, or
+  `st-ephemeral-review-v1` for a review job), in state `spawned`;
+- **claim** when the job's prompt is delivered (`mark_live`);
+- **end** on the recorded result: a task that reports `done`/`merged` walks
+  `work -> report`; a review walks its verdict (`approve -> report`,
+  `request-changes`, `reject`); anything else, or a job that never claimed,
+  is `fail`. `open-pr` (task) and `enqueue` (review) are legal edges no st
+  path takes yet: nothing reports them to st, and the run never claims a step
+  on the job's say-so.
+
+Illegal steps are refused in st before any signer is asked, and again by
+shuttle. The run is recorded on the ledger as `shuttle_run` (definition,
+state, steps, signer, last error). Recording never blocks a job: a host with no
+`shuttle`, no administrator, or a refused step still launches, reports and
+tears down, and the entry says why it has no run.
+
+**Signing is an interface.** `job_runs.Signer` is what the run needs
+(`define/start/advance/verify`). The only implementation today is
+`RegisteredKeySigner`: the `shuttle` CLI with `--require-existing-keys`,
+signing as the job's administrator, whose key is already registered. No
+per-job key is generated, injected, or passed in env, argv, a file or an fd
+(2026-09-12 decision 3). The attribution caveat of that decision still holds
+for this signer: the signature names the administrator's key, and a same-uid
+job could read that key. The signing broker (sattler's ruling B on
+aegis-za4f.19, slice S2) replaces this signer with per-job keys held under
+its own uid, and callers do not change.
+
+`SHANTY_JOB_RUNS=none` turns runs off. It is the negative control, and the
+test suite runs with it so that no test appends to the operator's shuttle log.
+
 ## Known limits
 
 - **One GitHub identity.** A non-author GitHub APPROVE can never exist, so the approval comes from a signed Quipu verdict record (above). Until verdict records are enabled and the signer is registered, merge jobs report `blocked`. That is the safe outcome.

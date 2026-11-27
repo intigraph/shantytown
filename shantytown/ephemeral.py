@@ -2090,9 +2090,60 @@ def apply_mailbox(root, name, state, now):
 def mark_live(root, name: str) -> None:
     with lock(root):
         rec = read(root, name)
-        if rec is not None and rec.get("state") == LAUNCHING:
-            rec["state"] = LIVE
+        if rec is None or rec.get("state") != LAUNCHING:
+            return
+        rec["state"] = LIVE
+        write(root, rec)
+    run_step(root, name, "claim")
+
+
+# --- the job's Shuttle run (aegis-za4f.19.1): start, steps, end ---------------
+# Signer calls shell out, so they run OUTSIDE the ledger lock and only the
+# resulting `shuttle_run` entry is written under it. None of these raise: a job
+# that cannot reach Shuttle must still launch, report and be torn down, and the
+# ledger entry says why it has no run instead of hiding it.
+
+def _store_run(root, name: str, entry: dict) -> None:
+    with lock(root):
+        rec = read(root, name)
+        if rec is not None:
+            rec["shuttle_run"] = entry
             write(root, rec)
+
+
+def run_begin(root, name: str, signer_for=None) -> dict | None:
+    from . import job_runs
+    rec = read(root, name)
+    if rec is None:
+        return None
+    entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
+    _store_run(root, name, entry)
+    return entry
+
+
+def run_step(root, name: str, step: str, signer_for=None) -> dict | None:
+    from . import job_runs
+    rec = read(root, name)
+    if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+        return None
+    try:
+        job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
+    except job_runs.RunRefused as e:
+        entry = dict(rec.get("shuttle_run") or {})
+        entry["error"] = entry.get("error") or f"{step} refused: {e}"
+        rec["shuttle_run"] = entry
+    _store_run(root, name, rec["shuttle_run"])
+    return rec["shuttle_run"]
+
+
+def run_end(root, name: str, verdict: str, signer_for=None) -> dict | None:
+    from . import job_runs
+    rec = read(root, name)
+    if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+        return None
+    entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
+    _store_run(root, name, entry)
+    return entry
 
 
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
@@ -2365,6 +2416,8 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
            persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
+    # The run ends on the RECORDED result: a second ending keeps the first story.
+    run_end(root, name, rec["result"]["verdict"])
     problems = notify(rec, persist_event=persist_event, comment=comment)
     schedule_teardown(name)
     return rec, problems
