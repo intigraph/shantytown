@@ -307,6 +307,15 @@ def store(tmp_path, monkeypatch):
     def offline_gh(*args):
         raise RuntimeError("offline fixture")
     monkeypatch.setattr(cli, "_gh_json", offline_gh)
+    # A task job must name --repo (aegis-za4f.15), and a named repo must resolve
+    # a real checkout to cut from, so `--repo o/n` lands on this one-commit
+    # clone unless a test stubs its own.
+    import subprocess
+    src = tmp_path / "fixture-src"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+    subprocess.run(["git", "-C", str(src), "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    monkeypatch.setattr(cli, "_resolve_repo", lambda name: src)
     from shantytown import actor_identity
     panes.verified_actor = 'boss'
     def authenticated():
@@ -341,14 +350,14 @@ def _st(root, *args):
 
 def test_spawn_launches_a_supervised_card_then_queues_over_cap(store, capsys):
     root, panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     card = json.loads((root / "crew" / f"{rec['name']}.json").read_text())
     assert card["reports_to"] == "boss" and card["roles"] == ["worker", "first"]
     assert card["dangerous"] is False and card["harness"] == "claude"
     assert launched[0].name == rec["name"]
     assert Path(rec["workspace"]).is_dir()
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert "QUEUED q-" in capsys.readouterr().out
     assert len(launched) == 1 and len(eph.records(root)) == 1
 
@@ -358,7 +367,7 @@ def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
     (root / "crew" / "lex.json").write_text(json.dumps({"role": "worker"}))
     _panes.verified_actor = "lex"
     monkeypatch.setenv("SHANTY_AGENT", "lex")
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.REFUSED
     assert "not the administrator" in capsys.readouterr().err and not launched
 
 
@@ -368,11 +377,11 @@ def test_a_lead_can_spawn_and_stop(store, monkeypatch, capsys):
     (root / "crew" / "lea.json").write_text(json.dumps({"role": "lead", "reports_to": "boss"}))
     panes.verified_actor = "lea"
     monkeypatch.setenv("SHANTY_AGENT", "lea")
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     assert len(launched) == 1
     # The cap is unchanged for a lead: max_agents = 1 in the fixture.
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert "QUEUED" in capsys.readouterr().out and len(launched) == 1
     (t,) = eph.tickets(root)
     assert t["requester"] == "lea"
@@ -395,7 +404,7 @@ def test_lead_admission_is_opt_in_so_the_controller_boundary_stays_administrator
 
 def test_administrator_stop_reports_and_tears_down_and_retry_respawns(store, capsys):
     root, panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     name = rec["name"]
     assert _st(root, "--stop", name) == cli.OK
@@ -423,7 +432,7 @@ def test_governor_admission_fails_closed_for_ephemeral_work(store, monkeypatch, 
     def blind(a):
         raise OSError("usage reader gone")
     monkeypatch.setattr(cli, "_governors", blind)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.REFUSED
     assert "governor admission could not be established" in capsys.readouterr().err
     assert not launched and eph.records(root) == []
 
@@ -435,7 +444,7 @@ def test_unverifiable_hooks_still_deliver_and_spawn_succeeds(store, capsys):
     job was delivered, so the spawn is a success and the job goes LIVE."""
     root, panes, _launched = store
     panes.behaviour.update(rc=cli.CANNOT_TELL, delivered=True)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     assert rec["state"] == eph.LIVE
 
@@ -443,7 +452,7 @@ def test_unverifiable_hooks_still_deliver_and_spawn_succeeds(store, capsys):
 def test_an_undelivered_job_is_ended_not_left_idle(store, capsys):
     root, panes, _launched = store
     panes.behaviour.update(rc=cli.CANNOT_TELL, delivered=False)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.CANNOT_TELL
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.CANNOT_TELL
     (rec,) = eph.records(root)
     assert rec["state"] == eph.DONE and rec["result"]["cause"] == "launch failed"
     assert not panes.exists(f"st-{rec['name']}")
@@ -455,7 +464,7 @@ def test_tend_during_launch_does_not_orphan_the_pane(store):
     mark the job died and drop its card, then the pane came up unsupervised."""
     root, panes, _launched = store
     panes.behaviour["during"] = lambda a: cli._spawn_reap(a)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     assert rec["state"] == eph.LIVE and rec["result"] is None
     assert (root / "crew" / f"{rec['name']}.json").exists()
@@ -518,10 +527,10 @@ def test_an_ephemeral_process_without_shanty_agent_is_still_that_job(tmp_path):
 
 def test_spawn_from_inside_a_job_is_refused_even_with_the_env_unset(store, monkeypatch, capsys):
     root, _panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     monkeypatch.chdir(rec["workspace"])
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.REFUSED
     assert "cannot spawn" in capsys.readouterr().err and len(launched) == 1
 
 
@@ -618,7 +627,7 @@ def test_report_requires_the_verified_job_principal_not_just_the_env(store, monk
     """Live review finding: a crew pane exporting SHANTY_AGENT=<job> could forge
     that job's verdict. Reporting requires the verified job principal."""
     root, panes, _launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     monkeypatch.setenv("SHANTY_AGENT", rec["name"])
     assert _st(root, "--report", "--verdict", "done") == cli.REFUSED   # wrong verified principal
@@ -839,7 +848,7 @@ def test_detached_verified_job_still_cannot_manage_jobs(store, monkeypatch, caps
     monkeypatch.delenv('SHANTY_AGENT', raising=False)
     monkeypatch.setattr(eph, 'ancestor_pids', lambda: [])
     monkeypatch.chdir(root)  # outside the job workspace; no process-tree rail
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-other') == cli.REFUSED
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-other') == cli.REFUSED
     assert 'cannot spawn' in capsys.readouterr().err and not launched
 
 
@@ -881,7 +890,7 @@ def test_unattended_gate_defaults_off_and_refuses_before_retry_releases_lane(sto
 def test_unattended_gate_also_covers_inherited_dangerous_posture(store, capsys):
     root, _, launched = store
     (root / 'shantytown.toml').write_text('[ephemeral]\nmax_agents = 1\n')
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1') == cli.REFUSED
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-1') == cli.REFUSED
     assert 'unattended_uid_ready is false' in capsys.readouterr().err
     assert not launched and not eph.records(root)
 
@@ -893,7 +902,7 @@ def test_uid_readiness_must_be_boolean_and_cannot_replace_verified_identity(stor
     with pytest.raises(config.ConfigError, match='unattended_uid_ready'):
         config.load(root)
     path.write_text('[ephemeral]\nunattended = true\nunattended_uid_ready = true\n')
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1', '--dry-run') == cli.REFUSED
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-1', '--dry-run') == cli.REFUSED
     assert 'verified protected UID' in capsys.readouterr().err
     assert not launched and not eph.records(root)
 
@@ -917,7 +926,7 @@ def test_identity_failure_never_falls_back_to_environment_for_mutation(store, mo
     def unavailable():
         raise actor_identity.IdentityError('identity service unavailable')
     monkeypatch.setattr(actor_identity, 'authenticated_actor', unavailable)
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-1') == cli.REFUSED
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-1') == cli.REFUSED
     assert not launched and not eph.records(root)
 
 
@@ -936,19 +945,19 @@ def test_unmigrated_cli_can_spawn_stop_and_report_with_legacy_guards(store, monk
         monkeypatch.setenv('SHANTY_AGENT', actor)
     else:
         monkeypatch.delenv('SHANTY_AGENT', raising=False)
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-legacy') == cli.OK
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-legacy') == cli.OK
     rec, = eph.records(root)
     assert launched
     assert _st(root, '--stop', rec['name']) == cli.OK
     assert eph.read(root, rec['name'])['state'] == eph.DONE
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-report') == cli.OK
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-report') == cli.OK
     rec = next(r for r in eph.records(root) if r['state'] == eph.LIVE)
     monkeypatch.setenv('SHANTY_AGENT', rec['name'])
     monkeypatch.chdir(rec['workspace'])
     assert _st(root, '--report', '--verdict', 'done', '--dry-run') == cli.OK
     # Clearing the declaration cannot escape the workspace restriction.
     monkeypatch.delenv('SHANTY_AGENT', raising=False)
-    assert _st(root, '--ephemeral', '--job', 'task', '--item', 'it-nested') == cli.REFUSED
+    assert _st(root, '--ephemeral', '--job', 'task', '--repo', 'o/n', '--item', 'it-nested') == cli.REFUSED
 
 
 def test_verified_identity_setting_rejects_non_boolean(store):
@@ -1336,7 +1345,7 @@ def test_a_codex_job_is_trusted_before_launch(codex_store):
     trusted_at_launch = []
     _panes.behaviour["during"] = lambda a: trusted_at_launch.append(
         codex_mod.tomllib.loads(cfg.read_text()).get("projects", {}))
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     assert rec["harness"] == "codex" and seen["card"] == rec["name"]
     assert rec["codex_trust_config"] == str(cfg.resolve())
@@ -1352,7 +1361,7 @@ def test_a_codex_job_without_resolvable_settings_is_refused_unlaunched(codex_sto
         def settings_path(self, card):
             return None
     monkeypatch.setattr(cli, "_runtime", lambda a, p: NoSettings())
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.REFUSED
     assert "codex trust not recorded" in capsys.readouterr().err
     (rec,) = eph.records(root)
     assert not launched and rec["state"] == eph.DONE
@@ -1412,7 +1421,7 @@ def test_report_verdict_must_be_one_of_the_jobs_bound_verdicts(store, monkeypatc
     A bound JobSpec verdict list replaces the enum; anything else refuses."""
     from shantytown import job_tools
     root, panes, _launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     spec = job_tools.validate_specs({"task": {"verdicts": ["diagnosed", "blocked"]}}, eph.JOBS)
     rec["jobspec"] = job_tools.bind(config.Ephemeral(jobs=spec), "task")
@@ -1429,7 +1438,7 @@ def test_report_verdict_must_be_one_of_the_jobs_bound_verdicts(store, monkeypatc
 
 def test_report_without_a_profile_keeps_the_legacy_verdicts(store, monkeypatch, capsys):
     root, panes, _launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (rec,) = eph.records(root)
     monkeypatch.setenv("SHANTY_AGENT", rec["name"])
     panes.verified_actor = rec["name"]
@@ -1514,7 +1523,7 @@ def test_a_codex_task_job_gets_its_sandbox_profile_at_spawn(codex_store, monkeyp
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     try:
         root, _panes, launched, _cfg, _seen = codex_store
-        assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+        assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
         (rec,) = eph.records(root)
         from shantytown.codex_daemon import runtime_home
         assert rec["codex_sandbox"] == str(runtime_home(rec["name"]) / eph.CODEX_SANDBOX_FILE)
@@ -1735,16 +1744,16 @@ def test_over_cap_spawn_queues_lists_and_drains_on_job_end(store, monkeypatch, c
         drains.append(r)
         return cli.main(["--root", str(r), "agent", "spawn", "--drain"])
     monkeypatch.setattr(eph, "kick_drain", drain_now)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (first,) = eph.records(root)
     capsys.readouterr()
     # --dry-run says what would queue and writes nothing.
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--priority", "1",
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2", "--priority", "1",
                "--dry-run") == cli.OK
     assert "would queue task on it-2 (P1" in capsys.readouterr().out
     assert eph.tickets(root) == []
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3", "--priority", "0") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--priority", "1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-3", "--priority", "0") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2", "--priority", "1") == cli.OK
     out = capsys.readouterr().out
     assert out.count("QUEUED q-") == 2 and len(launched) == 1
     assert _st(root, "--list") == cli.OK
@@ -1769,9 +1778,9 @@ def test_a_drained_ticket_the_spawn_refuses_is_dropped_with_its_reason(store, mo
     root, _panes, launched = store
     monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (first,) = eph.records(root)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert _st(root, "--stop", first["name"]) == cli.OK
     monkeypatch.setattr(cli, "_spawn_governor_refusal", lambda a, card: "governor: held")
     assert _st(root, "--drain") == cli.REFUSED
@@ -1895,8 +1904,8 @@ def test_with_shares_configured_the_under_share_track_drains_first(tmp_path):
 
 def test_list_shows_harness_and_track_on_tickets_and_live_jobs(store, capsys):
     root, _panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--track", "ops") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1", "--track", "ops") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2",
                "--harness", "codex", "--track", "backlog") == cli.OK
     capsys.readouterr()
     assert _st(root, "--list") == cli.OK
@@ -1918,15 +1927,15 @@ def test_cli_codex_ticket_waits_while_claude_capacity_is_free(codex_store, monke
         "[ephemeral.max_agents_by_harness]\ncodex = 1\n")
     monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1", "--harness", "codex") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2", "--harness", "codex") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1", "--harness", "codex") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2", "--harness", "codex") == cli.OK
     assert "over codex cap: 1/1" in capsys.readouterr().out
     assert len(launched) == 1
     assert _st(root, "--drain", "--dry-run") == cli.OK
     assert "would drain 0 of 1 queued ticket(s) into 1 free slot(s)" in capsys.readouterr().out
     assert _st(root, "--drain") == cli.OK
     assert len(launched) == 1 and eph.tickets(root)[0]["item"] == "it-2"
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3", "--harness", "claude") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-3", "--harness", "claude") == cli.OK
     assert len(launched) == 2 and {r["harness"] for r in eph.live(root)} == {"codex", "claude"}
 
 
@@ -1976,10 +1985,10 @@ def _two_queued(store, monkeypatch, bad_item="it-bad"):
     root, panes, launched = store
     monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     (first,) = eph.records(root)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", bad_item, "--priority", "0") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-good", "--priority", "3") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", bad_item, "--priority", "0") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-good", "--priority", "3") == cli.OK
     assert _st(root, "--stop", first["name"]) == cli.OK
     return root, panes, launched
 
@@ -2018,8 +2027,8 @@ def test_a_dead_claim_ahead_of_a_good_ticket_does_not_block_the_drain(store, mon
 
 def test_a_missing_checkout_is_refused_at_queue_time(store, capsys, tmp_path):
     root, _panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2",
                "--repo", "o/n", "--checkout", str(tmp_path / "nonexistent")) == cli.REFUSED
     assert "does not exist" in capsys.readouterr().err
     assert eph.tickets(root) == []
@@ -2030,10 +2039,10 @@ def test_a_checkout_without_the_repos_remote_is_refused(store, capsys, tmp_path)
     plain = tmp_path / "plain"
     plain.mkdir()
     other = _checkout_with_origin(tmp_path / "other", "git@github.com:o/other.git")
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2",
                "--checkout", str(plain)) == cli.REFUSED
     assert "not a git checkout" in capsys.readouterr().err
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2",
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2",
                "--repo", "o/n", "--checkout", str(other)) == cli.REFUSED
     assert "no remote for --repo o/n" in capsys.readouterr().err
     assert launched == []
@@ -2111,8 +2120,8 @@ def test_spawn_admits_a_checkout_whose_origin_predates_the_move(store, monkeypat
 
 def test_stop_cancels_a_queued_ticket_reversibly(store, monkeypatch, capsys):
     root, _panes, launched = store
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     (t,) = eph.tickets(root)
     eph._put(root, dict(t, state=eph.CLAIMED, claimed_by=1, claimed_at=NOW))
     capsys.readouterr()
@@ -2129,3 +2138,52 @@ def test_stop_cancels_a_queued_ticket_reversibly(store, monkeypatch, capsys):
     assert back["id"] == t["id"] and back["state"] == eph.QUEUED
     # A ticket not in the queue is refused, not silently "cancelled".
     assert _st(root, "--stop", "q-" + "0" * 12) == cli.REFUSED
+
+# --- aegis-za4f.15: a task job without --repo is refused at spawn -------------
+# eph-task-9a5fba (za4f.15), 72e750 (xc7) and 2g7f were each spawned with no
+# --repo, got a scratch dir with no source, and spent their whole slot finding
+# out. The refusal comes before the request is built, so it holds over cap too.
+
+def _no_ticket_files(root):
+    q = eph.queue_dir(root)
+    return not q.exists() or not any(q.iterdir())
+
+
+def test_a_task_job_without_repo_is_refused_under_cap(store, capsys):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.REFUSED
+    assert "a task job needs --repo OWNER/NAME" in capsys.readouterr().err
+    assert launched == [] and eph.records(root) == []
+    assert eph.tickets(root) == [] and _no_ticket_files(root)
+
+
+def test_a_task_job_without_repo_is_refused_over_cap_and_queues_nothing(store, capsys):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert len(launched) == 1  # max_agents = 1: the next spawn is over cap
+    capsys.readouterr()
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.REFUSED
+    out = capsys.readouterr()
+    assert "a task job needs --repo" in out.err and "QUEUED" not in out.out
+    assert eph.tickets(root) == [] and _no_ticket_files(root)
+    # The same spawn WITH --repo still queues exactly as before.
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
+    assert "QUEUED q-" in capsys.readouterr().out
+    (t,) = eph.tickets(root)
+    assert t["item"] == "it-2" and t["repo"] == "o/n"
+
+
+def test_a_task_job_with_checkout_but_no_repo_is_refused(store, capsys, tmp_path):
+    root, _panes, launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1",
+               "--checkout", str(tmp_path / "fixture-src")) == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "a task job needs --repo" in err and "--checkout without --repo" in err
+    assert launched == [] and eph.records(root) == [] and eph.tickets(root) == []
+
+
+@pytest.mark.parametrize("job", ["review", "merge", "triage"])
+def test_other_jobs_without_repo_are_not_held_to_the_task_rule(store, capsys, job):
+    root, _panes, _launched = store
+    _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude", "-n")
+    assert "a task job needs --repo" not in capsys.readouterr().err

@@ -148,8 +148,9 @@ a changed branch or an uncertain Git identity keep the tree. Per-tree outcomes
 are retained in `worktree_teardowns`. Provisioning after a job ends is refused.
 
 Names are generated as `eph-<job>-<6 hex>`. Each agent has its own worktree on
-branch `wt/<name>` when `--repo` names a checkout. Without `--repo` it gets a
-scratch directory under the ledger.
+branch `wt/<name>` when `--repo` names a checkout. A review, merge or triage
+job without `--repo` gets a scratch directory under the ledger; a task job
+without `--repo` is refused (below).
 
 ## Jobs
 
@@ -359,10 +360,14 @@ max_concurrent = 1          # live task jobs at once; over it, spawns queue (aeg
 
 A task job edits source, so it needs more than a review's sandbox:
 
-- **Worktree.** `--repo owner/name` (or `--checkout <path>`) cuts the job's
-  worktree from that checkout. A task job whose named repo resolves no local
-  checkout is refused; it never falls back to a scratch dir. A task job with
-  no repo at all still gets a scratch dir, and its prompt says it has no source.
+- **Worktree.** `--repo owner/name` (with `--checkout <path>` for a
+  non-default clone) cuts the job's worktree from that checkout. A task job
+  whose named repo resolves no local checkout is refused; it never falls back
+  to a scratch dir. A task job with no `--repo` at all, including one given
+  only `--checkout`, is refused before any request is built, so over cap no
+  repo-less ticket is queued either: eph-task-9a5fba, 72e750 and 2g7f each got
+  a scratch dir and spent their whole slot discovering they had no source
+  (aegis-za4f.15).
 - **Sandbox.** The job card is not `dangerous`, so its Codex daemon keeps
   `workspace-write`. That alone has no DNS (no tracker or Quipu), a read-only
   Quipu read-budget ledger and a read-only git common dir. The spawner writes
