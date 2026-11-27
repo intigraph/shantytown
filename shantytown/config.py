@@ -574,7 +574,11 @@ def _resolve(data: dict, path: Path) -> Config:
                   path=path)
 
 
-INBOX_STORES = ("seed", "message-graph")
+def _inbox_stores() -> tuple[str, ...]:
+    # The registry in inbox.py is the one list of backend names; a second copy
+    # here is how a registered backend would end up refused by its own config.
+    from .inbox import INBOX_BACKENDS
+    return tuple(INBOX_BACKENDS)
 
 
 def _escalation_poller(path: Path, tbl: dict) -> bool:
@@ -588,8 +592,9 @@ def _escalation_poller(path: Path, tbl: dict) -> bool:
 def _inbox_store(path: Path, tbl: dict) -> str:
     _refuse_unknown(path, "inbox", tbl, {"store"})
     store = tbl.get("store", "seed")
-    if store not in INBOX_STORES:
-        raise ConfigError(f"{path}: inbox.store must be one of {', '.join(INBOX_STORES)}, "
+    stores = _inbox_stores()
+    if not isinstance(store, str) or store not in stores:
+        raise ConfigError(f"{path}: inbox.store must be one of {', '.join(stores)}, "
                           f"not {store!r}")
     return store
 

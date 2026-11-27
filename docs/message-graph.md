@@ -1,5 +1,10 @@
 # Messages in their own graph (design)
 
+**Ownership changed on 2026-11-27.** Chaski now owns the message lifecycle
+and its shapes. `sd msg` and `st inbox` stay as thin surfaces over it. Read the
+[ownership amendment](#ownership-amendment-2026-11-27) before the rest: where
+the two disagree, the amendment wins.
+
 **Status:** source slices exist; the storage flip and native acceptance remain
 gated. The default remains the seed inbox. Expiry is implemented in `sd msg`
 (aegis-9qx, below). Ack, escalation and legacy migration are not implemented
@@ -37,6 +42,121 @@ work items and from ROOT, with their own lifecycle.
 | D5 | Messages are written and read through a **seeds verb family** (`sd msg …`), not by `st` talking HTTP to Quipu. | `st` writing Quipu directly: a second signing and credential path in `st`, beside the board's own. |
 | D6 | A message never carries work. A message that asks for work **refers to a seed** that already exists. Work-graph data never refers to a message. | Messages that become work by being on a plate: the defect `is_message` exists to prevent. |
 | D7 | Alerts are messages of `kind = alert`, with one open message per (recipient, alert fingerprint). A re-fire raises a count. | A new message per re-fire: today's escalation flood (see aegis-l7j). Routing alerts only to the alert router: crew then lose the durable "someone told me" record. |
+
+## Ownership amendment (2026-11-27)
+
+Ruling (Stiwi, 2026-11-27; Quipu decision
+`mem/decision/chaski/message-ownership/20261127T065319Z`), verbatim:
+
+> I agree it goes to chaski. Due to beads compat, seeds should support this
+> but defer to chaski underneath. Same with, it should support a pluggable msg
+> system st agents use and chaski will be an implementation. Then chaski still
+> wouldnt need an interface, just the shapes it needs and will react to in
+> quipu
+
+In short: messages belong to Chaski. Seeds keeps `sd msg` for beads
+compatibility and defers to Chaski underneath. `st` gets a pluggable message
+system, with Chaski as one implementation. Chaski needs no interface of its
+own, only the shapes it requires and reacts to in Quipu.
+
+### Who owns what
+
+| Part | Owns | Does not own |
+|------|------|--------------|
+| Quipu | Storage: the weekly message windows above. Unchanged. | Any knowledge of what a message is. |
+| Chaski | The message shapes it needs, and every lifecycle step as a reaction to message facts: escalating unread mail, expiry, collapsing duplicate alerts that slipped past write-time de-duplication, freezing old windows, and onward notification (a phone push, a notice to an administrator). Its own write credential, scoped to the message windows, for the lifecycle facts it writes (escalation messages, `escalatedTo`, `dateExpired`). | A command, API or library for senders. Its interface is the shapes. |
+| Seeds | The `sd msg` verbs, kept for beads compatibility, and the sender write credential. They validate against Chaski's shapes, write message facts and read them back. Read-time filters, including the TTL predicate from aegis-9qx and write-time alert de-duplication in `deliver` (D7). | Lifecycle. No timer, no sweep, no escalation and no write that a clock triggers lives in Seeds. Agent identity: Seeds writes for the agent `st` names. |
+| Shantytown | Agent identity: `st` says who the sender and the recipient are. A pluggable message backend behind the existing `Inbox` protocol. `st inbox`, `st sling` and the capacity notices call the protocol only. Chaski-shaped facts are one backend. The seed inbox stays another until the legacy drain reaches zero. | A Quipu write credential. Message writes reuse the Seeds credential. |
+
+A sender writes a fact. Chaski sees it on the change feed and reacts. Nothing
+calls Chaski.
+
+### What this changes in the design above
+
+- **D5 is narrowed.** Sender writes and all reads still go through `sd msg`,
+  on the Seeds credential. Lifecycle writes no longer do: Chaski writes them on
+  its own credential, so there are two signed write paths, one per writer, and
+  neither is `st`.
+- **aegis-9qx (Stiwi 2026-11-20) is kept for reads and superseded for one
+  write.** Listings and counts keep deriving expiry at read time from the TTL;
+  that filter is a query predicate in `sd msg`, not lifecycle, and stays. What
+  9qx rejected was a *polling tend pass* writing `dateExpired`; its reasons were
+  the added poll and that it saved no reads. Chaski reacts from the change
+  stream (no poll), and writes `dateExpired` only on unacknowledged `request`
+  and `alert` messages, because freezing a window must prove from facts that
+  every message in it is acked or expired. Listings still do not depend on that
+  fact.
+- **D7 is unchanged.** One open message per (recipient, fingerprint) stays
+  enforced in `deliver` at write time: a reaction can only collapse duplicates
+  after they exist. Chaski's alert reaction collapses the residue that
+  concurrent sends race past, and raises nothing on its own.
+- **Rollout phase 6** (expiry, escalation and freeze "as a scheduled tend
+  step") becomes Chaski reactions. It is not an `st` tend step and not new
+  `sd msg` verbs. Chaski writes the expiry and escalation facts.
+- **Phase 2's planned `sd msg expire`** is dropped. `sd msg ack` stays, because
+  an acknowledgement is a fact the recipient writes.
+- **Vocabulary.** `seeds:RemoteMessageShape` is replaced by shapes that Chaski
+  declares, published with the stack's other shared vocabulary. No data moves:
+  the same windows hold the same `schema:Message` records.
+- **Phases 4 and 5** (legacy migration, then dropping the dual read) are
+  unchanged. They concern where data sits, not who owns the lifecycle.
+- **Open question 2** is ruled: Chaski owns messages, and `sd msg` is a
+  compatibility surface.
+
+### Why, in measurements (2026-11-27)
+
+- The three live windows held 22,298 messages after under three weeks: 12,436
+  in W46, 5,208 in W47 and 4,654 in W48. Reads already filter expired mail by
+  TTL (aegis-9qx), but nothing writes expiry and no window is ever frozen.
+- `sd msg list --to <agent> --all-windows --include-expired` ran past the
+  30-second limit twice, so `st sling` reported "could not tell" although its
+  handoff comment had landed. That is the delivery-idempotence read
+  (`MessageGraphInbox.find_delivery`), not the unread listing, and expiry or
+  freezing alone does not shorten it.
+- A host with an old `sd` that lacks `msg` cannot send durable mail at all.
+
+The first two are lifecycle problems, and lifecycle is what Chaski already
+does: it reacts to graph changes and handles deadlines and expiry.
+
+### Done means
+
+1. Chaski's message shapes are admitted. A message written by `sd msg send`
+   validates, and a malformed one is refused.
+2. A Chaski rule expires an unacknowledged message after 7 days and escalates
+   one left unread for 24 hours, each by writing a fact. Both are rehearsed on
+   a store copy first.
+3. `st` selects its message backend by name. A test backend passes the same
+   protocol tests as the Chaski-shaped one.
+4. With 20,000 messages in live windows, two reads for one recipient each
+   return within 2 seconds. The unread listing, `sd msg list --to <agent>
+   --unread` over the windows the TTL overlaps, bounded by a recipient-scoped
+   server-side filter. The delivery-idempotence read, which becomes an exact
+   `sd msg show --key <key>` lookup instead of a scan of every window. Seeds
+   owns both queries; Quipu owns the recipient and key indexes they need.
+   Today the scan exceeds 30 seconds.
+5. Seeds contains no message lifecycle code: no timer, sweep, escalation or
+   clock-triggered write. Read-time filters (the aegis-9qx TTL predicate) and
+   write-time de-duplication (D7) are reads and validation, not lifecycle, and
+   stay.
+
+### Settled on 2026-11-27 (Stiwi)
+
+1. **Write credential.** `st` holds no Quipu write credential. Message writes
+   reuse the Seeds credential.
+2. **Agent identity.** `st` owns it. `st` names the sending and receiving
+   agents, and Seeds writes on behalf of the identity `st` supplies. Seeds
+   does not decide who an agent is.
+3. **No polling.** Chaski reads Quipu's committed change stream
+   (`/changes/stream`) by default, so a reaction follows a message fact
+   promptly. Polling remains only as the rollback path.
+
+### Open point (with recommendation)
+
+**Live delivery into a pane.** With the stream, a Chaski reaction can trigger
+it promptly. Recommended: `st` keeps the pane mechanics, because it owns the
+panes. Whether the trigger is the sender's own call, a Chaski reaction or
+both is for the implementing design to settle, with one rule: a message is
+never shown twice to the same session.
 
 ## Graph layout
 
@@ -156,9 +276,9 @@ Mapped at 7420239:
 | `inbox.TrackerInbox` | New `MessageGraphInbox` implementing the same `Inbox` protocol (`deliver`, `deliver_once`, `unread`, `unread_count`, `unread_view`, `unread_selected`, `find_delivery`) plus `ack`. `mark_read` sets `dateRead` only. |
 | `sd.SdTracker.create_inbox_message`, `inbox_items`, `inbox_count`, `inbox_page`, `inbox_receipts` | Call `sd msg create/list/count/show` instead of `sd create`/`sd list`. |
 | `seeds_inbox.read`, `seeds_inbox_window.*` | Read message windows by name; stop unioning `#seeds-ephemeral`. |
-| `cli._tracker.notify`, `producer_capacity.main.notify` | These write `inbox:` seeds with a plain `create`, bypassing `deliver`. Convert them to `deliver` **before** cutover, or they keep writing to the work graph. |
+| `cli._tracker.notify`, `producer_capacity.main.notify` | Done (aegis-8dda.10.6): both call `inbox.deliver_notice` on the backend `open_inbox` returns, keyed one note per item, owner and day. Neither branches on the store name. |
 | `inbox_bridge.main` | Hard-wired to the br tracker; take the selected inbox instead. |
-| `cli._inbox` | Selects `MessageGraphInbox` when `[inbox] store = "message-graph"`. |
+| `cli._inbox` | Done (aegis-8dda.10.6): `[inbox] store` names a backend in `inbox.INBOX_BACKENDS` (`seed`, `message-graph`), opened by `inbox.open_inbox`. `register_inbox_backend` adds one; config accepts exactly the registered names and an unknown name is refused, never routed to seeds. `tests/test_inbox_backends.py` runs one protocol suite over a test backend and the Chaski-shaped one, and shows it failing a backend whose read marks mail. |
 | Exclusion readers (`is_message`, `MESSAGE_PATTERN`, `plate_capacity`, `overdue`, `due_brief`, `ranking_check`, `board_triage`, `deferrals`, `feed_check`, `priority_advisory`, `busy_wait`) | Unchanged until the legacy drain reaches zero; then removed in one change. `overdue.verify_inbox_receipt` requires the `inbox` label and moves to `find_delivery`. `seeds_plate.ready_count` counts messages on purpose; that inclusion is dropped. |
 
 Callers that live outside this repository and read or close inbox seeds
@@ -239,7 +359,8 @@ nothing. The cost of moving them can be measured and decided separately.
 1. **Window size.** Weekly (recommended: it matches the 7-day expiry, and at
    most three windows are live) or monthly, as shuttle uses (fewer graphs, but a
    window freezes up to 5 weeks after its first message).
-2. **Who owns `sd msg`.** Recommended: seeds, because it owns the signed write
+2. **Who owns `sd msg`.** *Ruled 2026-11-27: Chaski owns messages; see the
+   ownership amendment.* The original recommendation was seeds, because it owns the signed write
    path and the shapes file. The alternative is a shantytown-owned writer that
    holds a second credential.
 3. **Should `note` messages expire faster?** Recommended: no. One TTL is easier
