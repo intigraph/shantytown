@@ -390,9 +390,19 @@ user-level `quipu.read_stream_config`. The SDK owns the private socket, source
 binding, signed freshness proof and query-scope validation. Shantytown does not
 open another applier or replace the configured primary URL.
 
-When enabled, plate queries skip the watermark cache entirely. A missing SDK,
-projection refusal, malformed reply or incomplete result remains UNKNOWN; it
-never falls back to HTTP polling. Explicit `seeds_read_cache.direct_reads()`
+When enabled, every Seeds board read that goes through `seeds_plate._query`
+(owner rows, unblocked IDs, inbox counts, windows and markers, schema checks)
+uses the projection and skips the watermark cache. Any refusal is reported on
+stderr (`st: seeds push read refused (...)`) and that read falls back to the
+existing direct read. A refusal of the reader itself (SDK missing, timed out or
+exiting nonzero) is latched for that board binding for the rest of the
+process, so later reads go direct without retrying it. A refusal of one query
+(over the 60 KiB query budget, a truncated or partial result, a malformed reply
+or a non-boolean ASK) is not latched: the next read tries the projection again,
+and a repeated reason prints once. The refusal reason appears only on stderr;
+if the direct read also fails, the plate caveat names that direct-read error.
+Such a fallback stays UNKNOWN; neither path ever returns an empty answer for an
+unreadable one. Explicit `seeds_read_cache.direct_reads()`
 admission scopes keep their original query-only transport. Primary profiling is
 refused on the projection path rather than presenting local timing as primary
 performance. The default `0` retains existing reads. Invalid setting values

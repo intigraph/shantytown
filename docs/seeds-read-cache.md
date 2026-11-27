@@ -31,6 +31,7 @@ invalidation, concurrent processes, metadata failures and query refusals.
 These are private synthetic reads, not measurements of an installed service.
 
 With `ST_SEEDS_PUSH_READS=1`, plate projections use the Seeds SDK private IPC
-path instead, without watermark or primary query requests. See the push
+path instead, without watermark or primary query requests. A projection
+refusal says so and falls back to this cached direct read. See the push
 projection contract in `adapters.md`. Query-only admission scopes retain their
 original direct transport.
