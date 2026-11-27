@@ -1608,8 +1608,10 @@ class LeadStallAlerter:
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  in_progress=None, ready=None, live_jobs=None,
-                 threshold_min=None, now=None, log=None, verdict_for=None):
+                 threshold_min=None, now=None, log=None, verdict_for=None,
+                 catalog=None):
         self._root = root
+        self._catalog = catalog
         self.path = Path(root) / "notify" / "lead_stalled.json"
         self._verdict_for = verdict_for
         self._reg = reg
@@ -1644,9 +1646,6 @@ class LeadStallAlerter:
 
     def sweep(self, agents) -> list[str]:
         """Returns the leads a notice was raised for on this pass."""
-        import hashlib
-        from .runtime import asks_a_question, auth_expired
-        from .stop_event import _assigned_to
         try:
             active = list(self._in_progress())
             ready = list(self._ready())
@@ -1656,59 +1655,83 @@ class LeadStallAlerter:
         store = self._load()
         now = self._now()
         raised = []
+        # A lead that left the roster keeps no episode: unpruned entries
+        # outlive the agent and a returning name would inherit a stale one.
+        for name in set(store) - {ag.name for ag in agents if ag.role == "lead"}:
+            store.pop(name, None)
+        for ag in agents:
+            if ag.role != "lead" or not ag.pane:
+                continue
+            # ONE TRY PER LEAD, and the store is saved whatever happens. With a
+            # single try around the loop, lead A noticed (push delivered) and
+            # lead B then raising returned before _save, so A's `noticed` was
+            # lost and a deterministic failure on B re-paged the administrator
+            # about A on every pass: the repage aegis-4j6.1 exists to forbid. A
+            # failed lead keeps its previous episode untouched and pushes nothing.
+            try:
+                if self._sweep_one(ag, active, ready, waiting_on_job, store, now):
+                    raised.append(ag.name)
+            except Exception as exc:
+                self._log(f"lead-stalled: {ag.name} unreadable "
+                          f"({type(exc).__name__}); nothing sent")
         try:
-            # A lead that left the roster keeps no episode: unpruned entries
-            # outlive the agent and a returning name would inherit a stale one.
-            for name in set(store) - {ag.name for ag in agents if ag.role == "lead"}:
-                store.pop(name, None)
-            for ag in agents:
-                if ag.role != "lead" or not ag.pane:
-                    continue
-                anchors = sorted(
-                    b.get("id", "?") for b in _assigned_to(ag.name, active)
-                    if not StalledAlerter._blocked_on_decision(b))
-                mine = _assigned_to(ag.name, ready)
-                if mine and self._verdict_for is not None:
-                    from .feed_check import admitted_haul
-                    mine = admitted_haul(
-                        mine, ag, self._verdict_for(ag),
-                        lambda msg: self._log(f"lead-stalled: {msg}"),
-                        root=self._root)
-                held = sorted(b.get("id", "?") for b in mine)
-                if (not anchors or not held or ag.name in waiting_on_job
-                        or not self._panes.exists(ag.pane)):
-                    store.pop(ag.name, None)
-                    continue
-                screen = self._panes.capture(ag.pane, attrs=True)
-                plain = triage_mod.strip_attrs(screen)
-                state = triage_mod.work_state(
-                    screen, self._runtime.shows_ready_ui(plain),
-                    awaiting=asks_a_question(self._runtime, plain),
-                    auth_dead=auth_expired(self._runtime, plain))
-                shells = triage_mod.running_shells(plain)
-                if state != triage_mod.IDLE or (shells is not None and shells > 0):
-                    store.pop(ag.name, None)
-                    continue
-                key = hashlib.sha256((plain + "\n" + "|".join(anchors) + "\n"
-                                      + "|".join(held)).encode()).hexdigest()
-                ep = store.get(ag.name)
-                if not ep or ep.get("key") != key:
-                    store[ag.name] = {"key": key, "since": now, "noticed": False}
-                    continue
-                if ep.get("noticed") or now - ep["since"] < self._threshold_s:
-                    continue
-                mins = (now - ep["since"]) / 60
-                if self._push(self._reg, self._panes,
-                              self._message(ag.name, anchors, held, mins)) is None:
-                    self._log(f"lead-stalled: administrator unreachable for "
-                              f"{ag.name}; will retry")
-                    continue
-                ep["noticed"] = True
-                raised.append(ag.name)
-        except Exception:
-            return []
-        self._save(store)
+            self._save(store)
+        except OSError as exc:
+            self._log(f"lead-stalled: episode store not saved ({exc})")
         return raised
+
+    def _sweep_one(self, ag, active, ready, waiting_on_job, store, now) -> bool:
+        """True when a notice for this lead was delivered on this pass."""
+        import hashlib
+        from .runtime import asks_a_question, auth_expired
+        from .stop_event import _assigned_to
+        anchors = sorted(
+            b.get("id", "?") for b in _assigned_to(ag.name, active)
+            if not StalledAlerter._blocked_on_decision(b))
+        verdict = self._verdict_for(ag) if self._verdict_for is not None else None
+        # A tier that excludes this lead by role (not only per item) means it
+        # may not run at all; "Wake <lead>" would contradict the tier.
+        if verdict is not None and verdict.excludes(ag, self._catalog):
+            store.pop(ag.name, None)
+            return False
+        mine = _assigned_to(ag.name, ready)
+        if mine and verdict is not None:
+            from .feed_check import admitted_haul
+            mine = admitted_haul(
+                mine, ag, verdict,
+                lambda msg: self._log(f"lead-stalled: {msg}"),
+                root=self._root)
+        held = sorted(b.get("id", "?") for b in mine)
+        if (not anchors or not held or ag.name in waiting_on_job
+                or not self._panes.exists(ag.pane)):
+            store.pop(ag.name, None)
+            return False
+        screen = self._panes.capture(ag.pane, attrs=True)
+        plain = triage_mod.strip_attrs(screen)
+        state = triage_mod.work_state(
+            screen, self._runtime.shows_ready_ui(plain),
+            awaiting=asks_a_question(self._runtime, plain),
+            auth_dead=auth_expired(self._runtime, plain))
+        shells = triage_mod.running_shells(plain)
+        if state != triage_mod.IDLE or (shells is not None and shells > 0):
+            store.pop(ag.name, None)
+            return False
+        key = hashlib.sha256((plain + "\n" + "|".join(anchors) + "\n"
+                              + "|".join(held)).encode()).hexdigest()
+        ep = store.get(ag.name)
+        if not ep or ep.get("key") != key:
+            store[ag.name] = {"key": key, "since": now, "noticed": False}
+            return False
+        if ep.get("noticed") or now - ep["since"] < self._threshold_s:
+            return False
+        mins = (now - ep["since"]) / 60
+        if self._push(self._reg, self._panes,
+                      self._message(ag.name, anchors, held, mins)) is None:
+            self._log(f"lead-stalled: administrator unreachable for "
+                      f"{ag.name}; will retry")
+            return False
+        ep["noticed"] = True
+        return True
 
     @staticmethod
     def _message(name, anchors, held, mins) -> str:

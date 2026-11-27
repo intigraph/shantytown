@@ -16941,7 +16941,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         idle = _fleet_sweep("idle-fleet", lambda: notify_mod.IdleFleetAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
             balance=lambda: _fleet_balance(a),
-            verdict_for=_card_verdict).sweep(agents))
+            verdict_for=_card_verdict, catalog=_catalog(a)).sweep(agents))
         if idle:
             print(f"  ⚠ alerted the coordinator — {len(idle)} newly-idle feedable "
                   f"worker(s) with work ready: {', '.join(idle)}", file=sys.stderr)
@@ -17045,7 +17045,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # case: hours parked on a bead whose blocker had already resolved.
         stalled = _sweep("stalled", lambda: notify_mod.StalledAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
-            verdict_for=_card_verdict).sweep(agents))
+            verdict_for=_card_verdict, catalog=_catalog(a)).sweep(agents))
         # aegis-es1tt: the stalled sweep now REMEDIATES — a self-heal nudge to the
         # agent first, coordinator escalation only if that goes unanswered. (_sweep
         # returns [] on crash, a dict on success.)
@@ -17063,7 +17063,7 @@ def _tend_once(a, quiet: bool = False) -> int:
         # nothing acted on it. One notice per stall episode.
         lead_stalled = _sweep("lead-stalled", lambda: notify_mod.LeadStallAlerter(
             Path(a.root), _registry(a), panes, runtime, log=_log,
-            verdict_for=_card_verdict).sweep(agents))
+            verdict_for=_card_verdict, catalog=_catalog(a)).sweep(agents))
         if lead_stalled:
             print(f"  ⚠ raised {len(lead_stalled)} stalled lead(s) holding ready "
                   f"work to the administrator: {', '.join(lead_stalled)}",

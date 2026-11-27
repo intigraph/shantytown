@@ -195,8 +195,12 @@ class _Verdict:
     """The surface feed_check.admitted_haul reads off a governor verdict."""
     admit_class = False
 
-    def __init__(self, parked):
+    def __init__(self, parked, excluded=""):
         self.parked = set(parked)
+        self.excluded = excluded
+
+    def excludes(self, agent, catalog=None):
+        return self.excluded
 
     def admits(self, item, agent=None):
         return "media hold" if item.id in self.parked else ""
@@ -240,3 +244,51 @@ def test_an_episode_for_a_lead_that_left_the_roster_is_pruned(tmp_path):
     assert "ellie" in alerter._load()
     alerter.sweep([ADMIN])
     assert "ellie" not in mk()._load()
+
+
+def test_a_lead_the_tier_excludes_by_role_is_not_raised(tmp_path):
+    # A tier that stops the lead itself (not only its items): "Wake ellie"
+    # would contradict it. The admitted control below shows the same world
+    # does raise when the tier admits her.
+    verdict = _Verdict(set(), excluded="quiet tier: ellie does not carry support")
+    reg, clock, pushed, mk = _world(tmp_path, verdict_for=lambda card: verdict)
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == []
+    assert pushed == []
+    verdict.excluded = ""
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == ["ellie"]
+
+
+class _BrokenPanes(_Panes):
+    def capture(self, pane, history=0, attrs=False):
+        if pane == "p-k":
+            raise RuntimeError("pane vanished mid-capture")
+        return super().capture(pane, history, attrs)
+
+
+def test_a_failing_second_lead_does_not_repage_the_first(tmp_path):
+    # Review of #798: one try around the whole loop returned before _save, so
+    # lead A's `noticed` was lost whenever lead B raised, and A was re-paged
+    # on every pass. B failing must cost only B.
+    kelly = Agent(name="kelly", role="lead", pane="p-k")
+    reg = _Reg([ADMIN, LEAD, kelly])
+    panes = _BrokenPanes({"p-s": "", "p-e": IDLE, "p-k": IDLE})
+    clock = {"t": 1000.0}
+    pushed, logged = [], []
+    active = [{"id": "aegis-gqi0", "assignee": "crew/ellie"},
+              {"id": "aegis-k1", "assignee": "crew/kelly"}]
+    ready = [{"id": "aegis-8fye.9", "assignee": "crew/ellie"},
+             {"id": "aegis-k2", "assignee": "crew/kelly"}]
+    mk = lambda: LeadStallAlerter(
+        tmp_path, reg, panes, _Runtime(),
+        push=lambda r, p, m: pushed.append(m) or "sattler",
+        in_progress=lambda: active, ready=lambda: ready, live_jobs=lambda: [],
+        threshold_min=15, now=lambda: clock["t"], log=logged.append)
+    agents = reg.all().exact()
+    mk().sweep(agents)
+    clock["t"] += 16 * 60
+    assert mk().sweep(agents) == ["ellie"]
+    for _ in range(3):
+        clock["t"] += 30 * 60
+        assert mk().sweep(agents) == []
+    assert len(pushed) == 1 and "kelly" not in pushed[0]
+    assert any("kelly unreadable" in m for m in logged)
