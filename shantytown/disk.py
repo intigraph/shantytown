@@ -113,8 +113,9 @@ BUILD_CACHES = ("target",)
 def purge_build_caches(dest, *, git) -> list[str]:
     """Remove git-ignored build-cache dirs at the top of a worktree.
 
-    Only a real directory (never a symlink) that git itself says is ignored, so
-    a tracked `target/` source directory or a link out of the tree is untouched.
+    Only a real directory (never a symlink) that git itself says is ignored and
+    that carries cargo's mark, so a tracked `target/` source directory, another
+    tool's ignored output or a link out of the tree is untouched.
     Returns the names removed."""
     import shutil as _shutil
     dest = Path(dest)
@@ -128,6 +129,10 @@ def purge_build_caches(dest, *, git) -> list[str]:
             continue
         tracked = git("-C", str(dest), "ls-files", "--", name)
         if tracked.returncode != 0 or tracked.stdout.strip():
+            continue
+        # An ignored target/ that is not cargo's is someone's output, not
+        # debris: the same proof teardown demands (#765, aegis-g68w.32).
+        if not ((cache / "CACHEDIR.TAG").is_file() or (dest / "Cargo.toml").is_file()):
             continue
         _shutil.rmtree(cache, ignore_errors=True)
         if not cache.exists():

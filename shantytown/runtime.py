@@ -1272,6 +1272,19 @@ def admin_budget_prompt_hooks(role: str, root=None) -> list:
     return [{"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}]
 
 
+def operator_capture_hooks(role: str, root=None) -> list:
+    """The administrator's pane is where the operator types (aegis-za4f.20).
+
+    The hook spools the prompt verbatim before any network call and never
+    blocks; st's own attributed deliveries ("[from x] ...") are not captured.
+    """
+    if role != "administrator" or root is None:
+        return []
+    cmd = (f"{shlex.quote(_hook_interpreter())} -m shantytown.operator_capture --root "
+           + shlex.quote(str(Path(root).resolve())))
+    return [{"hooks": [{"type": "command", "command": cmd, "timeout": 10}]}]
+
+
 def stop_failure_hooks(root=None) -> list[dict]:
     """API errors bypass Stop; regeneration and old-artifact repair share this."""
     return [{"hooks": [{
@@ -1303,7 +1316,8 @@ def claude_settings_for_role(role: str, root=None) -> dict:
         "hooks": {
             # QUERY-FIRST at session start (aegis-rcyd). See session_start_hooks.
             "SessionStart": session_start_hooks(root) + memory_hooks(root, 'start'),
-            "UserPromptSubmit": incident_recall_hooks() + admin_budget_prompt_hooks(role, root),
+            "UserPromptSubmit": (incident_recall_hooks() + admin_budget_prompt_hooks(role, root)
+                                 + operator_capture_hooks(role, root)),
             "Stop": [{"hooks": role_stop_hooks(role, root=root)},
                      {"hooks": [capture]}] + memory_hooks(root, 'stop'),
             # API errors bypass Stop. This handler is notification-only and

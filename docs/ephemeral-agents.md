@@ -25,7 +25,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. Delivered means the job's turn STARTED, not that its text landed: on Claude Code st checks the composer is empty, types the job with no Enter, waits to see it in the box (a long job shows as `[Pasted text #1 +N lines]`), presses Enter as its own keystroke and waits to see the turn start (busy marker, spinner, context-left drop or the job echoed). It presses Enter again, up to three times, only while the box holds just the job, and never on text it did not type. A pane whose job did not start is ended at once as `launch failed`, with the reason. |
 | Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
-| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
+| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) unless Quipu's stored query `repo_review_mode` says that repo's review mode is `none` (a missing fact, an unknown value or an unreadable query is `non-author`: fail closed; a policy change is a graph write, never a deploy), and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
 
 ## Signed controller launch bridge
 
@@ -138,7 +138,13 @@ cases. Teardown deletes the card **before** it kills the pane, so a tend pass
 can never find a dead pane with a live card and respawn it. A worktree that
 holds commits or uncommitted changes is **kept**, and the result says so,
 because discarding an agent's output is the data-loss class `cleanup_worktree`
-exists to refuse.
+exists to refuse. A kept tree still loses its gitignored cargo `target/`
+directories (rebuildable debris, about 30 GB of fleet disk at one count): only a
+directory git reports as wholly ignored, named `target`, carrying cargo's
+`CACHEDIR.TAG` or sitting next to a `Cargo.toml`, and reached without a symlink is
+deleted. Tracked files and untracked files that are not ignored are never
+touched. When this happens the outcome reads `kept (holds work): … ; cleared N
+ignored cargo target/`.
 
 Worktrees provisioned later by `st repo worktree` or `st go --worktree` for an
 active job are recorded in its ledger before creation. Teardown checks these
@@ -157,7 +163,7 @@ without `--repo` is refused (below).
 | Job      | Default harness | Prompt contract |
 |----------|-----------------|-----------------|
 | `review` | codex (fleet directive: reviews on codex) | Independent, non-author review of `--repo/--pr` at the exact head. Post one verdict comment on the PR (APPROVE / REQUEST CHANGES with findings), then `--report --verdict V --head SHA --evidence URL`; st signs the verdict into Quipu. Never push, never merge. |
-| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
+| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and, unless the repo's Quipu review mode is `none`, a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
 | `triage` | claude | Find the cause of a red check. Comment the diagnosis on the item. Attended jobs may propose a fix on a branch and PR, never onto main. Protected UID jobs receive the read-only alert-triage instructions below. |
 
 Protected triage jobs (a controller ledger record with `uid_binding`) investigate
@@ -172,6 +178,12 @@ before enabling unattended launches. This change does not enable that gate.
 
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
+
+`[ephemeral.model_by_harness]` names the model a job runs on each harness
+(aegis-jsp0). Spawn copies it onto the job card, so the launch passes `--model`
+and exports `SHANTY_MODEL` from that one value, and the job's Quipu writes carry
+`X-Quipu-Model`. A harness with no entry gets no model: the harness default runs
+and nothing is declared, so write provenance stays visibly partial.
 
 ## Administrator surface
 
@@ -364,6 +376,10 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 
 [ephemeral.harness_by_job]
 review = "codex"
+
+# The model each harness's jobs run and declare (aegis-jsp0). Unset = none.
+[ephemeral.model_by_harness]
+claude = "claude-opus-5-5"
 
 # Per-harness slot caps (aegis-fye). Unset = max_agents for that harness; 0 = off.
 [ephemeral.max_agents_by_harness]

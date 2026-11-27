@@ -263,6 +263,14 @@ def harness_for(req: Request, policy) -> str:
         req.job, DEFAULT_HARNESS[req.job])
 
 
+def model_for(harness: str, policy) -> str | None:
+    """The configured model for a job on `harness`, or None (aegis-jsp0).
+
+    None is a real answer: nothing is put on the card, the harness runs its own
+    default, and no model is declared. Never a guess."""
+    return (getattr(policy, "model_by_harness", {}) or {}).get(harness) or None
+
+
 # Who may spawn, stop or retry ephemeral jobs (aegis-za4f, sattler ruling
 # 2026-11-25): the administrator and leads. ADMINISTRATOR_ONLY is the default
 # so other callers of authority(), such as the recruit controller, keep their
@@ -408,6 +416,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
         "pr": req.pr, "checkout": req.checkout, "harness": harness,
+        "model": model_for(harness, policy),
         "track": req.track or DEFAULT_TRACK,
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
@@ -1527,6 +1536,10 @@ def card_for(rec: dict, *, unattended: bool) -> dict:
             "reports_to": rec["administrator"], "pane": f"st-{rec['name']}",
             "harness": rec["harness"], "workspace": rec["workspace"],
             "dangerous": bool(unattended), "retired": False}
+    # aegis-jsp0: the card's model is what the launch passes as --model and
+    # exports as SHANTY_MODEL (resolve_model: the card wins), one value for both.
+    if rec.get("model"):
+        card["model"] = rec["model"]
     if rec.get("host"):
         card["host"] = rec["host"]
     return card
@@ -1574,11 +1587,13 @@ _JOBS = {
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
 1. `gh pr view {pr} --repo {repo} --json headRefOid,mergeable,mergeStateStatus,reviews,author,isDraft`
 2. Require ALL of: not draft; every required check green (`gh pr checks {pr} --repo {repo} --required`);
-   an approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
-   shared GitHub account means a GitHub APPROVE usually cannot exist); no unresolved request-changes.
+   no unresolved request-changes; and, unless Quipu's review policy for {repo} is "none", an
+   approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
+   shared GitHub account means a GitHub APPROVE usually cannot exist). The guarded merge below applies
+   that configured policy; a missing approval it accepts is not a reason to report blocked.
    An outside (non-crew) contribution is never merged by an agent: report blocked.
-3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, a non-author approval
-   and the author's association in code before it calls gh with the head pinned:
+3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, the approval the
+   repo's review policy requires and the author's association in code before it calls gh with the head pinned:
      st agent spawn --merge --head {head}
    If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
@@ -1692,6 +1707,8 @@ def prompt(rec: dict) -> str:
 #      the job, a bounded number of times; then "launch failed".
 
 PASTE_TOKEN = re.compile(r"\[Pasted text #\d+(?: \+\d+ lines)?\]")
+#: A paste token cut by the composer's row wrap: the row ends inside `[Pasted ...`.
+_PASTE_OPEN = re.compile(r"\[Pasted[^\]]*$")
 SUBMIT_ATTEMPTS = 3
 LOOK_S = 0.4
 SHOW_LOOKS = 20      # ~8s for the box to show the typed job
@@ -1727,6 +1744,39 @@ def _composer(screen: str):
     return None
 
 
+def _join_wrapped_paste_tokens(pieces: list[str]) -> list[str]:
+    """Rejoin a paste token the composer's row wrap split across two rows.
+
+    Claude Code can fold part of a long typed job into `[Pasted text #1 +13 lines]`
+    in the MIDDLE of a line, and that line can wrap inside the token:
+        '... (this posts your result on ae[Pasted'
+        'text #1 +13 lines]aegis-za4f.15, read by st ...'
+    PASTE_TOKEN is judged per row, so neither half matches, `[Pasted` and
+    `text #1 +13 lines]aegis...` read as text st never typed, and the job was refused
+    "holds text that is not the job's" (aegis-8et: 11 of 24 delivery failures since
+    #747, all Claude). A row that ends inside an unclosed `[Pasted` is joined to the
+    next row ONLY when the join forms a real token; a wrap on a space is restored
+    with one space, a hard wrap with none. Anything else stays as it was seen, so
+    genuinely foreign text still refuses."""
+    out: list[str] = []
+    i = 0
+    while i < len(pieces):
+        row = pieces[i]
+        while i + 1 < len(pieces) and _PASTE_OPEN.search(row):
+            nxt = pieces[i + 1].strip("\xa0 \t")
+            have = len(PASTE_TOKEN.findall(row))
+            for glue in (" ", ""):
+                joined = row.rstrip("\xa0 \t") + glue + nxt
+                if len(PASTE_TOKEN.findall(joined)) > have:   # the join MADE a token
+                    row, i = joined, i + 1
+                    break
+            else:
+                break
+        out.append(row)
+        i += 1
+    return out
+
+
 def foreign_fragment(screen: str, text: str) -> str | None:
     """The first composer fragment st did not type, for a refusal reason.
 
@@ -1739,8 +1789,9 @@ def foreign_fragment(screen: str, text: str) -> str | None:
     frame = _composer(screen)
     _prompt_raw, body, _above = frame
     first = body[0].split(_PROMPT, 1)[1] if body else ""
-    for piece in [first] + body[1:]:
-        for rest in PASTE_TOKEN.split(piece.strip("\xa0 \t")):
+    rows = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
+    for piece in _join_wrapped_paste_tokens(rows):
+        for rest in PASTE_TOKEN.split(piece):
             rest = rest.strip("\xa0 \t")
             if rest and rest not in text:
                 return rest
@@ -1762,6 +1813,8 @@ def box_state(screen: str, text: str) -> str:
     pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
     if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
         return EMPTY
+    # A paste token the row wrap split in two is one token (aegis-8et), not foreign text.
+    pieces = _join_wrapped_paste_tokens(pieces)
     pasted = False
     for piece in pieces:
         # A paste token can land MID-ROW: Claude Code folds part of a long
@@ -1873,12 +1926,41 @@ INSIDE = ("OWNER", "MEMBER", "COLLABORATOR")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
+#: The stored query that answers one repo's review policy (aegis-za4f.17.1,
+#: Stiwi 11-27 03:53Z: "configurable in quipu"). st holds no repo list: the
+#: policy is a typed fact on the repo's node, and a change is a graph write.
+REVIEW_MODE_QUERY = "repo_review_mode"
+REVIEW_MODES = ("non-author", "none")
+
+
+def review_mode_from_rows(rows) -> str:
+    """The review mode one stored-query answer gives, failing closed.
+
+    Only a single, unanimous "none" waives the approval. No row (the repo has no
+    fact), an unknown value, or conflicting rows all mean "non-author", so a
+    repo nobody configured, a typo or a half-written policy never merges
+    unreviewed. The caller maps an unreadable query (timeout, refusal,
+    truncation) to None, which is also "non-author"."""
+    if not isinstance(rows, list):
+        return "non-author"
+    modes = set()
+    for row in rows:
+        value = row.get("mode") if isinstance(row, dict) else None
+        if isinstance(value, dict):
+            value = value.get("value")
+        modes.add(str(value).rsplit("/", 1)[-1].rsplit("#", 1)[-1] if value else "")
+    return "none" if modes == {"none"} else "non-author"
+
+
 def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list,
-               verdict: dict | None = None) -> str:
+               verdict: dict | None = None, review_mode: str = "non-author") -> str:
     """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
     (GET /repos/R/pulls/N), `reviews` and the head's check runs. Enforced in
     code so "reviews never merge", the pinned head and the lane do not rest on
-    prompt text alone."""
+    prompt text alone. `review_mode` is the repo's policy as Quipu states it
+    (review_mode_from_rows): "none" waives only the approval requirement;
+    every other refusal, including a standing change request, holds in every
+    mode. Anything but "none" requires the approval (fail closed)."""
     if rec is None or rec.get("job") != "merge":
         return "only a merge job may merge; review, triage and task jobs never do"
     if rec.get("state") not in (LAUNCHING, LIVE):
@@ -1910,7 +1992,7 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
         return "a reviewer agent's signed verdict requests changes on this head"
     github_ok = any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
                     for login, r in latest.items())
-    if not github_ok and not (verdict and verdict.get("approved")):
+    if review_mode != "none" and not github_ok and not (verdict and verdict.get("approved")):
         why = ""
         if verdict and verdict.get("author_agent_unknown") and verdict.get("approvals"):
             why = " (the PR's author agent is unknown, so no verdict can approve it)"
@@ -2126,6 +2208,38 @@ def push_stranded_work(rec: dict, base: str = "origin/main", git=_git) -> str:
     return f"pushed {branch} to origin so the committed work is not local-only"
 
 
+def clear_ignored_cargo_targets(dest: Path, git=_git) -> list[str]:
+    """Delete gitignored cargo target/ dirs in a worktree kept for its work.
+
+    aegis-g68w.32: ~30 of a 36 GB /srv/fleet loss was target/ dirs left in ended
+    eph-job worktrees that were kept because they held a dirty file, so their
+    rebuildable debris outlived the job. Only a directory git itself reports as
+    wholly ignored (never one holding a tracked or merely-untracked path), named
+    target, carrying cargo's CACHEDIR.TAG or sitting beside a Cargo.toml, and
+    resolving inside the worktree without a symlink is removed. Uncertain = keep."""
+    listed = git("-C", str(dest), "ls-files", "-z", "--others", "--ignored",
+                 "--exclude-standard", "--directory")
+    if listed.returncode != 0:
+        return []
+    root = dest.resolve()
+    cleared = []
+    for rel in listed.stdout.split("\0"):
+        rel = rel.rstrip("/")
+        if not rel or Path(rel).name != "target":
+            continue
+        path = dest / rel
+        if any(p.is_symlink() for p in [path, *path.parents] if p != dest and dest in p.parents):
+            continue
+        if not path.is_dir() or root not in path.resolve().parents:
+            continue
+        if not ((path / "CACHEDIR.TAG").is_file() or (path.parent / "Cargo.toml").is_file()):
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            cleared.append(rel)
+    return cleared
+
+
 def remove_workspace(rec: dict, root, git=_git) -> str:
     """'removed', 'kept (holds work)' or 'none'. Never discards output."""
     ws = rec.get("workspace")
@@ -2150,11 +2264,9 @@ def remove_workspace(rec: dict, root, git=_git) -> str:
             or branch.stdout.strip() != f"wt/{rec['name']}"):
         return f"kept (worktree identity uncertain or branch changed): {dest}"
     if worktree_holds_work(dest, git=git):
-        # The work stays; its regenerable build cache does not (aegis-xa6w).
-        from . import disk
-        purged = disk.purge_build_caches(dest, git=git)
-        tail = f"; purged {', '.join(purged)}/" if purged else ""
-        return f"kept (holds work): {dest}{tail}"
+        cleared = clear_ignored_cargo_targets(dest, git=git)
+        note = f"; cleared {len(cleared)} ignored cargo target/" if cleared else ""
+        return f"kept (holds work): {dest}{note}"
     r = git("-C", shared, "worktree", "remove", "--force", str(dest))
     if r.returncode != 0:
         return f"kept (git worktree remove failed: {(r.stderr or '').strip()[:120]})"

@@ -1,0 +1,522 @@
+"""Operator messages captured verbatim into Quipu by st, never by someone remembering.
+
+# arming: the administrator's UserPromptSubmit hook (runtime.operator_capture_hooks)
+# and `st inbox` when the sender is the deployment's declared operator.
+
+aegis-za4f.20. Directive capture used to be manual: one night six operator
+directives were relayed to a lead to record, with wrong time labels, and the
+operator asked why someone else was writing to the graph for the administrator.
+So st writes the record itself, at the moment it sees the message.
+
+Every operator message becomes ONE `a:OperatorMessage` node: the verbatim text
+(rdfs:comment), the exact receive UTC, the recipient agent, the session id and
+the source channel. Not every message is an instruction, so it is NOT typed
+`a:Directive` until the administrator confirms it (`st work directive mark`) or links
+a seed to it (`st work directive track`, `st task --directive`), which also writes
+`a:trackedBy` — the predicate the existing operator-verbatim directives use.
+
+The LOCAL SPOOL is written before any network call, so a Quipu failure never
+loses the text. Its file name is the record key (receive timestamp + content
+hash). A REDELIVERY is the same inbox text to the same recipient within
+REDELIVERY_WINDOW of an already-spooled copy: it writes nothing. The window
+exists because keying on the capture instant alone deduped only within one
+second, and a resent inbox line arrives with a later clock (review of #764).
+The window applies to the inbox channel ONLY: a UserPromptSubmit hook fires
+once per prompt and is never redelivered, so an operator who types "go" twice
+typed it twice, and folding the second into the first would drop text (second
+review of #764). Two identical prompts in one second get a "-2", "-3" key
+suffix rather than colliding. Every Quipu statement is derived from the spooled record and
+is idempotent (same subject IRI, same triples), so `st work directive flush` can
+retry a failed write as often as it likes.
+
+The capture paths (the prompt hook, `st inbox`) never wait on Quipu: they spool
+and hand the write to a detached `--flush`, because a synchronous /knot call
+(5s timeout per statement) would delay every operator prompt behind it.
+
+WHO SAID IT. An `st inbox` sender is the operator only when authenticated_actor()
+proves it. A sender known only from $SHANTY_AGENT (no identity policy on the
+host, or no TMUX_PANE to check) is spooled and written with sourceKind
+"operator-claimed", never "operator-verbatim": any agent shell can set that
+variable, and "operator-verbatim" is the vocabulary real operator directives
+carry (third review of #764). A relayed off-host send arrives at the far side
+by $SHANTY_AGENT, so it is captured there as operator-claimed too.
+
+SECRETS. The graph is shared, the spool is not: the record keeps the raw text
+(0600 file in a 0700 directory), and the Quipu literal is the text after
+jobs.mask_secrets. A masked literal also carries a:textRedacted true, so a
+reader knows the graph copy is not byte-for-byte.
+
+REVIEW. Every message waits in the administrator's notice until it is marked a
+Directive, linked to a seed, or DISMISSED (`st work directive dismiss`): most
+admin prompts ("y", "go") are not instructions, and a notice that only grows
+is noise. Dismissing is local review state; the OperatorMessage node stays.
+
+An inbox resend folded into its prior copy is not dropped either: its receive
+instant is appended to that record's `redelivered_at`.
+
+KNOWN GAPS: the pane-prompt channel's provenance is the harness hook itself;
+nothing proves the module was run by the harness. A pane injection that st does not prefix with "[from ...]" is
+indistinguishable from the operator typing and IS captured; a Codex
+administrator has no UserPromptSubmit hook here, so only its `st inbox` path
+captures.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+OPERATOR_KEY = "SHANTY_OPERATOR"          # the operator's sender name in st inbox
+TRACK_MINUTES_KEY = "SHANTY_DIRECTIVE_TRACK_MINUTES"
+TRACK_MINUTES = 30
+REDELIVERY_WINDOW = timedelta(minutes=10)
+SOURCE_KIND = "operator-verbatim"         # existing vocabulary on operator directives
+CLAIMED_KIND = "operator-claimed"         # the sender name was never authenticated
+SOURCE_KINDS = frozenset({SOURCE_KIND, CLAIMED_KIND})
+# Names land in Turtle as `a:<name>`. A trailing "." would close the statement
+# early ("a:x. .") and the write would stay owed forever, so a name must end on
+# a letter, digit or underscore.
+_NAME = re.compile(r"[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9_])?\Z")
+_KEY = re.compile(r"om-\d{8}T\d{6}Z-[0-9a-f]{16}(?:-[1-9][0-9]{0,2})?\Z")
+REDELIVERED_CHANNELS = frozenset({"inbox"})
+# st's own pane deliveries carry the attribution marker (attribution.attribute):
+# "[from sattler] ...", "[from st startup] ...". Those are crew traffic, not the
+# operator typing, and capturing them would bury the operator's words.
+_ATTRIBUTED = re.compile(r"\s*\[from [^\]\n]{1,80}\]")
+
+
+class CaptureRefused(ValueError):
+    pass
+
+
+def spool_dir(root) -> Path:
+    return Path(root) / "operator-messages"
+
+
+def _utc(when: datetime) -> datetime:
+    if when.tzinfo is None:
+        raise CaptureRefused("receive time must be timezone-aware")
+    return when.astimezone(timezone.utc).replace(microsecond=0)
+
+
+def key_for(text: str, received_at: datetime) -> str:
+    stamp = _utc(received_at)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    return f"om-{stamp:%Y%m%dT%H%M%SZ}-{digest}"
+
+
+@dataclass
+class Record:
+    key: str
+    text: str
+    received_at: str
+    recipient: str
+    session: str
+    channel: str
+    directive: bool = False
+    source_kind: str = SOURCE_KIND
+    dismissed: bool = False              # reviewed: not a directive (local only)
+    redelivered_at: list[str] = field(default_factory=list)
+    tracked_by: list[str] = field(default_factory=list)
+    # Statements Quipu has accepted, by name ("message", "directive",
+    # "tracked:<seed>"). Anything derived but not listed here is still owed.
+    written: list[str] = field(default_factory=list)
+
+    def owed(self) -> list[str]:
+        want = ["message"] + (["directive"] if self.directive else []) \
+            + [f"tracked:{seed}" for seed in self.tracked_by]
+        return [w for w in want if w not in self.written]
+
+
+def _path(root, key: str) -> Path:
+    if not _KEY.fullmatch(key):
+        raise CaptureRefused(f"not an operator message key: {key!r}")
+    return spool_dir(root) / f"{key}.json"
+
+
+def _save(root, record: Record) -> None:
+    from .files import write_json_atomic
+    write_json_atomic(_path(root, record.key), record.__dict__)
+
+
+@contextmanager
+def _locked(root):
+    """One writer at a time over the spool: the hook, `st inbox`, a detached
+    flush and the administrator's mark/track can all run at once, and a
+    read-modify-write without this lets a flush save a stale copy over a mark
+    that landed meanwhile, losing directive=True."""
+    import fcntl
+    directory = spool_dir(root)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(directory / ".lock", "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _update(root, key: str, change) -> Record:
+    with _locked(root):
+        record = load(root, key)
+        change(record)
+        _save(root, record)
+        return record
+
+
+def load(root, key: str) -> Record:
+    try:
+        data = json.loads(_path(root, key).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise CaptureRefused(f"no captured operator message {key}") from None
+    return Record(**data)
+
+
+def records(root, unreadable: list | None = None) -> list[Record]:
+    """Every readable spooled record. One corrupt file used to raise out of
+    here and take down `list`, the anchor notice and every flush with it, so a
+    record that will not parse is skipped and its file name appended to
+    `unreadable` for the caller to report as UNKNOWN (never deleted)."""
+    out = []
+    for path in sorted(spool_dir(root).glob("om-*.json")):
+        try:
+            out.append(Record(**json.loads(path.read_text(encoding="utf-8"))))
+        except (OSError, ValueError, TypeError):
+            if unreadable is not None:
+                unreadable.append(path.name)
+    return out
+
+
+def resolve(root, ref: str) -> str:
+    """A spool key, or an IRI / a:-name whose last segment is one.
+
+    Only messages st captured are linkable: a Directive minted by hand in Quipu
+    (e.g. a:stiwi-directive-...) has no spool record, so it is refused here and
+    gets its trackedBy through the governed write path directly."""
+    tail = ref.strip().rstrip("/").rsplit("/", 1)[-1].rsplit("#", 1)[-1]
+    tail = tail.split(":", 1)[-1] if tail.startswith("a:") else tail
+    _path(root, tail)
+    return tail
+
+
+def _literal(value: str) -> str:
+    # JSON string escapes are a subset of Turtle's, and ensure_ascii=False keeps
+    # the operator's characters as written: verbatim means byte-for-byte.
+    return json.dumps(value, ensure_ascii=False)
+
+
+def screened(text: str) -> str:
+    from .jobs import mask_secrets
+    return mask_secrets(text)
+
+
+def turtle(onto: str, record: Record, statement: str) -> str:
+    s = f"a:{record.key}"
+    if statement == "message":
+        if record.source_kind not in SOURCE_KINDS:
+            raise CaptureRefused(f"unknown source kind {record.source_kind!r}")
+        shown = screened(record.text)
+        body = (f"{s} a a:OperatorMessage ;\n"
+                f"  rdfs:label {_literal(record.key)} ;\n"
+                f"  rdfs:comment {_literal(shown)} ;\n"
+                + ("  a:textRedacted true ;\n" if shown != record.text else "")
+                + f"  a:sourceKind {_literal(record.source_kind)} ;\n"
+                f"  a:receivedAt {_literal(record.received_at)}^^xsd:dateTime ;\n"
+                + (f"  a:recipient a:{record.recipient} ;\n" if record.recipient else "")
+                + f"  a:sessionId {_literal(record.session)} ;\n"
+                f"  a:sourceChannel {_literal(record.channel)} .\n")
+    elif statement == "directive":
+        body = f"{s} a a:Directive .\n"
+    elif statement.startswith("tracked:"):
+        body = f"{s} a:trackedBy a:{statement.split(':', 1)[1]} .\n"
+    else:
+        raise CaptureRefused(f"unknown statement {statement!r}")
+    return (f"@prefix a: <{onto}> .\n"
+            "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n"
+            "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n" + body)
+
+
+def _default_writer(root):
+    from .quipu import QuipuRegistry
+    registry = QuipuRegistry(root=root, client_label="st-operator-capture")
+    return lambda record, statement: registry._knot(turtle(registry.onto, record, statement))
+
+
+def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]:
+    """Deliver what each spooled record still owes. Returns (written, failures).
+
+    A failure leaves the statement owed and the text on disk; nothing here ever
+    deletes a record. Error text is reduced to the exception class, because a
+    remote error can carry an authority URL.
+    """
+    unreadable: list[str] = []
+    keys = [key] if key else [r.key for r in records(root, unreadable)]
+    write = writer
+    done, failed = 0, [f"{name}: unreadable spool record (UNKNOWN)" for name in unreadable]
+    for k in keys:
+        record = load(root, k)
+        for statement in record.owed():
+            try:
+                if write is None:
+                    write = _default_writer(root)
+                write(record, statement)
+            except Exception as error:
+                failed.append(f"{record.key} {statement}: {type(error).__name__}")
+                break   # keep order: never write trackedBy before the node exists
+
+            def wrote(fresh, statement=statement):
+                if statement not in fresh.written:
+                    fresh.written.append(statement)
+            # Reload under the lock: saving `record` itself would overwrite a
+            # mark/track that landed while the write was in flight.
+            _update(root, k, wrote)
+            done += 1
+        # A mark/track during this pass adds statements; the next flush owes them.
+    return done, failed
+
+
+def _redelivered(root, text: str, recipient: str, channel: str, when: datetime):
+    """The spool path of the prior copy this one redelivers, or None."""
+    if channel not in REDELIVERED_CHANNELS:
+        return None
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    for path in spool_dir(root).glob(f"om-*-{digest}.json"):
+        stamp = datetime.strptime(path.name[3:19], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if abs(when - stamp) > REDELIVERY_WINDOW:
+            continue
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return path   # unreadable but present: never mint a second node over it
+        if (prior.get("text"), prior.get("recipient"), prior.get("channel")) == (text, recipient, channel):
+            return path
+    return None
+
+
+def _note_redelivery(root, path: Path, when: datetime) -> None:
+    """Keep the resend instant on the prior record (caller holds the lock).
+
+    A deliberate second identical send is indistinguishable from a retry, so
+    it writes no second node, but its time is kept: never drop what arrived."""
+    try:
+        record = load(root, path.name[:-len(".json")])
+    except (CaptureRefused, OSError, ValueError, TypeError):
+        return    # an unreadable prior is reported UNKNOWN by records()
+    stamp = f"{when:%Y-%m-%dT%H:%M:%SZ}"
+    if stamp != record.received_at and stamp not in record.redelivered_at:
+        record.redelivered_at.append(stamp)
+        _save(root, record)
+
+
+def spawn_flush(root, key: str) -> None:
+    """Deliver a just-spooled record without making the caller wait on Quipu."""
+    subprocess.Popen(
+        [sys.executable, "-m", "shantytown.operator_capture", "--root", str(Path(root)),
+         "--flush", key],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True)
+
+
+def capture(root, text: str, *, recipient: str, session: str, channel: str,
+            received_at: datetime | None = None, writer=None,
+            deliver: bool = True, source_kind: str = SOURCE_KIND) -> Record | None:
+    """Spool, then write. None = this message was already captured.
+
+    deliver=False spools only; the caller hands the write to spawn_flush.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise CaptureRefused("empty operator message")
+    # An unknown recipient is spooled with recipient "" (no a:recipient triple)
+    # rather than refused: refusing lost the text silently when a hook ran
+    # without SHANTY_AGENT (review of #764). A name that IS given must be one.
+    if recipient and not _NAME.fullmatch(recipient):
+        raise CaptureRefused(f"recipient is not an agent name: {recipient!r}")
+    if source_kind not in SOURCE_KINDS:
+        raise CaptureRefused(f"unknown source kind {source_kind!r}")
+    when = _utc(received_at or datetime.now(timezone.utc))
+    base = key_for(text, when)
+    record = Record(key=base, text=text,
+                    received_at=f"{when:%Y-%m-%dT%H:%M:%SZ}", recipient=recipient or "",
+                    session=str(session or ""), channel=channel, source_kind=source_kind)
+    redelivers = channel in REDELIVERED_CHANNELS
+    with _locked(root):
+        prior = _redelivered(root, text, record.recipient, channel, when)
+        if prior is not None:
+            _note_redelivery(root, prior, when)
+            return None
+        for n in range(1, 1000 if not redelivers else 2):
+            record.key = base if n == 1 else f"{base}-{n}"
+            try:
+                # O_EXCL backs the lock: the first delivery creates the file.
+                fd = os.open(_path(root, record.key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                break
+            except FileExistsError:
+                if redelivers:
+                    return None
+        else:
+            raise CaptureRefused(f"999 identical prompts in one second at {base}")
+        data = json.dumps(record.__dict__, ensure_ascii=False, indent=1).encode("utf-8")
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    if deliver:
+        flush(root, record.key, writer=writer)
+    return load(root, record.key)
+
+
+def mark(root, ref: str, *, writer=None) -> Record:
+    key = resolve(root, ref)
+
+    def confirm(record):
+        record.directive, record.dismissed = True, False
+    _update(root, key, confirm)
+    flush(root, key, writer=writer)
+    return load(root, key)
+
+
+def track(root, ref: str, seed: str, *, writer=None) -> Record:
+    """Linking a seed is itself the confirmation that the message is a directive."""
+    if not _NAME.fullmatch(seed or ""):
+        raise CaptureRefused(f"not a seed id: {seed!r}")
+    key = resolve(root, ref)
+
+    def link(record):
+        record.directive, record.dismissed = True, False
+        if seed not in record.tracked_by:
+            record.tracked_by.append(seed)
+    _update(root, key, link)
+    flush(root, key, writer=writer)
+    return load(root, key)
+
+
+def dismiss(root, ref: str) -> Record:
+    """Reviewed, not an instruction: drop it from the notice, keep the node.
+
+    A confirmed Directive is refused: un-confirming it is a graph retraction,
+    which belongs to the governed path, not a review keystroke."""
+    key = resolve(root, ref)
+
+    def review(record):
+        if record.directive:
+            raise CaptureRefused(f"{record.key} is already a Directive; dismiss applies "
+                                 "only to an unreviewed OperatorMessage")
+        record.dismissed = True
+    return _update(root, key, review)
+
+
+def track_minutes(root) -> int:
+    from .deployment import deployment_default
+    raw = deployment_default(root, TRACK_MINUTES_KEY)
+    try:
+        value = int(raw) if raw else TRACK_MINUTES
+    except ValueError:
+        return TRACK_MINUTES
+    return value if value > 0 else TRACK_MINUTES
+
+
+def notices(root, *, now: datetime | None = None) -> list[str]:
+    """The administrator's notice lines; [] when there is nothing to say."""
+    unreadable: list[str] = []
+    try:
+        found = records(root, unreadable)
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return ["  OPERATOR MESSAGES: UNKNOWN (local spool unreadable)"]
+    now = now or datetime.now(timezone.utc)
+    limit = timedelta(minutes=track_minutes(root))
+
+    # A record that parses but carries a malformed received_at made age() raise
+    # out of the administrator's `st anchor` (review of #764 @ c775cbcb): it is
+    # reported UNKNOWN with the unreadable files instead.
+    readable = []
+    for r in found:
+        try:
+            datetime.strptime(r.received_at, "%Y-%m-%dT%H:%M:%SZ")
+        except (TypeError, ValueError):
+            unreadable.append(f"{r.key}.json")
+        else:
+            readable.append(r)
+    found = readable
+
+    def age(r):
+        return now - datetime.strptime(r.received_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+    lines = []
+    untracked = [r.key for r in found if r.directive and not r.tracked_by and age(r) >= limit]
+    if untracked:
+        lines += [f"  UNTRACKED DIRECTIVES ({len(untracked)}): no seed after "
+                  f"{int(limit.total_seconds() // 60)}m. `st work directive track <key> <seed>`.",
+                  "    " + ", ".join(untracked[:8]) + (f" (+{len(untracked) - 8} more)" if len(untracked) > 8 else "")]
+    unreviewed = [r.key for r in found if not r.directive and not r.dismissed]
+    if unreviewed:
+        lines += [f"  OPERATOR MESSAGES TO REVIEW ({len(unreviewed)}): "
+                  "`st work directive mark <key>` if it gives an instruction, "
+                  "`dismiss <key>` if not.",
+                  "    " + ", ".join(unreviewed[:8]) + (f" (+{len(unreviewed) - 8} more)" if len(unreviewed) > 8 else "")]
+    if unreadable:
+        lines += [f"  OPERATOR MESSAGES UNKNOWN ({len(unreadable)}): spool record(s) unreadable, "
+                  "kept on disk: " + ", ".join(unreadable[:8])]
+    owed = [r.key for r in found if r.owed()]
+    if owed:
+        lines += [f"  OPERATOR CAPTURE SPOOLED ({len(owed)}): Quipu write pending. "
+                  "`st work directive flush`."]
+    return lines
+
+
+def hook(root, stdin_text: str, *, env=None, now=None, writer=None,
+         spawn=None) -> Record | None:
+    """UserPromptSubmit: the operator typing into the administrator's pane.
+
+    Spools and returns; the Quipu write runs detached (spawn_flush) unless a
+    writer is injected.
+    """
+    env = os.environ if env is None else env
+    payload = json.loads(stdin_text or "{}")
+    text = payload.get("prompt") if isinstance(payload, dict) else None
+    if not isinstance(text, str) or not text.strip() or _ATTRIBUTED.match(text):
+        return None
+    # A SHANTY_AGENT that is not agent-name-shaped made capture() refuse before
+    # spooling, and main() swallowed it: the prompt was lost (review of #764 @
+    # c775cbcb). Spool it with recipient UNKNOWN, as for an unset one.
+    recipient = env.get("SHANTY_AGENT", "")
+    if not recipient or not _NAME.fullmatch(recipient):
+        why = "unset" if not recipient else f"not an agent name ({recipient!r})"
+        print(f"operator_capture: SHANTY_AGENT {why}; spooled with recipient UNKNOWN",
+              file=sys.stderr)
+        recipient = ""
+    record = capture(root, text, recipient=recipient,
+                     session=payload.get("session_id") or env.get("CLAUDE_SESSION_ID", ""),
+                     channel="pane-prompt", received_at=now, writer=writer,
+                     deliver=writer is not None)
+    if record is not None and writer is None:
+        (spawn or spawn_flush)(root, record.key)
+    return record
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="capture an operator prompt (hook)")
+    ap.add_argument("--root", required=True, type=Path)
+    ap.add_argument("--flush", metavar="KEY", help="deliver one spooled record (detached)")
+    args = ap.parse_args(argv)
+    try:
+        if args.flush:
+            flush(args.root, args.flush)
+        else:
+            hook(args.root, sys.stdin.read())
+    except Exception as exc:  # a hook must never obstruct the operator
+        print(f"operator_capture: capture UNKNOWN ({type(exc).__name__})", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

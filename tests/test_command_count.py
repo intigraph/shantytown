@@ -169,14 +169,18 @@ def test_six_verbs_five_groups_twenty_seven_leaves():
     watches the OTHER host's (aegis-az0a40) — one pass, its own state, its own
     exit contract, reaching across a host boundary tend does not cross.
 
+    Grew to 49 with `directive` (under `work`): the administrator's write that
+    confirms a captured operator message is a Directive or links its seed
+    (aegis-za4f.20).
+
     Each command still earns its slot."""
     surface = _actual_surface()
     verbs = [n for n, leaves in surface.items() if leaves is None]
     groups = {n: leaves for n, leaves in surface.items() if leaves is not None}
     assert len(verbs) == 8, verbs
     assert len(groups) == 5, sorted(groups)
-    assert sum(len(l) for l in groups.values()) == 40
-    assert len(_actual_leaves()) == 48, (
+    assert sum(len(l) for l in groups.values()) == 41
+    assert len(_actual_leaves()) == 49, (
         "the command count changed. If that's intended, update the number here, "
         "cli.SURFACE and the cli.py docstring together — and say why the surface "
         "grew in docs/cli.md."
@@ -189,7 +193,8 @@ def test_the_grouping_is_the_one_ruled():
     assert _actual_surface() == {
         "task": None, "go": None, "sling": None, "inbox": None, "crew": None, "anchor": None, "prime": None,
         "attach": None,
-        "work": frozenset({"item", "repool", "defer", "hold-feed", "cost", "dream", "triage", "jobs"}),
+        "work": frozenset({"item", "repool", "defer", "hold-feed", "cost", "dream", "triage", "jobs",
+                             "directive"}),
         "agent": frozenset({"new", "spawn", "stop", "harness", "account", "cycle", "advise", "input", "ask",
                             "answer", "log", "history", "stats", "remote", "memory"}),
         "fleet": frozenset({"start", "tend", "roles", "init", "hold", "window",
@@ -216,7 +221,7 @@ def test_the_prose_numbers_in_the_docstring_match_the_parser():
              31: "thirty-one", 32: "thirty-two", 33: "thirty-three",
              34: "thirty-four", 35: "thirty-five", 36: "thirty-six",
              37: "thirty-seven", 38: "thirty-eight", 39: "thirty-nine",
-             40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three", 44: "forty-four", 45: "forty-five", 46: "forty-six", 47: "forty-seven", 48: "forty-eight"}
+             40: "forty", 41: "forty-one", 42: "forty-two", 43: "forty-three", 44: "forty-four", 45: "forty-five", 46: "forty-six", 47: "forty-seven", 48: "forty-eight", 49: "forty-nine"}
     surface = _actual_surface()
     n_verbs = sum(1 for l in surface.values() if l is None)
     n_groups = sum(1 for l in surface.values() if l is not None)
