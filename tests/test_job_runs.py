@@ -175,6 +175,30 @@ def test_registered_key_signer_surfaces_a_refusal():
         jr.RegisteredKeySigner(identity="sattler", run=run).advance("r", "claim")
 
 
+def test_each_shuttle_call_is_bounded_and_the_signer_has_a_total_budget():
+    t = [0.0]
+    timeouts = []
+
+    def slow(argv, *, timeout):
+        timeouts.append(timeout)
+        t[0] += 15.0                        # every call eats most of its timeout
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    s = jr.RegisteredKeySigner(identity="sattler", run=slow, clock=lambda: t[0])
+    s.advance("r", "work")
+    s.advance("r", "report")                # 15s in: 5s of the 20s budget left
+    with pytest.raises(jr.RunRefused, match="budget"):
+        s.advance("r", "report")            # 30s in: refused without calling shuttle
+    assert timeouts == [jr.CALL_TIMEOUT, 5.0]
+
+
+def test_a_hung_shuttle_is_a_refusal_not_a_stall():
+    def hang(argv, *, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+    with pytest.raises(jr.RunRefused, match="TimeoutExpired"):
+        jr.RegisteredKeySigner(identity="sattler", run=hang).advance("r", "claim")
+
+
 # --- wiring: the ledger carries the run through spawn, live and finish --------
 
 def test_ledger_job_run_from_spawn_to_report(tmp_path):
@@ -187,6 +211,45 @@ def test_ledger_job_run_from_spawn_to_report(tmp_path):
     eph.run_end(root, "eph-task-abc123", "done", signer_for=lambda rec: s)
     run = eph.read(root, "eph-task-abc123")["shuttle_run"]
     assert (run["state"], run["steps"]) == ("reported", ["claim", "work", "report"])
+
+
+def test_a_claim_racing_the_ending_loses_no_signed_step(tmp_path):
+    """Review of #758: run_step and run_end read the entry outside any lock and
+    wrote it whole, so the later store could drop a step shuttle had signed.
+    The per-job run lock makes the ending see the claim. Shown failing: with
+    run_lock replaced by a no-op the ending reads 'spawned' and ends 'failed'."""
+    import threading
+    root = tmp_path
+    eph.write(root, dict(_rec(), state=eph.LAUNCHING, result=None))
+    eph.run_begin(root, "eph-task-abc123", signer_for=lambda rec: FakeSigner())
+    in_claim, release = threading.Event(), threading.Event()
+
+    class SlowClaim(FakeSigner):
+        def advance(self, run, step):
+            if step == "claim":
+                in_claim.set()
+                release.wait(5)
+            super().advance(run, step)
+
+    claim = threading.Thread(target=eph.run_step,
+                             args=(root, "eph-task-abc123", "claim"),
+                             kwargs={"signer_for": lambda rec: SlowClaim()})
+    claim.start()
+    assert in_claim.wait(5)
+    ender = threading.Thread(target=eph.run_end, args=(root, "eph-task-abc123", "done"),
+                             kwargs={"signer_for": lambda rec: FakeSigner()})
+    ender.start()
+    release.set()
+    claim.join(5), ender.join(5)
+    run = eph.read(root, "eph-task-abc123")["shuttle_run"]
+    assert (run["state"], run["steps"]) == ("reported", ["claim", "work", "report"])
+
+
+def test_a_job_run_is_started_once(tmp_path):
+    eph.write(tmp_path, dict(_rec(), state=eph.LAUNCHING, result=None))
+    s = FakeSigner()
+    assert eph.run_begin(tmp_path, "eph-task-abc123", signer_for=lambda rec: s)
+    assert eph.run_begin(tmp_path, "eph-task-abc123", signer_for=lambda rec: s) is None
 
 
 def test_ledger_job_with_runs_off_records_why(tmp_path):
@@ -264,6 +327,10 @@ def test_real_shuttle_refuses_an_unregistered_signer_and_mints_no_key(tmp_path, 
     s = jr.RegisteredKeySigner(identity="eph-task-abc123", binary=shutil.which("shuttle"))
     rec = dict(_rec(), administrator="eph-task-abc123")
     rec["shuttle_run"] = jr.begin(rec, s)
-    with pytest.raises(jr.RunRefused):
+    # Review of #758: without these, a refused START left state None and step()
+    # raised "no started run", passing without the key ever being asked for.
+    assert rec["shuttle_run"]["error"] is None and rec["shuttle_run"]["state"] == "spawned"
+    with pytest.raises(jr.RunRefused, match="signing key"):
         jr.step(rec, "claim", s)
+    assert rec["shuttle_run"]["state"] == "spawned"
     assert list(keys.iterdir()) == []
