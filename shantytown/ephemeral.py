@@ -2090,9 +2090,116 @@ def apply_mailbox(root, name, state, now):
 def mark_live(root, name: str) -> None:
     with lock(root):
         rec = read(root, name)
-        if rec is not None and rec.get("state") == LAUNCHING:
-            rec["state"] = LIVE
+        if rec is None or rec.get("state") != LAUNCHING:
+            return
+        rec["state"] = LIVE
+        write(root, rec)
+    run_step(root, name, "claim")
+
+
+# --- the job's Shuttle run (aegis-za4f.19.1): start, steps, end ---------------
+# Signer calls shell out, so they run OUTSIDE the ledger lock and only the
+# resulting `shuttle_run` entry is written under it. They DO run under a
+# per-job run lock held from the read to the store: review of #758 found a
+# timeout finish racing the claim could read the same entry, each sign its
+# step, and the later store drop the other's, leaving the ledger and the
+# shuttle log disagreeing. None of these raise: a job that cannot reach Shuttle
+# must still launch, report and be torn down, and the ledger entry says why it
+# has no run instead of hiding it.
+
+@contextmanager
+def run_lock(root, name: str):
+    """Serialize one job's run operations without holding the host ledger lock
+    across shuttle calls. Always taken BEFORE `lock(root)`, never inside it."""
+    d = ledger_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f".run-{name}.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _store_run(root, name: str, entry: dict) -> None:
+    with lock(root):
+        rec = read(root, name)
+        if rec is not None:
+            rec["shuttle_run"] = entry
             write(root, rec)
+
+
+def _run_guarded(root, name: str, op: str, fn) -> dict | None:
+    """Run one job-run operation; ANY failure is recorded, never raised.
+
+    Review of #758: only RunRefused was caught, so an OSError from the signer's
+    temp file, a PermissionError opening a run lock another uid created, or a
+    KeyError on a stale `definition` escaped into spawn, mark_live and finish,
+    where run_end runs before notify and teardown, and the job was neither
+    reported nor torn down. Recording a run must never cost the job its ending.
+    """
+    try:
+        return fn()
+    except Exception as error:  # noqa: BLE001 - a run must never block a job
+        why = f"{op} failed: {type(error).__name__}: {error}"[:300]
+        try:
+            with lock(root):
+                rec = read(root, name)
+                if rec is not None:
+                    entry = dict(rec.get("shuttle_run") or {})
+                    entry["error"] = why
+                    rec["shuttle_run"] = entry
+                    write(root, rec)
+        except Exception:  # noqa: BLE001 - nowhere left to record it
+            pass
+        return None
+
+
+def run_begin(root, name: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or (rec.get("shuttle_run") or {}).get("state"):
+                return None                 # one run per job: never start twice
+            entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "start", go)
+
+
+def run_step(root, name: str, step: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            try:
+                job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
+            except job_runs.RunRefused as e:
+                entry = dict(rec.get("shuttle_run") or {})
+                entry["error"] = entry.get("error") or f"{step} refused: {e}"
+                rec["shuttle_run"] = entry
+            _store_run(root, name, rec["shuttle_run"])
+            return rec["shuttle_run"]
+    return _run_guarded(root, name, step, go)
+
+
+def run_end(root, name: str, verdict: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "end", go)
 
 
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
@@ -2359,12 +2466,20 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
         rec["settings_teardown"] = retire_settings(root, rec)
         rec["torn_down_at"] = time.time() if now is None else now
         write(root, rec)
+    # Review of #758: run locks were never removed and piled up in the ledger
+    # dir. The run has ended by now; a late step would only recreate it.
+    try:
+        (ledger_dir(root) / f".run-{name}.lock").unlink()
+    except OSError:
+        pass
     return rec
 
 
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
            persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
+    # The run ends on the RECORDED result: a second ending keeps the first story.
+    run_end(root, name, rec["result"]["verdict"])
     problems = notify(rec, persist_event=persist_event, comment=comment)
     schedule_teardown(name)
     return rec, problems

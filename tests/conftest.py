@@ -96,6 +96,10 @@ def _no_live_entity_linker(_no_ambient_operator_env, monkeypatch, tmp_path_facto
     (write), so it is switched off here and pointed at nothing. Tests of the
     linker opt back in with an injected runner."""
     monkeypatch.setenv("SHANTY_ENTITY_LINK", "off")
+    # Ephemeral jobs start a Shuttle run (aegis-za4f.19.1) and the real CLI
+    # appends to the operator's ~/.local/state/shuttle log. Off for the suite;
+    # tests of the run itself pass a signer explicitly.
+    monkeypatch.setenv("SHANTY_JOB_RUNS", "none")
     monkeypatch.setenv("CAMAYOC_SOURCE", str(tmp_path_factory.mktemp("no-camayoc")))
 
 
