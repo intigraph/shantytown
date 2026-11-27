@@ -2418,6 +2418,16 @@ The contract, because a program depends on it:
   busy/idle state we can actually answer; an agent that is down, has no pane, or shows a pane with no
   runtime UI is in **neither** number. Counting the unknowns into the denominator would print a
   capacity figure that was never measured, in the same font as one that was.
+- **Status-bar modes read Quipu at background priority** (aegis-69x). `anchor --short/--events/--harness`,
+  `crew --count/--governor/--display-snapshot`, `inbox --count`, `dashboard`, `tend` and `watch` send
+  `X-Quipu-Priority: background` on every Quipu read, so a busy Quipu sheds them first with
+  429 + Retry-After instead of making interactive reads wait behind them. The one list lives in
+  `query_identity.BACKGROUND_INVOCATIONS`, and the one place the header is attached is
+  `quipu_read_budget.open_read`, which carries reads only; writes and interactive commands
+  (`st anchor`, `st work item show`, `st go`) never carry it. A shed read is UNKNOWN with its retry
+  time, never an empty or green value, and further background reads skip the network until
+  Retry-After expires (`quipu_busy`). The header has no effect until the server enables
+  `read_admission_wait_ms`.
 
 ## What's deliberately absent
 
