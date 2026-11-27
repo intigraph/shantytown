@@ -279,6 +279,19 @@ def plan_role_set(registry: Registry, agent_name: str, role: str,
             )
         if r == agent_name:
             raise ValueError(f"{agent_name} cannot report to itself (cycle)")
+        # An administrator is not a router (is_router), so the Q1 check above let
+        # it through as a report. Measured 2026-11-27: creating a lead with the
+        # administrator in --reports wrote `administrator reports_to lead` beside
+        # `lead reports_to administrator`. That is a cycle; it sent the
+        # administrator's stop events to its own new lead, and the Quipu registry
+        # then derived the administrator as `lead`, so `st sling` refused.
+        if ra.role == "administrator":
+            raise ValueError(
+                f"{r} is the administrator; it cannot report to a {role} (cycle). "
+                f"--reports names who reports TO {agent_name}. To place "
+                f"{agent_name} under {r}, leave {r} out of --reports: a {role} "
+                f"with no lead is wired to the administrator."
+            )
 
     # A router MUST have somewhere to escalate. If it has no reports_to yet, wire
     # it to the sole administrator (the common case). If none exists, leave it
