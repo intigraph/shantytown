@@ -1051,3 +1051,68 @@ def validate_delivery_key(key):
     import re
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}", key):
         raise ValueError("delivery key must be 1..128 ASCII letters/digits or _.:-")
+
+
+# --- Named, pluggable message backends (aegis-8dda.10.6) ----------------------
+# Stiwi 2026-11-27: st "should support a pluggable msg system st agents use and
+# chaski will be an implementation". Before this, `[inbox] store` was a string
+# that three call sites (st inbox, the CLI capacity notice and the producer
+# capacity notice) each compared against "message-graph" and then reached past
+# the Inbox protocol to `tracker.send_message` or `sd msg send` themselves. A
+# fourth backend would have meant a fourth copy of that branch. Now a backend is
+# a NAME mapped to a factory; callers ask for the name and speak the protocol.
+
+InboxFactory = Callable[["TrackerInbox | None", object], Inbox]
+
+
+def _seed_backend(legacy, tracker):
+    if legacy is None:
+        raise ValueError("inbox backend 'seed' needs a tracker-backed inbox")
+    return legacy
+
+
+def _message_graph_backend(legacy, tracker):
+    # Chaski-shaped message facts written and read through `sd msg`. A tracker
+    # that does not speak `sd msg` stays on seeds rather than failing every send;
+    # this is the fallback the old inline branch had, kept so the flip is safe.
+    if not callable(getattr(tracker, "send_message", None)):
+        return _seed_backend(legacy, tracker)
+    return MessageGraphInbox(legacy, tracker)
+
+
+INBOX_BACKENDS: dict[str, InboxFactory] = {
+    "seed": _seed_backend,
+    "message-graph": _message_graph_backend,
+}
+
+
+def register_inbox_backend(name: str, factory: InboxFactory) -> None:
+    """Add a named backend. Refuses to shadow an existing name: silently
+    replacing "message-graph" would route every agent's mail somewhere new."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("inbox backend name must be a nonempty string")
+    if name in INBOX_BACKENDS:
+        raise ValueError(f"inbox backend {name!r} is already registered")
+    INBOX_BACKENDS[name] = factory
+
+
+def open_inbox(name: str, legacy: "TrackerInbox | None", tracker) -> Inbox:
+    """The Inbox for backend `name`. An unknown name is an error, never a
+    silent fall back to seeds: a typo must not quietly move mail."""
+    factory = INBOX_BACKENDS.get(name)
+    if factory is None:
+        raise ValueError(f"unknown inbox backend {name!r}; known: {', '.join(INBOX_BACKENDS)}")
+    return factory(legacy, tracker)
+
+
+def deliver_notice(inbox: Inbox, to: str, body: str, key: str,
+                   frm: str | None = None) -> Message:
+    """An idempotent system notice (capacity, escalation) through the protocol.
+
+    Keyed when the backend can make the key stable, so a re-run on the same day
+    is one message, not two. A seed backend whose tracker has no stable create
+    keeps the old unkeyed write instead of refusing the notice outright."""
+    if isinstance(inbox, TrackerInbox) and not callable(
+            getattr(inbox._tracker, "create_inbox_message", None)):
+        return inbox.deliver(to, body, frm)
+    return inbox.deliver_once(to, body, key, frm)

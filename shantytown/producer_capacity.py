@@ -188,18 +188,18 @@ def main():
             raise ValueError('owner has no lead')
         body = f'capacity: {item_id} retained in pool; {owner} full'
         from .config import load_or_default
+        from .inbox import TrackerInbox, deliver_notice, open_inbox
+        from datetime import datetime, timezone
         cfg, _ = load_or_default(Path(os.environ['SHANTY_ROOT']))
-        if cfg.inbox_store == "message-graph":
-            # message graph: a message window, never a seed; one note per item/owner/day.
-            from datetime import datetime, timezone
-            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            result = execute(['msg', 'send', '--to', lead, '--from', 'st',
-                              '--key', f'capacity:{item_id}:{owner}:{day}', '-m', body, '--json'])
-        else:
-            result = execute(['create', f'inbox: {body}',
-                              '--assignee', lead, '--labels', 'inbox', '--json'])
-        if result.returncode:
-            raise ValueError('lead delivery unproven')
+        # The named backend's Inbox protocol, over the SAME selected SDK route
+        # (tracker._bd is `execute`); one note per item/owner/day. Any failure
+        # to persist raises, so delivery is never reported without proof.
+        box = open_inbox(cfg.inbox_store, TrackerInbox(tracker, lambda: []), tracker)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            deliver_notice(box, lead, body, f'capacity:{item_id}:{owner}:{day}', frm='st')
+        except Exception as error:  # noqa: BLE001 -- any failed persist is unproven
+            raise ValueError('lead delivery unproven') from error
     result = run(arguments, tracker, execute, notify)
     sys.stdout.write(result.stdout)
     sys.stderr.write(result.stderr)

@@ -363,14 +363,15 @@ def _tracker(a, default="files"):
         # no recursive capacity routing. Never recreate the original work item.
         body = f'capacity: {item_id} retained in pool; {owner} has 10 real work items'
         from .config import load_or_default
+        from .inbox import TrackerInbox, deliver_notice, open_inbox
+        from datetime import datetime, timezone
         cfg, _ = load_or_default(Path(a.root))
-        if cfg.inbox_store == "message-graph" and callable(getattr(tracker, "send_message", None)):
-            # message graph: a message window, never a seed; one note per item/owner/day.
-            from datetime import datetime, timezone
-            day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            tracker.send_message(lead, body, key=f"capacity:{item_id}:{owner}:{day}", frm="st")
-            return
-        tracker.create(f'inbox: {body}', assignee=lead, labels='inbox')
+        # Through the named backend's Inbox protocol only: one note per
+        # item/owner/day. The raw tracker, not the guarded one, so a notice can
+        # never recurse into capacity routing.
+        box = open_inbox(cfg.inbox_store, TrackerInbox(tracker, lambda: []), tracker)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        deliver_notice(box, lead, body, f"capacity:{item_id}:{owner}:{day}", frm="st")
     return guard_producers(tracker, notify)
 
 
@@ -521,15 +522,13 @@ def _raw_inbox(a, default="files"):
         legacy = TrackerInbox(trk, lambda: br_items(trk),
                               lambda: br_items(trk, include_closed=True),
                               items_for=getattr(trk, "inbox_items", None))
-        # [inbox] store: "message-graph" sends NEW mail through
-        # `sd msg` into the message windows and reads legacy seeds + windows.
-        # Only a tracker that speaks `sd msg` can; anything else stays on seeds.
+        # [inbox] store names the message backend (inbox.INBOX_BACKENDS).
+        # "message-graph" sends NEW mail through `sd msg` as Chaski-shaped
+        # message facts and reads legacy seeds + windows.
         from .config import load_or_default
+        from .inbox import open_inbox
         cfg, _ = load_or_default(Path(a.root))
-        if cfg.inbox_store == "message-graph" and callable(getattr(trk, "send_message", None)):
-            from .inbox import MessageGraphInbox
-            return MessageGraphInbox(legacy, trk)
-        return legacy
+        return open_inbox(cfg.inbox_store, legacy, trk)
     return FilesInbox(Path(a.root) / "inbox")
 
 
