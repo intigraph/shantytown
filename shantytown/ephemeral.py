@@ -2047,42 +2047,77 @@ def _store_run(root, name: str, entry: dict) -> None:
             write(root, rec)
 
 
+def _run_guarded(root, name: str, op: str, fn) -> dict | None:
+    """Run one job-run operation; ANY failure is recorded, never raised.
+
+    Review of #758: only RunRefused was caught, so an OSError from the signer's
+    temp file, a PermissionError opening a run lock another uid created, or a
+    KeyError on a stale `definition` escaped into spawn, mark_live and finish,
+    where run_end runs before notify and teardown, and the job was neither
+    reported nor torn down. Recording a run must never cost the job its ending.
+    """
+    try:
+        return fn()
+    except Exception as error:  # noqa: BLE001 - a run must never block a job
+        why = f"{op} failed: {type(error).__name__}: {error}"[:300]
+        try:
+            with lock(root):
+                rec = read(root, name)
+                if rec is not None:
+                    entry = dict(rec.get("shuttle_run") or {})
+                    entry["error"] = why
+                    rec["shuttle_run"] = entry
+                    write(root, rec)
+        except Exception:  # noqa: BLE001 - nowhere left to record it
+            pass
+        return None
+
+
 def run_begin(root, name: str, signer_for=None) -> dict | None:
     from . import job_runs
-    with run_lock(root, name):
-        rec = read(root, name)
-        if rec is None or (rec.get("shuttle_run") or {}).get("state"):
-            return None                     # one run per job: never start twice
-        entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
-        _store_run(root, name, entry)
-        return entry
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or (rec.get("shuttle_run") or {}).get("state"):
+                return None                 # one run per job: never start twice
+            entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "start", go)
 
 
 def run_step(root, name: str, step: str, signer_for=None) -> dict | None:
     from . import job_runs
-    with run_lock(root, name):
-        rec = read(root, name)
-        if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
-            return None
-        try:
-            job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
-        except job_runs.RunRefused as e:
-            entry = dict(rec.get("shuttle_run") or {})
-            entry["error"] = entry.get("error") or f"{step} refused: {e}"
-            rec["shuttle_run"] = entry
-        _store_run(root, name, rec["shuttle_run"])
-        return rec["shuttle_run"]
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            try:
+                job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
+            except job_runs.RunRefused as e:
+                entry = dict(rec.get("shuttle_run") or {})
+                entry["error"] = entry.get("error") or f"{step} refused: {e}"
+                rec["shuttle_run"] = entry
+            _store_run(root, name, rec["shuttle_run"])
+            return rec["shuttle_run"]
+    return _run_guarded(root, name, step, go)
 
 
 def run_end(root, name: str, verdict: str, signer_for=None) -> dict | None:
     from . import job_runs
-    with run_lock(root, name):
-        rec = read(root, name)
-        if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
-            return None
-        entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
-        _store_run(root, name, entry)
-        return entry
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "end", go)
 
 
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
@@ -2315,6 +2350,12 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
         rec["settings_teardown"] = retire_settings(root, rec)
         rec["torn_down_at"] = time.time() if now is None else now
         write(root, rec)
+    # Review of #758: run locks were never removed and piled up in the ledger
+    # dir. The run has ended by now; a late step would only recreate it.
+    try:
+        (ledger_dir(root) / f".run-{name}.lock").unlink()
+    except OSError:
+        pass
     return rec
 
 
