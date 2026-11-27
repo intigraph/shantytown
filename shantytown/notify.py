@@ -1587,7 +1587,12 @@ class LeadStallAlerter:
     So the flag becomes an event. The condition is the `st crew` stalled
     predicate (pane idle, no live shell, an in_progress item held) plus at least
     one READY item the lead holds, by the haul predicate (stop_event._assigned_to)
-    so this cannot disagree with what the haul would serve. Once that condition
+    narrowed by the SAME governor admission the haul applies
+    (feed_check.admitted_haul with this pass's per-card verdict). Without that
+    narrowing a governor hold that parks every held item would page the
+    administrator about work the lead cannot start. Anchors carrying a
+    decision/blocked label are StalledAlerter's exclusion too: they are parked
+    on an owner answer, not neglected. Once that condition
     has held unchanged for the threshold (default 15 min, SHANTY_STALL_MIN), ONE
     notice goes to the lead's own lead, which for a lead is the administrator.
     It stays one notice per episode: any progress, a changed held set, or a
@@ -1603,9 +1608,10 @@ class LeadStallAlerter:
 
     def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
                  in_progress=None, ready=None, live_jobs=None,
-                 threshold_min=None, now=None, log=None):
+                 threshold_min=None, now=None, log=None, verdict_for=None):
         self._root = root
         self.path = Path(root) / "notify" / "lead_stalled.json"
+        self._verdict_for = verdict_for
         self._reg = reg
         self._panes = panes
         self._runtime = runtime
@@ -1651,11 +1657,24 @@ class LeadStallAlerter:
         now = self._now()
         raised = []
         try:
+            # A lead that left the roster keeps no episode: unpruned entries
+            # outlive the agent and a returning name would inherit a stale one.
+            for name in set(store) - {ag.name for ag in agents if ag.role == "lead"}:
+                store.pop(name, None)
             for ag in agents:
                 if ag.role != "lead" or not ag.pane:
                     continue
-                anchors = sorted(b.get("id", "?") for b in _assigned_to(ag.name, active))
-                held = sorted(b.get("id", "?") for b in _assigned_to(ag.name, ready))
+                anchors = sorted(
+                    b.get("id", "?") for b in _assigned_to(ag.name, active)
+                    if not StalledAlerter._blocked_on_decision(b))
+                mine = _assigned_to(ag.name, ready)
+                if mine and self._verdict_for is not None:
+                    from .feed_check import admitted_haul
+                    mine = admitted_haul(
+                        mine, ag, self._verdict_for(ag),
+                        lambda msg: self._log(f"lead-stalled: {msg}"),
+                        root=self._root)
+                held = sorted(b.get("id", "?") for b in mine)
                 if (not anchors or not held or ag.name in waiting_on_job
                         or not self._panes.exists(ag.pane)):
                     store.pop(ag.name, None)

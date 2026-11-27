@@ -97,7 +97,8 @@ def test_lead_stopping_idle_holding_nothing_ready_gets_no_wake(monkeypatch, caps
 
 # --- C: a stalled lead with ready held work raises one notice ----------------
 
-def _world(tmp_path, *, screen=IDLE, active=None, ready=None, jobs=()):
+def _world(tmp_path, *, screen=IDLE, active=None, ready=None, jobs=(),
+           verdict_for=None):
     reg = _Reg([ADMIN, LEAD])
     panes = _Panes({"p-s": "", "p-e": screen})
     clock = {"t": 1000.0}
@@ -113,7 +114,8 @@ def _world(tmp_path, *, screen=IDLE, active=None, ready=None, jobs=()):
     mk = lambda: LeadStallAlerter(tmp_path, reg, panes, _Runtime(), push=push,
                                   in_progress=lambda: active, ready=lambda: ready,
                                   live_jobs=lambda: list(jobs), threshold_min=15,
-                                  now=lambda: clock["t"], log=lambda m: None)
+                                  now=lambda: clock["t"], log=lambda m: None,
+                                  verdict_for=verdict_for)
     return reg, clock, pushed, mk
 
 
@@ -187,3 +189,54 @@ def test_read_failure_fails_open(tmp_path):
     alerter = mk()
     alerter._ready = lambda: (_ for _ in ()).throw(RuntimeError("tracker down"))
     assert alerter.sweep(reg.all().exact()) == [] and pushed == []
+
+
+class _Verdict:
+    """The surface feed_check.admitted_haul reads off a governor verdict."""
+    admit_class = False
+
+    def __init__(self, parked):
+        self.parked = set(parked)
+
+    def admits(self, item, agent=None):
+        return "media hold" if item.id in self.parked else ""
+
+    def waives(self, item, agent=None):
+        return False
+
+
+def _stall_past_threshold(mk, clock, agents):
+    mk().sweep(agents)
+    clock["t"] += 16 * 60
+    return mk().sweep(agents)
+
+
+def test_a_lead_whose_held_work_is_all_parked_by_the_governor_is_not_raised(tmp_path):
+    verdict = _Verdict({"aegis-8fye.9", "aegis-r2"})
+    reg, clock, pushed, mk = _world(tmp_path, verdict_for=lambda card: verdict)
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == []
+    assert pushed == []
+
+
+def test_only_governor_admitted_items_are_named_in_the_notice(tmp_path):
+    verdict = _Verdict({"aegis-r2"})
+    reg, clock, pushed, mk = _world(tmp_path, verdict_for=lambda card: verdict)
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == ["ellie"]
+    (msg,) = pushed
+    assert "1 ready item(s): aegis-8fye.9." in msg and "aegis-r2" not in msg
+
+
+def test_a_decision_labelled_anchor_is_parked_not_stalled(tmp_path):
+    reg, clock, pushed, mk = _world(tmp_path, active=[
+        {"id": "aegis-gqi0", "assignee": "crew/ellie", "labels": ["blocked-on-human"]}])
+    assert _stall_past_threshold(mk, clock, reg.all().exact()) == []
+    assert pushed == []
+
+
+def test_an_episode_for_a_lead_that_left_the_roster_is_pruned(tmp_path):
+    reg, clock, pushed, mk = _world(tmp_path)
+    mk().sweep(reg.all().exact())
+    alerter = mk()
+    assert "ellie" in alerter._load()
+    alerter.sweep([ADMIN])
+    assert "ellie" not in mk()._load()

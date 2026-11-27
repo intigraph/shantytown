@@ -932,6 +932,8 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path, *, payload=None) -> in
         examples = for_deployment(root, reg)
         # NAME EVERYTHING HELD, not just the next item (aegis-0dh5). A lead that
         # stops idle holding ready work must be told what it holds at that stop.
+        # Workers get the same line, and the count INCLUDES the item claimed
+        # just now: it is everything held at this stop, not what remains after.
         # "(N more)" alone left the rest to a plate read nobody was prompted to
         # make, and ellie sat 56 minutes with ready work she did not know about.
         held_ids = [b.get("id", "?") for b in mine]

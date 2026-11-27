@@ -17062,7 +17062,8 @@ def _tend_once(a, quiet: bool = False) -> int:
         # skips leads, so `st crew` showed ellie "stalled" for 56 minutes and
         # nothing acted on it. One notice per stall episode.
         lead_stalled = _sweep("lead-stalled", lambda: notify_mod.LeadStallAlerter(
-            Path(a.root), _registry(a), panes, runtime, log=_log).sweep(agents))
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            verdict_for=_card_verdict).sweep(agents))
         if lead_stalled:
             print(f"  ⚠ raised {len(lead_stalled)} stalled lead(s) holding ready "
                   f"work to the administrator: {', '.join(lead_stalled)}",
