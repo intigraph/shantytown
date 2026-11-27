@@ -33,7 +33,29 @@ The capture paths (the prompt hook, `st inbox`) never wait on Quipu: they spool
 and hand the write to a detached `--flush`, because a synchronous /knot call
 (5s timeout per statement) would delay every operator prompt behind it.
 
-KNOWN GAPS: a pane injection that st does not prefix with "[from ...]" is
+WHO SAID IT. An `st inbox` sender is the operator only when authenticated_actor()
+proves it. A sender known only from $SHANTY_AGENT (no identity policy on the
+host, or no TMUX_PANE to check) is spooled and written with sourceKind
+"operator-claimed", never "operator-verbatim": any agent shell can set that
+variable, and "operator-verbatim" is the vocabulary real operator directives
+carry (third review of #764). A relayed off-host send arrives at the far side
+by $SHANTY_AGENT, so it is captured there as operator-claimed too.
+
+SECRETS. The graph is shared, the spool is not: the record keeps the raw text
+(0600 file in a 0700 directory), and the Quipu literal is the text after
+jobs.mask_secrets. A masked literal also carries a:textRedacted true, so a
+reader knows the graph copy is not byte-for-byte.
+
+REVIEW. Every message waits in the administrator's notice until it is marked a
+Directive, linked to a seed, or DISMISSED (`st work directive dismiss`): most
+admin prompts ("y", "go") are not instructions, and a notice that only grows
+is noise. Dismissing is local review state; the OperatorMessage node stays.
+
+An inbox resend folded into its prior copy is not dropped either: its receive
+instant is appended to that record's `redelivered_at`.
+
+KNOWN GAPS: the pane-prompt channel's provenance is the harness hook itself;
+nothing proves the module was run by the harness. A pane injection that st does not prefix with "[from ...]" is
 indistinguishable from the operator typing and IS captured; a Codex
 administrator has no UserPromptSubmit hook here, so only its `st inbox` path
 captures.
@@ -56,6 +78,8 @@ TRACK_MINUTES_KEY = "SHANTY_DIRECTIVE_TRACK_MINUTES"
 TRACK_MINUTES = 30
 REDELIVERY_WINDOW = timedelta(minutes=10)
 SOURCE_KIND = "operator-verbatim"         # existing vocabulary on operator directives
+CLAIMED_KIND = "operator-claimed"         # the sender name was never authenticated
+SOURCE_KINDS = frozenset({SOURCE_KIND, CLAIMED_KIND})
 # Names land in Turtle as `a:<name>`. A trailing "." would close the statement
 # early ("a:x. .") and the write would stay owed forever, so a name must end on
 # a letter, digit or underscore.
@@ -97,6 +121,9 @@ class Record:
     session: str
     channel: str
     directive: bool = False
+    source_kind: str = SOURCE_KIND
+    dismissed: bool = False              # reviewed: not a directive (local only)
+    redelivered_at: list[str] = field(default_factory=list)
     tracked_by: list[str] = field(default_factory=list)
     # Statements Quipu has accepted, by name ("message", "directive",
     # "tracked:<seed>"). Anything derived but not listed here is still owed.
@@ -185,13 +212,22 @@ def _literal(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
+def screened(text: str) -> str:
+    from .jobs import mask_secrets
+    return mask_secrets(text)
+
+
 def turtle(onto: str, record: Record, statement: str) -> str:
     s = f"a:{record.key}"
     if statement == "message":
+        if record.source_kind not in SOURCE_KINDS:
+            raise CaptureRefused(f"unknown source kind {record.source_kind!r}")
+        shown = screened(record.text)
         body = (f"{s} a a:OperatorMessage ;\n"
                 f"  rdfs:label {_literal(record.key)} ;\n"
-                f"  rdfs:comment {_literal(record.text)} ;\n"
-                f"  a:sourceKind {_literal(SOURCE_KIND)} ;\n"
+                f"  rdfs:comment {_literal(shown)} ;\n"
+                + ("  a:textRedacted true ;\n" if shown != record.text else "")
+                + f"  a:sourceKind {_literal(record.source_kind)} ;\n"
                 f"  a:receivedAt {_literal(record.received_at)}^^xsd:dateTime ;\n"
                 + (f"  a:recipient a:{record.recipient} ;\n" if record.recipient else "")
                 + f"  a:sessionId {_literal(record.session)} ;\n"
@@ -246,9 +282,10 @@ def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]
     return done, failed
 
 
-def _redelivered(root, text: str, recipient: str, channel: str, when: datetime) -> bool:
+def _redelivered(root, text: str, recipient: str, channel: str, when: datetime):
+    """The spool path of the prior copy this one redelivers, or None."""
     if channel not in REDELIVERED_CHANNELS:
-        return False
+        return None
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
     for path in spool_dir(root).glob(f"om-*-{digest}.json"):
         stamp = datetime.strptime(path.name[3:19], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
@@ -257,10 +294,25 @@ def _redelivered(root, text: str, recipient: str, channel: str, when: datetime) 
         try:
             prior = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return True   # unreadable but present: never mint a second node over it
+            return path   # unreadable but present: never mint a second node over it
         if (prior.get("text"), prior.get("recipient"), prior.get("channel")) == (text, recipient, channel):
-            return True
-    return False
+            return path
+    return None
+
+
+def _note_redelivery(root, path: Path, when: datetime) -> None:
+    """Keep the resend instant on the prior record (caller holds the lock).
+
+    A deliberate second identical send is indistinguishable from a retry, so
+    it writes no second node, but its time is kept: never drop what arrived."""
+    try:
+        record = load(root, path.name[:-len(".json")])
+    except (CaptureRefused, OSError, ValueError, TypeError):
+        return    # an unreadable prior is reported UNKNOWN by records()
+    stamp = f"{when:%Y-%m-%dT%H:%M:%SZ}"
+    if stamp != record.received_at and stamp not in record.redelivered_at:
+        record.redelivered_at.append(stamp)
+        _save(root, record)
 
 
 def spawn_flush(root, key: str) -> None:
@@ -274,7 +326,7 @@ def spawn_flush(root, key: str) -> None:
 
 def capture(root, text: str, *, recipient: str, session: str, channel: str,
             received_at: datetime | None = None, writer=None,
-            deliver: bool = True) -> Record | None:
+            deliver: bool = True, source_kind: str = SOURCE_KIND) -> Record | None:
     """Spool, then write. None = this message was already captured.
 
     deliver=False spools only; the caller hands the write to spawn_flush.
@@ -286,14 +338,18 @@ def capture(root, text: str, *, recipient: str, session: str, channel: str,
     # without SHANTY_AGENT (review of #764). A name that IS given must be one.
     if recipient and not _NAME.fullmatch(recipient):
         raise CaptureRefused(f"recipient is not an agent name: {recipient!r}")
+    if source_kind not in SOURCE_KINDS:
+        raise CaptureRefused(f"unknown source kind {source_kind!r}")
     when = _utc(received_at or datetime.now(timezone.utc))
     base = key_for(text, when)
     record = Record(key=base, text=text,
                     received_at=f"{when:%Y-%m-%dT%H:%M:%SZ}", recipient=recipient or "",
-                    session=str(session or ""), channel=channel)
+                    session=str(session or ""), channel=channel, source_kind=source_kind)
     redelivers = channel in REDELIVERED_CHANNELS
     with _locked(root):
-        if _redelivered(root, text, record.recipient, channel, when):
+        prior = _redelivered(root, text, record.recipient, channel, when)
+        if prior is not None:
+            _note_redelivery(root, prior, when)
             return None
         for n in range(1, 1000 if not redelivers else 2):
             record.key = base if n == 1 else f"{base}-{n}"
@@ -318,7 +374,10 @@ def capture(root, text: str, *, recipient: str, session: str, channel: str,
 
 def mark(root, ref: str, *, writer=None) -> Record:
     key = resolve(root, ref)
-    _update(root, key, lambda r: setattr(r, "directive", True))
+
+    def confirm(record):
+        record.directive, record.dismissed = True, False
+    _update(root, key, confirm)
     flush(root, key, writer=writer)
     return load(root, key)
 
@@ -330,12 +389,27 @@ def track(root, ref: str, seed: str, *, writer=None) -> Record:
     key = resolve(root, ref)
 
     def link(record):
-        record.directive = True
+        record.directive, record.dismissed = True, False
         if seed not in record.tracked_by:
             record.tracked_by.append(seed)
     _update(root, key, link)
     flush(root, key, writer=writer)
     return load(root, key)
+
+
+def dismiss(root, ref: str) -> Record:
+    """Reviewed, not an instruction: drop it from the notice, keep the node.
+
+    A confirmed Directive is refused: un-confirming it is a graph retraction,
+    which belongs to the governed path, not a review keystroke."""
+    key = resolve(root, ref)
+
+    def review(record):
+        if record.directive:
+            raise CaptureRefused(f"{record.key} is already a Directive; dismiss applies "
+                                 "only to an unreviewed OperatorMessage")
+        record.dismissed = True
+    return _update(root, key, review)
 
 
 def track_minutes(root) -> int:
@@ -369,10 +443,11 @@ def notices(root, *, now: datetime | None = None) -> list[str]:
         lines += [f"  UNTRACKED DIRECTIVES ({len(untracked)}): no seed after "
                   f"{int(limit.total_seconds() // 60)}m. `st work directive track <key> <seed>`.",
                   "    " + ", ".join(untracked[:8]) + (f" (+{len(untracked) - 8} more)" if len(untracked) > 8 else "")]
-    unreviewed = [r.key for r in found if not r.directive]
+    unreviewed = [r.key for r in found if not r.directive and not r.dismissed]
     if unreviewed:
         lines += [f"  OPERATOR MESSAGES TO REVIEW ({len(unreviewed)}): "
-                  "`st work directive mark <key>` if it gives an instruction.",
+                  "`st work directive mark <key>` if it gives an instruction, "
+                  "`dismiss <key>` if not.",
                   "    " + ", ".join(unreviewed[:8]) + (f" (+{len(unreviewed) - 8} more)" if len(unreviewed) > 8 else "")]
     if unreadable:
         lines += [f"  OPERATOR MESSAGES UNKNOWN ({len(unreadable)}): spool record(s) unreadable, "

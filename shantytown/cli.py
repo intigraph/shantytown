@@ -3,7 +3,7 @@
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
-            · jobs [list|check|run|history] · directive [list|mark|track|flush]
+            · jobs [list|check|run|history] · directive [list|mark|dismiss|track|flush]
     agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap|--drain] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
@@ -564,6 +564,9 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
         print(f"  refused: {error}", file=sys.stderr)
         return None, False
     sender = authenticated or _me(a)
+    # Kept so operator capture can tell a proven sender from an env claim
+    # without a second sd round trip (review of #764).
+    a.authenticated_sender = authenticated
     if authenticated and getattr(a, "me", None) not in (None, authenticated):
         return None, False
     if not sender:
@@ -2182,9 +2185,9 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("-n", "--dry-run", action="store_true")
 
     dv = leaf("directive", help="operator messages st captured verbatim: "
-                                "list | mark <key> | track <key> <seed> | flush")
+                                "list | mark <key> | dismiss <key> | track <key> <seed> | flush")
     dv.add_argument("action", nargs="?", default="list",
-                    choices=["list", "mark", "track", "flush"])
+                    choices=["list", "mark", "dismiss", "track", "flush"])
     dv.add_argument("args", nargs="*")
 
     dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
@@ -8407,16 +8410,24 @@ def _capture_operator_inbox(a, sender, recipient, text) -> None:
     The operator is whoever the deployment names in SHANTY_OPERATOR; unset means
     no inbox capture, because guessing who the operator is would be authority
     laundering. Capture failure never blocks the send: the spool keeps the text.
+
+    The name match alone is a claim: with no TMUX_PANE and no identity policy,
+    `SHANTY_AGENT=<operator> st inbox ...` from any agent shell reaches here.
+    Only an authenticated_actor() match is stamped operator-verbatim; anything
+    else is captured as operator-claimed (review of #764).
     """
     from . import operator_capture
     operator = _deployment_default(a, operator_capture.OPERATOR_KEY)
     if not operator or sender != operator:
         return
+    proven = getattr(a, "authenticated_sender", None) == operator
+    kind = operator_capture.SOURCE_KIND if proven else operator_capture.CLAIMED_KIND
     try:
         # Spool now, write detached: the send must not wait on Quipu.
         record = operator_capture.capture(
             a.root, text, recipient=recipient, channel="inbox",
-            session=os.environ.get("CLAUDE_SESSION_ID", ""), deliver=False)
+            session=os.environ.get("CLAUDE_SESSION_ID", ""), deliver=False,
+            source_kind=kind)
         if record is not None:
             operator_capture.spawn_flush(a.root, record.key)
     except Exception as error:
@@ -8428,7 +8439,8 @@ def _cmd_directive(a) -> int:
     """directive — the administrator's side of operator capture (aegis-za4f.20)."""
     from . import operator_capture as oc
     args = list(a.args)
-    need = {"list": (0, 0), "mark": (1, 1), "track": (2, 2), "flush": (0, 1)}[a.action]
+    need = {"list": (0, 0), "mark": (1, 1), "dismiss": (1, 1), "track": (2, 2),
+            "flush": (0, 1)}[a.action]
     if not need[0] <= len(args) <= need[1]:
         print(f"  refused: st work directive {a.action} takes {need[0]}..{need[1]} argument(s)",
               file=sys.stderr)
@@ -8437,7 +8449,10 @@ def _cmd_directive(a) -> int:
         if a.action == "list":
             found = oc.records(a.root) if oc.spool_dir(a.root).is_dir() else []
             for r in found:
-                kind = "Directive" if r.directive else "OperatorMessage"
+                kind = ("Directive" if r.directive
+                        else "OperatorMessage(dismissed)" if r.dismissed else "OperatorMessage")
+                if r.source_kind != oc.SOURCE_KIND:
+                    kind += f" {r.source_kind}"
                 owed = f" OWED:{','.join(r.owed())}" if r.owed() else ""
                 seeds = f" trackedBy:{','.join(r.tracked_by)}" if r.tracked_by else ""
                 print(f"  {r.key}  {kind}  {r.received_at} -> {r.recipient} "
@@ -8452,6 +8467,10 @@ def _cmd_directive(a) -> int:
             for line in failed:
                 print(f"  still owed: {line}", file=sys.stderr)
             return CANNOT_TELL if failed else OK
+        if a.action == "dismiss":
+            record = oc.dismiss(a.root, args[0])
+            print(f"  {record.key}: reviewed, not a directive (node kept in Quipu)")
+            return OK
         record = (oc.mark(a.root, args[0]) if a.action == "mark"
                   else oc.track(a.root, args[0], args[1]))
     except oc.CaptureRefused as error:

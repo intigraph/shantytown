@@ -349,3 +349,105 @@ def test_st_task_directive_link_still_owed_exits_cannot_tell(tmp_path, monkeypat
     rc = cli.main(["--root", str(tmp_path), "task", "x", "--directive", record.key])
     assert rc == cli.CANNOT_TELL
     assert oc.load(tmp_path, record.key).tracked_by
+
+
+# --- third review of #764 ------------------------------------------------------
+
+def test_an_env_only_operator_sender_is_claimed_not_verbatim(tmp_path, monkeypatch):
+    """`SHANTY_AGENT=<operator> st inbox ...` from any agent shell must not mint
+    the vocabulary real operator directives carry."""
+    root = _cli_store(tmp_path)
+    _inbox(monkeypatch, root, operator="stiwi")
+    (record,) = oc.records(root)
+    assert record.source_kind == oc.CLAIMED_KIND
+    ttl = oc.turtle(ONTO, record, "message")
+    assert 'a:sourceKind "operator-claimed"' in ttl and "operator-verbatim" not in ttl
+
+
+def test_an_authenticated_operator_sender_is_verbatim(tmp_path, monkeypatch):
+    from shantytown import actor_identity
+    monkeypatch.setattr(actor_identity, "authenticated_actor", lambda **k: "stiwi")
+    root = _cli_store(tmp_path)
+    _inbox(monkeypatch, root, operator="stiwi")
+    (record,) = oc.records(root)
+    assert record.source_kind == oc.SOURCE_KIND
+    assert 'a:sourceKind "operator-verbatim"' in oc.turtle(ONTO, record, "message")
+
+
+def test_an_unknown_source_kind_is_refused(tmp_path):
+    with pytest.raises(oc.CaptureRefused):
+        oc.capture(tmp_path, TEXT, recipient="sattler", session="", channel="inbox",
+                   received_at=AT, source_kind="operator-ish")
+
+
+def test_dismiss_clears_the_review_notice_and_keeps_the_node(tmp_path, capsys):
+    from shantytown.cli import OK, REFUSED
+    w = Writer()
+    first = capture(tmp_path, w)
+    second = capture(tmp_path, w, text="go", channel="pane-prompt")
+    assert any("TO REVIEW (2)" in line for line in oc.notices(tmp_path, now=AT))
+    assert _directive(tmp_path, "dismiss", second.key) == OK
+    assert any("TO REVIEW (1)" in line for line in oc.notices(tmp_path, now=AT))
+    assert _directive(tmp_path, "dismiss", first.key) == OK
+    assert not any("TO REVIEW" in line for line in oc.notices(tmp_path, now=AT))
+    assert len(oc.records(tmp_path)) == 2                 # nothing deleted
+    assert w.calls == [(first.key, "message"), (second.key, "message")]  # no retraction
+    assert _directive(tmp_path, "dismiss") == REFUSED     # missing key
+    # Marking a dismissed message makes it a Directive again, and a Directive
+    # cannot be dismissed by a review keystroke.
+    oc.mark(tmp_path, first.key, writer=w)
+    assert not oc.load(tmp_path, first.key).dismissed
+    assert _directive(tmp_path, "dismiss", first.key) == REFUSED
+    assert oc.load(tmp_path, first.key).directive
+
+
+def test_a_secret_in_a_prompt_is_masked_in_the_graph_and_kept_in_the_spool(tmp_path):
+    token = "gh" + "p_" + "Q7" * 18          # assembled so the repo scanner sees no token
+    text = f"use this: {token} for the push"
+    record = capture(tmp_path, Writer(), text=text, channel="pane-prompt")
+    assert oc.load(tmp_path, record.key).text == text      # raw, in the 0700 spool
+    ttl = oc.turtle(ONTO, record, "message")
+    assert token not in ttl and "[REDACTED]" in ttl and "a:textRedacted true" in ttl
+    plain = oc.turtle(ONTO, capture(tmp_path, Writer()), "message")
+    assert "a:textRedacted" not in plain
+
+
+def test_a_folded_inbox_resend_keeps_its_receive_time(tmp_path):
+    w = Writer()
+    first = capture(tmp_path, w)
+    assert capture(tmp_path, w, at=AT + timedelta(minutes=3)) is None
+    assert oc.load(tmp_path, first.key).redelivered_at == ["2026-11-27T04:48:12Z"]
+    assert w.calls == [(first.key, "message")]
+
+
+def test_a_relayed_off_host_send_is_captured_by_the_far_side(tmp_path, monkeypatch):
+    """Run the far host's `st inbox` exactly as the relay composes it."""
+    import shlex
+    import subprocess
+    from shantytown import actor_identity, cli
+    near, far = tmp_path / "near", tmp_path / "far"
+    _cli_store(near, host="far-host")
+    _cli_store(far)
+    (near / "shantytown.toml").write_text(
+        f'[host]\nname="this-host"\n[host.peers.far-host]\nssh="user@example.test"\nroot="{far}"\n')
+    monkeypatch.setattr(actor_identity, "POLICY_PATH", tmp_path / "no-identity-policy.json")
+    remote = []
+
+    def ssh(argv, **kw):
+        words = shlex.split(argv[-1])
+        env = dict(w.split("=", 1) for w in words[:words.index("st")])
+        argv_st = words[words.index("st") + 1:]
+        remote.append(argv_st)
+        monkeypatch.setenv("SHANTY_AGENT", env["SHANTY_AGENT"])
+        monkeypatch.delenv("SHANTY_HOST", raising=False)
+        rc = cli.main(argv_st)
+        return subprocess.CompletedProcess(argv, rc, "", "")
+
+    monkeypatch.setattr(subprocess, "run", ssh)
+    monkeypatch.setenv("SHANTY_HOST", "this-host")
+    _inbox(monkeypatch, near, operator="stiwi")
+    assert remote, "the send did not relay"
+    assert not oc.spool_dir(near).exists() or oc.records(near) == []
+    (record,) = oc.records(far)
+    assert (record.text, record.recipient, record.channel) == ("ship it", "dearing", "inbox")
+    assert record.source_kind == oc.CLAIMED_KIND     # carried by $SHANTY_AGENT only

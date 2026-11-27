@@ -309,7 +309,7 @@ st work                       the item and the board
   jobs [list|check|run|history]
                               declared cron / interval / event jobs in <root>/jobs/*.toml,
                               evaluated by `st fleet tend`; see docs/jobs.md
-  directive [list|mark|track|flush]
+  directive [list|mark|dismiss|track|flush]
                               operator messages st captured verbatim; mark/track confirm a Directive
 st agent                      one agent
   new <agent>                 create an agent from a card
@@ -2026,15 +2026,25 @@ now records them itself:
   types, and `st inbox` captures a message whose sender is `SHANTY_OPERATOR`.
   Text st delivered itself (the `[from x]` attribution prefix) is crew traffic
   and is not captured.
-- Each message is ONE `a:OperatorMessage` node: verbatim text (`rdfs:comment`),
+- Each message is ONE `a:OperatorMessage` node: its text (`rdfs:comment`),
   `a:receivedAt` (exact UTC, `xsd:dateTime`), `a:recipient`, `a:sessionId`,
-  `a:sourceChannel` (`pane-prompt` or `inbox`) and `a:sourceKind
-  "operator-verbatim"`, written through the same governed `/knot` path the
-  registry uses, so a SHACL refusal is a failure, not a success.
+  `a:sourceChannel` (`pane-prompt` or `inbox`) and `a:sourceKind`, written
+  through the same governed `/knot` path the registry uses, so a SHACL refusal
+  is a failure, not a success.
+- `a:sourceKind` is `"operator-verbatim"` for a pane prompt and for an `st inbox`
+  send whose sender `authenticated_actor()` proves is the operator. A sender
+  known only from `$SHANTY_AGENT` (no identity policy, or no `TMUX_PANE` to
+  check) is `"operator-claimed"`: any agent shell can set that variable. A
+  relayed off-host send reaches the far side by `$SHANTY_AGENT`, so it is
+  operator-claimed there.
+- The spool keeps the raw text. The graph copy is the text after the shared
+  secret masker (`jobs.mask_secrets`, the one job failure tails use); when it
+  masked anything the node also carries `a:textRedacted true`.
 - The local spool (`<root>/operator-messages/`) is written first. Its key is
   `om-<UTC>-<sha256 prefix>`: receive timestamp plus content hash. The same
   `st inbox` text to the same recipient within 10 minutes of a spooled copy is
-  a redelivery and writes nothing. A pane prompt is never deduped: the hook
+  a redelivery and writes no second node; its receive time is appended to the
+  prior record's `redelivered_at`, so nothing that arrived is dropped. A pane prompt is never deduped: the hook
   fires once per prompt, so typing "go" twice is two records (identical prompts
   in one second take a `-2`, `-3` key suffix). A hook with `SHANTY_AGENT` unset
   still spools, with no `a:recipient`; a corrupt spool file is skipped and
@@ -2048,7 +2058,9 @@ now records them itself:
   operator typing and is captured; a Codex administrator has no prompt hook, so
   only its `st inbox` path captures.
 - Not every message is a directive. `st work directive mark <key>` confirms one (it
-  adds `a:Directive`). `st work directive track <key> <seed>` or
+  adds `a:Directive`); `st work directive dismiss <key>` records that it is not
+  one, which clears it from the review notice and keeps the node in Quipu.
+  Dismissing a confirmed Directive is refused. `st work directive track <key> <seed>` or
   `st task "..." --directive <key|IRI>` confirms it and writes
   `a:trackedBy a:<seed>`. `--directive` takes only an st-captured `om-...` key
   (or an IRI ending in one) and is refused before the seed is created
