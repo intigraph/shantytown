@@ -1,18 +1,21 @@
-"""Read declared recurring jobs from an explicitly selected Quipu graph.
+"""Read, and declare, recurring jobs in an explicitly selected Quipu graph.
 
-No writes, schedules, shell execution or TOML fallback. The caller must retain
+The reader does no schedules, shell execution or TOML fallback. The one write,
+`JobCatalogue.declare`, adds a declaration this same reader admits and then
+reads it back; nothing here fires a job (Chaski does). The caller must retain
 last-known catalogue membership to detect deletion; a fresh nonempty catalogue
 alone does not prove completeness. This reader rejects empty, partial and
 malformed snapshots rather than advertising a healthy empty workload.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .quipu import request_headers, resolve_server
@@ -239,11 +242,179 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
     return sorted(jobs, key=lambda job: job.iri)
 
 
+# --- declaring a job (st work jobs new) --------------------------------------
+#
+# Adding ONE weekly job to the Mac pilot (aegis-6vf.9) took a catalogue entry, a
+# per-job json, a ~7 KB shuttle config, an emitters.json entry carrying sha256s,
+# a deliver.py branch, a re-hashed manifest and a chaski restart. Directive
+# crew/scheduled-jobs: creating one is one command and one review. The rows are
+# run through decode_catalogue BEFORE anything is written, so the writer can
+# never emit a declaration the reader (and so the catalogue) would refuse.
+
+JOB_PREFIX = "urn:shantytown:job:"
+HOST_PREFIX = "urn:shantytown:host:"
+INBOX_PREFIX = "urn:shantytown:inbox:"
+_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_AGENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class Declaration:
+    job: DeclaredJob
+    turtle: str
+    body: dict          # the same rows, shaped as a complete /query answer
+
+
+def parse_weekday(text: str) -> int:
+    word = str(text).strip().lower()
+    for i, day in enumerate(WEEKDAYS):
+        if word in (day.lower(), day[:3].lower()):
+            return i
+    raise JobRefused(f"{text!r} is not a weekday (mon..sun)")
+
+
+def _host_iri(host: str) -> str:
+    if _NAME.fullmatch(host or ""):
+        return HOST_PREFIX + host
+    try:
+        return _iri(host)
+    except JobRefused:
+        raise JobRefused(f"host {host!r} is neither a host name nor an absolute IRI") from None
+
+
+def _duration(seconds: int) -> str:
+    d, rest = divmod(seconds, 86400)
+    h, rest = divmod(rest, 3600)
+    m, s = divmod(rest, 60)
+    clock = "".join(f"{n}{u}" for n, u in ((h, "H"), (m, "M"), (s, "S")) if n)
+    return "P" + (f"{d}D" if d else "") + (f"T{clock}" if clock else "")
+
+
+def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
+                 message: str, weekly: tuple[int, str] | None = None,
+                 every_s: int | None = None, enabled: bool = True,
+                 now: datetime | None = None) -> Declaration:
+    """One inbox job's declaration: weekly civil time in `zone`, or a fixed
+    interval. There is no cron form here either."""
+    if not _NAME.fullmatch(name or ""):
+        raise JobRefused(f"job name {name!r}: lowercase letters, digits, - and _ only")
+    if not _AGENT.fullmatch(inbox or ""):
+        raise JobRefused(f"inbox agent {inbox!r} is not an agent name")
+    if not isinstance(message, str) or not message.strip():
+        raise JobRefused("an inbox job needs a nonempty --message")
+    if not isinstance(owner, str) or not owner.strip():
+        raise JobRefused("a job needs an owner (--owner)")
+    if (weekly is None) == (every_s is None):
+        raise JobRefused("pick exactly one of --weekly or --every")
+    try:
+        tz = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise JobRefused(f"unknown timezone {zone!r}") from exc
+    host_iri = _host_iri(host)
+    now = (now or datetime.now(dt_timezone.utc)).replace(microsecond=0)
+    if weekly is not None:
+        weekday, hhmm = weekly
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", hhmm or ""):
+            raise JobRefused(f"time {hhmm!r} must be HH:MM (24-hour)")
+        local = now.astimezone(tz)
+        day = local.date() + timedelta(days=(weekday - local.weekday()) % 7)
+        first = datetime(day.year, day.month, day.day, int(hhmm[:2]), int(hhmm[3:]), tzinfo=tz)
+        if first <= local:
+            day += timedelta(days=7)
+            first = datetime(day.year, day.month, day.day, int(hhmm[:2]), int(hhmm[3:]), tzinfo=tz)
+        anchor, duration, cadence = first.isoformat(), "P7D", f"weekly:{weekday}:{hhmm}"
+    else:
+        if isinstance(every_s, bool) or not isinstance(every_s, int) or every_s < 60:
+            raise JobRefused("--every must be at least sixty seconds")
+        anchor = now.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        duration, cadence = _duration(every_s), f"every:{every_s}"
+    host_key = host if _NAME.fullmatch(host) else hashlib.sha256(host_iri.encode()).hexdigest()[:12]
+    job = f"{JOB_PREFIX}{host_key}:{name}"
+    event, schedule, target = job + ":event", job + ":schedule", INBOX_PREFIX + inbox
+    revision = "r" + hashlib.sha256(json.dumps(
+        [name, host_iri, owner, zone, cadence, anchor, target, message, enabled]
+    ).encode()).hexdigest()[:16]
+    S, X = SCHEMA, XSD
+    triples = [(s, RDF_TYPE, S + k, True, None) for s, k in
+               ((job, "Action"), (event, "Event"), (schedule, "Schedule"))]
+    triples += [
+        (event, S + "eventSchedule", schedule, True, None),
+        (event, S + "potentialAction", job, True, None),
+        (job, S + "name", name, False, X + "string"),
+        (job, S + "identifier", revision, False, X + "string"),
+        (job, S + "description", message, False, X + "string"),
+        (job, QUECHUA_CANONICAL + "sourceKind", "declared", False, X + "string"),
+        (job, QUECHUA_CANONICAL + "owner", owner, False, X + "string"),
+        (job, QUECHUA_CANONICAL + "enabled", enabled, False, X + "boolean"),
+        (job, S + "location", host_iri, True, None),
+        (job, S + "target", target, True, None),
+        (schedule, S + "repeatFrequency", duration, False, X + "duration"),
+        (schedule, S + "scheduleTimezone", zone, False, X + "string"),
+        (schedule, S + "startDate", anchor, False, X + "dateTime"),
+    ]
+    if weekly is not None:
+        triples += [(schedule, S + "byDay", S + WEEKDAYS[weekly[0]], True, None),
+                    (schedule, S + "startTime", weekly[1] + ":00", False, X + "time")]
+    rows = [dict(s=s, p=p, o=o, subjectIRI=True, objectIRI=iri,
+                 **({} if iri else {"datatype": dt})) for s, p, o, iri, dt in triples]
+    body = dict(count=len(rows), rows=rows, truncated=False)
+    decoded, = decode_catalogue(body)       # the reader is the writer's gate
+
+    def term(o, iri, dt):
+        if iri:
+            return f"<{o}>"
+        lexical = ("true" if o else "false") if isinstance(o, bool) else o
+        return json.dumps(lexical, ensure_ascii=True) + ("" if dt == X + "string" else f"^^<{dt}>")
+    turtle = "".join(f"<{s}> <{p}> {term(o, iri, dt)} .\n" for s, p, o, iri, dt in triples)
+    return Declaration(decoded, turtle, body)
+
+
 class JobCatalogue:
     def __init__(self, graph: str, *, root=None, server=None, timeout=10):
         self.graph, self.server, self.timeout = _iri(graph), resolve_server(server, root).rstrip('/'), timeout
 
     def read(self) -> list[DeclaredJob]:
+        return decode_catalogue(self._fetch())
+
+    def declare(self, decl: Declaration) -> DeclaredJob:
+        """Write one NEW declaration and read it back. Refuses to replace an
+        existing identity or name: a revision is a separate, reviewed change.
+        An error after the write may follow a committed write, so the caller
+        reads back before retrying rather than writing twice."""
+        body = self._fetch()
+        empty = (body.get('rows') == [] and body.get('count') == 0 and
+                 body.get('truncated') is False and not body.get('error'))
+        new = decl.job
+        for job in ([] if empty else decode_catalogue(body)):
+            if job.iri == new.iri or (job.host, job.name) == (new.host, new.name):
+                raise JobRefused(f"{new.name} is already declared on {new.host} "
+                                 f"({job.iri} revision {job.revision}); not replacing it")
+        from . import quipu_auth
+        try:
+            headers = quipu_auth.write_headers(self.server)
+        except quipu_auth.CredentialRefused as exc:
+            raise JobRefused(str(exc)) from None
+        req = urllib.request.Request(self.server+'/knot', data=json.dumps({
+            'turtle': decl.turtle, 'graph': self.graph}).encode(),
+            headers={**headers, 'X-Quipu-Client': 'st-jobs'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                out = json.loads(response.read(MAX_BYTES))
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise JobsUnavailable(f"write outcome unknown ({exc}); read back before retrying") from exc
+        if not isinstance(out, dict) or out.get('error'):
+            raise JobRefused(f"quipu refused the declaration: {str(out)[:200]}")
+        if out.get('conforms') is False:   # a SHACL refusal has no "error" key (aegis-0v97)
+            issues = "; ".join(f"{i.get('path', '?')}: {i.get('message', '?')}"
+                               for i in (out.get('issues') or [])[:3])
+            raise JobRefused(f"quipu refused the declaration (SHACL): {issues or out}")
+        # HTTP 200 alone does not prove the write: the job must read back.
+        back = [job for job in self.read() if job.iri == new.iri]
+        if len(back) != 1 or back[0].revision != new.revision:
+            raise JobsUnavailable(f"{new.iri} revision {new.revision} did not read back")
+        return back[0]
+
+    def _fetch(self) -> dict:
         query = ('SELECT ?s ?p ?o (isIRI(?s) AS ?subjectIRI) '
                  '(isIRI(?o) AS ?objectIRI) (DATATYPE(?o) AS ?datatype) '
                  f'WHERE {{ ?s ?p ?o }} LIMIT {MAX_TRIPLES+1}')
@@ -258,4 +429,6 @@ class JobCatalogue:
             body = json.loads(raw)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise JobsUnavailable("could not read declared job graph") from exc
-        return decode_catalogue(body)
+        if not isinstance(body, dict):
+            raise JobsUnavailable("catalogue response is not an object")
+        return body

@@ -139,7 +139,7 @@ grew well past the original ten, each slot on a specific ask — not drift:
   · dream   — schedule one bounded, reviewed reflection artifact on measured
               spare provider capacity. It is not a tend flag because operators
               need a read/preview surface for its due state and safety gates.
-  · jobs    — declared scheduled and event-driven work (<root>/jobs/*.toml),
+  · jobs    — jobs declared in Quipu (`new` writes one; job files deprecated),
               EVALUATED by the tend pass and inspected here: list, check (would
               it fire now, and why), run (fire once, now), history. A command
               and not a tend flag for dream's reason: the recurring work that
@@ -2191,16 +2191,36 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
-    jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
-                           "list | check [name] | run <name> | history [name]")
-    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph; "
-                    "list/check only until the signed execution lane is enabled")
+    jb = leaf("jobs", help="declared jobs, from Quipu ([jobs] graph) — job files are "
+                           "deprecated: new | list | check [name] | run <name> | history [name]")
+    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph "
+                    "(default: [jobs] graph in shantytown.toml); list/check only until "
+                    "the signed execution lane is enabled")
     jb.add_argument("--expect-job", action="append", default=[], metavar="IRI",
                     help="require a known job identity in the graph (repeatable); "
                          "detects deletion independently of other valid declarations")
     jb.add_argument("--json", action="store_true",
                     help="versioned declarations-only JSON; requires --graph")
     jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
+    jb_new = jb_sub.add_parser(
+        "new", help="declare a scheduled inbox job in Quipu (Chaski fires it); "
+                    "prints the declaration to review, then writes and reads it back")
+    jb_new.add_argument("name")
+    when = jb_new.add_mutually_exclusive_group(required=True)
+    when.add_argument("--weekly", nargs=2, metavar=("DAY", "HH:MM"),
+                      help="once a week at local civil time, e.g. --weekly tue 09:17")
+    when.add_argument("--every", metavar="DURATION",
+                      help="fixed interval of at least 60s, e.g. 6h (no cron form exists)")
+    jb_new.add_argument("--tz", default="UTC", help="IANA timezone for --weekly (default UTC)")
+    jb_new.add_argument("--host", required=True,
+                        help="host name or IRI the job fires on")
+    jb_new.add_argument("--inbox", required=True, metavar="AGENT", help="recipient agent")
+    jb_new.add_argument("--message", required=True)
+    jb_new.add_argument("--owner", help="who answers for the job (default $SHANTY_AGENT)")
+    jb_new.add_argument("--disabled", action="store_true",
+                        help="declare it disabled (visible, never fired)")
+    jb_new.add_argument("-n", "--dry-run", action="store_true",
+                        help="print the declaration only; write nothing")
     jb_sub.add_parser("list", help="every job: trigger, next due, last result")
     jb_check = jb_sub.add_parser(
         "check", help="would it fire NOW, and why — reads events, writes nothing")
@@ -15204,6 +15224,55 @@ def _cmd_declared_jobs(a, verb) -> int:
     return OK
 
 
+def _cmd_jobs_new(a) -> int:
+    """st work jobs new: one command, one review. Prints the exact declaration,
+    writes it to the jobs graph, and reads it back; Chaski fires it from there.
+    Exit 0 written and read back; 1 refused (nothing written); 2 outcome unknown
+    (read back before retrying — the write may have committed)."""
+    from . import quipu_jobs
+    from .jobs import parse_duration
+    if not a.graph:
+        print("refused: no jobs graph — set [jobs] graph in shantytown.toml or pass "
+              "--graph", file=sys.stderr)
+        return REFUSED
+    try:
+        weekly = every_s = None
+        if a.weekly:
+            weekly = (quipu_jobs.parse_weekday(a.weekly[0]), a.weekly[1])
+        else:
+            try:
+                every_s = int(parse_duration(a.every))
+            except ValueError as exc:
+                raise quipu_jobs.JobRefused(f"--every: {exc}") from None
+        decl = quipu_jobs.declare_rows(
+            a.name, host=a.host, owner=a.owner or os.environ.get("SHANTY_AGENT", ""),
+            zone=a.tz, inbox=a.inbox, message=a.message, weekly=weekly,
+            every_s=every_s, enabled=not a.disabled)
+    except quipu_jobs.JobRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return REFUSED
+    job = decl.job
+    cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time} {job.timezone}"
+               if isinstance(job, quipu_jobs.CalendarDeclaredJob) else f"every {job.interval_s}s")
+    print(f"job {job.name} ({job.iri}) revision {job.revision}: {cadence}, "
+          f"inbox {job.target}, host {job.host}, owner {job.owner}"
+          f"{'' if job.enabled else ', DISABLED'} -> graph {a.graph}")
+    print(decl.turtle, end="")
+    if a.dry_run:
+        print("dry run: nothing written")
+        return OK
+    try:
+        quipu_jobs.JobCatalogue(a.graph, root=a.root).declare(decl)
+    except quipu_jobs.JobRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return REFUSED
+    except quipu_jobs.JobsUnavailable as exc:
+        print(f"cannot tell: {exc}", file=sys.stderr)
+        return CANNOT_TELL
+    print(f"declared and read back: {job.iri} revision {job.revision}")
+    return OK
+
+
 def _cmd_jobs(a) -> int:
     """st work jobs [list] | check [name] | run <name> | history [name].
 
@@ -15214,6 +15283,13 @@ def _cmd_jobs(a) -> int:
     """
     from . import jobs as jobs_mod
     verb = getattr(a, "jobs_sub", None) or "list"
+    if not getattr(a, "graph", None):
+        # Job config lives in Quipu (directive crew/scheduled-jobs). Once a
+        # deployment names its graph, the read surface goes there with no TOML
+        # fallback; an unreadable config raises rather than reading files.
+        a.graph = config.load(Path(a.root)).jobs_graph or None
+    if verb == "new":
+        return _cmd_jobs_new(a)
     if getattr(a, "graph", None):
         return _cmd_declared_jobs(a, verb)
     if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
@@ -15227,6 +15303,8 @@ def _cmd_jobs(a) -> int:
     by_name = {j.name: j for j in jobs}
     for e in errors:
         print(f"  ⚠ refused {e}", file=sys.stderr)
+    if jobs or errors:
+        print(f"  ⚠ {jobs_mod.FILE_DEPRECATION}", file=sys.stderr)
     if verb == "history":
         rows = jobs_mod.read_ledger(a.root, a.name, a.limit)
         if not rows:

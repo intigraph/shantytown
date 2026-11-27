@@ -55,6 +55,21 @@ STATE_DIR = ".state"
 LEDGER = "jobs.jsonl"
 
 TRIGGER_KINDS = ("cron", "every", "on", "manual")
+# Directive crew/scheduled-jobs (Stiwi 2026-11-13): "No more cron jobs and st
+# shouldnt support that". hammond added a cron job file on 11-13, a week after
+# the 11-04 rule against it, because this evaluator still accepted one. Timed
+# work is now a Quipu declaration that Chaski fires; a file asking for a clock
+# is REFUSED, loudly, with the replacement named. The old cron/every evaluator
+# below stays only until every host is measured free of such files, and nothing
+# outside the tests can reach it while this is False.
+LEGACY_TIMED_TRIGGERS = False
+TIMED_REFUSAL = ("cron/interval job files are no longer supported: declare the "
+                 "job in Quipu with `st work jobs new <name> --weekly <day> <HH:MM> "
+                 "...` (or --every), which Chaski fires; see docs/jobs.md")
+FILE_DEPRECATION = ("job files under <root>/jobs are DEPRECATED (directive "
+                    "crew/scheduled-jobs): job config lives in Quipu. Event and "
+                    "manual file jobs still run during the migration window; move "
+                    "them with `st work jobs new` and delete the file")
 SOURCES = ("bead.created", "bead.closed", "gh.pr.opened", "gh.issue.opened",
            "quipu.tx")
 # Which `match` keys each source understands. A key a source does not read is a
@@ -421,6 +436,8 @@ def _parse_trigger(path, t) -> Trigger:
     if kind != "on" and ("repo" in t or "match" in t):
         bad = "repo" if "repo" in t else "match"
         raise JobError(path, f"trigger.{bad}", "only an `on` trigger reads it")
+    if kind in ("cron", "every") and not LEGACY_TIMED_TRIGGERS:
+        raise JobError(path, f"trigger.{kind}", TIMED_REFUSAL)
     if kind == "cron":
         try:
             return Trigger("cron", cron=Cron.parse(t["cron"]), when=when)

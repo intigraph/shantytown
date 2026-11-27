@@ -19,6 +19,14 @@ import pytest
 from shantytown import cli, jobs
 
 
+@pytest.fixture(autouse=True)
+def _legacy_timed_evaluator(monkeypatch):
+    """These cases exercise the retained cron/every evaluator, which production
+    job files can no longer reach (test_jobs_declare.py proves the refusal). It
+    is deleted once every host is measured free of timed job files."""
+    monkeypatch.setattr(jobs, "LEGACY_TIMED_TRIGGERS", True)
+
+
 def _write(root: Path, name: str, text: str) -> Path:
     d = root / "jobs"
     d.mkdir(parents=True, exist_ok=True)
