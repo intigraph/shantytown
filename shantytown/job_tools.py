@@ -247,11 +247,28 @@ def prepare_settings(root, card, base):
         if (ambient := _ambient_opencode_mcp(card)):
             raise ValueError("OpenCode MCP is declared outside the job config: " + ", ".join(ambient))
         data = json.loads(source)
-        servers = data.get("mcp", {})
-        missing = set(spec["mcp_servers"]) - set(servers)
-        if missing:
-            raise ValueError("JobSpec MCP servers are not provisioned: " + ", ".join(sorted(missing)))
-        data["mcp"] = {name: servers[name] for name in spec["mcp_servers"]}
+        # The kit comes from the workspace .mcp.json that provisioning wrote for
+        # THIS job (already narrowed to the profile, credentials projected), never
+        # from the shared role file, which holds no kit (aegis-j550, measured on
+        # vati: every opencode job refused "not provisioned"). The pre-flight
+        # compose runs before provisioning, so no kit yet means an empty kit;
+        # the launch compose runs after it and must find every selected server.
+        data["mcp"] = {}
+        kit = Path(card.workspace) / ".mcp.json" if card.workspace else None
+        if kit is not None and (kit.is_symlink() or kit.exists()):
+            from .opencode import translate_servers
+            from .provision import ProvisionError
+            if kit.is_symlink() or not kit.is_file():
+                raise ValueError("workspace .mcp.json is not a regular file")
+            servers = json.loads(kit.read_text()).get("mcpServers", {})
+            missing = set(spec["mcp_servers"]) - set(servers)
+            if missing:
+                raise ValueError("JobSpec MCP servers are not provisioned: " + ", ".join(sorted(missing)))
+            try:
+                data["mcp"] = translate_servers(
+                    {"mcpServers": {name: servers[name] for name in spec["mcp_servers"]}})
+            except ProvisionError as exc:
+                raise ValueError(str(exc)) from None
         bridges = [p for p in data.get("plugin", []) if isinstance(p, list) and len(p) == 2
                    and str(p[0]).endswith(PLUGIN_NAME) and isinstance(p[1], dict)]
         if len(bridges) != 1:

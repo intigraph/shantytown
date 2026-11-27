@@ -1405,7 +1405,10 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
         # A profiled job's kit is exactly the selected servers; never merge in
         # whatever an earlier projection left in the workspace.
         project_mcp(card, root, rendered, replace=template is not None or profile is not None)
-    if card.harness == "opencode":
+    if card.harness == "opencode" and profile is None:
+        # A profiled job's kit goes into its own job config at launch compose
+        # (job_tools.prepare_settings); writing it here would put one job's kit
+        # into the role file every opencode agent in that role shares.
         from .opencode import project_mcp
         project_mcp(card, root, rendered, replace=template is not None)
 
