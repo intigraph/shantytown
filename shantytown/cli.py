@@ -4720,11 +4720,21 @@ def _spawn_drain_events(a) -> int:
         events, problems = pe.read(a.drain_events)
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
-    for problem in problems:
-        print(f"  events: skipped {problem}", file=sys.stderr)
-    rc = OK if not problems else CANNOT_TELL
+    rc = OK
     counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
     with pe.lock(a.root):
+        reported = pe.malformed_seen(a.root)
+        for lid, problem in problems:
+            if lid in reported:
+                # Reported once already; it stays in the append-only file
+                # but must not hold exit 2 on every later drain.
+                print(f"  events: skipped {problem} (reported before)", file=sys.stderr)
+                continue
+            print(f"  events: skipped {problem}", file=sys.stderr)
+            rc = CANNOT_TELL
+            if not a.dry_run:
+                pe.note_malformed(a.root, lid, problem, time.time())
+            reported.add(lid)
         done = pe.settled(a.root)
         refused = pe.first_refused(a.root)
         tried = pe.attempted(a.root)
@@ -4750,7 +4760,7 @@ def _spawn_drain_events(a) -> int:
                 _drain_event_pending(a, pe, ev, label, refused, counts,
                                      "no work item named in the PR; a job must report on an item")
                 continue
-            running = (pe.in_flight(ev, eph.live(a.root), eph.tickets(a.root))
+            running = (pe.in_flight(ev, eph.live(a.root), eph.tickets(a.root), tried[eid])
                        if eid in tried else None)
             if running:
                 if not a.dry_run:

@@ -38,9 +38,9 @@ _ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _ID = re.compile(r"[0-9a-f]{64}")
 
 LEDGER = "pr-events.jsonl"
-# Outcomes that end an event. "refused" (dates the first refusal) and
-# "spawning" (intent, written before the spawn) are also written; neither
-# settles the event.
+# Outcomes that end an event. "refused" (dates the first refusal),
+# "spawning" (intent, written before the spawn) and "malformed" (a bad line
+# already reported, keyed by line_id) are also written; none settles an event.
 SETTLING = ("admitted", "superseded", "expired")
 # How long a pending event is offered again before it expires. Without a bound
 # a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
@@ -92,9 +92,16 @@ def parse(line: str) -> dict:
             "item": item, "reason": reason, "observed_at": ev.get("observed_at")}
 
 
-def read(path: Path) -> tuple[list[dict], list[str]]:
-    """(events in file order, problems). A bad line is reported and skipped,
-    never fatal: one malformed append must not stop every later event."""
+def line_id(line: str) -> str:
+    """A malformed line's ledger key: sha256 of its text, since it has no
+    trustworthy event_id of its own."""
+    return hashlib.sha256(line.encode()).hexdigest()
+
+
+def read(path: Path) -> tuple[list[dict], list[tuple[str, str]]]:
+    """(events in file order, problems as (line_id, message)). A bad line is
+    reported and skipped, never fatal: one malformed append must not stop
+    every later event."""
     events, problems = [], []
     for n, line in enumerate(Path(path).read_text().splitlines(), 1):
         if not line.strip():
@@ -102,13 +109,15 @@ def read(path: Path) -> tuple[list[dict], list[str]]:
         try:
             events.append(parse(line))
         except ValueError as e:
-            problems.append(f"line {n}: {e}")
+            problems.append((line_id(line), f"line {n}: {e}"))
     return events, problems
 
 
 def current_heads(events: list[dict]) -> dict[tuple[str, int], str]:
     """The head each PR was last observed at. The file is append-only, so the
-    last line for a PR is the newest observation."""
+    last line for a PR is the newest observation. That is an emitter contract
+    requirement: lines are appended in observation order. A line appended out
+    of order would supersede the newer head it came after."""
     return {(e["repo"], e["pr"]): e["head"] for e in events}
 
 
@@ -148,24 +157,58 @@ def first_refused(root) -> dict[str, float]:
     return out
 
 
-def attempted(root) -> set[str]:
-    """event_ids whose spawn was started: an intent line written just before it."""
-    return {r["event_id"] for r in _ledger(root) if r.get("outcome") == "spawning"}
+def malformed_seen(root) -> set[str]:
+    """line_ids of malformed lines already reported. The file is append-only,
+    so a bad line stays in it forever; without this record it held exit 2 on
+    every later drain, the never-goes-clean problem PENDING_TTL_S fixes for
+    refusals (review of #776). The first sighting is still exit 2."""
+    return {r["event_id"] for r in _ledger(root) if r.get("outcome") == "malformed"}
 
 
-def in_flight(ev: dict, live: list[dict], tickets: list[dict]) -> str | None:
+def note_malformed(root, lid: str, problem: str, now: float) -> None:
+    p = ledger_path(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"event_id": lid, "outcome": "malformed", "at": now, "detail": problem[:300]}
+    with open(p, "a") as fh:
+        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+
+
+def attempted(root) -> dict[str, float]:
+    """event_id -> when its spawn was first started: the intent line written
+    just before it. in_flight() needs the time, not just the fact."""
+    out: dict[str, float] = {}
+    for r in _ledger(root):
+        if r.get("outcome") == "spawning":
+            at = r.get("at")
+            out.setdefault(r["event_id"], at if isinstance(at, (int, float)) else 0.0)
+    return out
+
+
+def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> str | None:
     """The live job or queued ticket already doing this event's step, or None.
     A drain that crashed after the spawn succeeded but before settle() offers
     the event again, and the spawn path itself does not refuse a duplicate
     (review of #776), so this is the check that stops a second launch.
 
     Only asked for an event that attempted() names, since an event never
-    spawned cannot be running. Review and task records keep no head (only
-    merge does), so a head-less record matches on job, repo and PR."""
+    spawned cannot be running; `since` is that attempt's intent time. A merge
+    record keeps its head and must match it exactly. Review and task records
+    keep no head (cli builds their Request with head=None), so a head-less
+    record matches on job, repo and PR only if it was spawned or queued at or
+    after the intent. Before, any head-less record matched: a hand-spawned
+    task on an older head of the same PR settled a new head's refused event
+    as admitted, and the new head's fix never ran (review of #776)."""
     for r in [*live, *tickets]:
-        if ((r.get("job"), r.get("repo"), r.get("pr")) == (ev["job"], ev["repo"], ev["pr"])
-                and r.get("head") in (None, ev["head"])):
-            return r.get("name") or r.get("id") or "?"
+        if (r.get("job"), r.get("repo"), r.get("pr")) != (ev["job"], ev["repo"], ev["pr"]):
+            continue
+        if r.get("head") is not None:
+            if r["head"] != ev["head"]:
+                continue
+        else:
+            born = r.get("spawned_at", r.get("enqueued_at"))
+            if not isinstance(born, (int, float)) or born < since:
+                continue
+        return r.get("name") or r.get("id") or "?"
     return None
 
 

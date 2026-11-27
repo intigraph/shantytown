@@ -225,9 +225,9 @@ def test_an_event_already_in_flight_is_not_launched_twice(store, tmp_path, capsy
 
 
 def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, monkeypatch):
-    # Task records keep no head, so in_flight matches on the PR alone; it must
-    # only be asked about an event that was actually spawned, or the new head's
-    # fix would settle against the old head's job and never run.
+    # Task records keep no head, so a head-less in_flight match must only be
+    # asked about an event that was actually spawned, or the new head's fix
+    # would settle against the old head's job and never run.
     root, _panes, launched = store
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
     path = tmp_path / "ev.jsonl"
@@ -238,3 +238,45 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     assert len(eph.tickets(root)) == 1
     (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
     assert "in flight" not in new.get("detail", "")
+
+
+def test_a_malformed_line_holds_exit_2_once_not_forever(store, tmp_path, capsys):
+    # The file is append-only, so a bad line never leaves it. Before this it
+    # held exit 2 on every later drain (review of #776).
+    root, _panes, launched = store
+    path = _write(tmp_path / "ev.jsonl", "{not json", _ev())
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert "skipped line 1" in capsys.readouterr().err
+    assert len(launched) == 1                      # the good line still drained
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert "reported before" in capsys.readouterr().err
+    # A different bad line is new, so it is loud again.
+    _write(path, "{not json", _ev(), "[]")
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+
+
+def test_a_dry_run_records_no_malformed_line(store, tmp_path):
+    root, _panes, _launched = store
+    path = _write(tmp_path / "ev.jsonl", "{not json")
+    assert _st(root, "--drain-events", str(path), "--dry-run") == cli.CANNOT_TELL
+    assert pe.malformed_seen(root) == set()
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+
+
+def test_a_head_less_hand_spawned_job_does_not_settle_a_new_head():
+    # Event B was attempted at t=100 and refused; a hand-spawned task on an
+    # older head of the same PR (no head on its record, spawned at t=50) must
+    # not count as B's launch, or B would be settled and never run.
+    ev = pe.parse(json.dumps(_ev(head=NEWER)))
+    hand = {"name": "eph-task-hand", "job": "task", "repo": "o/n", "pr": 7,
+            "head": None, "spawned_at": 50.0}
+    old_merge = {**hand, "name": "eph-task-old", "head": HEAD, "spawned_at": 200.0}
+    assert pe.in_flight(ev, [hand, old_merge], [], since=100.0) is None
+    # The drain's own launch: head-less but born after the intent line.
+    mine = {**hand, "name": "eph-task-mine", "spawned_at": 101.0}
+    assert pe.in_flight(ev, [hand, mine], [], since=100.0) == "eph-task-mine"
+    ticket = {"id": "q-1", "job": "task", "repo": "o/n", "pr": 7, "head": None,
+              "enqueued_at": 100.0}
+    assert pe.in_flight(ev, [], [ticket], since=100.0) == "q-1"
+    exact = {**hand, "name": "eph-merge-x", "head": NEWER, "spawned_at": 1.0}
+    assert pe.in_flight(ev, [exact], [], since=100.0) == "eph-merge-x"
