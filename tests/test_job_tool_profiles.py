@@ -515,11 +515,17 @@ def _opencode_job(tmp_path, monkeypatch, spec=None):
     base = tmp_path / "settings/opencode/worker/opencode.json"
     base.parent.mkdir(parents=True)
     bridge = (base.parent / PLUGIN_NAME).as_uri()
+    # The real shape (measured on vati, aegis-j550): the shared role file holds
+    # no kit; provisioning writes this job's kit to the workspace .mcp.json.
+    # A stale kit in the role file must never reach the job.
     base.write_text(json.dumps({
         "permission": {"*": "ask"},
-        "plugin": [[bridge, {"hooks": {"Stop": []}, "mcp_servers": ["bobbin", "gmail"]}]],
-        "mcp": {"bobbin": {"type": "remote", "url": "http://bobbin.invalid/mcp", "enabled": True},
+        "plugin": [[bridge, {"hooks": {"Stop": []}, "mcp_servers": ["gmail"]}]],
+        "mcp": {"bobbin": {"type": "remote", "url": "http://stale-role.invalid/mcp", "enabled": True},
                 "gmail": {"type": "remote", "url": "http://gmail.invalid/mcp", "enabled": True}}}))
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "bobbin": {"type": "http", "url": "http://bobbin.invalid/mcp"},
+        "gmail": {"type": "http", "url": "http://gmail.invalid/mcp"}}}))
     return rec, card, base, ws
 
 
@@ -539,7 +545,11 @@ def test_opencode_profile_narrows_the_kit_and_gates_through_the_native_bridge(tm
     assert (base.read_bytes(), base.stat().st_mtime_ns) == before
     assert target.stat().st_mode & 0o777 == 0o600
     data = json.loads(target.read_text())
-    assert set(data["mcp"]) == {"bobbin"}
+    # Unattended job posture (sattler ruling, aegis-j550): allow in the job
+    # file only; the shared role file (checked byte-identical above) keeps "ask".
+    assert data["permission"] == {"*": "allow"}
+    assert json.loads(base.read_text())["permission"] == {"*": "ask"}
+    assert data["mcp"] == {"bobbin": {"type": "remote", "url": "http://bobbin.invalid/mcp", "enabled": True}}
     options = bridge_options(target.read_text())
     assert options["mcp_servers"] == ["bobbin"]
     assert options["hooks"]["Stop"] == []
@@ -581,3 +591,44 @@ def test_opencode_profile_refuses_an_unprovisioned_selected_server(tmp_path, mon
     rec, card, base, ws = _opencode_job(tmp_path, monkeypatch, spec)
     with pytest.raises(ValueError, match="not provisioned: yupana"):
         jobs.prepare_settings(tmp_path, card, str(base))
+
+
+def test_opencode_preflight_compose_before_provisioning_does_not_refuse(tmp_path, monkeypatch):
+    # aegis-j550, vati 2026-11-27 eph-task-6a4351: st composes once BEFORE
+    # provisioning (pre-flight) and again at launch. With no workspace kit yet,
+    # the job config gets an empty kit instead of refusing "not provisioned".
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch)
+    (ws / ".mcp.json").unlink()
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert json.loads(target.read_text())["mcp"] == {}
+    # The launch compose, after provisioning wrote the kit, carries it.
+    (ws / ".mcp.json").write_text(json.dumps({"mcpServers": {
+        "bobbin": {"type": "http", "url": "http://bobbin.invalid/mcp"}}}))
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert set(json.loads(target.read_text())["mcp"]) == {"bobbin"}
+
+
+def test_opencode_job_kit_refuses_a_symlinked_workspace_kit(tmp_path, monkeypatch):
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch)
+    real = tmp_path / "elsewhere.json"
+    (ws / ".mcp.json").rename(real)
+    (ws / ".mcp.json").symlink_to(real)
+    with pytest.raises(ValueError, match="not a regular file"):
+        jobs.prepare_settings(tmp_path, card, str(base))
+
+
+def test_opencode_profiled_provision_leaves_the_shared_role_file_alone(tmp_path, monkeypatch):
+    from shantytown.harness import get
+    monkeypatch.setattr(type(get("opencode")), "provision", lambda *a, **kw: [])
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch)
+    (ws / ".mcp.json").unlink()
+    before = base.read_bytes()
+    templates = tmp_path / "provision"; templates.mkdir()
+    (templates / provision.MCP_TEMPLATE).write_text(json.dumps({"mcpServers": {
+        "bobbin": {"type": "http", "url": "http://bobbin.invalid/mcp"},
+        "gmail": {"type": "http", "url": "http://gmail.invalid/mcp"}}}))
+    provision.provision(card, tmp_path)
+    assert base.read_bytes() == before
+    assert set(json.loads((ws / ".mcp.json").read_text())["mcpServers"]) == {"bobbin"}
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert set(json.loads(target.read_text())["mcp"]) == {"bobbin"}
