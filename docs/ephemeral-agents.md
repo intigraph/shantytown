@@ -188,6 +188,11 @@ requester and the jobs it overrode are recorded on the ledger record as
 merge and triage jobs keep their own rules, and `--despite-live` is refused for
 them.
 
+`--retry` of a task job runs the same check before it ends the original, so a
+retry refused for a sibling job leaves the original running. A retry of a job
+launched with `--despite-live` carries that reason over, since the slice it
+was launched beside is still live.
+
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 

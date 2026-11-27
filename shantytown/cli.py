@@ -4555,6 +4555,31 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             # is qualified, live replacement refuses; completed retries can use
             # a fresh protected slot. Attended compatibility behavior is intact.
             raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
+        despite = getattr(a, "despite_live", None)
+        if despite is not None:
+            despite = despite.strip()
+            if not despite:
+                raise eph.Refused("--despite-live needs a nonempty REASON; it is recorded on the job")
+            if req.job != "task":
+                raise eph.Refused("--despite-live applies to task jobs only; "
+                                  f"{req.job} jobs keep their own rules")
+        elif a.retry:
+            # A retried parallel slice is still that slice: the operator's
+            # recorded reason carries over rather than the retry being refused
+            # by the sibling it was deliberately launched beside.
+            despite = ((old.get("despite_live") or {}).get("reason") or "").strip() or None
+        if a.retry and req.job == "task" and not despite:
+            # Checked again under the lock below; this pass exists because the
+            # supersede that follows ends the original, and a retry refused for
+            # a sibling job afterwards had already lost the original's lane
+            # (eph-review-093a9c on #770).
+            with eph.lock(a.root):
+                held = eph.task_holders(a.root, req.item, superseded=retry_of)
+            if held:
+                raise eph.Refused(
+                    f"{req.item} already has a task job: {', '.join(held)}; {a.retry} was "
+                    "left running and nothing was launched. Pass --despite-live REASON "
+                    "for a deliberate parallel slice")
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
             # drain=False: this slot is the retry's, not the queue's.
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
@@ -4565,14 +4590,6 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         graph_ctx = collect_job_context(a.root, req.item, getattr(a, "quipu_node", []))
         from .job_context import current_comments
         graph_ctx["comments"] = current_comments(lambda: _tracker(a), req.item)
-        despite = getattr(a, "despite_live", None)
-        if despite is not None:
-            despite = despite.strip()
-            if not despite:
-                raise eph.Refused("--despite-live needs a nonempty REASON; it is recorded on the job")
-            if req.job != "task":
-                raise eph.Refused("--despite-live applies to task jobs only; "
-                                  f"{req.job} jobs keep their own rules")
         with eph.lock(a.root):
             # Under the ledger lock, before plan(): an over-cap spawn must not
             # queue a duplicate ticket either, and two leads racing from the

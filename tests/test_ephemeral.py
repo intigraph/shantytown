@@ -2487,3 +2487,33 @@ def test_despite_live_is_for_task_jobs_only(store, capsys, job):
     assert _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude",
                "--despite-live", "why", "-n") == cli.REFUSED
     assert "task jobs only" in capsys.readouterr().err
+
+
+def test_a_refused_retry_leaves_the_original_running(store, monkeypatch, capsys):
+    # eph-review-093a9c on #770: --retry ended the original BEFORE the holder
+    # check, so a retry refused for a sibling job had already cost its lane.
+    root, _panes, launched = store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 3\nunattended = false\nrequire_verified_identity = true\n")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    (a_job,) = eph.live(root)
+    assert _task(root, "it-1", "--despite-live", "second slice") == cli.OK
+    (b_job,) = [r for r in eph.live(root) if r["name"] != a_job["name"]]
+    capsys.readouterr()
+    # Retrying A while B is live refuses, names B, and A is still live.
+    assert _st(root, "--retry", a_job["name"]) == cli.REFUSED
+    err = capsys.readouterr().err
+    assert b_job["name"] in err and "left running" in err
+    assert eph.read(root, a_job["name"])["state"] in (eph.LIVE, eph.LAUNCHING)
+    # A blank override is refused before the supersede too.
+    assert _st(root, "--retry", a_job["name"], "--despite-live", "  ") == cli.REFUSED
+    assert "nonempty REASON" in capsys.readouterr().err
+    assert eph.read(root, a_job["name"])["state"] in (eph.LIVE, eph.LAUNCHING)
+    assert len(launched) == 2
+    # Retrying B, the recorded slice, carries its reason and launches.
+    assert _st(root, "--retry", b_job["name"]) == cli.OK
+    (retried,) = [r for r in eph.records(root) if r.get("retry_of") == b_job["name"]]
+    assert retried["despite_live"]["reason"] == "second slice"
+    assert a_job["name"] in " ".join(retried["despite_live"]["held"])
+    assert len(launched) == 3
