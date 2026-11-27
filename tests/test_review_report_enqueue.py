@@ -24,7 +24,7 @@ p=pathlib.Path(__file__).with_suffix('.calls')
 p.write_text(p.read_text()+'enqueue\\n' if p.exists() else 'enqueue\\n')
 print(json.dumps(dict(schema=r['schema'],intent=r['intent'],attempt=r['attempt'],state='queued',receipt='native-queue-receipt')))
 ''')
-    policy = SimpleNamespace(review_enqueue_enabled=True,
+    policy = SimpleNamespace(queue_ttl_minutes=0, review_enqueue_enabled=True,
                              review_enqueue_command=(sys.executable, str(adapter)))
     monkeypatch.setattr(cli.config, 'load_or_default', lambda _: (SimpleNamespace(ephemeral=policy), None))
     monkeypatch.setattr(cli, '_panes', lambda _: SimpleNamespace(exists=lambda _: True))

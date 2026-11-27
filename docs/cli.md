@@ -311,6 +311,9 @@ st work                       the item and the board
                               evaluated by `st fleet tend`; see docs/jobs.md
 st agent                      one agent
   new <agent>                 create an agent from a card
+  spawn --pool <status|size N|config|pause|drain|resume>
+                              see and manage the ephemeral pool: runtime size, pause (spawns queue),
+                              drain (spawns refused, live jobs finish), resume. docs/ephemeral-agents.md
   spawn --ephemeral --job <review|merge|triage|task> --item <id> [--harness] [--repo R --pr N]
                               an EPHEMERAL agent for one job, managed by the administrator or a lead:
                               own worktree, deadline + turn/context budget, counted in the cap

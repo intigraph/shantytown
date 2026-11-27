@@ -177,8 +177,13 @@ class Ephemeral:
     # aegis-za4f D5: per-job-type bounds, {job: {"lifetime_minutes": n,
     # "max_turns": n}}. A job type with no entry keeps the global bounds above,
     # so a review keeps its short timebox while a task job can get enough turns
-    # to read, edit, test and open a PR.
+    # to read, edit, test and open a PR. aegis-za4f.3 adds "max_concurrent":
+    # live jobs of that type at once; over it a spawn queues like any over-cap.
     limits: dict = field(default_factory=dict)
+    # aegis-za4f.3: a ticket queued longer than this is reported to the
+    # administrator and on its item, once, by the tend reap sweep. It stays
+    # queued: the TTL makes a stuck queue visible, it never discards work. 0 = off.
+    queue_ttl_minutes: int = 240
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
     verdict_graph: str = ""         # registered committed graph IRI for the records
@@ -1215,7 +1220,7 @@ _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
-                   "max_agents_by_harness", "track_shares"}
+                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1223,11 +1228,12 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     _refuse_unknown(path, "ephemeral", tbl, _EPHEMERAL_KEYS)
     values = {}
     for key in ("max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                "merge_spacing_minutes"):
+                "merge_spacing_minutes", "queue_ttl_minutes"):
         value = tbl.get(key, getattr(Ephemeral, key))
-        # max_agents and spacing may be 0 (off / no gap); a zero lifetime or
-        # budget would end every job at its first stop, which is a typo.
-        floor = 0 if key in ("max_agents", "merge_spacing_minutes") else 1
+        # max_agents and spacing may be 0 (off / no gap), and a zero queue TTL
+        # means no TTL; a zero lifetime or budget would end every job at its
+        # first stop, which is a typo.
+        floor = 0 if key in ("max_agents", "merge_spacing_minutes", "queue_ttl_minutes") else 1
         if isinstance(value, bool) or not isinstance(value, int) or value < floor:
             raise ConfigError(f"{path}: ephemeral.{key} must be an integer >= {floor}, "
                               f"got {value!r}")
@@ -1290,7 +1296,7 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
         if not isinstance(bounds, dict):
             raise ConfigError(f"{path}: [ephemeral.limits.{job}] must be a table")
         _refuse_unknown(path, f"ephemeral.limits.{job}", bounds,
-                        {"lifetime_minutes", "max_turns"})
+                        {"lifetime_minutes", "max_turns", "max_concurrent"})
         for key, value in bounds.items():
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ConfigError(f"{path}: ephemeral.limits.{job}.{key} must be an "

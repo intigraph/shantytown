@@ -164,7 +164,10 @@ def free_slots(root) -> int:
     stop_policy.ephemeral_free_slots reads (aegis-c01c.1, Rule Zero)."""
     from . import config
     cfg, _err = config.load_or_default(root)
-    return max(0, cfg.ephemeral.max_agents - len(live(root)))
+    pool = pool_state(root)
+    if pool["paused"] or pool["draining"]:
+        return 0
+    return max(0, pooled(cfg.ephemeral, pool).max_agents - len(live(root)))
 
 
 def is_ephemeral(root, name: str | None) -> bool:
@@ -313,7 +316,14 @@ def harness_off(policy, harness: str | None) -> bool:
     return harness is not None and policy.max_agents > 0 and harness_cap(policy, harness) <= 0
 
 
-def cap_refusal(root, policy, harness: str | None = None) -> str:
+def job_cap(policy, job: str | None) -> int | None:
+    """[ephemeral.limits.<job>] max_concurrent, or None when the job type has
+    no cap of its own (aegis-za4f.3: per-job concurrency)."""
+    bounds = (getattr(policy, "limits", {}) or {}).get(job or "", {}) or {}
+    return bounds.get("max_concurrent")
+
+
+def cap_refusal(root, policy, harness: str | None = None, job: str | None = None) -> str:
     cap = policy.max_agents
     if cap <= 0:
         return "ephemeral spawning is off ([ephemeral] max_agents = 0)"
@@ -333,6 +343,12 @@ def cap_refusal(root, policy, harness: str | None = None) -> str:
             return (f"over {harness} cap: {len(mine)}/{hcap} {harness} ephemeral agent(s) "
                     f"live ({names}); stop one or raise "
                     f"[ephemeral.max_agents_by_harness] {harness}")
+    if (jcap := job_cap(policy, job)) is not None:
+        mine = [r for r in running if r.get("job") == job]
+        if len(mine) >= jcap:
+            names = ", ".join(r["name"] for r in mine)
+            return (f"over {job} concurrency: {len(mine)}/{jcap} {job} job(s) live "
+                    f"({names}); raise [ephemeral.limits.{job}] max_concurrent")
     return ""
 
 
@@ -366,7 +382,12 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         raise Refused("no administrator card on this host; nobody would receive "
                       "the result, so nothing is spawned")
     harness = harness_for(req, policy)
-    if refusal := cap_refusal(root, policy, harness):
+    pool = pool_state(root)
+    if refusal := pool_refusal(pool):
+        # Paused holds launches but keeps taking work, so it is over-cap (a
+        # fresh spawn queues); draining takes no new work at all.
+        raise (Refused if pool["draining"] else OverCap)(refusal)
+    if refusal := cap_refusal(root, policy, harness, req.job):
         over = policy.max_agents > 0 and not harness_off(policy, harness)
         raise (OverCap if over else Refused)(refusal)
     if req.job == "merge":
@@ -664,7 +685,7 @@ def track_deficits(running: list[dict], shares: dict) -> dict:
 
 
 def route(ts: list[dict], running: list[dict], *, cap: int, harness_caps: dict,
-          shares: dict) -> list[dict]:
+          shares: dict, job_caps: dict | None = None) -> list[dict]:
     """Queued tickets that could launch NOW, best first. Pure: the caller reads
     the queue and the live jobs. A ticket whose harness is at its own cap is
     not a candidate however free the host is."""
@@ -673,9 +694,14 @@ def route(ts: list[dict], running: list[dict], *, cap: int, harness_caps: dict,
     by_harness = {}
     for r in running:
         by_harness[r.get("harness")] = by_harness.get(r.get("harness"), 0) + 1
+    by_job = {}
+    for r in running:
+        by_job[r.get("job")] = by_job.get(r.get("job"), 0) + 1
+    job_caps = job_caps or {}
     deficit = track_deficits(running, shares)
     ready = [t for t in ts if t.get("state") == QUEUED
-             and by_harness.get(t.get("harness"), 0) < harness_caps.get(t.get("harness"), cap)]
+             and by_harness.get(t.get("harness"), 0) < harness_caps.get(t.get("harness"), cap)
+             and by_job.get(t.get("job"), 0) < job_caps.get(t.get("job"), cap)]
     return sorted(ready, key=lambda t: (-deficit.get(track_of(t), 0.0),) + _order(t))
 
 
@@ -695,13 +721,16 @@ def routing(policy) -> dict:
     absent here and route() gives it the host cap."""
     return {"cap": policy.max_agents,
             "harness_caps": dict(getattr(policy, "max_agents_by_harness", {}) or {}),
-            "shares": dict(getattr(policy, "track_shares", {}) or {})}
+            "shares": dict(getattr(policy, "track_shares", {}) or {}),
+            "job_caps": {job: b["max_concurrent"]
+                         for job, b in (getattr(policy, "limits", {}) or {}).items()
+                         if isinstance(b, dict) and b.get("max_concurrent") is not None}}
 
 
 def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
-               harness_caps: dict | None = None, shares: dict | None = None
-               ) -> tuple[dict | None, list[str]]:
+               harness_caps: dict | None = None, shares: dict | None = None,
+               job_caps: dict | None = None) -> tuple[dict | None, list[str]]:
     """Recover interrupted claims, then claim the best routed ticket (track
     share, priority, age; within its harness's capacity) whose item is open, if
     a slot is free. Caller holds lock().
@@ -728,8 +757,12 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
             else:
                 release(root, t["id"], recovered=True)
                 lines.append(f"{t['id']}: claimer gone before launch; back in the queue")
+    pool = pool_state(root)
+    if pool["paused"] or pool["draining"]:
+        return None, lines + [pool_refusal(pool) + "; nothing launched"]
     candidates = route(tickets(root), live(root), cap=cap,
-                       harness_caps=harness_caps or {}, shares=shares or {})
+                       harness_caps=harness_caps or {}, shares=shares or {},
+                       job_caps=job_caps or {})
     for t in candidates:
         state = item_state(t["item"])
         if state in ("closed", "missing"):
@@ -769,8 +802,158 @@ def render_tickets(ts: list[dict], now: float) -> list[str]:
         out.append(f"{t['id']}  queued #{n}  {t['job']:<6} {t['item']}  "
                    f"{t.get('harness', '?')}  {track_of(t)}  "
                    f"P{p if p is not None else '?'}  by {t.get('requester')}  "
-                   f"waiting {age}m" + ("  (launching)" if t.get("state") == CLAIMED else ""))
+                   f"waiting {age}m" + ("  (launching)" if t.get("state") == CLAIMED else "")
+                   + ("  OVERDUE" if t.get("overdue_reported_at") else ""))
     return out
+
+
+# --- pool management (aegis-za4f.3) --------------------------------------------
+#
+# Stiwi: "we'll need [queueing] and to be able to manage the ephemeral agent
+# pool." Before this the only way to resize the pool was editing max_agents in
+# shantytown.toml, and the only way to stop launches was max_agents = 0, which
+# REFUSES new work instead of holding it. ephemeral/pool.json is the
+# administrator's runtime override, written under lock():
+#   size     : replaces max_agents (config's 0 still means off: a runtime file
+#              must not switch on what the host's config turned off).
+#   paused   : nothing launches; fresh spawns still QUEUE, so no work is lost.
+#   draining : nothing launches and fresh spawns are REFUSED; live jobs finish
+#              and queued tickets are held. For emptying the pool (maintenance).
+# resume clears both and kicks the queue. A missing or unreadable file is the
+# config's pool, so a corrupt override can only fall back, never wedge spawns.
+
+def pool_path(root) -> Path:
+    return ledger_dir(root) / "pool.json"
+
+
+def pool_state(root) -> dict:
+    out = {"size": None, "paused": False, "draining": False}
+    try:
+        raw = json.loads(pool_path(root).read_text())
+    except (OSError, ValueError):
+        return out
+    if not isinstance(raw, dict):
+        return out
+    size = raw.get("size")
+    out["size"] = size if isinstance(size, int) and not isinstance(size, bool) and size >= 1 else None
+    out["paused"] = raw.get("paused") is True
+    out["draining"] = raw.get("draining") is True
+    out.update({k: raw[k] for k in ("by", "at", "size_by", "size_at") if k in raw})
+    return out
+
+
+def set_pool(root, *, actor: str | None, now: float, **changes) -> dict:
+    """Caller holds lock(). `size=None` returns the pool to the config's cap."""
+    state = {**pool_state(root), **changes}
+    if "size" in changes:
+        state.update(size_by=actor or "operator", size_at=now)
+    if "paused" in changes or "draining" in changes:
+        state.update(by=actor or "operator", at=now)
+    p = pool_path(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+    os.replace(tmp, p)
+    return state
+
+
+def pooled(policy, pool: dict):
+    """The policy with the administrator's runtime size applied."""
+    if pool.get("size") is None or policy.max_agents <= 0:
+        return policy
+    import dataclasses
+    return dataclasses.replace(policy, max_agents=pool["size"])
+
+
+def pool_refusal(pool: dict) -> str:
+    who = f" by {pool.get('by', 'operator')}"
+    if pool.get("draining"):
+        return (f"ephemeral pool is draining{who}: no new work admitted, live jobs finish; "
+                "`st agent spawn --pool resume` reopens it")
+    if pool.get("paused"):
+        return (f"ephemeral pool is paused{who}: queued, nothing launches until "
+                "`st agent spawn --pool resume`")
+    return ""
+
+
+def pool_status(root, policy, config_max: int, now: float) -> list[str]:
+    """What the administrator reads: size, use, state, and the queue."""
+    pool = pool_state(root)
+    running, queued = live(root), tickets(root)
+    size = pooled(policy, pool).max_agents
+    src = (f"set by {pool.get('size_by', 'operator')}, config {config_max}"
+           if pool["size"] is not None and config_max > 0 else "config")
+    state = ("draining" if pool["draining"] else "paused" if pool["paused"]
+             else "off" if size <= 0 else "open")
+    lines = [f"pool: {state}; {len(running)}/{size} slot(s) live ({src}); "
+             f"{len(queued)} queued"]
+    if pool["draining"] and not running:
+        lines[0] += "; drained (no live jobs)"
+    if reason := pool_refusal(pool):
+        lines.append(reason)
+    caps = routing(policy)
+    if caps["harness_caps"]:
+        lines.append("per harness: " + ", ".join(
+            f"{h} {sum(1 for r in running if r.get('harness') == h)}/{c}"
+            for h, c in sorted(caps["harness_caps"].items())))
+    if caps["job_caps"]:
+        lines.append("per job: " + ", ".join(
+            f"{j} {sum(1 for r in running if r.get('job') == j)}/{c}"
+            for j, c in sorted(caps["job_caps"].items())))
+    ttl = getattr(policy, "queue_ttl_minutes", 0)
+    if ttl:
+        late = [t for t in queued if now - (t.get("enqueued_at") or now) > ttl * 60]
+        lines.append(f"queue TTL {ttl}m: {len(late)} ticket(s) past it")
+    return lines + render(running, now, recent=0) + render_tickets(queued, now)
+
+
+def overdue(root, ttl_minutes: int, now: float) -> list[dict]:
+    """Queued tickets older than the TTL not yet reported (aegis-za4f.3). A
+    ticket is reported once, then marked; it stays queued, never discarded."""
+    if ttl_minutes <= 0:
+        return []
+    return [t for t in tickets(root)
+            if t.get("state") == QUEUED and not t.get("overdue_reported_at")
+            and now - (t.get("enqueued_at") or now) > ttl_minutes * 60]
+
+
+def overdue_text(t: dict, ttl_minutes: int, now: float) -> str:
+    age = int((now - (t.get("enqueued_at") or now)) // 60)
+    return (f"Ephemeral queue ticket {t['id']} ({t['job']} on {t['item']}, requested by "
+            f"{t.get('requester')}) has waited {age}m, past the {ttl_minutes}m queue TTL. "
+            "It is still queued. `st agent spawn --pool status` shows why nothing "
+            f"launched; `st agent spawn --stop {t['id']}` cancels it.")
+
+
+def report_overdue(root, administrator: str | None, ttl_minutes: int, now: float, *,
+                   persist_event, comment) -> list[str]:
+    """Tell the administrator and the item about each overdue ticket. Marked
+    reported only when a leg landed: with both legs down it stays unmarked, so
+    the next sweep tries again instead of going quiet. Caller holds lock()."""
+    lines = []
+    for t in overdue(root, ttl_minutes, now):
+        text, landed, problems = overdue_text(t, ttl_minutes, now), 0, []
+        if administrator:
+            try:
+                persist_event(to=administrator, frm=t["id"], reason="ephemeral-queue-ttl",
+                              rose=True, item=t["item"], item_status=None, detail=text[:600],
+                              key=f"ephemeral:{t['id']}:ttl")
+                landed += 1
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"administrator event NOT written ({type(exc).__name__})")
+        else:
+            problems.append("no administrator card to tell")
+        try:
+            comment(t["item"], text)
+            landed += 1
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"item comment NOT written ({type(exc).__name__})")
+        if landed:
+            _put(root, dict(t, overdue_reported_at=now))
+        lines.append(f"{t['id']} past queue TTL ({ttl_minutes}m): "
+                     + ("reported" if landed else "NOT reported, retried next sweep")
+                     + (f"; {'; '.join(problems)}" if problems else ""))
+    return lines
 
 
 def render_dropped(ts: list[dict], now: float) -> list[str]:
@@ -2188,7 +2371,9 @@ def summary_line(root, now: float | None = None) -> str:
             + ", ".join(f"{r['name']} ({r['job']} {r['item']}, {_left(r, now)})"
                         for r in running)
             + (f"; {queued} queued" if queued else "")
-            + " — `st agent spawn --list|--stop|--retry`")
+            + (f"; pool {'draining' if pool['draining'] else 'paused'}"
+               if (pool := pool_state(root))["paused"] or pool["draining"] else "")
+            + " — `st agent spawn --list|--stop|--retry|--pool status`")
 
 
 # --- plumbing entry: `python -m shantytown.ephemeral teardown` ----------------
