@@ -48,7 +48,7 @@ def test_real_hook_payload_event_inbox_and_fallback_dedup(tmp_path):
         assert events.pending("admin")
         return inbox.deliver("admin", text, frm="st-stop-failure").id
     for _ in range(2):
-        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin", events=events,
+        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin", events=events,
                              plate=lambda name: ("fixture-item", "in_progress"), deliver=deliver)
     pending = events.pending("admin")
     assert len(pending) == len(inbox.unread("admin")) == 1
@@ -72,7 +72,7 @@ def test_real_hook_payload_event_inbox_and_fallback_dedup(tmp_path):
 
 def test_primary_holds_without_banner_and_relaunch_retires(tmp_path, monkeypatch):
     settings = setup_root(tmp_path)
-    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin",
                          events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, "?"), deliver=lambda t: "receipt")
     assert stop_failure.pane_state(tmp_path, CARD.pane) == "safeguard-blocked"
     panes = Tmux(root=tmp_path)
@@ -101,7 +101,7 @@ def test_unknown_delivery_reserved_and_never_retried(tmp_path):
     def fail(text):
         calls.append(text)
         raise TimeoutError("may have committed")
-    args = dict(administrator="admin", events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, "?"), deliver=fail)
+    args = dict(to="admin", events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, "?"), deliver=fail)
     with pytest.raises(TimeoutError):
         stop_failure.capture(tmp_path, CARD.name, PAYLOAD, **args)
     stop_failure.capture(tmp_path, CARD.name, PAYLOAD, **args)
@@ -113,7 +113,7 @@ def test_unknown_delivery_reserved_and_never_retried(tmp_path):
 def test_limit_auth_no_generic_inbox_and_success_can_retire(tmp_path, error, verdict):
     setup_root(tmp_path)
     events = FilesEvents(tmp_path / "events")
-    stop_failure.capture(tmp_path, CARD.name, {"error": error}, administrator="admin", events=events,
+    stop_failure.capture(tmp_path, CARD.name, {"error": error}, to="admin", events=events,
                          plate=lambda n: (None, None), deliver=lambda t: pytest.fail("generic routing"))
     assert stop_failure.state(tmp_path, CARD.name) == verdict
     stop_failure.clear_recovered(tmp_path, CARD.name)
@@ -169,7 +169,7 @@ def test_invalid_payload_never_sends_or_blocks(tmp_path, monkeypatch, capsys, ra
 
 def test_new_generic_error_cannot_clear_safety_hold(tmp_path):
     setup_root(tmp_path)
-    args = dict(administrator="admin", events=FilesEvents(tmp_path / "events"),
+    args = dict(to="admin", events=FilesEvents(tmp_path / "events"),
                 plate=lambda n: (None, None), deliver=lambda t: "receipt")
     stop_failure.capture(tmp_path, CARD.name, PAYLOAD, **args)
     stop_failure.capture(tmp_path, CARD.name, {"error": "rate_limit"}, **args)
@@ -179,7 +179,7 @@ def test_new_generic_error_cannot_clear_safety_hold(tmp_path):
 def test_generic_failure_is_durable_with_unknown_request_and_plate(tmp_path):
     setup_root(tmp_path)
     inbox = FilesInbox(tmp_path / "inbox")
-    stop_failure.capture(tmp_path, CARD.name, {"error": "server_error"}, administrator="admin",
+    stop_failure.capture(tmp_path, CARD.name, {"error": "server_error"}, to="admin",
                          events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, "?"),
                          deliver=lambda t: inbox.deliver("admin", t).id)
     assert "requests=UNKNOWN" in inbox.unread("admin")[0].body
@@ -190,7 +190,7 @@ def test_message_with_maximum_ids_stays_inside_durable_byte_cap(tmp_path):
     setup_root(tmp_path)
     text = []
     payload = {**PAYLOAD, "last_assistant_message": "safeguards req_" + "x" * 96 + " req_" + "y" * 96}
-    stop_failure.capture(tmp_path, CARD.name, payload, administrator="admin",
+    stop_failure.capture(tmp_path, CARD.name, payload, to="admin",
                          events=FilesEvents(tmp_path / "events"), plate=lambda n: ("é" * 100, "?"),
                          deliver=lambda t: text.append(t) or "receipt")
     assert len(text[0].encode()) <= 482
@@ -199,7 +199,7 @@ def test_message_with_maximum_ids_stays_inside_durable_byte_cap(tmp_path):
 def test_primary_hold_covers_down_pane_crew_and_stop_liveness(tmp_path):
     from shantytown import stop_event
     setup_root(tmp_path)
-    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin",
                          events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, None), deliver=lambda t: "receipt")
     pane = NullPanes("❯ ")
     pane.delivery_root = tmp_path
@@ -239,7 +239,7 @@ def test_slow_read_cannot_silence_durable_error_notice(tmp_path, monkeypatch):
         gate.wait()
         return "late-item", "in_progress"
     try:
-        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin", events=events,
+        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin", events=events,
                              plate=slow, deliver=lambda text: box.deliver("admin", text).id)
         assert len(box.unread("admin")) == len(events.pending("admin")) == 1
         assert "plate=UNKNOWN" in box.unread("admin")[0].body
@@ -282,7 +282,7 @@ def test_interrupted_primary_notification_reconciles_once_without_banner(tmp_pat
         else:
             patch.setattr(safeguard, "notify", interrupted)
         with pytest.raises(OSError):
-            stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+            stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin",
                 events=events, plate=lambda n: (None, None),
                 deliver=lambda text: box.deliver("admin", text).id)
     assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
@@ -300,7 +300,7 @@ def test_interrupted_primary_notification_reconciles_once_without_banner(tmp_pat
 
 def test_missing_launch_metadata_preserves_existing_safety_hold(tmp_path):
     setup_root(tmp_path)
-    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+    stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin",
         events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, None), deliver=lambda t: "receipt")
     (tmp_path / "launched" / (CARD.name + ".json")).unlink()
     assert stop_failure.state(tmp_path, CARD.name) == "safeguard-blocked"
@@ -316,7 +316,7 @@ def test_primary_unconfirmed_notification_stays_loud_without_retry(tmp_path, mon
         calls.append(text)
         raise TimeoutError("fixture delivery may have committed")
     with pytest.raises(TimeoutError):
-        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, administrator="admin",
+        stop_failure.capture(tmp_path, CARD.name, PAYLOAD, to="admin",
             events=FilesEvents(tmp_path / "events"), plate=lambda n: (None, None), deliver=uncertain)
     ledger = next((tmp_path / "safeguard-reports").glob("*.json"))
     value = json.loads(ledger.read_text()); value["state"] = reservation
@@ -328,3 +328,74 @@ def test_primary_unconfirmed_notification_stays_loud_without_retry(tmp_path, mon
     for _ in range(2):
         assert cli._safeguard_reports(SimpleNamespace(root=tmp_path), [CARD], report, NullPanes("❯ ")) == []
     assert len(calls) == 1 and "UNKNOWN" in capsys.readouterr().err
+
+
+# aegis-rr3: franklin's safeguard StopFailure reached the administrator while
+# every ordinary stop that evening reached its lead. The failure hook must pick
+# the recipient exactly as route_stop does for an ordinary stop.
+def _main_with_lead(tmp_path, monkeypatch, lead_up):
+    import io
+    from shantytown import stop_event
+    from shantytown.tier import LeadStatus
+    setup_root(tmp_path)
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    registry.set(Agent(name="fixture-lead", role="lead", pane="lead-pane", reports_to="admin"))
+    registry.set(Agent(name=CARD.name, role="worker", pane=CARD.pane, reports_to="fixture-lead"))
+    box = FilesInbox(tmp_path / "inbox")
+    asked = []
+    def lead_is_up(reg, panes):
+        def up(name):
+            asked.append(name)
+            return LeadStatus(lead_up, "" if lead_up else "fixture-lead is DOWN (no pane)")
+        return up
+    monkeypatch.setenv("SHANTY_AGENT", CARD.name)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setattr(stop_failure.sys, "stdin", io.StringIO(json.dumps(
+        {**PAYLOAD, "hook_event_name": "StopFailure"})))
+    monkeypatch.setattr(cli, "_inbox", lambda *a, **kw: box)
+    monkeypatch.setattr(stop_event, "_lead_is_up", lead_is_up)
+    monkeypatch.setattr(stop_event, "_plate_of", lambda root, name: ("fixture-item", "in_progress", []))
+    assert stop_failure.main(["--root", str(tmp_path)]) == 0
+    assert asked == ["fixture-lead"]  # the same live-lead predicate ordinary stops use
+    return box, FilesEvents(tmp_path / "events")
+
+
+def test_stop_failure_with_up_lead_reaches_the_lead_not_the_administrator(tmp_path, monkeypatch):
+    box, events = _main_with_lead(tmp_path, monkeypatch, lead_up=True)
+    assert len(box.unread("fixture-lead")) == 1
+    assert box.unread("admin") == []
+    [event] = events.pending("fixture-lead")
+    assert event.kind == "stop-failure" and not event.rose
+    assert events.pending("admin") == []
+
+
+def test_stop_failure_with_down_lead_rises_to_the_administrator_loudly(tmp_path, monkeypatch):
+    box, events = _main_with_lead(tmp_path, monkeypatch, lead_up=False)
+    assert box.unread("fixture-lead") == []
+    assert len(box.unread("admin")) == 1
+    [event] = events.pending("admin")
+    assert event.rose and "lead-unreachable" in event.detail
+    assert events.pending("fixture-lead") == []
+
+
+def test_route_recipient_says_no_to_the_administrator_when_the_lead_is_up(tmp_path):
+    # The control must be able to fail: the old hard-coded answer is refused.
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    registry.set(Agent(name="fixture-lead", role="lead", reports_to="admin"))
+    registry.set(Agent(name="w", role="worker", reports_to="fixture-lead"))
+    assert stop_failure.route_recipient(registry, "w", lambda n: True) == ("fixture-lead", False, None)
+    to, rose, note = stop_failure.route_recipient(registry, "w", lambda n: False)
+    assert (to, rose) == ("admin", True) and note
+    registry.set(Agent(name="solo", role="worker"))  # no lead: administrator, not a rise
+    assert stop_failure.route_recipient(registry, "solo", lambda n: True) == ("admin", False, None)
+
+
+def test_route_recipient_falls_back_loudly_when_the_lead_card_is_missing(tmp_path, capsys):
+    registry = FilesRegistry(tmp_path / "crew")
+    registry.set(Agent(name="admin", role="administrator"))
+    registry.set(Agent(name="w", role="worker", reports_to="ghost"))
+    to, rose, note = stop_failure.route_recipient(registry, "w", lambda n: True)
+    assert (to, rose) == ("admin", True) and "UNKNOWN" in note
+    assert "fell back to administrator" in capsys.readouterr().err
