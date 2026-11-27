@@ -7703,7 +7703,10 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
-    if not a.dry_run:
+    if not a.dry_run and (getattr(a, "durable", False) or not _sends_offhost(a, agent)):
+        # An off-host routine send is relayed to the other host's own
+        # `st inbox`, which captures it there. Capturing here too would mint a
+        # second node for one message (review of #764).
         _capture_operator_inbox(a, sender, agent.name, typed)
     owned_work_flag, stopped = False, None
     if not a.dry_run:
@@ -7917,6 +7920,13 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
     if res.returncode == 255:
         return False, f"ssh to host {agent.host} ({peer.ssh}) failed: {last}"
     return False, f"host {agent.host} did not deliver live (exit {res.returncode}): {last}"
+
+
+def _sends_offhost(a, agent) -> bool:
+    """The same test _relay_if_offhost opens with, without its side effects."""
+    from .deployment import local_host
+    local = local_host(a.root)
+    return not (agent.host is None or local is None or agent.host == local)
 
 
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
@@ -8401,8 +8411,12 @@ def _capture_operator_inbox(a, sender, recipient, text) -> None:
     if not operator or sender != operator:
         return
     try:
-        operator_capture.capture(a.root, text, recipient=recipient, channel="inbox",
-                                 session=os.environ.get("CLAUDE_SESSION_ID", ""))
+        # Spool now, write detached: the send must not wait on Quipu.
+        record = operator_capture.capture(
+            a.root, text, recipient=recipient, channel="inbox",
+            session=os.environ.get("CLAUDE_SESSION_ID", ""), deliver=False)
+        if record is not None:
+            operator_capture.spawn_flush(a.root, record.key)
     except Exception as error:
         print(f"  operator capture UNKNOWN ({type(error).__name__}); message still sent",
               file=sys.stderr)

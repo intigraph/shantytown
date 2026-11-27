@@ -54,11 +54,55 @@ def test_redelivery_writes_nothing(tmp_path):
     assert len(oc.records(tmp_path)) == 1
 
 
-def test_same_text_at_another_time_is_a_new_message(tmp_path):
+def test_redelivery_with_a_later_clock_writes_nothing(tmp_path):
+    """Keying on the capture instant alone deduped only within one second."""
+    w = Writer()
+    first = capture(tmp_path, w)
+    for later in (timedelta(seconds=1), timedelta(minutes=5), oc.REDELIVERY_WINDOW):
+        assert capture(tmp_path, w, at=AT + later) is None, later
+    assert w.calls == [(first.key, "message")]
+    assert len(oc.records(tmp_path)) == 1
+
+
+def test_same_text_after_the_window_is_a_new_message(tmp_path):
     w = Writer()
     capture(tmp_path, w)
-    capture(tmp_path, w, at=AT + timedelta(minutes=1))
+    capture(tmp_path, w, at=AT + oc.REDELIVERY_WINDOW + timedelta(seconds=1))
     assert len(oc.records(tmp_path)) == 2
+
+
+def test_same_text_to_another_recipient_is_a_new_message(tmp_path):
+    w = Writer()
+    capture(tmp_path, w)
+    oc.capture(tmp_path, TEXT, recipient="ellie", session="sess-1",
+               channel="pane-prompt", received_at=AT + timedelta(seconds=5), writer=w)
+    assert sorted(r.recipient for r in oc.records(tmp_path)) == ["ellie", "sattler"]
+
+
+@pytest.mark.parametrize("name", ["aegis-x1.", "x.", "-x", "X1", ""])
+def test_a_name_that_would_break_turtle_is_refused(tmp_path, name):
+    record = capture(tmp_path, Writer())
+    with pytest.raises(oc.CaptureRefused):
+        oc.track(tmp_path, record.key, name, writer=Writer())
+    with pytest.raises(oc.CaptureRefused):
+        oc.capture(tmp_path, "other text", recipient=name, session="", channel="inbox",
+                   received_at=AT)
+    assert oc.load(tmp_path, record.key).tracked_by == []
+
+
+def test_flush_keeps_a_mark_that_lands_while_it_writes(tmp_path):
+    """flush used to save the copy it loaded, overwriting directive=True."""
+    record = capture(tmp_path, Writer(fail=1))
+    marked = []
+
+    def writer(rec, statement):
+        if not marked:   # the administrator marks while the node write is in flight
+            marked.append(oc._update(tmp_path, rec.key, lambda r: setattr(r, "directive", True)))
+
+    oc.flush(tmp_path, writer=writer)
+    after = oc.load(tmp_path, record.key)
+    assert after.directive and after.written == ["message"]
+    assert after.owed() == ["directive"]
 
 
 def test_quipu_failure_spools_and_retries_idempotently(tmp_path):
@@ -94,13 +138,15 @@ def test_seed_link_writes_directive_and_tracked_by(tmp_path):
 
 
 def test_untracked_directive_raises_notice_only_after_window(tmp_path, monkeypatch):
-    monkeypatch.setenv(oc.TRACK_MINUTES_KEY, "30")
+    # 7, not the default 30: a test at the default cannot see the knob ignored.
+    monkeypatch.setenv(oc.TRACK_MINUTES_KEY, "7")
+    assert oc.TRACK_MINUTES != 7
     w = Writer()
     record = capture(tmp_path, w)
     assert any("TO REVIEW" in line for line in oc.notices(tmp_path, now=AT))
     oc.mark(tmp_path, record.key, writer=w)
-    assert not any("UNTRACKED" in l for l in oc.notices(tmp_path, now=AT + timedelta(minutes=29)))
-    late = oc.notices(tmp_path, now=AT + timedelta(minutes=31))
+    assert not any("UNTRACKED" in l for l in oc.notices(tmp_path, now=AT + timedelta(minutes=6)))
+    late = oc.notices(tmp_path, now=AT + timedelta(minutes=8))
     assert any("UNTRACKED DIRECTIVES (1)" in l for l in late)
     assert any(record.key in l for l in late)
     oc.track(tmp_path, record.key, "aegis-x1", writer=w)
@@ -129,3 +175,117 @@ def test_hook_is_administrator_only():
     assert "shantytown.operator_capture" in hooks[0]["hooks"][0]["command"]
     prompt = runtime.claude_settings_for_role("administrator", "/r")["hooks"]["UserPromptSubmit"]
     assert any("operator_capture" in h["command"] for g in prompt for h in g["hooks"])
+
+
+def test_hook_spools_and_hands_the_write_to_a_detached_flush(tmp_path, monkeypatch):
+    """The prompt must not wait on Quipu: no writer runs inside the hook."""
+    inline = Writer()
+    monkeypatch.setattr(oc, "_default_writer", lambda root: inline)
+    spawned = []
+    got = oc.hook(tmp_path, json.dumps({"prompt": TEXT}), env={"SHANTY_AGENT": "sattler"},
+                  now=AT, spawn=lambda root, key: spawned.append(key))
+    assert spawned == [got.key] and inline.calls == []
+    assert oc.load(tmp_path, got.key).owed() == ["message"]
+    assert oc.hook(tmp_path, json.dumps({"prompt": TEXT}), env={"SHANTY_AGENT": "sattler"},
+                   now=AT + timedelta(minutes=1), spawn=lambda r, k: spawned.append(k)) is None
+    assert spawned == [got.key]
+
+
+def test_detached_flush_entry_point_delivers_one_record(tmp_path, monkeypatch):
+    record = capture(tmp_path, Writer(fail=1))
+    w = Writer()
+    monkeypatch.setattr(oc, "_default_writer", lambda root: w)
+    assert oc.main(["--root", str(tmp_path), "--flush", record.key]) == 0
+    assert w.calls == [(record.key, "message")]
+    assert oc.load(tmp_path, record.key).owed() == []
+
+
+# --- the CLI wiring: deleting any of these call sites must fail a test -------
+
+class _NoPanes:
+    def exists(self, pane):
+        return False
+
+
+def _cli_store(tmp_path, **card):
+    crew = tmp_path / "crew"
+    crew.mkdir(parents=True, exist_ok=True)
+    # A pane name nothing runs: the routine send ends "pane is not there".
+    (crew / "dearing.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "sattler", "pane": "st-test-no-such-pane", **card}))
+    return tmp_path
+
+
+def _inbox(monkeypatch, root, *, operator, sender="stiwi"):
+    from shantytown import cli
+    monkeypatch.setattr(cli, "_panes", lambda a: _NoPanes())
+    spawned = []
+    monkeypatch.setattr(oc, "spawn_flush", lambda r, key: spawned.append(key))
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setenv("SHANTY_AGENT", sender)
+    if operator:
+        monkeypatch.setenv(oc.OPERATOR_KEY, operator)
+    rc = cli.main(["--root", str(root), "inbox", "dearing", "ship", "it"])
+    return rc, spawned
+
+
+def test_st_inbox_from_the_operator_is_captured_and_flushed_detached(tmp_path, monkeypatch):
+    root = _cli_store(tmp_path)
+    rc, spawned = _inbox(monkeypatch, root, operator="stiwi")
+    found = oc.records(root)
+    assert [(r.text, r.recipient, r.channel) for r in found] == [("ship it", "dearing", "inbox")]
+    assert spawned == [found[0].key]
+    assert rc != 0          # the pane is absent; capture still happened first
+
+
+@pytest.mark.parametrize("operator", [None, "someone-else"])
+def test_st_inbox_without_a_matching_operator_captures_nothing(tmp_path, monkeypatch, operator):
+    root = _cli_store(tmp_path)
+    _inbox(monkeypatch, root, operator=operator)
+    assert not oc.spool_dir(root).exists() or oc.records(root) == []
+
+
+def test_st_inbox_relayed_off_host_is_captured_by_the_far_side_only(tmp_path, monkeypatch):
+    root = _cli_store(tmp_path, host="far-host")
+    monkeypatch.setenv("SHANTY_HOST", "this-host")
+    _inbox(monkeypatch, root, operator="stiwi")
+    assert not oc.spool_dir(root).exists() or oc.records(root) == []
+
+
+def _directive(tmp_path, *argv):
+    from shantytown import cli
+    return cli.main(["--root", str(tmp_path), "work", "directive", *argv])
+
+
+def test_st_work_directive_exit_codes(tmp_path, monkeypatch, capsys):
+    from shantytown.cli import CANNOT_TELL, OK, REFUSED
+    record = capture(tmp_path, Writer())
+    assert _directive(tmp_path, "list") == OK
+    assert record.key in capsys.readouterr().out
+    assert _directive(tmp_path, "mark") == REFUSED                 # missing key
+    assert _directive(tmp_path, "mark", "om-nope") == REFUSED      # not a key
+    assert _directive(tmp_path, "track", record.key, "bad.") == REFUSED
+    monkeypatch.setattr(oc, "_default_writer", lambda root: Writer(fail=99))
+    assert _directive(tmp_path, "mark", record.key) == CANNOT_TELL  # spooled, owed
+    assert oc.load(tmp_path, record.key).directive
+    assert _directive(tmp_path, "flush") == CANNOT_TELL
+    w = Writer()
+    monkeypatch.setattr(oc, "_default_writer", lambda root: w)
+    assert _directive(tmp_path, "flush") == OK
+    assert w.calls == [(record.key, "directive")]
+    assert _directive(tmp_path, "track", record.key, SEED) == OK
+    assert oc.load(tmp_path, record.key).tracked_by == [SEED]
+
+
+def test_st_task_directive_links_the_new_seed(tmp_path, monkeypatch, capsys):
+    from shantytown import cli
+    record = capture(tmp_path, Writer())
+    w = Writer()
+    monkeypatch.setattr(oc, "_default_writer", lambda root: w)
+    rc = cli.main(["--root", str(tmp_path), "task", "record the directive",
+                   "--directive", record.key])
+    out = capsys.readouterr()
+    linked = oc.load(tmp_path, record.key)
+    assert linked.directive and len(linked.tracked_by) == 1, (rc, out)
+    seed = linked.tracked_by[0]
+    assert seed in out.out and w.calls[-1] == (record.key, f"tracked:{seed}")

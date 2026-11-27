@@ -16,10 +16,23 @@ a seed to it (`st work directive track`, `st task --directive`), which also writ
 `a:trackedBy` — the predicate the existing operator-verbatim directives use.
 
 The LOCAL SPOOL is written before any network call, so a Quipu failure never
-loses the text. Its file name is the dedupe key (content hash + timestamp): a
-redelivery finds the file and writes nothing. Every Quipu statement is derived
-from the spooled record and is idempotent (same subject IRI, same triples), so
-`st work directive flush` can retry a failed write as often as it likes.
+loses the text. Its file name is the record key (receive timestamp + content
+hash). A REDELIVERY is the same text to the same recipient over the same channel
+within REDELIVERY_WINDOW of an already-spooled copy: it writes nothing. The
+window exists because keying on the capture instant alone deduped only within
+one second, and a retried hook or a resent inbox line arrives with a later clock
+(review of #764). Every Quipu statement is derived from the spooled record and
+is idempotent (same subject IRI, same triples), so `st work directive flush` can
+retry a failed write as often as it likes.
+
+The capture paths (the prompt hook, `st inbox`) never wait on Quipu: they spool
+and hand the write to a detached `--flush`, because a synchronous /knot call
+(5s timeout per statement) would delay every operator prompt behind it.
+
+KNOWN GAPS: a pane injection that st does not prefix with "[from ...]" is
+indistinguishable from the operator typing and IS captured; a Codex
+administrator has no UserPromptSubmit hook here, so only its `st inbox` path
+captures.
 """
 from __future__ import annotations
 
@@ -27,6 +40,9 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,8 +50,12 @@ from pathlib import Path
 OPERATOR_KEY = "SHANTY_OPERATOR"          # the operator's sender name in st inbox
 TRACK_MINUTES_KEY = "SHANTY_DIRECTIVE_TRACK_MINUTES"
 TRACK_MINUTES = 30
+REDELIVERY_WINDOW = timedelta(minutes=10)
 SOURCE_KIND = "operator-verbatim"         # existing vocabulary on operator directives
-_NAME = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}\Z")
+# Names land in Turtle as `a:<name>`. A trailing "." would close the statement
+# early ("a:x. .") and the write would stay owed forever, so a name must end on
+# a letter, digit or underscore.
+_NAME = re.compile(r"[a-z0-9](?:[a-z0-9_.-]{0,126}[a-z0-9_])?\Z")
 _KEY = re.compile(r"om-\d{8}T\d{6}Z-[0-9a-f]{16}\Z")
 # st's own pane deliveries carry the attribution marker (attribution.attribute):
 # "[from sattler] ...", "[from st startup] ...". Those are crew traffic, not the
@@ -92,6 +112,31 @@ def _path(root, key: str) -> Path:
 def _save(root, record: Record) -> None:
     from .files import write_json_atomic
     write_json_atomic(_path(root, record.key), record.__dict__)
+
+
+@contextmanager
+def _locked(root):
+    """One writer at a time over the spool: the hook, `st inbox`, a detached
+    flush and the administrator's mark/track can all run at once, and a
+    read-modify-write without this lets a flush save a stale copy over a mark
+    that landed meanwhile, losing directive=True."""
+    import fcntl
+    directory = spool_dir(root)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with open(directory / ".lock", "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _update(root, key: str, change) -> Record:
+    with _locked(root):
+        record = load(root, key)
+        change(record)
+        _save(root, record)
+        return record
 
 
 def load(root, key: str) -> Record:
@@ -158,10 +203,11 @@ def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]
     deletes a record. Error text is reduced to the exception class, because a
     remote error can carry an authority URL.
     """
-    targets = [load(root, key)] if key else records(root)
+    keys = [key] if key else [r.key for r in records(root)]
     write = writer
     done, failed = 0, []
-    for record in targets:
+    for k in keys:
+        record = load(root, k)
         for statement in record.owed():
             try:
                 if write is None:
@@ -170,15 +216,49 @@ def flush(root, key: str | None = None, *, writer=None) -> tuple[int, list[str]]
             except Exception as error:
                 failed.append(f"{record.key} {statement}: {type(error).__name__}")
                 break   # keep order: never write trackedBy before the node exists
-            record.written.append(statement)
-            _save(root, record)
+
+            def wrote(fresh, statement=statement):
+                if statement not in fresh.written:
+                    fresh.written.append(statement)
+            # Reload under the lock: saving `record` itself would overwrite a
+            # mark/track that landed while the write was in flight.
+            _update(root, k, wrote)
             done += 1
+        # A mark/track during this pass adds statements; the next flush owes them.
     return done, failed
 
 
+def _redelivered(root, text: str, recipient: str, channel: str, when: datetime) -> bool:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+    for path in spool_dir(root).glob(f"om-*-{digest}.json"):
+        stamp = datetime.strptime(path.name[3:19], "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+        if abs(when - stamp) > REDELIVERY_WINDOW:
+            continue
+        try:
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return True   # unreadable but present: never mint a second node over it
+        if (prior.get("text"), prior.get("recipient"), prior.get("channel")) == (text, recipient, channel):
+            return True
+    return False
+
+
+def spawn_flush(root, key: str) -> None:
+    """Deliver a just-spooled record without making the caller wait on Quipu."""
+    subprocess.Popen(
+        [sys.executable, "-m", "shantytown.operator_capture", "--root", str(Path(root)),
+         "--flush", key],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True)
+
+
 def capture(root, text: str, *, recipient: str, session: str, channel: str,
-            received_at: datetime | None = None, writer=None) -> Record | None:
-    """Spool, then write. None = this exact message was already captured."""
+            received_at: datetime | None = None, writer=None,
+            deliver: bool = True) -> Record | None:
+    """Spool, then write. None = this message was already captured.
+
+    deliver=False spools only; the caller hands the write to spawn_flush.
+    """
     if not isinstance(text, str) or not text.strip():
         raise CaptureRefused("empty operator message")
     if not _NAME.fullmatch(recipient or ""):
@@ -187,43 +267,44 @@ def capture(root, text: str, *, recipient: str, session: str, channel: str,
     record = Record(key=key_for(text, when), text=text,
                     received_at=f"{when:%Y-%m-%dT%H:%M:%SZ}", recipient=recipient,
                     session=str(session or ""), channel=channel)
-    directory = spool_dir(root)
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     data = json.dumps(record.__dict__, ensure_ascii=False, indent=1).encode("utf-8")
-    try:
-        # O_EXCL is the dedupe: the first delivery creates the file, a
-        # redelivery of the same text at the same instant finds it.
-        fd = os.open(_path(root, record.key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        return None
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(data)
-        stream.flush()
-        os.fsync(stream.fileno())
-    flush(root, record.key, writer=writer)
+    with _locked(root):
+        if _redelivered(root, text, record.recipient, channel, when):
+            return None
+        try:
+            # O_EXCL backs the lock: the first delivery creates the file.
+            fd = os.open(_path(root, record.key), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            return None
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    if deliver:
+        flush(root, record.key, writer=writer)
     return load(root, record.key)
 
 
 def mark(root, ref: str, *, writer=None) -> Record:
-    record = load(root, resolve(root, ref))
-    if not record.directive:
-        record.directive = True
-        _save(root, record)
-    flush(root, record.key, writer=writer)
-    return load(root, record.key)
+    key = resolve(root, ref)
+    _update(root, key, lambda r: setattr(r, "directive", True))
+    flush(root, key, writer=writer)
+    return load(root, key)
 
 
 def track(root, ref: str, seed: str, *, writer=None) -> Record:
     """Linking a seed is itself the confirmation that the message is a directive."""
     if not _NAME.fullmatch(seed or ""):
         raise CaptureRefused(f"not a seed id: {seed!r}")
-    record = load(root, resolve(root, ref))
-    record.directive = True
-    if seed not in record.tracked_by:
-        record.tracked_by.append(seed)
-    _save(root, record)
-    flush(root, record.key, writer=writer)
-    return load(root, record.key)
+    key = resolve(root, ref)
+
+    def link(record):
+        record.directive = True
+        if seed not in record.tracked_by:
+            record.tracked_by.append(seed)
+    _update(root, key, link)
+    flush(root, key, writer=writer)
+    return load(root, key)
 
 
 def track_minutes(root) -> int:
@@ -268,26 +349,38 @@ def notices(root, *, now: datetime | None = None) -> list[str]:
     return lines
 
 
-def hook(root, stdin_text: str, *, env=None, now=None, writer=None) -> Record | None:
-    """UserPromptSubmit: the operator typing into the administrator's pane."""
+def hook(root, stdin_text: str, *, env=None, now=None, writer=None,
+         spawn=None) -> Record | None:
+    """UserPromptSubmit: the operator typing into the administrator's pane.
+
+    Spools and returns; the Quipu write runs detached (spawn_flush) unless a
+    writer is injected.
+    """
     env = os.environ if env is None else env
     payload = json.loads(stdin_text or "{}")
     text = payload.get("prompt") if isinstance(payload, dict) else None
     if not isinstance(text, str) or not text.strip() or _ATTRIBUTED.match(text):
         return None
-    return capture(root, text, recipient=env.get("SHANTY_AGENT", ""),
-                   session=payload.get("session_id") or env.get("CLAUDE_SESSION_ID", ""),
-                   channel="pane-prompt", received_at=now, writer=writer)
+    record = capture(root, text, recipient=env.get("SHANTY_AGENT", ""),
+                     session=payload.get("session_id") or env.get("CLAUDE_SESSION_ID", ""),
+                     channel="pane-prompt", received_at=now, writer=writer,
+                     deliver=writer is not None)
+    if record is not None and writer is None:
+        (spawn or spawn_flush)(root, record.key)
+    return record
 
 
 def main(argv=None):
     import argparse
-    import sys
     ap = argparse.ArgumentParser(description="capture an operator prompt (hook)")
     ap.add_argument("--root", required=True, type=Path)
+    ap.add_argument("--flush", metavar="KEY", help="deliver one spooled record (detached)")
     args = ap.parse_args(argv)
     try:
-        hook(args.root, sys.stdin.read())
+        if args.flush:
+            flush(args.root, args.flush)
+        else:
+            hook(args.root, sys.stdin.read())
     except Exception as exc:  # a hook must never obstruct the operator
         print(f"operator_capture: capture UNKNOWN ({type(exc).__name__})", file=sys.stderr)
     return 0

@@ -2032,9 +2032,17 @@ now records them itself:
   "operator-verbatim"`, written through the same governed `/knot` path the
   registry uses, so a SHACL refusal is a failure, not a success.
 - The local spool (`<root>/operator-messages/`) is written first. Its key is
-  `om-<UTC>-<sha256 prefix>`: content hash plus timestamp, so a redelivery
-  writes nothing. A failed Quipu write leaves the statement owed and the text on
-  disk; `st work directive flush` retries idempotently.
+  `om-<UTC>-<sha256 prefix>`: receive timestamp plus content hash. The same text
+  to the same recipient over the same channel within 10 minutes of a spooled
+  copy is a redelivery and writes nothing. The hook and `st inbox` never wait on
+  Quipu: they spool and hand the write to a detached flush. A failed write leaves
+  the statement owed and the text on disk; `st work directive flush` retries
+  idempotently.
+- An off-host `st inbox` send is captured by the receiving host's own `st inbox`
+  (the relay), not by the sender as well.
+- Known gaps: a pane injection st does not prefix with `[from ...]` reads as the
+  operator typing and is captured; a Codex administrator has no prompt hook, so
+  only its `st inbox` path captures.
 - Not every message is a directive. `st work directive mark <key>` confirms one (it
   adds `a:Directive`). `st work directive track <key> <seed>` or
   `st task "..." --directive <key|IRI>` confirms it and writes
