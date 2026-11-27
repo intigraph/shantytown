@@ -1,9 +1,9 @@
-"""st — the CLI. Eight verbs, five groups, forty grouped commands: forty-eight, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Eight verbs, five groups, forty-one grouped commands: forty-nine, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
-            · jobs [list|check|run|history]
+            · jobs [list|check|run|history] · directive [list|mark|track|flush]
     agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap|--drain] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
@@ -35,6 +35,13 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`work directive` earned the forty-ninth slot (aegis-za4f.20, Stiwi 2026-11-27: "Ya good
+idea! Do that for auto directives / St is the right place fkr it too"). st captures
+every operator message verbatim itself; this is the administrator's one-keystroke
+WRITE that confirms a message is a Directive or links its seed. It is a command and
+not a flag on `item` because it writes to the graph, not the tracker, and its
+subject is a captured message that has no item yet.
 
 `agent spawn` earned the forty-seventh slot (aegis-c01c.2, Stiwi 2026-10-28: "I
 would like for st to support ephemeral agents that can handle pr reviews and merging
@@ -2167,7 +2174,16 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("--due", help="explicit due date (YYYY-MM-DD) or timezone-qualified instant")
     tk.add_argument("--queue-override", metavar="REASON",
                     help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
+    tk.add_argument("--directive", metavar="KEY|IRI",
+                    help="a captured operator message this seed tracks: writes "
+                         "Directive trackedBy <seed> (st work directive)")
     tk.add_argument("-n", "--dry-run", action="store_true")
+
+    dv = leaf("directive", help="operator messages st captured verbatim: "
+                                "list | mark <key> | track <key> <seed> | flush")
+    dv.add_argument("action", nargs="?", default="list",
+                    choices=["list", "mark", "track", "flush"])
+    dv.add_argument("args", nargs="*")
 
     dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
     dm.add_argument("--run", action="store_true",
@@ -2963,6 +2979,8 @@ def _run_command(a) -> int:
         return _cmd_inbox(a)
     if a.cmd == "task":
         return _cmd_task(a)
+    if a.cmd == "directive":
+        return _cmd_directive(a)
     if a.cmd == "context":
         return _cmd_context(a)
     if a.cmd == "provision":
@@ -7685,6 +7703,8 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
+    if not a.dry_run:
+        _capture_operator_inbox(a, sender, agent.name, typed)
     owned_work_flag, stopped = False, None
     if not a.dry_run:
         try:
@@ -8369,6 +8389,67 @@ def _inbox_read(a, me: str) -> int:
     return OK
 
 
+def _capture_operator_inbox(a, sender, recipient, text) -> None:
+    """An operator-authored inbox message is captured before it is delivered.
+
+    The operator is whoever the deployment names in SHANTY_OPERATOR; unset means
+    no inbox capture, because guessing who the operator is would be authority
+    laundering. Capture failure never blocks the send: the spool keeps the text.
+    """
+    from . import operator_capture
+    operator = _deployment_default(a, operator_capture.OPERATOR_KEY)
+    if not operator or sender != operator:
+        return
+    try:
+        operator_capture.capture(a.root, text, recipient=recipient, channel="inbox",
+                                 session=os.environ.get("CLAUDE_SESSION_ID", ""))
+    except Exception as error:
+        print(f"  operator capture UNKNOWN ({type(error).__name__}); message still sent",
+              file=sys.stderr)
+
+
+def _cmd_directive(a) -> int:
+    """directive — the administrator's side of operator capture (aegis-za4f.20)."""
+    from . import operator_capture as oc
+    args = list(a.args)
+    need = {"list": (0, 0), "mark": (1, 1), "track": (2, 2), "flush": (0, 1)}[a.action]
+    if not need[0] <= len(args) <= need[1]:
+        print(f"  refused: st work directive {a.action} takes {need[0]}..{need[1]} argument(s)",
+              file=sys.stderr)
+        return REFUSED
+    try:
+        if a.action == "list":
+            found = oc.records(a.root) if oc.spool_dir(a.root).is_dir() else []
+            for r in found:
+                kind = "Directive" if r.directive else "OperatorMessage"
+                owed = f" OWED:{','.join(r.owed())}" if r.owed() else ""
+                seeds = f" trackedBy:{','.join(r.tracked_by)}" if r.tracked_by else ""
+                print(f"  {r.key}  {kind}  {r.received_at} -> {r.recipient} "
+                      f"[{r.channel}]{seeds}{owed}")
+                print(f"    {r.text[:200]!r}")
+            for line in oc.notices(a.root):
+                print(line)
+            return OK
+        if a.action == "flush":
+            done, failed = oc.flush(a.root, oc.resolve(a.root, args[0]) if args else None)
+            print(f"  {done} statement(s) written")
+            for line in failed:
+                print(f"  still owed: {line}", file=sys.stderr)
+            return CANNOT_TELL if failed else OK
+        record = (oc.mark(a.root, args[0]) if a.action == "mark"
+                  else oc.track(a.root, args[0], args[1]))
+    except oc.CaptureRefused as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return REFUSED
+    owed = record.owed()
+    print(f"  {record.key}: Directive" + (f" trackedBy {','.join(record.tracked_by)}" if record.tracked_by else ""))
+    if owed:
+        print(f"  spooled; Quipu write pending ({', '.join(owed)}): st work directive flush",
+              file=sys.stderr)
+        return CANNOT_TELL
+    return OK
+
+
 def _cmd_task(a) -> int:
     """task creates a work item and PRINTS ITS ID, because the id is the product.
 
@@ -8480,6 +8561,17 @@ def _cmd_task(a) -> int:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
     print(f"  {item.id}    {item.title}")
+    if getattr(a, "directive", None):
+        # aegis-za4f.20: naming the seed for a directive IS the link; st writes
+        # it so the trackedBy edge never waits on someone remembering.
+        from . import operator_capture
+        try:
+            record = operator_capture.track(a.root, a.directive, item.id)
+            owed = record.owed()
+            print(f"  {record.key} trackedBy {item.id}"
+                  + (f" (spooled; Quipu write pending: {', '.join(owed)})" if owed else ""))
+        except operator_capture.CaptureRefused as error:
+            print(f"  {item.id} CREATED; directive link refused: {error}", file=sys.stderr)
     if refused:
         print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
         return REFUSED
@@ -8644,6 +8736,9 @@ def _cmd_anchor(a) -> int:
     if p.me.role == "administrator":
         from . import orphan_directives
         p.orphan_directives = orphan_directives.render(orphan_directives.load(a.root))
+        from . import operator_capture
+        captured = "\n".join(operator_capture.notices(Path(a.root)))
+        p.orphan_directives = "\n".join(x for x in (p.orphan_directives, captured) if x)
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),

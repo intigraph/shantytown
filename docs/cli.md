@@ -309,6 +309,8 @@ st work                       the item and the board
   jobs [list|check|run|history]
                               declared cron / interval / event jobs in <root>/jobs/*.toml,
                               evaluated by `st fleet tend`; see docs/jobs.md
+  directive [list|mark|track|flush]
+                              operator messages st captured verbatim; mark/track confirm a Directive
 st agent                      one agent
   new <agent>                 create an agent from a card
   spawn --pool <status|size N|config|pause|drain|resume>
@@ -623,7 +625,7 @@ Codex input already includes its cached subset. This makes
 `cache_read / usage_in` a provider-independent prompt-cache hit rate. The fields
 are omitted—not zeroed—when every matching transcript is unknown.
 
-Forty-eight. Eight verbs at the top level and forty grouped commands under five groups
+Forty-nine. Eight verbs at the top level and forty-one grouped commands under five groups
 (`work`, `agent`, `fleet`, `repo`, `ops`). A group is a namespace and runs nothing, so it earns no
 slot; the count is the leaves. The flat spellings from before the grouping (st cycle for
 st agent cycle, and so on) still parse into the same handler, print one line on stderr saying
@@ -2013,6 +2015,33 @@ is not "missing", it's "installed and nobody knows what's there"), and detect **
 `--install` prefers a release binary, falls back to a source build only where there's no release
 (beads), and **refuses loudly when the toolchain is missing** rather than half-installing. Never
 `--break-system-packages` — this host is PEP-668, which is why `st` itself ships via pipx.
+
+## `st work directive` — operator messages, captured by st (aegis-za4f.20)
+
+Directive capture used to depend on someone remembering, and on the night it
+mattered six directives were relayed to a lead to record, with wrong times. st
+now records them itself:
+
+- The administrator's `UserPromptSubmit` hook captures every prompt the operator
+  types, and `st inbox` captures a message whose sender is `SHANTY_OPERATOR`.
+  Text st delivered itself (the `[from x]` attribution prefix) is crew traffic
+  and is not captured.
+- Each message is ONE `a:OperatorMessage` node: verbatim text (`rdfs:comment`),
+  `a:receivedAt` (exact UTC, `xsd:dateTime`), `a:recipient`, `a:sessionId`,
+  `a:sourceChannel` (`pane-prompt` or `inbox`) and `a:sourceKind
+  "operator-verbatim"`, written through the same governed `/knot` path the
+  registry uses, so a SHACL refusal is a failure, not a success.
+- The local spool (`<root>/operator-messages/`) is written first. Its key is
+  `om-<UTC>-<sha256 prefix>`: content hash plus timestamp, so a redelivery
+  writes nothing. A failed Quipu write leaves the statement owed and the text on
+  disk; `st work directive flush` retries idempotently.
+- Not every message is a directive. `st work directive mark <key>` confirms one (it
+  adds `a:Directive`). `st work directive track <key> <seed>` or
+  `st task "..." --directive <key|IRI>` confirms it and writes
+  `a:trackedBy a:<seed>`.
+- The administrator's `st anchor` lists messages to review, directives with no
+  seed after `SHANTY_DIRECTIVE_TRACK_MINUTES`, and spooled writes still owed.
+  `st work directive` (`list`) prints all of it.
 
 ## `st inbox` — a message, and somewhere for it to land
 
