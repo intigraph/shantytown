@@ -184,6 +184,32 @@ CLI graph clients refuse before sending a request when the namespace is missing
 or is the documentation example. Local commands still work without a namespace.
 Library clients outside a CLI invocation retain the warned example fallback.
 
+## Scheduled jobs (`[jobs]`)
+
+Job config lives in Quipu (see [scheduled jobs](jobs.md)). The `[jobs]`
+table has three keys. Any other key is refused.
+
+```toml
+[jobs]
+graph = "urn:aegis:scheduled:jobs"   # the Quipu graph jobs are declared in
+timed_files = "refuse"               # or "migrate", for a migration window only
+scheduler = "local"                  # or "chaski"
+```
+
+- **`graph`**: an absolute IRI, empty by default. When set, `st work jobs list`
+  and `check` read only this graph and never fall back to `<root>/jobs/*.toml`.
+  `st work jobs new` writes to it, and tend stops running file jobs. Leave it
+  unset on a host whose event (`on`) file jobs are still live, until the Chaski
+  consumer (aegis-6vf.11) exists. Graph mode would stop them. A value that is
+  not an absolute IRI is refused.
+- **`timed_files`**: `"refuse"` (default) or `"migrate"`. A job file with a
+  `cron` or `every` trigger is refused, and the refusal names `st work jobs new`.
+  `"migrate"` keeps such files firing on a host that still has them, and every
+  tend pass and `st work jobs` read warns. Set it only before deploying to such
+  a host, move the jobs, delete the files, then remove the setting.
+- **`scheduler`**: `"local"` (default) or `"chaski"`. `"chaski"` skips tend's
+  local job evaluator entirely, for a host whose jobs Chaski fires.
+
 ## Named accounts
 
 A harness may have several independent subscriptions. Account names must differ
