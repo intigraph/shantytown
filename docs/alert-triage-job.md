@@ -90,12 +90,21 @@ write reconciliation, admission and execution remain controller responsibilities
 
 `incident_consumer.consume(record, frozen=..., jobspec=..., journal=..., verified=True)`
 takes ONE report record that the signed reader has already verified and returns
-the shadow intents, journaled once. `consume_event(raw, journal=..., verified=True)`
-takes the serialized event form, a JSON object of exactly `kind: "incident_report"`,
-`record`, `frozen` and `jobspec` (at most 1 MiB), so a recorded event can be
-replayed; `tests/fixtures/incident_consumer/triage-event.json` is one. `verified`
-must be exactly `True`; the caller that read `st-gate-verdicts` and checked the
-signature sets it, this module does not authenticate. It then:
+the shadow intents, journaled once.
+`consume_event(raw, frozen=..., jobspec=..., journal=..., verified=True)` takes the
+serialized event form, a JSON object of exactly `kind: "incident_report"`, `record`,
+`frozen` and `jobspec` (at most 1 MiB), so a recorded event can be replayed;
+`tests/fixtures/incident_consumer/triage-event.json` is one. `verified` must be
+exactly `True`; the caller that read `st-gate-verdicts` and checked the signature
+sets it, this module does not authenticate.
+
+`verified` covers the **record only**. `frozen` and `jobspec` are trusted launch
+state and always come from the caller (the launcher's own copy). The event's
+embedded copies are provenance, not input: if either differs from the trusted
+one, the event is refused as `launch-mismatch` and recorded with the digests of
+both copies. Otherwise a forged or replayed event could carry a frozen input that
+matches its own report and a jobspec whose `sha256` is computed over its own
+routes, so it would vouch for its own incident binding and actions. Then:
 
 1. requires a journal directory that is a real directory owned by the caller and
    not writable by group or others, otherwise `journal-dir` (the only refusal
@@ -115,10 +124,18 @@ signature sets it, this module does not authenticate. It then:
 
 Refusals and UNKNOWN are recorded, not dropped. An `unknown` verdict journals an
 intent record with no intents. Every refusal after step 1 writes
-`refusal-<sha256>.json` once, keyed by reason plus the digests of the record and
-the frozen input, holding `reason`, `record_sha256`, `frozen_sha256` and the
-`run_id` when one is readable, never the untrusted record itself. The same
-refusal twice is one record. Files starting `.pending-` are crash leftovers of an
+`refusal-<sha256>.json` once, keyed by reason plus the digests of the record, the
+frozen input and the jobspec, holding `reason`, `record_sha256`, `frozen_sha256`,
+`jobspec_sha256` (plus `event_frozen_sha256`/`event_jobspec_sha256` for
+`launch-mismatch`) and the `run_id` when one is readable, never the untrusted
+record itself. The same refusal twice is one record; the same record refused under
+two different specs is two.
+
+A journal write that fails (`ENOSPC`, `EIO`, `EXDEV` from the link or an fsync)
+is **fatal**: the `OSError` propagates, nothing is journaled (not even a refusal,
+since the journal itself failed) and no `.pending-` file is left. The event source
+must treat the exception as not consumed and redeliver. A redelivery after the
+fault is consumed normally, once. Files starting `.pending-` are crash leftovers of an
 interrupted write; readers ignore dot-files.
 
 It imports no launcher, signer, executor, queue or network code, and creates no

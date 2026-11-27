@@ -8,13 +8,27 @@ The journal is the input of the next step (H2), not an action.
 
 Authentication stays the caller's job. `verified` must be exactly True, set by
 the code that read the record from `st-gate-verdicts` and checked its signature;
-anything else refuses before any parsing. A report that passes here is still
-untrusted data (see docs/alert-triage-job.md).
+anything else refuses before any parsing. `verified` vouches for the RECORD only.
+`frozen` and `jobspec` are trusted launch state and must come from the caller (the
+launcher's own copy), never from the event: an event that carried its own frozen
+input and a self-consistent jobspec would attest its own incident binding and
+routes. `consume_event` therefore takes them as arguments and refuses an event
+whose embedded copies differ (`launch-mismatch`). A report that passes here is
+still untrusted data (see docs/alert-triage-job.md).
 
 Refusals are recorded, not dropped: once the journal directory is known safe,
 every refusal writes a `refusal-<key>.json` record (digests and reason only, never
 the untrusted record itself) so an ignored alert leaves evidence. Only an unsafe
 journal directory refuses without a record, because there is nowhere safe to write.
+Refusals are keyed by (reason, record, frozen, jobspec): the same record refused under
+two different specs leaves two records.
+
+A journal write that fails (ENOSPC, EIO, EXDEV from os.link or fsync) is FATAL: the
+OSError propagates to the caller and nothing is journaled, not even a refusal, since
+the journal is the thing that failed. Raising is the loud form; returning a Refusal
+here would be the silent drop this module exists to prevent. The event source must
+treat the exception as not-consumed and redeliver; a redelivery after the fault is
+consumed normally, once.
 
 Known limits, accepted for H1: the directory check is lstat-then-use, so a
 caller that swaps its own private directory between check and write races
@@ -99,6 +113,8 @@ def _create_once(journal: str, name: str, body: bytes) -> bool:
     fsync before the link and of the directory after it: without them a crash could
     leave a linked but empty record that every replay then refuses as unreadable.
     """
+    # Any OSError below propagates (see the module docstring: journal faults are fatal);
+    # the finally still removes the temp file so a failed write leaves no `.pending-*`.
     fd, tmp = tempfile.mkstemp(dir=journal, prefix='.pending-')
     try:
         os.fchmod(fd, 0o600)
@@ -121,10 +137,11 @@ def _create_once(journal: str, name: str, body: bytes) -> bool:
     return created
 
 
-def _refuse(journal: str, reason: str, record, frozen) -> Refusal:
-    """Record the refusal once, keyed by (reason, record, frozen), and return it."""
+def _refuse(journal: str, reason: str, record, frozen, jobspec, extra=None) -> Refusal:
+    """Record the refusal once, keyed by (reason, record, frozen, jobspec, extra), and return it."""
     entry = {'version': JOURNAL_VERSION, 'kind': 'refusal', 'reason': reason,
-             'record_sha256': _digest(record), 'frozen_sha256': _digest(frozen)}
+             'record_sha256': _digest(record), 'frozen_sha256': _digest(frozen),
+             'jobspec_sha256': _digest(jobspec), **(extra or {})}
     run_id = record.get('run_id') if isinstance(record, dict) else None
     if isinstance(run_id, str) and len(run_id) <= 1024:
         entry['run_id'] = run_id
@@ -146,25 +163,25 @@ def consume(record, *, frozen, jobspec, journal: str, verified) -> Consumed | Re
     if not _journal_dir_ok(journal):
         return Refusal('journal-dir')
     if verified is not True:
-        return _refuse(journal, 'unverified-record', record, frozen)
+        return _refuse(journal, 'unverified-record', record, frozen, jobspec)
     if not _frozen_ok(frozen):
-        return _refuse(journal, 'frozen-input', record, frozen)
+        return _refuse(journal, 'frozen-input', record, frozen, jobspec)
     validated = validate('triage', jobspec, record)
     if isinstance(validated, Refusal):
-        return _refuse(journal, validated.reason, record, frozen)
+        return _refuse(journal, validated.reason, record, frozen, jobspec)
     report = json.loads(validated.report_json)
     incident = report['report']['incident']
     # The report must be about THIS incident, not merely a well-formed one.
     if (incident['source'] != frozen['fingerprint_kind'] or incident['fingerprint'] != frozen['fingerprint']
             or not _same_onset(incident['onset'], frozen['onset_utc']) or incident['carrier_item'] != frozen['item']):
-        return _refuse(journal, 'incident-binding', record, frozen)
+        return _refuse(journal, 'incident-binding', record, frozen, jobspec)
     intents = plan(validated, jobspec)
     if isinstance(intents, Refusal):
-        return _refuse(journal, intents.reason, record, frozen)
+        return _refuse(journal, intents.reason, record, frozen, jobspec)
     wanted = _record(report, validated, intents)
     body = (_canonical(wanted) + '\n').encode()
     if len(body) > RECORD_CAP:
-        return _refuse(journal, 'record-too-large', record, frozen)
+        return _refuse(journal, 'record-too-large', record, frozen, jobspec)
     final = os.path.join(journal, hashlib.sha256(report['run_id'].encode()).hexdigest() + '.json')
     replay = not _create_once(journal, os.path.basename(final), body)
     if replay:
@@ -172,17 +189,20 @@ def consume(record, *, frozen, jobspec, journal: str, verified) -> Consumed | Re
             with open(final, 'rb') as handle:
                 existing = json.loads(handle.read(RECORD_CAP + 1))
         except (OSError, ValueError):
-            return _refuse(journal, 'journal-unreadable', record, frozen)
+            return _refuse(journal, 'journal-unreadable', record, frozen, jobspec)
         if existing != wanted:
-            return _refuse(journal, 'run-rebound', record, frozen)
+            return _refuse(journal, 'run-rebound', record, frozen, jobspec)
     return Consumed(report['run_id'], tuple(intents), replay, final)
 
 
-def consume_event(raw: bytes, *, journal: str, verified) -> Consumed | Refusal:
+def consume_event(raw: bytes, *, frozen, jobspec, journal: str, verified) -> Consumed | Refusal:
     """Consume one serialized incident_report event: {kind, record, frozen, jobspec}.
 
     This is the replayable wire form: a recorded event file fed twice is one intent
     record. A malformed event is refused AND recorded, keyed by the digest of its bytes.
+    `frozen` and `jobspec` are the caller's trusted launch state; the event's copies are
+    provenance only and must equal them exactly, or the event is refused as
+    `launch-mismatch`. The trusted copies, never the event's, are what get validated.
     """
     if not _journal_dir_ok(journal):
         return Refusal('journal-dir')
@@ -195,9 +215,14 @@ def consume_event(raw: bytes, *, journal: str, verified) -> Consumed | Refusal:
     if not (isinstance(event, dict) and set(event) == EVENT_KEYS and event['kind'] == 'incident_report'):
         marker = {'unparsed_event_sha256': hashlib.sha256(bytes(raw) if isinstance(raw, (bytes, bytearray))
                                                          else repr(raw).encode()).hexdigest()}
-        return _refuse(journal, 'event-shape', marker, None)
-    return consume(event['record'], frozen=event['frozen'], jobspec=event['jobspec'],
-                   journal=journal, verified=verified)
+        return _refuse(journal, 'event-shape', marker, frozen, jobspec)
+    if _digest(event['frozen']) != _digest(frozen) or _digest(event['jobspec']) != _digest(jobspec):
+        # The event's own copies are digested into the entry so that two different
+        # forged specs against one record leave two records, not one.
+        return _refuse(journal, 'launch-mismatch', event['record'], frozen, jobspec,
+                       {'event_frozen_sha256': _digest(event['frozen']),
+                        'event_jobspec_sha256': _digest(event['jobspec'])})
+    return consume(event['record'], frozen=frozen, jobspec=jobspec, journal=journal, verified=verified)
 
 
 __all__ = ['Consumed', 'consume', 'consume_event', 'ActionIntent', 'Refusal']
