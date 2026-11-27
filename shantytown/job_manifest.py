@@ -15,7 +15,7 @@ import re
 import stat
 
 from .actor_identity import IdentityError
-from .job_launch import FIELDS, IDENTITY_FIELDS, validate_manifest
+from .job_launch import FIELDS, IDENTITY_FIELDS, argv_model, validate_manifest
 from .ephemeral import Request, Refused, validate
 
 
@@ -85,6 +85,12 @@ def render(directory, bindings, destination, *, catalog_sha256, bindings_sha256)
             if set(row) != IDENTITY_FIELDS or not isinstance(extra, dict) or set(extra) != FIELDS - IDENTITY_FIELDS:
                 raise IdentityError('add exactly the launch fields to an identity-only slot; never replace a capability')
             row = dict(row, **extra)
+            # The slot's resolved model (aegis-jsp0): the model its pinned argv
+            # launches, else one the binding declares; unknown stays omitted.
+            launched = argv_model(row['argv']) if isinstance(row['argv'], list) else None
+            if launched is not None and isinstance(row['environment'], dict):
+                row['environment'] = dict(row['environment'])
+                row['environment'].setdefault('SHANTY_MODEL', launched)
             validate_manifest(row, name)
             try:
                 validate(Request(**row['request'], harness=row['harness']))

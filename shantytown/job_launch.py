@@ -28,7 +28,20 @@ OWNER = 0
 _NAME = re.compile(r'eph-(review|merge|triage|task)-[0-9a-f]{6}')
 IDENTITY_FIELDS = {'version', 'principal', 'controller_uid', 'uid', 'gid', 'username', 'home', 'root'}
 FIELDS = IDENTITY_FIELDS | {'controller_root', 'workspace', 'settings', 'harness', 'request', 'argv', 'environment', 'review'}
-ENVIRONMENT = {'PATH', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR'}
+ENVIRONMENT = {'PATH', 'LANG', 'LC_ALL', 'TERM', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'SHANTY_MODEL'}
+# SHANTY_MODEL (aegis-jsp0) is the job's declared model for Quipu write
+# provenance (X-Quipu-Model). A bounded plain name, equal to the model the
+# pinned argv launches when it names one; never inherited from a controller.
+_MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}')
+
+
+def argv_model(argv):
+    """The model a pinned argv launches (`--model X` or `--model=X`), or None."""
+    found = [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == '--model']
+    found += [arg[len('--model='):] for arg in argv if arg.startswith('--model=')]
+    if len(set(found)) > 1:
+        raise IdentityError('pinned argv names more than one model')
+    return found[0] if found else None
 
 
 def protected(path, *, directory=False):
@@ -126,6 +139,10 @@ def validate_manifest(spec, name, *, allow_identity=False):
     for key in ('CODEX_HOME', 'CLAUDE_CONFIG_DIR'):
         if key in env and not Path(env[key]).is_relative_to(home):
             raise IdentityError('harness configuration must belong to the job')
+    if 'SHANTY_MODEL' in env:
+        launched = argv_model(argv)
+        if not _MODEL.fullmatch(env['SHANTY_MODEL']) or launched not in (None, env['SHANTY_MODEL']):
+            raise IdentityError('declared job model is malformed or not the model its argv launches')
     if spec['review'] is not None:
         from . import job_review
         job_review.policy(spec)

@@ -778,3 +778,88 @@ def test_launch_renderer_refuses_a_reviewed_but_mixed_controller_inventory(capab
         render(jobs.BASE, path, output, catalog_sha256=hashlib.sha256(raw).hexdigest(),
             bindings_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     assert not output.exists()
+
+
+# --- aegis-jsp0: a job declares the model it runs, never a guess -----------------
+# Quipu write provenance needs X-Quipu-Model; every client derives it from
+# SHANTY_MODEL. A job's environment is allowlisted, so SHANTY_MODEL is admitted
+# alone, only as the model the slot's own pinned argv launches (or one the
+# provisioner resolved when argv names none), and omitted when unknown.
+
+@pytest.mark.parametrize('model', ['claude-opus-5-5', 'gpt-5.5-codex', 'claude-sonnet-5-5[1m]'])
+def test_a_manifest_may_declare_the_model_its_argv_launches(capability, model):
+    spec, save, _ = capability
+    save(dict(spec, argv=['/usr/bin/true', '--model', model],
+              environment=dict(spec['environment'], SHANTY_MODEL=model)))
+    loaded, _ = jobs.load(spec['principal'])
+    assert loaded['environment']['SHANTY_MODEL'] == model
+
+
+@pytest.mark.parametrize('environment, argv', [
+    ({'SHANTY_MODEL': ''}, ['/usr/bin/true']),
+    ({'SHANTY_MODEL': 'two words'}, ['/usr/bin/true']),
+    ({'SHANTY_MODEL': 'line\nbreak'}, ['/usr/bin/true']),
+    ({'SHANTY_MODEL': 'm' * 129}, ['/usr/bin/true']),
+    ({'SHANTY_MODEL': 'claude-opus-5-5'}, ['/usr/bin/true', '--model', 'claude-sonnet-5-5']),
+    ({'SHANTY_MODEL': 'claude-opus-5-5'}, ['/usr/bin/true', '--model=claude-sonnet-5-5']),
+    ({'QUIPU_MODEL': 'claude-opus-5-5'}, ['/usr/bin/true']),
+])
+def test_a_malformed_or_contradicting_model_is_not_a_capability(capability, environment, argv):
+    spec, save, _ = capability
+    save(dict(spec, argv=argv, environment=dict(spec['environment'], **environment)))
+    with pytest.raises(IdentityError):
+        jobs.load(spec['principal'])
+
+
+def test_the_launched_job_receives_its_declared_model_and_no_controller_model(monkeypatch):
+    import resource
+    monkeypatch.setattr(jobs, 'drop_identity', lambda spec: None)
+    monkeypatch.setattr(resource, 'getrlimit', lambda _: (1024, 1024))
+    monkeypatch.setattr(jobs.os, 'chdir', lambda path: None)
+    monkeypatch.setattr(jobs.os, 'closerange', lambda *args: None)
+    monkeypatch.setattr('shantytown.actor_identity.config_environment', lambda: {})
+    monkeypatch.setenv('SHANTY_MODEL', 'controller-model')
+    seen = {}
+    monkeypatch.setattr(jobs.os, 'execve', lambda path, argv, environment: seen.update(environment))
+    spec = dict(home='/private/job', username='_stjobs', principal='eph-task-123abc',
+                root='/private/job-store', workspace='/private/job/work',
+                argv=['/usr/bin/true', '--model', 'claude-opus-5-5'],
+                environment={'SHANTY_MODEL': 'claude-opus-5-5'})
+    jobs.execute(spec)
+    assert seen['SHANTY_MODEL'] == 'claude-opus-5-5'
+    seen.clear()
+    jobs.execute(dict(spec, argv=['/usr/bin/true'], environment={}))
+    assert 'SHANTY_MODEL' not in seen  # unknown is omitted, never inherited
+
+
+@pytest.mark.parametrize('argv, declared, expected', [
+    (['/usr/bin/true', '--model', 'claude-opus-5-5'], None, 'claude-opus-5-5'),
+    (['/usr/bin/true', '--model=claude-opus-5-5'], None, 'claude-opus-5-5'),
+    (['/usr/bin/true', '--model', 'claude-opus-5-5'], 'claude-opus-5-5', 'claude-opus-5-5'),
+    (['/usr/bin/true'], 'gpt-5.5-codex', 'gpt-5.5-codex'),
+    (['/usr/bin/true'], None, None),
+])
+def test_the_renderer_binds_the_slots_resolved_model_or_omits_it(capability, monkeypatch, argv, declared, expected):
+    original, _, _, bindings, file, output, run = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    bindings[name]['argv'] = argv
+    if declared is not None:
+        bindings[name]['environment']['SHANTY_MODEL'] = declared
+    file.write_text(json.dumps(bindings))
+    run()
+    rendered = json.loads((output / (name + '.json')).read_text())
+    assert rendered['environment'].get('SHANTY_MODEL') == expected
+    assert 'SHANTY_MODEL' not in json.loads((output / (original['principal'] + '.json')).read_text()).get('environment', {})
+    monkeypatch.setattr(jobs, 'BASE', output)
+    jobs.load(name)
+
+
+def test_the_renderer_refuses_a_model_that_contradicts_the_argv_before_any_output(capability):
+    _, _, _, bindings, file, output, run = render_fixture(capability, 1)
+    name = next(iter(bindings))
+    bindings[name]['argv'] = ['/usr/bin/true', '--model', 'claude-opus-5-5']
+    bindings[name]['environment']['SHANTY_MODEL'] = 'claude-sonnet-5-5'
+    file.write_text(json.dumps(bindings))
+    with pytest.raises(IdentityError):
+        run()
+    assert not output.exists()
