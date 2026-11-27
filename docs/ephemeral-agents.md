@@ -269,7 +269,15 @@ not the signed controller `recruit_*` path.
   step is stale. The new head's own events re-arm it.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
-  to report on. A refusal is never dropped.
+  to report on. A refusal is not dropped: the first one is dated in the ledger.
+- **Expired** (settled): still pending 24h after its first refusal
+  (`pr_events.PENDING_TTL_S`). It is printed and recorded, then never offered
+  again, so a permanent refusal (a pin mismatch, a closed PR) cannot hold exit 2
+  forever. A new head re-arms the step.
+- **Already in flight** (settled as admitted): a live job or queued ticket
+  already has this job, repo, PR and head. This covers a drain that crashed
+  after the spawn but before it settled; the spawn path does not refuse a
+  duplicate itself.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 

@@ -4709,7 +4709,9 @@ def _spawn_drain_events(a) -> int:
     superseded (the PR has a newer head in the file, so the step is stale).
     Pending (offered again next drain): refused (governor, pool, authority,
     a merge pin mismatch), crashed, or no item to report on. A refusal is
-    never dropped: the cap and the governor are the brakes, not this loop."""
+    not dropped: the cap and the governor are the brakes, not this loop.
+    Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
+    printed, so a permanent refusal cannot hold exit 2 forever."""
     from . import ephemeral as eph
     from . import pr_events as pe
     if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
@@ -4721,9 +4723,11 @@ def _spawn_drain_events(a) -> int:
     for problem in problems:
         print(f"  events: skipped {problem}", file=sys.stderr)
     rc = OK if not problems else CANNOT_TELL
-    counts = {"admitted": 0, "superseded": 0, "pending": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
     with pe.lock(a.root):
         done = pe.settled(a.root)
+        refused = pe.first_refused(a.root)
+        tried = pe.attempted(a.root)
         heads = pe.current_heads(events)
         seen = set()
         for ev in events:
@@ -4742,16 +4746,25 @@ def _spawn_drain_events(a) -> int:
                 print(f"  superseded {label}: the PR has a newer head")
                 continue
             if ev["item"] is None:
-                counts["pending"] += 1
                 rc = CANNOT_TELL
-                print(f"  pending {label}: no work item named in the PR; "
-                      "a job must report on an item", file=sys.stderr)
+                _drain_event_pending(a, pe, ev, label, refused, counts,
+                                     "no work item named in the PR; a job must report on an item")
+                continue
+            running = (pe.in_flight(ev, eph.live(a.root), eph.tickets(a.root))
+                       if eid in tried else None)
+            if running:
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "admitted", time.time(), f"already in flight as {running}")
+                counts["admitted"] += 1
+                print(f"  admitted {label}: already in flight as {running}")
                 continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
                 print(f"  would spawn {' '.join(spawn)}  ({ev['reason']})")
                 continue
+            if eid not in tried:
+                pe.settle(a.root, ev, "spawning", time.time())
             ns, out, detail = None, CANNOT_TELL, ""
             try:
                 ns = _parse_args(["--root", str(a.root), "agent", "spawn", *spawn])
@@ -4767,15 +4780,37 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
-                counts["pending"] += 1
                 rc = CANNOT_TELL
-                print(f"  pending {label}: {detail or 'spawn refused (reason above)'}; "
-                      "offered again next drain", file=sys.stderr)
+                _drain_event_pending(a, pe, ev, label, refused, counts,
+                                     detail or "spawn refused (reason above)")
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, already settled "
+          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
+
+
+def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
+    """Leave an event pending, or expire it once it has been pending for
+    pe.PENDING_TTL_S. The first refusal is dated in the ledger so the clock
+    survives across drains; the expiry is printed and recorded, never silent."""
+    now = time.time()
+    first = refused.get(ev["event_id"])
+    if a.dry_run:
+        counts["pending"] += 1
+        print(f"  pending {label}: {why}", file=sys.stderr)
+        return
+    if first is None:
+        pe.settle(a.root, ev, "refused", now, why)
+        first = refused[ev["event_id"]] = now
+    if now - first >= pe.PENDING_TTL_S:
+        pe.settle(a.root, ev, "expired", now, f"pending since {first:.0f}: {why}")
+        counts["expired"] += 1
+        print(f"  expired {label}: pending {(now - first) / 3600:.0f}h, last: {why}; "
+              "not offered again (a new head re-arms the step)", file=sys.stderr)
+        return
+    counts["pending"] += 1
+    print(f"  pending {label}: {why}; offered again next drain", file=sys.stderr)
 
 
 def _spawn_drain(a, policy) -> int:

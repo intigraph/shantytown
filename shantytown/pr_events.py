@@ -38,6 +38,16 @@ _ITEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _ID = re.compile(r"[0-9a-f]{64}")
 
 LEDGER = "pr-events.jsonl"
+# Outcomes that end an event. "refused" (dates the first refusal) and
+# "spawning" (intent, written before the spawn) are also written; neither
+# settles the event.
+SETTLING = ("admitted", "superseded", "expired")
+# How long a pending event is offered again before it expires. Without a bound
+# a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
+# re-spawned on every drain and held exit 2 forever (review of #776), so a
+# drain could never go clean. A day covers a governor hold or a full pool; an
+# expiry is written to the ledger and printed, never silent.
+PENDING_TTL_S = 24 * 3600
 
 
 def event_id(repo: str, pr: int, head: str, job: str) -> str:
@@ -107,22 +117,56 @@ def ledger_path(root) -> Path:
     return ledger_dir(root) / LEDGER
 
 
-def settled(root) -> dict[str, dict]:
-    """event_id -> its settling record. Unreadable lines are skipped: at worst an
-    event is offered again, and the spawn path refuses a duplicate live job."""
-    out: dict[str, dict] = {}
+def _ledger(root) -> list[dict]:
     try:
         text = ledger_path(root).read_text()
     except FileNotFoundError:
-        return out
+        return []
+    out = []
     for line in text.splitlines():
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
             continue
         if isinstance(rec, dict) and isinstance(rec.get("event_id"), str):
-            out[rec["event_id"]] = rec
+            out.append(rec)
     return out
+
+
+def settled(root) -> dict[str, dict]:
+    """event_id -> its settling record. Unreadable lines are skipped: at worst an
+    event is offered again, and in_flight() then finds the job it launched."""
+    return {r["event_id"]: r for r in _ledger(root) if r.get("outcome") in SETTLING}
+
+
+def first_refused(root) -> dict[str, float]:
+    """event_id -> when it was first left pending, the clock PENDING_TTL_S runs on."""
+    out: dict[str, float] = {}
+    for r in _ledger(root):
+        if r.get("outcome") == "refused" and isinstance(r.get("at"), (int, float)):
+            out.setdefault(r["event_id"], r["at"])
+    return out
+
+
+def attempted(root) -> set[str]:
+    """event_ids whose spawn was started: an intent line written just before it."""
+    return {r["event_id"] for r in _ledger(root) if r.get("outcome") == "spawning"}
+
+
+def in_flight(ev: dict, live: list[dict], tickets: list[dict]) -> str | None:
+    """The live job or queued ticket already doing this event's step, or None.
+    A drain that crashed after the spawn succeeded but before settle() offers
+    the event again, and the spawn path itself does not refuse a duplicate
+    (review of #776), so this is the check that stops a second launch.
+
+    Only asked for an event that attempted() names, since an event never
+    spawned cannot be running. Review and task records keep no head (only
+    merge does), so a head-less record matches on job, repo and PR."""
+    for r in [*live, *tickets]:
+        if ((r.get("job"), r.get("repo"), r.get("pr")) == (ev["job"], ev["repo"], ev["pr"])
+                and r.get("head") in (None, ev["head"])):
+            return r.get("name") or r.get("id") or "?"
+    return None
 
 
 def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:

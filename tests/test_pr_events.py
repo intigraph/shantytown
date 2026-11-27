@@ -177,3 +177,64 @@ def test_a_missing_file_is_refused(store, tmp_path, capsys):
     root, _panes, _launched = store
     assert _st(root, "--drain-events", str(tmp_path / "absent.jsonl")) == cli.REFUSED
     assert "cannot read" in capsys.readouterr().err
+
+
+def _age_first_refusal(root, seconds):
+    p = pe.ledger_path(root)
+    lines = [json.loads(line) for line in p.read_text().splitlines()]
+    for rec in lines:
+        if rec["outcome"] == "refused":
+            rec["at"] -= seconds
+    p.write_text("".join(json.dumps(r) + "\n" for r in lines))
+
+
+def test_a_permanent_refusal_expires_so_the_drain_can_go_clean(store, tmp_path, monkeypatch, capsys):
+    # Review of #776: a merge pin mismatch or closed PR re-spawned on every
+    # drain and held exit 2 forever.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    monkeypatch.setattr(cli, "_spawn_governor_refusal", lambda a, card: "governor: held")
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL   # inside the TTL: still pending
+    assert pe.settled(root) == {}
+    assert len(pe.first_refused(root)) == 1        # dated once, not once per drain
+    capsys.readouterr()
+    _age_first_refusal(root, pe.PENDING_TTL_S + 1)
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL   # the expiry itself is loud
+    assert "expired task o/n#7" in capsys.readouterr().err
+    assert [r["outcome"] for r in pe.settled(root).values()] == ["expired"]
+    assert _st(root, "--drain-events", str(events)) == cli.OK            # and then clean
+    assert launched == []
+
+
+def test_an_event_already_in_flight_is_not_launched_twice(store, tmp_path, capsys):
+    # A drain that crashed after the spawn but before settle() offers the event
+    # again; the spawn path would happily launch a second job for it.
+    root, _panes, launched = store
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    p = pe.ledger_path(root)                       # the lost settle: keep only the intent
+    p.write_text("".join(line + "\n" for line in p.read_text().splitlines()
+                         if json.loads(line)["outcome"] == "spawning"))
+    capsys.readouterr()
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1 and len(eph.records(root)) == 1
+    assert "already in flight as eph-task-" in capsys.readouterr().out
+    (rec,) = pe.settled(root).values()
+    assert rec["outcome"] == "admitted"
+
+
+def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, monkeypatch):
+    # Task records keep no head, so in_flight matches on the PR alone; it must
+    # only be asked about an event that was actually spawned, or the new head's
+    # fix would settle against the old head's job and never run.
+    root, _panes, launched = store
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    path = tmp_path / "ev.jsonl"
+    _write(path, _ev(head=HEAD))
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(eph.tickets(root)) == 1
+    (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
+    assert "in flight" not in new.get("detail", "")
