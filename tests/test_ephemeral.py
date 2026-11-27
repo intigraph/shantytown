@@ -59,6 +59,26 @@ def test_config_reads_and_refuses_the_ephemeral_table(tmp_path):
         config.load(tmp_path)
 
 
+def test_config_reads_and_refuses_the_job_model_table(tmp_path):
+    """aegis-jsp0: [ephemeral.model_by_harness] names the model a job runs."""
+    (tmp_path / "shantytown.toml").write_text(
+        "[ephemeral.model_by_harness]\nclaude = \"claude-opus-5-5\"\n")
+    assert config.load(tmp_path).ephemeral.model_by_harness == {"claude": "claude-opus-5-5"}
+    assert config.load_or_default(tmp_path / "absent")[0].ephemeral.model_by_harness == {}
+    for bad in ('claude = ""', "claude = 5", "claude = \"  \""):
+        (tmp_path / "shantytown.toml").write_text(f"[ephemeral.model_by_harness]\n{bad}\n")
+        with pytest.raises(config.ConfigError, match="model_by_harness.claude"):
+            config.load(tmp_path)
+
+
+def test_job_model_is_per_harness_and_absent_means_none():
+    p = _policy(model_by_harness={"claude": "claude-opus-5-5"})
+    assert eph.model_for("claude", p) == "claude-opus-5-5"
+    # A claude slug never reaches a codex job, and no table means no model.
+    assert eph.model_for("codex", p) is None
+    assert eph.model_for("claude", _policy()) is None
+
+
 # --- admission ----------------------------------------------------------------
 
 def test_review_and_merge_need_a_pr_and_jobs_are_closed():
@@ -166,7 +186,7 @@ def test_merge_prompt_only_through_the_lane_with_the_head_pinned(tmp_path):
     assert "SERIALIZED MERGE LANE" in text
     assert "st agent spawn --merge --head" in text and "never `--admin`" in text
     assert "NEVER run `gh pr merge` yourself" in text
-    assert "OTHER than the author" in text
+    assert "OTHER than the author" in text and 'review policy for o/n is "none"' in text
 
 
 # --- bounds -------------------------------------------------------------------
@@ -360,6 +380,44 @@ def test_spawn_launches_a_supervised_card_then_queues_over_cap(store, capsys):
     assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert "QUEUED q-" in capsys.readouterr().out
     assert len(launched) == 1 and len(eph.records(root)) == 1
+
+
+def _launch_line(root, card):
+    """The real Claude launch line for the card spawn handed to _launch."""
+    from shantytown.harness import ClaudeHarness
+    return ClaudeHarness().launch(card, str(root / "settings.json"), root=root)
+
+
+def test_spawn_puts_the_configured_model_on_the_job_card_and_its_launch(store):
+    """aegis-jsp0: one configured value is BOTH --model and SHANTY_MODEL, so the
+    model a job declares to Quipu (X-Quipu-Model) is the one it runs."""
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text()
+                    + "[ephemeral.model_by_harness]\nclaude = \"claude-opus-5-5\"\n")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["model"] == "claude-opus-5-5"
+    card_json = json.loads((root / "crew" / f"{rec['name']}.json").read_text())
+    assert card_json["model"] == "claude-opus-5-5"
+    assert launched[0].model == "claude-opus-5-5"
+    line = _launch_line(root, launched[0])
+    assert "--model claude-opus-5-5" in line and "SHANTY_MODEL=claude-opus-5-5 " in line
+
+
+def test_spawn_without_a_configured_job_model_declares_none(store):
+    """No entry -> no model on the card, no --model, no SHANTY_MODEL: the harness
+    default is never reported as if declared."""
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text()
+                    + "[ephemeral.model_by_harness]\ncodex = \"gpt-5.5\"\n")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["model"] is None and launched[0].model is None
+    assert "model" not in json.loads((root / "crew" / f"{rec['name']}.json").read_text())
+    line = _launch_line(root, launched[0])
+    assert "--model" not in line and "SHANTY_MODEL=" not in line.replace("-u SHANTY_MODEL", "")
 
 
 def test_a_worker_cannot_spawn(store, monkeypatch, capsys):
@@ -571,6 +629,79 @@ def test_merge_gate_says_no_to_each_unsafe_merge():
     }
     for want, args in cases.items():
         assert want in eph.merge_gate(*args), want
+
+
+def test_review_mode_none_waives_only_the_approval():
+    """aegis-za4f.17 (Stiwi 11-27): a repo configured review_mode = "none"
+    merges at green with no review; every other refusal still holds, and any
+    mode but "none" still demands the non-author approval."""
+    merge = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE}
+    assert eph.merge_gate(merge, HEAD, _pr(), [], GREEN, None, review_mode="none") == ""
+    for mode in ("non-author", "", "nonee"):
+        assert "no non-author APPROVE" in eph.merge_gate(
+            merge, HEAD, _pr(), [], GREEN, None, review_mode=mode), mode
+    changes = [{"user": {"login": "x"}, "state": "CHANGES_REQUESTED", "commit_id": HEAD}]
+    cases = {
+        "outside contribution": (_pr(author_association="CONTRIBUTOR"), [], GREEN, None),
+        "draft": (_pr(draft=True), [], GREEN, None),
+        "head moved": (_pr(head={"sha": "b" * 40}), [], GREEN, None),
+        "requests changes": (_pr(), changes, GREEN, None),
+        "signed verdict requests changes": (_pr(), [], GREEN, {"blocking": True}),
+        "not green": (_pr(), [], [{"name": "ci", "status": "completed",
+                                   "conclusion": "failure"}], None),
+        "unproven": (_pr(), [], [], None),
+    }
+    for want, (pr, reviews, checks, verdict) in cases.items():
+        assert want in eph.merge_gate(merge, HEAD, pr, reviews, checks, verdict,
+                                      review_mode="none"), want
+
+
+def test_review_mode_rows_fail_closed():
+    """Missing fact, unknown value or conflict -> non-author; only a unanimous none waives."""
+    f = eph.review_mode_from_rows
+    assert f([{"mode": "none"}]) == "none"
+    assert f([{"mode": "http://aegis.gastown.local/ontology/none"}]) == "none"
+    assert f([{"mode": {"type": "literal", "value": "none"}}]) == "none"
+    for rows in ([], None, [{"mode": "non-author"}], [{"mode": "off"}], [{}],
+                 [{"mode": "none"}, {"mode": "non-author"}], "none"):
+        assert f(rows) == "non-author", rows
+
+
+def _timeout(*_a, **_k):
+    raise TimeoutError("quipu did not answer")
+
+
+@pytest.mark.parametrize("reader, merged", [
+    (lambda *a, **k: [{"mode": "none"}], True),          # game / Forgejo repo
+    (lambda *a, **k: [{"mode": "non-author"}], False),   # product repo, no review
+    (lambda *a, **k: [], False),                         # missing fact
+    (_timeout, False),                                   # query UNKNOWN
+])
+def test_guarded_merge_reads_the_repos_review_mode_from_quipu(store, reader, merged):
+    root, _panes, _launched = store
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": [],
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    ran, asked = [], []
+
+    class _R:
+        returncode, stdout, stderr = 0, "", ""
+    a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
+    a.root = root
+
+    def read(root_, name, params, **k):
+        asked.append((name, params))
+        return reader(root_, name, params, **k)
+    go = lambda: cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],  # noqa: E731
+                                  run=lambda argv, **k: ran.append(argv) or _R(),
+                                  review_reader=read)
+    if merged:
+        assert go() == cli.OK and len(ran) == 1
+    else:
+        with pytest.raises(eph.Refused, match="no non-author APPROVE"):
+            go()
+        assert ran == []
+    assert asked == [(eph.REVIEW_MODE_QUERY, {"repo": "o/n"})]
 
 
 def test_guarded_merge_refuses_a_review_job_and_merges_only_when_the_gate_passes(
@@ -2187,3 +2318,60 @@ def test_other_jobs_without_repo_are_not_held_to_the_task_rule(store, capsys, jo
     root, _panes, _launched = store
     _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude", "-n")
     assert "a task job needs --repo" not in capsys.readouterr().err
+
+
+def _cargo_target(tree, rel='target'):
+    target = tree / rel
+    (target / 'debug').mkdir(parents=True)
+    (target / 'CACHEDIR.TAG').write_text('Signature: 8a477f597d28d172789f06886806bc55\n')
+    (target / 'debug' / 'big.rlib').write_bytes(b'\0' * 4096)
+    return target
+
+
+def test_a_kept_worktree_loses_its_ignored_cargo_target_but_not_its_work(tmp_path):
+    # aegis-g68w.32 fix A: a worktree kept for a dirty file used to keep its
+    # rebuildable target/ too, ~30 GB of /srv/fleet across ended eph jobs.
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    _, tree = _job_tree(tmp_path, rec['name'], 'project')
+    (tree / '.gitignore').write_text('target/\n')
+    (tree / 'tracked.txt').write_text('output\n')          # the agent's work
+    (tree / 'notes.txt').write_text('untracked work\n')    # untracked, not ignored
+    top = _cargo_target(tree)
+    nested = _cargo_target(tree, 'wasm/explorer/target')   # nested crate, as observed
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    [entry] = done['worktree_teardowns']
+    assert entry['result'].startswith('kept (holds work)')
+    assert 'cleared 2 ignored cargo target/' in entry['result']
+    assert not top.exists() and not nested.exists()
+    assert (tree / 'tracked.txt').read_text() == 'output\n'
+    assert (tree / 'notes.txt').read_text() == 'untracked work\n'
+    assert (tree / '.gitignore').read_text() == 'target/\n'
+
+
+@pytest.mark.parametrize('case', ['not-ignored', 'tracked-inside', 'not-cargo', 'symlink'])
+def test_a_target_that_is_not_wholly_ignored_cargo_debris_is_kept(tmp_path, case):
+    rec = _rec(tmp_path, name='eph-task-abcdef', state=eph.LIVE)
+    _, tree = _job_tree(tmp_path, rec['name'], 'project')
+    (tree / 'tracked.txt').write_text('output\n')
+    if case == 'not-ignored':
+        target = _cargo_target(tree)                       # untracked work, not debris
+    elif case == 'tracked-inside':
+        (tree / '.gitignore').write_text('target/\n')
+        target = _cargo_target(tree)
+        _git('add', '-f', 'target/CACHEDIR.TAG', cwd=tree)
+    elif case == 'not-cargo':
+        (tree / '.gitignore').write_text('target/\n')
+        target = tree / 'target'
+        target.mkdir()
+        (target / 'deploy.yaml').write_text('not rebuildable\n')
+    else:
+        (tree / '.gitignore').write_text('target\n')
+        outside = _cargo_target(tmp_path, 'elsewhere')
+        target = tree / 'target'
+        target.symlink_to(outside)
+    eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert target.exists() or target.is_symlink()
+    if case == 'symlink':
+        assert (tmp_path / 'elsewhere' / 'debug' / 'big.rlib').exists()
+    elif case != 'not-cargo':
+        assert (target / 'debug' / 'big.rlib').exists()
