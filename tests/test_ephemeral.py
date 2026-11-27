@@ -2605,3 +2605,40 @@ def test_a_target_that_is_not_wholly_ignored_cargo_debris_is_kept(tmp_path, case
         assert (tmp_path / 'elsewhere' / 'debug' / 'big.rlib').exists()
     elif case != 'not-cargo':
         assert (target / 'debug' / 'big.rlib').exists()
+
+
+@pytest.mark.parametrize("harness", ["agy", "opencode"])
+def test_a_job_on_a_harness_no_crew_card_uses_gets_its_role_artifact(store, harness):
+    """aegis-j550: the first live --harness agy review refused "could not
+    materialize settings" because only `roles set` emitted role files, and only
+    for harnesses some crew card names. Spawn must emit the job harness's role
+    artifact before launch, or no job on that harness can ever start."""
+    from shantytown.harness import get
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text() + f'[ephemeral.harness_by_job]\ntask = "{harness}"\n')
+    role_file = root / "settings" / get(harness).settings_name("worker")
+    assert not role_file.exists()
+    seen_at_launch = []
+    _panes.behaviour["during"] = lambda a: seen_at_launch.append(role_file.is_file())
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["harness"] == harness and launched[0].name == rec["name"]
+    assert seen_at_launch == [True]
+    if harness == "agy":
+        # agy launches on the provider-owned file provision writes beside it.
+        from shantytown.agy import native_settings_path
+        assert native_settings_path(role_file).is_file()
+
+
+def test_spawn_never_rewrites_an_existing_role_artifact(store):
+    """The role file is shared with live crew on that harness: leave it alone."""
+    from shantytown.harness import get
+    root, _panes, _launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text() + '[ephemeral.harness_by_job]\ntask = "agy"\n')
+    role_file = root / "settings" / get("agy").settings_name("worker")
+    role_file.parent.mkdir(parents=True)
+    role_file.write_text('{"hooks": {}, "operator": "kept"}\n')
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'
