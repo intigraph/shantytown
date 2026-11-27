@@ -42,13 +42,25 @@ more than LOOKBACK before the cursor is still out of reach.
 A notice lists at most LISTED_CAP seeds; the rest stay pending for the next pass,
 so every seed is NAMED to the administrator, never just counted.
 
+Burst timing (WINDOW, MAX_WAIT) runs on first_seen: the created_at stamp, clamped
+to no later than the pass that first saw the seed. On the raw stamp, a seed
+stamped in the future by a skewed host kept a burst "not quiet" and "not
+overdue" until its stamp passed, so MAX_WAIT bounded nothing. Clamping (rather
+than the bare first-seen time) keeps an ordinary seed flushing on the first pass
+after its burst went quiet. For the same reason the cursor never moves past the
+sweep's own clock.
+
 State that is unreadable is not the same as state that is missing. Missing means
-first run: baseline. Corrupt is moved aside, logged, and recovered by announcing
-the last RECOVER_LOOKBACK again: a duplicate notice is cheaper than a lost seed.
+first run: baseline. Corrupt is moved aside, logged, and recovered with an empty
+seen set at a cursor of now, so every seed inside LOOKBACK is announced again: a
+duplicate notice is cheaper than a lost seed. (The first version re-announced
+only the last day, which lost a pending late-listed seed stamped earlier.)
 
 A stand-in host (owner unreachable) does NOT announce. Its notify state is its
 own, so when the owner returned it re-announced every seed the stand-in had sent.
-The owner's cursor already covers the outage, so it catches up on return.
+The owner's cursor already covers the outage, so it catches up on return, but
+only for seeds stamped within LOOKBACK of that cursor: an owner outage longer
+than LOOKBACK drops the seeds stamped before the floor.
 """
 from __future__ import annotations
 
@@ -63,7 +75,6 @@ RELATED_TOP = 3
 RELATED_MIN = 0.2       # Jaccard floor; below it a "match" is shared filler words
 LISTED_CAP = 20         # items spelled out in one notice; the rest wait a pass
 LOOKBACK = 7 * 86400    # how far before the cursor a late-listed seed still counts
-RECOVER_LOOKBACK = 86400
 _WORD = re.compile(r"[a-z0-9][a-z0-9_-]{2,}")
 _STOP = frozenset(
     "the and for with from that this into when then than not are was were its "
@@ -240,10 +251,10 @@ class NewSeedNotifier:
                 self.path.replace(aside)
             except OSError:
                 pass
-            since = now - timedelta(seconds=RECOVER_LOOKBACK)
+            floor = now - timedelta(seconds=LOOKBACK)
             self._log(f"new-seeds: state file {self.path} is UNUSABLE ({e}); kept as {aside}; "
-                      f"re-announcing seeds since {since.isoformat()} rather than lose any")
-            state = self._baseline(created, since)
+                      f"re-announcing seeds since {floor.isoformat()} rather than lose any")
+            state = {"cursor": now.isoformat(), "pending": [], "seen": {}}
         if state is None:
             newest = max((t for t, _ in created), default=now)
             self._save(self._baseline(created, newest))
@@ -257,14 +268,16 @@ class NewSeedNotifier:
                 continue
             known.add(str(row["id"]))
             state["pending"].append({
-                "id": str(row["id"]), "at": at.isoformat(),
+                "id": str(row["id"]), "at": at.isoformat(), "first_seen": min(at, now).isoformat(),
                 "title": row.get("title") or "", "priority": row.get("priority"),
                 "labels": _labels(row), "creator": _creator(row)})
         if not state["pending"]:
             self._save(state)
             return []
 
-        times = [_time(p["at"]) or now for p in state["pending"]]
+        # Pending written before first_seen existed falls back to its stamp.
+        times = [min(_time(p.get("first_seen")) or _time(p["at"]) or now, now)
+                 for p in state["pending"]]
         quiet = (now - max(times)).total_seconds() >= WINDOW
         overdue = (now - min(times)).total_seconds() >= MAX_WAIT
         if not (quiet or overdue):
@@ -287,7 +300,7 @@ class NewSeedNotifier:
         ids = [p["id"] for p in batch]
         for p in batch:
             state["seen"][p["id"]] = p["at"]
-        flushed = max(_time(p["at"]) or now for p in batch)
+        flushed = min(max(_time(p["at"]) or now for p in batch), now)
         cursor = max(cursor, flushed)
         state["cursor"] = cursor.isoformat()
         state["pending"] = held

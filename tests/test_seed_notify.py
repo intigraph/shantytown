@@ -175,21 +175,47 @@ def test_creator_comes_from_the_real_sd_list_field(tmp_path):
     assert "by franklin" in world.msgs[0] and "UNKNOWN" not in world.msgs[0]
 
 
+def _corrupt_then_recover(world, tmp_path):
+    path = tmp_path / "notify" / "new-seeds.json"
+    path.write_text("{not json")
+    logs = []
+    notifier = NewSeedNotifier(tmp_path, None, None, push=lambda r, p, m: world.msgs.append(m) or "s",
+                               rows=lambda: list(world.board), now=lambda: world.now,
+                               log=logs.append)
+    flushed = notifier.sweep()
+    assert any("UNUSABLE" in line for line in logs)
+    assert (tmp_path / "notify" / "new-seeds.json.corrupt").read_text() == "{not json"
+    return flushed + world.tick(tmp_path, seed_notify.WINDOW)
+
+
 def test_corrupt_state_is_kept_logged_and_recovered_without_losing_the_batch(tmp_path):
     world = _baselined(tmp_path)
     world.board.append(_row("aegis-p", "pending when the file broke",
                             world.now + timedelta(seconds=1)))
     assert world.tick(tmp_path, 10) == []                   # pending, not yet flushed
-    path = tmp_path / "notify" / "new-seeds.json"
-    path.write_text("{not json")
-    logs = []
-    notifier = NewSeedNotifier(tmp_path, None, None, push=lambda r, p, m: world.msgs.append(m) or "s",
-                               rows=lambda: list(world.board),
-                               now=lambda: world.now + timedelta(seconds=seed_notify.WINDOW),
-                               log=logs.append)
-    assert notifier.sweep() == ["aegis-p"]                 # a silent re-baseline drops it
-    assert any("UNUSABLE" in line for line in logs)
-    assert (tmp_path / "notify" / "new-seeds.json.corrupt").read_text() == "{not json"
+    assert "aegis-p" in _corrupt_then_recover(world, tmp_path)   # a silent re-baseline drops it
+
+
+def test_corrupt_state_recovers_a_pending_late_listed_seed_older_than_a_day(tmp_path):
+    # Review of #757: recovery re-announced only the last 24h, so a pending
+    # late-listed seed stamped earlier (but inside LOOKBACK) was lost.
+    world = _baselined(tmp_path)
+    world.board.append(_row("aegis-old", "late-listed, stamped three days back",
+                            world.now - timedelta(days=3)))
+    world.push_ok = False                                   # its notice does not land
+    assert world.tick(tmp_path, 10) == []                   # so it stays pending
+    world.push_ok = True
+    assert "aegis-old" in _corrupt_then_recover(world, tmp_path)
+
+
+def test_a_future_stamped_seed_still_flushes_by_max_wait(tmp_path):
+    # Review of #757: burst timing on created_at let a seed stamped an hour ahead
+    # keep the burst neither quiet nor overdue, so MAX_WAIT bounded nothing.
+    world = _baselined(tmp_path)
+    world.board.append(_row("aegis-f", "skewed clock, stamped ahead",
+                            world.now + timedelta(hours=1)))
+    assert world.tick(tmp_path, 1) == []                    # first seen now
+    assert world.tick(tmp_path, seed_notify.WINDOW) == ["aegis-f"]
 
 
 def test_a_missing_state_file_still_baselines_quietly(tmp_path):
@@ -202,13 +228,21 @@ def test_a_missing_state_file_still_baselines_quietly(tmp_path):
 
 def test_a_stand_in_host_does_not_announce_and_the_owner_catches_up(tmp_path):
     world = _baselined(tmp_path)
+    standin_root = tmp_path / "standin"
+    # Baseline the stand-in's own state BEFORE the seed exists (review of #757:
+    # a fresh root only baselined, so the test passed with the guard deleted).
+    _baselined(standin_root)
+
+    def stand_in(at):
+        return NewSeedNotifier(standin_root, None, None,
+                               push=lambda *a: world.msgs.append(a) or "s",
+                               rows=lambda: list(world.board), now=lambda: at, stand_in=True)
+
     world.board.append(_row("aegis-s", "made while the owner was down",
                             world.now + timedelta(seconds=1)))
-    stand_in = NewSeedNotifier(tmp_path / "standin", None, None,
-                               push=lambda *a: world.msgs.append(a) or "s",
-                               rows=lambda: list(world.board),
-                               now=lambda: world.now + timedelta(hours=1), stand_in=True)
-    assert stand_in.sweep() == [] and world.msgs == []
+    for minutes in (1, 30, 60):
+        assert stand_in(world.now + timedelta(minutes=minutes)).sweep() == []
+    assert world.msgs == []
     assert world.tick(tmp_path, 3600) == ["aegis-s"]       # owner, back, announces it once
 
 

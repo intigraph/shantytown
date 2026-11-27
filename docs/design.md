@@ -137,8 +137,11 @@ ephemeral job reports are skipped; the first pass baselines and announces nothin
 notice is retried, never ledgered. The cursor is a floor minus a seven-day lookback and the seen set
 dedupes, so a seed stamped before the last flush but listed after it (clock skew, a slow commit, a
 newly added store) is still announced. A notice names at most 20 seeds and holds the rest for the
-next one. A corrupt state file is kept aside, logged, and recovered by re-announcing the last day;
-a stand-in host (owner unreachable) announces nothing, and the owner catches up when it returns.
+next one. Burst timing runs on when the sweep first saw a seed, not its stamp, so a
+future-stamped seed cannot hold a burst past ten minutes. A corrupt state file is kept aside,
+logged, and recovered by re-announcing every seed inside the lookback; a stand-in host (owner
+unreachable) announces nothing, and the owner catches up when it returns, but an owner outage
+longer than the seven-day lookback drops the seeds stamped before that floor.
 
 ## Panes
 
