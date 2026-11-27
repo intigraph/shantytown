@@ -1696,6 +1696,40 @@ def prompt(rec: dict) -> str:
 #      the job, a bounded number of times; then "launch failed".
 
 PASTE_TOKEN = re.compile(r"\[Pasted text #\d+(?: \+\d+ lines)?\]")
+
+
+def _wrap_tolerant_token() -> re.Pattern:
+    """PASTE_TOKEN, allowed to break across a terminal row anywhere.
+
+    aegis-za4f.21.1: a token landing at the right edge was cut by the wrap,
+    leaving "...report EXACTLY ONCE (this posts your result on[Pasted" on one
+    row and " text #1 +9 lines]" on the next. Neither half is a whole token, so
+    the first row read as foreign text and Enter was withheld on our own job
+    (3 of ~20 launches on 2026-11-27). Matched over the rows joined by "\n",
+    a break may fall between any two characters, and a space may be eaten by
+    the wrap; only a COMPLETE token is ever removed, so a dangling "[Pasted"
+    in front of text we did not type is still judged by what is left."""
+    brk = r"(?:[ \xa0\t]*\n[ \xa0\t]*)?"
+    space = r"(?:[ \xa0\t]+|[ \xa0\t]*\n[ \xa0\t]*)"
+    num = rf"\d(?:{brk}\d)*"
+
+    def lit(s: str) -> str:
+        return brk.join(space if c == " " else re.escape(c) for c in s)
+    return re.compile(lit("[Pasted text #") + brk + num
+                      + rf"(?:{brk}{lit(' +')}{brk}{num}{brk}{lit(' lines')})?"
+                      + brk + r"\]")
+
+
+_PASTE_ACROSS_ROWS = _wrap_tolerant_token()
+
+
+def _box_fragments(pieces: list[str]) -> tuple[list[str], bool]:
+    """(runs of composer text outside any paste token, saw a token). Each run
+    is one row's worth of text between tokens, stripped; a token split across
+    a row break counts as one token, never as two foreign halves."""
+    parts = _PASTE_ACROSS_ROWS.split("\n".join(pieces))
+    runs = [row.strip("\xa0 \t") for part in parts for row in part.split("\n")]
+    return [r for r in runs if r], len(parts) > 1
 SUBMIT_ATTEMPTS = 3
 LOOK_S = 0.4
 SHOW_LOOKS = 20      # ~8s for the box to show the typed job
@@ -1743,12 +1777,9 @@ def foreign_fragment(screen: str, text: str) -> str | None:
     frame = _composer(screen)
     _prompt_raw, body, _above = frame
     first = body[0].split(_PROMPT, 1)[1] if body else ""
-    for piece in [first] + body[1:]:
-        for rest in PASTE_TOKEN.split(piece.strip("\xa0 \t")):
-            rest = rest.strip("\xa0 \t")
-            if rest and rest not in text:
-                return rest
-    return None
+    pieces = [piece.strip("\xa0 \t") for piece in [first] + body[1:]]
+    runs, _pasted = _box_fragments(pieces)
+    return next((rest for rest in runs if rest not in text), None)
 
 
 def box_state(screen: str, text: str) -> str:
@@ -1766,18 +1797,14 @@ def box_state(screen: str, text: str) -> str:
     pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
     if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
         return EMPTY
-    pasted = False
-    for piece in pieces:
-        # A paste token can land MID-ROW: Claude Code folds part of a long
-        # typed job into "[Pasted text #1 +9 lines]" between two halves of a
-        # line (aegis-e579 finding 4). Each side is a separate run of our text;
-        # gluing them together made text we never typed, so judge each side.
-        fragments = PASTE_TOKEN.split(piece)
-        pasted = pasted or len(fragments) > 1
-        for rest in fragments:
-            rest = rest.strip("\xa0 \t")
-            if rest and rest not in text:
-                return FOREIGN
+    # A paste token can land MID-ROW: Claude Code folds part of a long typed
+    # job into "[Pasted text #1 +9 lines]" between two halves of a line
+    # (aegis-e579 finding 4). Each side is a separate run of our text; gluing
+    # them together made text we never typed, so judge each side. The token
+    # can also straddle a row break (aegis-za4f.21.1): see _wrap_tolerant_token.
+    runs, pasted = _box_fragments(pieces)
+    if any(rest not in text for rest in runs):
+        return FOREIGN
     last = text.rstrip().splitlines()[-1].strip() if text.strip() else ""
     joined = "\n".join(pieces)
     return OURS if pasted or (last and last in joined) else PARTIAL

