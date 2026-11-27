@@ -186,7 +186,7 @@ def test_merge_prompt_only_through_the_lane_with_the_head_pinned(tmp_path):
     assert "SERIALIZED MERGE LANE" in text
     assert "st agent spawn --merge --head" in text and "never `--admin`" in text
     assert "NEVER run `gh pr merge` yourself" in text
-    assert "OTHER than the author" in text
+    assert "OTHER than the author" in text and 'review policy for o/n is "none"' in text
 
 
 # --- bounds -------------------------------------------------------------------
@@ -629,6 +629,79 @@ def test_merge_gate_says_no_to_each_unsafe_merge():
     }
     for want, args in cases.items():
         assert want in eph.merge_gate(*args), want
+
+
+def test_review_mode_none_waives_only_the_approval():
+    """aegis-za4f.17 (Stiwi 11-27): a repo configured review_mode = "none"
+    merges at green with no review; every other refusal still holds, and any
+    mode but "none" still demands the non-author approval."""
+    merge = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE}
+    assert eph.merge_gate(merge, HEAD, _pr(), [], GREEN, None, review_mode="none") == ""
+    for mode in ("non-author", "", "nonee"):
+        assert "no non-author APPROVE" in eph.merge_gate(
+            merge, HEAD, _pr(), [], GREEN, None, review_mode=mode), mode
+    changes = [{"user": {"login": "x"}, "state": "CHANGES_REQUESTED", "commit_id": HEAD}]
+    cases = {
+        "outside contribution": (_pr(author_association="CONTRIBUTOR"), [], GREEN, None),
+        "draft": (_pr(draft=True), [], GREEN, None),
+        "head moved": (_pr(head={"sha": "b" * 40}), [], GREEN, None),
+        "requests changes": (_pr(), changes, GREEN, None),
+        "signed verdict requests changes": (_pr(), [], GREEN, {"blocking": True}),
+        "not green": (_pr(), [], [{"name": "ci", "status": "completed",
+                                   "conclusion": "failure"}], None),
+        "unproven": (_pr(), [], [], None),
+    }
+    for want, (pr, reviews, checks, verdict) in cases.items():
+        assert want in eph.merge_gate(merge, HEAD, pr, reviews, checks, verdict,
+                                      review_mode="none"), want
+
+
+def test_review_mode_rows_fail_closed():
+    """Missing fact, unknown value or conflict -> non-author; only a unanimous none waives."""
+    f = eph.review_mode_from_rows
+    assert f([{"mode": "none"}]) == "none"
+    assert f([{"mode": "http://aegis.gastown.local/ontology/none"}]) == "none"
+    assert f([{"mode": {"type": "literal", "value": "none"}}]) == "none"
+    for rows in ([], None, [{"mode": "non-author"}], [{"mode": "off"}], [{}],
+                 [{"mode": "none"}, {"mode": "non-author"}], "none"):
+        assert f(rows) == "non-author", rows
+
+
+def _timeout(*_a, **_k):
+    raise TimeoutError("quipu did not answer")
+
+
+@pytest.mark.parametrize("reader, merged", [
+    (lambda *a, **k: [{"mode": "none"}], True),          # game / Forgejo repo
+    (lambda *a, **k: [{"mode": "non-author"}], False),   # product repo, no review
+    (lambda *a, **k: [], False),                         # missing fact
+    (_timeout, False),                                   # query UNKNOWN
+])
+def test_guarded_merge_reads_the_repos_review_mode_from_quipu(store, reader, merged):
+    root, _panes, _launched = store
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": [],
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    ran, asked = [], []
+
+    class _R:
+        returncode, stdout, stderr = 0, "", ""
+    a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
+    a.root = root
+
+    def read(root_, name, params, **k):
+        asked.append((name, params))
+        return reader(root_, name, params, **k)
+    go = lambda: cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],  # noqa: E731
+                                  run=lambda argv, **k: ran.append(argv) or _R(),
+                                  review_reader=read)
+    if merged:
+        assert go() == cli.OK and len(ran) == 1
+    else:
+        with pytest.raises(eph.Refused, match="no non-author APPROVE"):
+            go()
+        assert ran == []
+    assert asked == [(eph.REVIEW_MODE_QUERY, {"repo": "o/n"})]
 
 
 def test_guarded_merge_refuses_a_review_job_and_merges_only_when_the_gate_passes(

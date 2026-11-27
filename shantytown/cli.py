@@ -3848,7 +3848,23 @@ def _spawn_lane_release(a, rec, *, run=None) -> str:
     return ""
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
+def _spawn_review_mode(a, repo, *, reader=None) -> str:
+    """The repo's review policy from Quipu's stored query. Any failure to read
+    it completely is UNKNOWN, and UNKNOWN is "non-author": the approval is
+    waived only when the graph positively says "none"."""
+    from . import ephemeral as eph
+    from .crew_rules import named_rows
+    from .query_identity import declared_read_operation
+    try:
+        with declared_read_operation("review-policy"):
+            rows = (reader or named_rows)(Path(a.root), eph.REVIEW_MODE_QUERY,
+                                          {"repo": repo}, limit=8, timeout=5)
+    except Exception:  # noqa: BLE001 - unreadable is UNKNOWN, never a pass
+        return "non-author"
+    return eph.review_mode_from_rows(rows)
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -3870,7 +3886,8 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
               if sha else [])
     verdict = _spawn_verdict_approval(a, repo, pr, info.get("node_id") or "", head,
                                       quipu=quipu)
-    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict):
+    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict,
+                             review_mode=_spawn_review_mode(a, repo, reader=review_reader)):
         raise eph.Refused(why)
     if a.dry_run:
         print(f"would merge {repo}#{pr} at {head}")

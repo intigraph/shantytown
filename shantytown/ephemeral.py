@@ -1578,11 +1578,13 @@ _JOBS = {
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
 1. `gh pr view {pr} --repo {repo} --json headRefOid,mergeable,mergeStateStatus,reviews,author,isDraft`
 2. Require ALL of: not draft; every required check green (`gh pr checks {pr} --repo {repo} --required`);
-   an approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
-   shared GitHub account means a GitHub APPROVE usually cannot exist); no unresolved request-changes.
+   no unresolved request-changes; and, unless Quipu's review policy for {repo} is "none", an
+   approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
+   shared GitHub account means a GitHub APPROVE usually cannot exist). The guarded merge below applies
+   that configured policy; a missing approval it accepts is not a reason to report blocked.
    An outside (non-crew) contribution is never merged by an agent: report blocked.
-3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, a non-author approval
-   and the author's association in code before it calls gh with the head pinned:
+3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, the approval the
+   repo's review policy requires and the author's association in code before it calls gh with the head pinned:
      st agent spawn --merge --head {head}
    If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
@@ -1877,12 +1879,41 @@ INSIDE = ("OWNER", "MEMBER", "COLLABORATOR")
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 
+#: The stored query that answers one repo's review policy (aegis-za4f.17.1,
+#: Stiwi 11-27 03:53Z: "configurable in quipu"). st holds no repo list: the
+#: policy is a typed fact on the repo's node, and a change is a graph write.
+REVIEW_MODE_QUERY = "repo_review_mode"
+REVIEW_MODES = ("non-author", "none")
+
+
+def review_mode_from_rows(rows) -> str:
+    """The review mode one stored-query answer gives, failing closed.
+
+    Only a single, unanimous "none" waives the approval. No row (the repo has no
+    fact), an unknown value, or conflicting rows all mean "non-author", so a
+    repo nobody configured, a typo or a half-written policy never merges
+    unreviewed. The caller maps an unreadable query (timeout, refusal,
+    truncation) to None, which is also "non-author"."""
+    if not isinstance(rows, list):
+        return "non-author"
+    modes = set()
+    for row in rows:
+        value = row.get("mode") if isinstance(row, dict) else None
+        if isinstance(value, dict):
+            value = value.get("value")
+        modes.add(str(value).rsplit("/", 1)[-1].rsplit("#", 1)[-1] if value else "")
+    return "none" if modes == {"none"} else "non-author"
+
+
 def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list,
-               verdict: dict | None = None) -> str:
+               verdict: dict | None = None, review_mode: str = "non-author") -> str:
     """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
     (GET /repos/R/pulls/N), `reviews` and the head's check runs. Enforced in
     code so "reviews never merge", the pinned head and the lane do not rest on
-    prompt text alone."""
+    prompt text alone. `review_mode` is the repo's policy as Quipu states it
+    (review_mode_from_rows): "none" waives only the approval requirement;
+    every other refusal, including a standing change request, holds in every
+    mode. Anything but "none" requires the approval (fail closed)."""
     if rec is None or rec.get("job") != "merge":
         return "only a merge job may merge; review, triage and task jobs never do"
     if rec.get("state") not in (LAUNCHING, LIVE):
@@ -1914,7 +1945,7 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
         return "a reviewer agent's signed verdict requests changes on this head"
     github_ok = any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
                     for login, r in latest.items())
-    if not github_ok and not (verdict and verdict.get("approved")):
+    if review_mode != "none" and not github_ok and not (verdict and verdict.get("approved")):
         why = ""
         if verdict and verdict.get("author_agent_unknown") and verdict.get("approvals"):
             why = " (the PR's author agent is unknown, so no verdict can approve it)"
