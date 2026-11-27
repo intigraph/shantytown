@@ -1,9 +1,98 @@
 # Scheduled & event jobs
 
-A job is recurring work declared in a file: *at 08:43 every day, tell hammond to
-run the repo patrol*; *when someone outside the project opens a PR, create a
-triage item and hand it to an agent*. One TOML file per job lives in
-`<root>/jobs/`, and `st fleet tend` evaluates every job on each pass.
+**Job config lives in Quipu, and st does not run cron jobs.** Directive
+crew/scheduled-jobs (2026-11-13): *"No more cron jobs and st shouldnt support
+that but facilitate easier creation."* A scheduled job is a declaration in the
+deployment's jobs graph, and Chaski fires it. `st work jobs new` writes that
+declaration in one command. Job files under `<root>/jobs/` are **deprecated**:
+
+- A job file with a `cron` or `every` trigger is **refused**. The refusal names
+  `st work jobs new`. A refused file is reported on every tend pass, and
+  `st work jobs list` exits 1 while the file exists.
+- Event (`on`), `when` and `manual` file jobs still load during a migration
+  window, and every `st work jobs` read prints a deprecation warning. Move them
+  to Quipu and delete the file.
+- Once `[jobs] graph` is set, `st work jobs list` and `check` read only the
+  graph. They never fall back to TOML. The tend pass also stops running file
+  jobs, so nothing runs that the read surface cannot show. It names the
+  ignored files on every pass, and `list` names them too.
+
+**Operator note: do not set `[jobs] graph` on a host whose event (`on`) file
+jobs are still live.** Graph mode stops tend from running *every* file job,
+event jobs included, and nothing replaces them until the Chaski consumer
+(aegis-6vf.11) fires Quipu-declared jobs. On such a host the event jobs stop
+with only a warning line on each tend pass. Measure first:
+`grep -lE '^on *=' <root>/jobs/*.toml`. Leave `graph` unset there until
+aegis-6vf.11 has shipped and the jobs have moved.
+
+**Migration gate.** A host that still has live cron/every job files sets
+`[jobs] timed_files = "migrate"` before it deploys this change. Its timed files
+then keep firing, and every tend pass and every `st work jobs` read warns that
+they are still firing. The default is `"refuse"`. Measure each host first:
+`ls <root>/jobs/*.toml` and look for `cron` or `every`. Move each job with
+`st work jobs new`, delete the file, then remove the setting. The cron/interval
+evaluator stays in the source only for this window. It will be deleted once
+every host has been measured free of timed job files.
+
+A refused timed file binds no duty, so it does not make the host's duty
+inventory incomplete. Any other broken job file still does.
+
+## Declare a scheduled job
+
+```toml
+# shantytown.toml
+[jobs]
+graph = "urn:aegis:scheduled:jobs"     # the Quipu graph Chaski reads
+```
+
+```sh
+st work jobs new weekly-podcast --weekly tue 09:17 --tz America/New_York \
+    --host mac --inbox lex --message "make this week's overview podcast" -n
+```
+
+`-n` prints the exact declaration (Turtle) and writes nothing. That output is
+the review. Run the same command without `-n` to write it. The command:
+
+1. builds the declaration and passes it through the same reader `list` uses, so
+   it cannot write anything the catalogue would refuse;
+2. refuses if that job name is already declared on that host (changing a job
+   is a separate change, not an overwrite);
+3. writes it to the graph through Quipu's authenticated write path, treating a
+   SHACL `conforms: false` answer as a refusal;
+4. reads the job back and succeeds only if the same revision is there.
+
+Exit 0 means the job was written and read back. Exit 1 means it was refused and
+nothing was written: an input refusal, an existing job, missing write
+credentials, or a SHACL `conforms: false`. Exit 2 means the outcome is unknown,
+because the write may have been committed. That covers a transport failure, an
+error answer from Quipu, and any failure to read the job back, including a graph
+that no longer decodes. Run `st work jobs list` before you retry.
+
+`--weekly DAY HH:MM` is local time in `--tz` (default UTC). `--every 6h` is a
+fixed interval of at least sixty seconds. There is no cron syntax. `--host`
+takes a host name (`urn:shantytown:host:<name>`) or an IRI. `--owner` defaults
+to `$SHANTY_AGENT`. `--disabled` declares a job that is listed but never fired.
+
+The declaration uses the schema.org/Quechua profile described below. The job is
+a `schema:Action` named `urn:shantytown:job:<host>:<name>`. Its `schema:target`
+is `urn:shantytown:inbox:<agent>` and its `schema:description` holds the message.
+The declaration is a pure function of the command's arguments, and it never
+reads the clock. The activation anchor is fixed: for `--every`, intervals
+count from 2026-01-05T00:00:00Z. For `--weekly`, the anchor is the first such
+slot in the zone after that instant. A slot that falls in a DST gap or fold
+that week is moved to the next week where it exists exactly once. The revision is
+a content hash, so the `-n` output you review is byte-for-byte what is written. Chaski's generic inbox action reads these fields (aegis-6vf.11 is the
+Chaski/Quipu side). No emitter entry, shuttle config, deliver-script branch or
+manifest hash is edited by hand.
+
+## Legacy file jobs
+
+The rest of this page describes the deprecated file format, which is kept for
+the migration window. Before this change, a job was recurring work declared in
+a file: *at 08:43 every day, tell hammond to run the repo patrol*; *when someone
+outside the project opens a PR, create a triage item and hand it to an agent*.
+One TOML file per job lived in `<root>/jobs/`, and `st fleet tend` evaluates
+every job on each pass.
 
 ## Delegate a host's scheduler to Chaski
 

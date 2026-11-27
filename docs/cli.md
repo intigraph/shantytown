@@ -71,6 +71,12 @@ of that old ID remains unauthorized. A later ordinary dispatch creates a new
 receipt and must pass the normal pane/composer gates. `--dry-run` only previews
 the retirement. A receipt at the uncertain assignment boundary still requires
 a **newer** native open/unassigned release; this recovery does not relax it.
+When the native item was read exactly but is not eligible (for example deferred
+or assigned), supersession is **refused** (exit 1) and names the observed
+revision, status, assignee and defer plus the release it needs. The same holds
+for an interrupted assignment whose native item is read but not newer, open,
+unassigned and undeferred. A native read that is refused, unreadable or names
+another item reports `UNKNOWN` (exit 2), with the store's reason for a refused read.
 
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,
@@ -306,9 +312,11 @@ st work                       the item and the board
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
   triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
-  jobs [list|check|run|history]
-                              declared cron / interval / event jobs in <root>/jobs/*.toml,
-                              evaluated by `st fleet tend`; see docs/jobs.md
+  jobs [new|list|check|run|history]
+                              jobs declared in Quipu ([jobs] graph); `new` writes one
+                              (--weekly DAY HH:MM | --every), Chaski fires it. Cron and
+                              interval job files are refused; other <root>/jobs/*.toml
+                              files are deprecated; see docs/jobs.md
   directive [list|mark|dismiss|track|flush]
                               operator messages st captured verbatim; mark/track confirm a Directive
 st agent                      one agent

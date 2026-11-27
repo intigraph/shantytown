@@ -7,7 +7,7 @@ import tomllib
 import pytest
 
 from shantytown import config, ephemeral as eph, job_tools as jobs, provision
-from shantytown.harness import ClaudeHarness, CodexHarness
+from shantytown.harness import ClaudeHarness, CodexHarness, get as get_harness
 from shantytown.protocols import Agent
 
 
@@ -448,3 +448,136 @@ def test_tracked_skill_with_local_state_keeps_refusal(tmp_path, mutation):
     with pytest.raises(ValueError, match="not a provisioned link"):
         jobs.prune_skills(root, profile())
     assert (tracked / "SKILL.md").exists()
+
+
+def _agy_call(ws, server, tool):
+    return {"toolCall": {"name": "call_mcp_tool",
+                         "args": {"ServerName": server, "ToolName": tool, "Arguments": {}}},
+            "workspacePaths": [str(ws)], "conversationId": "c1"}
+
+
+def test_agy_profile_gates_mcp_tools_through_the_native_hook_adapter(tmp_path):
+    # aegis-j550: an agy job used to refuse "job tool profile is not supported
+    # by this harness". It now gets a job-owned canonical file whose PreToolUse
+    # gate runs inside agy's own hook adapter.
+    from shantytown import agy, agy_hooks
+    ws = tmp_path / "ws"; ws.mkdir()
+    spec = profile(mcp_tools={"bobbin": ["search"]})
+    rec, card = record(tmp_path, ws, "agy", spec)
+    base = tmp_path / "settings/agy/worker/settings.json"
+    base.parent.mkdir(parents=True)
+    base.write_text('{"hooks":{"Stop":[]}}')
+    before = base.read_bytes(), base.stat().st_mtime_ns
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert target == tmp_path / f"settings/agy/job-{card.name}/settings.json"
+    assert jobs.selected_settings(tmp_path, card, str(base)) == str(target)
+    assert (base.read_bytes(), base.stat().st_mtime_ns) == before
+    assert target.stat().st_mode & 0o777 == 0o600
+    # The launch passes the job's own native file, and the workspace hooks
+    # name the job's canonical file (agy SessionStart refuses a mismatch).
+    assert json.loads(agy.native_settings_path(target).read_text()) == {"useG1Credits": False}
+    hooks = json.loads((ws / ".agents/hooks.json").read_text())
+    assert hooks["shantytown"] == agy.projected_hooks(str(target))
+    (ws / ".agents/mcp_config.json").write_text(json.dumps({"mcpServers": {"bobbin": {}}}))
+    allowed = agy_hooks.dispatch("PreToolUse", _agy_call(ws, "bobbin", "search"), str(target))
+    assert allowed == {"decision": "allow"}
+    for server, tool in (("bobbin", "write"), ("bobbin", "search_extra")):
+        assert agy_hooks.dispatch("PreToolUse", _agy_call(ws, server, tool),
+                                  str(target))["decision"] == "deny"
+    # A server outside the job kit never reaches the gate at all.
+    with pytest.raises(ValueError):
+        agy_hooks.dispatch("PreToolUse", _agy_call(ws, "gmail", "search"), str(target))
+
+
+def test_agy_profiled_provision_replaces_a_stale_workspace_kit(tmp_path, monkeypatch):
+    from shantytown.harness import get
+    monkeypatch.setattr(type(get("agy")), "provision", lambda *a, **kw: [])
+    ws = tmp_path / "ws"; ws.mkdir()
+    rec, card = record(tmp_path, ws, "agy")
+    (tmp_path / "settings/agy/worker").mkdir(parents=True)
+    (ws / ".agents").mkdir()
+    (ws / ".agents/mcp_config.json").write_text(json.dumps({"mcpServers": {
+        "gmail": {"serverUrl": "http://gmail.invalid/mcp"}}}))
+    templates = tmp_path / "provision"; templates.mkdir()
+    (templates / provision.MCP_TEMPLATE).write_text(json.dumps({"mcpServers": {
+        "bobbin": {"type": "http", "url": "http://bobbin.invalid/mcp"},
+        "gmail": {"type": "http", "url": "http://gmail.invalid/mcp"}}}))
+    provision.provision(card, tmp_path)
+    assert set(json.loads((ws / ".agents/mcp_config.json").read_text())["mcpServers"]) == {"bobbin"}
+
+
+
+def _opencode_job(tmp_path, monkeypatch, spec=None):
+    from shantytown.opencode import PLUGIN_NAME
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    ws = tmp_path / "ws"; ws.mkdir()
+    rec, card = record(tmp_path, ws, "opencode", spec or profile(mcp_tools={"bobbin": ["search"]}))
+    base = tmp_path / "settings/opencode/worker/opencode.json"
+    base.parent.mkdir(parents=True)
+    bridge = (base.parent / PLUGIN_NAME).as_uri()
+    base.write_text(json.dumps({
+        "permission": {"*": "ask"},
+        "plugin": [[bridge, {"hooks": {"Stop": []}, "mcp_servers": ["bobbin", "gmail"]}]],
+        "mcp": {"bobbin": {"type": "remote", "url": "http://bobbin.invalid/mcp", "enabled": True},
+                "gmail": {"type": "remote", "url": "http://gmail.invalid/mcp", "enabled": True}}}))
+    return rec, card, base, ws
+
+
+def test_opencode_profile_narrows_the_kit_and_gates_through_the_native_bridge(tmp_path, monkeypatch):
+    # aegis-j550: an opencode job used to refuse "job tool profile is not
+    # supported by this harness". It now gets its own config whose kit is the
+    # profile's servers and whose bridge runs the job gate before each tool.
+    import shutil
+    import subprocess
+    from shantytown.opencode import bridge_options
+    from shantytown.opencode_bridge import SOURCE
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch)
+    before = base.read_bytes(), base.stat().st_mtime_ns
+    target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
+    assert target == tmp_path / f"settings/opencode/job-{card.name}/opencode.json"
+    assert jobs.selected_settings(tmp_path, card, str(base)) == str(target)
+    assert (base.read_bytes(), base.stat().st_mtime_ns) == before
+    assert target.stat().st_mode & 0o777 == 0o600
+    data = json.loads(target.read_text())
+    assert set(data["mcp"]) == {"bobbin"}
+    options = bridge_options(target.read_text())
+    assert options["mcp_servers"] == ["bobbin"]
+    assert options["hooks"]["Stop"] == []
+    assert "OPENCODE_CONFIG=" + str(target.resolve()) in get_harness("opencode").launch(card, str(target), root=tmp_path).replace("'", "")
+    if shutil.which("node") is None:
+        pytest.skip("native bridge requires Node/Bun")
+    (tmp_path / "bridge.mjs").write_text(SOURCE)
+    (tmp_path / "options.json").write_text(json.dumps(options))
+    (tmp_path / "runner.mjs").write_text('''
+import plugin from './bridge.mjs';
+import {readFileSync} from 'node:fs';
+const h=await plugin({client:{},directory:process.cwd()},JSON.parse(readFileSync('options.json')));
+await h['tool.execute.before']({sessionID:'proof',tool:'bobbin_search'},{args:{}});
+for (const tool of ['bobbin_write','bobbin_search_extra']) {
+  let denied=false;
+  try {await h['tool.execute.before']({sessionID:'proof',tool},{args:{}});} catch {denied=true;}
+  if(!denied){console.error('allowed '+tool);process.exit(1);}
+}
+''')
+    # The gate command runs the installed module; point it at this checkout.
+    env = dict(os.environ, PYTHONPATH=str(Path(jobs.__file__).resolve().parents[1]))
+    subprocess.run(["node", "runner.mjs"], cwd=tmp_path, env=env, check=True, timeout=30)
+
+
+@pytest.mark.parametrize("where", ["global", "workspace"])
+def test_opencode_profile_refuses_mcp_declared_outside_the_job_config(tmp_path, monkeypatch, where):
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch)
+    place = tmp_path / "xdg/opencode" if where == "global" else ws
+    place.mkdir(parents=True, exist_ok=True)
+    (place / "opencode.jsonc").write_text('{\n  // ambient\n  "mcp": {"gmail": {"type": "remote", "url": "http://x"}}\n}')
+    with pytest.raises(ValueError, match="declared outside the job config"):
+        jobs.prepare_settings(tmp_path, card, str(base))
+    (place / "opencode.jsonc").write_text('{"provider": {"ollama": {}}}')
+    assert Path(jobs.prepare_settings(tmp_path, card, str(base))).is_file()
+
+
+def test_opencode_profile_refuses_an_unprovisioned_selected_server(tmp_path, monkeypatch):
+    spec = jobs.validate_specs({"task": dict(mcp_servers=["bobbin", "yupana"], skills=[])}, eph.JOBS)["task"]
+    rec, card, base, ws = _opencode_job(tmp_path, monkeypatch, spec)
+    with pytest.raises(ValueError, match="not provisioned: yupana"):
+        jobs.prepare_settings(tmp_path, card, str(base))

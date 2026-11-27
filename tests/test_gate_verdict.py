@@ -551,3 +551,30 @@ def test_dual_reader_terms_match_the_independent_published_crosswalk():
         row['old']: row['new'] for row in rows}
     with pytest.raises(KeyError):
         vocabulary.aliases('UnpublishedTerm')
+
+
+def _retype_gate(q, record, new_class):
+    graph = q.ds.graph(rdflib.URIRef(GRAPH))
+    subject = rdflib.URIRef(record.iri)
+    graph.remove((subject, rdflib.RDF.type, rdflib.URIRef(gv.AEGIS + 'GateApproval')))
+    graph.add((subject, rdflib.RDF.type, rdflib.URIRef(new_class)))
+
+
+def test_gate_typed_with_the_published_w3id_class_is_read(q):
+    # aegis-m5s.3: quipu ns#GateApproval is published, so a record a w3id
+    # writer types that way must still approve. Before this reader change
+    # the class filter named only the aegis spelling and this returned False.
+    from shantytown.stable_vocabulary import TERMS
+    record = _record()
+    gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
+    _retype_gate(q, record, TERMS['GateApproval'])
+    assert _approval(q)['approved']
+
+
+def test_gate_typed_with_an_unpublished_class_spelling_is_not_read(q):
+    # The negative control: no namespace guessing, so a look-alike class
+    # in another namespace never becomes an approval.
+    record = _record()
+    gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
+    _retype_gate(q, record, 'https://w3id.org/intigraph/camayoc/core/ns#GateApproval')
+    assert not _approval(q)['approved']

@@ -146,7 +146,7 @@ grew well past the original ten, each slot on a specific ask — not drift:
   · dream   — schedule one bounded, reviewed reflection artifact on measured
               spare provider capacity. It is not a tend flag because operators
               need a read/preview surface for its due state and safety gates.
-  · jobs    — declared scheduled and event-driven work (<root>/jobs/*.toml),
+  · jobs    — jobs declared in Quipu (`new` writes one; job files deprecated),
               EVALUATED by the tend pass and inspected here: list, check (would
               it fire now, and why), run (fire once, now), history. A command
               and not a tend flag for dream's reason: the recurring work that
@@ -1002,6 +1002,8 @@ def _crew_account_governor(a):
             snap['governors'][name].update(
                 windows={w: _window_wire(b) for w, b in _governor_windows(g).items()},
                 effect=g.evaluate(persist=False).effect())
+        if (disk := _crew_disk_line(a)) is not None:
+            snap['disk'] = disk.wire()
         print(json.dumps(snap))
         return OK
     counts = fleet.counts()
@@ -1024,7 +1026,10 @@ def _crew_account_governor(a):
                                            _governor_windows(governors[name]).items()},
                                   effect=v.effect())
                                   for name, v in verdicts.items()},
-                              balance=_balance_wire(fleet))))
+                              balance=_balance_wire(fleet),
+                              # Off omits the key, so a host with no floor
+                              # keeps its JSON byte-identical too.
+                              **({'disk': d.wire()} if (d := _crew_disk_line(a)) else {}))))
     else:
         if not governors:
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
@@ -1050,6 +1055,8 @@ def _crew_account_governor(a):
             print('  ' + warning)
         if fleet.errors:
             print('  ' + fleet.fallback())
+        if (disk := _crew_disk_line(a)) is not None:
+            print(disk.line())
     return CANNOT_TELL if fleet.errors else OK
 
 
@@ -2308,16 +2315,36 @@ def build_parser() -> argparse.ArgumentParser:
     bt.add_argument("--rank-json", action="store_true", help="full rank proposal evidence as JSON instead of table")
     bt.add_argument("-n", "--dry-run", action="store_true", help="read inputs only, no Jev or writes")
 
-    jb = leaf("jobs", help="declared scheduled/event jobs (<root>/jobs/*.toml): "
-                           "list | check [name] | run <name> | history [name]")
-    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph; "
-                    "list/check only until the signed execution lane is enabled")
+    jb = leaf("jobs", help="declared jobs, from Quipu ([jobs] graph) — job files are "
+                           "deprecated: new | list | check [name] | run <name> | history [name]")
+    jb.add_argument("--graph", help="read declarations from this explicit Quipu graph "
+                    "(default: [jobs] graph in shantytown.toml); list/check only until "
+                    "the signed execution lane is enabled")
     jb.add_argument("--expect-job", action="append", default=[], metavar="IRI",
                     help="require a known job identity in the graph (repeatable); "
                          "detects deletion independently of other valid declarations")
     jb.add_argument("--json", action="store_true",
                     help="versioned declarations-only JSON; requires --graph")
     jb_sub = jb.add_subparsers(dest="jobs_sub", required=False)
+    jb_new = jb_sub.add_parser(
+        "new", help="declare a scheduled inbox job in Quipu (Chaski fires it); "
+                    "prints the declaration to review, then writes and reads it back")
+    jb_new.add_argument("name")
+    when = jb_new.add_mutually_exclusive_group(required=True)
+    when.add_argument("--weekly", nargs=2, metavar=("DAY", "HH:MM"),
+                      help="once a week at local civil time, e.g. --weekly tue 09:17")
+    when.add_argument("--every", metavar="DURATION",
+                      help="fixed interval of at least 60s, e.g. 6h (no cron form exists)")
+    jb_new.add_argument("--tz", default="UTC", help="IANA timezone for --weekly (default UTC)")
+    jb_new.add_argument("--host", required=True,
+                        help="host name or IRI the job fires on")
+    jb_new.add_argument("--inbox", required=True, metavar="AGENT", help="recipient agent")
+    jb_new.add_argument("--message", required=True)
+    jb_new.add_argument("--owner", help="who answers for the job (default $SHANTY_AGENT)")
+    jb_new.add_argument("--disabled", action="store_true",
+                        help="declare it disabled (visible, never fired)")
+    jb_new.add_argument("-n", "--dry-run", action="store_true",
+                        help="print the declaration only; write nothing")
     jb_sub.add_parser("list", help="every job: trigger, next due, last result")
     jb_check = jb_sub.add_parser(
         "check", help="would it fire NOW, and why — reads events, writes nothing")
@@ -3474,7 +3501,7 @@ def _record_launch_unretirement(a, card) -> bool:
 # fleet owner host only (aegis-1g55ji); everything else in a tend pass is host-local.
 FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
                 "blocked-stale", "deferral-sweep", "unblocked-events",
-                "blocked-misstatus")
+                "new-seeds", "blocked-misstatus")
 
 
 def runs_fleet_sweeps(cfg, owner_unreachable: bool = False) -> bool:
@@ -4698,7 +4725,20 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             files.root.mkdir(parents=True, exist_ok=True)
             (files.root / f"{rec['name']}.json").write_text(
                 json.dumps(eph.card_for(rec, unattended=unattended), indent=2))
+        # One Shuttle run per job, started once the ledger exists so every path
+        # from here (including a refused launch) ends it (aegis-za4f.19.1).
+        eph.run_begin(a.root, rec["name"])
         card = files.get(rec["name"])
+        if not rec.get("uid_binding"):
+            try:
+                _ensure_job_role_settings(a.root, card)
+            except Exception as e:  # noqa: BLE001 -- the ledger exists: end it, never strand it
+                _spawn_end(a, rec["name"], "failed",
+                           f"role settings not emitted: {type(e).__name__}: {e}",
+                           "launch refused", detached=False)
+                print(f"  refused: {rec['name']}: role settings not emitted ({e})",
+                      file=sys.stderr)
+                return REFUSED
         panes = _panes(a)
         if (rec.get("harness") == "codex" and not rec.get("uid_binding")
                 and not rec.get("codex_trust_config")):
@@ -4760,6 +4800,36 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             a._ticket_refused = str(e)
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+
+
+def _ensure_job_role_settings(root, card) -> list[Path]:
+    """Emit the job harness's role artifact when this store has never had one.
+
+    MEASURED (aegis-j550, sattler 2026-11-27T16:50Z): the first live
+    `--harness agy` review refused "could not materialize settings for
+    eph-review-c22037 (role worker)". `st fleet roles set` emits settings only
+    for (harness, role) pairs some crew card names, and no crew card ran agy, so
+    settings/agy/worker/settings.json had never existed and no job on that
+    harness could launch. opencode would have hit the same refusal. The repair
+    the error names (`roles set` on the job card) works, but job cards are
+    minted per spawn and torn down after, so no operator can run it ahead of time.
+
+    ONLY WHEN ABSENT: an existing role file is shared with live crew agents on
+    that harness, and re-rendering it here would rewrite their hooks under them.
+    The emitter and provisioning are the same ones `roles set` uses, so a job
+    gets exactly the artifact a crew card on that harness would get. Workspace
+    hook projection stays with workspace provisioning, as it does for crew.
+    """
+    harness_name = harness_mod.name_for(card, root=root)
+    program = harness_mod.get(harness_name)
+    if (Path(root) / "settings" / program.settings_name(card.role)).is_file():
+        return []
+    written = _emit_role_settings(Path(root), {card.role}, harness_name=harness_name)
+    for path in written:
+        print(f"  hooks   {path}")
+        for note in program.provision(str(path), root=root, workspaces=()):
+            print(f"  ⚠ {note}", file=sys.stderr)
+    return written
 
 
 def _spawn_item_state(a, item) -> str:
@@ -4990,10 +5060,13 @@ def _spawn_drain(a, policy) -> int:
         free = max(0, policy.max_agents - len(eph.live(a.root)))
         queued = eph.tickets(a.root)
         pool = eph.pool_state(a.root)
-        order = ([] if pool["paused"] or pool["draining"]
+        from . import disk as disk_mod
+        disk_hold = disk_mod.read(policy, a.root).refusal()
+        order = ([] if pool["paused"] or pool["draining"] or disk_hold
                  else eph.drain_plan(queued, eph.live(a.root), **eph.routing(policy)))
-        if reason := eph.pool_refusal(pool):
-            print(f"  {reason}")
+        for reason in (eph.pool_refusal(pool), disk_hold):
+            if reason:
+                print(f"  {reason}")
         print(f"would drain {len(order)} of {len(queued)} queued ticket(s) "
               f"into {free} free slot(s)")
         for line in eph.render_tickets(order, time.time()):
@@ -5001,12 +5074,16 @@ def _spawn_drain(a, policy) -> int:
         return OK
     rc = OK
     seen = set()
+    from . import disk as disk_mod
     while True:
+        # Re-read every pass: each launch provisions a worktree, so the drain
+        # that filled the disk to its floor must stop there (aegis-xa6w).
+        disk_hold = disk_mod.read(policy, a.root).refusal()
         with eph.lock(a.root):
             r = eph.routing(policy)
             ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
                                            harness_caps=r["harness_caps"], shares=r["shares"],
-                                           job_caps=r["job_caps"],
+                                           job_caps=r["job_caps"], disk_hold=disk_hold,
                                            item_state=lambda i: _spawn_item_state(a, i))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
@@ -5129,6 +5206,13 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
                     comment=_spawn_item_comment(a))
     except Exception as error:  # noqa: BLE001 — a TTL read must never stop the reap
         problems.append(f"queue TTL check unproved ({type(error).__name__})")
+    # Disk back above its floor (aegis-xa6w). No job end may come to drain a
+    # queue the disk held -- a full disk is exactly when nothing launched -- so
+    # the tend sweep kicks it, and only when a ticket could launch right now.
+    try:
+        lines += _spawn_disk_kick(a, dry_run=dry_run)
+    except Exception as error:  # noqa: BLE001 — a disk read must never stop the reap
+        problems.append(f"disk floor check unproved ({type(error).__name__})")
     for line in lines:
         print(f"  ephemeral: {line}", file=sys.stderr)
     for problem in problems:
@@ -5136,6 +5220,37 @@ def _spawn_reap(a, *, dry_run=False, quiet=False) -> int:
     if not lines and not quiet:
         print("  ephemeral: nothing to reap")
     return CANNOT_TELL if problems else OK
+
+
+def _spawn_disk_kick(a, *, dry_run=False) -> list[str]:
+    """Kick the queue drain when the disk floor no longer holds it."""
+    from . import disk as disk_mod
+    from . import ephemeral as eph
+    cfg, _err = config.load_or_default(Path(a.root))
+    policy = eph.pooled(cfg.ephemeral, eph.pool_state(a.root))
+    reading = disk_mod.read(policy, a.root)
+    if reading.state != disk_mod.OK:
+        return []
+    pool = eph.pool_state(a.root)
+    if pool["paused"] or pool["draining"]:
+        return []
+    if not eph.route(eph.tickets(a.root), eph.live(a.root), **eph.routing(policy)):
+        return []
+    if dry_run:
+        return ["would kick the queue drain: disk is above its floor"]
+    eph.kick_drain(a.root)
+    return [f"queue drain kicked: {reading.line()}"]
+
+
+def _crew_disk_line(a):
+    """`st crew --governor`'s disk line (aegis-xa6w), or None when no floor is set.
+
+    Off prints nothing so a host that never set a floor keeps its bar output
+    byte-identical."""
+    from . import disk as disk_mod
+    cfg, _err = config.load_or_default(Path(a.root))
+    reading = disk_mod.read(cfg.ephemeral, a.root)
+    return None if reading.state == disk_mod.OFF else reading
 
 
 def _harness_lane_held(a, cfg, target: str) -> bool:
@@ -9431,6 +9546,7 @@ def _cmd_go(a) -> int:
     if (getattr(a, 'reconcile', False) or getattr(a, 'supersede', False)
             or getattr(a, 'complete', False) or getattr(a, 'receipt', None)):
         from .dispatch_binding import binding_for
+        from .dispatch_receipts import RetirementRefused
         try:
             if not getattr(a, 'receipt', None):
                 raise ValueError('--reconcile, --complete or --supersede requires --receipt')
@@ -9463,6 +9579,9 @@ def _cmd_go(a) -> int:
                       if getattr(a, 'supersede', False) else binding.reconcile(a.receipt))
             print(json.dumps(result, indent=2))
             return OK
+        except RetirementRefused as error:
+            print(f'  refused: {error}', file=sys.stderr)
+            return REFUSED
         except (Closed, Blocked, HasOpenBlocker, AlreadyAssigned, GovernorRefused,
                 PlateFull, CapacityUnknown) as error:
             print(f'  refused: {error}', file=sys.stderr)
@@ -9880,10 +9999,18 @@ def _cmd_crew(a) -> int:
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.state != "off":
             print(gaming.render())
+        # The disk is this host's own filesystem: an unreadable peer must not
+        # blank the reading that says why local spawns are held.
+        disk = _crew_disk_line(a)
         if peer_errors:
             print("lost " + "; ".join(peer_errors))
+            if disk is not None:
+                print(disk.line())
             return CANNOT_TELL
-        return _crew_governor(a)
+        rc = _crew_governor(a)
+        if disk is not None:
+            print(disk.line())
+        return rc
     if rules := getattr(a, "check_alert_keepers", None):
         return _check_alert_keepers(a, rules)
     # A self-cycle request exists before tend stops the pane and persists while
@@ -15553,8 +15680,18 @@ def _jobs_sweep(a) -> list[str]:
     so neither a broken file nor a crashing job can reach respawn."""
     # Tend's governor path can fall back to defaults after a configuration
     # error. Never let that fallback reactivate a delegated local scheduler.
-    if config.load(Path(a.root)).jobs_scheduler == "chaski":
+    cfg = config.load(Path(a.root))
+    if cfg.jobs_scheduler == "chaski":
         return []
+    if cfg.jobs_graph:
+        # Once a deployment names its jobs graph, `list` and `check` show only
+        # Quipu. Firing file jobs here too would run work no read surface
+        # shows, so they stay unrun and are named on every pass instead.
+        from . import jobs as jobs_mod
+        names = jobs_mod.file_job_names(a.root)
+        return [f"⚠ job files NOT run because [jobs] graph is set (job config "
+                f"lives in Quipu): {', '.join(names)}; move them with `st work "
+                f"jobs new` and delete the files"] if names else []
     return _jobs_runner(a).sweep()
 
 
@@ -15607,6 +15744,55 @@ def _cmd_declared_jobs(a, verb) -> int:
     return OK
 
 
+def _cmd_jobs_new(a) -> int:
+    """st work jobs new: one command, one review. Prints the exact declaration,
+    writes it to the jobs graph, and reads it back; Chaski fires it from there.
+    Exit 0 written and read back; 1 refused (nothing written); 2 outcome unknown
+    (read back before retrying — the write may have committed)."""
+    from . import quipu_jobs
+    from .jobs import parse_duration
+    if not a.graph:
+        print("refused: no jobs graph — set [jobs] graph in shantytown.toml or pass "
+              "--graph", file=sys.stderr)
+        return REFUSED
+    try:
+        weekly = every_s = None
+        if a.weekly:
+            weekly = (quipu_jobs.parse_weekday(a.weekly[0]), a.weekly[1])
+        else:
+            try:
+                every_s = int(parse_duration(a.every))
+            except ValueError as exc:
+                raise quipu_jobs.JobRefused(f"--every: {exc}") from None
+        decl = quipu_jobs.declare_rows(
+            a.name, host=a.host, owner=a.owner or os.environ.get("SHANTY_AGENT", ""),
+            zone=a.tz, inbox=a.inbox, message=a.message, weekly=weekly,
+            every_s=every_s, enabled=not a.disabled)
+    except quipu_jobs.JobRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return REFUSED
+    job = decl.job
+    cadence = (f"weekly {quipu_jobs.WEEKDAYS[job.weekday]} {job.local_time} {job.timezone}"
+               if isinstance(job, quipu_jobs.CalendarDeclaredJob) else f"every {job.interval_s}s")
+    print(f"job {job.name} ({job.iri}) revision {job.revision}: {cadence}, "
+          f"inbox {job.target}, host {job.host}, owner {job.owner}"
+          f"{'' if job.enabled else ', DISABLED'} -> graph {a.graph}")
+    print(decl.turtle, end="")
+    if a.dry_run:
+        print("dry run: nothing written")
+        return OK
+    try:
+        quipu_jobs.JobCatalogue(a.graph, root=a.root).declare(decl)
+    except quipu_jobs.JobRefused as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return REFUSED
+    except quipu_jobs.JobsUnavailable as exc:
+        print(f"cannot tell: {exc}", file=sys.stderr)
+        return CANNOT_TELL
+    print(f"declared and read back: {job.iri} revision {job.revision}")
+    return OK
+
+
 def _cmd_jobs(a) -> int:
     """st work jobs [list] | check [name] | run <name> | history [name].
 
@@ -15617,7 +15803,20 @@ def _cmd_jobs(a) -> int:
     """
     from . import jobs as jobs_mod
     verb = getattr(a, "jobs_sub", None) or "list"
+    if not getattr(a, "graph", None):
+        # Job config lives in Quipu (directive crew/scheduled-jobs). Once a
+        # deployment names its graph, the read surface goes there with no TOML
+        # fallback; an unreadable config raises rather than reading files.
+        a.graph = config.load(Path(a.root)).jobs_graph or None
+    if verb == "new":
+        return _cmd_jobs_new(a)
     if getattr(a, "graph", None):
+        names = jobs_mod.file_job_names(a.root)
+        if names:
+            # Not shown below and not run by tend in graph mode; say so rather
+            # than let a file job look like it still exists.
+            print(f"  ⚠ job files not shown (reading Quipu graph {a.graph}): "
+                  f"{', '.join(names)}", file=sys.stderr)
         return _cmd_declared_jobs(a, verb)
     if verb in {"run", "check"} and config.load(Path(a.root)).jobs_scheduler == "chaski":
         print("refused: local job evaluation and execution are delegated to Chaski; "
@@ -15630,6 +15829,10 @@ def _cmd_jobs(a) -> int:
     by_name = {j.name: j for j in jobs}
     for e in errors:
         print(f"  ⚠ refused {e}", file=sys.stderr)
+    if jobs or errors:
+        print(f"  ⚠ {jobs_mod.FILE_DEPRECATION}", file=sys.stderr)
+    if any(j.trigger.kind in ("cron", "every") for j in jobs) and jobs_mod.timed_migration(a.root):
+        print(f"  ⚠ {jobs_mod.TIMED_MIGRATION}", file=sys.stderr)
     if verb == "history":
         rows = jobs_mod.read_ledger(a.root, a.name, a.limit)
         if not rows:
@@ -16815,6 +17018,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         if unblocked:
             print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
                   f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
+        # NEW SEEDS (Stiwi 2026-11-27): every new non-pointer seed reaches the
+        # administrator in ONE batched notice with its likely duplicates, so it is
+        # ranked, linked, modified or rejected instead of piling up unranked.
+        from . import seed_notify as seed_notify_mod
+        announced = _fleet_sweep("new-seeds", seed_notify_mod.NewSeedNotifier(
+            Path(a.root), _registry(a), panes, log=_log,
+            stand_in=bool(owner_down)).sweep)
+        if announced:
+            print(f"  🌱 announced {len(announced)} new seed(s) to the administrator: "
+                  f"{', '.join(announced)}", file=sys.stderr)
         misstatused = _fleet_sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())

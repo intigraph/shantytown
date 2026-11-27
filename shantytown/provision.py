@@ -1402,7 +1402,9 @@ def provision(card: Agent, root, *, secrets=None, settings_path=None,
     _project_codex_mcp(card, root, rendered, template)
     if card.harness == "agy":
         from .agy import project_mcp
-        project_mcp(card, root, rendered, replace=template is not None)
+        # A profiled job's kit is exactly the selected servers; never merge in
+        # whatever an earlier projection left in the workspace.
+        project_mcp(card, root, rendered, replace=template is not None or profile is not None)
     if card.harness == "opencode":
         from .opencode import project_mcp
         project_mcp(card, root, rendered, replace=template is not None)

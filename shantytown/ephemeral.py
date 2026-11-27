@@ -395,6 +395,11 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         # Paused holds launches but keeps taking work, so it is over-cap (a
         # fresh spawn queues); draining takes no new work at all.
         raise (Refused if pool["draining"] else OverCap)(refusal)
+    # Disk below its floor QUEUES (aegis-xa6w): the work is fine, the host just
+    # has nowhere to put its worktree yet. OverCap is the queueing refusal.
+    from . import disk
+    if refusal := disk.read(policy, root).refusal():
+        raise OverCap(refusal)
     if refusal := cap_refusal(root, policy, harness, req.job):
         over = policy.max_agents > 0 and not harness_off(policy, harness)
         raise (OverCap if over else Refused)(refusal)
@@ -739,7 +744,8 @@ def routing(policy) -> dict:
 def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
                harness_caps: dict | None = None, shares: dict | None = None,
-               job_caps: dict | None = None) -> tuple[dict | None, list[str]]:
+               job_caps: dict | None = None,
+               disk_hold: str = "") -> tuple[dict | None, list[str]]:
     """Recover interrupted claims, then claim the best routed ticket (track
     share, priority, age; within its harness's capacity) whose item is open, if
     a slot is free. Caller holds lock().
@@ -769,6 +775,9 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
     pool = pool_state(root)
     if pool["paused"] or pool["draining"]:
         return None, lines + [pool_refusal(pool) + "; nothing launched"]
+    if disk_hold:
+        # Claiming would only bounce off plan()'s disk gate and requeue.
+        return None, lines + [disk_hold + "; nothing launched"]
     candidates = route(tickets(root), live(root), cap=cap,
                        harness_caps=harness_caps or {}, shares=shares or {},
                        job_caps=job_caps or {})
@@ -1943,6 +1952,21 @@ def review_mode_from_rows(rows) -> str:
     return "none" if modes == {"none"} else "non-author"
 
 
+def latest_check_runs(checks: list) -> list:
+    """The newest run per (app, check name). aegis-es9d: shantytown#767 had a
+    first suite CANCELLED and a rerun all SUCCESS on the same head; judging every
+    run refused "checks not green" on superseded runs the forge itself no longer
+    counts. Newest is by started_at, then id. A run with no started_at (queued)
+    sorts newest, so a pending rerun is never hidden behind an older green."""
+    latest = {}
+    for c in checks:
+        key = ((c.get("app") or {}).get("id"), c.get("name"))
+        rank = (c.get("started_at") is None, c.get("started_at") or "", c.get("id") or 0)
+        if key not in latest or rank >= latest[key][0]:
+            latest[key] = (rank, c)
+    return [c for _, c in latest.values()]
+
+
 def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list,
                verdict: dict | None = None, review_mode: str = "non-author") -> str:
     """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
@@ -1991,7 +2015,7 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
                 "trusted signed verdict from an agent other than the author" + why)
     if not checks:
         return "no check runs on the head; green is unproven"
-    bad = [c.get("name", "?") for c in checks
+    bad = [c.get("name", "?") for c in latest_check_runs(checks)
            if c.get("status") != "completed"
            or c.get("conclusion") not in ("success", "neutral", "skipped")]
     if bad:
@@ -2090,9 +2114,116 @@ def apply_mailbox(root, name, state, now):
 def mark_live(root, name: str) -> None:
     with lock(root):
         rec = read(root, name)
-        if rec is not None and rec.get("state") == LAUNCHING:
-            rec["state"] = LIVE
+        if rec is None or rec.get("state") != LAUNCHING:
+            return
+        rec["state"] = LIVE
+        write(root, rec)
+    run_step(root, name, "claim")
+
+
+# --- the job's Shuttle run (aegis-za4f.19.1): start, steps, end ---------------
+# Signer calls shell out, so they run OUTSIDE the ledger lock and only the
+# resulting `shuttle_run` entry is written under it. They DO run under a
+# per-job run lock held from the read to the store: review of #758 found a
+# timeout finish racing the claim could read the same entry, each sign its
+# step, and the later store drop the other's, leaving the ledger and the
+# shuttle log disagreeing. None of these raise: a job that cannot reach Shuttle
+# must still launch, report and be torn down, and the ledger entry says why it
+# has no run instead of hiding it.
+
+@contextmanager
+def run_lock(root, name: str):
+    """Serialize one job's run operations without holding the host ledger lock
+    across shuttle calls. Always taken BEFORE `lock(root)`, never inside it."""
+    d = ledger_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f".run-{name}.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _store_run(root, name: str, entry: dict) -> None:
+    with lock(root):
+        rec = read(root, name)
+        if rec is not None:
+            rec["shuttle_run"] = entry
             write(root, rec)
+
+
+def _run_guarded(root, name: str, op: str, fn) -> dict | None:
+    """Run one job-run operation; ANY failure is recorded, never raised.
+
+    Review of #758: only RunRefused was caught, so an OSError from the signer's
+    temp file, a PermissionError opening a run lock another uid created, or a
+    KeyError on a stale `definition` escaped into spawn, mark_live and finish,
+    where run_end runs before notify and teardown, and the job was neither
+    reported nor torn down. Recording a run must never cost the job its ending.
+    """
+    try:
+        return fn()
+    except Exception as error:  # noqa: BLE001 - a run must never block a job
+        why = f"{op} failed: {type(error).__name__}: {error}"[:300]
+        try:
+            with lock(root):
+                rec = read(root, name)
+                if rec is not None:
+                    entry = dict(rec.get("shuttle_run") or {})
+                    entry["error"] = why
+                    rec["shuttle_run"] = entry
+                    write(root, rec)
+        except Exception:  # noqa: BLE001 - nowhere left to record it
+            pass
+        return None
+
+
+def run_begin(root, name: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or (rec.get("shuttle_run") or {}).get("state"):
+                return None                 # one run per job: never start twice
+            entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "start", go)
+
+
+def run_step(root, name: str, step: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            try:
+                job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
+            except job_runs.RunRefused as e:
+                entry = dict(rec.get("shuttle_run") or {})
+                entry["error"] = entry.get("error") or f"{step} refused: {e}"
+                rec["shuttle_run"] = entry
+            _store_run(root, name, rec["shuttle_run"])
+            return rec["shuttle_run"]
+    return _run_guarded(root, name, step, go)
+
+
+def run_end(root, name: str, verdict: str, signer_for=None) -> dict | None:
+    from . import job_runs
+
+    def go():
+        with run_lock(root, name):
+            rec = read(root, name)
+            if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+                return None
+            entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
+            _store_run(root, name, entry)
+            return entry
+    return _run_guarded(root, name, "end", go)
 
 
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
@@ -2359,12 +2490,20 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
         rec["settings_teardown"] = retire_settings(root, rec)
         rec["torn_down_at"] = time.time() if now is None else now
         write(root, rec)
+    # Review of #758: run locks were never removed and piled up in the ledger
+    # dir. The run has ended by now; a late step would only recreate it.
+    try:
+        (ledger_dir(root) / f".run-{name}.lock").unlink()
+    except OSError:
+        pass
     return rec
 
 
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
            persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
+    # The run ends on the RECORDED result: a second ending keeps the first story.
+    run_end(root, name, rec["result"]["verdict"])
     problems = notify(rec, persist_event=persist_event, comment=comment)
     schedule_teardown(name)
     return rec, problems
@@ -2412,6 +2551,11 @@ def _prompt_clock(root, name: str, since: float | None) -> None:
             write(root, rec)
 
 
+def disk_build_caches() -> tuple[str, ...]:
+    from . import disk
+    return disk.BUILD_CACHES
+
+
 def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
          prompting=None, prompt_wait_s: float = PROMPT_WAIT_S) -> list[str]:
     """End every live job whose pane is gone or whose deadline passed, and finish
@@ -2434,6 +2578,28 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
                     write(root, rec)
                 if result in ("retired", "would retire") or result.startswith("kept"):
                     out.append(f"{rec['name']}: settings {result}")
+            # Jobs torn down before teardown purged build caches still hold
+            # them on the worktree filesystem (aegis-xa6w). DONE is the proof the
+            # job is over; "kept (holds work)" is the proof the tree's identity
+            # was verified as this job's own when it was kept.
+            ws = rec.get("workspace")
+            if (str(rec.get("workspace_teardown", "")).startswith("kept (holds work)")
+                    and not rec.get("build_cache_purged") and ws and Path(ws).is_dir()
+                    and not Path(ws).is_symlink()):
+                if dry_run:
+                    if any((Path(ws) / n).is_dir() for n in disk_build_caches()):
+                        out.append(f"{rec['name']}: would purge build caches in {ws}")
+                    continue
+                try:
+                    from . import disk
+                    purged = disk.purge_build_caches(ws, git=_git)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    out.append(f"{rec['name']}: build cache purge uncertain ({type(exc).__name__})")
+                    continue
+                rec["build_cache_purged"] = purged
+                write(root, rec)
+                if purged:
+                    out.append(f"{rec['name']}: purged {', '.join(purged)}/ in {ws}")
     for rec in live(root):
         name = rec["name"]
         if rec["state"] == ENDING:

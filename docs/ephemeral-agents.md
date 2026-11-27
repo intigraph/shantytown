@@ -377,6 +377,31 @@ TTL makes a stuck queue visible and never throws work away. If neither report
 leg lands, the ticket stays unmarked and the next sweep tries again, so a
 breach is never silent.
 
+**Disk floor** (aegis-xa6w). `[ephemeral] disk_floor_gb` (default `0` = off) is
+the free space, in GB, the filesystem worktrees land on must keep. That path is
+`disk_path` when set, else the mounted worktree storage root, else the st root.
+With no worktree storage configured, worktrees land beside their checkout
+(`<repo>-wt`), which can be a different mount from the st root: such a host must
+set `disk_path`. The governor line names the path it read, so a wrong one shows.
+A worktree storage file that exists but is invalid reads `lost` (held), never
+the st root's filesystem in its place.
+Below the floor a fresh spawn **queues** with the reason `disk below floor: <N>G
+free on <path>, floor <F>G` and the drain launches nothing; it re-reads the disk
+before every claim, so a drain stops at the floor it is filling towards. A full
+disk is exactly when no job ends to drain the queue, so the `st fleet tend` reap
+sweep kicks the drain once space is back. A floor whose filesystem cannot be
+read (`lost`) holds like `low`. `st crew --governor` prints the line
+`disk ok|low|lost <free>G free/floor <F>G/<total>G on <path>` (and `disk` in
+its JSON) whenever a floor is set, and nothing when none is. Rollback: set
+`disk_floor_gb = 0` and run `st agent spawn --pool resume` to drain anything it
+held.
+
+Teardown that **keeps** a job's worktree because it holds work also removes the
+tree's git-ignored top-level `target/` build cache (never a symlink, never a
+tracked directory); the reap sweep does the same, once, for jobs that ended
+before this landed. The edits and commits are the work; a cargo cache of up to
+8G per tree is not. This runs whether or not a floor is set.
+
 ## Configuration
 
 ```toml
@@ -391,6 +416,10 @@ require_verified_identity = false # opt in after protected UID migration
 unattended_uid_ready = false # unattended gate: OFF until distinct job UID isolation is verified
 recruitment_launch_ready = false # separate signed-controller gate; no runtime wiring
 queue_ttl_minutes = 240     # report a ticket queued this long, once; it stays queued; 0 = off (aegis-za4f.3)
+disk_floor_gb = 0           # free GB to keep on the worktree filesystem; below it spawns queue; 0 = off (aegis-xa6w)
+                            # rollback: disk_floor_gb = 0, then `st agent spawn --pool resume`
+disk_path = ""              # absolute path to watch; "" = worktree storage root, else the st root
+                            # (set it when worktrees land beside checkouts on another mount)
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into
@@ -527,11 +556,62 @@ write an `aegis:VerifierRegistration` in ROOT (`aegis:verifier` = the signer
 id, `aegis:publicKey` = the key's public half, `aegis:attests
 "github-pr-gate-approval"`). Set `lane_release` when chaski's receiver runs.
 
+## One Shuttle run per job (aegis-za4f.19.1)
+
+Every job is one Shuttle workflow run, named after the job (`eph-task-…`).
+`shantytown/job_runs.py` holds the definitions and the lifecycle:
+
+- **start** once the ledger is written at spawn (`st-ephemeral-task-v1`, or
+  `st-ephemeral-review-v1` for a review job), in state `spawned`;
+- **claim** when the job's prompt is delivered (`mark_live`);
+- **end** on the recorded result: a task that reports `done`/`merged` walks
+  `work -> report`; a review walks its verdict (`approve -> report`,
+  `request-changes`, `reject`); anything else, or a job that never claimed,
+  is `fail`. `open-pr` (task) and `enqueue` (review) are legal edges no st
+  path takes yet: nothing reports them to st, and the run never claims a step
+  on the job's say-so.
+
+Illegal steps are refused in st before any signer is asked, and again by
+shuttle. The run is recorded on the ledger as `shuttle_run` (definition,
+state, steps, signer, last error). Recording never blocks a job: a host with no
+`shuttle`, no administrator, or a refused step still launches, reports and
+tears down, and the entry says why it has no run. That holds for ANY failure,
+not only a refusal: a run operation that raises anything (an unwritable
+TMPDIR, a run lock it cannot open, a stale definition) records the error on
+`shuttle_run` and returns, so `--report` still notifies and tears down.
+
+**Signing is an interface.** `job_runs.Signer` is what the run needs
+(`define/start/advance/verify`). The only implementation today is
+`RegisteredKeySigner`: the `shuttle` CLI with `--require-existing-keys`,
+signing as the job's administrator, whose key is already registered. No
+per-job key is generated, injected, or passed in env, argv, a file or an fd
+(2026-09-12 decision 3). The attribution caveat of that decision still holds
+for this signer: the signature names the administrator's key, and a same-uid
+job could read that key. The signing broker (sattler's ruling B on
+aegis-za4f.19, slice S2) replaces this signer with per-job keys held under
+its own uid, and callers do not change.
+
+**S1 widens who exercises that key.** Before S1 the administrator's key signed
+only the administrator's own transitions. Now `st agent spawn --report`, run
+from inside the job's own process, signs the job's ending with it. That is the
+same 2026-09-12 caveat applied to more callers, accepted until S2, not fixed.
+
+**Bounds.** Each shuttle call has a 10s timeout, and one run operation (start,
+one step, or the ending) has 20s in total. A hung shuttle therefore costs
+`--report` at most 20s, and the ending is recorded as refused. One job's run
+operations hold a per-job run lock (`.run-<name>.lock`) from the read through
+the store, so a claim racing a timeout's ending cannot drop a signed step. Teardown removes the lock file.
+The host ledger lock is never held across a shuttle call.
+
+`SHANTY_JOB_RUNS=none` turns runs off. It is the negative control, and the
+test suite runs with it so that no test appends to the operator's shuttle log.
+
 ## Known limits
 
 - **One GitHub identity.** A non-author GitHub APPROVE can never exist, so the approval comes from a signed Quipu verdict record (above). Until verdict records are enabled and the signer is registered, merge jobs report `blocked`. That is the safe outcome.
 - **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
-- **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
+- **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there. One exception: when the job's harness has *no* role file yet, spawn emits it, using the same emitter and provisioning as `st fleet roles set`. This happens, for example, on the first `--harness agy` or `--harness opencode` job in a store where no crew card runs that harness. Without it, every job on that harness refused with "could not materialize settings" (aegis-j550). An existing file is never touched.
+- **Job tool profiles on agy and opencode.** A bound JobSpec (`[ephemeral.jobs.<job>]`) is enforced for claude, codex, agy and opencode (`job_tools.prepare_settings`). An agy job gets its own canonical file (`settings/agy/job-<name>/settings.json`); its PreToolUse gate runs inside agy's hook adapter on every MCP call, and its workspace MCP kit is replaced by exactly the selected servers. An opencode job gets its own config (`settings/opencode/job-<name>/opencode.json`): `mcp` holds only the selected servers, the bridge plugin knows exactly those names, and the gate runs in the bridge before each tool. An opencode job refuses if any other opencode config (global, or the workspace) declares `mcp`: a server named there would keep a raw tool name the gate never matches. A selected server that is not provisioned also refuses. No job runs with its profile dropped, because that would widen its tool surface.
 - **Task workspace consent.** Task jobs have no per-PR allowlist to restore. Provisioning records the hash of the exact workspace consent bytes it emits for that task, so the folder-trust guard can verify them. A later edit, a different workspace, or an unproven file still refuses trust; a completed job is not rebound by provisioning.
 - **Job MCP kit.** The guard used to admit a job's `.mcp.json` when its server *names* were all in the kit, so a planted file that reused a kit name with its own command passed. Provisioning now records the sha256 of the exact `.mcp.json` bytes it publishes into an ephemeral job's own workspace (`kit_mcp_sha256`). The guard requires both conditions: the names are in the kit, and the bytes match that hash. A missing record, a symlink, or any later edit refuses trust (aegis-8et).
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.

@@ -27,7 +27,10 @@ def job_bindings(root, host):
             raise ValueError('oversized job duty source')
         hashes[path] = hashlib.sha256(raw).digest()
     configured, errors = jobs.load(root)
-    if errors:
+    # A cron/every file is refused (directive crew/scheduled-jobs): it cannot
+    # run, so it binds no duty. Counting it as an unreadable source made the
+    # whole host's duty inventory fail while one such file existed.
+    if [e for e in errors if not jobs.is_timed_refusal(e)]:
         raise ValueError('job duty source incomplete')
     if sorted(directory.glob('*.toml')) != paths:
         raise ValueError('job duty population changed')

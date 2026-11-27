@@ -123,6 +123,7 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 | `SHANTY_OWNED_WORK_PUBLISH` | Opt in to authenticated lifecycle observation publication from the existing stop, launch, capture and supervisor hooks. `1` enables it; otherwise local escalation stays active without graph writes. Facts use the configured host/root writer scope and expire to UNKNOWN for the held-work reader. See [lifecycle observations](stopped-owner-graph.md). | off |
 | `SHANTY_GRAPH_CONTEXT` | how hard `st go` and `st agent cycle` insist on graph context: `advise` (default) warns and RECORDS the gap, `require` refuses a dispatch that names neither a `--quipu-node` nor a `--no-graph-context` reason. Advise is the default because this landed on a fleet whose scripts and crons already call `st go`, and a flag that refuses every existing caller the day it ships is a fleet-stopping change dressed as a measurement — so the ledger measures the habit first and the flip is one line once the callers carry it. Independent of the mode: a node the graph positively does NOT hold is refused either way (a wrong claim, not an absent one), while a graph that cannot be reached never refuses. Read the numbers with `st agent stats --graph`. | `advise` |
 | `SHANTY_ENTITY_LINK` | the graph-node SUGGESTION for work that names none (aegis-4hhqoe.12): `write` (default) suggests and records the link as an inferred, quarantined `aegis:about`; `suggest` only prints it; `off` asks nothing. When `st go` names no `--quipu-node`, and when a resume brief carries no node, st runs camayoc `scripts/entity_link.py` (quipu `/search`, then one Jev choice with none-of-these) and SHOWS the result as a suggestion. It is never added to the dispatch's nodes: citing it with `--quipu-node` is the agent's act, and `st agent stats --graph` reads that act as accepted/rejected, the live precision. Any failure (no camayoc at `CAMAYOC_SOURCE`, default `~/.local/share/camayoc-src/camayoc`, no Jev key, a timeout) is "no suggestion" and never blocks a dispatch. | `write` |
+| `SHANTY_JOB_RUNS` | whether each ephemeral job is one Shuttle workflow run (aegis-za4f.19.1): `shuttle` (default) starts a run at spawn, claims it on delivery and ends it on the report, signing with the administrator's EXISTING registered key (`--require-existing-keys`; no per-job key); `none` records no run. A host with no `shuttle` on PATH records why on the ledger's `shuttle_run` and the job still runs. See docs/ephemeral-agents.md. | `shuttle` |
 | `SHANTY_STALL_MIN` | minutes an idle worker may hold an in_progress item with zero pane/item/shell change before tend acts on the neglected anchor. At this threshold tend NUDGES the agent itself to close-or-release it (self-heal); the coordinator is only escalated to if that goes unanswered. Default 15 — ~30 consecutive unchanged 30s passes: far above prompt-render lag, far below the measured hours-long parked failure. | `15` |
 | `SHANTY_STALL_ESCALATE_MIN` | minutes a still-frozen anchor waits AFTER the self-heal nudge before tend escalates it to the coordinator (aegis-es1tt). Default = `SHANTY_STALL_MIN`: the agent gets the same grace to act on the nudge that it got to be noticed. Any progress in the window re-arms the episode, so an agent that acts is never escalated; a decision/blocked-labelled anchor is never nudged or escalated at all. | `SHANTY_STALL_MIN` |
 | `SHANTY_GOVERNOR_WAKE` | **set by `st`, not by you** — the window name (`five_hour`\|`seven_day`) on the tend pass a governor reset-wake timer started. tend prints it when a tier is released, so the log says whether the crew came back via the one-shot wake or via the ordinary five-minute pass. Setting it by hand only mislabels a line; it changes no decision, because the timer never decides anything — it schedules a READING, and the reading releases the tier. Unset = an ordinary pass. | unset |
@@ -183,6 +184,32 @@ error, it just stops new facts from joining the old ones.
 CLI graph clients refuse before sending a request when the namespace is missing
 or is the documentation example. Local commands still work without a namespace.
 Library clients outside a CLI invocation retain the warned example fallback.
+
+## Scheduled jobs (`[jobs]`)
+
+Job config lives in Quipu (see [scheduled jobs](jobs.md)). The `[jobs]`
+table has three keys. Any other key is refused.
+
+```toml
+[jobs]
+graph = "urn:aegis:scheduled:jobs"   # the Quipu graph jobs are declared in
+timed_files = "refuse"               # or "migrate", for a migration window only
+scheduler = "local"                  # or "chaski"
+```
+
+- **`graph`**: an absolute IRI, empty by default. When set, `st work jobs list`
+  and `check` read only this graph and never fall back to `<root>/jobs/*.toml`.
+  `st work jobs new` writes to it, and tend stops running file jobs. Leave it
+  unset on a host whose event (`on`) file jobs are still live, until the Chaski
+  consumer (aegis-6vf.11) exists. Graph mode would stop them. A value that is
+  not an absolute IRI is refused.
+- **`timed_files`**: `"refuse"` (default) or `"migrate"`. A job file with a
+  `cron` or `every` trigger is refused, and the refusal names `st work jobs new`.
+  `"migrate"` keeps such files firing on a host that still has them, and every
+  tend pass and `st work jobs` read warns. Set it only before deploying to such
+  a host, move the jobs, delete the files, then remove the setting.
+- **`scheduler`**: `"local"` (default) or `"chaski"`. `"chaski"` skips tend's
+  local job evaluator entirely, for a host whose jobs Chaski fires.
 
 ## Named accounts
 

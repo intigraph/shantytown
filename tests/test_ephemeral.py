@@ -631,6 +631,39 @@ def test_merge_gate_says_no_to_each_unsafe_merge():
         assert want in eph.merge_gate(*args), want
 
 
+def _run(name, conclusion, started, rid, status="completed", app=15368):
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "started_at": started, "id": rid, "app": {"id": app}}
+
+
+def test_merge_gate_judges_the_latest_run_per_check():
+    """aegis-es9d: shantytown#767's first suite was CANCELLED and its rerun all
+    SUCCESS; judging every run refused a head the forge called green. The
+    newest run per (app, name) wins, in both directions."""
+    merge = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE}
+    t0, t1 = "2026-11-27T06:34:26Z", "2026-11-27T06:39:04Z"
+
+    def gate(checks):
+        return eph.merge_gate(merge, HEAD, _pr(), GOOD_REVIEW, checks)
+
+    rerun_green = [_run("test (3.11)", "cancelled", t0, 1), _run("test (3.11)", "success", t1, 2),
+                   _run("order-independence", "cancelled", t0, 3),
+                   _run("order-independence", "success", t1, 4)]
+    assert gate(rerun_green) == ""
+    assert gate(list(reversed(rerun_green))) == ""
+    assert "not green" in gate([_run("ci", "success", t0, 1), _run("ci", "failure", t1, 2)])
+    assert "not green" in gate([_run("ci", "cancelled", t0, 1)])
+    assert "not green" in gate([_run("ci", "success", t1, 1), _run("lint", "failure", t1, 2)])
+    # Same started_at: the higher id is the rerun.
+    assert "not green" in gate([_run("ci", "success", t1, 1), _run("ci", "failure", t1, 2)])
+    # A queued rerun (no started_at yet) is newer than any started run: pending refuses.
+    assert "not green" in gate([_run("ci", "success", t1, 1),
+                                _run("ci", None, None, 2, status="queued")])
+    # Same name from a different app is a different check; its failure still refuses.
+    assert "not green" in gate([_run("ci", "success", t1, 2),
+                                _run("ci", "failure", t0, 1, app=99)])
+
+
 def test_review_mode_none_waives_only_the_approval():
     """aegis-za4f.17 (Stiwi 11-27): a repo configured review_mode = "none"
     merges at green with no review; every other refusal still holds, and any
@@ -2347,6 +2380,236 @@ def test_other_jobs_without_repo_are_not_held_to_the_task_rule(store, capsys, jo
     assert "a task job needs --repo" not in capsys.readouterr().err
 
 
+# --- disk floor (aegis-xa6w) ----------------------------------------------------
+
+from collections import namedtuple
+
+from shantytown import disk as disk_mod
+
+_Usage = namedtuple("_Usage", "total used free")
+
+
+def _disk(monkeypatch, free_gb, total_gb=2200):
+    state = {"free": free_gb}
+    def usage(path):
+        if state["free"] is None:
+            raise PermissionError(path)
+        g = disk_mod.GB
+        return _Usage(total_gb * g, (total_gb - state["free"]) * g, state["free"] * g)
+    monkeypatch.setattr(disk_mod.shutil, "disk_usage", usage)
+    return state
+
+
+def test_disk_reading_says_no_below_the_floor_and_when_blind(tmp_path, monkeypatch):
+    state = _disk(monkeypatch, 55)
+    off = disk_mod.read(_policy(), tmp_path)
+    assert off.state == "off" and not off.holds and off.refusal() == ""
+    low = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert low.state == "low" and low.holds
+    assert "disk below floor: 55G free" in low.refusal() and "floor 100G" in low.refusal()
+    assert low.line().startswith("disk low 55G free/floor 100G/2200G on ")
+    state["free"] = 150
+    ok = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert ok.state == "ok" and ok.refusal() == "" and ok.line().startswith("disk ok 150G")
+    # Blind holds: a floor we cannot read is not a floor we are above.
+    state["free"] = None
+    lost = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert lost.state == "lost" and lost.holds and "unreadable" in lost.refusal()
+    assert lost.line().startswith("disk lost floor 100G")
+
+
+def test_disk_path_overrides_the_watched_filesystem(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(disk_mod.shutil, "disk_usage",
+                        lambda p: seen.append(str(p)) or _Usage(1, 0, 1))
+    disk_mod.read(_policy(disk_floor_gb=1, disk_path="/srv/fleet"), tmp_path)
+    assert seen == ["/srv/fleet"]
+
+
+def test_config_reads_and_refuses_the_disk_floor(tmp_path):
+    (tmp_path / "shantytown.toml").write_text(
+        "[ephemeral]\ndisk_floor_gb = 100\ndisk_path = \"/srv/fleet\"\n")
+    cfg = config.load(tmp_path)
+    assert cfg.ephemeral.disk_floor_gb == 100 and cfg.ephemeral.disk_path == "/srv/fleet"
+    assert config.Ephemeral().disk_floor_gb == 0          # off unless configured
+    for bad in ("disk_floor_gb = -1", "disk_floor_gb = true", 'disk_path = "relative/x"'):
+        (tmp_path / "shantytown.toml").write_text(f"[ephemeral]\n{bad}\n")
+        with pytest.raises(config.ConfigError, match="disk_"):
+            config.load(tmp_path)
+
+
+def test_plan_queues_below_the_disk_floor(tmp_path, monkeypatch):
+    state = _disk(monkeypatch, 55)
+    req = eph.Request(job="task", item="it-1", repo="o/n")
+    kw = dict(root=tmp_path, policy=_policy(max_agents=10, disk_floor_gb=100), actor="boss",
+              administrator="boss", host=None, now=NOW,
+              role_of=lambda n: "administrator" if n == "boss" else None)
+    with pytest.raises(eph.OverCap, match="disk below floor"):
+        eph.plan(req, **kw)
+    state["free"] = 500
+    assert eph.plan(req, **kw)["item"] == "it-1"
+
+
+def test_claim_next_holds_on_disk(tmp_path):
+    eph.enqueue(tmp_path, eph.ticket_for(eph.Request(job="task", item="it-1", repo="o/n"),
+                                         harness="claude", priority=1, requester="boss", now=NOW))
+    t, notes = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW,
+                              disk_hold="disk below floor: x")
+    assert t is None and notes == ["disk below floor: x; nothing launched"]
+    t, _ = eph.claim_next(tmp_path, cap=10, item_state=lambda i: "open", now=NOW)
+    assert t is not None
+
+
+def test_spawn_below_disk_floor_queues_named_and_launches_when_space_returns(
+        store, monkeypatch, capsys):
+    root, _panes, launched = store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 2\nunattended = false\nrequire_verified_identity = true\n"
+        "disk_floor_gb = 100\n")
+    state = _disk(monkeypatch, 55)
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    kicks = []
+    def drain_now(r):
+        kicks.append(r)
+        return cli.main(["--root", str(r), "agent", "spawn", "--drain"])
+    monkeypatch.setattr(eph, "kick_drain", drain_now)
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    out = capsys.readouterr().out
+    assert "QUEUED q-" in out and "disk below floor: 55G free" in out
+    assert launched == [] and len(eph.tickets(root)) == 1
+    # The drain holds while the disk does, and the ticket stays queued.
+    assert _st(root, "--drain") == cli.OK
+    assert "disk below floor" in capsys.readouterr().err
+    assert launched == [] and len(eph.tickets(root)) == 1
+    # tend while still low: no kick.
+    assert cli._spawn_reap(cli._parse_args(["--root", str(root), "agent", "spawn", "--reap"]),
+                           quiet=True) in (cli.OK, cli.CANNOT_TELL)
+    assert kicks == []
+    # Space is back: the next tend sweep drains, with no pool pause/resume.
+    state["free"] = 400
+    cli._spawn_reap(cli._parse_args(["--root", str(root), "agent", "spawn", "--reap"]),
+                    quiet=True)
+    assert kicks and len(launched) == 1 and eph.tickets(root) == []
+    (rec,) = eph.live(root)
+    assert rec["item"] == "it-1" and rec["ticket"].startswith("q-")
+
+
+def test_crew_governor_prints_the_disk_line(tmp_path, monkeypatch, capsys):
+    (tmp_path / "crew").mkdir()
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\ndisk_floor_gb = 100\n")
+    state = _disk(monkeypatch, 55)
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk low 55G free/floor 100G/2200G" in capsys.readouterr().out
+    state["free"] = 300
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk ok 300G free/floor 100G" in capsys.readouterr().out
+    # No floor: the bar output is unchanged (no disk line at all).
+    (tmp_path / "shantytown.toml").write_text("")
+    cli.main(["--root", str(tmp_path), "crew", "--governor"])
+    assert "disk" not in capsys.readouterr().out
+
+
+def test_invalid_worktree_storage_reads_lost_not_the_st_root(tmp_path, monkeypatch):
+    # Review of #761: a storage file that is present but invalid must not fall
+    # back to a healthy reading of a different filesystem. Blind is held.
+    state = _disk(monkeypatch, 500)
+    monkeypatch.setenv("SHANTY_WORKTREE_ROOT", "relative/root")
+    monkeypatch.setenv("SHANTY_WORKTREE_MOUNT", "/srv")
+    r = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert r.state == "lost" and r.holds and "worktree storage" in r.error
+    assert "floor 100G is held" in r.refusal()
+    # An explicit disk_path does not consult the storage file at all.
+    ok = disk_mod.read(_policy(disk_floor_gb=100, disk_path=str(tmp_path)), tmp_path)
+    assert ok.state == "ok"
+    # No storage configured at all is not blind: the st root is read.
+    monkeypatch.delenv("SHANTY_WORKTREE_ROOT")
+    monkeypatch.delenv("SHANTY_WORKTREE_MOUNT")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "noconfig"))
+    assert disk_mod.read(_policy(disk_floor_gb=100), tmp_path).state == "ok"
+    state["free"] = 5
+    assert disk_mod.read(_policy(disk_floor_gb=100), tmp_path).state == "low"
+
+
+def _cache_tree(tmp_path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(tree), *a], check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q")
+    (tree / ".gitignore").write_text("target/\n")
+    (tree / "target" / "debug").mkdir(parents=True)
+    (tree / "target" / "debug" / "blob").write_bytes(b"x" * 1024)
+    (tree / "src.rs").write_text("fn main() {}\n")
+    (tree / "Cargo.toml").write_text("[package]\nname = \"t\"\n")
+    return tree, run
+
+
+def test_purge_build_caches_removes_only_an_ignored_target(tmp_path):
+    tree, run = _cache_tree(tmp_path)
+    assert disk_mod.purge_build_caches(tree, git=eph._git) == ["target"]
+    assert not (tree / "target").exists() and (tree / "src.rs").exists()
+    # A tracked target/ is source, not cache: it must say no.
+    (tree / ".gitignore").write_text("")
+    (tree / "target").mkdir()
+    (tree / "target" / "lib.rs").write_text("pub fn f() {}\n")
+    run("add", "target/lib.rs")
+    assert disk_mod.purge_build_caches(tree, git=eph._git) == []
+    assert (tree / "target" / "lib.rs").exists()
+    # A symlinked target/ points out of the tree: never followed or removed.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("k")
+    tree2 = tmp_path / "tree2"
+    tree2.mkdir()
+    subprocess.run(["git", "-C", str(tree2), "init", "-q"], check=True)
+    (tree2 / ".gitignore").write_text("target\n")
+    (tree2 / "target").symlink_to(outside)
+    assert disk_mod.purge_build_caches(tree2, git=eph._git) == []
+    assert (outside / "keep").exists()
+    # An ignored target/ with no cargo mark is another tool's output: kept.
+    (tmp_path / "t3").mkdir()
+    tree3, _ = _cache_tree(tmp_path / "t3")
+    (tree3 / "Cargo.toml").unlink()
+    assert disk_mod.purge_build_caches(tree3, git=eph._git) == []
+    assert (tree3 / "target" / "debug" / "blob").exists()
+
+
+def test_reap_purges_build_cache_of_an_ended_kept_worktree_once(tmp_path):
+    tree, _run = _cache_tree(tmp_path)
+    root = tmp_path / "st"
+    rec = dict(name="eph-task-aaaaaa", state=eph.DONE, workspace=str(tree),
+               workspace_teardown=f"kept (holds work): {tree}")
+    eph.write(root, rec)
+    lines = eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None,
+                     now=1.0e9, dry_run=True)
+    assert any("would purge build caches" in l for l in lines)
+    assert (tree / "target").exists()                       # dry run touched nothing
+    lines = eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None,
+                     now=1.0e9)
+    assert any("purged target/" in l for l in lines) and not (tree / "target").exists()
+    assert eph.read(root, rec["name"])["build_cache_purged"] == ["target"]
+    (tree / "target").mkdir()                               # once: not re-swept
+    eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None, now=1.0e9)
+    assert (tree / "target").exists()
+    # A job not proven over, or a tree not kept as its own, is never swept.
+    rec2 = dict(rec, name="eph-task-bbbbbb", workspace_teardown="kept (worktree identity uncertain)")
+    eph.write(root, rec2)
+    eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None, now=1.0e9)
+    assert (tree / "target").exists()
+
+
+def test_crew_governor_json_omits_disk_when_no_floor(tmp_path, monkeypatch, capsys):
+    (tmp_path / "crew").mkdir()
+    _disk(monkeypatch, 55)
+    (tmp_path / "shantytown.toml").write_text("")
+    cli.main(["--root", str(tmp_path), "crew", "--governor", "--json"])
+    assert '"disk"' not in capsys.readouterr().out
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\ndisk_floor_gb = 100\n")
+    cli.main(["--root", str(tmp_path), "crew", "--governor", "--json"])
+    out = capsys.readouterr().out
+    assert '"disk"' in out and '"state": "low"' in out
+
+
 def _cargo_target(tree, rel='target'):
     target = tree / rel
     (target / 'debug').mkdir(parents=True)
@@ -2402,3 +2665,40 @@ def test_a_target_that_is_not_wholly_ignored_cargo_debris_is_kept(tmp_path, case
         assert (tmp_path / 'elsewhere' / 'debug' / 'big.rlib').exists()
     elif case != 'not-cargo':
         assert (target / 'debug' / 'big.rlib').exists()
+
+
+@pytest.mark.parametrize("harness", ["agy", "opencode"])
+def test_a_job_on_a_harness_no_crew_card_uses_gets_its_role_artifact(store, harness):
+    """aegis-j550: the first live --harness agy review refused "could not
+    materialize settings" because only `roles set` emitted role files, and only
+    for harnesses some crew card names. Spawn must emit the job harness's role
+    artifact before launch, or no job on that harness can ever start."""
+    from shantytown.harness import get
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text() + f'[ephemeral.harness_by_job]\ntask = "{harness}"\n')
+    role_file = root / "settings" / get(harness).settings_name("worker")
+    assert not role_file.exists()
+    seen_at_launch = []
+    _panes.behaviour["during"] = lambda a: seen_at_launch.append(role_file.is_file())
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["harness"] == harness and launched[0].name == rec["name"]
+    assert seen_at_launch == [True]
+    if harness == "agy":
+        # agy launches on the provider-owned file provision writes beside it.
+        from shantytown.agy import native_settings_path
+        assert native_settings_path(role_file).is_file()
+
+
+def test_spawn_never_rewrites_an_existing_role_artifact(store):
+    """The role file is shared with live crew on that harness: leave it alone."""
+    from shantytown.harness import get
+    root, _panes, _launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text() + '[ephemeral.harness_by_job]\ntask = "agy"\n')
+    role_file = root / "settings" / get("agy").settings_name("worker")
+    role_file.parent.mkdir(parents=True)
+    role_file.write_text('{"hooks": {}, "operator": "kept"}\n')
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'

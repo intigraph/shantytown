@@ -1,18 +1,21 @@
-"""Read declared recurring jobs from an explicitly selected Quipu graph.
+"""Read, and declare, recurring jobs in an explicitly selected Quipu graph.
 
-No writes, schedules, shell execution or TOML fallback. The caller must retain
+The reader does no schedules, shell execution or TOML fallback. The one write,
+`JobCatalogue.declare`, adds a declaration this same reader admits and then
+reads it back; nothing here fires a job (Chaski does). The caller must retain
 last-known catalogue membership to detect deletion; a fresh nonempty catalogue
 alone does not prove completeness. This reader rejects empty, partial and
 malformed snapshots rather than advertising a healthy empty workload.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone as dt_timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .quipu import request_headers, resolve_server
@@ -239,11 +242,234 @@ def decode_catalogue(body: dict) -> list[DeclaredJob]:
     return sorted(jobs, key=lambda job: job.iri)
 
 
+# --- declaring a job (st work jobs new) --------------------------------------
+#
+# Adding ONE weekly job to the Mac pilot (aegis-6vf.9) took a catalogue entry, a
+# per-job json, a ~7 KB shuttle config, an emitters.json entry carrying sha256s,
+# a deliver.py branch, a re-hashed manifest and a chaski restart. Directive
+# crew/scheduled-jobs: creating one is one command and one review. The rows are
+# run through decode_catalogue BEFORE anything is written, so the writer can
+# never emit a declaration the reader (and so the catalogue) would refuse.
+
+JOB_PREFIX = "urn:shantytown:job:"
+HOST_PREFIX = "urn:shantytown:host:"
+INBOX_PREFIX = "urn:shantytown:inbox:"
+_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_AGENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+@dataclass(frozen=True)
+class Declaration:
+    job: DeclaredJob
+    turtle: str
+    body: dict          # the same rows, shaped as a complete /query answer
+
+
+def parse_weekday(text: str) -> int:
+    word = str(text).strip().lower()
+    for i, day in enumerate(WEEKDAYS):
+        if word in (day.lower(), day[:3].lower()):
+            return i
+    raise JobRefused(f"{text!r} is not a weekday (mon..sun)")
+
+
+def _host_iri(host: str) -> str:
+    if _NAME.fullmatch(host or ""):
+        return HOST_PREFIX + host
+    try:
+        return _iri(host)
+    except JobRefused:
+        raise JobRefused(f"host {host!r} is neither a host name nor an absolute IRI") from None
+
+
+def _duration(seconds: int) -> str:
+    d, rest = divmod(seconds, 86400)
+    h, rest = divmod(rest, 3600)
+    m, s = divmod(rest, 60)
+    clock = "".join(f"{n}{u}" for n, u in ((h, "H"), (m, "M"), (s, "S")) if n)
+    return "P" + (f"{d}D" if d else "") + (f"T{clock}" if clock else "")
+
+
+# Fixed activation anchor for every declaration. A Monday at UTC midnight, so
+# --every slots land on whole multiples of the interval since a known instant
+# and the weekly anchor is the first matching slot in its zone at or after it.
+ANCHOR_EPOCH = datetime(2026, 1, 5, tzinfo=dt_timezone.utc)
+
+
+def _weekly_anchor(tz: ZoneInfo, weekday: int, hhmm: str) -> datetime:
+    """The first unambiguous weekly slot at or after ANCHOR_EPOCH. A slot that
+    falls in a DST gap or fold that week is skipped by whole weeks, because the
+    reader refuses such an anchor with only "ambiguous or nonexistent"."""
+    hour, minute = int(hhmm[:2]), int(hhmm[3:])
+    local = ANCHOR_EPOCH.astimezone(tz)
+    day = local.date() + timedelta(days=(weekday - local.weekday()) % 7)
+    for _ in range(106):
+        naive = datetime(day.year, day.month, day.day, hour, minute)
+        stamps = {naive.replace(tzinfo=tz, fold=f).timestamp() for f in (0, 1)}
+        slot = naive.replace(tzinfo=tz)
+        if (len(stamps) == 1 and slot >= ANCHOR_EPOCH and
+                datetime.fromtimestamp(slot.timestamp(), tz).replace(tzinfo=None) == naive):
+            return slot
+        day += timedelta(days=7)
+    raise JobRefused(f"{WEEKDAYS[weekday]} {hhmm} never exists unambiguously in {tz.key}")
+
+
+_TURTLE_ECHAR = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t",
+                 "\b": "\\b", "\f": "\\f"}
+
+
+def _turtle_string(text: str) -> str:
+    """A Turtle STRING_LITERAL_QUOTE. json.dumps(ensure_ascii=True) was used here
+    and wrote a non-BMP character (an emoji in --message) as a JSON surrogate
+    pair, \\ud83d\\ude00; Turtle's UCHAR forbids surrogate code points, so the
+    write failed or stored mojibake. Characters stay literal in the Turtle; the
+    JSON envelope carrying it is ASCII-escaped, which is JSON-level escaping and
+    decodes back to the same characters before the Turtle parser sees them. Only
+    the quote, backslash and C0 controls are Turtle-escaped. A lone
+    surrogate (undecodable argv bytes under surrogateescape) has no UTF-8 form,
+    so it is refused here, before anything is written."""
+    out = []
+    for i, ch in enumerate(text):
+        if "\ud800" <= ch <= "\udfff":
+            # An excerpt, not the whole --message: a long message echoed in full
+            # buries the one character the operator has to find.
+            near = text[max(0, i - 20):i + 20]
+            raise JobRefused(f"text holds an undecodable character (lone surrogate "
+                             f"U+{ord(ch):04X} at offset {i}, near {near!r})")
+        out.append(_TURTLE_ECHAR.get(ch) or (f"\\u{ord(ch):04X}" if ch < " " else ch))
+    return '"' + "".join(out) + '"'
+
+
+def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
+                 message: str, weekly: tuple[int, str] | None = None,
+                 every_s: int | None = None, enabled: bool = True) -> Declaration:
+    """One inbox job's declaration: weekly civil time in `zone`, or a fixed
+    interval. There is no cron form here either. The output is a pure function
+    of the arguments: the `-n` dry run IS what gets written, revision included
+    (an anchor taken from the clock made the reviewed Turtle differ from the
+    written one)."""
+    if not _NAME.fullmatch(name or ""):
+        raise JobRefused(f"job name {name!r}: lowercase letters, digits, - and _ only")
+    if not _AGENT.fullmatch(inbox or ""):
+        raise JobRefused(f"inbox agent {inbox!r} is not an agent name")
+    if not isinstance(message, str) or not message.strip():
+        raise JobRefused("an inbox job needs a nonempty --message")
+    if not isinstance(owner, str) or not owner.strip():
+        raise JobRefused("a job needs an owner (--owner)")
+    if (weekly is None) == (every_s is None):
+        raise JobRefused("pick exactly one of --weekly or --every")
+    try:
+        tz = ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise JobRefused(f"unknown timezone {zone!r}") from exc
+    host_iri = _host_iri(host)
+    if weekly is not None:
+        weekday, hhmm = weekly
+        if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", hhmm or ""):
+            raise JobRefused(f"time {hhmm!r} must be HH:MM (24-hour)")
+        anchor = _weekly_anchor(tz, weekday, hhmm).isoformat()
+        duration, cadence = "P7D", f"weekly:{weekday}:{hhmm}"
+    else:
+        if isinstance(every_s, bool) or not isinstance(every_s, int) or every_s < 60:
+            raise JobRefused("--every must be at least sixty seconds")
+        anchor = ANCHOR_EPOCH.strftime("%Y-%m-%dT%H:%M:%SZ")
+        duration, cadence = _duration(every_s), f"every:{every_s}"
+    host_key = host if _NAME.fullmatch(host) else hashlib.sha256(host_iri.encode()).hexdigest()[:12]
+    job = f"{JOB_PREFIX}{host_key}:{name}"
+    event, schedule, target = job + ":event", job + ":schedule", INBOX_PREFIX + inbox
+    revision = "r" + hashlib.sha256(json.dumps(
+        [name, host_iri, owner, zone, cadence, anchor, target, message, enabled]
+    ).encode()).hexdigest()[:16]
+    S, X = SCHEMA, XSD
+    triples = [(s, RDF_TYPE, S + k, True, None) for s, k in
+               ((job, "Action"), (event, "Event"), (schedule, "Schedule"))]
+    triples += [
+        (event, S + "eventSchedule", schedule, True, None),
+        (event, S + "potentialAction", job, True, None),
+        (job, S + "name", name, False, X + "string"),
+        (job, S + "identifier", revision, False, X + "string"),
+        (job, S + "description", message, False, X + "string"),
+        (job, QUECHUA_CANONICAL + "sourceKind", "declared", False, X + "string"),
+        (job, QUECHUA_CANONICAL + "owner", owner, False, X + "string"),
+        (job, QUECHUA_CANONICAL + "enabled", enabled, False, X + "boolean"),
+        (job, S + "location", host_iri, True, None),
+        (job, S + "target", target, True, None),
+        (schedule, S + "repeatFrequency", duration, False, X + "duration"),
+        (schedule, S + "scheduleTimezone", zone, False, X + "string"),
+        (schedule, S + "startDate", anchor, False, X + "dateTime"),
+    ]
+    if weekly is not None:
+        triples += [(schedule, S + "byDay", S + WEEKDAYS[weekly[0]], True, None),
+                    (schedule, S + "startTime", weekly[1] + ":00", False, X + "time")]
+    rows = [dict(s=s, p=p, o=o, subjectIRI=True, objectIRI=iri,
+                 **({} if iri else {"datatype": dt})) for s, p, o, iri, dt in triples]
+    body = dict(count=len(rows), rows=rows, truncated=False)
+    decoded, = decode_catalogue(body)       # the reader is the writer's gate
+
+    def term(o, iri, dt):
+        if iri:
+            return f"<{o}>"
+        lexical = ("true" if o else "false") if isinstance(o, bool) else o
+        return _turtle_string(lexical) + ("" if dt == X + "string" else f"^^<{dt}>")
+    turtle = "".join(f"<{s}> <{p}> {term(o, iri, dt)} .\n" for s, p, o, iri, dt in triples)
+    return Declaration(decoded, turtle, body)
+
+
 class JobCatalogue:
     def __init__(self, graph: str, *, root=None, server=None, timeout=10):
         self.graph, self.server, self.timeout = _iri(graph), resolve_server(server, root).rstrip('/'), timeout
 
     def read(self) -> list[DeclaredJob]:
+        return decode_catalogue(self._fetch())
+
+    def declare(self, decl: Declaration) -> DeclaredJob:
+        """Write one NEW declaration and read it back. Refuses to replace an
+        existing identity or name: a revision is a separate, reviewed change.
+        An error after the write may follow a committed write, so the caller
+        reads back before retrying rather than writing twice."""
+        body = self._fetch()
+        empty = (body.get('rows') == [] and body.get('count') == 0 and
+                 body.get('truncated') is False and not body.get('error'))
+        new = decl.job
+        for job in ([] if empty else decode_catalogue(body)):
+            if job.iri == new.iri or (job.host, job.name) == (new.host, new.name):
+                raise JobRefused(f"{new.name} is already declared on {new.host} "
+                                 f"({job.iri} revision {job.revision}); not replacing it")
+        from . import quipu_auth
+        try:
+            headers = quipu_auth.write_headers(self.server)
+        except quipu_auth.CredentialRefused as exc:
+            raise JobRefused(str(exc)) from None
+        req = urllib.request.Request(self.server+'/knot', data=json.dumps({
+            'turtle': decl.turtle, 'graph': self.graph}).encode(),
+            headers={**headers, 'X-Quipu-Client': 'st-jobs'}, method='POST')
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                out = json.loads(response.read(MAX_BYTES))
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            raise JobsUnavailable(f"write outcome unknown ({exc}); read back before retrying") from exc
+        if not isinstance(out, dict) or out.get('error'):
+            # An error answer can follow a committed write: unknown, not refused.
+            raise JobsUnavailable(f"quipu answered the write with an error, outcome "
+                                  f"unknown: {str(out)[:200]}; read back before retrying")
+        if out.get('conforms') is False:   # a SHACL refusal has no "error" key (aegis-0v97)
+            issues = "; ".join(f"{i.get('path', '?')}: {i.get('message', '?')}"
+                               for i in (out.get('issues') or [])[:3])
+            raise JobRefused(f"quipu refused the declaration (SHACL): {issues or out}")
+        # HTTP 200 alone does not prove the write: the job must read back. The
+        # write may already have committed, so ANY failure from here on is an
+        # unknown outcome, never "refused, nothing written": a racing writer, a
+        # name conflict or a malformed neighbour makes read() raise JobRefused.
+        try:
+            back = [job for job in self.read() if job.iri == new.iri]
+        except (JobRefused, JobsUnavailable) as exc:
+            raise JobsUnavailable(f"wrote {new.iri} but could not read it back "
+                                  f"({exc}); read back before retrying") from exc
+        if len(back) != 1 or back[0].revision != new.revision:
+            raise JobsUnavailable(f"{new.iri} revision {new.revision} did not read back")
+        return back[0]
+
+    def _fetch(self) -> dict:
         query = ('SELECT ?s ?p ?o (isIRI(?s) AS ?subjectIRI) '
                  '(isIRI(?o) AS ?objectIRI) (DATATYPE(?o) AS ?datatype) '
                  f'WHERE {{ ?s ?p ?o }} LIMIT {MAX_TRIPLES+1}')
@@ -258,4 +484,6 @@ class JobCatalogue:
             body = json.loads(raw)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise JobsUnavailable("could not read declared job graph") from exc
-        return decode_catalogue(body)
+        if not isinstance(body, dict):
+            raise JobsUnavailable("catalogue response is not an object")
+        return body

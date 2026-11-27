@@ -63,6 +63,27 @@ class ReceiptConflict(ValueError):
     """No submission, assignment or replay is authorized by this receipt."""
 
 
+class RetirementRefused(ReceiptConflict):
+    """The native item was read exactly, and its state does not permit retirement.
+
+    Distinct from an unknown read: the caller is told the observed state and the
+    release it needs, instead of "UNKNOWN" (aegis-5q2r).
+    """
+
+
+def _native_release_refusal(kind, receipt, current, needs):
+    observed = ' '.join(f"{key}={current.get(key)!r}"
+                        for key in ('revision', 'status', 'assignee', 'defer_until'))
+    return RetirementRefused(
+        f"{kind} refused: native {receipt['item']} is {observed}; receipt {receipt['id']} "
+        f"(revision {receipt['revision']}) needs {needs}")
+
+
+def _native_row_known(receipt, current):
+    return (isinstance(current, dict) and current.get('id') == receipt['item']
+            and type(current.get('revision')) is int)
+
+
 class DifferentScope(ReceiptConflict):
     """Retain the blocking identity, never the requested replacement worker."""
 
@@ -86,12 +107,14 @@ def assignment_supersession(receipt, current):
     This does not prove whether the original claim committed. Its uncertainty
     stays in the ledger; neither its old body nor its claim may be replayed.
     """
-    if (not isinstance(current, dict) or current.get('id') != receipt['item']
-            or type(current.get('revision')) is not int
-            or current['revision'] <= receipt['revision']
+    if not _native_row_known(receipt, current):
+        raise ReceiptConflict('native release for assignment supersession UNKNOWN')
+    if (current['revision'] <= receipt['revision']
             or current.get('status') != 'open' or current.get('assignee') not in (None, '')
             or current.get('defer_until') not in (None, '')):
-        raise ReceiptConflict('native release does not supersede this assignment')
+        raise _native_release_refusal(
+            'assignment supersession', receipt, current,
+            'a NEWER native revision with status open, no assignee and no defer')
     return dict(receipt=receipt['id'], item=receipt['item'], revision=current['revision'],
                 status='open', assignee=None)
 
@@ -106,12 +129,14 @@ def prepared_supersession(receipt, current):
     """
     if (receipt.get('state') != 'prepared' or receipt.get('submission') is not None
             or receipt.get('assignment') is not None
-            or not isinstance(current, dict) or current.get('id') != receipt['item']
-            or type(current.get('revision')) is not int
-            or current['revision'] < receipt['revision']
-            or current.get('status') != 'open' or current.get('assignee') not in (None, '')
-            or current.get('defer_until') not in (None, '')):
+            or not _native_row_known(receipt, current)
+            or current['revision'] < receipt['revision']):
         raise ReceiptConflict('native open/unassigned state for prepared retirement UNKNOWN')
+    if (current.get('status') != 'open' or current.get('assignee') not in (None, '')
+            or current.get('defer_until') not in (None, '')):
+        raise _native_release_refusal(
+            'prepared retirement', receipt, current,
+            'status open, no assignee and no defer')
     return dict(receipt=receipt['id'], item=receipt['item'], revision=current['revision'],
                 status='open', assignee=None, kind='prepared-no-claim')
 

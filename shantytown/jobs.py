@@ -55,6 +55,28 @@ STATE_DIR = ".state"
 LEDGER = "jobs.jsonl"
 
 TRIGGER_KINDS = ("cron", "every", "on", "manual")
+# Directive crew/scheduled-jobs (Stiwi 2026-11-13): "No more cron jobs and st
+# shouldnt support that". hammond added a cron job file on 11-13, a week after
+# the 11-04 rule against it, because this evaluator still accepted one. Timed
+# work is now a Quipu declaration that Chaski fires; a file asking for a clock
+# is REFUSED, loudly, with the replacement named. The old cron/every evaluator
+# below stays only until every host is measured free of such files. A host
+# that still has live timed files (vati was not measured when the refusal
+# shipped) sets `[jobs] timed_files = "migrate"` so they keep firing, with a
+# warning on every read, until they are moved: migrate first, then remove.
+# This constant is the tests' opt-in; operators use the config key.
+LEGACY_TIMED_TRIGGERS = False
+TIMED_MIGRATION = ("cron/interval job files are still firing because [jobs] "
+                   "timed_files = \"migrate\": move each to Quipu with `st work "
+                   "jobs new` and delete the file; the evaluator is removed once "
+                   "no host needs this")
+TIMED_REFUSAL = ("cron/interval job files are no longer supported: declare the "
+                 "job in Quipu with `st work jobs new <name> --weekly <day> <HH:MM> "
+                 "...` (or --every), which Chaski fires; see docs/jobs.md")
+FILE_DEPRECATION = ("job files under <root>/jobs are DEPRECATED (directive "
+                    "crew/scheduled-jobs): job config lives in Quipu. Event and "
+                    "manual file jobs still run during the migration window; move "
+                    "them with `st work jobs new` and delete the file")
 SOURCES = ("bead.created", "bead.closed", "gh.pr.opened", "gh.issue.opened",
            "quipu.tx")
 # Which `match` keys each source understands. A key a source does not read is a
@@ -346,9 +368,11 @@ def _placeholders_ok(path, fld: str, text: str, events: bool) -> None:
                        f"(use date, time, job or event.<field>)")
 
 
-def parse(path, data: dict) -> Job:
+def parse(path, data: dict, *, legacy_timed: bool | None = None) -> Job:
     """One job from one parsed TOML table. Raises JobError naming the field."""
     path = Path(path)
+    if legacy_timed is None:
+        legacy_timed = LEGACY_TIMED_TRIGGERS
     unknown = sorted(set(data) - TOP_KEYS)
     if unknown:
         raise JobError(path, unknown[0], f"unknown key (expected one of "
@@ -382,7 +406,7 @@ def parse(path, data: dict) -> Job:
         backoff_s = parse_duration(retry.get("backoff", "5m"))
     except ValueError as e:
         raise JobError(path, "retry.backoff", str(e)) from None
-    trigger = _parse_trigger(path, data.get("trigger"))
+    trigger = _parse_trigger(path, data.get("trigger"), legacy_timed=legacy_timed)
     action = _parse_action(path, data.get("action"), events=trigger.kind == "on")
     if action.kind == "agy-review" and (trigger.kind != "manual" or retry_max != 0):
         raise JobError(path, "action.agy_review", "requires manual trigger and retry.max=0")
@@ -397,7 +421,7 @@ def parse(path, data: dict) -> Job:
                catch_up=catch_up)
 
 
-def _parse_trigger(path, t) -> Trigger:
+def _parse_trigger(path, t, *, legacy_timed: bool = False) -> Trigger:
     if not isinstance(t, dict):
         raise JobError(path, "trigger", "missing — a job needs a [trigger] table")
     unknown = sorted(set(t) - TRIGGER_KEYS)
@@ -421,6 +445,8 @@ def _parse_trigger(path, t) -> Trigger:
     if kind != "on" and ("repo" in t or "match" in t):
         bad = "repo" if "repo" in t else "match"
         raise JobError(path, f"trigger.{bad}", "only an `on` trigger reads it")
+    if kind in ("cron", "every") and not legacy_timed:
+        raise JobError(path, f"trigger.{kind}", TIMED_REFUSAL)
     if kind == "cron":
         try:
             return Trigger("cron", cron=Cron.parse(t["cron"]), when=when)
@@ -558,6 +584,7 @@ def load(root) -> tuple[list[Job], list[JobError]]:
     d = jobs_dir(root)
     if not d.is_dir():
         return jobs, errors
+    legacy = LEGACY_TIMED_TRIGGERS or timed_migration(root)
     for p in sorted(d.glob("*.toml")):
         try:
             data = tomllib.loads(p.read_text(encoding="utf-8"))
@@ -568,10 +595,34 @@ def load(root) -> tuple[list[Job], list[JobError]]:
             errors.append(JobError(p, "toml", str(e)))
             continue
         try:
-            jobs.append(parse(p, data))
+            jobs.append(parse(p, data, legacy_timed=legacy))
         except JobError as e:
             errors.append(e)
     return jobs, errors
+
+
+def file_job_names(root) -> list[str]:
+    """Job file stems, WITHOUT parsing them: in graph mode st reads no job
+    TOML, but it still names the files it is ignoring."""
+    d = jobs_dir(root)
+    return sorted(p.stem for p in d.glob("*.toml")) if d.is_dir() else []
+
+
+def timed_migration(root) -> bool:
+    """Has this host opted its existing cron/every files into the migration
+    window? An unreadable config answers no: the refusal is the default, and
+    a broken config is already loud everywhere else."""
+    from . import config
+    try:
+        return config.load(Path(root)).jobs_timed_files == "migrate"
+    except (config.ConfigError, OSError):
+        return False
+
+
+def is_timed_refusal(err: JobError) -> bool:
+    """A file refused only for asking for a clock. It cannot run, so it holds
+    no duty and is not an unreadable source (duty discovery depends on this)."""
+    return str(err).endswith(TIMED_REFUSAL)
 
 
 def runs_here(job: Job, host: str | None) -> tuple[bool, str]:
@@ -1103,6 +1154,8 @@ class Runner:
         job that silently stopped existing is the failure this module replaces."""
         jobs, errors = load(self.root)
         lines = [f"⚠ job file refused — {e}" for e in errors]
+        if any(j.trigger.kind in ("cron", "every") for j in jobs) and timed_migration(self.root):
+            lines.append(f"⚠ {TIMED_MIGRATION}")
         for job in jobs:
             try:
                 lines.extend(self.tick(job))
