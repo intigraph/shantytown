@@ -545,6 +545,10 @@ def test_opencode_profile_narrows_the_kit_and_gates_through_the_native_bridge(tm
     assert (base.read_bytes(), base.stat().st_mtime_ns) == before
     assert target.stat().st_mode & 0o777 == 0o600
     data = json.loads(target.read_text())
+    # Unattended job posture (sattler ruling, aegis-j550): allow in the job
+    # file only; the shared role file (checked byte-identical above) keeps "ask".
+    assert data["permission"] == {"*": "allow"}
+    assert json.loads(base.read_text())["permission"] == {"*": "ask"}
     assert data["mcp"] == {"bobbin": {"type": "remote", "url": "http://bobbin.invalid/mcp", "enabled": True}}
     options = bridge_options(target.read_text())
     assert options["mcp_servers"] == ["bobbin"]

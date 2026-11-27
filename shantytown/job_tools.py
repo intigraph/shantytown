@@ -273,6 +273,12 @@ def prepare_settings(root, card, base):
                    and str(p[0]).endswith(PLUGIN_NAME) and isinstance(p[1], dict)]
         if len(bridges) != 1:
             raise ValueError("OpenCode job config needs exactly one shantytown bridge")
+        # sattler ruling 2026-11-27 (aegis-j550 c22): an ephemeral opencode job
+        # runs unattended, the same posture as a claude job. Nobody answers an
+        # "ask" in a job pane, so the job config allows; it stays bounded by
+        # the JobSpec gate below and the job worktree. Only this per-job file
+        # changes; the shared role file keeps its "ask" for crew agents.
+        data["permission"] = {"*": "allow"}
         options = bridges[0][1]
         options["mcp_servers"] = sorted(data["mcp"])
         options.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_gate_hook(root, card))
