@@ -325,3 +325,47 @@ def test_cli_supersession_dry_run_refuses_unproven_release(world, monkeypatch, c
                      '--supersede', '--receipt', old['id'], flag]) != 0
     assert snapshot(root) == before and panes.sent == sent
     assert binding.store.read(old['id'])['state'] == 'assigning'
+
+
+def test_an_ineligible_interrupted_assignment_is_named_not_called_unknown(world):
+    """aegis-5q2r review: the assignment path names its known state too."""
+    _, _, binding, tracker, _ = world
+    old = prepared(world) | dict(state='assigning')
+    base = dict(id='work-1', status='open', assignee=None, defer_until=None)
+    for bad in [dict(revision=old['revision']),
+                dict(revision=old['revision'] + 1, assignee='worker'),
+                dict(revision=old['revision'] + 1, defer_until='2099-01-01T00:00:00Z')]:
+        with pytest.raises(RetirementRefused) as refused:
+            assignment_supersession(old, base | bad)
+        text = str(refused.value)
+        assert 'UNKNOWN' not in text and 'NEWER native revision' in text, text
+    for bad in [None, base | dict(id='other', revision=old['revision'] + 1)]:
+        with pytest.raises(ReceiptConflict) as unknown:
+            assignment_supersession(old, bad)
+        assert not isinstance(unknown.value, RetirementRefused)
+        assert 'UNKNOWN' in str(unknown.value)
+    ok = assignment_supersession(old, base | dict(revision=old['revision'] + 1))
+    assert ok['status'] == 'open' and ok['assignee'] is None
+
+
+def test_a_refused_native_read_is_unknown_with_the_store_reason(world, monkeypatch, capsys):
+    """aegis-5q2r review: bz7's failure was the read itself, before any proof."""
+    import subprocess
+    from shantytown.dispatch_binding import SeedsAssignments
+    from shantytown.sd import SdTracker
+    root, dispatcher, binding, tracker, panes = world
+    old = prepared(world)
+    sd = SdTracker.__new__(SdTracker)
+    monkeypatch.setattr(sd, '_bd_for', lambda *a: subprocess.CompletedProcess(
+        a, 3, stdout='', stderr='sd: board read refused: timeout after 10s\n'), raising=False)
+    with pytest.raises(RuntimeError) as raw:
+        sd.stranded_read('work-1')
+    assert 'sd exit 3' in str(raw.value) and 'timeout after 10s' in str(raw.value)
+    monkeypatch.setattr(tracker, 'stranded_read',
+                        lambda item: (_ for _ in ()).throw(RuntimeError(str(raw.value))),
+                        raising=False)
+    with pytest.raises(ReceiptConflict) as unknown:
+        SeedsAssignments(tracker).supersession(old)
+    assert not isinstance(unknown.value, RetirementRefused)
+    text = str(unknown.value)
+    assert 'UNKNOWN' in text and 'timeout after 10s' in text, text

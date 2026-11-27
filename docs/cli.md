@@ -73,8 +73,10 @@ the retirement. A receipt at the uncertain assignment boundary still requires
 a **newer** native open/unassigned release; this recovery does not relax it.
 When the native item was read exactly but is not eligible (for example deferred
 or assigned), supersession is **refused** (exit 1) and names the observed
-revision, status, assignee and defer plus the release it needs. Only an
-unreadable or mismatched native row reports `UNKNOWN` (exit 2).
+revision, status, assignee and defer plus the release it needs. The same holds
+for an interrupted assignment whose native item is read but not newer, open,
+unassigned and undeferred. A native read that is refused, unreadable or names
+another item reports `UNKNOWN` (exit 2), with the store's reason for a refused read.
 
 Seeds and file-backed `st go` persist a pending receipt before sending. The
 receipt binds the task revision, worker card, pane/session/process generation, note, graph context,

@@ -120,7 +120,12 @@ class SdTracker(BrTracker):
         """Exact SDK revision, never the revision-less plate projection."""
         result = self._bd_for(item_id, 'show', item_id, '--json')
         if result.returncode != 0:
-            raise RuntimeError('stranded item read refused')
+            # Keep the store's own reason (bounded): a bare refusal hid why the
+            # read failed, and the same read often succeeds a moment later
+            # (aegis-5q2r, bz7 2026-11-27).
+            reason = ' '.join((result.stderr or '').split())[-300:] or 'no stderr'
+            raise RuntimeError(
+                f'stranded item read refused (sd exit {result.returncode}): {reason}')
         rows = json.loads(result.stdout)
         if not isinstance(rows, list) or len(rows) != 1:
             raise ValueError('stranded item read incomplete')

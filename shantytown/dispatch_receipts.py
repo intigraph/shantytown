@@ -108,7 +108,7 @@ def assignment_supersession(receipt, current):
     stays in the ledger; neither its old body nor its claim may be replayed.
     """
     if not _native_row_known(receipt, current):
-        raise ReceiptConflict('native release does not supersede this assignment')
+        raise ReceiptConflict('native release for assignment supersession UNKNOWN')
     if (current['revision'] <= receipt['revision']
             or current.get('status') != 'open' or current.get('assignee') not in (None, '')
             or current.get('defer_until') not in (None, '')):
