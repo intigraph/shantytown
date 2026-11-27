@@ -2675,3 +2675,79 @@ def test_spawn_never_rewrites_an_existing_role_artifact(store):
     role_file.write_text('{"hooks": {}, "operator": "kept"}\n')
     assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'
+
+
+# --- results go to the spawner (aegis-0dh5) ------------------------------------
+#
+# Measured 2026-11-27: lead ellie spawned a job and waited on it; its DONE went
+# to the administrator, and ellie idled 56 min with ready work.
+
+def test_result_recipient_is_the_up_crew_spawner_else_the_administrator():
+    rec = {"administrator": "boss", "spawned_by": "lea"}
+    assert eph.result_recipient(rec, crew_up=lambda n: n == "lea") == "lea"
+    # Spawner down or unknown: the administrator, as before.
+    assert eph.result_recipient(rec, crew_up=lambda n: False) == "boss"
+
+    def blind(_n):
+        raise LookupError("no card")
+    assert eph.result_recipient(rec, crew_up=blind) == "boss"
+    for spawner in ("boss", "operator", None, "eph-task-1a2b3c"):
+        assert eph.result_recipient(dict(rec, spawned_by=spawner),
+                                    crew_up=lambda n: True) == "boss"
+
+
+def test_a_spawner_wake_that_fails_is_named_and_the_event_still_lands(tmp_path):
+    rec = _rec(tmp_path)
+    eph.record_result(tmp_path, rec["name"], "done", "shipped", "report", NOW)
+    events = FilesEvents(tmp_path / "events")
+    problems = eph.notify(eph.read(tmp_path, rec["name"]), persist_event=events.persist,
+                          comment=lambda *a: None, recipient="lea",
+                          wake=lambda to, text: False)
+    assert problems == ["spawner lea NOT woken live; the event waits for its next stop"]
+    assert [e.frm for e in events.pending("lea")] == [rec["name"]]
+    assert events.pending("boss") == []
+
+
+def test_a_job_spawned_by_a_lead_reports_to_that_lead_not_the_administrator(
+        store, monkeypatch):
+    root, panes, _launched = store
+    (root / "crew" / "lea.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "boss", "pane": "st-lea"}))
+    panes.new_session("st-lea")
+    panes.verified_actor = "lea"
+    monkeypatch.setenv("SHANTY_AGENT", "lea")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["spawned_by"] == "lea" and rec["administrator"] == "boss"
+    panes.sent.clear()
+    assert _st(root, "--stop", rec["name"]) == cli.OK
+    events = FilesEvents(root / "events")
+    assert [e.frm for e in events.pending("lea")] == [rec["name"]]
+    assert events.pending("boss") == []
+    woke = [s for s in panes.sent if s[0] == "st-lea"]
+    assert len(woke) == 1 and rec["name"] in woke[0][1] and "FAILED" in woke[0][1]
+
+
+def test_a_lead_spawned_job_falls_back_to_the_administrator_when_the_lead_is_down(
+        store, monkeypatch):
+    root, panes, _launched = store
+    (root / "crew" / "lea.json").write_text(json.dumps(
+        {"role": "lead", "reports_to": "boss", "pane": "st-lea"}))
+    panes.verified_actor = "lea"
+    monkeypatch.setenv("SHANTY_AGENT", "lea")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert _st(root, "--stop", rec["name"]) == cli.OK   # st-lea was never up
+    events = FilesEvents(root / "events")
+    assert [e.frm for e in events.pending("boss")] == [rec["name"]]
+    assert events.pending("lea") == []
+
+
+def test_an_administrator_spawned_job_still_reports_to_the_administrator(store):
+    root, panes, _launched = store
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    panes.sent.clear()
+    assert _st(root, "--stop", rec["name"]) == cli.OK
+    assert [e.frm for e in FilesEvents(root / "events").pending("boss")] == [rec["name"]]
+    assert not [s for s in panes.sent if s[0] == "st-boss"]

@@ -4233,10 +4233,34 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached, drain=True):
         current = eph.read(a.root, name) or rec
         lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
         return current, [lane] if lane else []
+    crew = FilesRegistry(Path(a.root) / "crew")
+
+    def spawner_card(who):
+        card = crew.get(who)
+        if getattr(card, "retired", False) or card.role == "administrator":
+            return None
+        return card if card.pane and panes.exists(card.pane) else None
+
+    def wake_spawner(who, text):
+        # The event is already durable; this is the live push that reaches a
+        # lead idle-waiting on its own job (aegis-0dh5). PaneNotAgent: its
+        # runtime exited and typing would EXECUTE the text (aegis-ikj4t).
+        card = spawner_card(who)
+        if card is None:
+            return False
+        try:
+            panes.send(card.pane, attribute(
+                text[:600] + "\n(your ephemeral job's result; it is also on the item)",
+                "st agent spawn"))
+        except PaneNotAgent:
+            return False
+        return True
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
-                               schedule_teardown=schedule, now=time.time())
+                               schedule_teardown=schedule, now=time.time(),
+                               crew_up=lambda who: spawner_card(who) is not None,
+                               wake=wake_spawner)
     if lane := _spawn_lane_release(a, rec):
         problems = [*problems, lane]
     if drain and not detached:

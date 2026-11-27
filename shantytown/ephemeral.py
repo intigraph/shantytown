@@ -2265,18 +2265,53 @@ def report_text(rec: dict) -> str:
     return head + ("\n\n" + r["summary"] if r["summary"] else "")
 
 
-def notify(rec: dict, *, persist_event, comment) -> list[str]:
-    """Tell the administrator and the item. Each leg is best-effort and named
-    when it fails: one lost leg must not hide the other, and neither may block
-    teardown (an agent that cannot report must still not outlive its bounds)."""
+def result_recipient(rec: dict, *, crew_up) -> str:
+    """Who hears this job's result: its SPAWNER when that is a crew agent that
+    is up, else the administrator (aegis-0dh5).
+
+    Measured 2026-11-27: lead ellie spawned a job and waited on it; its DONE
+    went to the administrator because every result was addressed to
+    rec["administrator"], so ellie idled 56 min with ready work and the admin,
+    whose context then cycled, dropped it. The waiter is the spawner.
+    `crew_up(name)` answers "a non-ephemeral crew card whose pane is up"; any
+    doubt (operator spawn, unknown name, spawner down, a lookup that raises)
+    falls back to the administrator, who always had the result before."""
+    admin = rec["administrator"]
+    spawner = rec.get("spawned_by")
+    if not spawner or spawner in (admin, "operator") or is_ephemeral_name(spawner):
+        return admin
+    try:
+        return spawner if crew_up(spawner) else admin
+    except Exception:  # noqa: BLE001 -- unknown is not up
+        return admin
+
+
+def notify(rec: dict, *, persist_event, comment, recipient: str | None = None,
+           wake=None) -> list[str]:
+    """Tell the result's recipient and the item. Each leg is best-effort and
+    named when it fails: one lost leg must not hide the other, and neither may
+    block teardown (an agent that cannot report must still not outlive its
+    bounds). `recipient` defaults to the administrator; `wake(to, text)` pushes
+    the result live into a SPAWNER's pane, since a lead waiting idle on its own
+    job never reaches the stop that would drain the event (aegis-0dh5). The
+    event stays the durable copy: a failed wake is named, never lost."""
     problems = []
     text = report_text(rec)
+    to = recipient or rec["administrator"]
     try:
-        persist_event(to=rec["administrator"], frm=rec["name"], reason=RESULT_REASON,
+        persist_event(to=to, frm=rec["name"], reason=RESULT_REASON,
                       rose=False, item=rec["item"], item_status=None,
                       detail=text[:600], key=f"ephemeral:{rec['name']}:result")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"administrator event NOT written ({type(exc).__name__})")
+        who = "administrator" if to == rec["administrator"] else f"spawner {to}"
+        problems.append(f"{who} event NOT written ({type(exc).__name__})")
+    if wake is not None and to != rec["administrator"]:
+        try:
+            if not wake(to, text):
+                problems.append(f"spawner {to} NOT woken live; the event waits for its next stop")
+        except Exception as exc:  # noqa: BLE001
+            problems.append(f"spawner {to} NOT woken live ({type(exc).__name__}); "
+                            "the event waits for its next stop")
     try:
         comment(rec["item"], text)
     except Exception as exc:  # noqa: BLE001
@@ -2500,11 +2535,14 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
 
 
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
-           persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
+           persist_event, comment, schedule_teardown, now: float,
+           crew_up=None, wake=None) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
     # The run ends on the RECORDED result: a second ending keeps the first story.
     run_end(root, name, rec["result"]["verdict"])
-    problems = notify(rec, persist_event=persist_event, comment=comment)
+    to = result_recipient(rec, crew_up=crew_up) if crew_up else rec["administrator"]
+    problems = notify(rec, persist_event=persist_event, comment=comment,
+                      recipient=to, wake=wake)
     schedule_teardown(name)
     return rec, problems
 
