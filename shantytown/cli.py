@@ -8511,8 +8511,12 @@ def _cmd_task(a) -> int:
         if getattr(a, "directive", None):
             # Refuse an unlinkable --directive before anything is created: a
             # seed minted for a link that then fails is the half-done state.
+            # load(), not just resolve(): a well-formed key with no spool record
+            # (a typo in the digest, or one captured in another host's spool)
+            # passed the regex, the seed was created, then track() refused it,
+            # leaving an orphan seed (review of #764 @ c775cbcb).
             from . import operator_capture
-            operator_capture.resolve(a.root, a.directive)
+            operator_capture.load(a.root, operator_capture.resolve(a.root, a.directive))
     except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED

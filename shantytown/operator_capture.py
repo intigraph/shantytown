@@ -434,6 +434,19 @@ def notices(root, *, now: datetime | None = None) -> list[str]:
     now = now or datetime.now(timezone.utc)
     limit = timedelta(minutes=track_minutes(root))
 
+    # A record that parses but carries a malformed received_at made age() raise
+    # out of the administrator's `st anchor` (review of #764 @ c775cbcb): it is
+    # reported UNKNOWN with the unreadable files instead.
+    readable = []
+    for r in found:
+        try:
+            datetime.strptime(r.received_at, "%Y-%m-%dT%H:%M:%SZ")
+        except (TypeError, ValueError):
+            unreadable.append(f"{r.key}.json")
+        else:
+            readable.append(r)
+    found = readable
+
     def age(r):
         return now - datetime.strptime(r.received_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
 
@@ -471,10 +484,16 @@ def hook(root, stdin_text: str, *, env=None, now=None, writer=None,
     text = payload.get("prompt") if isinstance(payload, dict) else None
     if not isinstance(text, str) or not text.strip() or _ATTRIBUTED.match(text):
         return None
-    if not env.get("SHANTY_AGENT"):
-        print("operator_capture: SHANTY_AGENT unset; spooled with recipient UNKNOWN",
+    # A SHANTY_AGENT that is not agent-name-shaped made capture() refuse before
+    # spooling, and main() swallowed it: the prompt was lost (review of #764 @
+    # c775cbcb). Spool it with recipient UNKNOWN, as for an unset one.
+    recipient = env.get("SHANTY_AGENT", "")
+    if not recipient or not _NAME.fullmatch(recipient):
+        why = "unset" if not recipient else f"not an agent name ({recipient!r})"
+        print(f"operator_capture: SHANTY_AGENT {why}; spooled with recipient UNKNOWN",
               file=sys.stderr)
-    record = capture(root, text, recipient=env.get("SHANTY_AGENT", ""),
+        recipient = ""
+    record = capture(root, text, recipient=recipient,
                      session=payload.get("session_id") or env.get("CLAUDE_SESSION_ID", ""),
                      channel="pane-prompt", received_at=now, writer=writer,
                      deliver=writer is not None)

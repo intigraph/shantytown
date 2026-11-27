@@ -451,3 +451,37 @@ def test_a_relayed_off_host_send_is_captured_by_the_far_side(tmp_path, monkeypat
     (record,) = oc.records(far)
     assert (record.text, record.recipient, record.channel) == ("ship it", "dearing", "inbox")
     assert record.source_kind == oc.CLAIMED_KIND     # carried by $SHANTY_AGENT only
+
+
+# --- fourth review of #764 -----------------------------------------------------
+
+def test_st_task_directive_refuses_a_well_formed_key_not_in_the_spool(tmp_path, monkeypatch, capsys):
+    """A well-formed om- key that was never captured here must be refused before
+    the seed is created, not after (the orphan-seed state)."""
+    from shantytown import cli
+    real = capture(tmp_path, Writer())
+    missing = real.key[:-1] + ("0" if real.key[-1] != "0" else "1")
+    created = []
+    monkeypatch.setattr(cli, "_tracker", lambda a: created.append(1) or (_ for _ in ()).throw(AssertionError))
+    rc = cli.main(["--root", str(tmp_path), "task", "x", "--directive", missing])
+    assert rc == cli.REFUSED and not created
+    assert "no captured operator message" in capsys.readouterr().err
+
+
+def test_hook_with_a_malformed_agent_name_still_spools(tmp_path, capsys):
+    record = oc.hook(tmp_path, json.dumps({"prompt": TEXT}), env={"SHANTY_AGENT": "Not An Agent"},
+                     now=AT, writer=Writer())
+    assert record.text == TEXT and record.recipient == ""
+    assert [r.text for r in oc.records(tmp_path)] == [TEXT]
+    assert "UNKNOWN" in capsys.readouterr().err
+
+
+def test_a_record_with_a_malformed_receive_time_is_reported_unknown(tmp_path):
+    good = capture(tmp_path, Writer())
+    bad = oc.load(tmp_path, good.key)
+    bad.key = "om-20261127T000000Z-0000000000000000"
+    bad.received_at = "yesterday"
+    oc._save(tmp_path, bad)
+    lines = oc.notices(tmp_path, now=AT)
+    assert any("UNKNOWN (1)" in line and bad.key in line for line in lines)
+    assert any("TO REVIEW (1)" in line for line in lines)
