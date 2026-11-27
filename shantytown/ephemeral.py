@@ -62,7 +62,7 @@ MAX_ATTEMPTS = 3
 KIT_PATHS = (".mcp.json", ".claude", ".agents", ".codex", "AGENTS.md", "CLAUDE.md",
              ".shantytown-tooling.json")
 LAUNCHING, LIVE, ENDING, DONE = "launching", "live", "ending", "done"
-#: How long a LAUNCHING job may have no pane before the reaper calls it dead.
+#: How long a job may stay LAUNCHING before the reaper ends it (pane gone or not).
 #: Covers the whole launch (codex readiness waits included). Without it a tend
 #: pass between "ledger written" and "pane up" reaped the job as died, removed
 #: the card, and the pane then came up with no ledger, no cap slot and no bounds.
@@ -446,7 +446,8 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
 #             claimer died before launching: the ticket goes back to queued,
 #             once (MAX_RECOVERIES); a second dead claim drops it, visibly.
 # A launch that dies after the ledger write is an ordinary LAUNCHING job, which
-# the reaper already ends and reports (LAUNCH_GRACE_S); it is not relaunched.
+# the reaper ends and reports after LAUNCH_GRACE_S, whether its pane is gone
+# ("died") or still up with no agent ("launch stalled"); it is not relaunched.
 
 TICKET_PREFIX = "q-"
 _TICKET = re.compile(r"q-[0-9a-f]{12}")
@@ -2610,8 +2611,15 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
             continue
         launching = (rec["state"] == LAUNCHING
                      and now - rec.get("spawned_at", 0) < LAUNCH_GRACE_S)
+        # Past the grace a job still LAUNCHING has no live spawner: the spawner
+        # either marks it live or ends it. A pane that is up then is a bare shell
+        # the agent never started in (aegis-5x2x c10: eph-task-48be8f held a pool
+        # slot at a shell prompt until stopped by hand), so pane_alive alone
+        # must not keep it until the deadline.
         cause = ("timeout" if now >= rec["deadline"]
-                 else "" if launching or pane_alive(f"st-{name}") else "died")
+                 else "" if launching
+                 else "died" if not pane_alive(f"st-{name}")
+                 else "launch stalled" if rec["state"] == LAUNCHING else "")
         verdict = "failed"
         if not cause and not launching and rec["state"] == LIVE and prompting is not None:
             waiting = prompting(f"st-{name}")

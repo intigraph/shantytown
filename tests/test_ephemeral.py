@@ -539,6 +539,20 @@ def test_a_launching_job_with_no_pane_is_reaped_after_the_grace(tmp_path):
     assert ended == [(rec["name"], "failed", "died")]
 
 
+def test_a_launching_job_stuck_at_a_live_shell_is_reaped_after_the_grace(tmp_path):
+    """aegis-5x2x c10: eph-task-48be8f sat LAUNCHING at a bare shell prompt and
+    held a pool slot until stopped by hand, because a live pane alone kept it."""
+    stuck = _rec(tmp_path)
+    live = _rec(tmp_path, state=eph.LIVE)
+    ended = []
+    assert eph.reap(tmp_path, pane_alive=lambda s: True,
+                    end=lambda *a: ended.append(a), now=NOW + 10) == []
+    lines = eph.reap(tmp_path, pane_alive=lambda s: True, end=lambda *a: ended.append(a),
+                     now=NOW + eph.LAUNCH_GRACE_S + 1)
+    assert ended == [(stuck["name"], "failed", "launch stalled")]
+    assert live["name"] not in "".join(lines)
+
+
 def test_tend_never_respawns_an_ephemeral_card_it_reaps_it(tmp_path, monkeypatch):
     from tests.test_tend import _Args, _Panes, _Runtime, _roster
     name = "eph-task-abc123"
