@@ -170,6 +170,18 @@ permissions, native negative probes, and host admission remain prerequisites
 before enabling unattended launches. This change does not enable that gate.
 | `task`   | claude | Do the item's acceptance criteria in the worktree. Open a PR if code changed. |
 
+One task job per item (aegis-bmu3). A task spawn refuses, naming the holder,
+when the item already has a live task job or a queued or claimed task ticket.
+The check runs under the ledger lock before the cap, so an over-cap duplicate
+queues nothing and a drained ticket whose item has since gained a live task job
+is dropped with that reason. aegis-8dda.12 and aegis-xjh each ran two task jobs
+at once because two leads filled from the ready list concurrently. For a
+deliberate parallel slice, pass `--despite-live REASON`. The reason, the
+requester and the jobs it overrode are recorded on the ledger record as
+`despite_live`, and a queued ticket carries the reason into the drain. Review,
+merge and triage jobs keep their own rules, and `--despite-live` is refused for
+them.
+
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 
