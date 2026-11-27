@@ -506,6 +506,18 @@ job could read that key. The signing broker (sattler's ruling B on
 aegis-za4f.19, slice S2) replaces this signer with per-job keys held under
 its own uid, and callers do not change.
 
+**S1 widens who exercises that key.** Before S1 the administrator's key signed
+only the administrator's own transitions. Now `st agent spawn --report`, run
+from inside the job's own process, signs the job's ending with it. That is the
+same 2026-09-12 caveat applied to more callers, accepted until S2, not fixed.
+
+**Bounds.** Each shuttle call has a 10s timeout, and one run operation (start,
+one step, or the ending) has 20s in total. A hung shuttle therefore costs
+`--report` at most 20s, and the ending is recorded as refused. One job's run
+operations hold a per-job run lock (`.run-<name>.lock`) from the read through
+the store, so a claim racing a timeout's ending cannot drop a signed step.
+The host ledger lock is never held across a shuttle call.
+
 `SHANTY_JOB_RUNS=none` turns runs off. It is the negative control, and the
 test suite runs with it so that no test appends to the operator's shuttle log.
 

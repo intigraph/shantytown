@@ -33,7 +33,8 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 #: Versioned names: a changed lifecycle is a NEW definition. Re-defining the
@@ -147,8 +148,16 @@ class Signer(Protocol):
 Runner = Callable[..., subprocess.CompletedProcess]
 
 
-def _run(argv, **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, timeout=60, **kw)
+#: Review of #758: start/define/start (spawn) and work/report (report) were up
+#: to three shuttle calls at 60s each, so a hung shuttle stalled `st agent spawn
+#: --report` for minutes. A healthy call takes well under a second; each call
+#: gets CALL_TIMEOUT and one signer (= one begin/step/end) gets BUDGET in total.
+CALL_TIMEOUT = 10.0
+BUDGET = 20.0
+
+
+def _run(argv, *, timeout: float = CALL_TIMEOUT, **kw) -> subprocess.CompletedProcess:
+    return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, **kw)
 
 
 @dataclass
@@ -160,11 +169,21 @@ class RegisteredKeySigner:
     identity: str
     binary: str = "shuttle"
     run: Runner = _run
+    budget: float = BUDGET
+    clock: Callable[[], float] = time.monotonic
+    _deadline: float | None = field(default=None, init=False, repr=False)
 
     def _call(self, *args: str) -> str:
         argv = [self.binary, "--require-existing-keys", *args]
+        now = self.clock()
+        if self._deadline is None:
+            self._deadline = now + self.budget
+        remaining = self._deadline - now
+        if remaining <= 0:
+            raise RunRefused(f"shuttle time budget ({self.budget:g}s) exhausted "
+                             f"before '{args[0]}'")
         try:
-            p = self.run(argv)
+            p = self.run(argv, timeout=min(CALL_TIMEOUT, remaining))
         except (OSError, subprocess.SubprocessError) as e:
             raise RunRefused(f"shuttle unavailable: {type(e).__name__}: {e}") from None
         if p.returncode != 0:

@@ -2099,9 +2099,27 @@ def mark_live(root, name: str) -> None:
 
 # --- the job's Shuttle run (aegis-za4f.19.1): start, steps, end ---------------
 # Signer calls shell out, so they run OUTSIDE the ledger lock and only the
-# resulting `shuttle_run` entry is written under it. None of these raise: a job
-# that cannot reach Shuttle must still launch, report and be torn down, and the
-# ledger entry says why it has no run instead of hiding it.
+# resulting `shuttle_run` entry is written under it. They DO run under a
+# per-job run lock held from the read to the store: review of #758 found a
+# timeout finish racing the claim could read the same entry, each sign its
+# step, and the later store drop the other's, leaving the ledger and the
+# shuttle log disagreeing. None of these raise: a job that cannot reach Shuttle
+# must still launch, report and be torn down, and the ledger entry says why it
+# has no run instead of hiding it.
+
+@contextmanager
+def run_lock(root, name: str):
+    """Serialize one job's run operations without holding the host ledger lock
+    across shuttle calls. Always taken BEFORE `lock(root)`, never inside it."""
+    d = ledger_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / f".run-{name}.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
 
 def _store_run(root, name: str, entry: dict) -> None:
     with lock(root):
@@ -2113,37 +2131,40 @@ def _store_run(root, name: str, entry: dict) -> None:
 
 def run_begin(root, name: str, signer_for=None) -> dict | None:
     from . import job_runs
-    rec = read(root, name)
-    if rec is None:
-        return None
-    entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
-    _store_run(root, name, entry)
-    return entry
+    with run_lock(root, name):
+        rec = read(root, name)
+        if rec is None or (rec.get("shuttle_run") or {}).get("state"):
+            return None                     # one run per job: never start twice
+        entry = job_runs.begin(rec, (signer_for or job_runs.signer_for)(rec))
+        _store_run(root, name, entry)
+        return entry
 
 
 def run_step(root, name: str, step: str, signer_for=None) -> dict | None:
     from . import job_runs
-    rec = read(root, name)
-    if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
-        return None
-    try:
-        job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
-    except job_runs.RunRefused as e:
-        entry = dict(rec.get("shuttle_run") or {})
-        entry["error"] = entry.get("error") or f"{step} refused: {e}"
-        rec["shuttle_run"] = entry
-    _store_run(root, name, rec["shuttle_run"])
-    return rec["shuttle_run"]
+    with run_lock(root, name):
+        rec = read(root, name)
+        if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+            return None
+        try:
+            job_runs.step(rec, step, (signer_for or job_runs.signer_for)(rec))
+        except job_runs.RunRefused as e:
+            entry = dict(rec.get("shuttle_run") or {})
+            entry["error"] = entry.get("error") or f"{step} refused: {e}"
+            rec["shuttle_run"] = entry
+        _store_run(root, name, rec["shuttle_run"])
+        return rec["shuttle_run"]
 
 
 def run_end(root, name: str, verdict: str, signer_for=None) -> dict | None:
     from . import job_runs
-    rec = read(root, name)
-    if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
-        return None
-    entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
-    _store_run(root, name, entry)
-    return entry
+    with run_lock(root, name):
+        rec = read(root, name)
+        if rec is None or not (rec.get("shuttle_run") or {}).get("state"):
+            return None
+        entry = job_runs.end(rec, verdict, (signer_for or job_runs.signer_for)(rec))
+        _store_run(root, name, entry)
+        return entry
 
 
 def record_result(root, name: str, verdict: str, summary: str, cause: str,
