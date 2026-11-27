@@ -1,9 +1,9 @@
-"""st — the CLI. Eight verbs, five groups, forty grouped commands: forty-eight, and the count is load-bearing: each earns its slot.
+"""st — the CLI. Eight verbs, five groups, forty-one grouped commands: forty-nine, and the count is load-bearing: each earns its slot.
 
     task · go · sling · inbox [--count] · crew [--count|--governor]
     · anchor [--short|--events|--harness] · prime [--brief|--static|--json] · attach [-r|--no-start]
     work  → item · repool · defer · hold-feed [--until|--clear|--status] · cost [--sync] · dream [--run] · triage
-            · jobs [list|check|run|history]
+            · jobs [list|check|run|history] · directive [list|mark|dismiss|track|flush]
     agent → new · spawn [--ephemeral|--list|--stop|--retry|--report|--reap|--drain] · stop · harness · account · cycle [--self|--allow-loss] · advise [--related|--decision]
             · input [--show|--clear|--dismiss] · ask · answer · log · history <agent> · stats · remote {list|pair} · memory
     fleet → start [--mode] · tend [--install|--status|--reauth|--target]
@@ -35,6 +35,13 @@ The count is thirty-three LEAVES: the six verbs plus the twenty-seven grouped
 commands, i.e. everything that runs a handler. A group runs nothing and earns
 no slot; it is a namespace, and the discipline this file argues is about what
 gets a handler.
+
+`work directive` earned the forty-ninth slot (aegis-za4f.20, Stiwi 2026-11-27: "Ya good
+idea! Do that for auto directives / St is the right place fkr it too"). st captures
+every operator message verbatim itself; this is the administrator's one-keystroke
+WRITE that confirms a message is a Directive or links its seed. It is a command and
+not a flag on `item` because it writes to the graph, not the tracker, and its
+subject is a captured message that has no item yet.
 
 `agent spawn` earned the forty-seventh slot (aegis-c01c.2, Stiwi 2026-10-28: "I
 would like for st to support ephemeral agents that can handle pr reviews and merging
@@ -629,6 +636,9 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
         print(f"  refused: {error}", file=sys.stderr)
         return None, False
     sender = authenticated or _me(a)
+    # Kept so operator capture can tell a proven sender from an env claim
+    # without a second sd round trip (review of #764).
+    a.authenticated_sender = authenticated
     if authenticated and getattr(a, "me", None) not in (None, authenticated):
         return None, False
     # aegis-vpy, 2026-11-27: an ephemeral job testing `st inbox` against a
@@ -2260,7 +2270,18 @@ def build_parser() -> argparse.ArgumentParser:
     tk.add_argument("--due", help="explicit due date (YYYY-MM-DD) or timezone-qualified instant")
     tk.add_argument("--queue-override", metavar="REASON",
                     help="assign out of queue order; the reason is recorded on the item and counted (enforce mode only)")
+    tk.add_argument("--directive", metavar="KEY|IRI",
+                    help="a captured operator message this seed tracks: writes "
+                         "Directive trackedBy <seed> (st work directive). Only "
+                         "st-captured om-... keys (or IRIs ending in one) link; "
+                         "a hand-minted Quipu Directive is refused")
     tk.add_argument("-n", "--dry-run", action="store_true")
+
+    dv = leaf("directive", help="operator messages st captured verbatim: "
+                                "list | mark <key> | dismiss <key> | track <key> <seed> | flush")
+    dv.add_argument("action", nargs="?", default="list",
+                    choices=["list", "mark", "dismiss", "track", "flush"])
+    dv.add_argument("args", nargs="*")
 
     dm = leaf("dream", help="inspect or run one bounded spare-capacity reflection cycle")
     dm.add_argument("--run", action="store_true",
@@ -2903,10 +2924,11 @@ def _refuse_gaming(a, status) -> int:
     print(f"  refused: {status.refusal}", file=sys.stderr)
     for line in status.override_lines(getattr(a, "invocation", "")):
         print(f"           {line}", file=sys.stderr)
+    a._startup_failure = _bounded_cause(status.refusal, _LAUNCH_REFUSAL_LEDGER_MAX)
     return REFUSED
 
 
-def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
+def _bounded_cause(exc: BaseException | str, limit: int = 400) -> str:
     """An exception's message for stderr: one line, bounded, bearer-redacted.
 
     The type name alone hid WHY a write failed (aegis-epi). The message can
@@ -2915,6 +2937,27 @@ def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
     """
     from .br import redact_cause
     return redact_cause(" ".join(str(exc).split()))[:limit] or "no message"
+
+
+# The ledger line a refused spawn ends with is `launch refused (<why>)`; keep <why> short
+# enough to read in `st agent spawn --list` and in a census (aegis-8et).
+_LAUNCH_REFUSAL_LEDGER_MAX = 240
+
+
+def _launch_refused(a, why) -> int:
+    """Refuse a launch AND record why, so the ledger can name the cause.
+
+    Every `return REFUSED` inside _launch_admitted goes through here. Printing to
+    stderr alone was the defect: the spawner reads `a._startup_failure` to write
+    `launch refused (<why>)` on the job's record, and when nothing set it the record
+    said "see the spawner's stderr" — gone by the time anyone read the ledger
+    (aegis-8et: 13 of 24 delivery failures since #747 carried only that generic
+    text, so the trust-surface subcause could not be counted). The stderr line is
+    unchanged; the recorded copy is one line, redacted and bounded.
+    """
+    print(f"  refused: {why}", file=sys.stderr)
+    a._startup_failure = _bounded_cause(why, _LAUNCH_REFUSAL_LEDGER_MAX)
+    return REFUSED
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -3076,6 +3119,8 @@ def _run_command(a) -> int:
         return _cmd_inbox(a)
     if a.cmd == "task":
         return _cmd_task(a)
+    if a.cmd == "directive":
+        return _cmd_directive(a)
     if a.cmd == "context":
         return _cmd_context(a)
     if a.cmd == "provision":
@@ -5587,13 +5632,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     try:
         uid_launch = job_launch.for_card(a.root, card)
     except (IdentityError, OSError, ValueError):
-        print('  refused: protected job launch binding unavailable', file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, 'protected job launch binding unavailable')
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
-        print('  refused: ' + refusal, file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, refusal)
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
@@ -5616,8 +5659,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
             harness_mod.Unsupported, IdentityError, ValueError, OSError) as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, e)
     if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
@@ -5629,8 +5671,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         try:
             ensure_workspace(card)
         except WorkspaceError as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
         # current tree — launch is the other safe pull moment (nothing is running
         # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
@@ -5667,20 +5708,18 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             if _eph.is_ephemeral_name(card.name):
                 _eph.reapply_attended_settings(a.root, card.name)
         except _eph_refused() as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         except ProvisionError as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         if not servers and _eph.is_ephemeral_name(card.name):
             # aegis-za4f D3: a task job with no MCP kit cannot query Quipu or
             # search code, and looks healthy on every surface. Refuse it.
             _job = (_eph.read(a.root, card.name) or {}).get("job")
             if _job == "task":
-                print(f"  refused: {card.name}: task job resolved NO MCP servers "
-                      f"(template {prov_mod.provision_dir(a.root)}; check "
-                      "[ephemeral.jobs.task] mcp_servers)", file=sys.stderr)
-                return REFUSED
+                return _launch_refused(
+                    a, f"{card.name}: task job resolved NO MCP servers "
+                    f"(template {prov_mod.provision_dir(a.root)}; check "
+                    "[ephemeral.jobs.task] mcp_servers)")
         if servers:
             # Say what it CAN reach, parsed back out of the file we wrote — "the file
             # is there" was true for every broken render.
@@ -5724,8 +5763,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         else:
             panes.new_session(session, cwd=card.workspace)
     except RuntimeError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, e)
     if getattr(a, '_account_card', None) is not None:
         # The old TUI is gone and the target has not started. Per-card remote
         # daemons outlive pane replacement and must not keep spending the old
@@ -7815,6 +7853,11 @@ def _cmd_inbox(a) -> int:
         print(f"  could not tell: recipient lookup failed ({type(e).__name__}); "
               "nothing was sent", file=sys.stderr)
         return CANNOT_TELL
+    if not a.dry_run and (getattr(a, "durable", False) or not _sends_offhost(a, agent)):
+        # An off-host routine send is relayed to the other host's own
+        # `st inbox`, which captures it there. Capturing here too would mint a
+        # second node for one message (review of #764).
+        _capture_operator_inbox(a, sender, agent.name, typed)
     owned_work_flag, stopped = False, None
     if not a.dry_run:
         try:
@@ -8027,6 +8070,13 @@ def _offhost_nudge(a, agent, typed: str, sender: str | None) -> tuple[bool, str]
     if res.returncode == 255:
         return False, f"ssh to host {agent.host} ({peer.ssh}) failed: {last}"
     return False, f"host {agent.host} did not deliver live (exit {res.returncode}): {last}"
+
+
+def _sends_offhost(a, agent) -> bool:
+    """The same test _relay_if_offhost opens with, without its side effects."""
+    from .deployment import local_host
+    local = local_host(a.root)
+    return not (agent.host is None or local is None or agent.host == local)
 
 
 def _relay_if_offhost(a, agent, typed: str, sender: str | None) -> int | None:
@@ -8499,6 +8549,87 @@ def _inbox_read(a, me: str) -> int:
     return OK
 
 
+def _capture_operator_inbox(a, sender, recipient, text) -> None:
+    """An operator-authored inbox message is captured before it is delivered.
+
+    The operator is whoever the deployment names in SHANTY_OPERATOR; unset means
+    no inbox capture, because guessing who the operator is would be authority
+    laundering. Capture failure never blocks the send: the spool keeps the text.
+
+    The name match alone is a claim: with no TMUX_PANE and no identity policy,
+    `SHANTY_AGENT=<operator> st inbox ...` from any agent shell reaches here.
+    Only an authenticated_actor() match is stamped operator-verbatim; anything
+    else is captured as operator-claimed (review of #764).
+    """
+    from . import operator_capture
+    operator = _deployment_default(a, operator_capture.OPERATOR_KEY)
+    if not operator or sender != operator:
+        return
+    proven = getattr(a, "authenticated_sender", None) == operator
+    kind = operator_capture.SOURCE_KIND if proven else operator_capture.CLAIMED_KIND
+    try:
+        # Spool now, write detached: the send must not wait on Quipu.
+        record = operator_capture.capture(
+            a.root, text, recipient=recipient, channel="inbox",
+            session=os.environ.get("CLAUDE_SESSION_ID", ""), deliver=False,
+            source_kind=kind)
+        if record is not None:
+            operator_capture.spawn_flush(a.root, record.key)
+    except Exception as error:
+        print(f"  operator capture UNKNOWN ({type(error).__name__}); message still sent",
+              file=sys.stderr)
+
+
+def _cmd_directive(a) -> int:
+    """directive — the administrator's side of operator capture (aegis-za4f.20)."""
+    from . import operator_capture as oc
+    args = list(a.args)
+    need = {"list": (0, 0), "mark": (1, 1), "dismiss": (1, 1), "track": (2, 2),
+            "flush": (0, 1)}[a.action]
+    if not need[0] <= len(args) <= need[1]:
+        print(f"  refused: st work directive {a.action} takes {need[0]}..{need[1]} argument(s)",
+              file=sys.stderr)
+        return REFUSED
+    try:
+        if a.action == "list":
+            found = oc.records(a.root) if oc.spool_dir(a.root).is_dir() else []
+            for r in found:
+                kind = ("Directive" if r.directive
+                        else "OperatorMessage(dismissed)" if r.dismissed else "OperatorMessage")
+                if r.source_kind != oc.SOURCE_KIND:
+                    kind += f" {r.source_kind}"
+                owed = f" OWED:{','.join(r.owed())}" if r.owed() else ""
+                seeds = f" trackedBy:{','.join(r.tracked_by)}" if r.tracked_by else ""
+                print(f"  {r.key}  {kind}  {r.received_at} -> {r.recipient} "
+                      f"[{r.channel}]{seeds}{owed}")
+                print(f"    {r.text[:200]!r}")
+            for line in oc.notices(a.root):
+                print(line)
+            return OK
+        if a.action == "flush":
+            done, failed = oc.flush(a.root, oc.resolve(a.root, args[0]) if args else None)
+            print(f"  {done} statement(s) written")
+            for line in failed:
+                print(f"  still owed: {line}", file=sys.stderr)
+            return CANNOT_TELL if failed else OK
+        if a.action == "dismiss":
+            record = oc.dismiss(a.root, args[0])
+            print(f"  {record.key}: reviewed, not a directive (node kept in Quipu)")
+            return OK
+        record = (oc.mark(a.root, args[0]) if a.action == "mark"
+                  else oc.track(a.root, args[0], args[1]))
+    except oc.CaptureRefused as error:
+        print(f"  refused: {error}", file=sys.stderr)
+        return REFUSED
+    owed = record.owed()
+    print(f"  {record.key}: Directive" + (f" trackedBy {','.join(record.tracked_by)}" if record.tracked_by else ""))
+    if owed:
+        print(f"  spooled; Quipu write pending ({', '.join(owed)}): st work directive flush",
+              file=sys.stderr)
+        return CANNOT_TELL
+    return OK
+
+
 def _cmd_task(a) -> int:
     """task creates a work item and PRINTS ITS ID, because the id is the product.
 
@@ -8522,6 +8653,15 @@ def _cmd_task(a) -> int:
             queue_plan = intake(_tracker(a).queue_rows())
         elif getattr(a, "queue_override", None) is not None:
             raise ValueError("--queue-override applies only when the queue policy is enforce")
+        if getattr(a, "directive", None):
+            # Refuse an unlinkable --directive before anything is created: a
+            # seed minted for a link that then fails is the half-done state.
+            # load(), not just resolve(): a well-formed key with no spool record
+            # (a typo in the digest, or one captured in another host's spool)
+            # passed the regex, the seed was created, then track() refused it,
+            # leaving an orphan seed (review of #764 @ c775cbcb).
+            from . import operator_capture
+            operator_capture.load(a.root, operator_capture.resolve(a.root, a.directive))
     except (ValueError, AttributeError, RuntimeError, PartialAnswer) as error:
         print(f"  refused: {error}", file=sys.stderr)
         return REFUSED
@@ -8610,6 +8750,23 @@ def _cmd_task(a) -> int:
         print(f"  could not tell: tracker create failed: {e}", file=sys.stderr)
         return CANNOT_TELL
     print(f"  {item.id}    {item.title}")
+    # The link's outcome reaches the exit code: it used to print "link refused"
+    # and still return OK, so no check could see it (review of #764).
+    directive_rc = OK
+    if getattr(a, "directive", None):
+        # aegis-za4f.20: naming the seed for a directive IS the link; st writes
+        # it so the trackedBy edge never waits on someone remembering.
+        from . import operator_capture
+        try:
+            record = operator_capture.track(a.root, a.directive, item.id)
+            owed = record.owed()
+            print(f"  {record.key} trackedBy {item.id}"
+                  + (f" (spooled; Quipu write pending: {', '.join(owed)})" if owed else ""))
+            if owed:
+                directive_rc = CANNOT_TELL
+        except operator_capture.CaptureRefused as error:
+            print(f"  {item.id} CREATED; directive link refused: {error}", file=sys.stderr)
+            directive_rc = REFUSED
     if refused:
         print(f"  refused assignment: {refused}; created {item.id} unassigned", file=sys.stderr)
         return REFUSED
@@ -8637,7 +8794,7 @@ def _cmd_task(a) -> int:
                   "Read back before retrying.", file=sys.stderr)
             return CANNOT_TELL
         print(f"  {item.id} assigned to {a.assignee} by recorded queue override")
-    return OK
+    return directive_rc
 
 
 def _lead_status(registry, panes):
@@ -8774,6 +8931,9 @@ def _cmd_anchor(a) -> int:
     if p.me.role == "administrator":
         from . import orphan_directives
         p.orphan_directives = orphan_directives.render(orphan_directives.load(a.root))
+        from . import operator_capture
+        captured = "\n".join(operator_capture.notices(Path(a.root)))
+        p.orphan_directives = "\n".join(x for x in (p.orphan_directives, captured) if x)
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
@@ -14440,12 +14600,17 @@ def _window_launch_gate(a) -> int | None:
         lease = window_mod.active(Path(a.root))
     except window_mod.WindowUnreadable as exc:
         print(f"  could not tell: {exc}; relaunch held fail-closed", file=sys.stderr)
+        # Not REFUSED, but the spawner ends the job as `job not started: <why>` from
+        # the same record, so the ledger names this cause too (aegis-8et).
+        a._startup_failure = _bounded_cause(
+            f"maintenance window unreadable ({exc}); relaunch held fail-closed",
+            _LAUNCH_REFUSAL_LEDGER_MAX)
         return CANNOT_TELL
     if lease is None:
         return None
-    print(f"  refused: maintenance window {lease['id']!r} is {lease['state']} — "
-          "relaunch held until `st fleet window release` or `abort`", file=sys.stderr)
-    return REFUSED
+    return _launch_refused(
+        a, f"maintenance window {lease['id']!r} is {lease['state']} — "
+        "relaunch held until `st fleet window release` or `abort`")
 
 
 def _window_systemctl(action: str, unit: str) -> None:

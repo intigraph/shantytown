@@ -975,6 +975,22 @@ _TAIL_LINES = 8
 _TAIL_CHARS = 1024
 
 
+def mask_secrets(text: str) -> str:
+    """Mask credential-shaped text before it leaves for a shared surface.
+
+    The shared bearer redactor (br.redact_cause) first, then bare well-known
+    token shapes and secret-named key=value pairs it misses. A failure tail is
+    escalated to the lead and an operator prompt is written to the shared graph
+    (aegis-za4f.20), so both go through this one function rather than two
+    copies of the patterns that could drift.
+    """
+    from .br import redact_cause
+    text = redact_cause(text)
+    text = _TOKEN_SHAPES.sub("[REDACTED]", text)
+    text = _SECRET_PAIRS.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    return _AUTH_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
+
+
 def _failure_tail(log_path, offset: int) -> str:
     """The masked end of THIS run's output, for the failed row's detail.
 
@@ -995,13 +1011,7 @@ def _failure_tail(log_path, offset: int) -> str:
             raw = f.read(end - start)
     except OSError:
         return ""
-    from .br import redact_cause
-    text = redact_cause(raw.decode("utf-8", errors="replace"))
-    # A failure tail is escalated to the lead, so also mask bare well-known token
-    # shapes and secret-named key=value pairs the shared bearer redactor misses.
-    text = _TOKEN_SHAPES.sub("[REDACTED]", text)
-    text = _SECRET_PAIRS.sub(lambda m: m.group(1) + "[REDACTED]", text)
-    text = _AUTH_VALUE.sub(lambda m: m.group(1) + "[REDACTED]", text)
+    text = mask_secrets(raw.decode("utf-8", errors="replace"))
     lines = [line for line in text.splitlines() if line.strip()][-_TAIL_LINES:]
     return "\n".join(lines)[-_TAIL_CHARS:]
 
