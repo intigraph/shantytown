@@ -59,6 +59,26 @@ def test_config_reads_and_refuses_the_ephemeral_table(tmp_path):
         config.load(tmp_path)
 
 
+def test_config_reads_and_refuses_the_job_model_table(tmp_path):
+    """aegis-jsp0: [ephemeral.model_by_harness] names the model a job runs."""
+    (tmp_path / "shantytown.toml").write_text(
+        "[ephemeral.model_by_harness]\nclaude = \"claude-opus-5-5\"\n")
+    assert config.load(tmp_path).ephemeral.model_by_harness == {"claude": "claude-opus-5-5"}
+    assert config.load_or_default(tmp_path / "absent")[0].ephemeral.model_by_harness == {}
+    for bad in ('claude = ""', "claude = 5", "claude = \"  \""):
+        (tmp_path / "shantytown.toml").write_text(f"[ephemeral.model_by_harness]\n{bad}\n")
+        with pytest.raises(config.ConfigError, match="model_by_harness.claude"):
+            config.load(tmp_path)
+
+
+def test_job_model_is_per_harness_and_absent_means_none():
+    p = _policy(model_by_harness={"claude": "claude-opus-5-5"})
+    assert eph.model_for("claude", p) == "claude-opus-5-5"
+    # A claude slug never reaches a codex job, and no table means no model.
+    assert eph.model_for("codex", p) is None
+    assert eph.model_for("claude", _policy()) is None
+
+
 # --- admission ----------------------------------------------------------------
 
 def test_review_and_merge_need_a_pr_and_jobs_are_closed():
@@ -360,6 +380,44 @@ def test_spawn_launches_a_supervised_card_then_queues_over_cap(store, capsys):
     assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert "QUEUED q-" in capsys.readouterr().out
     assert len(launched) == 1 and len(eph.records(root)) == 1
+
+
+def _launch_line(root, card):
+    """The real Claude launch line for the card spawn handed to _launch."""
+    from shantytown.harness import ClaudeHarness
+    return ClaudeHarness().launch(card, str(root / "settings.json"), root=root)
+
+
+def test_spawn_puts_the_configured_model_on_the_job_card_and_its_launch(store):
+    """aegis-jsp0: one configured value is BOTH --model and SHANTY_MODEL, so the
+    model a job declares to Quipu (X-Quipu-Model) is the one it runs."""
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text()
+                    + "[ephemeral.model_by_harness]\nclaude = \"claude-opus-5-5\"\n")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["model"] == "claude-opus-5-5"
+    card_json = json.loads((root / "crew" / f"{rec['name']}.json").read_text())
+    assert card_json["model"] == "claude-opus-5-5"
+    assert launched[0].model == "claude-opus-5-5"
+    line = _launch_line(root, launched[0])
+    assert "--model claude-opus-5-5" in line and "SHANTY_MODEL=claude-opus-5-5 " in line
+
+
+def test_spawn_without_a_configured_job_model_declares_none(store):
+    """No entry -> no model on the card, no --model, no SHANTY_MODEL: the harness
+    default is never reported as if declared."""
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text()
+                    + "[ephemeral.model_by_harness]\ncodex = \"gpt-5.5\"\n")
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    (rec,) = eph.records(root)
+    assert rec["model"] is None and launched[0].model is None
+    assert "model" not in json.loads((root / "crew" / f"{rec['name']}.json").read_text())
+    line = _launch_line(root, launched[0])
+    assert "--model" not in line and "SHANTY_MODEL=" not in line.replace("-u SHANTY_MODEL", "")
 
 
 def test_a_worker_cannot_spawn(store, monkeypatch, capsys):

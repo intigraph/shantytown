@@ -173,6 +173,12 @@ before enabling unattended launches. This change does not enable that gate.
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 
+`[ephemeral.model_by_harness]` names the model a job runs on each harness
+(aegis-jsp0). Spawn copies it onto the job card, so the launch passes `--model`
+and exports `SHANTY_MODEL` from that one value, and the job's Quipu writes carry
+`X-Quipu-Model`. A harness with no entry gets no model: the harness default runs
+and nothing is declared, so write provenance stays visibly partial.
+
 ## Administrator surface
 
 ```
@@ -335,6 +341,10 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 
 [ephemeral.harness_by_job]
 review = "codex"
+
+# The model each harness's jobs run and declare (aegis-jsp0). Unset = none.
+[ephemeral.model_by_harness]
+claude = "claude-opus-5-5"
 
 # Per-harness slot caps (aegis-fye). Unset = max_agents for that harness; 0 = off.
 [ephemeral.max_agents_by_harness]
