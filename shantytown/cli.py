@@ -2883,10 +2883,11 @@ def _refuse_gaming(a, status) -> int:
     print(f"  refused: {status.refusal}", file=sys.stderr)
     for line in status.override_lines(getattr(a, "invocation", "")):
         print(f"           {line}", file=sys.stderr)
+    a._startup_failure = _bounded_cause(status.refusal, _LAUNCH_REFUSAL_LEDGER_MAX)
     return REFUSED
 
 
-def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
+def _bounded_cause(exc: BaseException | str, limit: int = 400) -> str:
     """An exception's message for stderr: one line, bounded, bearer-redacted.
 
     The type name alone hid WHY a write failed (aegis-epi). The message can
@@ -2895,6 +2896,27 @@ def _bounded_cause(exc: BaseException, limit: int = 400) -> str:
     """
     from .br import redact_cause
     return redact_cause(" ".join(str(exc).split()))[:limit] or "no message"
+
+
+# The ledger line a refused spawn ends with is `launch refused (<why>)`; keep <why> short
+# enough to read in `st agent spawn --list` and in a census (aegis-8et).
+_LAUNCH_REFUSAL_LEDGER_MAX = 240
+
+
+def _launch_refused(a, why) -> int:
+    """Refuse a launch AND record why, so the ledger can name the cause.
+
+    Every `return REFUSED` inside _launch_admitted goes through here. Printing to
+    stderr alone was the defect: the spawner reads `a._startup_failure` to write
+    `launch refused (<why>)` on the job's record, and when nothing set it the record
+    said "see the spawner's stderr" — gone by the time anyone read the ledger
+    (aegis-8et: 13 of 24 delivery failures since #747 carried only that generic
+    text, so the trust-surface subcause could not be counted). The stderr line is
+    unchanged; the recorded copy is one line, redacted and bounded.
+    """
+    print(f"  refused: {why}", file=sys.stderr)
+    a._startup_failure = _bounded_cause(why, _LAUNCH_REFUSAL_LEDGER_MAX)
+    return REFUSED
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5567,13 +5589,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
     try:
         uid_launch = job_launch.for_card(a.root, card)
     except (IdentityError, OSError, ValueError):
-        print('  refused: protected job launch binding unavailable', file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, 'protected job launch binding unavailable')
     if not window_restore and (rc := _window_launch_gate(a)) is not None:
         return rc
     if refusal := _account_launch_refusal(a, card, replacing=reuse_session):
-        print('  refused: ' + refusal, file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, refusal)
     # A dead app-server can outlive its pane behind Codex's per-card daemon and
     # make every subsequent launch time out. Repair only the daemon whose
     # /proc environment names this card; argv is never an ownership signal.
@@ -5596,8 +5616,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         launch = runtime.compose(card)
     except (CapabilityError, SettingsError, harness_mod.UnknownHarness,
             harness_mod.Unsupported, IdentityError, ValueError, OSError) as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, e)
     if dry_run:
         print(f"  would launch in {session}: {launch}")
         return OK
@@ -5609,8 +5628,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         try:
             ensure_workspace(card)
         except WorkspaceError as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         # KEEP CURRENT ON RELAUNCH (aegis-4zld): a fresh session must start on a
         # current tree — launch is the other safe pull moment (nothing is running
         # in the workspace yet). ff-only + kit-preserving; a refused pull is LOUD
@@ -5647,20 +5665,18 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
             if _eph.is_ephemeral_name(card.name):
                 _eph.reapply_attended_settings(a.root, card.name)
         except _eph_refused() as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         except ProvisionError as e:
-            print(f"  refused: {e}", file=sys.stderr)
-            return REFUSED
+            return _launch_refused(a, e)
         if not servers and _eph.is_ephemeral_name(card.name):
             # aegis-za4f D3: a task job with no MCP kit cannot query Quipu or
             # search code, and looks healthy on every surface. Refuse it.
             _job = (_eph.read(a.root, card.name) or {}).get("job")
             if _job == "task":
-                print(f"  refused: {card.name}: task job resolved NO MCP servers "
-                      f"(template {prov_mod.provision_dir(a.root)}; check "
-                      "[ephemeral.jobs.task] mcp_servers)", file=sys.stderr)
-                return REFUSED
+                return _launch_refused(
+                    a, f"{card.name}: task job resolved NO MCP servers "
+                    f"(template {prov_mod.provision_dir(a.root)}; check "
+                    "[ephemeral.jobs.task] mcp_servers)")
         if servers:
             # Say what it CAN reach, parsed back out of the file we wrote — "the file
             # is there" was true for every broken render.
@@ -5704,8 +5720,7 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
         else:
             panes.new_session(session, cwd=card.workspace)
     except RuntimeError as e:
-        print(f"  refused: {e}", file=sys.stderr)
-        return REFUSED
+        return _launch_refused(a, e)
     if getattr(a, '_account_card', None) is not None:
         # The old TUI is gone and the target has not started. Per-card remote
         # daemons outlive pane replacement and must not keep spending the old
@@ -14420,12 +14435,17 @@ def _window_launch_gate(a) -> int | None:
         lease = window_mod.active(Path(a.root))
     except window_mod.WindowUnreadable as exc:
         print(f"  could not tell: {exc}; relaunch held fail-closed", file=sys.stderr)
+        # Not REFUSED, but the spawner ends the job as `job not started: <why>` from
+        # the same record, so the ledger names this cause too (aegis-8et).
+        a._startup_failure = _bounded_cause(
+            f"maintenance window unreadable ({exc}); relaunch held fail-closed",
+            _LAUNCH_REFUSAL_LEDGER_MAX)
         return CANNOT_TELL
     if lease is None:
         return None
-    print(f"  refused: maintenance window {lease['id']!r} is {lease['state']} — "
-          "relaunch held until `st fleet window release` or `abort`", file=sys.stderr)
-    return REFUSED
+    return _launch_refused(
+        a, f"maintenance window {lease['id']!r} is {lease['state']} — "
+        "relaunch held until `st fleet window release` or `abort`")
 
 
 def _window_systemctl(action: str, unit: str) -> None:
