@@ -17,6 +17,14 @@ declaration in one command. Job files under `<root>/jobs/` are **deprecated**:
   jobs, so nothing runs that the read surface cannot show. It names the
   ignored files on every pass, and `list` names them too.
 
+**Operator note: do not set `[jobs] graph` on a host whose event (`on`) file
+jobs are still live.** Graph mode stops tend from running *every* file job,
+event jobs included, and nothing replaces them until the Chaski consumer
+(aegis-6vf.11) fires Quipu-declared jobs. On such a host the event jobs stop
+with only a warning line on each tend pass. Measure first:
+`grep -lE '^on *=' <root>/jobs/*.toml`. Leave `graph` unset there until
+aegis-6vf.11 has shipped and the jobs have moved.
+
 **Migration gate.** A host that still has live cron/every job files sets
 `[jobs] timed_files = "migrate"` before it deploys this change. Its timed files
 then keep firing, and every tend pass and every `st work jobs` read warns that

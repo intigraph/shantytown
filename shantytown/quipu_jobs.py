@@ -314,6 +314,30 @@ def _weekly_anchor(tz: ZoneInfo, weekday: int, hhmm: str) -> datetime:
     raise JobRefused(f"{WEEKDAYS[weekday]} {hhmm} never exists unambiguously in {tz.key}")
 
 
+_TURTLE_ECHAR = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\r": "\\r", "\t": "\\t",
+                 "\b": "\\b", "\f": "\\f"}
+
+
+def _turtle_string(text: str) -> str:
+    """A Turtle STRING_LITERAL_QUOTE. json.dumps(ensure_ascii=True) was used here
+    and wrote a non-BMP character (an emoji in --message) as a JSON surrogate
+    pair, \\ud83d\\ude00; Turtle's UCHAR forbids surrogate code points, so the
+    write failed or stored mojibake. Characters stay literal in the Turtle (the
+    JSON envelope then ASCII-escapes them, which JSON decodes back to the same
+    characters); only the quote, backslash and C0 controls are escaped. A lone
+    surrogate (undecodable argv bytes under surrogateescape) is no character
+    Turtle can carry, so it is refused here, before anything is written."""
+    out = []
+    for i, ch in enumerate(text):
+        if "\ud800" <= ch <= "\udfff":
+            # An excerpt, not the whole --message: enough to find the byte.
+            near = text[max(0, i - 20):i + 20]
+            raise JobRefused(f"text near {near!r} holds an undecodable character "
+                             f"(lone surrogate at offset {i})")
+        out.append(_TURTLE_ECHAR.get(ch) or (f"\\u{ord(ch):04X}" if ch < " " else ch))
+    return '"' + "".join(out) + '"'
+
+
 def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
                  message: str, weekly: tuple[int, str] | None = None,
                  every_s: int | None = None, enabled: bool = True) -> Declaration:
@@ -384,7 +408,7 @@ def declare_rows(name: str, *, host: str, owner: str, zone: str, inbox: str,
         if iri:
             return f"<{o}>"
         lexical = ("true" if o else "false") if isinstance(o, bool) else o
-        return json.dumps(lexical, ensure_ascii=True) + ("" if dt == X + "string" else f"^^<{dt}>")
+        return _turtle_string(lexical) + ("" if dt == X + "string" else f"^^<{dt}>")
     turtle = "".join(f"<{s}> <{p}> {term(o, iri, dt)} .\n" for s, p, o, iri, dt in triples)
     return Declaration(decoded, turtle, body)
 
