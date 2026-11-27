@@ -1565,13 +1565,12 @@ _JOBS = {
 for you for as long as you live; it is why no other merge can run beside you. Never merge any other PR or head.
 1. `gh pr view {pr} --repo {repo} --json headRefOid,mergeable,mergeStateStatus,reviews,author,isDraft`
 2. Require ALL of: not draft; every required check green (`gh pr checks {pr} --repo {repo} --required`);
-   an approval from an agent OTHER than the author, on the CURRENT head (a signed Quipu verdict record; the
-   shared GitHub account means a GitHub APPROVE usually cannot exist); no unresolved request-changes.
+   no unresolved request-changes (a GitHub review or a signed Quipu verdict). A crew PR needs no approval.
    An outside (non-crew) contribution is never merged by an agent: report blocked.
-3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, a non-author approval
+3. Merge ONLY with st's guarded merge command, which re-checks the lane, the head, CI, change requests
    and the author's association in code before it calls gh with the head pinned:
      st agent spawn --merge --head {head}
-   If the PR's head is no longer {head}, report blocked: a new head needs a new review.
+   If the PR's head is no longer {head}, report blocked: a new head needs fresh verification.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
    edit branch protection, never force-push.
 4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
@@ -1887,7 +1886,12 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
         return "the PR is a draft"
     if pr.get("author_association") not in INSIDE:
         return "outside contribution: agents never merge these; report blocked for a human"
-    author = (pr.get("user") or {}).get("login")
+    # Stiwi 11-15 ("no review for internal contributors") and 11-27 ("no reason
+    # to wait on ci ... with ephemeral agents"): an inside PR merges on green
+    # with no approval. Requiring a non-author APPROVE here blocked every
+    # internal merge job with all checks green (quipu#1344, shantytown#745,
+    # 2026-11-27). An explicit "no" still blocks: a reviewer's latest
+    # CHANGES_REQUESTED or a signed blocking verdict.
     latest = {}
     for r in reviews:
         login = (r.get("user") or {}).get("login")
@@ -1895,18 +1899,11 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
             latest[login] = r
     if any(r.get("state") == "CHANGES_REQUESTED" for r in latest.values()):
         return "a reviewer's latest review requests changes"
-    # aegis-c01c.7: a SIGNED agent verdict (gate_verdict.approval, verified by
-    # Quipu) stands in for the GitHub approval the shared account cannot give.
     if verdict and verdict.get("blocking"):
         return "a reviewer agent's signed verdict requests changes on this head"
-    github_ok = any(login != author and r.get("state") == "APPROVED" and r.get("commit_id") == head
-                    for login, r in latest.items())
-    if not github_ok and not (verdict and verdict.get("approved")):
-        why = ""
-        if verdict and verdict.get("author_agent_unknown") and verdict.get("approvals"):
-            why = " (the PR's author agent is unknown, so no verdict can approve it)"
-        return ("no non-author APPROVE on the current head: neither a GitHub review nor a "
-                "trusted signed verdict from an agent other than the author" + why)
+    if verdict and verdict.get("unreadable"):
+        return ("the signed verdict records could not be read, so a blocking verdict is "
+                "unproven: " + str(verdict["unreadable"]))
     if not checks:
         return "no check runs on the head; green is unproven"
     bad = [c.get("name", "?") for c in checks

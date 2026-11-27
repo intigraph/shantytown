@@ -232,16 +232,14 @@ MERGE = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE, "head": 
 APPROVED = {"approved": True, "approvals": [{"by": "eph-review-aaaaaa"}], "blocking": []}
 
 
-def test_merge_gate_takes_a_verified_verdict_instead_of_a_github_review():
+def test_merge_gate_needs_no_verdict_for_crew_but_a_blocking_one_still_refuses():
+    # Stiwi 11-15/11-27: an internal PR merges on green with no approval.
     assert eph.merge_gate(MERGE, HEAD, _pr(), [], GREEN, APPROVED) == ""
-    assert "no non-author APPROVE" in eph.merge_gate(MERGE, HEAD, _pr(), [], GREEN, None)
-    assert "no non-author APPROVE" in eph.merge_gate(
-        MERGE, HEAD, _pr(), [], GREEN, {"approved": False, "approvals": [], "blocking": []})
+    assert eph.merge_gate(MERGE, HEAD, _pr(), [], GREEN, None) == ""
+    assert eph.merge_gate(
+        MERGE, HEAD, _pr(), [], GREEN, {"approved": False, "approvals": [], "blocking": []}) == ""
     assert "requests changes" in eph.merge_gate(
         MERGE, HEAD, _pr(), [], GREEN, dict(APPROVED, blocking=[{"by": "x"}]))
-    # Same-login GitHub "approval" (the shared account) still never counts.
-    self_review = [{"user": {"login": "scbrown"}, "state": "APPROVED", "commit_id": HEAD}]
-    assert "no non-author APPROVE" in eph.merge_gate(MERGE, HEAD, _pr(), self_review, GREEN)
 
 
 def test_merge_gate_merges_only_the_items_head():
@@ -305,12 +303,24 @@ def test_guarded_merge_merges_on_a_signed_verdict_with_no_github_review(root, q)
                     "--match-head-commit", HEAD]]
 
 
-def test_guarded_merge_refuses_a_forged_unsigned_verdict(root, q):
-    q.knot(_record().turtle(), GRAPH)
+def test_guarded_merge_merges_an_internal_green_pr_with_no_verdict_at_all(root, q):
     rec = _rec(root, state=eph.LIVE)
     reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": [],
              f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
-    with pytest.raises(eph.Refused, match="no non-author APPROVE"):
+    ran = []
+    assert cli._spawn_merge(_args(root, "--merge", "--head", HEAD), rec["name"],
+                            gh=reads.__getitem__, quipu=q,
+                            run=lambda argv, **k: ran.append(argv) or _R()) == cli.OK
+    assert len(ran) == 1
+
+
+def test_guarded_merge_still_refuses_an_outside_pr_with_no_verdict(root, q):
+    q.knot(_record().turtle(), GRAPH)
+    rec = _rec(root, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(author_association="CONTRIBUTOR"),
+             "repos/o/n/pulls/5/reviews?per_page=100": [],
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    with pytest.raises(eph.Refused, match="outside contribution"):
         cli._spawn_merge(_args(root, "--merge", "--head", HEAD), rec["name"],
                          gh=reads.__getitem__, quipu=q, run=lambda *a, **k: 1 / 0)
 
@@ -551,3 +561,16 @@ def test_dual_reader_terms_match_the_independent_published_crosswalk():
         row['old']: row['new'] for row in rows}
     with pytest.raises(KeyError):
         vocabulary.aliases('UnpublishedTerm')
+
+
+def test_guarded_merge_refuses_when_the_verdict_records_cannot_be_read(root, q, monkeypatch):
+    """No approval is needed, so an unread store must not pass as 'no blocking verdict'."""
+    def unreadable(*a, **k):
+        raise gv.VerdictError("synthetic quipu timeout")
+    monkeypatch.setattr(gv, "approval", unreadable)
+    rec = _rec(root, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": [],
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    with pytest.raises(eph.Refused, match="could not be read"):
+        cli._spawn_merge(_args(root, "--merge", "--head", HEAD), rec["name"],
+                         gh=reads.__getitem__, quipu=q, run=lambda *a, **k: 1 / 0)

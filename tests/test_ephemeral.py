@@ -166,7 +166,8 @@ def test_merge_prompt_only_through_the_lane_with_the_head_pinned(tmp_path):
     assert "SERIALIZED MERGE LANE" in text
     assert "st agent spawn --merge --head" in text and "never `--admin`" in text
     assert "NEVER run `gh pr merge` yourself" in text
-    assert "OTHER than the author" in text
+    assert "A crew PR needs no approval" in text and "OTHER than the author" not in text
+    assert "outside (non-crew) contribution is never merged" in text
 
 
 # --- bounds -------------------------------------------------------------------
@@ -550,18 +551,45 @@ def test_merge_gate_says_no_to_each_unsafe_merge():
         "outside contribution": (merge, HEAD, _pr(author_association="CONTRIBUTOR"),
                                  GOOD_REVIEW, GREEN),
         "draft": (merge, HEAD, _pr(draft=True), GOOD_REVIEW, GREEN),
-        "non-author APPROVE": (merge, HEAD, _pr(), [dict(GOOD_REVIEW[0],
-                               user={"login": "author"})], GREEN),
         "requests changes": (merge, HEAD, _pr(), GOOD_REVIEW + [
             {"user": {"login": "x"}, "state": "CHANGES_REQUESTED", "commit_id": HEAD}], GREEN),
-        "on the current head": (merge, HEAD, _pr(), [dict(GOOD_REVIEW[0], commit_id="c" * 40)],
-                           GREEN),
         "not green": (merge, HEAD, _pr(), GOOD_REVIEW,
                       [{"name": "ci", "status": "completed", "conclusion": "failure"}]),
         "unproven": (merge, HEAD, _pr(), GOOD_REVIEW, []),
     }
     for want, args in cases.items():
         assert want in eph.merge_gate(*args), want
+
+
+def test_merge_gate_admits_an_internal_green_pinned_pr_with_no_review():
+    """Stiwi 11-15/11-27: crew PRs merge on green with no approval. Each
+    remaining refusal still holds with zero reviews, so dropping the approval
+    did not open the gate for anything else."""
+    merge = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE, "head": HEAD}
+    for assoc in eph.INSIDE:
+        assert eph.merge_gate(merge, HEAD, _pr(author_association=assoc), [], GREEN) == ""
+    # A self-review or a stale-head approval neither helps nor hurts.
+    assert eph.merge_gate(merge, HEAD, _pr(), [dict(GOOD_REVIEW[0], commit_id="c" * 40)],
+                          GREEN) == ""
+    red = [{"name": "ci", "status": "completed", "conclusion": "failure"}]
+    pending = [{"name": "ci", "status": "in_progress", "conclusion": None}]
+    changes = [{"user": {"login": "x"}, "state": "CHANGES_REQUESTED", "commit_id": HEAD}]
+    cases = {
+        "outside contribution": (_pr(author_association="CONTRIBUTOR"), HEAD, [], GREEN, None),
+        "outside contribution ": (_pr(author_association="NONE"), HEAD, [], GREEN, None),
+        "draft": (_pr(draft=True), HEAD, [], GREEN, None),
+        "head moved": (_pr(head={"sha": "b" * 40}), HEAD, [], GREEN, None),
+        "exactly the item's head": (_pr(head={"sha": "b" * 40}), "b" * 40, [], GREEN, None),
+        "requests changes": (_pr(), HEAD, changes, GREEN, None),
+        "signed verdict requests changes": (_pr(), HEAD, [], GREEN, {"blocking": [{"by": "x"}]}),
+        "not green": (_pr(), HEAD, [], red, None),
+        "not green ": (_pr(), HEAD, [], pending, None),
+        "unproven": (_pr(), HEAD, [], [], None),
+        "could not be read": (_pr(), HEAD, [], GREEN, {"unreadable": "timeout"}),
+    }
+    for want, (pr, head, reviews, checks, verdict) in cases.items():
+        why = eph.merge_gate(merge, head, pr, reviews, checks, verdict)
+        assert want.strip() in why, (want, why)
 
 
 def test_guarded_merge_refuses_a_review_job_and_merges_only_when_the_gate_passes(

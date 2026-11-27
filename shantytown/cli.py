@@ -1913,7 +1913,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="end dead or expired jobs (st fleet tend runs this)")
     sp_mode.add_argument("--merge", action="store_true",
                          help="run BY a merge job: the guarded merge of its own PR "
-                              "(lane, pinned head, green CI, non-author approval)")
+                              "(lane, pinned head, green CI, no change request)")
     sp_mode.add_argument("--recruitment-request", action="store_true",
                          help="controller signed-request qualification on stdin (--dry-run only; no execution)")
     sp_mode.add_argument("--recruitment-prepare", action="store_true",
@@ -3704,8 +3704,9 @@ def _spawn_quipu(a):
 
 def _spawn_verdict_approval(a, repo, pr, node_id, head, *, quipu=None) -> dict | None:
     """The signed agent-verdict approval of exactly `head` (aegis-c01c.7), or
-    None when verdict records are off. Any failure to read or verify is "not
-    approved", never an error that could be mistaken for a pass."""
+    None when verdict records are off. A failure to read or verify returns
+    {"unreadable": ...}: crew PRs need no approval, so an unread store could
+    otherwise hide a blocking verdict and let the merge gate pass."""
     from . import gate_verdict as gv
     policy, _cfg = _spawn_verdict_policy(a)
     if not policy.verdict_graph or not node_id:
@@ -3715,8 +3716,9 @@ def _spawn_verdict_approval(a, repo, pr, node_id, head, *, quipu=None) -> dict |
                            head=head, graph=policy.verdict_graph,
                            signers=gv.trusted_signers())
     except gv.VerdictError as exc:
-        print(f"  verdict source unreadable ({exc}); counts as no approval", file=sys.stderr)
-        return None
+        print(f"  verdict source unreadable ({exc}); a blocking verdict is unproven",
+              file=sys.stderr)
+        return {"unreadable": str(exc)[:200]}
 
 
 def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None, now=None):

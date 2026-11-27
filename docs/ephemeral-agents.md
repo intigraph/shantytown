@@ -25,7 +25,7 @@ disappear without anyone being told. Each rule below closes one of those gaps.
 | Unfed panes                 | The job prompt is the agent's verified first turn. On macOS, hook verification is always "cannot tell" because there is no `/proc`, so an ephemeral job is delivered anyway; the deadline does not depend on hooks. Delivered means the job's turn STARTED, not that its text landed: on Claude Code st checks the composer is empty, types the job with no Enter, waits to see it in the box (a long job shows as `[Pasted text #1 +N lines]`), presses Enter as its own keystroke and waits to see the turn start (busy marker, spinner, context-left drop or the job echoed). It presses Enter again, up to three times, only while the box holds just the job, and never on text it did not type. A pane whose job did not start is ended at once as `launch failed`, with the reason. |
 | Respawned zombies           | `st fleet tend` never respawns an ephemeral card. When the pane is dead or past its deadline, tend reaps it instead. The reap runs first in every tend pass, before any early return for a hold or a registry error. A job is `launching` until its job is delivered; tend leaves a launching job with no pane alone for `LAUNCH_GRACE_S` (10 min), so a pass mid-spawn cannot orphan the pane. |
 | Mistaken for crew capacity  | Rule Zero / `free_feedable_workers` skip ephemeral cards, so a coordinator is never told to dispatch board work to one. |
-| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is a non-author approval on that head (a GitHub APPROVE, or a signed Quipu verdict record from an agent other than the author agent; see [Signed verdicts](#signed-verdicts-one-github-account)) and no outstanding change request, and every check run is green. Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
+| Merging around the lane     | A merge job holds its repo's serialized merge lane for its whole life: one merge job per repo at a time, with `merge_spacing_minutes` between them. It merges only through `st agent spawn --merge --head SHA`. That command checks in code, against fresh forge reads, that the caller is a live merge job (review, triage and task jobs are refused) and that the PR is its own. It also checks that the head equals the verified SHA and the head the item pins, the PR is not a draft, the author is crew (never an outside contribution), there is no outstanding change request (a reviewer's latest GitHub review, or a blocking signed Quipu verdict; see [Signed verdicts](#signed-verdicts-one-github-account)), and every check run is green, with at least one check run. A crew PR needs no approval: it merges on green (Stiwi 11-15, 11-27). Only then does it call `gh pr merge --match-head-commit`. The agent's own gh credentials remain the residual gap. |
 
 ## Signed controller launch bridge
 
@@ -156,7 +156,7 @@ scratch directory under the ledger.
 | Job      | Default harness | Prompt contract |
 |----------|-----------------|-----------------|
 | `review` | codex (fleet directive: reviews on codex) | Independent, non-author review of `--repo/--pr` at the exact head. Post one verdict comment on the PR (APPROVE / REQUEST CHANGES with findings), then `--report --verdict V --head SHA --evidence URL`; st signs the verdict into Quipu. Never push, never merge. |
-| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and a non-author approval at that head, then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
+| `merge`  | claude | Only through the serialized lane, and only the head the item pins (`--head`, or the `revision` of the chaski work request in the item). Verify green CI and no outstanding change request at that head (crew PRs need no approval), then merge through `st agent spawn --merge --head SHA`. Never push to the base branch, never `--admin`, never bypass protection. If anything is unproven, report `blocked`. |
 | `triage` | claude | Find the cause of a red check. Comment the diagnosis on the item. Attended jobs may propose a fix on a branch and PR, never onto main. Protected UID jobs receive the read-only alert-triage instructions below. |
 
 Protected triage jobs (a controller ledger record with `uid_binding`) investigate
@@ -421,7 +421,8 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
   quipu `src/signing.rs`). The evidence hash covers every GateApproval field,
   so an edit after signing voids it. A failed write is reported, never
   silent, and no merge can rest on that review.
-- **Merge gate.** `st agent spawn --merge` reads the records on exactly the
+- **Merge gate.** A crew PR needs no approval, so a signed verdict matters to
+  the merge gate only when it blocks (`changes`). `st agent spawn --merge` reads the records on exactly the
   head, from the ONE configured `verdict_graph` (never any named graph), and
   recomputes each evidence hash. A record counts only if its signature
   verifies under a key pinned in `/etc/shantytown/verdict-signers.json`
@@ -433,7 +434,7 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
   chaski's rules: a verdict by the PR's author agent never counts, each other
   agent's latest word counts, any `changes` blocks, an unknown author agent
   approves nothing. An unsigned or forged record is ignored. A Quipu read
-  failure is "not approved".
+  failure refuses the merge, since a blocking verdict is then unproven.
 - **Merge job.** It merges only the head its item pins. When it ends without
   merging, its lane frees at once (spacing counts merges only) and, if
   `lane_release` is set, st calls chaski's `lane release` with the request id.
@@ -455,7 +456,7 @@ id, `aegis:publicKey` = the key's public half, `aegis:attests
 
 ## Known limits
 
-- **One GitHub identity.** A non-author GitHub APPROVE can never exist, so the approval comes from a signed Quipu verdict record (above). Until verdict records are enabled and the signer is registered, merge jobs report `blocked`. That is the safe outcome.
+- **One GitHub identity.** A non-author GitHub APPROVE can never exist, so a change request can also arrive as a signed Quipu verdict record (above). Crew PRs merge on green without any approval. When `verdict_graph` is set and the records cannot be read or verified, the merge is refused: a blocking verdict is then unproven, not absent.
 - **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
 - **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
 - **Task workspace consent.** Task jobs have no per-PR allowlist to restore. Provisioning records the hash of the exact workspace consent bytes it emits for that task, so the folder-trust guard can verify them. A later edit, a different workspace, or an unproven file still refuses trust; a completed job is not rebound by provisioning.
