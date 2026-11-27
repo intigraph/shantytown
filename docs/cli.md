@@ -3606,6 +3606,14 @@ outcome remains unproven: read back the
 item before deciding whether to retry. The command never retries or changes the
 principal, blocker checks or close reason to get past a failure.
 
+`st work item close` refuses, before any write, an item whose
+`agent_context.deploy_admission` phase is not terminal (`drained` or
+`cancelled`), and an item whose agent context cannot be parsed. Closing the
+item does not release the admission, so CD would keep refusing on a
+"competing INFLIGHT operation". `deploy_admission.py cancel` will not cancel a
+closed item either. Cancel a never-begun `planned` operation, or resolve it,
+before closing.
+
 ### Alert causes and members
 
 A **cause** is the currently firing root alarm class selected from Quipu's
