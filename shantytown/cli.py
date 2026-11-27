@@ -4341,6 +4341,8 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
                 import dataclasses
                 req = dataclasses.replace(req, repo=_spawn_canonical_repo(req.repo))
+            if recruiter_scope is None and recruitment is None:
+                req = _spawn_overflow(a, req, policy)
         # Before superseding a retried original, reading context, taking the
         # ledger lock or cutting a worktree: a foreign forge costs nothing.
         if refusal := _spawn_forge_refusal(req):
@@ -4600,6 +4602,71 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             a._ticket_refused = str(e)
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
+
+
+def _overflow_lane_reading(a, policy):
+    """(pct, reset_at, lost) of the default job lane's seven_day window.
+
+    The lane is [ephemeral.overflow] lane when set, else `base` (the legacy
+    Claude governor), else the default account of the default task harness.
+    Anything unreadable comes back as `lost`, which keeps jobs on that lane.
+    """
+    from . import governor as gov
+    from . import ephemeral as eph
+    cfg, governors = _governors(a)
+    eph_default = (getattr(policy, "harness_by_job", {}) or {}).get(
+        "task", eph.DEFAULT_HARNESS["task"])
+    want = (getattr(policy, "overflow", {}) or {}).get("lane") or None
+    if want is None:
+        if "base" in governors:
+            want = "base"
+        else:
+            want = next((name for name, acct in (cfg.accounts or {}).items()
+                         if acct.harness == eph_default and acct.default
+                         and name in governors), None)
+    g = governors.get(want) if want else None
+    if g is None:
+        return None, None, f"no usage governor for the {eph_default} lane"
+    reading = g.reader.read_all().get(gov.SEVEN_DAY)
+    if reading is None:
+        return None, None, "no seven_day reading"
+    return (reading.pct, reading.reset_at,
+            reading.lost(time.time(), g.policy.max_age_seconds))
+
+
+def _spawn_overflow(a, req, policy):
+    """The request, rerouted to the overflow harness when the switch is on
+    (aegis-za4f.14). Fail-closed toward the DEFAULT lane: a governor that cannot
+    be built or read leaves the job where the directive puts it."""
+    from . import ephemeral as eph
+    import dataclasses
+    if not eph.overflow_applies(req, policy):
+        return req
+    cfg = policy.overflow
+    target = cfg.get("harness", "codex")
+    default = eph.harness_for(req, policy)
+    if eph.harness_off(policy, target):
+        print(f"  overflow: {target} is capped at 0; {req.job} stays on {default}",
+              file=sys.stderr)
+        return req
+    try:
+        pct, reset_at, lost = _overflow_lane_reading(a, policy)
+    except Exception as error:  # noqa: BLE001 — never block a spawn on this
+        pct, reset_at, lost = None, None, f"governor unreadable ({type(error).__name__})"
+    with eph.lock(a.root):
+        latch = eph.read_overflow_latch(a.root)
+        verdict = eph.overflow_decision(
+            pct=pct, reset_at=reset_at, lost=lost, now=time.time(), latch=latch,
+            threshold=cfg.get("threshold_pct", 70),
+            cutoff_weekday=cfg.get("cutoff_weekday", 4))
+        if not a.dry_run and verdict.latch != latch:
+            eph.write_overflow_latch(a.root, verdict.latch)
+    if not verdict.on:
+        print(f"  overflow off: {verdict.why}; {req.job} on {default}", file=sys.stderr)
+        return req
+    print(f"  overflow ON: {verdict.why}; {req.job} on {req.item} routed to {target} "
+          f"instead of {default}", file=sys.stderr)
+    return dataclasses.replace(req, harness=target)
 
 
 def _spawn_item_state(a, item) -> str:

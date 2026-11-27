@@ -184,6 +184,12 @@ class Ephemeral:
     # administrator and on its item, once, by the tend reap sweep. It stays
     # queued: the TTL makes a stuck queue visible, it never discards work. 0 = off.
     queue_ttl_minutes: int = 240
+    # aegis-za4f.14: the overflow job lane. Empty = OFF, and off is the default
+    # on purpose: the directive's precondition (the codex launch race aegis-5x2x
+    # fixed, the queue able to route by harness) is a fact about the deployment
+    # that no code here can check, so the operator turns it on once it holds.
+    # Parsed keys: enabled, harness, threshold_pct, cutoff_weekday, lane.
+    overflow: dict = field(default_factory=dict)
     # aegis-c01c.7: signed review verdicts in Quipu (shantytown/gate_verdict.py).
     # Empty = off: no record is written and the merge gate reads none.
     verdict_graph: str = ""         # registered committed graph IRI for the records
@@ -1220,7 +1226,8 @@ _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
-                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes"}
+                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes",
+                   "overflow"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1325,6 +1332,7 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
         raise ConfigError(f"{path}: ephemeral.track_shares needs at least one share > 0 "
                           "(remove the table to turn shares off)")
     values["track_shares"] = dict(shares)
+    values["overflow"] = _ephemeral_overflow(path, tbl.get("overflow", {}))
     from .job_tools import validate_job_servers, validate_specs
     try:
         jobs = validate_specs(tbl.get("jobs", {}), EPHEMERAL_JOBS,
@@ -1335,6 +1343,40 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
                      unattended_uid_ready=uid_ready,
                      recruitment_launch_ready=recruitment_ready,
                      harness_by_job=dict(by_job), jobs=jobs, **values)
+
+
+_OVERFLOW_KEYS = {"enabled", "harness", "threshold_pct", "cutoff_weekday", "lane"}
+
+
+def _ephemeral_overflow(path: Path, tbl) -> dict:
+    """[ephemeral.overflow] (aegis-za4f.14). Every key is checked, because a
+    typo here does not fail loudly later: a misspelt `enabled` would leave the
+    lane quietly off while the operator believes Claude has relief."""
+    if not isinstance(tbl, dict):
+        raise ConfigError(f"{path}: [ephemeral.overflow] must be a table")
+    _refuse_unknown(path, "ephemeral.overflow", tbl, _OVERFLOW_KEYS)
+    if not tbl:
+        return {}
+    enabled = tbl.get("enabled", False)
+    if type(enabled) is not bool:
+        raise ConfigError(f"{path}: ephemeral.overflow.enabled must be true or false")
+    harness = tbl.get("harness", "codex")
+    if not isinstance(harness, str) or not harness.strip():
+        raise ConfigError(f"{path}: ephemeral.overflow.harness must be a harness name")
+    threshold = tbl.get("threshold_pct", 70)
+    if (isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not 0 < threshold <= 100):
+        raise ConfigError(f"{path}: ephemeral.overflow.threshold_pct must be a number "
+                          f"in (0, 100], got {threshold!r}")
+    weekday = tbl.get("cutoff_weekday", 4)
+    if isinstance(weekday, bool) or not isinstance(weekday, int) or not 0 <= weekday <= 7:
+        raise ConfigError(f"{path}: ephemeral.overflow.cutoff_weekday must be 0 (Monday) "
+                          f"to 7 (no cutoff), got {weekday!r}")
+    lane = tbl.get("lane", "")
+    if not isinstance(lane, str):
+        raise ConfigError(f"{path}: ephemeral.overflow.lane must be a governor lane name")
+    return {"enabled": enabled, "harness": harness.strip(), "threshold_pct": threshold,
+            "cutoff_weekday": weekday, "lane": lane.strip()}
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:

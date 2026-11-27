@@ -275,7 +275,45 @@ configured the drain order is slice 1's exactly (priority, then age).
 `--list` shows harness and track on each live job and ticket;
 `--drain --dry-run` prints the routed launch order.
 
-Not yet: the Codex overflow trigger (aegis-za4f.14).
+### The overflow lane
+
+aegis-za4f.14 (Stiwi 2026-11-26, "Looks good, execute!"). Claude stays the
+default job lane. The OpenAI (codex) account is **overflow** for roadmap
+implementation work only: a `task` job on the `roadmap` track (the default
+track) with no explicit `--harness`. Ops, short-term and backlog tasks, and
+review, merge and triage jobs, never overflow.
+
+- **On** when the default lane's seven_day window reads at or over
+  `threshold_pct` (70) at a moment before `cutoff_weekday` (4 = Friday, UTC;
+  the calendar week runs Monday to Sunday). Crossing 70% on Friday or later
+  does not turn it on.
+- **Held** for the rest of that window, even past Friday and even if usage
+  later reads lower. The trigger is latched in `<root>/ephemeral/overflow.json`
+  with the window's reset time.
+- **Off** when the window resets: the reading names a different reset time,
+  or the latched reset time has passed.
+
+Every could-not-tell keeps the job on Claude: no governor for the lane, a
+stale or failed reading, no published reset time, a governor that throws, or
+codex capped at `0` in `[ephemeral.max_agents_by_harness]`. Each spawn the rule
+covers prints one `overflow ON` / `overflow off` line on stderr saying why.
+The decision is made when a spawn is admitted, so a ticket queued while
+overflow is on carries `codex` and drains into codex capacity. An explicit
+`--harness`, a retry, or a queued ticket keeps the harness it already has.
+
+The switch ships **off**, and should stay off until both of the directive's
+preconditions hold: the codex job launch race is fixed (aegis-5x2x) and the
+per-track queue routes by harness (aegis-za4f.3, merged). Code cannot check
+the first, so the operator turns it on:
+
+```toml
+[ephemeral.overflow]
+enabled = true          # default false
+harness = "codex"       # the overflow lane
+threshold_pct = 70      # default lane's seven_day percent that trips it
+cutoff_weekday = 4      # 0 = Monday ... 4 = Friday (UTC); 7 = no cutoff
+lane = ""               # governor lane measuring the default; "" = base, else the default claude account
+```
 
 ### Pool management
 
@@ -354,6 +392,10 @@ backlog = 15
 lifetime_minutes = 90
 max_turns = 40
 max_concurrent = 1          # live task jobs at once; over it, spawns queue (aegis-za4f.3)
+
+# The overflow lane (aegis-za4f.14). OFF unless enabled; see "The overflow lane".
+[ephemeral.overflow]
+enabled = false
 ```
 
 ### Attended Codex task jobs

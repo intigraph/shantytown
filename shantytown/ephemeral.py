@@ -263,6 +263,112 @@ def harness_for(req: Request, policy) -> str:
         req.job, DEFAULT_HARNESS[req.job])
 
 
+# --- the overflow lane (aegis-za4f.14) -----------------------------------------
+#
+# Stiwi 2026-11-26 ("Looks good, execute!"): Claude stays the default job lane;
+# the OpenAI (codex) account becomes OVERFLOW for roadmap implementation jobs
+# only -- not operations, not review or merge. It goes on when the Claude
+# account's seven-day window passes 70% before Friday of that week, and off
+# again when that window resets. Why: one lane taking everything saturates.
+# Claude read 31% with six sessions before jobs moved onto it; codex sat at 99%
+# of its weekly window on 11-25 when it carried them all.
+#
+# The decision is PURE (overflow_decision) and the latch is one small file, so
+# the switch rule can be shown saying both yes and no without a live probe.
+# Every could-not-tell -- no reading, a stale reading, no reset timestamp --
+# keeps the job on Claude: the directive's default, never a guess.
+
+#: The directive's scope, not configuration: widening it is a new ruling.
+OVERFLOW_JOBS = ("task",)
+OVERFLOW_TRACKS = ("roadmap",)
+OVERFLOW_FILE = "overflow.json"
+_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+@dataclass(frozen=True)
+class Overflow:
+    on: bool
+    why: str
+    latch: dict | None = None        # what to persist; None = clear it
+
+
+def _overflow_cfg(policy) -> dict:
+    return getattr(policy, "overflow", {}) or {}
+
+
+def overflow_applies(req: Request, policy) -> bool:
+    """Whether this request is one the overflow lane may take at all.
+
+    An explicit --harness is the operator's choice and is never rerouted, and a
+    job whose default is already not the lane being relieved has nothing to
+    overflow from. Ops, short-term and backlog work stays put by design.
+    """
+    cfg = _overflow_cfg(policy)
+    if not cfg.get("enabled") or req.harness:
+        return False
+    if req.job not in OVERFLOW_JOBS or (req.track or DEFAULT_TRACK) not in OVERFLOW_TRACKS:
+        return False
+    return harness_for(req, policy) != cfg.get("harness", "codex")
+
+
+def overflow_decision(*, pct, reset_at, lost: str, now: float, latch: dict | None,
+                      threshold: float = 70, cutoff_weekday: int = 4) -> Overflow:
+    """Is the overflow lane on for this moment of the default lane's window?
+
+    `latch` is the persisted record of an earlier trigger ({"reset_at": ...}).
+    The rule: on once the window passes `threshold` percent at a moment before
+    `cutoff_weekday` (UTC; 4 = Friday, 7 = no cutoff) of the calendar week, and
+    held on for the REST OF THAT WINDOW even past Friday -- "off again when the
+    window resets", not "off when usage dips". A window identified by its
+    reset timestamp is the only thing that can say "the same week" honestly.
+    """
+    from datetime import datetime, timezone
+    held = latch.get("reset_at") if latch else None
+    # A trigger already observed is a fact about this window, and its end is a
+    # time, so a probe going dark mid-window does not undo it. A reading that
+    # names a DIFFERENT reset is a new window: that is the "off" edge.
+    if (isinstance(held, (int, float)) and now < held
+            and (reset_at is None or reset_at == held)):
+        return Overflow(True, f"latched at {latch.get('pct', '?')}% on "
+                              f"{latch.get('day', '?')}; holds until the window resets", latch)
+    latch = None                     # absent, or that window reset
+    if lost:
+        return Overflow(False, f"default lane reading unusable ({lost}); "
+                               "jobs stay on the default lane", latch)
+    if reset_at is None:
+        return Overflow(False, "default lane publishes no seven_day reset time; "
+                               "overflow needs the window to latch on", latch)
+    if pct is None or pct < threshold:
+        return Overflow(False, f"default lane seven_day {'?' if pct is None else f'{pct:.0f}'}% "
+                               f"< {threshold:g}%", latch)
+    day = datetime.fromtimestamp(now, timezone.utc).weekday()
+    if day >= cutoff_weekday:
+        return Overflow(False, f"default lane seven_day {pct:.0f}% >= {threshold:g}% but on "
+                               f"{_DAYS[day]}, not before {_DAYS[min(cutoff_weekday, 6)]}", latch)
+    return Overflow(True, f"default lane seven_day {pct:.0f}% >= {threshold:g}% on {_DAYS[day]}",
+                    {"reset_at": reset_at, "pct": round(pct, 1), "day": _DAYS[day],
+                     "at": now})
+
+
+def read_overflow_latch(root) -> dict | None:
+    try:
+        data = json.loads((ledger_dir(root) / OVERFLOW_FILE).read_text())
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_overflow_latch(root, latch: dict | None) -> None:
+    path = ledger_dir(root) / OVERFLOW_FILE
+    if latch is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(latch, sort_keys=True))
+    os.replace(tmp, path)
+
+
 # Who may spawn, stop or retry ephemeral jobs (aegis-za4f, sattler ruling
 # 2026-11-25): the administrator and leads. ADMINISTRATOR_ONLY is the default
 # so other callers of authority(), such as the recruit controller, keep their
