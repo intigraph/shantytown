@@ -1574,6 +1574,131 @@ class StalledAlerter:
                 f"is working is invisible starvation.")
 
 
+class LeadStallAlerter:
+    """A LEAD rendered `stalled` with READY work held raises ONE notice upward.
+
+    MEASURED 2026-11-27 (aegis-0dh5): `st crew` showed lead ellie "stalled" for
+    about 56 minutes. She was idle on an in_progress anchor and held ready work.
+    Nothing acted on the flag. StalledAlerter above sweeps WORKERS only, the
+    generic idle renudge was retired (aegis-4j6.1), and her report had been
+    absorbed by an administrator whose context then cycled. A state that is
+    displayed and never acted on is not a safeguard.
+
+    So the flag becomes an event. The condition is the `st crew` stalled
+    predicate (pane idle, no live shell, an in_progress item held) plus at least
+    one READY item the lead holds, by the haul predicate (stop_event._assigned_to)
+    so this cannot disagree with what the haul would serve. Once that condition
+    has held unchanged for the threshold (default 15 min, SHANTY_STALL_MIN), ONE
+    notice goes to the lead's own lead, which for a lead is the administrator.
+    It stays one notice per episode: any progress, a changed held set, or a
+    live ephemeral job the lead spawned (it is waiting on that, not stalled)
+    ends the episode.
+
+    A STALL WITH NO READY WORK RAISES NOTHING. Parked on one anchor with nothing
+    else queued is StalledAlerter's question for workers and the lead's own
+    call; this is about ready work that is not being picked up.
+
+    FAIL OPEN like every alerter here: any read error pushes nothing.
+    """
+
+    def __init__(self, root, reg, panes, runtime, *, push=push_to_admin,
+                 in_progress=None, ready=None, live_jobs=None,
+                 threshold_min=None, now=None, log=None):
+        self._root = root
+        self.path = Path(root) / "notify" / "lead_stalled.json"
+        self._reg = reg
+        self._panes = panes
+        self._runtime = runtime
+        self._push = push
+        from . import feed_check
+        leads = lambda: [c.name for c in reg.all().exact() if c.role == "lead"]
+        self._in_progress = in_progress or (
+            lambda: feed_check.tend_active(root, reg, roles=("lead",)))
+        self._ready = ready or (lambda: feed_check.tend_ready(root, reg, leads()))
+        if live_jobs is None:
+            from . import ephemeral
+            live_jobs = lambda: ephemeral.live(root)
+        self._live_jobs = live_jobs
+        env = os.environ.get("SHANTY_STALL_MIN")
+        self._threshold_s = (threshold_min if threshold_min is not None
+                             else float(env) if env else 15.0) * 60.0
+        self._now = now or time.time
+        self._log = log or (lambda msg: None)
+
+    def _load(self) -> dict:
+        try:
+            return json.loads(self.path.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, store: dict) -> None:
+        from .files import write_json_atomic
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        write_json_atomic(self.path, store)
+
+    def sweep(self, agents) -> list[str]:
+        """Returns the leads a notice was raised for on this pass."""
+        import hashlib
+        from .runtime import asks_a_question, auth_expired
+        from .stop_event import _assigned_to
+        try:
+            active = list(self._in_progress())
+            ready = list(self._ready())
+            waiting_on_job = {(r.get("spawned_by") or "") for r in self._live_jobs()}
+        except Exception:
+            return []
+        store = self._load()
+        now = self._now()
+        raised = []
+        try:
+            for ag in agents:
+                if ag.role != "lead" or not ag.pane:
+                    continue
+                anchors = sorted(b.get("id", "?") for b in _assigned_to(ag.name, active))
+                held = sorted(b.get("id", "?") for b in _assigned_to(ag.name, ready))
+                if (not anchors or not held or ag.name in waiting_on_job
+                        or not self._panes.exists(ag.pane)):
+                    store.pop(ag.name, None)
+                    continue
+                screen = self._panes.capture(ag.pane, attrs=True)
+                plain = triage_mod.strip_attrs(screen)
+                state = triage_mod.work_state(
+                    screen, self._runtime.shows_ready_ui(plain),
+                    awaiting=asks_a_question(self._runtime, plain),
+                    auth_dead=auth_expired(self._runtime, plain))
+                shells = triage_mod.running_shells(plain)
+                if state != triage_mod.IDLE or (shells is not None and shells > 0):
+                    store.pop(ag.name, None)
+                    continue
+                key = hashlib.sha256((plain + "\n" + "|".join(anchors) + "\n"
+                                      + "|".join(held)).encode()).hexdigest()
+                ep = store.get(ag.name)
+                if not ep or ep.get("key") != key:
+                    store[ag.name] = {"key": key, "since": now, "noticed": False}
+                    continue
+                if ep.get("noticed") or now - ep["since"] < self._threshold_s:
+                    continue
+                mins = (now - ep["since"]) / 60
+                if self._push(self._reg, self._panes,
+                              self._message(ag.name, anchors, held, mins)) is None:
+                    self._log(f"lead-stalled: administrator unreachable for "
+                              f"{ag.name}; will retry")
+                    continue
+                ep["noticed"] = True
+                raised.append(ag.name)
+        except Exception:
+            return []
+        self._save(store)
+        return raised
+
+    @staticmethod
+    def _message(name, anchors, held, mins) -> str:
+        return (f"⚠ st fleet tend: lead {name} has been stalled for {mins:.0f}m, "
+                f"idle on {', '.join(anchors)} while holding {len(held)} ready "
+                f"item(s): {', '.join(held)}. Wake {name} with its next item, or "
+                f"take the work back. This is the one notice for this stall.")
+
+
 # --- BLOCKED beads go silent forever (internal-ref) --------------------------
 
 # Do not shout about a bead that was blocked this morning: a human may simply not
