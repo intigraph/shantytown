@@ -1,0 +1,10 @@
+# Stored query repo_review_mode (aegis-za4f.17.1), param ?repo = "owner/repo".
+# PROPOSED text: the reviewMode predicate is a pending /propose shape, not yet
+# in the vocabulary. st reads one row's ?mode; no row means "non-author".
+PREFIX aegis: <http://aegis.gastown.local/ontology/>
+SELECT ?mode WHERE {
+  ?node a aegis:GitRepo ;
+        aegis:forgeSlug ?repo ;
+        aegis:reviewMode ?mode .
+}
+LIMIT 8

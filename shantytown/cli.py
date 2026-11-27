@@ -542,6 +542,78 @@ def _me(a) -> str | None:
     return getattr(a, "me", None) or os.environ.get("SHANTY_AGENT")
 
 
+def _operator_names(a) -> frozenset[str]:
+    """`[inbox] operators` of the store being written AND of the deployment the
+    box points at. Reading both matters: a scratch root has its own (usually
+    empty) config, and an empty list there must not unlock the real operator's
+    name (aegis-vpy)."""
+    from .config import load_or_default
+    from .deployment import read_pointer
+    names: set[str] = set()
+    root_here = getattr(a, "root", None)
+    for root in {*(Path(r) for r in [root_here] if r), *(p for p in [read_pointer()] if p)}:
+        cfg, _ = load_or_default(root)
+        names.update(cfg.inbox_operators)
+    return frozenset(names)
+
+
+def _scratch_root_refusal(a) -> str | None:
+    """A send from a store that is not the box's deployment must not reach the
+    live fleet (aegis-vpy). The selected tracker, message graph, Quipu registry
+    and tmux panes are all SHARED: none of them is scoped by --root, so a test
+    root isolates only its own files. On a box with a deployment pointer, a send
+    from any other root is refused outright; a dry run writes nothing and stays
+    allowed. A box with no pointer (st's own test suite isolates it) has no live
+    deployment to protect and is unchanged."""
+    from .deployment import read_pointer
+    if getattr(a, "dry_run", False):
+        return None
+    pointed = read_pointer()
+    if pointed is None:
+        return None
+    here = getattr(a, "root", None)
+    try:
+        same = here is not None and Path(here).resolve() == pointed.resolve()
+    except OSError:
+        same = False
+    if same:
+        return None
+    return (f"store {here} is not this box's deployment ({pointed}); a send "
+            "from a scratch root would reach the live tracker and panes, so "
+            "nothing was sent (use --dry-run to test)")
+
+
+def _enclosing_job(a) -> str | None:
+    """The live ephemeral job this process runs inside, judged on the store
+    being written and on the box's deployment. A job pointed at a scratch root
+    is still inside its job on the real one (aegis-vpy)."""
+    from . import ephemeral as eph
+    from .deployment import read_pointer
+    claimed = _me(a)
+    root_here = getattr(a, "root", None)
+    roots = [*(Path(r) for r in [root_here] if r), *(p for p in [read_pointer()] if p)]
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        cwd = Path("/")
+    ancestors = None
+    for root in dict.fromkeys(roots):
+        try:
+            if not eph.live(root):
+                continue
+            if ancestors is None:
+                ancestors = eph.ancestor_pids()
+            panes = _panes(a)
+            reader = getattr(panes, "_pane_pid", None) or (lambda _s: None)
+            job = eph.inside_ephemeral(root, cwd=cwd, ancestors=ancestors,
+                                       pane_pid=reader)
+        except Exception:  # noqa: BLE001 - unreadable ledger: fall to the claim
+            job = None
+        if job:
+            return job
+    return claimed if eph.is_ephemeral_name(claimed) else None
+
+
 def _verified_sender(a, panes) -> tuple[str | None, bool]:
     """Resolve a message sender without trusting a leaked daemon environment.
 
@@ -558,6 +630,27 @@ def _verified_sender(a, panes) -> tuple[str | None, bool]:
         return None, False
     sender = authenticated or _me(a)
     if authenticated and getattr(a, "me", None) not in (None, authenticated):
+        return None, False
+    # aegis-vpy, 2026-11-27: an ephemeral job testing `st inbox` against a
+    # scratch root, with SHANTY_AGENT=stiwi in its environment, delivered a
+    # DURABLE "[from stiwi]" message to a lead, who acted on it as operator
+    # direction. Three independent closures, each sufficient for its own leg:
+    if (refusal := _scratch_root_refusal(a)):
+        print(f"  refused: {refusal}", file=sys.stderr)
+        return None, False
+    job = _enclosing_job(a)
+    if job:
+        # A job speaks as itself. A different claim is refused, and a job that
+        # unset $SHANTY_AGENT is still that job, never an anonymous sender.
+        if sender and sender != job:
+            print(f"  refused: this process runs inside ephemeral job {job}; "
+                  f"it cannot send as {sender}", file=sys.stderr)
+            return None, False
+        sender = job
+    if sender and sender != authenticated and sender in _operator_names(a):
+        print(f"  refused: {sender} is the operator; the operator's name is "
+              "attributable only through the operator's own channel, never "
+              "from a crew or job process environment", file=sys.stderr)
         return None, False
     if not sender:
         return None, True
@@ -3868,7 +3961,23 @@ def _spawn_lane_release(a, rec, *, run=None) -> str:
     return ""
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
+def _spawn_review_mode(a, repo, *, reader=None) -> str:
+    """The repo's review policy from Quipu's stored query. Any failure to read
+    it completely is UNKNOWN, and UNKNOWN is "non-author": the approval is
+    waived only when the graph positively says "none"."""
+    from . import ephemeral as eph
+    from .crew_rules import named_rows
+    from .query_identity import declared_read_operation
+    try:
+        with declared_read_operation("review-policy"):
+            rows = (reader or named_rows)(Path(a.root), eph.REVIEW_MODE_QUERY,
+                                          {"repo": repo}, limit=8, timeout=5)
+    except Exception:  # noqa: BLE001 - unreadable is UNKNOWN, never a pass
+        return "non-author"
+    return eph.review_mode_from_rows(rows)
+
+
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -3890,7 +3999,8 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None) -> int:
               if sha else [])
     verdict = _spawn_verdict_approval(a, repo, pr, info.get("node_id") or "", head,
                                       quipu=quipu)
-    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict):
+    if why := eph.merge_gate(rec, head, info, reviews, checks, verdict,
+                             review_mode=_spawn_review_mode(a, repo, reader=review_reader)):
         raise eph.Refused(why)
     if a.dry_run:
         print(f"would merge {repo}#{pr} at {head}")

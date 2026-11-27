@@ -333,6 +333,11 @@ class Config:
     # per-week message windows, and readers union the legacy seeds with them.
     # Rollback is setting it back to "seed"; window messages stay readable.
     inbox_store: str = "seed"
+    # [inbox] operators: the human operator names (aegis-vpy). A crew or job
+    # process can never SIGN as one of these: `[from <operator>]` carries an
+    # authority no agent has, so the name is attributable only through the
+    # operator's own channel or a protected-UID identity bound to it.
+    inbox_operators: tuple[str, ...] = ()
     # [harness] — WHICH AGENT PROGRAM, for cards that do not say (harness.py).
     # Two levels, and a card still beats both:
     #
@@ -582,6 +587,7 @@ def _resolve(data: dict, path: Path) -> Config:
                   cycle_advice=_cycle_advice(path, _table(path, data, "cycle_advice")),
                   ephemeral=_ephemeral(path, _table(path, data, "ephemeral")),
                   inbox_store=_inbox_store(path, _table(path, data, "inbox")),
+                  inbox_operators=_inbox_operators(path, _table(path, data, "inbox")),
                   path=path)
 
 
@@ -597,12 +603,20 @@ def _escalation_poller(path: Path, tbl: dict) -> bool:
 
 
 def _inbox_store(path: Path, tbl: dict) -> str:
-    _refuse_unknown(path, "inbox", tbl, {"store"})
+    _refuse_unknown(path, "inbox", tbl, {"store", "operators"})
     store = tbl.get("store", "seed")
     if store not in INBOX_STORES:
         raise ConfigError(f"{path}: inbox.store must be one of {', '.join(INBOX_STORES)}, "
                           f"not {store!r}")
     return store
+
+
+def _inbox_operators(path: Path, tbl: dict) -> tuple[str, ...]:
+    names = tbl.get("operators", [])
+    if (not isinstance(names, list)
+            or not all(isinstance(n, str) and n.strip() for n in names)):
+        raise ConfigError(f"{path}: inbox.operators must be a list of names")
+    return tuple(n.strip() for n in names)
 
 
 def _jobs_scheduler(path: Path, tbl: dict) -> str:
