@@ -120,8 +120,40 @@ def _plate_snapshot(plate, agent):
         return None, "?"
 
 
-def capture(root, agent, payload, *, administrator, events, plate, deliver):
-    """Persist payload before external reads/delivery; injected fixture seams."""
+def recipient(root, reg, panes, agent):
+    """Route a StopFailure exactly as an ordinary stop is routed (aegis-rr3).
+
+    This hook used to address find_administrator() unconditionally, so a
+    worker whose lead was up and draining had its ordinary stops reach the lead
+    all evening while its safeguard-blocked StopFailure went to the
+    administrator instead (franklin -> sattler, lead harding up, 2026-11-27).
+    The lead, not the administrator, is the one who can act on a stuck worker.
+    Reusing route_stop and the same _lead_is_up probe keeps the two streams from
+    ever choosing different recipients for the same card.
+
+    A failure to route still reaches SOMEONE: the administrator, with the reason
+    carried. A StopFailure is the event least able to afford being stranded.
+    """
+    from . import stop_event
+    from .routing_identity import with_remote_lead
+    from .tier import Routing, deployment_catalog, find_administrator, route_stop
+    try:
+        routed = with_remote_lead(reg, agent, root)
+        return route_stop(routed, agent, lead_is_up=stop_event._lead_is_up(routed, panes),
+                          catalog=deployment_catalog(root))
+    except Exception as exc:
+        administrator = find_administrator(reg)
+        if not administrator:
+            raise ValueError(f"administrator UNKNOWN and lead unroutable: {exc}") from exc
+        return Routing(worker=agent, to=administrator, rose=True,
+                       detail=f"stop-failure routing UNKNOWN ({type(exc).__name__}): {exc}"[:200])
+
+
+def capture(root, agent, payload, *, to, events, plate, deliver, rose=False, routing=""):
+    """Persist payload before external reads/delivery; injected fixture seams.
+
+    `to` is the routed recipient (see recipient()); `rose`/`routing` say whether
+    and why it went past the card's lead, as an ordinary stop event does."""
     import fcntl
     directory = Path(root) / "stop-failures"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -141,14 +173,16 @@ def capture(root, agent, payload, *, administrator, events, plate, deliver):
         item, item_status = _plate_snapshot(plate, agent)
         record.update(plate=item, item_status=item_status)
         _save(path, record)
-        detail = json.dumps({"kind": "stop-failure", "verdict": verdict, **payload}, sort_keys=True)
-        events.persist(administrator, agent, "stop-failure", False, item=item,
+        extra = {"routing": routing} if routing else {}
+        detail = json.dumps({"kind": "stop-failure", "verdict": verdict, **extra, **payload},
+                            sort_keys=True)
+        events.persist(to, agent, "stop-failure", rose, item=item,
                        item_status=item_status, detail=detail, key=event_key,
                        kind="stop-failure", error=payload.get("error", "unknown"),
                        error_details=payload.get("error_details"),
                        last_assistant_message=payload.get("last_assistant_message"))
         # Limit/auth paths are consumed by tend; all other failures also reach
-        # the durable inbox, independent of the administrator's Stop hook.
+        # the durable inbox, independent of the recipient's Stop hook.
         if verdict in ("limited", "auth-dead"):
             return record
         _notify_record(root, record, deliver)
@@ -191,7 +225,6 @@ def main(argv=None):
     from . import cli, stop_event
     from .events import FilesEvents
     from .files import FilesRegistry
-    from .tier import find_administrator
     from .tmux import Tmux, declared_socket
     args = list(sys.argv[1:] if argv is None else argv)
     root = stop_event._root(args)
@@ -215,14 +248,13 @@ def main(argv=None):
         if not agent:
             raise ValueError("agent identity unavailable")
         reg.get(agent)  # exact registry identity, including outside tmux
-        administrator = find_administrator(reg)
-        if not administrator:
-            raise ValueError("administrator UNKNOWN")
+        routing = recipient(root, reg, panes, agent)
         options = SimpleNamespace(root=root, backend=None)
         inbox = cli._inbox(options, default="beads")
         def deliver(text):
-            return inbox.deliver(administrator, text, frm="st-stop-failure").id
-        capture(root, agent, payload, administrator=administrator,
+            return inbox.deliver(routing.to, text, frm="st-stop-failure").id
+        capture(root, agent, payload, to=routing.to, rose=routing.rose,
+                routing=routing.detail,
                 events=FilesEvents(root / "events"),
                 plate=lambda name: stop_event._plate_of(root, name)[:2], deliver=deliver)
     except Exception as exc:

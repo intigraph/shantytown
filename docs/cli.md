@@ -3766,7 +3766,11 @@ unknown until a real hook payload is observed; fixtures do not establish it.
 
 A rendered API message containing `safeguards` takes priority over every other
 error category. It records a hold for that launch and durably notifies the
-canonical administrator, with request IDs extracted from the rendered message.
+agent's stop recipient, with request IDs extracted from the rendered message.
+The recipient is chosen exactly as for an ordinary stop (`route_stop`): the
+card's lead while that lead is up and can drain, rising to the administrator
+(event `rose`, with the reason in its detail) only when the lead is down,
+deaf, off-host or unroutable.
 The hold also prevents ordinary input and automatic cycles when the pane has no
 banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
 does not clear a safeguard hold. Rate-limit and authentication failures enter the
