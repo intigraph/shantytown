@@ -128,10 +128,11 @@ def test_a_stale_head_is_superseded_not_spawned(store, tmp_path, capsys):
 def test_a_new_head_re_arms_the_same_job(store, tmp_path, monkeypatch):
     root, _panes, launched = store
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
     path = tmp_path / "ev.jsonl"
-    _write(path, _ev(head=HEAD))
+    _write(path, _ev(job="review", head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    _write(path, _ev(job="review", head=HEAD), _ev(job="review", head=NEWER))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     # The second head's event is admitted (queued: the first job holds the slot).
     assert len(launched) + len(eph.tickets(root)) == 2
@@ -234,10 +235,84 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    # The old head's fix is still live, so the new head's waits (pending, not
+    # settled against it) rather than stacking a second job on the branch.
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert [r["head"] for r in pe.settled(root).values()] == [HEAD]
+    _end_jobs(root)
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(eph.tickets(root)) == 1
+    assert len(launched) == 2
     (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
     assert "in flight" not in new.get("detail", "")
+
+
+def _end_jobs(root):
+    for rec in eph.live(root):
+        eph.write(root, {**rec, "state": eph.DONE})
+
+
+def _review_rounds(n):
+    return [f"{i:x}" * 40 for i in range(1, n + 1)]
+
+
+def test_the_drain_recruits_three_review_rounds_and_caps_the_fourth(store, tmp_path, monkeypatch, capsys):
+    # tambo#311: five drain reviews, each REQUEST-CHANGES with one new finding.
+    root, _panes, launched = store
+    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
+    path = tmp_path / "ev.jsonl"
+    lines = []
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        lines.append(_ev(job="review", head=head))
+        _write(path, *lines)
+        assert _st(root, "--drain-events", str(path)) == cli.OK
+        _end_jobs(root)
+    assert len(launched) == 3
+    capsys.readouterr()
+    fourth = "e" * 40
+    lines.append(_ev(job="review", head=fourth))
+    _write(path, *lines)
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 3                      # no fourth review
+    assert "capped review o/n#7@eeeeeeeeeeee: 3 review rounds" in capsys.readouterr().err
+    assert pe.settled(root)[pe.event_id("o/n", 7, fourth, "review")]["outcome"] == "capped"
+    # Settled, so it is not re-offered; another PR still gets its first round.
+    lines.append(_ev(job="review", pr=8, head=fourth))
+    _write(path, *lines)
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 4 and "capped 0" in capsys.readouterr().out
+
+
+def test_the_cap_counts_heads_not_admissions(store, tmp_path):
+    # A crash replay re-admits the same head; that is not a new round.
+    root, _panes, _launched = store
+    ev = pe.parse(json.dumps(_ev(job="review", head=HEAD)))
+    for _ in range(pe.MAX_REVIEW_ROUNDS + 1):
+        pe.settle(root, ev, "admitted", 1.0)
+    pe.settle(root, pe.parse(json.dumps(_ev(job="task", head=NEWER))), "admitted", 1.0)
+    assert pe.review_rounds(root) == {("o/n", 7): {HEAD}}
+
+
+def test_a_task_is_refused_while_one_is_live_for_the_same_item_and_pr(store, tmp_path, monkeypatch, capsys):
+    # 6vf.10 got three fix jobs from drain plus hand spawns.
+    root, panes, launched = store
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    hand = {"name": "eph-task-abc123", "job": "task", "item": "it-1", "repo": "o/n",
+            "pr": 7, "state": eph.LIVE}
+    eph.write(root, hand)
+    path = _write(tmp_path / "ev.jsonl", _ev(job="task", reason="ci-red"))
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert "task job eph-task-abc123 is already live for it-1" in capsys.readouterr().err
+    assert launched == [] and pe.settled(root) == {}
+    # A queued ticket for the same item and PR blocks it too.
+    assert pe.live_task(pe.parse(json.dumps(_ev())), [],
+                        [{"id": "q-1", "job": "task", "item": "it-1", "repo": "o/n", "pr": 7}]) == "q-1"
+    # Another PR, another item or a review job are not duplicates.
+    assert pe.live_task(pe.parse(json.dumps(_ev(pr=8))), [hand], []) is None
+    assert pe.live_task(pe.parse(json.dumps(_ev(item="it-2"))), [hand], []) is None
+    assert pe.live_task(pe.parse(json.dumps(_ev())), [{**hand, "job": "review"}], []) is None
+    eph.write(root, {**hand, "state": eph.DONE})
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 1
 
 
 def test_a_malformed_line_holds_exit_2_once_not_forever(store, tmp_path, capsys):

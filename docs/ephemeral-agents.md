@@ -292,6 +292,18 @@ not the signed controller `recruit_*` path.
   crashed after the spawn but before it settled; the spawn path does not refuse
   a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
+- **Capped** (settled): a review event for a PR that already has
+  `pr_events.MAX_REVIEW_ROUNDS` (3) reviewed heads admitted in the ledger. Round
+  4 and every later head are printed and never offered again, so the PR lands
+  on green rather than looping. On tambo#311 the drain recruited five reviews,
+  each REQUEST-CHANGES with one new finding. Only drain-admitted reviews count;
+  a review spawned by hand is not a round. Re-admitting the same head is not a
+  new round either.
+- **One fix job per item and PR.** A task event waits pending (exit 2) while a
+  task job or queued ticket for the same item, repo and PR exists, whether the
+  drain or a hand spawn started it. Before, 6vf.10 got three fix jobs pushing
+  to one branch. When the live job pushes, the new head supersedes the
+  event. If it ends without pushing, the next drain recruits the fix.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 

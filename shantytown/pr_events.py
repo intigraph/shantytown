@@ -41,13 +41,20 @@ LEDGER = "pr-events.jsonl"
 # Outcomes that end an event. "refused" (dates the first refusal),
 # "spawning" (intent, written before the spawn) and "malformed" (a bad line
 # already reported, keyed by line_id) are also written; none settles an event.
-SETTLING = ("admitted", "superseded", "expired")
+SETTLING = ("admitted", "superseded", "expired", "capped")
 # How long a pending event is offered again before it expires. Without a bound
 # a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
 # re-spawned on every drain and held exit 2 forever (review of #776), so a
 # drain could never go clean. A day covers a governor hold or a full pool; an
 # expiry is written to the ledger and printed, never silent.
 PENDING_TTL_S = 24 * 3600
+# Review rounds the drain recruits per PR before it stops. tambo#311 got five
+# drain reviews (1d484a, 07aef5, 65b603, fc24ee, 9efbf4), each REQUEST-CHANGES
+# with one new finding, at 91% of the weekly Claude budget (sattler 17:4xZ):
+# a reviewer always finds one more thing, so an uncapped loop never converges.
+# Round 4 is settled as "capped", printed, and never offered again; a later
+# head is a later round and is capped too, so the PR lands on green instead.
+MAX_REVIEW_ROUNDS = 3
 
 
 def event_id(repo: str, pr: int, head: str, job: str) -> str:
@@ -209,6 +216,31 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
             if not isinstance(born, (int, float)) or born < since:
                 continue
         return r.get("name") or r.get("id") or "?"
+    return None
+
+
+def review_rounds(root) -> dict[tuple[str, int], set[str]]:
+    """(repo, pr) -> the heads the drain admitted a review for. One round per
+    head: re-admitting the same head (a crash replay) is not a new round. Only
+    the drain's own ledger counts, so a review spawned by hand is not a round;
+    the cap brakes the automatic loop, not an operator."""
+    out: dict[tuple[str, int], set[str]] = {}
+    for r in _ledger(root):
+        if r.get("job") == "review" and r.get("outcome") == "admitted":
+            out.setdefault((r.get("repo"), r.get("pr")), set()).add(r.get("head"))
+    return out
+
+
+def live_task(ev: dict, live: list[dict], tickets: list[dict]) -> str | None:
+    """A task job already live or queued for this event's item and PR, or None.
+    Drain and hand spawns stacked three fix jobs on 6vf.10 and two or three on
+    az3d.2 (sattler 17:4xZ), each pushing to the same branch. The live one's
+    push moves the head, which supersedes this event; if it ends without one,
+    the event is still pending and the next drain recruits the fix."""
+    for r in [*live, *tickets]:
+        if (r.get("job"), r.get("item"), r.get("repo"), r.get("pr")) == \
+                ("task", ev["item"], ev["repo"], ev["pr"]):
+            return r.get("name") or r.get("id") or "?"
     return None
 
 

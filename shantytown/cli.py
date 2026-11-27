@@ -4936,7 +4936,9 @@ def _spawn_drain_events(a) -> int:
     a merge pin mismatch), crashed, or no item to report on. A refusal is
     not dropped: the cap and the governor are the brakes, not this loop.
     Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
-    printed, so a permanent refusal cannot hold exit 2 forever."""
+    printed, so a permanent refusal cannot hold exit 2 forever.
+    Capped (settled): a review past pr_events.MAX_REVIEW_ROUNDS for its PR.
+    A task event waits pending while a task job for its item and PR is live."""
     from . import ephemeral as eph
     from . import pr_events as pe
     if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
@@ -4946,7 +4948,7 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -4964,6 +4966,7 @@ def _spawn_drain_events(a) -> int:
         refused = pe.first_refused(a.root)
         tried = pe.attempted(a.root)
         heads = pe.current_heads(events)
+        rounds = pe.review_rounds(a.root)
         seen = set()
         for ev in events:
             eid = ev["event_id"]
@@ -4993,6 +4996,24 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
                 continue
+            reviewed = rounds.setdefault((ev["repo"], ev["pr"]), set())
+            if (ev["job"] == "review" and ev["head"] not in reviewed
+                    and len(reviewed) >= pe.MAX_REVIEW_ROUNDS):
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "capped", time.time(),
+                              f"{len(reviewed)} review rounds already recruited")
+                counts["capped"] += 1
+                print(f"  capped {label}: {len(reviewed)} review rounds already "
+                      f"recruited (max {pe.MAX_REVIEW_ROUNDS}); not offered again",
+                      file=sys.stderr)
+                continue
+            if ev["job"] == "task" and (dup := pe.live_task(
+                    ev, eph.live(a.root), eph.tickets(a.root))):
+                rc = CANNOT_TELL
+                _drain_event_pending(a, pe, ev, label, refused, counts,
+                                     f"task job {dup} is already live for "
+                                     f"{ev['item']} on this PR")
+                continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -5012,6 +5033,8 @@ def _spawn_drain_events(a) -> int:
                 detail = f"launch crashed: {type(error).__name__}: {str(error)[:200]}"
             if out == OK:
                 pe.settle(a.root, ev, "admitted", time.time(), ev["reason"])
+                if ev["job"] == "review":
+                    reviewed.add(ev["head"])
                 counts["admitted"] += 1
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
@@ -5020,7 +5043,8 @@ def _spawn_drain_events(a) -> int:
                                      detail or "spawn refused (reason above)")
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
+          f"pending {counts['pending']}, expired {counts['expired']}, "
+          f"capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
 
