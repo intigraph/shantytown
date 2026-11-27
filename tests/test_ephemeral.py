@@ -631,6 +631,39 @@ def test_merge_gate_says_no_to_each_unsafe_merge():
         assert want in eph.merge_gate(*args), want
 
 
+def _run(name, conclusion, started, rid, status="completed", app=15368):
+    return {"name": name, "status": status, "conclusion": conclusion,
+            "started_at": started, "id": rid, "app": {"id": app}}
+
+
+def test_merge_gate_judges_the_latest_run_per_check():
+    """aegis-es9d: shantytown#767's first suite was CANCELLED and its rerun all
+    SUCCESS; judging every run refused a head the forge called green. The
+    newest run per (app, name) wins, in both directions."""
+    merge = {"name": "eph-merge-aaaaaa", "job": "merge", "state": eph.LIVE}
+    t0, t1 = "2026-11-27T06:34:26Z", "2026-11-27T06:39:04Z"
+
+    def gate(checks):
+        return eph.merge_gate(merge, HEAD, _pr(), GOOD_REVIEW, checks)
+
+    rerun_green = [_run("test (3.11)", "cancelled", t0, 1), _run("test (3.11)", "success", t1, 2),
+                   _run("order-independence", "cancelled", t0, 3),
+                   _run("order-independence", "success", t1, 4)]
+    assert gate(rerun_green) == ""
+    assert gate(list(reversed(rerun_green))) == ""
+    assert "not green" in gate([_run("ci", "success", t0, 1), _run("ci", "failure", t1, 2)])
+    assert "not green" in gate([_run("ci", "cancelled", t0, 1)])
+    assert "not green" in gate([_run("ci", "success", t1, 1), _run("lint", "failure", t1, 2)])
+    # Same started_at: the higher id is the rerun.
+    assert "not green" in gate([_run("ci", "success", t1, 1), _run("ci", "failure", t1, 2)])
+    # A queued rerun (no started_at yet) is newer than any started run: pending refuses.
+    assert "not green" in gate([_run("ci", "success", t1, 1),
+                                _run("ci", None, None, 2, status="queued")])
+    # Same name from a different app is a different check; its failure still refuses.
+    assert "not green" in gate([_run("ci", "success", t1, 2),
+                                _run("ci", "failure", t0, 1, app=99)])
+
+
 def test_review_mode_none_waives_only_the_approval():
     """aegis-za4f.17 (Stiwi 11-27): a repo configured review_mode = "none"
     merges at green with no review; every other refusal still holds, and any

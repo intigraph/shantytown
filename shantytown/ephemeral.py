@@ -1943,6 +1943,21 @@ def review_mode_from_rows(rows) -> str:
     return "none" if modes == {"none"} else "non-author"
 
 
+def latest_check_runs(checks: list) -> list:
+    """The newest run per (app, check name). aegis-es9d: shantytown#767 had a
+    first suite CANCELLED and a rerun all SUCCESS on the same head; judging every
+    run refused "checks not green" on superseded runs the forge itself no longer
+    counts. Newest is by started_at, then id. A run with no started_at (queued)
+    sorts newest, so a pending rerun is never hidden behind an older green."""
+    latest = {}
+    for c in checks:
+        key = ((c.get("app") or {}).get("id"), c.get("name"))
+        rank = (c.get("started_at") is None, c.get("started_at") or "", c.get("id") or 0)
+        if key not in latest or rank >= latest[key][0]:
+            latest[key] = (rank, c)
+    return [c for _, c in latest.values()]
+
+
 def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: list,
                verdict: dict | None = None, review_mode: str = "non-author") -> str:
     """Why this merge must NOT happen, or "". Pure: the caller fetched `pr`
@@ -1991,7 +2006,7 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
                 "trusted signed verdict from an agent other than the author" + why)
     if not checks:
         return "no check runs on the head; green is unproven"
-    bad = [c.get("name", "?") for c in checks
+    bad = [c.get("name", "?") for c in latest_check_runs(checks)
            if c.get("status") != "completed"
            or c.get("conclusion") not in ("success", "neutral", "skipped")]
     if bad:
