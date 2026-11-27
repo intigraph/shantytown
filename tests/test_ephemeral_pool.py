@@ -17,14 +17,14 @@ from test_ephemeral import NOW, _rec, _st, _ticket, store  # noqa: F401
 def test_a_runtime_pool_size_replaces_the_config_cap(store, monkeypatch, capsys):
     root, _panes, launched = store                 # config max_agents = 1
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     # At the config cap the second spawn queues ...
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK
     assert "QUEUED" in capsys.readouterr().out and len(launched) == 1
     # ... and after a resize to 2 the third launches straight away.
     assert _st(root, "--pool", "size", "2") == cli.OK
     assert eph.pool_state(root)["size"] == 2
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-3") == cli.OK
     assert len(launched) == 2
     assert _st(root, "--pool", "status") == cli.OK
     out = capsys.readouterr().out
@@ -76,7 +76,7 @@ def test_pause_queues_fresh_spawns_and_resume_launches_them(store, monkeypatch, 
     monkeypatch.setattr(eph, "kick_drain", drain_now)
     assert _st(root, "--pool", "pause") == cli.OK
     # A free slot, but paused: the spawn is held as a ticket, not refused.
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     assert "pool is paused by boss" in capsys.readouterr().out
     assert launched == [] and len(eph.tickets(root)) == 1
     assert eph.free_slots(root) == 0
@@ -90,11 +90,11 @@ def test_pause_queues_fresh_spawns_and_resume_launches_them(store, monkeypatch, 
 def test_drain_refuses_new_work_and_holds_the_queue(store, monkeypatch, capsys):
     root, _panes, launched = store
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1") == cli.OK
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-2") == cli.OK  # queued
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.OK  # queued
     assert _st(root, "--pool", "drain") == cli.OK
     capsys.readouterr()
-    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-3") == cli.REFUSED
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-3") == cli.REFUSED
     assert "pool is draining" in capsys.readouterr().err
     assert [t["item"] for t in eph.tickets(root)] == ["it-2"]
     (job,) = eph.live(root)
