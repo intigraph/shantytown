@@ -11,6 +11,12 @@ from shantytown.stop_event import _compose_reason, _drain
 from shantytown.tier import is_governance
 
 
+@pytest.fixture(autouse=True)
+def _legacy_timed_evaluator(monkeypatch):
+    # The retained interval evaluator; production files refuse it (test_jobs_declare.py).
+    monkeypatch.setattr(jobs, "LEGACY_TIMED_TRIGGERS", True)
+
+
 def fixture(root, *, retry=0):
     (root / "crew").mkdir()
     (root / "crew" / "boss.json").write_text(json.dumps({"role": "administrator"}))

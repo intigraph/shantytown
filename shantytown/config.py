@@ -55,6 +55,7 @@ from .admin_wake_budget import Policy as AdminWakeBudget, parse as parse_admin_w
 
 import math
 import tomllib
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import os
@@ -249,6 +250,14 @@ class Config:
     overdue_enabled: bool = False
     # Explicit per-host scheduler cutover; omission preserves local TOML jobs.
     jobs_scheduler: str = "local"
+    # The Quipu graph holding this deployment's job declarations. File job
+    # config is deprecated (directive crew/scheduled-jobs), so `st work jobs`
+    # reads here by default once it is set, with no TOML fallback.
+    jobs_graph: str = ""
+    # "refuse" (default) or "migrate": a host with live cron/every job files
+    # keeps them firing through the migration window instead of losing them
+    # silently on deploy. Directive crew/scheduled-jobs: no new timed files.
+    jobs_timed_files: str = "refuse"
     # Activation belongs to the producer's declared config, never ambient env.
     escalation_poller_carrier_enabled: bool = False
     mode: str = DEFAULT_MODE
@@ -540,6 +549,8 @@ def _resolve(data: dict, path: Path) -> Config:
         raise ConfigError(f"{path}: overdue.spec_changes must be boolean")
     return Config(mode=mode, modes=modes, overdue_spec_changes=spec_changes, overdue_enabled=overdue_enabled,
                   jobs_scheduler=_jobs_scheduler(path, _table(path, data, "jobs")),
+                  jobs_graph=_jobs_graph(path, _table(path, data, "jobs")),
+                  jobs_timed_files=_jobs_timed_files(path, _table(path, data, "jobs")),
                   escalation_poller_carrier_enabled=_escalation_poller(
                       path, _table(path, data, "escalation_poller")),
                   overdue_external_unlocks=external_unlocks,
@@ -609,11 +620,26 @@ def _inbox_operators(path: Path, tbl: dict) -> tuple[str, ...]:
 
 
 def _jobs_scheduler(path: Path, tbl: dict) -> str:
-    _refuse_unknown(path, "jobs", tbl, {"scheduler"})
+    _refuse_unknown(path, "jobs", tbl, {"scheduler", "graph", "timed_files"})
     scheduler = tbl.get("scheduler", "local")
     if not isinstance(scheduler, str) or scheduler not in {"local", "chaski"}:
         raise ConfigError(f"{path}: jobs.scheduler must be 'local' or 'chaski'")
     return scheduler
+
+
+def _jobs_graph(path: Path, tbl: dict) -> str:
+    graph = tbl.get("graph", "")
+    if not isinstance(graph, str) or (graph and not re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9+.-]*:[^\s<>\"{}|^`\\]+", graph)):
+        raise ConfigError(f"{path}: jobs.graph must be an absolute IRI (e.g. urn:example:jobs)")
+    return graph
+
+
+def _jobs_timed_files(path: Path, tbl: dict) -> str:
+    mode = tbl.get("timed_files", "refuse")
+    if mode not in ("refuse", "migrate"):
+        raise ConfigError(f"{path}: jobs.timed_files must be 'refuse' or 'migrate'")
+    return mode
 
 
 def _dream(path: Path, tbl: dict) -> DreamPolicy:
