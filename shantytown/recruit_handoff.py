@@ -80,7 +80,7 @@ def prepare(envelope, *, root, host, policy, actor, inside, role_of,
             with ephemeral.lock(root):
                 quiet = quiet_time.read(Path(root))
                 if (quiet.held or quiet.state == 'unknown'
-                        or any(status.state == 'unknown' for _, status in quiet.entries)
+                        or quiet.launch_unknown
                         or window.active(Path(root)) is not None):
                     raise IdentityError('controller launch window is held or unknown')
                 selected, digest = job_launch.select(

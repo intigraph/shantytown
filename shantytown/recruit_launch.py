@@ -57,7 +57,7 @@ class Admission:
                                                 inside=ctx['inside'], role_of=ctx['role_of'])
         quiet = recruit_handoff.quiet_time.read(Path(ctx['root']))
         if (quiet.held or quiet.state == 'unknown'
-                or any(status.state == 'unknown' for _, status in quiet.entries)
+                or quiet.launch_unknown
                 or recruit_handoff.window.active(Path(ctx['root'])) is not None):
             raise IdentityError('controller launch window held or unknown')
         if recruit_request.load_controller_binding() != self.pin:
@@ -87,7 +87,7 @@ class Admission:
             raise IdentityError('controller binding changed during launch admission')
         quiet = recruit_handoff.quiet_time.read(Path(ctx['root']))
         if (quiet.held or quiet.state == 'unknown'
-                or any(status.state == 'unknown' for _, status in quiet.entries)
+                or quiet.launch_unknown
                 or recruit_handoff.window.active(Path(ctx['root'])) is not None):
             raise IdentityError('controller launch window changed during admission')
         recruit_handoff._lease(self.body, ctx['clock'])

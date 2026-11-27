@@ -414,7 +414,8 @@ def test_aggregate_reads_shader_as_clear_but_throttled(tmp_path):
     assert agg.state == 'clear' and not agg.held and not agg.refusal
     assert agg.throttled
     text = quiet_time.metrics(agg)
-    assert 'aegis_quiet_time_hold_active 0' in text
+    assert 'aegis_quiet_time_hold_active{effect="full"} 0' in text
+    assert 'aegis_quiet_time_hold_active{effect="no-heavy-builds"} 1' in text   # throttle defers builds
     assert 'aegis_quiet_time_throttled 1' in text
     assert 'aegis_gaming_session_active 0' in text       # the gaming alert stays quiet
     held = quiet_time.Status((('gaming', gaming.Status('gaming', ('42',))),))
