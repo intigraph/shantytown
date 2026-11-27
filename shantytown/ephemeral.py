@@ -1698,6 +1698,8 @@ def prompt(rec: dict) -> str:
 #      the job, a bounded number of times; then "launch failed".
 
 PASTE_TOKEN = re.compile(r"\[Pasted text #\d+(?: \+\d+ lines)?\]")
+#: A paste token cut by the composer's row wrap: the row ends inside `[Pasted ...`.
+_PASTE_OPEN = re.compile(r"\[Pasted[^\]]*$")
 SUBMIT_ATTEMPTS = 3
 LOOK_S = 0.4
 SHOW_LOOKS = 20      # ~8s for the box to show the typed job
@@ -1733,6 +1735,39 @@ def _composer(screen: str):
     return None
 
 
+def _join_wrapped_paste_tokens(pieces: list[str]) -> list[str]:
+    """Rejoin a paste token the composer's row wrap split across two rows.
+
+    Claude Code can fold part of a long typed job into `[Pasted text #1 +13 lines]`
+    in the MIDDLE of a line, and that line can wrap inside the token:
+        '... (this posts your result on ae[Pasted'
+        'text #1 +13 lines]aegis-za4f.15, read by st ...'
+    PASTE_TOKEN is judged per row, so neither half matches, `[Pasted` and
+    `text #1 +13 lines]aegis...` read as text st never typed, and the job was refused
+    "holds text that is not the job's" (aegis-8et: 11 of 24 delivery failures since
+    #747, all Claude). A row that ends inside an unclosed `[Pasted` is joined to the
+    next row ONLY when the join forms a real token; a wrap on a space is restored
+    with one space, a hard wrap with none. Anything else stays as it was seen, so
+    genuinely foreign text still refuses."""
+    out: list[str] = []
+    i = 0
+    while i < len(pieces):
+        row = pieces[i]
+        while i + 1 < len(pieces) and _PASTE_OPEN.search(row):
+            nxt = pieces[i + 1].strip("\xa0 \t")
+            have = len(PASTE_TOKEN.findall(row))
+            for glue in (" ", ""):
+                joined = row.rstrip("\xa0 \t") + glue + nxt
+                if len(PASTE_TOKEN.findall(joined)) > have:   # the join MADE a token
+                    row, i = joined, i + 1
+                    break
+            else:
+                break
+        out.append(row)
+        i += 1
+    return out
+
+
 def foreign_fragment(screen: str, text: str) -> str | None:
     """The first composer fragment st did not type, for a refusal reason.
 
@@ -1745,8 +1780,9 @@ def foreign_fragment(screen: str, text: str) -> str | None:
     frame = _composer(screen)
     _prompt_raw, body, _above = frame
     first = body[0].split(_PROMPT, 1)[1] if body else ""
-    for piece in [first] + body[1:]:
-        for rest in PASTE_TOKEN.split(piece.strip("\xa0 \t")):
+    rows = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
+    for piece in _join_wrapped_paste_tokens(rows):
+        for rest in PASTE_TOKEN.split(piece):
             rest = rest.strip("\xa0 \t")
             if rest and rest not in text:
                 return rest
@@ -1768,6 +1804,8 @@ def box_state(screen: str, text: str) -> str:
     pieces = [first.strip("\xa0 \t")] + [row.strip("\xa0 \t") for row in body[1:]]
     if not any(pieces[1:]) and input_state(prompt_raw) in (INPUT_EMPTY, INPUT_PLACEHOLDER):
         return EMPTY
+    # A paste token the row wrap split in two is one token (aegis-8et), not foreign text.
+    pieces = _join_wrapped_paste_tokens(pieces)
     pasted = False
     for piece in pieces:
         # A paste token can land MID-ROW: Claude Code folds part of a long
