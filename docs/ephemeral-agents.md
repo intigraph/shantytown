@@ -315,6 +315,11 @@ breach is never silent.
 **Disk floor** (aegis-xa6w). `[ephemeral] disk_floor_gb` (default `0` = off) is
 the free space, in GB, the filesystem worktrees land on must keep. That path is
 `disk_path` when set, else the mounted worktree storage root, else the st root.
+With no worktree storage configured, worktrees land beside their checkout
+(`<repo>-wt`), which can be a different mount from the st root: such a host must
+set `disk_path`. The governor line names the path it read, so a wrong one shows.
+A worktree storage file that exists but is invalid reads `lost` (held), never
+the st root's filesystem in its place.
 Below the floor a fresh spawn **queues** with the reason `disk below floor: <N>G
 free on <path>, floor <F>G` and the drain launches nothing; it re-reads the disk
 before every claim, so a drain stops at the floor it is filling towards. A full
@@ -325,6 +330,12 @@ read (`lost`) holds like `low`. `st crew --governor` prints the line
 its JSON) whenever a floor is set, and nothing when none is. Rollback: set
 `disk_floor_gb = 0` and run `st agent spawn --pool resume` to drain anything it
 held.
+
+Teardown that **keeps** a job's worktree because it holds work also removes the
+tree's git-ignored top-level `target/` build cache (never a symlink, never a
+tracked directory); the reap sweep does the same, once, for jobs that ended
+before this landed. The edits and commits are the work; a cargo cache of up to
+8G per tree is not. This runs whether or not a floor is set.
 
 ## Configuration
 
@@ -343,6 +354,7 @@ queue_ttl_minutes = 240     # report a ticket queued this long, once; it stays q
 disk_floor_gb = 0           # free GB to keep on the worktree filesystem; below it spawns queue; 0 = off (aegis-xa6w)
                             # rollback: disk_floor_gb = 0, then `st agent spawn --pool resume`
 disk_path = ""              # absolute path to watch; "" = worktree storage root, else the st root
+                            # (set it when worktrees land beside checkouts on another mount)
 
 # Signed review verdicts (aegis-c01c.7). All empty = off.
 verdict_graph = ""          # registered Quipu graph IRI the records go into

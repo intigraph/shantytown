@@ -924,7 +924,9 @@ def _crew_account_governor(a):
                                   effect=v.effect())
                                   for name, v in verdicts.items()},
                               balance=_balance_wire(fleet),
-                              disk=(d.wire() if (d := _crew_disk_line(a)) else None))))
+                              # Off omits the key, so a host with no floor
+                              # keeps its JSON byte-identical too.
+                              **({'disk': d.wire()} if (d := _crew_disk_line(a)) else {}))))
     else:
         if not governors:
             print('off' if not fleet.errors else 'lost ' + fleet.fallback())
@@ -9532,11 +9534,16 @@ def _cmd_crew(a) -> int:
         gaming = quiet_time_mod.read(Path(a.root))
         if gaming.state != "off":
             print(gaming.render())
+        # The disk is this host's own filesystem: an unreadable peer must not
+        # blank the reading that says why local spawns are held.
+        disk = _crew_disk_line(a)
         if peer_errors:
             print("lost " + "; ".join(peer_errors))
+            if disk is not None:
+                print(disk.line())
             return CANNOT_TELL
         rc = _crew_governor(a)
-        if (disk := _crew_disk_line(a)) is not None:
+        if disk is not None:
             print(disk.line())
         return rc
     if rules := getattr(a, "check_alert_keepers", None):

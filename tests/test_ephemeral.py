@@ -2316,3 +2316,97 @@ def test_crew_governor_prints_the_disk_line(tmp_path, monkeypatch, capsys):
     (tmp_path / "shantytown.toml").write_text("")
     cli.main(["--root", str(tmp_path), "crew", "--governor"])
     assert "disk" not in capsys.readouterr().out
+
+
+def test_invalid_worktree_storage_reads_lost_not_the_st_root(tmp_path, monkeypatch):
+    # Review of #761: a storage file that is present but invalid must not fall
+    # back to a healthy reading of a different filesystem. Blind is held.
+    state = _disk(monkeypatch, 500)
+    monkeypatch.setenv("SHANTY_WORKTREE_ROOT", "relative/root")
+    monkeypatch.setenv("SHANTY_WORKTREE_MOUNT", "/srv")
+    r = disk_mod.read(_policy(disk_floor_gb=100), tmp_path)
+    assert r.state == "lost" and r.holds and "worktree storage" in r.error
+    assert "floor 100G is held" in r.refusal()
+    # An explicit disk_path does not consult the storage file at all.
+    ok = disk_mod.read(_policy(disk_floor_gb=100, disk_path=str(tmp_path)), tmp_path)
+    assert ok.state == "ok"
+    # No storage configured at all is not blind: the st root is read.
+    monkeypatch.delenv("SHANTY_WORKTREE_ROOT")
+    monkeypatch.delenv("SHANTY_WORKTREE_MOUNT")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "noconfig"))
+    assert disk_mod.read(_policy(disk_floor_gb=100), tmp_path).state == "ok"
+    state["free"] = 5
+    assert disk_mod.read(_policy(disk_floor_gb=100), tmp_path).state == "low"
+
+
+def _cache_tree(tmp_path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    run = lambda *a: subprocess.run(["git", "-C", str(tree), *a], check=True,
+                                    capture_output=True, text=True)
+    run("init", "-q")
+    (tree / ".gitignore").write_text("target/\n")
+    (tree / "target" / "debug").mkdir(parents=True)
+    (tree / "target" / "debug" / "blob").write_bytes(b"x" * 1024)
+    (tree / "src.rs").write_text("fn main() {}\n")
+    return tree, run
+
+
+def test_purge_build_caches_removes_only_an_ignored_target(tmp_path):
+    tree, run = _cache_tree(tmp_path)
+    assert disk_mod.purge_build_caches(tree, git=eph._git) == ["target"]
+    assert not (tree / "target").exists() and (tree / "src.rs").exists()
+    # A tracked target/ is source, not cache: it must say no.
+    (tree / ".gitignore").write_text("")
+    (tree / "target").mkdir()
+    (tree / "target" / "lib.rs").write_text("pub fn f() {}\n")
+    run("add", "target/lib.rs")
+    assert disk_mod.purge_build_caches(tree, git=eph._git) == []
+    assert (tree / "target" / "lib.rs").exists()
+    # A symlinked target/ points out of the tree: never followed or removed.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep").write_text("k")
+    tree2 = tmp_path / "tree2"
+    tree2.mkdir()
+    subprocess.run(["git", "-C", str(tree2), "init", "-q"], check=True)
+    (tree2 / ".gitignore").write_text("target\n")
+    (tree2 / "target").symlink_to(outside)
+    assert disk_mod.purge_build_caches(tree2, git=eph._git) == []
+    assert (outside / "keep").exists()
+
+
+def test_reap_purges_build_cache_of_an_ended_kept_worktree_once(tmp_path):
+    tree, _run = _cache_tree(tmp_path)
+    root = tmp_path / "st"
+    rec = dict(name="eph-task-aaaaaa", state=eph.DONE, workspace=str(tree),
+               workspace_teardown=f"kept (holds work): {tree}")
+    eph.write(root, rec)
+    lines = eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None,
+                     now=1.0e9, dry_run=True)
+    assert any("would purge build caches" in l for l in lines)
+    assert (tree / "target").exists()                       # dry run touched nothing
+    lines = eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None,
+                     now=1.0e9)
+    assert any("purged target/" in l for l in lines) and not (tree / "target").exists()
+    assert eph.read(root, rec["name"])["build_cache_purged"] == ["target"]
+    (tree / "target").mkdir()                               # once: not re-swept
+    eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None, now=1.0e9)
+    assert (tree / "target").exists()
+    # A job not proven over, or a tree not kept as its own, is never swept.
+    rec2 = dict(rec, name="eph-task-bbbbbb", workspace_teardown="kept (worktree identity uncertain)")
+    eph.write(root, rec2)
+    eph.reap(root, pane_alive=lambda p: False, end=lambda *a, **k: None, now=1.0e9)
+    assert (tree / "target").exists()
+
+
+def test_crew_governor_json_omits_disk_when_no_floor(tmp_path, monkeypatch, capsys):
+    (tmp_path / "crew").mkdir()
+    _disk(monkeypatch, 55)
+    (tmp_path / "shantytown.toml").write_text("")
+    cli.main(["--root", str(tmp_path), "crew", "--governor", "--json"])
+    assert '"disk"' not in capsys.readouterr().out
+    (tmp_path / "shantytown.toml").write_text("[ephemeral]\ndisk_floor_gb = 100\n")
+    cli.main(["--root", str(tmp_path), "crew", "--governor", "--json"])
+    out = capsys.readouterr().out
+    assert '"disk"' in out and '"state": "low"' in out

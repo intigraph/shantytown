@@ -2150,7 +2150,11 @@ def remove_workspace(rec: dict, root, git=_git) -> str:
             or branch.stdout.strip() != f"wt/{rec['name']}"):
         return f"kept (worktree identity uncertain or branch changed): {dest}"
     if worktree_holds_work(dest, git=git):
-        return f"kept (holds work): {dest}"
+        # The work stays; its regenerable build cache does not (aegis-xa6w).
+        from . import disk
+        purged = disk.purge_build_caches(dest, git=git)
+        tail = f"; purged {', '.join(purged)}/" if purged else ""
+        return f"kept (holds work): {dest}{tail}"
     r = git("-C", shared, "worktree", "remove", "--force", str(dest))
     if r.returncode != 0:
         return f"kept (git worktree remove failed: {(r.stderr or '').strip()[:120]})"
@@ -2305,6 +2309,11 @@ def _prompt_clock(root, name: str, since: float | None) -> None:
             write(root, rec)
 
 
+def disk_build_caches() -> tuple[str, ...]:
+    from . import disk
+    return disk.BUILD_CACHES
+
+
 def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
          prompting=None, prompt_wait_s: float = PROMPT_WAIT_S) -> list[str]:
     """End every live job whose pane is gone or whose deadline passed, and finish
@@ -2327,6 +2336,28 @@ def reap(root, *, pane_alive, end, now: float, dry_run: bool = False,
                     write(root, rec)
                 if result in ("retired", "would retire") or result.startswith("kept"):
                     out.append(f"{rec['name']}: settings {result}")
+            # Jobs torn down before teardown purged build caches still hold
+            # them on the worktree filesystem (aegis-xa6w). DONE is the proof the
+            # job is over; "kept (holds work)" is the proof the tree's identity
+            # was verified as this job's own when it was kept.
+            ws = rec.get("workspace")
+            if (str(rec.get("workspace_teardown", "")).startswith("kept (holds work)")
+                    and not rec.get("build_cache_purged") and ws and Path(ws).is_dir()
+                    and not Path(ws).is_symlink()):
+                if dry_run:
+                    if any((Path(ws) / n).is_dir() for n in disk_build_caches()):
+                        out.append(f"{rec['name']}: would purge build caches in {ws}")
+                    continue
+                try:
+                    from . import disk
+                    purged = disk.purge_build_caches(ws, git=_git)
+                except (OSError, subprocess.SubprocessError) as exc:
+                    out.append(f"{rec['name']}: build cache purge uncertain ({type(exc).__name__})")
+                    continue
+                rec["build_cache_purged"] = purged
+                write(root, rec)
+                if purged:
+                    out.append(f"{rec['name']}: purged {', '.join(purged)}/ in {ws}")
     for rec in live(root):
         name = rec["name"]
         if rec["state"] == ENDING:

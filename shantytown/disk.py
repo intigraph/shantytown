@@ -65,28 +65,71 @@ class Reading:
                     total_gb=None if self.total_gb is None else round(self.total_gb, 1))
 
 
-def watched_path(policy, root) -> Path:
-    """The filesystem worktrees land on: the explicit disk_path, else the
-    mounted worktree storage root, else the st root."""
+def watched_path(policy, root) -> tuple[Path, str]:
+    """The filesystem to watch and, when it cannot be named, why.
+
+    The explicit disk_path, else the mounted worktree storage root, else the st
+    root. With no storage configured, worktrees land beside their checkout
+    (`<repo>-wt`), which may be a different mount from the st root: such a host
+    must set disk_path, and the governor line names the path it reads so a wrong
+    one is visible. A storage file that is present but invalid is NOT "no
+    storage": configured_root refuses to fall back on explicit invalid choices,
+    and reading the st root's filesystem instead would report a healthy number
+    for the wrong disk. That is a blind reading, and BLIND IS HELD."""
     explicit = getattr(policy, "disk_path", "") or ""
     if explicit:
-        return Path(explicit)
+        return Path(explicit), ""
+    from . import worktree_storage
     try:
-        from . import worktree_storage
         storage = worktree_storage.configured_root()
-    except Exception:  # noqa: BLE001 — a bad storage file is not a disk reading
-        storage = None
-    return Path(storage) if storage else Path(root)
+    except worktree_storage.StorageError as error:
+        return Path(root), f"worktree storage: {error}"
+    return (Path(storage) if storage else Path(root)), ""
 
 
 def read(policy, root, *, usage=None) -> Reading:
     floor = int(getattr(policy, "disk_floor_gb", 0) or 0)
-    path = watched_path(policy, root)
+    path, blind = watched_path(policy, root)
     if floor <= 0:
         return Reading(OFF, str(path), 0)
+    if blind:
+        return Reading(LOST, str(path), floor, error=blind)
     try:
         u = (usage or shutil.disk_usage)(path)
     except OSError as error:
         return Reading(LOST, str(path), floor, error=type(error).__name__)
     free, total = u.free / GB, u.total / GB
     return Reading(LOW if free < floor else OK, str(path), floor, free, total)
+
+
+# --- reclaim regenerable build output from ended jobs (aegis-xa6w) -------------
+# 2026-11-27 sattler reclaimed 30G by hand: ended ephemeral jobs whose worktree
+# teardown KEPT the tree (it holds work) still carried cargo target/ dirs of up
+# to 8G each. The commits and edits are the work; a git-ignored build cache is
+# not, and rebuilding it is what a resumed job would do anyway.
+BUILD_CACHES = ("target",)
+
+
+def purge_build_caches(dest, *, git) -> list[str]:
+    """Remove git-ignored build-cache dirs at the top of a worktree.
+
+    Only a real directory (never a symlink) that git itself says is ignored, so
+    a tracked `target/` source directory or a link out of the tree is untouched.
+    Returns the names removed."""
+    import shutil as _shutil
+    dest = Path(dest)
+    removed = []
+    for name in BUILD_CACHES:
+        cache = dest / name
+        if cache.is_symlink() or not cache.is_dir():
+            continue
+        ignored = git("-C", str(dest), "check-ignore", "-q", name)
+        if ignored.returncode != 0:
+            continue
+        tracked = git("-C", str(dest), "ls-files", "--", name)
+        if tracked.returncode != 0 or tracked.stdout.strip():
+            continue
+        _shutil.rmtree(cache, ignore_errors=True)
+        if not cache.exists():
+            removed.append(name)
+    return removed
