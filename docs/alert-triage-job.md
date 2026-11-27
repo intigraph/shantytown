@@ -85,3 +85,30 @@ registry owned by za4f.2 before integration; it is not a second executor.
 Each intent carries copied JSON arguments and SHA256 of canonical
 `[run_id, action, args]`. A changed payload changes the key. Registry idempotency,
 write reconciliation, admission and execution remain controller responsibilities.
+
+## Shadow consumer (za4f.6.1, step H1)
+
+`incident_consumer.consume(record, frozen=..., jobspec=..., journal=..., verified=True)`
+takes ONE report record that the signed reader has already verified and returns
+the shadow intents, journaled once. `verified` must be exactly `True`; the caller
+that read `st-gate-verdicts` and checked the signature sets it, this module does
+not authenticate. It then:
+
+1. requires the frozen launch input to have exactly `version: 1`, `item`,
+   `fingerprint_kind`, `fingerprint` and `onset_utc`;
+2. runs `incident_report.validate` and `plan` unchanged;
+3. binds the report to THIS incident: `incident.source`, `fingerprint`, `onset`
+   and `carrier_item` must equal the frozen `fingerprint_kind`, `fingerprint`,
+   `onset_utc` and `item`, otherwise `incident-binding`;
+4. writes `<sha256(run_id)>.json` (mode 0600, created exclusively by a hard link)
+   into a journal directory that must be a real directory owned by the caller and
+   not writable by group or others. The same run twice returns the same intents
+   with `replay=True` and one file; the same run with different content refuses
+   `run-rebound` and leaves the first record unchanged.
+
+It imports no launcher, signer, executor, queue or network code, and creates no
+seed, comment or job. The journal is H2's input (signed verdict -> fix-seed
+executor), not an action. Source proof: `python -m pytest -q tests/test_incident_consumer.py`
+(22 tests; breaking the binding, the `verified` check, the rebound check or the
+symlink check each turns tests red). No runtime activation, no chaski route yet.
+

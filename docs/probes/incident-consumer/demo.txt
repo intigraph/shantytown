@@ -1,0 +1,6 @@
+first : ['comment-item', 'file-followup'] replay = False
+again : ['comment-item', 'file-followup'] replay = True | files = 1
+other incident : Refusal(reason='incident-binding')
+unverified     : Refusal(reason='unverified-record')
+rebound run    : Refusal(reason='run-rebound')
+journal files  : 1 (still one)
