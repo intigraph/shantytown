@@ -14,11 +14,6 @@ ROWS = {"rows": [{"id": "item-1"}], "count": 1, "truncated": False}
 DIRECT = {"rows": [{"id": "direct-1"}], "count": 1, "truncated": False}
 
 
-@pytest.fixture(autouse=True)
-def _fresh_latch(monkeypatch):
-    monkeypatch.setattr(seeds_push_read, "_REFUSED", {})
-
-
 def test_repeated_reads_never_touch_primary_or_watermark(monkeypatch):
     monkeypatch.setenv("ST_SEEDS_PUSH_READS", "1")
     calls = []
@@ -46,7 +41,7 @@ def test_malformed_or_partial_projection_falls_back_and_never_becomes_empty(
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0, stdout=reply))
     monkeypatch.setattr(seeds_read_cache, "read", lambda *a, **k: DIRECT)
     assert seeds_plate._query(PROOF, QUERY, 30) == DIRECT
-    assert "falling back to direct Quipu reads" in capsys.readouterr().err
+    assert "this read falls back to a direct Quipu read" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("failure", ["exit", "timeout", "missing"])
@@ -75,6 +70,42 @@ def test_sdk_refusal_says_so_once_latches_and_falls_back(monkeypatch, capsys, fa
     other = SimpleNamespace(quipu_url=PROOF.quipu_url, graph="urn:test:other")
     seeds_plate._query(other, QUERY, 30)
     assert len(calls) == 2
+
+
+def _counting_sdk(calls, reply):
+    def sdk(*args, **kw):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout=reply, stderr=b"")
+    return sdk
+
+
+@pytest.mark.parametrize("reply", [b'{"rows":[],"count":0,"truncated":true}', b"broken"])
+def test_per_query_refusal_does_not_latch_the_reader(monkeypatch, capsys, reply):
+    monkeypatch.setenv("ST_SEEDS_PUSH_READS", "1")
+    calls = []
+    monkeypatch.setattr(subprocess, "run", _counting_sdk(calls, reply))
+    monkeypatch.setattr(seeds_read_cache, "read", lambda *a, **k: DIRECT)
+    for _ in range(3):
+        assert seeds_plate._query(PROOF, QUERY, 30) == DIRECT
+    # Every read still tried the projection, and the repeated reason printed once.
+    assert len(calls) == 3
+    assert seeds_push_read.refused(PROOF) is None
+    assert capsys.readouterr().err.count("seeds push read refused") == 1
+
+
+def test_budget_refusal_does_not_latch_and_the_next_read_is_served(monkeypatch, capsys):
+    monkeypatch.setenv("ST_SEEDS_PUSH_READS", "1")
+    calls = []
+    monkeypatch.setattr(subprocess, "run", _counting_sdk(calls, json.dumps(ROWS).encode()))
+    direct = []
+    monkeypatch.setattr(seeds_read_cache, "read", lambda *a, **k: direct.append(a) or DIRECT)
+    huge = "SELECT ?id WHERE { " + "?s ?p ?o . " * 8000 + "} LIMIT 10"
+    assert seeds_plate._query(PROOF, huge, 30) == DIRECT
+    assert calls == [] and len(direct) == 1
+    assert "exceeds budget" in capsys.readouterr().err
+    assert seeds_push_read.refused(PROOF) is None
+    assert seeds_plate._query(PROOF, QUERY, 30) == ROWS
+    assert len(calls) == 1 and len(direct) == 1
 
 
 def test_refusal_whose_direct_read_also_fails_is_unknown_not_empty(monkeypatch):

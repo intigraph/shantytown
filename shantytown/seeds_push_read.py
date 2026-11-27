@@ -1,8 +1,12 @@
 """Opt-in local projection reads through the Seeds SDK, never a second applier.
 
-A refusal is reported once and latched for the binding, and the caller takes
-its direct read. Without the latch a hung or unconfigured reader cost up to 5s
-on every one of the ~15 reads a single `st anchor` makes (aegis-fzu).
+A reader that cannot serve at all (SDK missing, hung, or exiting nonzero) is
+reported once and latched for the binding, and the caller takes its direct
+read. Without the latch a hung or unconfigured reader cost up to 5s on every
+one of the ~15 reads a single `st anchor` makes. A refusal about one query (an
+oversized query, a partial or malformed reply) falls back for that read only:
+latching it sent every later read of the command back to direct /query, the
+traffic this path exists to remove.
 """
 from __future__ import annotations
 
@@ -23,10 +27,23 @@ def enabled() -> bool:
 
 _REASON_MAX = 300
 
+
+class ReaderUnavailable(ValueError):
+    """The projection reader itself cannot serve, not merely this query."""
+
 #: (quipu_url, graph) -> refusal text, for this process only. A long-lived
 #: process must not be pinned to direct reads by one old refusal forever, but
 #: st commands are short; a fresh command retries the projection.
 _REFUSED: dict[tuple[str, str], str] = {}
+#: (quipu_url, graph, reason) already reported for a per-query fallback, so a
+#: refusal repeated across reads prints once without latching the reader.
+_NOTED: set[tuple[str, str, str]] = set()
+
+
+def reset() -> None:
+    """Forget latched refusals (tests, or a long-lived caller that wants a retry)."""
+    _REFUSED.clear()
+    _NOTED.clear()
 
 
 def _binding(proof) -> tuple[str, str]:
@@ -39,14 +56,24 @@ def refused(proof) -> str | None:
 
 
 def fall_back(proof, refusal) -> None:
-    """Say, once per binding, that the projection refused and a direct read follows."""
+    """Say that the projection refused and a direct read follows.
+
+    Only a ReaderUnavailable latches the binding; anything else is about this
+    query, and the next read still tries the projection."""
     binding = _binding(proof)
     if binding in _REFUSED:
         return
     reason = " ".join(str(refusal).split())[:_REASON_MAX] or type(refusal).__name__
-    _REFUSED[binding] = reason
-    print(f"st: seeds push read refused ({reason}); falling back to direct Quipu reads",
-          file=sys.stderr)
+    if isinstance(refusal, ReaderUnavailable):
+        _REFUSED[binding] = reason
+        print(f"st: seeds push read refused ({reason}); falling back to direct Quipu "
+              "reads for this board for the rest of this command", file=sys.stderr)
+        return
+    if (*binding, reason) in _NOTED:
+        return
+    _NOTED.add((*binding, reason))
+    print(f"st: seeds push read refused ({reason}); this read falls back to a direct "
+          "Quipu read", file=sys.stderr)
 
 
 def _refusal(stderr) -> str:
@@ -66,7 +93,10 @@ def _refusal(stderr) -> str:
 
 
 def read(proof, query: str, timeout: int) -> dict:
-    """SDK owns config, private IPC and proof validation; errors never poll."""
+    """SDK owns config, private IPC and proof validation.
+
+    Every failure raises; none is an empty answer. The caller decides whether a
+    direct read follows (seeds_plate._query does)."""
     if not proof.quipu_url or not proof.graph or timeout <= 0:
         raise ValueError("push read UNKNOWN: authoritative board binding missing")
     payload = json.dumps({"query": query}).encode()
@@ -81,9 +111,9 @@ def read(proof, query: str, timeout: int) -> dict:
             **sdk_subprocess_options(read_operation="push-projection"),
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise ValueError("push read UNKNOWN: local SDK unavailable; no polling fallback") from error
+        raise ReaderUnavailable("push read UNKNOWN: local SDK unavailable") from error
     if child.returncode:
-        raise ValueError(
+        raise ReaderUnavailable(
             f"push read UNKNOWN: SDK refused (exit {child.returncode}): "
             f"{_refusal(getattr(child, 'stderr', None))}")
     if len(child.stdout) > 8 * 1024 * 1024:
