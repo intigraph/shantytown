@@ -263,6 +263,14 @@ def harness_for(req: Request, policy) -> str:
         req.job, DEFAULT_HARNESS[req.job])
 
 
+def model_for(harness: str, policy) -> str | None:
+    """The configured model for a job on `harness`, or None (aegis-jsp0).
+
+    None is a real answer: nothing is put on the card, the harness runs its own
+    default, and no model is declared. Never a guess."""
+    return (getattr(policy, "model_by_harness", {}) or {}).get(harness) or None
+
+
 # Who may spawn, stop or retry ephemeral jobs (aegis-za4f, sattler ruling
 # 2026-11-25): the administrator and leads. ADMINISTRATOR_ONLY is the default
 # so other callers of authority(), such as the recruit controller, keep their
@@ -403,6 +411,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
         "pr": req.pr, "checkout": req.checkout, "harness": harness,
+        "model": model_for(harness, policy),
         "track": req.track or DEFAULT_TRACK,
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
@@ -1518,6 +1527,10 @@ def card_for(rec: dict, *, unattended: bool) -> dict:
             "reports_to": rec["administrator"], "pane": f"st-{rec['name']}",
             "harness": rec["harness"], "workspace": rec["workspace"],
             "dangerous": bool(unattended), "retired": False}
+    # aegis-jsp0: the card's model is what the launch passes as --model and
+    # exports as SHANTY_MODEL (resolve_model: the card wins), one value for both.
+    if rec.get("model"):
+        card["model"] = rec["model"]
     if rec.get("host"):
         card["host"] = rec["host"]
     return card

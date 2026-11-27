@@ -165,6 +165,12 @@ class Ephemeral:
     review_enqueue_attended_uid: int | None = None
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
+    # aegis-jsp0: the model a job runs, {harness: model}. Spawn copies it onto
+    # the job card, so the launch passes --model AND exports SHANTY_MODEL from
+    # that one value (X-Quipu-Model). Keyed by harness so a claude slug never
+    # reaches a codex job. No entry = no model: the harness default runs and
+    # nothing is declared, so provenance stays visibly partial.
+    model_by_harness: dict = field(default_factory=dict)
     # aegis-fye: per-harness slot caps, {harness: n}. A harness with no entry is
     # capped by max_agents alone, so an unset table routes exactly as before; 0
     # turns that harness off. The host-wide max_agents still bounds the total.
@@ -1216,7 +1222,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job",
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job", "model_by_harness",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
@@ -1278,6 +1284,15 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    by_harness_model = tbl.get("model_by_harness", {})
+    if not isinstance(by_harness_model, dict):
+        raise ConfigError(f"{path}: [ephemeral.model_by_harness] must be a table")
+    for harness, model in by_harness_model.items():
+        if (not isinstance(model, str) or not model.strip()
+                or any(c in model for c in '\r\n\0')):
+            raise ConfigError(f"{path}: ephemeral.model_by_harness.{harness} must be a "
+                              f"model name (a non-empty string), got {model!r}")
+    values["model_by_harness"] = dict(by_harness_model)
     for key in ("verdict_graph", "verdict_signer", "verdict_key"):
         value = tbl.get(key, "")
         if not isinstance(value, str) or any(c in value for c in '"<>\\\n '):
