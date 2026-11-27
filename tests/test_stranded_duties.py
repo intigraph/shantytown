@@ -13,6 +13,15 @@ from shantytown.stopped import FilesStops
 from shantytown.stranded_adapter import sweep
 from tests.test_stranded_adapter import setup
 
+
+@pytest.fixture(autouse=True)
+def _legacy_timed_job_files(monkeypatch):
+    # Fixtures use cron/every job files, which production now refuses
+    # (tests/test_jobs_declare.py); these cases test duty binding, not timing.
+    from shantytown import jobs
+    monkeypatch.setattr(jobs, "LEGACY_TIMED_TRIGGERS", True)
+
+
 ROUTING_RULES = {'internal-landing': dict(repository_prefix='internal/',
                                         holder_rule='author', require_live=True)}
 
