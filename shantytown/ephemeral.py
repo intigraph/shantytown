@@ -1249,7 +1249,8 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         with the exact sha256 st recorded when it wrote it, a provisioned skill
         (.claude/skills or .agents/skills)
         that is a symlink resolving OUTSIDE the worktree, or an untracked
-        .mcp.json naming only the provisioned servers;
+        .mcp.json naming only the provisioned servers AND holding the exact
+        bytes provisioning recorded for this job (kit_mcp_sha256);
       - a TRACKED .mcp.json is held to that same rule. Provisioning replaces
         the whole file (render, then atomic replace: no merge), so a repository
         that commits its own .mcp.json always differs from its base after
@@ -1286,6 +1287,18 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         if not allowed or not servers <= allowed:
             return ".mcp.json names servers outside the provisioned kit: " + \
                    ", ".join(sorted(servers - allowed)[:5] or ["(no kit to compare)"])
+        # Names alone prove nothing: a planted .mcp.json that reuses a kit
+        # server's NAME with its own command passed this check (aegis-8et).
+        # Provisioning records the sha256 of the exact bytes it published for
+        # this job (provision._record_job_mcp); anything else is foreign.
+        want = rec.get("kit_mcp_sha256")
+        if not want or path.is_symlink():
+            return ".mcp.json was not written by st's provisioning for this job"
+        try:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                return ".mcp.json differs from the kit st provisioned for this job"
+        except OSError:
+            return ".mcp.json is unreadable"
         return ""
 
     try:

@@ -459,6 +459,7 @@ id, `aegis:publicKey` = the key's public half, `aegis:attests
 - **OS isolation remains a prerequisite for unattended jobs.** Compatibility mode retains environment/ancestry restrictions and their detachment limitation. Opt-in verified identity survives session detachment. Shared Unix UIDs are not isolation; unattended launches stay gated until the separately governed distinct-UID setup is verified.
 - **Shared settings.** A spawn never rewrites the shared role settings files. Only crew launches repair the StopFailure hook there.
 - **Task workspace consent.** Task jobs have no per-PR allowlist to restore. Provisioning records the hash of the exact workspace consent bytes it emits for that task, so the folder-trust guard can verify them. A later edit, a different workspace, or an unproven file still refuses trust; a completed job is not rebound by provisioning.
+- **Job MCP kit.** The guard used to admit a job's `.mcp.json` when its server *names* were all in the kit, so a planted file that reused a kit name with its own command passed. Provisioning now records the sha256 of the exact `.mcp.json` bytes it publishes into an ephemeral job's own workspace (`kit_mcp_sha256`). The guard requires both conditions: the names are in the kit, and the bytes match that hash. A missing record, a symlink, or any later edit refuses trust (aegis-8et).
 - **Hooks on macOS.** Stop-hook enforcement of the turn and context budgets needs the deployed `st` in the agent's pane. The deadline is enforced by tend regardless.
 
 ## Out of scope here
