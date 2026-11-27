@@ -1,5 +1,10 @@
 # Messages in their own graph (design)
 
+**Ownership changed on 2026-11-27.** Chaski now owns the message lifecycle
+and its shapes. `sd msg` and `st inbox` stay as thin surfaces over it. Read the
+[ownership amendment](#ownership-amendment-2026-11-27) before the rest: where
+the two disagree, the amendment wins.
+
 **Status:** source slices exist; the storage flip and native acceptance remain
 gated. The default remains the seed inbox. Expiry is implemented in `sd msg`
 (aegis-9qx, below). Ack, escalation and legacy migration are not implemented
@@ -37,6 +42,77 @@ work items and from ROOT, with their own lifecycle.
 | D5 | Messages are written and read through a **seeds verb family** (`sd msg …`), not by `st` talking HTTP to Quipu. | `st` writing Quipu directly: a second signing and credential path in `st`, beside the board's own. |
 | D6 | A message never carries work. A message that asks for work **refers to a seed** that already exists. Work-graph data never refers to a message. | Messages that become work by being on a plate: the defect `is_message` exists to prevent. |
 | D7 | Alerts are messages of `kind = alert`, with one open message per (recipient, alert fingerprint). A re-fire raises a count. | A new message per re-fire: today's escalation flood (see aegis-l7j). Routing alerts only to the alert router: crew then lose the durable "someone told me" record. |
+
+## Ownership amendment (2026-11-27)
+
+Ruling (Stiwi, 2026-11-27, recorded as the Quipu decision
+`chaski/message-ownership`): messages belong to Chaski. Seeds keeps `sd msg`
+for beads compatibility and defers to Chaski underneath. `st` gets a pluggable
+message system, with Chaski as one implementation. Chaski needs no interface
+of its own, only the shapes it requires and reacts to in Quipu.
+
+### Who owns what
+
+| Part | Owns | Does not own |
+|------|------|--------------|
+| Quipu | Storage: the weekly message windows above. Unchanged. | Any knowledge of what a message is. |
+| Chaski | The message shapes it needs, and every lifecycle step as a reaction to message facts: escalating unread mail, expiry, alert de-duplication, freezing old windows, and onward notification (a phone push, a notice to an administrator). | A command, API or library for senders. Its interface is the shapes. |
+| Seeds | The `sd msg` verbs, kept for beads compatibility. They validate against Chaski's shapes, write message facts and read them back. | Lifecycle. No timer, no escalation and no expiry policy lives in Seeds. |
+| Shantytown | A pluggable message backend behind the existing `Inbox` protocol. `st inbox`, `st sling` and the capacity notices call the protocol only. Chaski-shaped facts are one backend. The seed inbox stays another until the legacy drain reaches zero. | A second signing or credential path (D5 still holds for writes). |
+
+A sender writes a fact. Chaski sees it on the change feed and reacts. Nothing
+calls Chaski.
+
+### What this changes in the design above
+
+- **D5 is narrowed.** Writes and reads still go through `sd msg`, so there is
+  one signed write path. Lifecycle no longer does.
+- **Rollout phase 6** (expiry, escalation and freeze "as a scheduled tend
+  step") becomes Chaski reactions. It is not an `st` tend step and not new
+  `sd msg` verbs. Chaski writes the expiry and escalation facts.
+- **Phase 2's planned `sd msg expire`** is dropped. `sd msg ack` stays, because
+  an acknowledgement is a fact the recipient writes.
+- **Vocabulary.** `seeds:RemoteMessageShape` is replaced by shapes that Chaski
+  declares, published with the stack's other shared vocabulary. No data moves:
+  the same windows hold the same `schema:Message` records.
+- **Phases 4 and 5** (legacy migration, then dropping the dual read) are
+  unchanged. They concern where data sits, not who owns the lifecycle.
+- **Open question 2** is ruled: Chaski owns messages, and `sd msg` is a
+  compatibility surface.
+
+### Why, in measurements (2026-11-27)
+
+- The three live windows held 22,298 messages after under three weeks: 12,436
+  in W46, 5,208 in W47 and 4,654 in W48. Nothing expires or freezes them.
+- `sd msg list --to <agent> --all-windows --include-expired` ran past the
+  30-second limit twice, so `st sling` reported "could not tell" although its
+  handoff comment had landed.
+- A host with an old `sd` that lacks `msg` cannot send durable mail at all.
+
+The first two are lifecycle problems, and lifecycle is what Chaski already
+does: it reacts to graph changes and handles deadlines and expiry.
+
+### Done means
+
+1. Chaski's message shapes are admitted. A message written by `sd msg send`
+   validates, and a malformed one is refused.
+2. A Chaski rule expires an unacknowledged message after 7 days and escalates
+   one left unread for 24 hours, each by writing a fact. Both are rehearsed on
+   a store copy first.
+3. `st` selects its message backend by name. A test backend passes the same
+   protocol tests as the Chaski-shaped one.
+4. An unread listing for one recipient returns within 2 seconds with 20,000
+   messages in live windows. Today it exceeds 30 seconds.
+5. Seeds contains no message lifecycle code.
+
+### Open points (with recommendation)
+
+1. **Who writes the facts for `st`.** Recommended: `sd msg`, so `st` holds no
+   Quipu write credential. The cost is that every sending host needs a current
+   `sd`.
+2. **Immediate delivery into a pane.** Recommended: it stays in `st`,
+   unchanged. Chaski reads the change feed at most once a minute today, which
+   is right for escalation and expiry but too slow for a live nudge.
 
 ## Graph layout
 
@@ -239,7 +315,8 @@ nothing. The cost of moving them can be measured and decided separately.
 1. **Window size.** Weekly (recommended: it matches the 7-day expiry, and at
    most three windows are live) or monthly, as shuttle uses (fewer graphs, but a
    window freezes up to 5 weeks after its first message).
-2. **Who owns `sd msg`.** Recommended: seeds, because it owns the signed write
+2. **Who owns `sd msg`.** *Ruled 2026-11-27: Chaski owns messages; see the
+   ownership amendment.* The original recommendation was seeds, because it owns the signed write
    path and the shapes file. The alternative is a shantytown-owned writer that
    holds a second credential.
 3. **Should `note` messages expire faster?** Recommended: no. One TTL is easier
