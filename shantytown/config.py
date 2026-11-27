@@ -169,6 +169,11 @@ class Ephemeral:
     # capped by max_agents alone, so an unset table routes exactly as before; 0
     # turns that harness off. The host-wide max_agents still bounds the total.
     max_agents_by_harness: dict = field(default_factory=dict)
+    # aegis-j550: per-harness model, {harness: model}. Ephemeral cards are role
+    # `worker`, so without this the only way to point opencode jobs at a local
+    # model was [model.by_role] worker, which moves every crew worker with them.
+    # A harness with no entry passes no model, exactly as before.
+    model_by_harness: dict = field(default_factory=dict)
     # aegis-fye: queue drain shares per work track, {track: weight}. Empty = OFF
     # (priority-then-age). The quarter plan's split is ops 20, short-term 15,
     # roadmap 50, backlog 15 (ephemeral.SUGGESTED_TRACK_SHARES), opt-in only.
@@ -1220,7 +1225,7 @@ _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
-                   "max_agents_by_harness", "track_shares", "queue_ttl_minutes"}
+                   "max_agents_by_harness", "model_by_harness", "track_shares", "queue_ttl_minutes"}
 EPHEMERAL_JOBS = ("review", "merge", "triage", "task")
 
 
@@ -1311,6 +1316,16 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
             raise ConfigError(f"{path}: ephemeral.max_agents_by_harness.{harness} must be an "
                               f"integer >= 0, got {cap!r}")
     values["max_agents_by_harness"] = dict(by_harness)
+    models = tbl.get("model_by_harness", {})
+    if not isinstance(models, dict):
+        raise ConfigError(f"{path}: [ephemeral.model_by_harness] must be a table")
+    for harness, model in models.items():
+        # The value lands on a launch command line; refuse anything that is not
+        # one plain token rather than trust shell quoting to absorb it.
+        if not isinstance(model, str) or not model.strip() or any(c.isspace() for c in model):
+            raise ConfigError(f"{path}: ephemeral.model_by_harness.{harness} must be a "
+                              f"model name, got {model!r}")
+    values["model_by_harness"] = dict(models)
     from .ephemeral import TRACKS
     shares = tbl.get("track_shares", {})
     if not isinstance(shares, dict):

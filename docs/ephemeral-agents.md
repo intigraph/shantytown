@@ -173,6 +173,13 @@ before enabling unattended launches. This change does not enable that gate.
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 
+`[ephemeral.model_by_harness]` pins the model a job's harness runs, for
+example `opencode = "ollama/gemma4:12b"` to send opencode jobs to a local
+model (aegis-j550). Job cards are role `worker`, so `[model.by_role] worker`
+would move every crew worker too; this table moves only ephemeral jobs on that
+harness. The value is written onto the job card, the most specific rung of
+model resolution. A harness with no entry passes no model, as before.
+
 ## Administrator surface
 
 ```
@@ -339,6 +346,10 @@ review = "codex"
 # Per-harness slot caps (aegis-fye). Unset = max_agents for that harness; 0 = off.
 [ephemeral.max_agents_by_harness]
 codex = 1
+
+# Per-harness job model (aegis-j550). Unset = no model on the job card.
+[ephemeral.model_by_harness]
+opencode = "ollama/gemma4:12b"
 
 # Queue drain shares per track (aegis-fye). OFF unless this table exists. The
 # quarter plan's split (ephemeral.SUGGESTED_TRACK_SHARES):

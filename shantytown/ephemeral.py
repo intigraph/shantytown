@@ -403,6 +403,7 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
     return {
         "name": name, "job": req.job, "item": req.item, "repo": req.repo,
         "pr": req.pr, "checkout": req.checkout, "harness": harness,
+        "model": (getattr(policy, "model_by_harness", {}) or {}).get(harness),
         "track": req.track or DEFAULT_TRACK,
         "head": req.head, "request_id": req.request_id,
         "administrator": administrator, "spawned_by": actor or "operator",
@@ -1520,6 +1521,10 @@ def card_for(rec: dict, *, unattended: bool) -> dict:
             "dangerous": bool(unattended), "retired": False}
     if rec.get("host"):
         card["host"] = rec["host"]
+    if rec.get("model"):
+        # aegis-j550: the card's model is the most specific rung of
+        # resolve_model, so the job's harness model beats [model.by_role] worker.
+        card["model"] = rec["model"]
     return card
 
 
