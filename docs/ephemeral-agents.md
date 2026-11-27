@@ -493,7 +493,10 @@ Illegal steps are refused in st before any signer is asked, and again by
 shuttle. The run is recorded on the ledger as `shuttle_run` (definition,
 state, steps, signer, last error). Recording never blocks a job: a host with no
 `shuttle`, no administrator, or a refused step still launches, reports and
-tears down, and the entry says why it has no run.
+tears down, and the entry says why it has no run. That holds for ANY failure,
+not only a refusal: a run operation that raises anything (an unwritable
+TMPDIR, a run lock it cannot open, a stale definition) records the error on
+`shuttle_run` and returns, so `--report` still notifies and tears down.
 
 **Signing is an interface.** `job_runs.Signer` is what the run needs
 (`define/start/advance/verify`). The only implementation today is
@@ -515,7 +518,7 @@ same 2026-09-12 caveat applied to more callers, accepted until S2, not fixed.
 one step, or the ending) has 20s in total. A hung shuttle therefore costs
 `--report` at most 20s, and the ending is recorded as refused. One job's run
 operations hold a per-job run lock (`.run-<name>.lock`) from the read through
-the store, so a claim racing a timeout's ending cannot drop a signed step.
+the store, so a claim racing a timeout's ending cannot drop a signed step. Teardown removes the lock file.
 The host ledger lock is never held across a shuttle call.
 
 `SHANTY_JOB_RUNS=none` turns runs off. It is the negative control, and the

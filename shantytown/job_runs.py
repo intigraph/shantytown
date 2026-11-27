@@ -191,8 +191,11 @@ class RegisteredKeySigner:
         return (p.stdout or "").strip()
 
     def define(self, defn: dict) -> None:
-        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-            json.dump(defn, f)
+        try:                                # a full or read-only TMPDIR is a refusal
+            with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+                json.dump(defn, f)
+        except OSError as e:
+            raise RunRefused(f"cannot write workflow definition: {e}") from None
         try:
             self._call("define", f.name)
         finally:
@@ -236,6 +239,14 @@ def _entry(rec: dict) -> dict:
     return dict(rec.get("shuttle_run") or {})
 
 
+def _definition(entry: dict) -> dict:
+    """A stale or hand-edited ledger entry names no known definition: refuse."""
+    try:
+        return DEFINITIONS[entry["definition"]]
+    except (KeyError, TypeError):
+        raise RunRefused(f"unknown run definition {entry.get('definition')!r}") from None
+
+
 def begin(rec: dict, signer: Signer | None) -> dict:
     """Start the job's run. Returns the `shuttle_run` ledger entry to store."""
     defn = definition_for(rec.get("job"))
@@ -262,7 +273,7 @@ def step(rec: dict, name: str, signer: Signer | None) -> dict:
     if not entry.get("state"):
         raise RunRefused(f"job {rec.get('name')} has no started run"
                          + (f" ({entry['error']})" if entry.get("error") else ""))
-    defn = DEFINITIONS[entry["definition"]]
+    defn = _definition(entry)
     to_state = next_state(defn, entry["state"], name)
     if signer is None:
         raise RunRefused("no signer configured")
@@ -285,7 +296,12 @@ def end(rec: dict, verdict: str, signer: Signer | None) -> dict:
     entry = _entry(rec)
     if not entry.get("state"):
         return entry
-    defn = DEFINITIONS[entry["definition"]]
+    try:
+        defn = _definition(entry)
+    except RunRefused as e:
+        entry["error"] = f"end refused: {e}"
+        rec["shuttle_run"] = entry
+        return entry
     # No job step reports "I opened a PR" to st yet, so a task's ending never
     # claims `open-pr` on the job's say-so; the edge exists for that wiring.
     for name in ending_steps(defn, entry["state"], verdict):

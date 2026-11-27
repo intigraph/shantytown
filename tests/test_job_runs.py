@@ -217,7 +217,7 @@ def test_a_claim_racing_the_ending_loses_no_signed_step(tmp_path):
     """Review of #758: run_step and run_end read the entry outside any lock and
     wrote it whole, so the later store could drop a step shuttle had signed.
     The per-job run lock makes the ending see the claim. Shown failing: with
-    run_lock replaced by a no-op the ending reads 'spawned' and ends 'failed'."""
+    run_lock replaced by a no-op the ender reads while the claim is unsigned."""
     import threading
     root = tmp_path
     eph.write(root, dict(_rec(), state=eph.LAUNCHING, result=None))
@@ -236,13 +236,88 @@ def test_a_claim_racing_the_ending_loses_no_signed_step(tmp_path):
                              kwargs={"signer_for": lambda rec: SlowClaim()})
     claim.start()
     assert in_claim.wait(5)
+    ender_read = threading.Event()
+
+    def ender_signer(rec):                  # called only AFTER the ender has read
+        ender_read.set()
+        return FakeSigner()
+
     ender = threading.Thread(target=eph.run_end, args=(root, "eph-task-abc123", "done"),
-                             kwargs={"signer_for": lambda rec: FakeSigner()})
+                             kwargs={"signer_for": ender_signer})
     ender.start()
+    # The claim is still unsigned: the ender must be BLOCKED, not reading. With
+    # run_lock a no-op this fails here, deterministically, before any release.
+    assert not ender_read.wait(0.5)
     release.set()
     claim.join(5), ender.join(5)
     run = eph.read(root, "eph-task-abc123")["shuttle_run"]
     assert (run["state"], run["steps"]) == ("reported", ["claim", "work", "report"])
+
+
+class Exploding(FakeSigner):
+    """A signer failing with something OTHER than RunRefused (review of #758)."""
+
+    def start(self, defn, run):
+        raise OSError("read-only TMPDIR")
+
+    def advance(self, run, step):
+        raise OSError("read-only TMPDIR")
+
+
+@pytest.mark.parametrize("op", ["begin", "step", "end"])
+def test_a_non_refusal_failure_is_recorded_not_raised(tmp_path, op):
+    root, name = tmp_path, "eph-task-abc123"
+    eph.write(root, dict(_rec(), state=eph.LAUNCHING, result=None))
+    if op != "begin":
+        eph.run_begin(root, name, signer_for=lambda rec: FakeSigner())
+    call = {"begin": lambda: eph.run_begin(root, name, signer_for=lambda rec: Exploding()),
+            "step": lambda: eph.run_step(root, name, "claim", signer_for=lambda rec: Exploding()),
+            "end": lambda: eph.run_end(root, name, "done", signer_for=lambda rec: Exploding())}[op]
+    assert call() is None
+    assert "OSError" in eph.read(root, name)["shuttle_run"]["error"]
+
+
+def test_a_stale_definition_is_refused_not_a_keyerror():
+    rec = dict(_rec(), shuttle_run={"run": "r", "definition": "gone-v0", "state": "claimed"})
+    with pytest.raises(jr.RunRefused, match="unknown run definition"):
+        jr.step(rec, "work", FakeSigner())
+    assert "unknown run definition" in jr.end(rec, "done", FakeSigner())["error"]
+
+
+def test_signer_temp_file_failure_is_a_refusal(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("No space left on device")
+    monkeypatch.setattr(jr.tempfile, "NamedTemporaryFile", boom)
+    signer = jr.RegisteredKeySigner(identity="sattler",
+                                    run=lambda *a, **k: pytest.fail("must not run"))
+    with pytest.raises(jr.RunRefused, match="No space left"):
+        signer.define(jr.TASK)
+
+
+def test_finish_still_reports_and_tears_down_when_the_run_explodes(tmp_path, monkeypatch):
+    """Shown failing: drop the guard in run_end and the OSError escapes finish
+    before notify and schedule_teardown run."""
+    root, name = tmp_path, "eph-task-abc123"
+    eph.write(root, dict(_rec(), state=eph.LIVE, result=None))
+    eph.run_begin(root, name, signer_for=lambda rec: FakeSigner())
+    monkeypatch.setattr(jr, "signer_for", lambda rec: Exploding())
+    notified, scheduled = [], []
+    monkeypatch.setattr(eph, "notify",
+                        lambda rec, **kw: notified.append(rec["name"]) or [])
+    eph.finish(root, name, "done", "did it", "", persist_event=None, comment=None,
+               schedule_teardown=scheduled.append, now=1.0)
+    assert notified == [name] and scheduled == [name]
+    assert "OSError" in eph.read(root, name)["shuttle_run"]["error"]
+
+
+def test_teardown_removes_the_run_lock(tmp_path):
+    root, name = tmp_path, "eph-task-abc123"
+    eph.write(root, dict(_rec(), state=eph.LAUNCHING, result=None))
+    eph.run_begin(root, name, signer_for=lambda rec: FakeSigner())
+    lockfile = eph.ledger_dir(root) / f".run-{name}.lock"
+    assert lockfile.exists()
+    eph.teardown(root, name, kill_session=lambda s: None, git=lambda *a, **k: None)
+    assert not lockfile.exists()
 
 
 def test_a_job_run_is_started_once(tmp_path):
