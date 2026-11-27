@@ -2036,6 +2036,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--item", help="the work item this job reports on")
     sp.add_argument("--priority", type=int, default=None,
                     help="queue priority if over cap, 0 highest (default: the item's)")
+    sp.add_argument("--despite-live", default=None, metavar="REASON",
+                    help="launch a task job although the item already has a live or "
+                         "queued task job (a deliberate parallel slice); the reason is "
+                         "recorded on the job")
     sp.add_argument("--quipu-node", action="append", default=[], metavar="IRI",
                     help="exact Quipu node IRI to include in the bounded startup snapshot")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
@@ -4561,7 +4565,27 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         graph_ctx = collect_job_context(a.root, req.item, getattr(a, "quipu_node", []))
         from .job_context import current_comments
         graph_ctx["comments"] = current_comments(lambda: _tracker(a), req.item)
+        despite = getattr(a, "despite_live", None)
+        if despite is not None:
+            despite = despite.strip()
+            if not despite:
+                raise eph.Refused("--despite-live needs a nonempty REASON; it is recorded on the job")
+            if req.job != "task":
+                raise eph.Refused("--despite-live applies to task jobs only; "
+                                  f"{req.job} jobs keep their own rules")
         with eph.lock(a.root):
+            # Under the ledger lock, before plan(): an over-cap spawn must not
+            # queue a duplicate ticket either, and two leads racing from the
+            # ready list serialise here (aegis-bmu3).
+            held = (eph.task_holders(a.root, req.item,
+                                     ticket=ticket["id"] if ticket is not None else None,
+                                     superseded=retry_of)
+                    if req.job == "task" else [])
+            if held and not despite:
+                raise eph.Refused(
+                    f"{req.item} already has a task job: {', '.join(held)}; nothing was "
+                    "launched or queued. Wait for it to end, or pass --despite-live "
+                    "REASON for a deliberate parallel slice")
             try:
                 rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                                administrator=admin, host=cfg.host_name, now=time.time(),
@@ -4580,6 +4604,12 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 return _spawn_enqueue(a, req, policy, actor, over)
             if ticket is not None:
                 rec["ticket"] = ticket["id"]
+            if despite:
+                rec["despite_live"] = {"reason": despite, "by": actor or "operator",
+                                       "held": held}
+                if held:
+                    print(f"  despite live task job(s) {', '.join(held)}: {despite}",
+                          file=sys.stderr)
             if recruiter_scope is not None:
                 rec['recruiter'] = {'principal': recruiter_scope.principal,
                                     'host': recruiter_scope.host, 'uid': recruiter_scope.uid, 'item': req.item,
@@ -4791,8 +4821,9 @@ def _spawn_enqueue(a, req, policy, actor, over) -> int:
             priority = exact(_tracker(a), req.item).priority
         except Exception:  # noqa: BLE001 — no priority sorts it last, by age
             priority = None
+    despite = (getattr(a, "despite_live", None) or "").strip() or None
     ticket = eph.ticket_for(req, harness=eph.harness_for(req, policy), priority=priority,
-                            requester=actor, now=time.time())
+                            requester=actor, now=time.time(), despite_live=despite)
     ahead = sum(1 for t in eph.tickets(a.root) if eph._order(t) < eph._order(ticket))
     p = "?" if priority is None else priority
     if a.dry_run:
@@ -5016,7 +5047,8 @@ def _spawn_drain(a, policy) -> int:
         argv = ["--root", str(a.root), "agent", "spawn", "--ephemeral",
                 "--job", ticket["job"], "--item", ticket["item"]]
         for flag, key in (("--repo", "repo"), ("--pr", "pr"), ("--checkout", "checkout"),
-                          ("--harness", "harness"), ("--head", "head"), ("--track", "track")):
+                          ("--harness", "harness"), ("--head", "head"), ("--track", "track"),
+                          ("--despite-live", "despite_live")):
             if ticket.get(key) is not None:
                 argv += [flag, str(ticket[key])]
         ns, crash = None, None
