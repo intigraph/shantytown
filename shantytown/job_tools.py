@@ -194,7 +194,38 @@ def settings_target(root, card):
         # agy keeps a native launch-settings.json beside its canonical file, so
         # each job gets its own directory rather than sharing settings/.
         return base / "agy" / f"job-{card.name}" / "settings.json"
+    if card.harness == "opencode":
+        return base / "opencode" / f"job-{card.name}" / "opencode.json"
     return base / f"{card.name}.job.settings.json"
+
+
+def _gate_hook(root, card):
+    import shlex
+    import sys
+    command = shlex.join([sys.executable, "-m", "shantytown.job_tools", "--root", str(root),
+                          "--job", card.name])
+    return {"matcher": "mcp__.*", "hooks": [{"type": "command", "command": command, "timeout": 5}]}
+
+
+def _ambient_opencode_mcp(card):
+    """OpenCode merges global and project config into OPENCODE_CONFIG. The bridge
+    names only servers it was told about as mcp__<server>__<tool>; a server from
+    any other config would keep a raw tool name the gate never matches. So an
+    MCP declaration anywhere else refuses (a false positive refuses, never opens)."""
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    places = [config_home / "opencode"]
+    if card.workspace:
+        places += [Path(card.workspace), Path(card.workspace) / ".opencode"]
+    found = []
+    for place in places:
+        for name in ("opencode.json", "opencode.jsonc", "config.json"):
+            path = place / name
+            try:
+                if path.is_file() and '"mcp"' in path.read_text():
+                    found.append(str(path))
+            except OSError:
+                found.append(str(path))
+    return found
 
 
 def prepare_settings(root, card, base):
@@ -205,12 +236,31 @@ def prepare_settings(root, card, base):
     # runs these PreToolUse hooks on every call_mcp_tool, translated to
     # mcp__<server>__<tool>, and denies on any refusal or adapter error. Its
     # server set is the workspace kit, which provisioning filters by this same
-    # profile. opencode has no such gate yet, so it still refuses.
-    if card.harness not in ("claude", "codex", "agy"):
+    # profile. OpenCode's bridge plugin runs the hooks in its own options and
+    # throws (refusing the tool) on a deny or any hook failure.
+    if card.harness not in ("claude", "codex", "agy", "opencode"):
         raise ValueError("job tool profile is not supported by this harness")
     from . import codex
     source = Path(base).read_text()
-    if card.harness == "codex":
+    if card.harness == "opencode":
+        from .opencode import PLUGIN_NAME
+        if (ambient := _ambient_opencode_mcp(card)):
+            raise ValueError("OpenCode MCP is declared outside the job config: " + ", ".join(ambient))
+        data = json.loads(source)
+        servers = data.get("mcp", {})
+        missing = set(spec["mcp_servers"]) - set(servers)
+        if missing:
+            raise ValueError("JobSpec MCP servers are not provisioned: " + ", ".join(sorted(missing)))
+        data["mcp"] = {name: servers[name] for name in spec["mcp_servers"]}
+        bridges = [p for p in data.get("plugin", []) if isinstance(p, list) and len(p) == 2
+                   and str(p[0]).endswith(PLUGIN_NAME) and isinstance(p[1], dict)]
+        if len(bridges) != 1:
+            raise ValueError("OpenCode job config needs exactly one shantytown bridge")
+        options = bridges[0][1]
+        options["mcp_servers"] = sorted(data["mcp"])
+        options.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_gate_hook(root, card))
+        body = json.dumps(data, indent=2) + "\n"
+    elif card.harness == "codex":
         data = tomllib.loads(source)
         data["mcp_servers"] = filter_servers(data.get("mcp_servers", {}), spec)
         for name, tools in spec["mcp_tools"].items():
@@ -226,13 +276,8 @@ def prepare_settings(root, card, base):
         permissions["allow"] = [rule for rule in permissions.get("allow", [])
                                 if not str(rule).startswith("mcp__")] + [
             f"mcp__{server}__{tool}" for server, tools in spec["mcp_tools"].items() for tool in tools]
-        import shlex
-        import sys
-        command = shlex.join([sys.executable, "-m", "shantytown.job_tools", "--root", str(root),
-                              "--job", card.name])
         hooks = data.setdefault("hooks", {})
-        hooks.setdefault("PreToolUse", []).append({"matcher": "mcp__.*", "hooks": [
-            {"type": "command", "command": command, "timeout": 5}]})
+        hooks.setdefault("PreToolUse", []).append(_gate_hook(root, card))
         body = json.dumps(data, sort_keys=True, indent=2) + "\n"
     target = settings_target(root, card)
     target.parent.mkdir(parents=True, exist_ok=True)
