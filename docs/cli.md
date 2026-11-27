@@ -306,9 +306,11 @@ st work                       the item and the board
   cost [bead] [--sync]        parser-owned cost reads and closed-bead/metric publication
   triage [item ...]             preview Jev board suggestions; --publish comments only
   dream [--run]               inspect or run one bounded spare-capacity reflection cycle
-  jobs [list|check|run|history]
-                              declared cron / interval / event jobs in <root>/jobs/*.toml,
-                              evaluated by `st fleet tend`; see docs/jobs.md
+  jobs [new|list|check|run|history]
+                              jobs declared in Quipu ([jobs] graph); `new` writes one
+                              (--weekly DAY HH:MM | --every), Chaski fires it. Cron and
+                              interval job files are refused; other <root>/jobs/*.toml
+                              files are deprecated; see docs/jobs.md
   directive [list|mark|dismiss|track|flush]
                               operator messages st captured verbatim; mark/track confirm a Directive
 st agent                      one agent
