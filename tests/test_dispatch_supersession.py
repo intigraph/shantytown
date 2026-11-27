@@ -3,8 +3,8 @@ import pytest
 
 from shantytown import cli
 from shantytown.dispatch import DispatchedButUntracked, SendUnverified
-from shantytown.dispatch_receipts import (ReceiptConflict, assignment_supersession,
-                                         prepared_supersession)
+from shantytown.dispatch_receipts import (ReceiptConflict, RetirementRefused,
+                                         assignment_supersession, prepared_supersession)
 from shantytown.protocols import SubmissionObserved
 from test_dispatch_binding import world, snapshot
 
@@ -68,6 +68,43 @@ def test_prepared_retirement_refuses_unreleased_or_unknown_native_state(world, m
     assert binding.store.read(old['id'])['state'] == 'prepared'
     # Lock creation is already present from preparation, so no ledger write.
     assert snapshot(root) == before and len(panes.sent) == 1
+
+
+def test_a_known_ineligible_native_state_is_named_not_called_unknown(world, monkeypatch, capsys):
+    """aegis-5q2r: deferred + assigned is a measured state; say so and what is needed."""
+    import json
+    root, dispatcher, binding, tracker, panes = world
+    old = prepared(world)
+    tracker.update('work-1', assignee='worker', defer_until='2099-01-01T00:00:00Z')
+    with pytest.raises(RetirementRefused) as refused:
+        binding.supersede(old['id'], dry_run=True)
+    text = str(refused.value)
+    assert 'UNKNOWN' not in text
+    for part in ("'worker'", '2099-01-01T00:00:00Z', 'needs status open, no assignee and no defer',
+                 old['id']):
+        assert part in text, text
+    monkeypatch.setattr(cli, '_tracker', lambda _: tracker)
+    monkeypatch.setattr(cli, '_registry', lambda _: dispatcher.registry)
+    monkeypatch.setattr(cli, '_panes', lambda _: panes)
+    monkeypatch.setattr(cli, '_wire', lambda _: pytest.fail('refusal dispatched'))
+    before = snapshot(root)
+    code = cli.main(['--root', str(root), 'go', 'work-1', 'worker', '--supersede',
+                     '--receipt', old['id'], '-n'])
+    err = capsys.readouterr().err
+    assert code == cli.REFUSED and 'refused: prepared retirement refused' in err, err
+    assert binding.store.read(old['id'])['state'] == 'prepared' and snapshot(root) == before
+
+
+def test_an_unreadable_or_foreign_native_row_stays_unknown(world):
+    _, _, binding, tracker, _ = world
+    old = prepared(world)
+    current = dict(id='work-1', revision=tracker.get('work-1').revision,
+                   status='open', assignee=None)
+    for bad in [None, current | dict(id='other'), current | dict(revision='7')]:
+        with pytest.raises(ReceiptConflict) as unknown:
+            prepared_supersession(old, bad)
+        assert not isinstance(unknown.value, RetirementRefused)
+        assert 'UNKNOWN' in str(unknown.value)
 
 
 @pytest.mark.parametrize('flag', ['--dry-run', '-n'])
@@ -288,3 +325,47 @@ def test_cli_supersession_dry_run_refuses_unproven_release(world, monkeypatch, c
                      '--supersede', '--receipt', old['id'], flag]) != 0
     assert snapshot(root) == before and panes.sent == sent
     assert binding.store.read(old['id'])['state'] == 'assigning'
+
+
+def test_an_ineligible_interrupted_assignment_is_named_not_called_unknown(world):
+    """aegis-5q2r review: the assignment path names its known state too."""
+    _, _, binding, tracker, _ = world
+    old = prepared(world) | dict(state='assigning')
+    base = dict(id='work-1', status='open', assignee=None, defer_until=None)
+    for bad in [dict(revision=old['revision']),
+                dict(revision=old['revision'] + 1, assignee='worker'),
+                dict(revision=old['revision'] + 1, defer_until='2099-01-01T00:00:00Z')]:
+        with pytest.raises(RetirementRefused) as refused:
+            assignment_supersession(old, base | bad)
+        text = str(refused.value)
+        assert 'UNKNOWN' not in text and 'NEWER native revision' in text, text
+    for bad in [None, base | dict(id='other', revision=old['revision'] + 1)]:
+        with pytest.raises(ReceiptConflict) as unknown:
+            assignment_supersession(old, bad)
+        assert not isinstance(unknown.value, RetirementRefused)
+        assert 'UNKNOWN' in str(unknown.value)
+    ok = assignment_supersession(old, base | dict(revision=old['revision'] + 1))
+    assert ok['status'] == 'open' and ok['assignee'] is None
+
+
+def test_a_refused_native_read_is_unknown_with_the_store_reason(world, monkeypatch, capsys):
+    """aegis-5q2r review: bz7's failure was the read itself, before any proof."""
+    import subprocess
+    from shantytown.dispatch_binding import SeedsAssignments
+    from shantytown.sd import SdTracker
+    root, dispatcher, binding, tracker, panes = world
+    old = prepared(world)
+    sd = SdTracker.__new__(SdTracker)
+    monkeypatch.setattr(sd, '_bd_for', lambda *a: subprocess.CompletedProcess(
+        a, 3, stdout='', stderr='sd: board read refused: timeout after 10s\n'), raising=False)
+    with pytest.raises(RuntimeError) as raw:
+        sd.stranded_read('work-1')
+    assert 'sd exit 3' in str(raw.value) and 'timeout after 10s' in str(raw.value)
+    monkeypatch.setattr(tracker, 'stranded_read',
+                        lambda item: (_ for _ in ()).throw(RuntimeError(str(raw.value))),
+                        raising=False)
+    with pytest.raises(ReceiptConflict) as unknown:
+        SeedsAssignments(tracker).supersession(old)
+    assert not isinstance(unknown.value, RetirementRefused)
+    text = str(unknown.value)
+    assert 'UNKNOWN' in text and 'timeout after 10s' in text, text

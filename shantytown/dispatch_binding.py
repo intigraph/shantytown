@@ -66,7 +66,14 @@ class SeedsAssignments:
 
     def supersession(self, row):
         prove = prepared_supersession if row['state'] == 'prepared' else assignment_supersession
-        return prove(row, self.tracker.stranded_read(row['item']))
+        try:
+            current = self.tracker.stranded_read(row['item'])
+        except RuntimeError as error:
+            # A refused read proves nothing about the native state: report it
+            # as UNKNOWN (exit 2) with the store's reason, never a traceback.
+            raise ReceiptConflict(
+                f"native state of {row['item']} for supersession UNKNOWN: {error}") from error
+        return prove(row, current)
 
 
 class Binding:
