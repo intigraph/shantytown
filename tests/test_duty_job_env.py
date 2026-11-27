@@ -5,6 +5,15 @@ import pytest
 from shantytown.duty_discovery import job_bindings
 
 
+@pytest.fixture(autouse=True)
+def _legacy_timed_job_files(monkeypatch):
+    # Fixtures use cron/every job files, which production now refuses
+    # (tests/test_jobs_declare.py); these cases test duty binding, not timing.
+    from shantytown import jobs
+    monkeypatch.setattr(jobs, "LEGACY_TIMED_TRIGGERS", True)
+
+
+
 def inventory(tmp_path, argv):
     jobs = tmp_path / 'jobs'
     jobs.mkdir()

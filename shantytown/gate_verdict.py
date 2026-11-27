@@ -512,8 +512,10 @@ def _graph(graph: str) -> str:
 
 
 def gates_query(pr: str, head: str, graph: str) -> str:
-    # GateApproval and these GitHub-only properties await published ownership.
-    classes = ", ".join("<" + iri + ">" for iri in (AEGIS + "GateApproval", *aliases("Decision")))
+    # GateApproval is now published (quipu ns), so a record typed with either
+    # spelling is read. aboutGitHubEntity, recordedAt, authorAgent and evidence
+    # have no published w3id term yet: they stay exact historical reads.
+    classes = ", ".join("<" + iri + ">" for iri in (*aliases("GateApproval"), *aliases("Decision")))
     return (f"SELECT (STR(?v) AS ?gate) ?outcome ?by ?at ?author ?evidence WHERE {{ GRAPH <{_graph(graph)}> {{ "
             f"?v a ?t ; <{AEGIS}aboutGitHubEntity> <{pr}> ; <{AEGIS}recordedAt> ?at . "
             + pattern("?v", "commitSha", json.dumps(head)) + pattern("?v", "outcome", "?outcome")
