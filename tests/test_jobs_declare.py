@@ -106,6 +106,15 @@ def test_an_undecodable_message_is_refused_before_anything_is_written():
         _weekly(message="bad \udcff byte")
 
 
+def test_the_undecodable_refusal_quotes_an_excerpt_not_the_whole_message():
+    long_message = "x" * 200 + "\udcff" + "TAIL-MARKER" + "y" * 200
+    with pytest.raises(q.JobRefused) as refused:
+        _weekly(message=long_message)
+    text = str(refused.value)
+    assert "U+DCFF at offset 200" in text
+    assert len(text) < 150, text
+
+
 def test_new_writes_a_non_bmp_message_as_valid_turtle(tmp_path, monkeypatch, capsys):
     fake = _Quipu()
     fake.pending = _weekly(message="go \N{GRINNING FACE}").body["rows"]

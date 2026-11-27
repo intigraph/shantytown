@@ -322,14 +322,20 @@ def _turtle_string(text: str) -> str:
     """A Turtle STRING_LITERAL_QUOTE. json.dumps(ensure_ascii=True) was used here
     and wrote a non-BMP character (an emoji in --message) as a JSON surrogate
     pair, \\ud83d\\ude00; Turtle's UCHAR forbids surrogate code points, so the
-    write failed or stored mojibake. Characters stay literal (the body is sent as
-    UTF-8); only the quote, backslash and C0 controls are escaped. A lone
+    write failed or stored mojibake. Characters stay literal in the Turtle; the
+    JSON envelope carrying it is ASCII-escaped, which is JSON-level escaping and
+    decodes back to the same characters before the Turtle parser sees them. Only
+    the quote, backslash and C0 controls are Turtle-escaped. A lone
     surrogate (undecodable argv bytes under surrogateescape) has no UTF-8 form,
     so it is refused here, before anything is written."""
     out = []
-    for ch in text:
+    for i, ch in enumerate(text):
         if "\ud800" <= ch <= "\udfff":
-            raise JobRefused(f"text {text!r} holds an undecodable character (lone surrogate)")
+            # An excerpt, not the whole --message: a long message echoed in full
+            # buries the one character the operator has to find.
+            near = text[max(0, i - 20):i + 20]
+            raise JobRefused(f"text holds an undecodable character (lone surrogate "
+                             f"U+{ord(ch):04X} at offset {i}, near {near!r})")
         out.append(_TURTLE_ECHAR.get(ch) or (f"\\u{ord(ch):04X}" if ch < " " else ch))
     return '"' + "".join(out) + '"'
 
