@@ -2409,6 +2409,8 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
     DONE is the lifecycle proof, not a name prefix or a missing pane. Never
     follow settings symlinks or overwrite an earlier retirement archive.
     """
+    from types import SimpleNamespace
+    from . import job_tools
     from .harness import UnknownHarness, get as get_harness
     name = rec.get("name")
     if not is_ephemeral_name(name) or rec.get("state") != DONE:
@@ -2418,8 +2420,29 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
     if card.exists() or card.is_symlink():
         return "kept (crew card still present)"
     try:
-        rel = get_harness(rec["harness"]).agent_settings_name(name)
-        path = root / "settings" / rel
+        rels = [get_harness(rec["harness"]).agent_settings_name(name)]
+        # MEASURED (aegis-ixj.1, 2026-11-27): a job with a tool profile launches
+        # on job_tools.settings_target, not the per-agent file, and only the
+        # latter was retired. 656 ended claude jobs kept <name>.job.settings.json,
+        # which `st ops hooks check` read as a role: 12,312 of 12,447 items.
+        target = job_tools.settings_target(root, SimpleNamespace(name=name, harness=rec["harness"]))
+        rel = str(target.relative_to(root / "settings"))
+        if rel not in rels:
+            rels.append(rel)
+    except (KeyError, ValueError, UnknownHarness) as error:
+        return f"kept (settings retirement uncertain: {type(error).__name__})"
+    results = [_retire_one(root, root / "settings" / rel, dry_run) for rel in rels]
+    for result in results:
+        if result.startswith("kept"):
+            return result
+    for result in results:
+        if result != "none":
+            return result
+    return "none"
+
+
+def _retire_one(root: Path, path: Path, dry_run: bool) -> str:
+    try:
         parent = root
         if parent.is_symlink():
             return "kept (settings symlink)"
@@ -2439,7 +2462,7 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
         if not dry_run:
             path.rename(archive)
         return "would retire" if dry_run else "retired"
-    except (KeyError, ValueError, OSError, UnknownHarness) as error:
+    except (ValueError, OSError) as error:
         return f"kept (settings retirement uncertain: {type(error).__name__})"
 
 

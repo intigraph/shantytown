@@ -2675,3 +2675,52 @@ def test_spawn_never_rewrites_an_existing_role_artifact(store):
     role_file.write_text('{"hooks": {}, "operator": "kept"}\n')
     assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'
+
+
+@pytest.mark.parametrize('harness', ['claude', 'codex', 'opencode', 'agy'])
+def test_teardown_retires_the_job_profile_settings_too(tmp_path, harness):
+    """aegis-ixj.1: a job with a tool profile launches on
+    job_tools.settings_target, which teardown never retired."""
+    from types import SimpleNamespace
+    from shantytown import job_tools
+    rec = _rec(tmp_path, name='eph-task-abcdef', harness=harness, state=eph.LIVE)
+    path = job_tools.settings_target(tmp_path, SimpleNamespace(name=rec['name'], harness=harness))
+    path.parent.mkdir(parents=True)
+    path.write_text('job profile configuration')
+    done = eph.teardown(tmp_path, rec['name'], kill_session=lambda _: None)
+    assert done['settings_teardown'] == 'retired'
+    assert not path.exists()
+    assert path.with_name(path.name + '.retired').read_text() == 'job profile configuration'
+
+
+def test_an_ended_job_contributes_no_hook_check_items_and_a_live_one_does(tmp_path):
+    """aegis-ixj.1, measured 2026-11-27: 12,312 of 12,447 `st ops hooks check`
+    items came from 648 ended jobs' leftover <name>.job.settings.json files.
+    After reap repairs them, only the live job's file is still checked."""
+    import json
+    from types import SimpleNamespace
+    from shantytown import harness as harness_mod, hook_bundles as hb, job_tools
+    src = tmp_path / 'src-example.json'
+    src.write_text(json.dumps({
+        'schema': hb.SCHEMA, 'name': 'example', 'version': '1', 'owner': 'test', 'roles': ['*'],
+        'hooks': [{'event': 'UserPromptSubmit', 'command': 'example-tool || true'}]}))
+    hb.register(tmp_path, src)
+    h = harness_mod.get('claude')
+    ended = _rec(tmp_path, name='eph-task-abcdef', harness='claude', state=eph.DONE)
+    live = _rec(tmp_path, name='eph-task-123abc', harness='claude', state=eph.LIVE,
+                deadline=NOW + 1000)
+    paths = {}
+    for rec in (ended, live):
+        path = job_tools.settings_target(tmp_path, SimpleNamespace(name=rec['name'], harness='claude'))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(h.render(h.settings('worker', root=tmp_path), '', root=tmp_path))
+        paths[rec['name']] = str(path)
+
+    def checked_files():
+        return {i['file'] for i in hb.check(tmp_path).items}
+
+    # The check must be able to say the ended job is still counted (red first).
+    assert checked_files() == set(paths.values())
+    eph.reap(tmp_path, pane_alive=lambda _: True, end=lambda *a: None, now=NOW)
+    assert checked_files() == {paths[live['name']]}
+    assert all(i['configured'] == 'ok' for i in hb.check(tmp_path).items)
