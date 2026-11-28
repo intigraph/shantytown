@@ -164,6 +164,57 @@ def test_offhost_without_a_declared_peer_says_not_nudged(tmp_path, monkeypatch, 
     assert len(open_messages(root)) == 1    # the durable half is intact
 
 
+def test_old_local_stop_cannot_override_newer_peer_heartbeat(tmp_path, monkeypatch, capsys):
+    from shantytown.owned_work import OwnedWork
+    root = two_admins(tmp_path, monkeypatch)
+    local = OwnedWork(root)
+    local.stop('bea', at=100, reason='old local process observation')
+    peer = OwnedWork(tmp_path / 'peer')
+    peer.heartbeat('bea', now=200)
+    assert peer.snapshot()['bea']['state'] == 'live'
+    before = local.snapshot()
+    ticks = []
+    monkeypatch.setattr(cli, '_owned_work_tick', lambda *a, **kw: ticks.append(kw))
+    fake_panes(monkeypatch)
+    ssh_result(monkeypatch, out='  -> bea    sent to pane shanty-bea\n')
+    assert durable(root, 'bea', 'peer is live') == OK
+    captured = capsys.readouterr()
+    assert '+ live on host host-b' in captured.out
+    assert 'stopped-owner' not in captured.err
+    assert 'must decide ownership' not in captured.err
+    assert ticks == []
+    assert local.snapshot() == before
+
+
+def test_unreachable_peer_with_old_local_stop_is_unknown(tmp_path, monkeypatch, capsys):
+    from shantytown.owned_work import OwnedWork
+    root = two_admins(tmp_path, monkeypatch)
+    OwnedWork(root).stop('bea', at=100)
+    fake_panes(monkeypatch)
+    ssh_result(monkeypatch, rc=255, err='peer unreachable')
+    assert durable(root, 'bea', 'pending delivery') == OK
+    captured = capsys.readouterr()
+    assert 'recipient state UNKNOWN' in captured.out
+    assert 'stopped-owner' not in captured.err
+    assert 'must decide ownership' not in captured.err
+    assert len(open_messages(root)) == 1
+
+
+def test_local_stopped_owner_still_warns_and_wakes(tmp_path, monkeypatch, capsys):
+    from shantytown.owned_work import OwnedWork
+    root = two_admins(tmp_path, monkeypatch)
+    OwnedWork(root).stop('wu', at=100)
+    ticks = []
+    monkeypatch.setattr(cli, '_owned_work_tick', lambda *a, **kw: ticks.append(kw))
+    fake_panes(monkeypatch)
+    ssh_result(monkeypatch)
+    assert durable(root, 'wu', 'local stopped work') == OK
+    captured = capsys.readouterr()
+    assert 'stopped-owner: wu stopped' in captured.err
+    assert 'must decide ownership' in captured.err
+    assert ticks == [{'card': None, 'wake_owner': 'wu'}]
+
+
 def test_offhost_ssh_failure_says_not_nudged_and_keeps_exit_zero(
         tmp_path, monkeypatch, capsys):
     root = two_admins(tmp_path, monkeypatch)

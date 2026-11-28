@@ -8469,7 +8469,12 @@ def _cmd_inbox(a) -> int:
         # second node for one message (review of #764).
         _capture_operator_inbox(a, sender, agent.name, typed)
     owned_work_flag, stopped = False, None
-    if not a.dry_run:
+    from .deployment import local_host
+    owner_is_local = agent.host is None or agent.host == local_host(a.root)
+    # Stops and owned-work observations belong to this host. A historical
+    # local observation cannot establish that an off-host owner is stopped;
+    # let the recipient host's existing relay establish live delivery instead.
+    if not a.dry_run and owner_is_local:
         try:
             from .owned_work import OwnedWork
             stopped = _stops(a).get(agent.name)
@@ -8955,7 +8960,8 @@ def _inbox_durable(a, agent, msg: str, panes, typed: str | None = None,
                      else _offhost_nudge(a, agent, msg, None))
         if not sent:
             print(f"  -> {agent.name}    delivered to inbox as {item.id} ({backend}); "
-                  f"off-host: not nudged ({how}) — they read it with `st inbox`.")
+                  f"recipient state UNKNOWN; off-host: not nudged ({how}) "
+                  "— they read it with `st inbox`.")
             return OK
         try:
             box.mark_read(agent.name, ids=[item.id])
