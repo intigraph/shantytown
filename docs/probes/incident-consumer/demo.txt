@@ -1,0 +1,9 @@
+event        : ['comment-item', 'file-followup'] replay = False
+replayed     : ['comment-item', 'file-followup'] replay = True | intent files = 1
+other incident : Refusal(reason='incident-binding')
+unverified     : Refusal(reason='unverified-record')
+unverified x2  : Refusal(reason='unverified-record')
+rebound run    : Refusal(reason='run-rebound')
+forged spec    : Refusal(reason='launch-mismatch')
+garbage event  : Refusal(reason='event-shape')
+intent files   : 1 (still one) | refusal records : 5 (one per distinct refusal)
