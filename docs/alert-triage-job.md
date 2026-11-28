@@ -151,3 +151,18 @@ executor), not an action. Source proof: `python -m pytest -q tests/test_incident
 refusal recording, onset normalisation or the size cap each turns tests red; the
 fsyncs are durability only and no test detects their removal). No runtime
 activation, no chaski route yet.
+
+## Signed verdict -> fix-seed executor (za4f.6.2, H2)
+
+`incident_executor.execute` creates at most one fix seed from a triage verdict. It is
+source only: the verifier and the board are injected, nothing launches or signs.
+It refuses, and records the refusal in the H1 journal, when: the caller's frozen input no
+longer hashes to the digest recorded at launch (`frozen-digest`); the verifier is absent,
+raises or returns no identity (`unsigned`); the identity is not the expected signer
+(`wrong-signer`); the report is about another incident than the frozen input (H1's
+`incident-binding`); or the spec routes no `file-followup` (`no-fix-route`).
+The seed text comes from the validated report and the frozen input only. The board is
+asked for the intent's idempotency key before creating, and the key is written into the
+seed, so a redelivery after a crash finds it instead of creating a second. A board or
+journal fault raises. Still open for H3+: the real signed reader, the real board adapter,
+and bounding the refusal journal under hostile input.
