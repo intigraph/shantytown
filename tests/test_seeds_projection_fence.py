@@ -30,6 +30,7 @@ def wire(monkeypatch, tmp_path):
     def send(request, timeout):
         if request.get_method() == "POST":
             state["queries"] += 1
+            state["tx"] += state.get("step", 1000)  # Writes while queries run, not while observing.
             values = dict(id="test-held", title=state.get("title", "actual work"), status="in_progress",
                           assignee="worker", priority=1, issue_type="task")
             inverse = {v: k for k, v in plate.FIELDS.items()}
@@ -59,6 +60,7 @@ def wire(monkeypatch, tmp_path):
         if mode in ("paged", "page-cap", "epoch-change"):
             records = [dict(tx=since + n, graph=graph, entity=entity, attribute=attribute, op="assert")
                        for n in (1, 2)] if mode == "page-cap" or len(state["feeds"]) % 2 else []
+        records = [record for record in records if record["tx"] <= state["tx"]]
         result = dict(records=records, since=since,
                       next_tx=max((r["tx"] for r in records), default=since), watermark_tx=state["tx"],
                       capture="new_values", source=dict(store_id=state["store"], log_epoch="epoch"))
@@ -124,7 +126,9 @@ def test_unusable_change_evidence_is_unknown_not_an_empty_success(wire, mode):
     state["mode"] = mode
     assert not plate.owner_rows(proof, "worker").complete
     assert state["feeds"]
-    assert state["queries"] == 2  # Non-transient proof failures are not retried.
+    assert state["queries"] == (3 if mode == "store-replaced" else 2)
+    # A different source triggers store re-admission; this fixture cannot
+    # answer that schema probe, so it refuses before another candidate read.
 
 
 def test_relevant_change_invalidates_older_hits_before_retry(wire):
@@ -171,7 +175,7 @@ def test_projection_misses_publish_only_after_complete_fence(wire):
     assert state["queries"] == 4  # Neither uncertified miss was published.
 
 
-def test_projection_uses_one_initial_and_one_final_watermark(wire,monkeypatch):
+def test_projection_uses_one_watermark_and_post_query_change_proof(wire,monkeypatch):
     proof,state=wire
     state.update(step=0)
     original=cache._watermark
@@ -181,7 +185,7 @@ def test_projection_uses_one_initial_and_one_final_watermark(wire,monkeypatch):
         return original(*a)
     monkeypatch.setattr(cache,"_watermark",counted)
     assert plate.owner_rows(proof,"worker").exact()
-    assert len(calls)==2
+    assert len(calls)==1
     assert state["queries"]==2
     assert plate.owner_rows(proof,"worker").exact()
     assert state["queries"]==2  # Certified entries still accelerate warm reads.
@@ -189,8 +193,8 @@ def test_projection_uses_one_initial_and_one_final_watermark(wire,monkeypatch):
 
 def test_same_store_watermark_regression_is_unknown_not_a_restart(wire,monkeypatch):
     proof,state=wire
-    marks=iter([("fixture",10),("fixture",9)])
-    monkeypatch.setattr(cache,"_watermark",lambda *a:next(marks))
+    monkeypatch.setattr(cache,"_watermark",lambda *a:("fixture",10))
+    state.update(tx=9, step=0)
     assert not plate.owner_rows(proof,"worker").complete
     assert state["queries"]==2
 
@@ -275,6 +279,7 @@ def deferred_wire(wire, monkeypatch):
         if request.get_method() != "POST":
             return original(request, timeout)
         state["queries"] += 1
+        state["tx"] += state.get("step", 1000)
         query = json.loads(request.data)["query"]
         if "AS ?predicate" not in query:
             return Response([dict(subject=S, graph=G)])
@@ -314,4 +319,4 @@ def test_deferral_missing_change_proof_stays_unknown(wire, monkeypatch, mode):
     proof, state = deferred_wire(wire, monkeypatch)
     state["mode"] = mode
     assert not plate.deferred_rows(proof).complete
-    assert state["queries"] == 7
+    assert state["queries"] == (21 if mode == "store-replaced" else 7)

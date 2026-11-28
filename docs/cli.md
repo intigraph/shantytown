@@ -341,6 +341,12 @@ watermark before a result is returned. Selected field changes reload those field
 membership changes restart selection. Missing, partial or changed-store evidence
 remains UNKNOWN. No stale answer is returned when the proof fails. Ordinary
 query caching and the `ST_SEEDS_READ_CACHE=0` rollback remain unchanged.
+Each projection scope makes one fresh initial `/watermark` observation, shared
+only within that scope. Its final change-feed proof uses a fresh post-query
+head; it never certifies results using only the initial mark. Even a quiet store
+requires this change proof. Failed observations and writes that invalidate the
+cache refuse the active scope; a new scope must observe again. Bounded timeout
+recovery still consumes the existing shared retry and time budgets.
 
 In an interactive `st fleet dashboard`, **Left/Right** scroll assigned work eight
 characters at a time; **Home/End** show its beginning/end. `‹` marks hidden text

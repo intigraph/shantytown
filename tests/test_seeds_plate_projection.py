@@ -45,6 +45,17 @@ def answer(wire):
     return {"rows": wire, "count": len(wire), "truncated": False}
 
 
+def change_answer(request, store, tx, records=()):
+    from urllib.parse import parse_qs, urlsplit
+    params = parse_qs(urlsplit(request.full_url).query)
+    since = int(params["since"][0])
+    records = [r for r in records if r["tx"] > since and r["graph"] == params["graph"][0]]
+    return dict(records=records, since=since,
+                next_tx=max((r["tx"] for r in records), default=since),
+                watermark_tx=tx, capture="new_values",
+                source=dict(store_id=store, log_epoch="epoch"))
+
+
 def reader(monkeypatch, wire):
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix="test")
     monkeypatch.setattr(tracker, "prove_store", lambda: PROOF)
@@ -83,6 +94,10 @@ def test_owner_scope_and_lean_fields_on_actual_request(monkeypatch):
             return json.dumps(answer(fields())).encode()
 
     def send(request, timeout):
+        if request.get_method() == "GET":
+            response = Response()
+            response.read = lambda size: json.dumps(change_answer(request, "wire-fixture", 1)).encode()
+            return response
         observed.append(json.loads(request.data)["query"])
         assert request.full_url == PROOF.quipu_url + "/query"
         return Response()
@@ -417,7 +432,9 @@ def test_attribution_uses_declared_headers_and_no_bearer(monkeypatch):
                 pass
 
             def read(self, size):
-                return json.dumps(answer([])).encode()
+                value = (change_answer(request, "wire-fixture", 1)
+                         if request.get_method() == "GET" else answer([]))
+                return json.dumps(value).encode()
 
         return Response()
 
@@ -863,13 +880,10 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.delenv("ST_SEEDS_READ_CACHE", raising=False)
     monkeypatch.setattr(cache, "_WATERMARK_MAX_AGE", 0)
-    observed = {"marks": 0, "queries": 0}
+    observed = {"marks": 0, "queries": 0, "tx": 10, "records": []}
     def watermark(*args):
         observed["marks"] += 1
-        tx = (10 if observed["marks"] <= 1 else 11) if motion == "settles" else (
-            observed["marks"] if motion == "never" else 10)
-        observed["tx"] = tx
-        return ("fixture-store", tx)
+        return ("fixture-store", observed["tx"])
     monkeypatch.setattr(cache, "_watermark", watermark)
     if motion == "cache-unavailable":
         def unavailable():
@@ -882,18 +896,16 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
         def read(self, size): return json.dumps(answer(fields())).encode()
     def send(request, timeout):
         if request.get_method() == "GET":
-            from urllib.parse import urlsplit, parse_qs
-            params = parse_qs(urlsplit(request.full_url).query)
-            since = int(params["since"][0])
-            data = dict(records=[dict(tx=since + 1, graph=params["graph"][0],
-                        entity=seeds_plate.SEEDS + "item/test-held",
-                        attribute=seeds_plate.SCHEMA + "name", op="assert")],
-                        since=since, next_tx=since + 1, watermark_tx=observed["tx"],
-                        capture="new_values", source=dict(store_id="fixture-store", log_epoch="epoch"))
+            data = change_answer(request, "fixture-store", observed["tx"], observed["records"])
             response = Response()
             response.read = lambda size: json.dumps(data).encode()
             return response
         observed["queries"] += 1
+        if motion == "never" or (motion == "settles" and observed["queries"] == 2):
+            observed["tx"] += 1
+            observed["records"].append(dict(tx=observed["tx"], graph=G,
+                entity=seeds_plate.SEEDS + "item/test-held",
+                attribute=seeds_plate.SCHEMA + "name", op="assert"))
         return Response()
     monkeypatch.setattr(seeds_plate, "urlopen", send)
     result = seeds_plate.owner_rows(PROOF, "worker")
