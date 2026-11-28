@@ -161,6 +161,8 @@ def test_idle_codex_queued_input_retirement_uses_real_transport_without_resend(w
     from test_codex_submission import READY, FOOTER
     root, dispatcher, binding, tracker, panes = world
     adapter = tmux.Tmux(root=root)
+    # Screen-only transport has no native runtime settings.
+    monkeypatch.setattr(adapter, 'cmdline', lambda _: None)
     calls = []
     panes.screen = READY
     monkeypatch.setattr(adapter, 'foreground', lambda _: 'codex')

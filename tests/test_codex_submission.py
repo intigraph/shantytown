@@ -1,4 +1,5 @@
 """Submission evidence must be stronger than a successful send-keys call."""
+import hashlib
 import subprocess
 
 import pytest
@@ -133,17 +134,78 @@ def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
     assert keys(calls) == []
 
 
-def test_old_activity_with_no_new_queue_evidence_is_not_success(monkeypatch):
+def test_busy_crew_activity_alone_does_not_prove_delivery(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
     with pytest.raises(tmux.PaneSubmissionUnverified):
         panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
 
 
+def test_busy_activity_does_not_hide_our_typed_body(monkeypatch):
+    busy_owned = 'Working (1s • esc to interrupt)\n' + OWNED
+    panes, calls = transport(monkeypatch, [BUSY, busy_owned])
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+
+
 def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
     panes, _ = transport(monkeypatch, [BUSY, QUEUED])
     with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
         panes.send('worker', BODY)
+
+
+def test_fresh_startup_queue_can_drain_into_observed_turn(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [READY] + [startup_queue] * 4 + [BUSY])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls)] == [BODY, 'Enter']
+
+
+def test_persistent_startup_queue_waits_without_resubmitting(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [READY, startup_queue])
+    monkeypatch.setattr(tmux, '_CODEX_OBSERVE_POLLS', 3)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert calls.count(('sleep', tmux._CODEX_POLL_S)) == 5
+    assert [c[-1] for c in keys(calls)] == [BODY, 'Enter']
+
+
+def test_startup_queue_observation_respects_caller_deadline(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [startup_queue])
+    clock = [0.0]
+    monkeypatch.setattr(tmux.time, 'monotonic', lambda: clock[0])
+
+    def sleep(seconds):
+        clock[0] += seconds
+        calls.append(('sleep', seconds))
+
+    monkeypatch.setattr(tmux.time, 'sleep', sleep)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes._verify_codex_submission('worker', BODY, READY, deadline=0.3)
+    assert clock[0] == 0.3
+    assert keys(calls) == []
+
+
+@pytest.mark.parametrize('proof_kind', ['exact', 'missing', 'other-body', 'other-pane'])
+def test_busy_bootstrap_requires_exact_native_body_proof(monkeypatch, proof_kind):
+    panes, calls = transport(monkeypatch, [BUSY, BUSY])
+    proof = None
+    if proof_kind != 'missing':
+        proof = tmux.SubmissionObserved(
+            'other' if proof_kind == 'other-pane' else 'worker',
+            hashlib.sha256(
+                ('other' if proof_kind == 'other-body' else BODY).encode()).hexdigest())
+    monkeypatch.setattr(panes, '_codex_native_probe', lambda *a: lambda: proof)
+    if proof_kind == 'exact':
+        panes.send('worker', BODY)
+    else:
+        with pytest.raises(tmux.PaneSubmissionUnverified):
+            panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
 
 
 def test_other_queue_message_is_not_our_receipt(monkeypatch):

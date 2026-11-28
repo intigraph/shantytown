@@ -973,9 +973,10 @@ class Tmux:
             submit_key = "Tab" if _codex_submission_busy(current) else "Enter"
             before = current
             self._refuse_in_mode(pane, sent=len(chunks))
+        native_probe = self._codex_native_probe(pane, text) if codex else None
         subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
         if codex:
-            self._verify_codex_submission(pane, text, before)
+            self._verify_codex_submission(pane, text, before, native_probe=native_probe)
             return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
         if claude_before is not None and claude_birth is not None:
             from .triage import input_state, strip_attrs, INPUT_EMPTY, INPUT_PLACEHOLDER
@@ -1068,7 +1069,32 @@ class Tmux:
                 return False
         return False
 
-    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None) -> None:
+    def _codex_native_probe(self, pane, text):
+        """Bind read-only exact-body evidence before the submission key."""
+        if not self.delivery_root:
+            return None
+        from .harness import get
+        settings = get('codex').settings_in_cmdline(self.cmdline(pane) or '')
+        if not settings or not Path(settings).parent.name.startswith('agent-'):
+            return None
+        worker = Path(settings).parent.name.removeprefix('agent-')
+        session, created, runtime = self.session_created(pane), time.time(), self.runtime_identity(pane)
+
+        def probe():
+            if (not runtime or self.runtime_identity(pane) != runtime
+                    or self.session_created(pane) != session):
+                return None
+            from .codex_submission import observe
+            proof = observe(self.delivery_root, worker, text, created, settings)
+            if (self.runtime_identity(pane) != runtime
+                    or self.session_created(pane) != session):
+                return None
+            if proof:
+                return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest(), proof)
+
+        return probe
+
+    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None, native_probe=None) -> None:
         from . import triage
         was_busy = _codex_submission_busy(before)
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
@@ -1076,7 +1102,7 @@ class Tmux:
         def observed(screen):
             return (triage.input_state(screen) in
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
-                    not _codex_queued(screen, text) and
+                    not _codex_queue(screen) and
                     not was_busy and triage.mid_flight(screen))
         def watch(polls, screen):
             """(True, screen) once the turn is seen; (False, last screen) otherwise."""
@@ -1089,13 +1115,16 @@ class Tmux:
                 except (OSError, subprocess.SubprocessError) as exc:
                     raise PaneSubmissionUnverified(
                         f"UNVERIFIED: cannot observe Codex submission in {pane}") from exc
-                # Existing activity alone proves nothing: the new body can
-                # remain typed while an older turn is still working.
+                # Existing crew activity alone proves nothing about our body.
                 if observed(screen):
                     return True, screen
-                if _codex_queued(screen, text):
-                    raise PaneSubmissionUnverified(
-                        f'UNVERIFIED: Codex queued input in {pane}; not delivered')
+                if native_probe is not None:
+                    proof = native_probe()
+                    if isinstance(proof, SubmissionObserved) and proof.matches(pane, text):
+                        return True, screen
+                # A fresh session can queue startup input before its first
+                # turn begins. A queue is pending evidence: keep watching,
+                # without a key or body resend, until it drains or we time out.
             return False, screen
         for attempt in range(_CODEX_ATTEMPTS):
             seen, screen = watch(_CODEX_POLLS, "")
@@ -1136,6 +1165,9 @@ class Tmux:
                 was_busy = busy
             else:
                 break
+        if _codex_queued(screen, text):
+            raise PaneSubmissionUnverified(
+                f'UNVERIFIED: Codex queued input in {pane}; not delivered')
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
             f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"
