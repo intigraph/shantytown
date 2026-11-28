@@ -39,7 +39,9 @@ from typing import Callable
 
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
-VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+#: "enqueued" (aegis-1jtb): the guarded merge ADDED the PR to the forge's merge
+#: queue and it has not landed. Appended, so the legacy prefix stays stable.
+VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 
 
 def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
@@ -82,6 +84,19 @@ class Refused(Exception):
 class OverCap(Refused):
     """Refused only because every slot is taken. A fresh spawn turns this into a
     queued ticket (aegis-cui); every other refusal still refuses."""
+
+
+class LaneWait(OverCap):
+    """Refused only because the repo's merge lane is busy: held by a live merge
+    job, or spacing merges apart (aegis-1jtb). Like OverCap it QUEUES rather
+    than refuses: a ticket refused for a busy lane used to be dropped as failed,
+    so nothing queued behind a merge ever landed without a human respawn.
+    `not_before` is when spacing ends (None while a job holds the lane: the
+    holder's own end drains the queue)."""
+
+    def __init__(self, message: str, not_before: float | None = None):
+        super().__init__(message)
+        self.not_before = not_before
 
 
 # --- naming + the ledger ------------------------------------------------------
@@ -173,6 +188,36 @@ def task_holders(root, item: str, *, ticket: str | None = None,
             and r.get("name") != superseded]
     held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
              if t.get("job") == "task" and t.get("item") == item and t.get("id") != ticket]
+    return held
+
+
+def merge_holders(root, repo: str, pr, *, ticket: str | None = None,
+                  superseded: str | None = None) -> list[str]:
+    """Live merge jobs and queued or claimed merge tickets already on repo#pr
+    (aegis-1jtb: #753 got three merge jobs, each re-running a merge the forge
+    had already queued). Caller holds lock()."""
+    def same(r):
+        return r.get("job") == "merge" and r.get("repo") == repo and str(r.get("pr")) == str(pr)
+    held = [f"{r['name']} ({r.get('state')})" for r in live(root)
+            if same(r) and r.get("name") != superseded]
+    held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
+             if same(t) and t.get("id") != ticket]
+    return held
+
+
+def review_holders(root, item: str, repo, pr, head, *, ticket: str | None = None,
+                   superseded: str | None = None) -> list[str]:
+    """Live review jobs and queued or claimed review tickets for the same
+    (item, repo#pr, head) (aegis-1jtb, sattler 2026-11-28: five duplicate review
+    tickets queued for one item within two minutes). A new head is a new review
+    and does not coalesce. Caller holds lock()."""
+    def same(r):
+        return (r.get("job") == "review" and r.get("item") == item and r.get("repo") == repo
+                and str(r.get("pr")) == str(pr) and (r.get("head") or None) == (head or None))
+    held = [f"{r['name']} ({r.get('state')})" for r in live(root)
+            if same(r) and r.get("name") != superseded]
+    held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
+             if same(t) and t.get("id") != ticket]
     return held
 
 
@@ -380,20 +425,27 @@ def cap_refusal(root, policy, harness: str | None = None, job: str | None = None
 def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     """The repo's serialized merge lane: one merge job at a time, and a gap
     between them. A merge job HOLDS the lane for its whole life."""
+    return lane_state(root, repo, spacing_minutes, now)[0]
+
+
+def lane_state(root, repo: str, spacing_minutes: int, now: float) -> tuple[str, float | None]:
+    """(refusal, not_before) for the repo's merge lane: "" when free. not_before
+    is when spacing ends, or None while a live job holds the lane."""
     merges = [r for r in records(root) if r.get("job") == "merge" and r.get("repo") == repo]
     holder = next((r for r in merges if r.get("state") in (LAUNCHING, LIVE, ENDING)), None)
     if holder:
-        return f"merge lane for {repo} is held by {holder['name']}; one merge at a time"
+        return f"merge lane for {repo} is held by {holder['name']}; one merge at a time", None
     # Spacing follows MERGES. A job that ended without merging (blocked, failed,
-    # stopped) frees the lane at once: there is no deploy to space behind.
+    # stopped) frees the lane at once: there is no deploy to space behind. An
+    # enqueued PR is a merge in flight, so it is spaced behind like one.
     ended = [r.get("ended_at") or 0 for r in merges
-             if (r.get("result") or {}).get("verdict") == "merged"]
+             if (r.get("result") or {}).get("verdict") in ("merged", "enqueued")]
     last = max(ended, default=0)
     wait = last + spacing_minutes * 60 - now
     if wait > 0:
         return (f"merge lane for {repo} is spacing merges {spacing_minutes}m apart; "
-                f"next slot in {int(wait // 60) + 1}m")
-    return ""
+                f"next slot in {int(wait // 60) + 1}m"), last + spacing_minutes * 60
+    return "", None
 
 
 def plan(req: Request, *, root, policy, actor, administrator, host, now,
@@ -424,8 +476,10 @@ def plan(req: Request, *, root, policy, actor, administrator, host, now,
         if policy.review_enqueue_enabled:
             raise Refused("merge jobs are retired while review enqueue is enabled; "
                           "use the verified review report Action")
-        if refusal := lane_refusal(root, req.repo, policy.merge_spacing_minutes, now):
-            raise Refused(refusal)
+        refusal, not_before = lane_state(root, req.repo, policy.merge_spacing_minutes, now)
+        if refusal:
+            # Queue, never drop (aegis-1jtb): a busy lane is a wait, not a defect.
+            raise LaneWait(refusal, not_before)
     name = name or new_name(req.job)
     bounds = (getattr(policy, "limits", {}) or {}).get(req.job, {})
     lifetime = bounds.get("lifetime_minutes", policy.lifetime_minutes)
@@ -492,6 +546,7 @@ def _ticket_path(root, tid: str) -> Path:
 
 def ticket_for(req: Request, *, harness: str, priority: int | None,
                requester: str | None, now: float, despite_live: str | None = None,
+               not_before: float | None = None,
                token: Callable[[], str] = lambda: secrets.token_hex(6)) -> dict:
     return {
         "id": f"{TICKET_PREFIX}{token()}", "job": req.job, "item": req.item,
@@ -499,7 +554,7 @@ def ticket_for(req: Request, *, harness: str, priority: int | None,
         "harness": harness, "track": req.track or DEFAULT_TRACK, "priority": priority,
         "requester": requester or "operator", "enqueued_at": now,
         "state": QUEUED, "claimed_by": None, "claimed_at": None,
-        "despite_live": despite_live,
+        "despite_live": despite_live, "not_before": not_before,
     }
 
 
@@ -549,13 +604,17 @@ def settle(root, tid: str) -> None:
         pass
 
 
-def release(root, tid: str, *, recovered: bool = False) -> None:
+def release(root, tid: str, *, recovered: bool = False,
+            not_before: float | None = None) -> None:
     """Back to queued, keeping its age: the claimer found no slot after all.
-    `recovered` counts a dead claimer, which claim_next() tolerates only once."""
+    `recovered` counts a dead claimer, which claim_next() tolerates only once.
+    `not_before` (a busy merge lane's spacing end) keeps the drain from
+    claiming it again before then."""
     t = read_ticket(root, tid)
     if t is not None:
         n = (t.get("recoveries") or 0) + (1 if recovered else 0)
-        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None, recoveries=n))
+        _put(root, dict(t, state=QUEUED, claimed_by=None, claimed_at=None, recoveries=n,
+                        not_before=not_before))
 
 
 def drop(root, tid: str, reason: str, now: float) -> str:
@@ -764,7 +823,7 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                pid: int | None = None, pid_alive: Callable[[int], bool] = _pid_alive,
                harness_caps: dict | None = None, shares: dict | None = None,
                job_caps: dict | None = None,
-               disk_hold: str = "") -> tuple[dict | None, list[str]]:
+               disk_hold: str = "", skip=()) -> tuple[dict | None, list[str]]:
     """Recover interrupted claims, then claim the best routed ticket (track
     share, priority, age; within its harness's capacity) whose item is open, if
     a slot is free. Caller holds lock().
@@ -801,6 +860,10 @@ def claim_next(root, *, cap: int, item_state: Callable[[str], str], now: float,
                        harness_caps=harness_caps or {}, shares=shares or {},
                        job_caps=job_caps or {})
     for t in candidates:
+        # Already tried this pass, or waiting out a merge lane's spacing
+        # (aegis-1jtb): skip it and try the next ticket, never stop the drain.
+        if t["id"] in skip or (t.get("not_before") or 0) > now:
+            continue
         state = item_state(t["item"])
         if state in ("closed", "missing"):
             lines.append(drop(root, t["id"], f"item {t['item']} is {state}", now))
@@ -1632,7 +1695,9 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
    If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
    edit branch protection, never force-push.
-4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
+4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise
+   report the verdict the guarded merge PRINTS, never one you infer: --verdict merged only when it says the
+   PR merged; --verdict enqueued when it says the PR was only added to the merge queue (it has NOT landed).""",
     "triage": """JOB: diagnose the ONE failure or alert described by {item}{target_short}.
 1. Identify the subject from the item and the bounded context. For an infrastructure alert, use admitted
    alert/metrics/service READ tools; do not invent a CI run. Use forge run/check logs only for a CI failure.
@@ -2055,6 +2120,45 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
     if bad:
         return "checks not green on the head: " + ", ".join(sorted(bad)[:5])
     return ""
+
+
+#: One read of what `gh pr merge` actually did (aegis-1jtb). A repo with a merge
+#: queue makes `gh pr merge` exit 0 after only ENQUEUEING the PR: shantytown#762
+#: was reported "MERGED" while REST said merged=false and GraphQL said
+#: isInMergeQueue=true, position 1, and its head was not on main.
+MERGE_STATE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    state merged mergedAt headRefOid mergeCommit { oid }
+    isInMergeQueue mergeQueueEntry { position enqueuedAt state }
+  } }
+}"""
+
+
+def merge_outcome(node, repo: str, pr: int, head: str) -> tuple[str, str]:
+    """(verdict, line) for the PR state read AFTER `gh pr merge` returned 0.
+
+    Pure. Only merged=true is "merged"; a PR in the merge queue is "enqueued"
+    with its position and enqueuedAt, never "merged", because a red merge_group
+    run or a conflict can still eject it. Anything else, including an
+    unreadable answer, is "blocked" with the observed state, so a zero exit
+    code alone can never be reported as a landing."""
+    if not isinstance(node, dict):
+        return "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    observed = (f"state={node.get('state')} merged={node.get('merged')} "
+                f"isInMergeQueue={node.get('isInMergeQueue')}")
+    if node.get("merged") is True:
+        commit = (node.get("mergeCommit") or {}).get("oid") or "UNKNOWN"
+        return "merged", (f"merged {repo}#{pr} at head {head} as merge commit {commit} "
+                          f"(mergedAt {node.get('mergedAt') or 'UNKNOWN'})")
+    entry = node.get("mergeQueueEntry")
+    if node.get("isInMergeQueue") is True or isinstance(entry, dict):
+        entry = entry if isinstance(entry, dict) else {}
+        return "enqueued", (f"enqueued {repo}#{pr} at head {head} in the merge queue, NOT "
+                            f"merged: position {entry.get('position', 'UNKNOWN')}, "
+                            f"enqueuedAt {entry.get('enqueuedAt') or 'UNKNOWN'}, "
+                            f"queue state {entry.get('state') or 'UNKNOWN'}")
+    return "blocked", (f"{repo}#{pr}: gh pr merge exited 0 but the PR is neither merged nor "
+                       f"in the merge queue ({observed})")
 
 
 # --- identity that does not rest on the environment ---------------------------

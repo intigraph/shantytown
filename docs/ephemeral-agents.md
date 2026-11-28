@@ -228,6 +228,26 @@ permission and leave the ledger read-only. An empty summary is refused before
 publishing a verdict or ending the job. Existing stdin reports remain supported
 for callers that can supply stdin without wrapping the command.
 
+The guarded merge reads the PR back after `gh pr merge` exits 0, because on a
+repo with a merge queue that exit only means the PR was ADDED to the queue
+(shantytown#762 was reported merged while it sat at queue position 1). It prints
+the verdict the job must report: `merged` only when the forge says merged=true,
+with the merge commit; `enqueued` when the PR is in the merge queue, with its
+position and enqueuedAt; anything else is refused so the job reports `blocked`
+with the observed state. `enqueued` is appended to the legacy verdict enum,
+spaces the merge lane like a merge, and does not release the lane as failed.
+
+The guarded merge also reads the PR once BEFORE `gh pr merge`: a PR that is
+already merged or in the merge queue is reported as such and never merged again.
+A merge spawn does the same read first and launches nothing for such a PR
+(#753 got three merge jobs, each re-running a merge the queue already held).
+Unreadable proceeds, since the guarded merge reads again before it acts.
+
+One per PR: a merge spawn refuses, naming the holder, when the same repo#PR
+already has a live merge job or a queued or claimed merge ticket. A review
+spawn refuses the same way for the same (item, repo#PR, head); a new head is a
+new review.
+
 ## The spawn queue
 
 aegis-cui. Before it, a spawn over the cap was refused and the work was lost
@@ -241,8 +261,18 @@ refusal is the cap writes a ticket and exits 0:
 `--dry-run` prints `would queue ...` and writes nothing. A ticket records the
 job kind, item, repo/PR/checkout, harness, track, priority, requester and
 `enqueued_at`, one JSON file per ticket under `<root>/ephemeral/queue/`.
-Every other refusal (authority, no administrator, merge lane, governor,
-`max_agents = 0`) still refuses, as do `--retry` and scoped recruitment.
+A busy merge lane QUEUES the same way (aegis-1jtb): held by a live merge job,
+or spacing merges apart. A drained ticket that meets a busy lane goes back to
+queued, and only that ticket: with `not_before` set to the end of the spacing,
+or with none while a job holds the lane (the holder's own end drains it). The
+drain then tries the next ticket instead of stopping. A spacing-gated ticket
+launches at the first drain after its `not_before`; there is no poller, so that
+is the next job end. Before this, both refusals dropped the ticket as failed
+(11 tickets at 00:04Z on 2026-11-28), and nothing queued behind a merge landed
+without a human respawn. Nothing is queued for a CLOSED item: the spawn refuses
+where the requester sees it, instead of leaving the drain to drop the ticket.
+Every other refusal (authority, no administrator, governor, `max_agents = 0`)
+still refuses, as do `--retry` and scoped recruitment.
 
 **Drain on job end, no poller.** Every end path frees its slot and kicks the
 queue: `--stop` and the reaper after their synchronous teardown, `--report`
@@ -1045,7 +1075,7 @@ action fields are reserved for the JobSpec extension.
 
 `verdicts` lists the verdicts the job may report (1-16 names, `blocked`
 required; `failed` is recorded by st at teardown and refuses here). It replaces
-the legacy enum `approve|request-changes|merged|blocked|done|failed` in the
+the legacy enum `approve|request-changes|merged|blocked|done|failed|enqueued` in the
 job prompt and in `st agent spawn --report --verdict`, which refuses any other
 name. `review` and `merge` may only narrow the legacy names, because their gates
 key on `approve`, `request-changes` and `merged`. An absent key keeps the legacy
