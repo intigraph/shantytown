@@ -216,8 +216,8 @@ def test_no_commits_means_no_push(tmp_path):
                                    "workspace": str(ws)}) == ""
 
 
-# (d) aegis-cxy: a refusal names its category, a linked codex job worktree with
-# st's kit passes, and an ssh push that fails is retried over HTTPS.
+# (d) aegis-cxy: a refusal names its category, and a linked codex job worktree
+# with st's kit passes.
 
 def test_refusal_names_its_category_without_naming_the_path(tmp_path):
     world = World(tmp_path)
@@ -268,99 +268,3 @@ def test_codex_job_worktree_with_a_real_uncommitted_change_still_refuses(tmp_pat
     (ws / "src.py").write_text("x = 3\n")
     with pytest.raises(p.Refused, match="tracked or staged change"):
         p.require_clean_source(ws)
-
-
-class SshBroken:
-    """git that fails any push to origin (ssh) and records the HTTPS retry."""
-    def __init__(self, origin, https_ok=True, push_urls=None):
-        self.origin, self.https_ok, self.pushes = origin, https_ok, []
-        self.push_urls = [origin] if push_urls is None else push_urls
-
-    def __call__(self, *args, cwd=None):
-        argv = list(args)
-        def done(code=0, out="", err=""):
-            return subprocess.CompletedProcess(argv, code, out, err)
-        if "symbolic-ref" in argv:
-            return done(out="wt/eph-task-abc123\n")
-        if "rev-list" in argv:
-            return done(out="1\n")
-        if argv[-4:] == ["get-url", "--push", "--all", "origin"]:
-            return done(out="".join(u + "\n" for u in self.push_urls))
-        if argv[-2:] == ["get-url", "origin"]:
-            return done(out=self.origin + "\n")
-        if "push" in argv:
-            self.pushes.append(argv)
-            target = argv[argv.index("push") + 1]
-            if target == "origin":
-                return done(255, err="Bad owner or permissions on /etc/ssh/ssh_config.d/x.conf")
-            return done(0 if self.https_ok else 128, err="" if self.https_ok else "auth failed")
-        raise AssertionError(argv)
-
-
-REC = {"job": "task", "name": "eph-task-abc123"}
-
-
-def test_failed_ssh_push_is_retried_over_https_with_gh_credentials(tmp_path):
-    git = SshBroken("git@github.com:intigraph/shantytown.git")
-    note = eph.push_stranded_work({**REC, "workspace": str(tmp_path)}, git=git)
-    assert note.startswith("pushed wt/eph-task-abc123 to origin over HTTPS")
-    retry = git.pushes[-1]
-    assert "https://github.com/intigraph/shantytown.git" in retry
-    assert "credential.helper=!gh auth git-credential" in retry
-    assert retry[-1] == "HEAD:refs/heads/wt/eph-task-abc123"
-
-
-@pytest.mark.parametrize("origin,https_ok", [
-    ("git@github.com:intigraph/shantytown.git", False),   # HTTPS fails too
-    ("https://github.com/intigraph/shantytown.git", True),  # already HTTPS: no retry
-    ("git@forgejo.local:o/n.git", True),                   # not GitHub: no gh creds
-])
-def test_no_https_rescue_still_reports_local_only(tmp_path, origin, https_ok):
-    git = SshBroken(origin, https_ok)
-    note = eph.push_stranded_work({**REC, "workspace": str(tmp_path)}, git=git)
-    assert "NOT pushed" in note and "local-only" in note and "Bad owner" in note
-    assert len(git.pushes) == (2 if origin.startswith("git@github.com") else 1)
-
-
-@pytest.mark.parametrize("push_urls", [
-    ["git@github.com:someone-else/fork.git"],               # pushurl elsewhere
-    ["git@github.com:intigraph/shantytown.git",
-     "git@github.com:intigraph/mirror.git"],                # two push URLs
-    [],                                                     # cannot tell
-])
-def test_ambiguous_or_mismatched_push_destination_is_not_retried(tmp_path, push_urls):
-    git = SshBroken("git@github.com:intigraph/shantytown.git", True, push_urls)
-    note = eph.push_stranded_work({**REC, "workspace": str(tmp_path)}, git=git)
-    assert "NOT pushed" in note and "local-only" in note
-    assert len(git.pushes) == 1
-
-
-def _real_remote(tmp_path, *config):
-    ws = tmp_path / "ws"
-    subprocess.run(["git", "init", "-q", str(ws)], check=True)
-    subprocess.run(["git", "-C", str(ws), "remote", "add", "origin",
-                    "git@github.com:intigraph/shantytown.git"], check=True)
-    for key, value in config:
-        subprocess.run(["git", "-C", str(ws), "config", "--add", key, value], check=True)
-    return str(ws)
-
-
-def test_real_git_pushurl_to_another_repository_is_refused(tmp_path):
-    """#822 review: fetch and push URLs differ. The retry must not follow the
-    fetch URL into intigraph/shantytown when the configured push went elsewhere."""
-    ws = _real_remote(tmp_path, ("remote.origin.pushurl", "git@github.com:other/fork.git"))
-    assert eph._https_github_url(eph._git, ws) is None
-
-
-def test_real_git_pushinsteadof_to_another_repository_is_refused(tmp_path):
-    ws = _real_remote(tmp_path, ("url.git@github.com:other/.pushInsteadOf",
-                                 "git@github.com:intigraph/"))
-    assert eph._https_github_url(eph._git, ws) is None
-
-
-def test_real_git_matching_pushurl_is_retried_at_that_repository(tmp_path):
-    # Control: a pushurl naming the same repository (another spelling) still
-    # gets the rescue, so the refusals above are about the mismatch.
-    ws = _real_remote(tmp_path, ("remote.origin.pushurl",
-                                 "ssh://git@github.com/intigraph/shantytown"))
-    assert eph._https_github_url(eph._git, ws) == "https://github.com/intigraph/shantytown.git"
