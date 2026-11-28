@@ -296,7 +296,7 @@ def test_past_the_cap_no_fix_is_recruited_and_the_pr_is_raised_once(store, tmp_p
     monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
     raised = []
     monkeypatch.setattr(cli, "_drain_event_raise", lambda a, ev, outcome, text, key:
-                        raised.append((outcome, key)))
+                        raised.append((outcome, key)) or True)
     third = _review_rounds(pe.MAX_REVIEW_ROUNDS)[-1]
     for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
         pe.settle(root, pe.parse(json.dumps(_ev(job="review", head=head))), "admitted", 1.0)
@@ -449,3 +449,58 @@ def test_an_open_pr_at_the_event_head_still_spawns(store, tmp_path, monkeypatch)
     events = _write(tmp_path / "ev.jsonl", _ev())
     assert _st(root, "--drain-events", str(events)) == cli.OK
     assert len(launched) == 1
+
+
+@pytest.mark.parametrize("failure", ["no-administrator", "persist-error"])
+def test_capped_escalation_failure_retries_before_settling(store, tmp_path, monkeypatch, failure):
+    from shantytown.events import FilesEvents
+
+    root, _panes, launched = store
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        pe.settle(root, _ev(job="review", head=head), "admitted", 1.0)
+    event = _ev(job="task", head=_review_rounds(pe.MAX_REVIEW_ROUNDS)[-1])
+    path = _write(tmp_path / "ev.jsonl", event)
+    with monkeypatch.context() as failed:
+        if failure == "no-administrator":
+            failed.setattr(cli, "_spawn_administrator", lambda *a: (None, None))
+        else:
+            def unavailable(*a, **kw):
+                raise OSError("event store unavailable")
+            failed.setattr(FilesEvents, "persist", unavailable)
+        for _ in range(2):
+            assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+            assert event["event_id"] not in pe.settled(root)
+            assert launched == []
+    # Restoring the destination allows the same event to escalate and settle.
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert pe.settled(root)[event["event_id"]]["outcome"] == "capped"
+    raised = FilesEvents(root / "events").pending("boss")
+    assert len(raised) == 1 and raised[0].reason == "pr-event-capped"
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(FilesEvents(root / "events").pending("boss")) == 1
+    assert launched == []
+
+
+def test_capped_escalation_replay_after_settlement_crash_is_keyed(store, tmp_path, monkeypatch):
+    from shantytown.events import FilesEvents
+
+    root, _panes, launched = store
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        pe.settle(root, _ev(job="review", head=head), "admitted", 1.0)
+    event = _ev(job="task", head=_review_rounds(pe.MAX_REVIEW_ROUNDS)[-1])
+    path = _write(tmp_path / "ev.jsonl", event)
+    with monkeypatch.context() as crashed:
+        def unavailable(*a, **kw):
+            raise OSError("ledger unavailable after escalation")
+        crashed.setattr(pe, "settle", unavailable)
+        with pytest.raises(OSError, match="ledger unavailable"):
+            _st(root, "--drain-events", str(path))
+    events = FilesEvents(root / "events")
+    assert event["event_id"] not in pe.settled(root)
+    assert len(events.pending("boss")) == 1
+    events.drain("boss")
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert pe.settled(root)[event["event_id"]]["outcome"] == "capped"
+    assert events.pending("boss") == []      # a delivered escalation stays delivered
+    assert len(list((root / "events").glob("*.json"))) == 1
+    assert launched == []

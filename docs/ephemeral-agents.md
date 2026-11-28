@@ -358,6 +358,8 @@ not the signed controller `recruit_*` path.
   round 3's fix pushed a head nobody would review, so no APPROVE and no merge
   event could follow. A capped event is printed, exits 2 once, is never offered
   again, and the PR is raised to the administrator once (`pr-event-capped`). A
+  failed escalation stays pending and retries on the next drain without spawning.
+  Settlement follows durable escalation; retries use the same notification key. A
   capped PR does not land by itself; a human reviews, fixes or merges it. A
   merge event for an approved head is never capped. Only drain-admitted reviews
   count, so a review spawned by hand is not a round, and re-admitting the same
