@@ -293,6 +293,11 @@ def _commands_in(groups: Any) -> set[tuple[str | None, str]]:
 
 
 NOT_CHECKED = "not-checked"
+#: The harness has no evidence of use on this host (no running process, no card
+#: declaring it, no recent session record). Its own state, never ok and never a
+#: cannot-tell: a codex role file on a Mac that runs no codex otherwise read as a
+#: permanent not-checked, indistinguishable from a coverage hole (aegis-9uq.2).
+NOT_IN_USE = "not-in-use"
 
 
 @dataclass
@@ -318,6 +323,8 @@ class CheckResult:
             return 1
         if any(i[k] in v for i in self.items for k, v in unknown.items()):
             return 2
+        # NOT_IN_USE (like NOT_CHECKED) holds neither 1 nor 2: a harness that never
+        # runs here would otherwise keep the check, and its alert, red forever.
         return 0
 
     def summary(self) -> dict[str, int]:
@@ -328,7 +335,8 @@ class CheckResult:
                 "unsupported": n("configured", "unsupported"),
                 "duplicate": n("configured", "duplicate"),
                 "live_ok": n("live", "ok"), "live_stale": n("live", "stale"),
-                "firing_ok": n("firing", "ok"), "firing_silent": n("firing", "silent")}
+                "firing_ok": n("firing", "ok"), "firing_silent": n("firing", "silent"),
+                "not_in_use": sum(1 for i in self.items if NOT_IN_USE in (i["live"], i["firing"]))}
 
     def to_json(self, root=None, host=None) -> dict:
         from datetime import datetime, timezone
@@ -710,6 +718,35 @@ def apply_firing(res: CheckResult, reg: Registry, now: float | None = None,
                     note = (f"last ran {int(now - last)}s ago, but no agent carrying it was "
                             f"active in the last {h.evidence_max_age}s: idle is not silent")
         if note:
+            item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
+
+
+def apply_in_use(res: CheckResult, in_use: dict[str, list[str]] | None) -> None:
+    """Mark the live/firing layers NOT_IN_USE for a harness with no evidence of use here.
+
+    `in_use`: {harness: [evidence, ...]} as the caller observed this host. A
+    harness absent from the map, or with an empty list, has no evidence of use.
+    None means the evidence could not be read, and then nothing changes: an
+    unreadable host must stay not-checked, never be promoted to "not in use".
+
+    Only NOT_CHECKED layers move. A harness that DOES run here keeps whatever
+    the live and firing layers said, so a codex session whose hook does not fire
+    stays unknown/silent; and the configured layer is untouched, because a role
+    file st emits must carry its hooks whether or not anything launches on it."""
+    if in_use is None:
+        return
+    for item in res.items:
+        harness = item.get("harness")
+        if not harness or in_use.get(harness):
+            continue
+        moved = False
+        for layer in ("live", "firing"):
+            if item[layer] == NOT_CHECKED:
+                item[layer], moved = NOT_IN_USE, True
+        if moved:
+            note = (f"{harness} is not in use on this host: no running {harness} process, "
+                    f"no local card declares {harness}, and no {harness} session record "
+                    f"in the window")
             item["detail"] = f"{item['detail']}; {note}" if item["detail"] else note
 
 
