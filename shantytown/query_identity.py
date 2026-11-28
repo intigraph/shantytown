@@ -86,6 +86,8 @@ def read_context():
                    else _value(env.get("CLAUDE_CODE_SESSION_ID")) if in_session else None)
     # Invalid explicit task is omitted, never transformed into another identity.
     task = _key(env.get("QUIPU_TASK") if env.get("QUIPU_TASK") else env.get("SEEDS_TASK"))
+    if "QUIPU_TASK" not in env and "SEEDS_TASK" not in env:
+        task = command_task()
     return {k: v for k, v in {
         "QUIPU_AGENT": caller, "QUIPU_SESSION": session, "QUIPU_TASK": task,
         "QUIPU_HOST": _host(),
@@ -148,7 +150,12 @@ def sdk_subprocess_options(*, read_operation=None):
     """Scope read metadata to the SDK child; retain legacy write provenance."""
     if read_operation is not None:
         with declared_query_identity(current_query_identity(), operation=read_operation):
-            return {"env": dict(os.environ, **read_context())}
+            env = dict(os.environ, **read_context())
+            if "SEEDS_TASK" in os.environ and "QUIPU_TASK" not in env:
+                # An invalid explicit declaration must not become absent in a
+                # child whose SDK now has an absent-only command fallback.
+                env["QUIPU_TASK"] = ""
+            return {"env": env}
     name = current_query_identity() or (_source.get() if _source.get() == "st-tend" else None)
     # aegis-yc6f: a write child is attributed like a read child. Without this a
     # session-less st (timer, cron, launcher) passed no agent and sd's writes
@@ -157,6 +164,10 @@ def sdk_subprocess_options(*, read_operation=None):
     env = dict(os.environ, QUIPU_AGENT=name) if name else None
     if _command.get():
         env = dict(env or os.environ, QUIPU_SOURCE=_command.get())
+        if "QUIPU_TASK" not in os.environ and "SEEDS_TASK" not in os.environ:
+            env["QUIPU_TASK"] = command_task()
+        elif "QUIPU_TASK" not in os.environ and "SEEDS_TASK" in os.environ:
+            env["QUIPU_TASK"] = _key(os.environ["SEEDS_TASK"]) or ""
     return {"env": env} if env is not None else {}
 
 
@@ -188,6 +199,19 @@ def declared_read_operation(operation):
 KNOWN_COMMANDS = frozenset({"anchor", "plate", "inbox", "stop_policy", "stop_event",
                             "haul", "tend", "work", "crew", "crewid", "task", "events",
                             "harness", "stats", "go", "status", "census"})
+
+# Metric fallback is an enumerated vocabulary, stricter than the source label's
+# registered group/leaf shape. New or unknown verbs share ONE bucket.
+TASK_COMMANDS = frozenset("st-" + name for name in KNOWN_COMMANDS) | frozenset({
+    "st-work-item", "st-work-repool", "st-work-defer", "st-fleet-tend", "st-other",
+})
+
+
+def command_task():
+    command = _command.get()
+    if command is None:
+        return None
+    return command if command in TASK_COMMANDS else "st-other"
 
 #: The finite shape quipu admits for an st source (aegis-z29i):
 #: st-[a-z][a-z_-]{0,30}.
