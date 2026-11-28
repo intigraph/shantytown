@@ -176,6 +176,23 @@ permissions, native negative probes, and host admission remain prerequisites
 before enabling unattended launches. This change does not enable that gate.
 | `task`   | claude | Do the item's acceptance criteria in the worktree. Open a PR if code changed. |
 
+One task job per item (aegis-bmu3). A task spawn refuses, naming the holder,
+when the item already has a live task job or a queued or claimed task ticket.
+The check runs under the ledger lock before the cap, so an over-cap duplicate
+queues nothing and a drained ticket whose item has since gained a live task job
+is dropped with that reason. aegis-8dda.12 and aegis-xjh each ran two task jobs
+at once because two leads filled from the ready list concurrently. For a
+deliberate parallel slice, pass `--despite-live REASON`. The reason, the
+requester and the jobs it overrode are recorded on the ledger record as
+`despite_live`, and a queued ticket carries the reason into the drain. Review,
+merge and triage jobs keep their own rules, and `--despite-live` is refused for
+them.
+
+`--retry` of a task job runs the same check before it ends the original, so a
+retry refused for a sibling job leaves the original running. A retry of a job
+launched with `--despite-live` carries that reason over, since the slice it
+was launched beside is still live.
+
 `--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
 defaults per deployment.
 
@@ -281,6 +298,8 @@ not the signed controller `recruit_*` path.
 - **Pending** (offered again next drain, exit 2): the spawn refused (governor,
   pool, authority, a merge pin mismatch) or crashed, or the event names no item
   to report on. A refusal is not dropped: the first one is dated in the ledger.
+  A task event for an item that already has a live or queued task job is
+  pending too (aegis-bmu3), and it runs once that job ends.
 - **Expired** (settled): still pending 24h after its first refusal
   (`pr_events.PENDING_TTL_S`). It is printed and recorded, then never offered
   again, so a permanent refusal (a pin mismatch, a closed PR) cannot hold exit 2
@@ -289,8 +308,8 @@ not the signed controller `recruit_*` path.
   already has this job, repo and PR, and either the exact head (merge records
   keep it) or, for head-less review and task records, a spawn or enqueue time
   at or after the event's own `spawning` intent line. This covers a drain that
-  crashed after the spawn but before it settled; the spawn path does not refuse
-  a duplicate itself. A job spawned before the attempt, such as a hand-spawned
+  crashed after the spawn but before it settled; for review and merge jobs the
+  spawn path does not refuse a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.

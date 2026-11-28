@@ -159,6 +159,23 @@ def live(root) -> list[dict]:
     return [r for r in records(root) if r.get("state") in (LAUNCHING, LIVE, ENDING)]
 
 
+def task_holders(root, item: str, *, ticket: str | None = None,
+                 superseded: str | None = None) -> list[str]:
+    """Live task jobs and queued or claimed task tickets already on `item`.
+
+    Two task jobs on one item worked it in parallel (aegis-bmu3: aegis-8dda.12
+    ran eph-task-5d688d and eph-task-ed15d8 together, aegis-xjh ran f0cb18 and
+    c73519), because two leads filled from the ready list at once. `ticket` is
+    the ticket being drained and `superseded` the job a retry replaces: neither
+    holds the item against its own launch. Caller holds lock()."""
+    held = [f"{r['name']} ({r.get('state')})" for r in live(root)
+            if r.get("job") == "task" and r.get("item") == item
+            and r.get("name") != superseded]
+    held += [f"{t['id']} ({t.get('state')} ticket)" for t in tickets(root)
+             if t.get("job") == "task" and t.get("item") == item and t.get("id") != ticket]
+    return held
+
+
 def free_slots(root) -> int:
     """Ephemeral slots free on this host: the cap minus live jobs. The plug
     stop_policy.ephemeral_free_slots reads (aegis-c01c.1, Rule Zero)."""
@@ -474,7 +491,7 @@ def _ticket_path(root, tid: str) -> Path:
 
 
 def ticket_for(req: Request, *, harness: str, priority: int | None,
-               requester: str | None, now: float,
+               requester: str | None, now: float, despite_live: str | None = None,
                token: Callable[[], str] = lambda: secrets.token_hex(6)) -> dict:
     return {
         "id": f"{TICKET_PREFIX}{token()}", "job": req.job, "item": req.item,
@@ -482,6 +499,7 @@ def ticket_for(req: Request, *, harness: str, priority: int | None,
         "harness": harness, "track": req.track or DEFAULT_TRACK, "priority": priority,
         "requester": requester or "operator", "enqueued_at": now,
         "state": QUEUED, "claimed_by": None, "claimed_at": None,
+        "despite_live": despite_live,
     }
 
 
