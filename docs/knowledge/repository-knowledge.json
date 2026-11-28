@@ -60,8 +60,8 @@
       "kind": "decision",
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
-      "summary": "The package keeps one runtime dependency, cryptography, and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
-      "source_sha256": "0475500ef5d402a6750f9aa62576719f67ece27d69bba58b4b36011dcd692dc8",
+      "summary": "The package declares one runtime dependency today, cryptography, allows more when a change gives the reason, and keeps Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
+      "source_sha256": "187578721f912a54b40daf21bd580da5d00f2d30ce3cc3e4a0ff45e3b6967fb0",
       "type": "DecisionRecord",
       "properties": {
         "status": "active",
@@ -93,8 +93,8 @@
       "kind": "start-here",
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
-      "summary": "Use the contribution guide for supported Python versions, the one-dependency constraint, test conventions and console-entry checks.",
-      "source_sha256": "0475500ef5d402a6750f9aa62576719f67ece27d69bba58b4b36011dcd692dc8",
+      "summary": "Use the contribution guide for supported Python versions, the dependency guidance, test conventions and console-entry checks.",
+      "source_sha256": "187578721f912a54b40daf21bd580da5d00f2d30ce3cc3e4a0ff45e3b6967fb0",
       "properties": {
         "startHereOrder": 3
       }

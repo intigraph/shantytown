@@ -19,12 +19,11 @@ python -m pip install -e .          # editable install; also installs the consol
 python -m pip install ".[test]"     # pytest, rdflib and PyYAML, as CI installs them
 ```
 
-**The project declares one runtime dependency, `cryptography`, and keeping that list
-short is a design constraint, not an accident.** It was zero until the signed recruiter
-requests needed signature checks. Do not add another casually: consumers install this as
-an editable package, so a new dependency becomes a new install-time failure mode for
-everyone at once. If you genuinely need one, say so explicitly in the change rather than
-slipping it into the table.
+**Runtime dependencies are allowed.** The project declares one today, `cryptography`,
+which the signed recruiter requests use to check signatures. Add another when it does a
+job the standard library does poorly. Consumers install this as an editable package, so
+a new dependency reaches every install at once: name it and its reason in the change
+rather than slipping it into the table.
 
 Requires Python >= 3.11. CI runs the matrix 3.11, 3.12, 3.13, 3.14 — the declared floor
 through the newest version, because testing only one end lets the other rot silently.

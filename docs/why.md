@@ -11,7 +11,7 @@ earned its size honestly: a mayor, a deacon, convoys, formulas, quotas, scheduli
 orchestration tier for running a real fleet. If you want a town, use the town. Shantytown does not
 try to replace any of that and never will.
 
-Shantytown's claim is *smallness where it counts*: one Python package with one dependency, no
+Shantytown's claim is *smallness where it counts*: one Python package, no
 resident daemon, no server, and a tracker you can swap in three methods. The one scheduled thing is
 `st fleet tend --install`, which asks your systemd user timer (a launchd agent on macOS) to run a
 one-shot `st fleet tend` pass every five minutes; nothing of shantytown's stays running between

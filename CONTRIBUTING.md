@@ -72,15 +72,13 @@ and `shantytown/__init__.py` — kept in sync by hand with no guard. A bump that
 updates one and forgets the other ships a CLI whose `--version` disagrees with
 its own package metadata. If you bump the version, bump both.
 
-## Two standing constraints
+## Dependencies and the Python floor
 
-**One runtime dependency, and no more without an argument.** The package
-depends on `cryptography`, which the signed recruiter requests use to check
-signatures. Everything else is the standard library, and that is what lets a
-consumer install this into almost any environment without negotiating a
-dependency graph. A change that adds another runtime import from outside the
-standard library needs to argue for itself in the pull request. Test-only and
-development dependencies are a different question and are fine.
+**Runtime dependencies are allowed.** The package depends on `cryptography`
+today, which the signed recruiter requests use to check signatures. Add another
+when it does a job the standard library does poorly. A new dependency reaches
+every install at once, so declare it in `pyproject.toml` and give the reason in
+the pull request. Test-only and development dependencies go in the `test` extra.
 
 **3.11 is a floor, not a formality.** It is a promise to anyone installing on an
 older interpreter. Please do not reach for syntax or standard-library APIs newer
