@@ -252,6 +252,79 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     assert "in flight" not in new.get("detail", "")
 
 
+def _end_jobs(root):
+    for rec in eph.live(root):
+        eph.write(root, {**rec, "state": eph.DONE})
+
+
+def _review_rounds(n):
+    return [f"{i:x}" * 40 for i in range(1, n + 1)]
+
+
+def test_the_drain_recruits_three_review_rounds_and_caps_the_fourth(store, tmp_path, monkeypatch, capsys):
+    # tambo#311: five drain reviews, each REQUEST-CHANGES with one new finding.
+    root, _panes, launched = store
+    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
+    path = tmp_path / "ev.jsonl"
+    lines = []
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        lines.append(_ev(job="review", head=head))
+        _write(path, *lines)
+        assert _st(root, "--drain-events", str(path)) == cli.OK
+        _end_jobs(root)
+    assert len(launched) == 3
+    capsys.readouterr()
+    fourth = "e" * 40
+    lines.append(_ev(job="review", head=fourth))
+    _write(path, *lines)
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL   # loud, once
+    assert len(launched) == 3                      # no fourth review
+    assert "capped review o/n#7@eeeeeeeeeeee on it-1: 3 review rounds" in capsys.readouterr().err
+    assert pe.settled(root)[pe.event_id("o/n", 7, fourth, "review")]["outcome"] == "capped"
+    # Settled, so it is not re-offered; another PR still gets its first round.
+    lines.append(_ev(job="review", pr=8, head=fourth))
+    _write(path, *lines)
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 4 and "capped 0" in capsys.readouterr().out
+
+
+def test_past_the_cap_no_fix_is_recruited_and_the_pr_is_raised_once(store, tmp_path, monkeypatch, capsys):
+    # Review of #792: round 3 said REQUEST-CHANGES, the drain still recruited the
+    # fix, its push (head 4) was capped, and the PR sat with no APPROVE, no
+    # merge event and nothing raised.
+    root, _panes, launched = store
+    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
+    raised = []
+    monkeypatch.setattr(cli, "_drain_event_raise", lambda a, ev, outcome, text, key:
+                        raised.append((outcome, key)))
+    third = _review_rounds(pe.MAX_REVIEW_ROUNDS)[-1]
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        pe.settle(root, pe.parse(json.dumps(_ev(job="review", head=head))), "admitted", 1.0)
+    path = _write(tmp_path / "ev.jsonl", _ev(job="review", head=third), _ev(job="task", head=third))
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert launched == []                          # no fix job for an unreviewable head
+    assert pe.settled(root)[pe.event_id("o/n", 7, third, "task")]["outcome"] == "capped"
+    assert "A human must review, fix or merge it" in capsys.readouterr().err
+    assert raised == [("capped", "pr-events:o/n#7:capped")]
+    # Settled: the next drain is clean and raises nothing more.
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(raised) == 1
+    # An approved head still merges: the cap never blocks a merge event.
+    assert not pe.capped(pe.parse(json.dumps(_ev(job="merge", head=third,
+                                                  reason="green-and-approved"))), {"a", "b", "c"})
+    assert not pe.capped(pe.parse(json.dumps(_ev(job="task", head=third))), {"a", "b"})
+
+
+def test_the_cap_counts_heads_not_admissions(store, tmp_path):
+    # A crash replay re-admits the same head; that is not a new round.
+    root, _panes, _launched = store
+    ev = pe.parse(json.dumps(_ev(job="review", head=HEAD)))
+    for _ in range(pe.MAX_REVIEW_ROUNDS + 1):
+        pe.settle(root, ev, "admitted", 1.0)
+    pe.settle(root, pe.parse(json.dumps(_ev(job="task", head=NEWER))), "admitted", 1.0)
+    assert pe.review_rounds(root) == {("o/n", 7): {HEAD}}
+
+
 def test_a_malformed_line_holds_exit_2_once_not_forever(store, tmp_path, capsys):
     # The file is append-only, so a bad line never leaves it. Before this it
     # held exit 2 on every later drain (review of #776).

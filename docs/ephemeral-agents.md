@@ -351,6 +351,17 @@ not the signed controller `recruit_*` path.
   crashed after the spawn but before it settled; for review and merge jobs the
   spawn path does not refuse a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
+- **Capped** (settled): the PR already has `pr_events.MAX_REVIEW_ROUNDS` (3)
+  reviewed heads admitted in the ledger, and the event is a review of a new
+  head or a fix (`task`). On tambo#311 the drain recruited five reviews, each
+  REQUEST-CHANGES with one new finding. Capping only the review was not enough:
+  round 3's fix pushed a head nobody would review, so no APPROVE and no merge
+  event could follow. A capped event is printed, exits 2 once, is never offered
+  again, and the PR is raised to the administrator once (`pr-event-capped`). A
+  capped PR does not land by itself; a human reviews, fixes or merges it. A
+  merge event for an approved head is never capped. Only drain-admitted reviews
+  count, so a review spawned by hand is not a round, and re-admitting the same
+  head is not a new round either.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 

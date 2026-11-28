@@ -42,7 +42,7 @@ LEDGER = "pr-events.jsonl"
 # "spawning" (intent, written before the spawn), "launch-failure" (one spawn
 # that made a job which then failed to launch) and "malformed" (a bad line
 # already reported, keyed by line_id) are also written; none settles an event.
-SETTLING = ("admitted", "superseded", "expired", "launch-failed")
+SETTLING = ("admitted", "superseded", "expired", "launch-failed", "capped")
 # Failed launches an event gets before it is settled "launch-failed" and raised
 # to the administrator. Before this a launch failure only left the event
 # pending, so every drain made one more job: bobbin#259's merge event
@@ -56,6 +56,14 @@ MAX_LAUNCH_FAILURES = 3
 # drain could never go clean. A day covers a governor hold or a full pool; an
 # expiry is written to the ledger and printed, never silent.
 PENDING_TTL_S = 24 * 3600
+# Review rounds the drain recruits per PR before it stops. tambo#311 got five
+# drain reviews (1d484a, 07aef5, 65b603, fc24ee, 9efbf4), each REQUEST-CHANGES
+# with one new finding, at 91% of the weekly Claude budget (sattler 17:4xZ):
+# a reviewer always finds one more thing, so an uncapped loop never converges.
+# Past the cap, a new head's review and any fix are settled "capped" and the PR
+# is raised once to the administrator: it does not land by itself, a human
+# reviews or merges it. An approved head's merge event is never capped.
+MAX_REVIEW_ROUNDS = 3
 
 
 def event_id(repo: str, pr: int, head: str, job: str) -> str:
@@ -252,6 +260,29 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
                 continue
         return r.get("name") or r.get("id") or "?"
     return None
+
+
+def review_rounds(root) -> dict[tuple[str, int], set[str]]:
+    """(repo, pr) -> the heads the drain admitted a review for. One round per
+    head: re-admitting the same head (a crash replay) is not a new round. Only
+    the drain's own ledger counts, so a review spawned by hand is not a round;
+    the cap brakes the automatic loop, not an operator."""
+    out: dict[tuple[str, int], set[str]] = {}
+    for r in _ledger(root):
+        if r.get("job") == "review" and r.get("outcome") == "admitted":
+            out.setdefault((r.get("repo"), r.get("pr")), set()).add(r.get("head"))
+    return out
+
+
+def capped(ev: dict, reviewed: set[str]) -> bool:
+    """True when the drain must not recruit this event's job: its PR already
+    has MAX_REVIEW_ROUNDS reviewed heads, and the job is a review of a new head
+    or a fix. A fix past the cap pushes a head no drain review will approve, so
+    the PR could never reach a merge event. A merge is never capped, nor a
+    replay of a head already reviewed."""
+    if len(reviewed) < MAX_REVIEW_ROUNDS:
+        return False
+    return ev["job"] == "task" or (ev["job"] == "review" and ev["head"] not in reviewed)
 
 
 def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:
