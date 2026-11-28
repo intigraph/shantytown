@@ -282,7 +282,12 @@ def _only_tooling_block_changed(checkout_root, checkout, name):
 
 def require_clean_source(checkout):
     """Permit only private scratch and st's own provisioning; never print names."""
+    # The refusal names its CATEGORY, never a path (aegis-cxy): two codex jobs
+    # were refused with the bare sentence, and nobody could tell st's own kit
+    # from real dirt from a git that could not run, so the wrong fix was chased.
     refusal = "commit candidate changes before PR preflight"
+    def refuse(why):
+        return Refused(f"{refusal} ({why})")
     try:
         result = subprocess.run(
             ["git", "-C", str(checkout), "status", "--porcelain=v1", "-z",
@@ -290,11 +295,12 @@ def require_clean_source(checkout):
             capture_output=True, timeout=30)
         raw = result.stdout
         if result.returncode or result.stderr or not isinstance(raw, bytes):
-            raise Refused(refusal)
+            raise refuse(f"git status exit {result.returncode}"
+                         + (", with stderr" if result.stderr else ""))
         if not raw:
             return
         if not raw.endswith(b"\0"):
-            raise Refused(refusal)
+            raise refuse("malformed git status")
         # Porcelain paths are repository-relative, even for a subdirectory
         # checkout. --show-cdup contains only parent hops, never private names.
         checkout_root = Path(checkout) / git(checkout, "rev-parse", "--show-cdup")
@@ -304,34 +310,34 @@ def require_clean_source(checkout):
                 # Worktree-only modification (never staged): st's tooling block.
                 if not _only_tooling_block_changed(checkout_root, checkout,
                                                    record[3:].decode("ascii")):
-                    raise Refused(refusal)
+                    raise refuse("instruction file changed outside st's tooling block")
                 continue
             # Every other tracked/index status (including renames and conflicts),
             # unknown status and malformed record refuses regardless of path.
             if not record.startswith(b"?? "):
-                raise Refused(refusal)
+                raise refuse("tracked or staged change")
             path = record[3:]
             parts = path.split(b"/")
             if parts[-1] == b"":  # Git keeps nested repositories as directories.
                 parts.pop()
             if any(part in {b"", b".", b".."} for part in parts):
-                raise Refused(refusal)
+                raise refuse("malformed untracked path")
             if path in KIT_FILES:
                 want = stat.S_ISREG
             elif b"/" in path and parts[0] in SCRATCH_DIRS | KIT_DIRS:
                 want = stat.S_ISDIR
             else:
-                raise Refused(refusal)
+                raise refuse("untracked path outside st's kit")
             root = parts[0]
             if root not in checked:
                 # lstat inspects the root itself; no private content or link
                 # target is opened, even when a root has been replaced.
                 mode = (checkout_root / root.decode("ascii")).lstat().st_mode
                 if not want(mode):
-                    raise Refused(refusal)
+                    raise refuse("kit path of the wrong type")
                 checked.add(root)
-    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
-        raise Refused(refusal) from None
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as error:
+        raise refuse(f"could not inspect the worktree: {type(error).__name__}") from None
 
 
 def candidate(checkout, repo, base, api):

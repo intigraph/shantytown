@@ -599,6 +599,10 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
 - **Merge job.** It merges only the head its item pins. When it ends without
   merging, its lane frees at once (spacing counts merges only) and, if
   `lane_release` is set, st calls chaski's `lane release` with the request id.
+- **Preflight refusals.** `st repo pr` preflight ignores st's own kit in the
+  worktree. When it refuses, it names the category in parentheses (for example
+  `tracked or staged change` or `untracked path outside st's kit`), never the
+  path.
 - **Authorship.** `st repo pr --create` records `<PR> aegis:authoredByAgent
   "<agent>"` so chaski and the gate can tell author from reviewer.
 
