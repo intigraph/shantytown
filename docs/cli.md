@@ -4356,3 +4356,7 @@ They stay out of worker plates, hauls, capacity, reminders and ready counts even
 without a legacy ASK title or decision label. Expiry records a deadline; it does
 not execute the fallback. `st work item update ID --type ask --unblocks ID
 --default TEXT --expires-at RFC3339` and exact item reads retain these fields.
+
+### Settings drift (aegis-za4f.20)
+
+Each `st fleet tend` pass re-emits any role settings file whose bytes differ from what the installed st renders, unless the re-render would drop a hook command (held and logged; `st fleet roles set` accepts the drop). A live agent whose launch stamp no longer matches its file is SETTINGS STALE: tend files an automatic replace-cycle request that is served only at an idle stop. The administrator is never cycled automatically; its anchor shows a SETTINGS STALE notice instead. Inbox operator capture defaults to the deployment `[inbox] operators` when `SHANTY_OPERATOR` is unset.

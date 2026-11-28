@@ -2772,7 +2772,8 @@ class AutoCycler:
             if read.depth_k < triage_mod.CYCLE_THRESHOLD_K:
                 del book[agent]
                 if (pending.get(agent, {}).get("auto")
-                        and not pending[agent].get("runtime_update")):
+                        and not pending[agent].get("runtime_update")
+                        and not pending[agent].get("settings_stale")):
                     self._requests.clear(agent)
                     self._log(f"auto-cycle: {agent} is back under the line at "
                               f"{int(read.depth_k)}k; withdrew its auto request")
