@@ -1093,9 +1093,9 @@ class Tmux:
                 # remain typed while an older turn is still working.
                 if observed(screen):
                     return True, screen
-                if _codex_queued(screen, text):
-                    raise PaneSubmissionUnverified(
-                        f'UNVERIFIED: Codex queued input in {pane}; not delivered')
+                # A fresh session can queue startup input before its first
+                # turn begins. A queue is pending evidence: keep watching,
+                # without a key or body resend, until it drains or we time out.
             return False, screen
         for attempt in range(_CODEX_ATTEMPTS):
             seen, screen = watch(_CODEX_POLLS, "")
@@ -1136,6 +1136,9 @@ class Tmux:
                 was_busy = busy
             else:
                 break
+        if _codex_queued(screen, text):
+            raise PaneSubmissionUnverified(
+                f'UNVERIFIED: Codex queued input in {pane}; not delivered')
         raise PaneSubmissionUnverified(
             f"UNVERIFIED: Codex submission in {pane} not observed; "
             f"{'stranded input remains; ' if _codex_owned_input(screen, text) else ''}"

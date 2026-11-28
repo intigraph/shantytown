@@ -146,6 +146,40 @@ def test_observed_queue_with_our_preview_is_not_delivery(monkeypatch):
         panes.send('worker', BODY)
 
 
+def test_fresh_startup_queue_can_drain_into_observed_turn(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [READY] + [startup_queue] * 4 + [BUSY])
+    panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls)] == [BODY, 'Enter']
+
+
+def test_persistent_startup_queue_waits_without_resubmitting(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [READY, startup_queue])
+    monkeypatch.setattr(tmux, '_CODEX_OBSERVE_POLLS', 3)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes.send('worker', BODY)
+    assert calls.count(('sleep', tmux._CODEX_POLL_S)) == 5
+    assert [c[-1] for c in keys(calls)] == [BODY, 'Enter']
+
+
+def test_startup_queue_observation_respects_caller_deadline(monkeypatch):
+    startup_queue = '• Queued follow-up inputs\n  ↳ ' + BODY + '\n' + READY
+    panes, calls = transport(monkeypatch, [startup_queue])
+    clock = [0.0]
+    monkeypatch.setattr(tmux.time, 'monotonic', lambda: clock[0])
+
+    def sleep(seconds):
+        clock[0] += seconds
+        calls.append(('sleep', seconds))
+
+    monkeypatch.setattr(tmux.time, 'sleep', sleep)
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='queued'):
+        panes._verify_codex_submission('worker', BODY, READY, deadline=0.3)
+    assert clock[0] == 0.3
+    assert keys(calls) == []
+
+
 def test_other_queue_message_is_not_our_receipt(monkeypatch):
     panes, _ = transport(monkeypatch, [BUSY, QUEUED.replace(BODY, 'Another message')])
     with pytest.raises(tmux.PaneSubmissionUnverified):
