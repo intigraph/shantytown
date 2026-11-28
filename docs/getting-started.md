@@ -22,7 +22,7 @@ st fleet init
 
 A few questions, each with a default that Enter accepts: the administrator's name, worker names,
 where agents should work, the startup mode, whether the admin may
-[hibernate](cli.md#hibernate), and whether new cards run unattended. Unattended means the agent
+[hibernate](cli-stops.md#hibernate), and whether new cards run unattended. Unattended means the agent
 program's approval prompts and sandbox are bypassed; the default is no. It shows every path it would
 write, waits for a yes, then creates:
 

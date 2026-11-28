@@ -22,6 +22,7 @@ every chapter; this page routes by task.
 | Add a host | [New host](new-host.md), [second host](second-host.md) |
 | Configure accounts, backends and controls | [Configuration](configuration.md), [configuration source](config-source.md) |
 | Every command and exit code | [The CLI](cli.md), [`st prime`](prime.md) |
+| One group of commands in depth | The pages under [The CLI](cli.md#where-each-command-is-described): sessions, dispatch, work items, crews, stops, messages, supervision, tooling and pushes |
 | Choose agent programs and models | [Harnesses](harnesses.md), [local models](local-models.md), [work classes](work-class-routing.md) |
 | Choose roles and reporting lines | [Roles](roles.md), [agent card](agent-card.md) |
 | Reach a crew from a phone | [Phone access](android-crew-sessions.md) |

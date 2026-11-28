@@ -52,7 +52,7 @@ explained in the place named here:
 | `[ephemeral]` | limits on one-job agents | the example file, [Ephemeral agents](ephemeral-agents.md) |
 | `[inbox]` | where durable messages are stored | the example file, [Message graph](message-graph.md) |
 | `[overdue]` | overdue, unlock and scope-change reminders | [Overdue reminders](overdue-reminders.md), [Rescope](rescope.md) |
-| `[quiet_time]` | detectors that hold launches while the host is in use | [The CLI](cli.md#configurable-quiet-time-detectors) |
+| `[quiet_time]` | detectors that hold launches while the host is in use | [The CLI](cli-supervision.md#configurable-quiet-time-detectors) |
 | `[keep_current]` | the fetch deadline `st agent cycle` allows for each work tree | [The CLI](cli.md) |
 | `[cycle_advice]` | keep-or-cycle advice at a handoff | the example file, [Cycle advice](cycle-advice.md) |
 | `[memory]` | crew file-memory sync | [Per-crew file memory](#per-crew-file-memory-default-off) below, [Crew memory](crew-memory.md) |
@@ -173,7 +173,7 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_TASK_DUE_REQUIRED` | `1` requires an explicit `st task --due` before tracker reads, duplicate advice or creation. Invalid policy values refuse. Dates and timezone-qualified instants normalize to UTC; no deadline is invented. | unset (off) |
 | `SHANTY_QUEUE_POLICY` | `enforce` requires ranked Next intake and Now/head dispatch admission on Seeds. `off` preserves legacy deployments; unknown values refuse. Existing unlaned plates require an explicit migration decision before activation. | unset (off) |
 | `SHANTY_QUEUE_REQUESTER` | The declared operator whose explicit "now" quote permits Now promotion. No name is embedded in the library. Absence refuses promotion; unreadable configuration refuses rather than falling back. | unset (UNKNOWN) |
-| `SHANTY_BACKLOG_PICKUP` | `1` enables graph-ranked worker pickup after the current anchor ends. Requires the reviewed `seeds_work_rank_v2` stored query and the matching installed v2 consumer; there is no v1 fallback. Unknown query/revision/admission or active background custody prevents pickup. See [pickup gates](cli.md#graph-ranked-pickup-after-an-anchor-ends). | unset (off) |
+| `SHANTY_BACKLOG_PICKUP` | `1` enables graph-ranked worker pickup after the current anchor ends. Requires the reviewed `seeds_work_rank_v2` stored query and the matching installed v2 consumer; there is no v1 fallback. Unknown query/revision/admission or active background custody prevents pickup. See [pickup gates](cli-dispatch.md#graph-ranked-pickup-after-an-anchor-ends). | unset (off) |
 | `SHANTY_BOARD_METRICS_QUERY` | Named query used by the fleet-owner ranking advisory for reconciled P0 created/closed counts across seven UTC calendar dates. Failed or incomplete coverage is UNKNOWN. | `seeds_board_metrics_v1` |
 | `SHANTY_ONTO_CREW_CLASS` | the class local-name your graph uses for a crew member, resolved under `SHANTY_ONTO_NS`. Point st at your own vocabulary instead of adopting ours. | `CrewMember` |
 | `SHANTY_ONTO_REPORTS_PRED` | the predicate local-name for the supervisor edge. | `reports_to` |
