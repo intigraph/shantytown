@@ -2035,6 +2035,7 @@ def test_forgejo_merge_routes_to_native_landing_before_github(
     assert rc == cli.REFUSED
     err = capsys.readouterr().err
     assert "pr-risk merge --forge forgejo --repo stiwi/example --pr 766" in err
+    assert "--expected-head " + "a" * 40 in err
     assert "complete-green" in err and "exact-main CI" in err
     assert "merge read-back" in err
     assert "crew reviewer" not in err

@@ -2103,6 +2103,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="run BY the ephemeral agent: post its verdict and end")
     sp_mode.add_argument("--reap", action="store_true",
                          help="end dead or expired jobs (st fleet tend runs this)")
+    sp_mode.add_argument("--publish", action="store_true",
+                         help="run BY an attended task job after tests: publish --head to its existing PR head branch")
     sp_mode.add_argument("--merge", action="store_true",
                          help="run BY a merge job: the guarded merge of its own PR "
                               "(lane, pinned head, green CI, non-author approval)")
@@ -4281,7 +4283,7 @@ def _spawn_forge_refusal(req) -> str:
     from .workspace import git_origin
     checkout = _spawn_checkout({"checkout": req.checkout, "repo": req.repo})
     origin = git_origin(checkout) if checkout is not None and checkout.exists() else None
-    return eph.forge_refusal(req.job, req.repo, origin, req.pr)
+    return eph.forge_refusal(req.job, req.repo, origin, req.pr, req.head)
 
 
 def _spawn_checkout_refusal(req) -> str:
@@ -4626,6 +4628,19 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             print(f"  reported {rec['result']['verdict']} to {rec['administrator']} and "
                   f"{rec['item']}; this session is being torn down.")
             return OK if not problems else CANNOT_TELL
+        if getattr(a, "publish", False):
+            from . import task_publication
+            me = inside
+            claimed = os.environ.get("SHANTY_AGENT")
+            if (not me or (policy.require_verified_identity and actor != me)
+                    or claimed and claimed != me):
+                raise eph.Refused("--publish requires this task job's own verified identity")
+            rec = eph.read(a.root, me)
+            if a.dry_run:
+                raise eph.Refused("--publish has no dry-run mutation; inspect the PR head read-only")
+            result = task_publication.publish(rec, a.head, gh=_gh_json)
+            print(json.dumps(result))
+            return OK
         if a.merge:
             me = inside
             claimed = os.environ.get("SHANTY_AGENT")
