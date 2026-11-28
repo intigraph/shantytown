@@ -85,6 +85,17 @@ def test_an_event_spawns_once_and_never_again(store, tmp_path, capsys):
     assert "already settled 1" in capsys.readouterr().out
 
 
+def test_drain_uses_repo_harness_override(store, tmp_path):
+    root, _panes, launched = store
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text() + '[ephemeral.harness_by_job]\ntask = "codex"\n'
+                    '[ephemeral.harness_by_repo]\n"o/n" = "claude"\n')
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1
+    assert eph.records(root)[0]["harness"] == "claude"
+
+
 def test_over_cap_the_event_queues_a_ticket_and_is_settled(store, tmp_path, monkeypatch, capsys):
     root, _panes, launched = store                       # max_agents = 1
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)

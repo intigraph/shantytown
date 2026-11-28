@@ -321,6 +321,9 @@ def foreign_forge_line(job: str, repo: str, forge: str) -> str:
 def harness_for(req: Request, policy) -> str:
     if req.harness:
         return req.harness
+    by_repo = getattr(policy, "harness_by_repo", {}) or {}
+    if req.repo in by_repo:
+        return by_repo[req.repo]
     return (getattr(policy, "harness_by_job", {}) or {}).get(
         req.job, DEFAULT_HARNESS[req.job])
 
