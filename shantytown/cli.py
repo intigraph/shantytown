@@ -5116,7 +5116,7 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "launch-failed": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -5163,6 +5163,16 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
                 continue
+            stale = _drain_event_pr_stale(ev)
+            if stale:
+                # Re-read before every spawn (aegis-qi22): the emitter's last
+                # line is not the PR's state, and bobbin#259 had merged while
+                # its merge event kept spawning jobs.
+                if not a.dry_run:
+                    pe.settle(a.root, ev, "superseded", time.time(), stale)
+                counts["superseded"] += 1
+                print(f"  superseded {label}: {stale}; no spawn")
+                continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -5170,6 +5180,7 @@ def _spawn_drain_events(a) -> int:
                 continue
             if eid not in tried:
                 pe.settle(a.root, ev, "spawning", time.time())
+            before = {r.get("name") for r in eph.records(a.root)}
             ns, out, detail = None, CANNOT_TELL, ""
             try:
                 ns = _parse_args(["--root", str(a.root), "agent", "spawn", *spawn])
@@ -5186,13 +5197,71 @@ def _spawn_drain_events(a) -> int:
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
                 rc = CANNOT_TELL
-                _drain_event_pending(a, pe, ev, label, refused, counts,
-                                     detail or "spawn refused (reason above)")
+                why = detail or "spawn refused (reason above)"
+                made = pe.new_jobs(ev, before, eph.records(a.root))
+                if made and _drain_event_launch_failed(a, pe, ev, label, made, why, counts):
+                    continue
+                _drain_event_pending(a, pe, ev, label, refused, counts, why)
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
-          f"pending {counts['pending']}, expired {counts['expired']}, already settled "
+          f"pending {counts['pending']}, expired {counts['expired']}, "
+          f"launch-failed {counts['launch-failed']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
+
+
+def _drain_event_pr_stale(ev) -> str:
+    """Why the PR no longer wants this event's step ("pr-merged", "pr-closed",
+    "head moved to ..."), or "" while it does. A forge that cannot be read
+    keeps the event's old behaviour (offered, and the job re-verifies the PR
+    itself), loudly: an outage must not settle live events, and the launch
+    cap still bounds what it can cost."""
+    from . import pr_events as pe
+    try:
+        info = _gh_json(f"repos/{ev['repo']}/pulls/{ev['pr']}") or {}
+    except (RuntimeError, ValueError, OSError) as e:
+        print(f"  note: could not re-read {ev['repo']}#{ev['pr']} ({e}); "
+              "offering the event as recorded", file=sys.stderr)
+        return ""
+    if not isinstance(info, dict):
+        return ""
+    return pe.pr_state(ev, info) or ""
+
+
+def _drain_event_launch_failed(a, pe, ev, label, made, why, counts) -> bool:
+    """Count one launch failure (a spawn that made `made` and returned non-OK)
+    against the event. At pe.MAX_LAUNCH_FAILURES the event is settled
+    "launch-failed" and raised once to the administrator; True then, so the
+    caller does not also leave it pending. Before aegis-qi22 a failed launch
+    was just "pending", and the next drain launched the same broken job again."""
+    now = time.time()
+    pe.settle(a.root, ev, "launch-failure", now, f"{', '.join(made)}: {why}")
+    n = pe.launch_failures(a.root).get(ev["event_id"], 0)
+    if n < pe.MAX_LAUNCH_FAILURES:
+        print(f"  launch failed {label}: {', '.join(made)} ({n}/{pe.MAX_LAUNCH_FAILURES})",
+              file=sys.stderr)
+        return False
+    text = (f"{label} on {ev['item']}: {n} launches failed (last {made[-1]}: {why}); "
+            "settled launch-failed and not offered again. A new head re-arms the step.")
+    pe.settle(a.root, ev, "launch-failed", now, text)
+    counts["launch-failed"] += 1
+    print(f"  launch-failed {label}: {text}", file=sys.stderr)
+    from .events import FilesEvents
+    cfg, _err = config.load_or_default(Path(a.root))
+    admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
+    if not admin:
+        print("  ⚠ no administrator card on this host; launch-failed NOT raised",
+              file=sys.stderr)
+        return True
+    try:
+        # The key makes the raise idempotent: once per event, ever.
+        FilesEvents(Path(a.root) / "events").persist(
+            to=admin, frm="pr-events", reason="pr-event-launch-failed", rose=True,
+            item=ev["item"], detail=text[:600], key=f"pr-events:{ev['event_id']}:launch-failed")
+    except Exception as e:  # noqa: BLE001 -- the settle stands; say the raise did not
+        print(f"  ⚠ launch-failed NOT raised to {admin} ({type(e).__name__}: {e})",
+              file=sys.stderr)
+    return True
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
