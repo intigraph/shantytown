@@ -2814,3 +2814,144 @@ def test_an_enqueued_result_is_a_valid_report_and_holds_the_lane(store):
     rec["ended_at"] = NOW
     eph.write(root, rec)
     assert "spacing merges" in eph.lane_refusal(root, "o/n", 10, NOW + 60)
+
+# --- aegis-bmu3: one task job per item unless --despite-live says why --------
+# aegis-8dda.12 ran eph-task-5d688d and eph-task-ed15d8 together, and aegis-xjh
+# ran f0cb18 and c73519, because two leads filled from the ready list at once.
+
+def _two_slots(root):
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 2\nunattended = false\nrequire_verified_identity = true\n")
+
+
+def _task(root, item, *extra):
+    return _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", item, *extra)
+
+
+def test_a_second_task_spawn_on_a_live_item_refuses_and_names_the_job(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    _two_slots(root)
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    (first,) = eph.live(root)
+    capsys.readouterr()
+    # A free slot is there: only the live job on it-1 refuses this spawn.
+    assert _task(root, "it-1") == cli.REFUSED
+    err = capsys.readouterr().err
+    assert first["name"] in err and "--despite-live" in err
+    assert len(launched) == 1 and eph.tickets(root) == []
+    # Another item takes the free slot; the rule is per item.
+    assert _task(root, "it-2") == cli.OK and len(launched) == 2
+    # Once the job ends, the item takes a task job again.
+    assert _st(root, "--stop", first["name"]) == cli.OK
+    capsys.readouterr()
+    assert _task(root, "it-1") == cli.OK and len(launched) == 3
+
+
+def test_an_over_cap_duplicate_queues_no_ticket_and_a_queued_ticket_holds_the_item(
+        store, monkeypatch, capsys):
+    root, _panes, launched = store
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    (first,) = eph.live(root)
+    capsys.readouterr()
+    assert _task(root, "it-1") == cli.REFUSED          # over cap, but not queued
+    assert first["name"] in capsys.readouterr().err and eph.tickets(root) == []
+    assert _task(root, "it-2") == cli.OK                # queued: holds it-2 now
+    (t,) = eph.tickets(root)
+    capsys.readouterr()
+    assert _task(root, "it-2") == cli.REFUSED
+    assert t["id"] in capsys.readouterr().err and len(eph.tickets(root)) == 1
+
+
+def test_the_drain_does_not_launch_a_ticket_whose_item_gained_a_live_task_job(
+        store, monkeypatch, capsys):
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    assert _task(root, "it-2") == cli.OK
+    (t,) = eph.tickets(root)
+    # A ticket queued before this rule (or by hand) for an item already live.
+    eph._put(root, dict(t, item="it-1"))
+    _two_slots(root)
+    capsys.readouterr()
+    _st(root, "--drain")
+    assert len(launched) == 1 and eph.tickets(root) == []
+    assert "already has a task job" in capsys.readouterr().err
+    # Its own ticket does not hold the item against the drain that launches it.
+    assert _task(root, "it-3") == cli.OK and len(launched) == 2
+    assert _task(root, "it-4") == cli.OK
+    (t4,) = eph.tickets(root)
+    _st(root, "--stop", eph.live(root)[0]["name"])
+    _st(root, "--drain")
+    assert any(r.get("ticket") == t4["id"] for r in eph.live(root))
+
+
+def test_despite_live_launches_and_records_its_reason(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    _two_slots(root)
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    (first,) = eph.live(root)
+    assert _task(root, "it-1", "--despite-live", "  ") == cli.REFUSED
+    assert "nonempty REASON" in capsys.readouterr().err
+    assert _task(root, "it-1", "--despite-live", "docs slice, separate files") == cli.OK
+    assert len(launched) == 2
+    (second,) = [r for r in eph.live(root) if r["name"] != first["name"]]
+    assert second["despite_live"]["reason"] == "docs slice, separate files"
+    assert second["despite_live"]["by"] == "boss"
+    assert any(first["name"] in h for h in second["despite_live"]["held"])
+
+
+def test_despite_live_rides_a_queued_ticket_into_the_drain(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    assert _task(root, "it-1", "--despite-live", "parallel slice") == cli.OK
+    (t,) = eph.tickets(root)
+    assert t["despite_live"] == "parallel slice"
+    _two_slots(root)
+    assert _st(root, "--drain") == cli.OK
+    assert len(launched) == 2 and eph.tickets(root) == []
+    assert any((r.get("despite_live") or {}).get("reason") == "parallel slice"
+               for r in eph.live(root))
+
+
+@pytest.mark.parametrize("job", ["review", "triage"])
+def test_despite_live_is_for_task_jobs_only(store, capsys, job):
+    root, _panes, _launched = store
+    assert _st(root, "--ephemeral", "--job", job, "--item", "it-1", "--harness", "claude",
+               "--despite-live", "why", "-n") == cli.REFUSED
+    assert "task jobs only" in capsys.readouterr().err
+
+
+def test_a_refused_retry_leaves_the_original_running(store, monkeypatch, capsys):
+    # eph-review-093a9c on #770: --retry ended the original BEFORE the holder
+    # check, so a retry refused for a sibling job had already cost its lane.
+    root, _panes, launched = store
+    (root / "shantytown.toml").write_text(
+        "[ephemeral]\nmax_agents = 3\nunattended = false\nrequire_verified_identity = true\n")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _task(root, "it-1") == cli.OK
+    (a_job,) = eph.live(root)
+    assert _task(root, "it-1", "--despite-live", "second slice") == cli.OK
+    (b_job,) = [r for r in eph.live(root) if r["name"] != a_job["name"]]
+    capsys.readouterr()
+    # Retrying A while B is live refuses, names B, and A is still live.
+    assert _st(root, "--retry", a_job["name"]) == cli.REFUSED
+    err = capsys.readouterr().err
+    assert b_job["name"] in err and "left running" in err
+    assert eph.read(root, a_job["name"])["state"] in (eph.LIVE, eph.LAUNCHING)
+    # A blank override is refused before the supersede too.
+    assert _st(root, "--retry", a_job["name"], "--despite-live", "  ") == cli.REFUSED
+    assert "nonempty REASON" in capsys.readouterr().err
+    assert eph.read(root, a_job["name"])["state"] in (eph.LIVE, eph.LAUNCHING)
+    assert len(launched) == 2
+    # Retrying B, the recorded slice, carries its reason and launches.
+    assert _st(root, "--retry", b_job["name"]) == cli.OK
+    (retried,) = [r for r in eph.records(root) if r.get("retry_of") == b_job["name"]]
+    assert retried["despite_live"]["reason"] == "second slice"
+    assert a_job["name"] in " ".join(retried["despite_live"]["held"])
+    assert len(launched) == 3
