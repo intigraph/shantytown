@@ -993,6 +993,7 @@ def _in_use_args(root):
 def test_hooks_in_use_evidence_from_running_cards_and_session_records(root, tmp_path, monkeypatch):
     from shantytown import cli
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     a = _in_use_args(root)
     # Nothing at all: no harness is in use.
     assert cli._hooks_in_use(a, [], [], now=10_000) == {}
@@ -1009,3 +1010,50 @@ def test_hooks_in_use_evidence_from_running_cards_and_session_records(root, tmp_
     assert "codex" in cli._hooks_in_use(a, [], [], now=5_100)
     # An unreadable crew registry is cannot-tell, never "not in use".
     assert cli._hooks_in_use(a, None, [], now=10_000) is None
+
+
+def test_a_fresh_rollout_only_in_the_XDG_codex_store_keeps_codex_in_use(root, tmp_path, monkeypatch):
+    """#810 review: launch redirects codex runtime sessions to
+    $XDG_STATE_HOME/shantytown/codex/<name>/sessions (cost.py). A host that ran a
+    codex job in the window, with nothing live now, is in use, not not-in-use."""
+    import os
+    from shantytown import cli
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    a = _in_use_args(root)
+    assert cli._hooks_in_use(a, [], [], now=10_000) == {}
+    rollout = (tmp_path / "state" / "shantytown" / "codex" / "eph-task-1" / "sessions"
+               / "2026" / "11" / "27" / "rollout-x.jsonl")
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text("{}\n")
+    os.utime(rollout, (9_000, 9_000))
+    got = cli._hooks_in_use(a, [], [], now=10_000)
+    assert list(got) == ["codex"] and str(rollout) in got["codex"][0]
+    # And it reaches the verdict: codex items stay not-checked, never not-in-use.
+    _codex_firing_setup(root)
+    res = hb.check(root)
+    hb.apply_live(res, [])
+    hb.apply_in_use(res, got)
+    assert _layers(res, "codex") == {(hb.NOT_CHECKED, hb.NOT_CHECKED)}
+    # Outside the window it no longer counts.
+    os.utime(rollout, (1_000, 1_000))
+    assert cli._hooks_in_use(a, [], [], now=1_000 + cli.HOOKS_USE_WINDOW_S + 1) == {}
+
+
+def test_a_hostless_card_is_not_use_on_a_named_host(root, tmp_path, monkeypatch):
+    """#810 review: host=None counted as local made one hostless codex card mark
+    codex in use on every host. On a named host only a card pinned there counts;
+    a deployment that names no host keeps counting hostless cards."""
+    from types import SimpleNamespace
+    from shantytown import cli
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr("shantytown.harness.for_card",
+                        lambda c, root=None: SimpleNamespace(name=c.harness))
+    a = _in_use_args(root)
+    hostless = SimpleNamespace(name="carol", host=None, harness="codex")
+    pinned = SimpleNamespace(name="dana", host="mac", harness="codex")
+    elsewhere = SimpleNamespace(name="erin", host="vati", harness="codex")
+    assert cli._hooks_in_use(a, [hostless, elsewhere], [], now=10_000, local="mac") == {}
+    assert cli._hooks_in_use(a, [pinned], [], now=10_000, local="mac") == {"codex": ["card: dana"]}
+    assert cli._hooks_in_use(a, [hostless], [], now=10_000, local=None) == {"codex": ["card: carol"]}

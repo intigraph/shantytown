@@ -1045,14 +1045,17 @@ retains schema `st.hook-check/1` and includes `store_error: "no store found"`.
 A real, existing store with an empty registry can still pass with exit 0.
 
 A harness with no evidence of use on the host (no running process on one of its
-settings files, no local card declaring it, no session record in the last 24h:
-claude transcripts, or rollouts under st's codex homes) has its `live` and
+settings files, no card pinned to this host declaring it, no session record in
+the last 24h: claude transcripts, or codex rollouts under st's role homes or the
+`$XDG_STATE_HOME/shantytown/codex/<name>/sessions` store) has its `live` and
 `firing` layers reported as `not-in-use` instead of `not-checked` (aegis-9uq.2).
 That state is never counted as ok and never as cannot-tell, so it holds neither
 exit 1 nor exit 2; its `configured` layer is still checked. A harness that does
 run there keeps its verdicts: a live hook with old evidence and unreadable
 activity stays `unknown` and exit 2. Unreadable crew or session stores change
-nothing, so an unreadable host is never reported as "not in use".
+nothing, so an unreadable host is never reported as "not in use". A card with
+no `host` counts as use only when the deployment names no host; on a named host
+it would otherwise mark its harness in use on every host.
 
 Codex and administrator launches also deliver the same anchor render through the
 verified startup input, together with any unread mail in one message. Any other

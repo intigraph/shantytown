@@ -4,7 +4,7 @@
 
 ### Bug Fixes
 
-* `st ops hooks check` reports a harness with no evidence of use on the host (no running process, card or recent session record) as `not-in-use` on the live and firing layers, distinct from `not-checked`, never ok and never holding exit 2 (aegis-9uq.2).
+* `st ops hooks check` reports a harness with no evidence of use on the host (no running process, card pinned to the host, or recent session record, including the XDG codex rollout store) as `not-in-use` on the live and firing layers, distinct from `not-checked`, never ok and never holding exit 2 (aegis-9uq.2).
 * `st crew --count` reuses a successful answer for 5 minutes (`SHANTY_CREW_COUNT_TTL`, 0 disables). Each fresh answer is a crew-wide plate read, and its only consumer is a status bar (aegis-t14).
 * Separate the CLI published-byte hash from its strictly witnessed reviewed summary so disjoint CLI changes do not require registry conflict repairs.
 

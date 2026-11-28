@@ -1420,33 +1420,56 @@ def _harness_of_settings(path: str) -> str | None:
     return kind if kind in ("codex", "opencode", "agy") else None
 
 
-def _hooks_in_use(a, cards, running, now: float | None = None) -> dict[str, list[str]] | None:
+_UNSET = object()
+
+
+def _hooks_in_use(a, cards, running, now: float | None = None,
+                  local=_UNSET) -> dict[str, list[str]] | None:
     """{harness: [evidence]} that each harness is used on THIS host (aegis-9uq.2).
 
-    Evidence: a running process launched on one of its settings files, a local
-    card that declares it, or a session record from the window (claude
-    transcripts, rollouts under st's codex homes). Erring toward "in use" is
-    the safe direction: it only keeps an item not-checked. None when the
-    session stores cannot be read, so the caller changes nothing."""
+    Evidence: a running process launched on one of its settings files, a card
+    pinned to this host that declares it, or a session record from the window
+    (claude transcripts; codex rollouts under st's role homes AND the durable
+    $XDG_STATE_HOME/shantytown/codex/<name>/sessions store that launch redirects
+    CODEX_HOME runtime sessions into, cost.py). Missing the XDG store reported a
+    host that ran codex jobs an hour ago as "not in use" (#810 review).
+
+    A HOSTLESS card counts only when the deployment names no host. In a
+    multi-host deployment `host = None` means "no host declared", not "runs
+    everywhere": counting it made one hostless codex card mark codex in use on
+    every host, so the Mac that runs no codex could never leave not-checked.
+    Real use there still shows up as a process or a session record.
+
+    Erring toward "in use" is otherwise the safe direction: it only keeps an
+    item not-checked. None when the crew or the session stores cannot be read,
+    so the caller changes nothing."""
+    import os
     import time
     from .harness import for_card
     if cards is None:
         return None
     now = time.time() if now is None else now
+    if local is _UNSET:
+        from .deployment import local_host as _lh
+        local = _lh(a.root)
     out: dict[str, list[str]] = {}
     for r in running:
         h = _harness_of_settings(r.settings_file)
         if h:
             out.setdefault(h, []).append(f"running: {r.agent}")
     for c in cards:
+        if local is not None and c.host != local:
+            continue
         try:
             h = for_card(c, root=a.root).name
         except Exception:
             return None
         out.setdefault(h, []).append(f"card: {c.name}")
     cutoff = now - HOOKS_USE_WINDOW_S
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
     stores = [("claude", Path.home() / ".claude" / "projects", "*/*.jsonl"),
-              ("codex", Path(a.root) / "settings" / "codex", "*/sessions/**/*.jsonl")]
+              ("codex", Path(a.root) / "settings" / "codex", "*/sessions/**/*.jsonl"),
+              ("codex", state / "shantytown" / "codex", "*/sessions/*/*/*/*.jsonl")]
     try:
         for h, base, pattern in stores:
             if h in out or not base.is_dir():
