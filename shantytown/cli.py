@@ -9498,13 +9498,17 @@ def _cmd_anchor(a) -> int:
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
     try:
-        p, _anchor_tracker, registry = _resolve_anchor(a, me)
+        p, _anchor_tracker, registry = _resolve_anchor(a, me, require_complete=True)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    except (Unreachable, CouldNotLook, PartialAnswer) as e:
-        # NOT success, NOT failure. "I could not look" must never say "fine".
-        print(f"  could not tell: {e}", file=sys.stderr)
+    except (Unreachable, CouldNotLook, PartialAnswer, RuntimeError) as e:
+        # An incomplete plate is not an empty one (including a shed 429 read).
+        # Never publish it as empty, even when a display adapter degrades loudly.
+        print(f"  UNKNOWN: could not tell: {e}", file=sys.stderr)
+        if getattr(a, "json", False):
+            print(json.dumps({"schema": "st.task-context/1", "agent": me,
+                              "harness": None, "item": None, "availability": "unknown", "error": str(e)}))
         return CANNOT_TELL
     # PUBLISH the resolved plate for non-Python consumers (aegis-qdjof). This
     # sits in the CLI and NOT in anchor(), whose docstring makes "reads only" a
