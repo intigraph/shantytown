@@ -1422,3 +1422,42 @@ def test_overdue_has_service_before_slow_cycle_and_recovery(tmp_path, monkeypatc
     assert counts == [1, 2, 3]
     assert "cycle" in events and "recovery" in events
     assert requests.pending() == before  # failed cycle custody is never dropped
+
+
+def test_census_advances_every_pass_despite_rotation_and_spent_budget(tmp_path, monkeypatch):
+    from shantytown import stranded_adapter, duty_adapter, inbox_recovery
+
+    monkeypatch.setenv("SHANTY_STRANDED_WORK", "observe")
+    crew = tmp_path / "crew"
+    crew.mkdir()
+    (crew / "w.json").write_text(json.dumps({"role": "worker", "pane": "p-w"}))
+    monkeypatch.setattr(cli, "Tmux", lambda *a, **k: _Panes())
+    monkeypatch.setattr(cli, "_owned_work_publish", lambda *a: None)
+    clock = {"t": 0.0}
+    monkeypatch.setattr(cli.time, "monotonic", lambda: clock["t"])
+    def slow(*a, **k):
+        clock["t"] += 130
+        return []
+    monkeypatch.setattr(inbox_recovery, "sweep", slow)
+    observed = []
+    def census(root, registry, tracker, panes, inbox):
+        observed.append(clock["t"] + 1)
+        # Use the real missing-inventory fail-closed report writer.
+        duty_adapter.sweep(root, {}, panes, inbox, tracker, "test", registry,
+                           now=observed[-1], release=False)
+        return []
+    monkeypatch.setattr(stranded_adapter, "sweep", census)
+    rotation = tmp_path / "notify" / "tend-sweep-rotation.json"
+    rotation.parent.mkdir()
+    rotation.write_text(json.dumps({"version": 1, "next": "cycle-requests"}))
+    args = type("A", (), dict(root=tmp_path, dry_run=False, backend="files",
+                             repo=None, registry="files"))()
+    timestamps = []
+    for _ in range(3):
+        clock["t"] += 900  # elapsed time between scheduled passes
+        cli._tend_once(args)
+        report = json.loads((tmp_path / "duties" / "report.json").read_text())
+        timestamps.append(report["checked_at"])
+        assert report["complete"] is False
+    assert len(observed) == 3
+    assert timestamps == sorted(set(timestamps))

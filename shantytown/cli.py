@@ -17092,9 +17092,10 @@ def _tend_once(a, quiet: bool = False) -> int:
         from .sweep_rotation import SweepRotation
         sweep_rotation = SweepRotation(Path(a.root), dry_run=a.dry_run, log=_log)
 
-        def _sweep(label, fn):
+        def _sweep(label, fn, *, must_run=False):
             admission = sweep_rotation.admission(
-                label, within_budget=time.monotonic() <= sweep_deadline)
+                label, within_budget=time.monotonic() <= sweep_deadline,
+                must_run=must_run)
             if admission == "rotation":
                 return []
             if admission == "budget":
@@ -17126,11 +17127,27 @@ def _tend_once(a, quiet: bool = False) -> int:
             _log(f"· {owner_down} unreachable; running fleet-wide sweeps on {cfg.host_name}")
         skipped_fleet: list[str] = []
 
-        def _fleet_sweep(label, fn):
+        def _fleet_sweep(label, fn, *, must_run=False):
             if not fleet_owner:
                 skipped_fleet.append(label)
                 return []
-            return _sweep(label, fn)
+            return _sweep(label, fn, must_run=must_run)
+
+        # aegis-9emo: census freshness cannot depend on rotation or slow cycles.
+        # Keep its existing bounded inventories, repair-action cap and backend
+        # read bounds; never interrupt a mutation. Charge best-effort work its
+        # own budget only after this mandatory fleet observation completes.
+        def _stranded_owner_work():
+            from .stranded_adapter import mode, sweep
+            if mode() == 'off':
+                return []
+            findings = sweep(a.root, reg, _tracker(a), panes, _inbox(a))
+            for identity, finding in findings:
+                _log(f'stranded-owner {identity}: {finding}')
+            _owned_work_publish(a)
+            return []
+        _fleet_sweep('stranded-owner-work', _stranded_owner_work, must_run=True)
+        sweep_deadline = time.monotonic() + _TEND_SWEEP_BUDGET_S
 
         # crs7: reserve the first best-effort slot for the shared notifier.
         # Rotation alone eventually reached it, but a 98.6s cycle plus 39.4s
@@ -17200,16 +17217,6 @@ def _tend_once(a, quiet: bool = False) -> int:
 
         _sweep("safeguard-report", lambda: _safeguard_reports(a, agents, rep, panes))
         _fleet_sweep("stopped-owner", _stopped_owner_deadlines)
-        def _stranded_owner_work():
-            from .stranded_adapter import mode, sweep
-            if mode() == 'off':
-                return []
-            findings = sweep(a.root, reg, _tracker(a), panes, _inbox(a))
-            for identity, finding in findings:
-                _log(f'stranded-owner {identity}: {finding}')
-            _owned_work_publish(a)
-            return []
-        _fleet_sweep('stranded-owner-work', _stranded_owner_work)
         _fleet_sweep("priority-advisory", _priority_report)
         def _role_ranking_report():
             from . import ranking_check

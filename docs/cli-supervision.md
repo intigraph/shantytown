@@ -483,3 +483,10 @@ the utilization line and `st_governor_pace_bound` read the envelope's ratio form
 at the current elapsed, and its advisory is unavailable when that cannot be
 stated. A row declaring both `ratio` and `curve` is refused. Drains are
 unchanged.
+
+The armed stranded-owner duty and item census runs on every fleet-owner pass,
+before best-effort sweeps and outside their rotation. Its existing inventory,
+repair-action and backend-read bounds apply independently; its time does not
+consume the following 120-second best-effort admission budget. A slow cycle
+cannot skip this observation. Census failures remain incomplete/unknown, and
+no in-flight mutation is interrupted to enforce a wall-clock deadline.

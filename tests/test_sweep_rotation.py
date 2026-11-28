@@ -104,3 +104,23 @@ def test_overdue_does_not_bypass_the_time_budget(tmp_path):
     rotation = SweepRotation(tmp_path)
     assert rotation.admission("overdue-sweep", within_budget=False) == "budget"
     assert rotation.started == []
+
+
+def test_mandatory_census_ignores_budget_and_preserves_other_cursor(tmp_path):
+    rotation = SweepRotation(tmp_path)
+    rotation.cursor = "late"
+    rotation.waiting = True
+    assert rotation.admission("stranded-owner-work", within_budget=False,
+                              must_run=True) is None
+    assert rotation.admission("early", within_budget=True) == "rotation"
+    assert rotation.admission("late", within_budget=True) is None
+    assert rotation.started == ["stranded-owner-work", "late"]
+
+
+def test_saved_census_cursor_is_consumed_when_it_becomes_mandatory(tmp_path):
+    rotation = SweepRotation(tmp_path)
+    rotation.cursor = "stranded-owner-work"
+    rotation.waiting = True
+    assert rotation.admission("stranded-owner-work", within_budget=False,
+                              must_run=True) is None
+    assert rotation.admission("next", within_budget=True) is None
