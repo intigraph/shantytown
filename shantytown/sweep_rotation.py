@@ -40,8 +40,15 @@ class SweepRotation:
         # Child cycle work cannot be reached unless its parent reads requests.
         return "cycle-requests" if label.startswith("cycle:") else label
 
-    def admission(self, label: str, *, within_budget: bool):
+    def admission(self, label: str, *, within_budget: bool, must_run=False):
         """None admits work; rotation/budget means UNKNOWN with no invocation."""
+        if must_run:
+            # Consume a cursor saved before this sweep became mandatory, while
+            # preserving every other best-effort cursor across the census.
+            if label == self.cursor:
+                self.waiting = False
+            self.started.append(label)
+            return None
         if self.waiting:
             if label == self.cursor:
                 self.waiting = False
