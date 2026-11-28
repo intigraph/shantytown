@@ -463,6 +463,7 @@ class Deferred:
     #: `defer()`. A deferral with no condition is invisible to the sweeper AND
     #: to feeders at once, which is the aegis-bqcjws defect.
     condition: str = ""
+    dependency: str = ""
 
 
 @dataclass
@@ -1070,6 +1071,13 @@ class Dispatcher:
             raise DeferRefused("existing notes have multiple resume markers; name one new condition or pass --until")
         active = (Condition("date", until) if until and (not written or marker.kind == "date")
                   else marker if marker else Condition("date", date) if date else None)
+        from .sd import SdTracker
+        native_bead = kind == "bead" and isinstance(self.tracker, SdTracker)
+        if native_bead and (active is None or active.kind != "closed"):
+            raise DeferRefused(
+                "Seeds bead deferral requires resume_when: closed:<blocker-id>; "
+                f"a date is not a dependency. Use sd dep add {item_id} <blocker-id> "
+                "--done-when closed")
         if active is None or not active.testable() or (
                 active.kind == "date" and parse_stamp(active.arg) is None):
             raise DeferRefused("resume_when must name a testable closed:<id>, date:<ISO date>, event:<binding>, release:<owner>/<repo>@<tag> installed:<tool><op><version> or installed:quipu@<full40hexSHA> / cold-launch:<agent>@<UTC>")
@@ -1164,7 +1172,9 @@ class Dispatcher:
 
         result = Deferred(item_id, kind, label, reason, was_status=item.status,
                           condition=condition)
-        if not missing(item, final=True):
+        if native_bead:
+            result.dependency = active.arg
+        if not native_bead and not missing(item, final=True):
             result.noop = True
             return result
         from datetime import datetime, timezone
@@ -1212,6 +1222,15 @@ class Dispatcher:
                     raise ValueError("priority inheritance readback failed")
             except Exception as exc:
                 raise DeferUnconfirmed(f"{gate_target.id}: inheritance unconfirmed; no defer or retry: {exc}") from exc
+        if native_bead:
+            try:
+                self.tracker.defer_dependency(item_id, active.arg, reason)
+            except Exception as exc:
+                raise DeferUnconfirmed(
+                    f"{item_id}: native dependency deferral unconfirmed ({exc}); "
+                    "edge or update may have landed. No automatic retry.") from exc
+            result.track_attempts = 1
+            return result
         fields = {"defer_reason": reason}
         if write_until:
             fields["defer_until"] = write_until

@@ -1952,7 +1952,8 @@ def build_parser() -> argparse.ArgumentParser:
     df.add_argument("item")
     df.add_argument("kind", choices=tuple(BLOCKER_KIND_LABELS),
                     help="dependency, human, access and external kinds are blockers; parked means "
-                         "deliberately set aside with no blocker")
+                         "deliberately set aside with no blocker. On Seeds, bead requires "
+                         "resume_when: closed:<blocker-id> and creates a native dependency")
     reason = df.add_mutually_exclusive_group(required=True)
     reason.add_argument("--reason", help="short reason; prefer --reason-file for prose")
     reason.add_argument("--reason-file", type=Path,
@@ -9741,6 +9742,11 @@ def _cmd_defer(a) -> int:
         return CANNOT_TELL
     if "gate_scope_flag:" in r.reason:
         print("  ⚠ gate scope flagged for Sattler on the next natural tend pass.", file=sys.stderr)
+    if r.dependency:
+        verb = "would record" if a.dry_run else "recorded and verified"
+        print(f"  {verb} dependency {a.item} waits for {r.dependency} to close; "
+              "item returns to open with no date deferral or blocked label.")
+        return OK
     if r.noop:
         print(f"  {a.item} is already deferred as {r.label} — nothing to write.")
         return OK
