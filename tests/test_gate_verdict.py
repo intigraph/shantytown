@@ -288,8 +288,13 @@ class _R:
 
 
 def _merge_run(ran):
+    """A forge whose PR is OPEN until `gh pr merge` runs, then MERGED: the
+    guarded merge reads the state first (aegis-1jtb) and must not mistake a
+    fixture for an already-landed PR."""
     import json as _json
-    node = {"state": "MERGED", "merged": True, "mergeCommit": {"oid": "c" * 40}}
+    opened = {"state": "OPEN", "merged": False, "mergedAt": None, "mergeCommit": None,
+              "isInMergeQueue": False, "mergeQueueEntry": None}
+    merged = {"state": "MERGED", "merged": True, "mergeCommit": {"oid": "c" * 40}}
 
     class _Done(_R):
         def __init__(self, stdout=""):
@@ -298,6 +303,7 @@ def _merge_run(ran):
     def run(argv, **_k):
         ran.append(argv)
         if argv[:3] == ["gh", "api", "graphql"]:
+            node = merged if any(a[:3] == ["gh", "pr", "merge"] for a in ran) else opened
             return _Done(_json.dumps({"data": {"repository": {"pullRequest": node}}}))
         return _Done()
     return run
@@ -317,8 +323,10 @@ def test_guarded_merge_merges_on_a_signed_verdict_with_no_github_review(root, q)
     a = _args(root, "--merge", "--head", HEAD)
     assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, quipu=q,
                             run=_merge_run(ran)) == cli.OK
-    assert ran[0] == ["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
-                      "--match-head-commit", HEAD]
+    merges = [argv for argv in ran if argv[:3] == ["gh", "pr", "merge"]]
+    assert merges == [["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
+                       "--match-head-commit", HEAD]]
+    assert ran[0][:3] == ["gh", "api", "graphql"] and ran[-1][:3] == ["gh", "api", "graphql"]
 
 
 def test_guarded_merge_refuses_a_forged_unsigned_verdict(root, q):
