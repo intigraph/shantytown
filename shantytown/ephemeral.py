@@ -2593,7 +2593,18 @@ def _https_github_url(git, ws) -> str | None:
     # GitHub owner and repository names are case-insensitive.
     if tuple(x.lower() for x in source) != tuple(x.lower() for x in dest):
         return None
-    return f"https://github.com/{dest[1]}/{dest[2]}.git"
+    https = f"https://github.com/{dest[1]}/{dest[2]}.git"
+    # A literal URL passed to push is rewritten again, including pushInsteadOf.
+    # Refuse any matching rule rather than sending credentials or work elsewhere.
+    rules = git("-C", ws, "config", "--get-regexp",
+                r"^url\..*\.(insteadof|pushinsteadof)$")
+    if rules.returncode not in (0, 1):
+        return None
+    for line in (rules.stdout or "").splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2 or https.startswith(parts[1]):
+            return None
+    return https
 
 
 def clear_ignored_cargo_targets(dest: Path, git=_git) -> list[str]:

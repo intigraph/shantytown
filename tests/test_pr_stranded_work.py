@@ -288,6 +288,8 @@ class SshBroken:
             return done(out="".join(u + "\n" for u in self.push_urls))
         if argv[-2:] == ["get-url", "origin"]:
             return done(out=self.origin + "\n")
+        if "--get-regexp" in argv:
+            return done(1)
         if "push" in argv:
             self.pushes.append(argv)
             target = argv[argv.index("push") + 1]
@@ -364,3 +366,12 @@ def test_real_git_matching_pushurl_is_retried_at_that_repository(tmp_path):
     ws = _real_remote(tmp_path, ("remote.origin.pushurl",
                                  "ssh://git@github.com/intigraph/shantytown"))
     assert eph._https_github_url(eph._git, ws) == "https://github.com/intigraph/shantytown.git"
+
+
+@pytest.mark.parametrize("replacement,rule", [
+    ("ssh://git@github.com/", "insteadOf"),
+    ("https://example.com/other/", "pushInsteadOf"),
+])
+def test_real_git_https_retry_rewrite_is_refused(tmp_path, replacement, rule):
+    ws = _real_remote(tmp_path, (f"url.{replacement}.{rule}", "https://github.com/"))
+    assert eph._https_github_url(eph._git, ws) is None
