@@ -930,6 +930,8 @@ class Tmux:
         # up to the break and is told nothing; the sender gets a traceback
         # instead of a delivery line. Partial delivery reported as neither
         # success nor failure is the worst of the three outcomes.
+        from .codex_submission_trace import for_launch
+        trace = for_launch(self.delivery_root, pane, text) if codex and submit else None
         for n, chunk in enumerate(chunks):
             if n:
                 self._refuse_in_mode(pane, sent=n)
@@ -938,6 +940,8 @@ class Tmux:
                                check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
+        if trace is not None:
+            trace.capture('paste-end', self.capture)
         # Refuse copy-mode before settling or returning an unsubmitted body.
         self._refuse_in_mode(pane, sent=len(chunks))
         if not submit:
@@ -976,7 +980,15 @@ class Tmux:
         native_probe = self._codex_native_probe(pane, text) if codex else None
         subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
         if codex:
-            self._verify_codex_submission(pane, text, before, native_probe=native_probe)
+            if trace is not None:
+                trace.capture('enter-sent', self.capture, key=submit_key)
+            outcome = 'unverified'
+            try:
+                self._verify_codex_submission(pane, text, before, native_probe=native_probe, trace=trace)
+                outcome = 'observed'
+            finally:
+                if trace is not None:
+                    trace.capture('verify', self.capture, outcome=outcome)
             return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
         if claude_before is not None and claude_birth is not None:
             from .triage import input_state, strip_attrs, INPUT_EMPTY, INPUT_PLACEHOLDER
@@ -1094,9 +1106,13 @@ class Tmux:
 
         return probe
 
-    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None, native_probe=None) -> None:
+    def _verify_codex_submission(self, pane: str, text: str, before: str, *, deadline=None, native_probe=None, trace=None) -> None:
         from . import triage
         was_busy = _codex_submission_busy(before)
+        # Ephemeral recovery is an opt-in experiment; ordinary crew delivery
+        # keeps its existing owned-composer retry behavior.
+        launch = bool(re.fullmatch(r'st-eph-[a-z]+-[a-z0-9]+', pane))
+        retry_enabled = not launch or os.environ.get('SHANTY_CODEX_ENTER_RETRY') == '1'
         local_deadline = time.monotonic() + _CODEX_DEADLINE_S
         deadline = local_deadline if deadline is None else min(deadline, local_deadline)
         def observed(screen):
@@ -1142,7 +1158,8 @@ class Tmux:
                 if seen:
                     return
                 break
-            if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
+            if (retry_enabled and (not launch or attempt == 0)
+                    and attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
                     and _codex_owned_input(screen, text)):
                 # Submit only the exact body we own. Busy Codex queues with
                 # Tab; waiting for the old turn to end can strand this body.
@@ -1159,9 +1176,29 @@ class Tmux:
                 if not self._confirmed_codex(pane, self.foreground(pane)):
                     break
                 busy = _codex_submission_busy(screen)
+                if launch:
+                    # A retained fresh frame, not an old placeholder or suffix,
+                    # must prove whole-body custody before the one extra Enter.
+                    row = trace.capture('retry-check', self.capture) if trace else None
+                    if (not row or row.get('truncated') or 'screen' not in row
+                            or not _codex_owned_input(row['screen'], text)
+                            or _codex_submission_busy(row['screen'])
+                            or _codex_queue(row['screen'])
+                            or time.monotonic() >= deadline):
+                        break
+                    if not self._confirmed_codex(pane, self.foreground(pane)):
+                        break
+                    busy = False
                 self._refuse_in_mode(pane, sent=1)
-                subprocess.run(self._cmd("send-keys", "-t", pane,
-                                         "Tab" if busy else "Enter"), check=True)
+                retry_outcome = 'key-error'
+                try:
+                    subprocess.run(self._cmd("send-keys", "-t", pane,
+                                             "Tab" if busy else "Enter"), check=True)
+                    retry_outcome = 'sent'
+                finally:
+                    if launch:
+                        trace.capture('retry-enter-sent', self.capture, key='Enter',
+                                      outcome=retry_outcome)
                 was_busy = busy
             else:
                 break
