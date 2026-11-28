@@ -1373,15 +1373,24 @@ untagged bytecode, unknown tag text and redirects still refuse.
 
 Codex ephemeral submissions retain default-on, private diagnostic traces under
 `ephemeral/<job>.submission-<random-id>.jsonl` in the configured runtime root.
-Each trace has at most three records: `paste-end`, `enter-sent` (including the
+Normally each trace has three records: `paste-end`, `enter-sent` (including the
 actual key, which can be Tab), and `verify` (observed or unverified). Each
 record includes UTC and monotonic timestamps, pane identity and the submitted
 body's SHA256, plus at most the last 16 KiB of the captured pane. Capture errors
 are recorded by exception type; storage errors warn without changing delivery.
 Files are created exclusively with mode 0600; appends reject replaced, linked
-or permissive files. These frames are diagnostic evidence, never permission
-to submit or resend. Existing ownership checks, deadlines and keys are unchanged.
-No trace is collected for ordinary crew sends or unsubmitted typing.
+or permissive files. No trace is collected for ordinary crew sends or unsubmitted typing.
+
+Ephemeral Enter recovery is **off by default**. `SHANTY_CODEX_ENTER_RETRY=1`
+permits one extra Enter only when a fresh, retained, untruncated `retry-check`
+frame proves the complete same body still fills the composer, with no busy
+state or follow-up queue and positive current Codex identity. A placeholder,
+clipped body, capture/storage error or unknown state refuses recovery. The
+`retry-enter-sent` frame records the additional key, followed by final `verify`
+(at most five records total). The body is never resent, the existing deadline
+is unchanged, and unsuccessful recovery still fails as unverified. Ordinary
+crew sends retain their existing owned-composer Enter/Tab retry behavior.
+This flag is experimental; source publication does not enable it.
 
 ## Codex jobs refuse interactive approval
 

@@ -1,4 +1,4 @@
-"""Bounded, private observation of a Codex launch; never delivery authority."""
+"""Bounded private launch frames; retained custody evidence for flagged recovery."""
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -12,6 +12,7 @@ import uuid
 
 CAPTURE_BYTES = 16_384
 STAGES = ('paste-end', 'enter-sent', 'verify')
+RETRY_STAGES = ('retry-check', 'retry-enter-sent')
 
 
 class Trace:
@@ -24,8 +25,8 @@ class Trace:
         self.identity = None
 
     def capture(self, stage, capture, *, key=None, outcome=None):
-        """At most three frames, 16 KiB each. No failure can authorize a key."""
-        if stage not in STAGES or stage in self.seen:
+        """At most five frames, 16 KiB each. Return only retained evidence."""
+        if stage not in STAGES + RETRY_STAGES or stage in self.seen:
             return
         self.seen.add(stage)
         row = dict(schema=1, stage=stage, pane=self.pane,
@@ -64,6 +65,8 @@ class Trace:
         except Exception as exc:
             print(f'  warning: Codex submission trace {stage} not retained '
                   f'({type(exc).__name__})', file=sys.stderr)
+            return None
+        return row
 
 
 def for_launch(root, pane, text):
