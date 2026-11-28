@@ -17239,6 +17239,16 @@ def _tend_once(a, quiet: bool = False) -> int:
             print(f"  ⚠ escalated {len(_e)} still-NEGLECTED anchor(s) to the "
                   f"coordinator (self-heal nudge unanswered): {', '.join(_e)}",
                   file=sys.stderr)
+        # A STALLED LEAD WITH READY WORK (aegis-0dh5). The worker sweep above
+        # skips leads, so `st crew` showed ellie "stalled" for 56 minutes and
+        # nothing acted on it. One notice per stall episode.
+        lead_stalled = _sweep("lead-stalled", lambda: notify_mod.LeadStallAlerter(
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            verdict_for=_card_verdict, catalog=_catalog(a)).sweep(agents))
+        if lead_stalled:
+            print(f"  ⚠ raised {len(lead_stalled)} stalled lead(s) holding ready "
+                  f"work to the administrator: {', '.join(lead_stalled)}",
+                  file=sys.stderr)
         # THE DRAIN (aegis-hdqej). Ask every live agent the tier excludes to
         # commit, push, report what went up, and stop itself. Deduped per drain
         # EPISODE, so a five-minute heartbeat does not re-broadcast every pass —
