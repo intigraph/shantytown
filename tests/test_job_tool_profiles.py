@@ -722,3 +722,36 @@ def test_opencode_profiled_provision_leaves_the_shared_role_file_alone(tmp_path,
     assert set(json.loads((ws / ".mcp.json").read_text())["mcpServers"]) == {"bobbin"}
     target = Path(jobs.prepare_settings(tmp_path, card, str(base)))
     assert set(json.loads(target.read_text())["mcp"]) == {"bobbin"}
+
+
+def test_opencode_profiled_job_verifies_against_its_kit_not_the_shared_role_file(tmp_path, monkeypatch):
+    # aegis-j550, measured on vati after #802: a manifest-provisioned opencode
+    # job refused "provisioned tooling failed verification: opencode-mcp(Quipu
+    # drift)". Verification compared the kit with the SHARED role file, which
+    # by design (#802) holds no kit; the job's kit is the workspace .mcp.json
+    # and its own job config gets it at launch compose.
+    from shantytown import tooling
+    from shantytown.answer import Answer
+    from shantytown.harness import get
+    from shantytown.opencode import PLUGIN_NAME
+    monkeypatch.setattr(type(get("opencode")), "provision", lambda *a, **kw: [])
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    iri = "urn:example:tooling"
+    (tmp_path / "shantytown.toml").write_text(f'[env]\nSHANTY_TOOLING_MANIFEST = "{iri}"\n')
+    data = {"version": 1, "skills": {}, "instructions": "Query first.",
+            "mcpServers": {"bobbin": {"type": "http", "url": "http://bobbin.invalid/mcp"},
+                           "gmail": {"type": "http", "url": "http://gmail.invalid/mcp"}}}
+    monkeypatch.setattr(tooling.QuipuRegistry, "_query_answer",
+                        lambda self, text: Answer.complete_read([{"value": json.dumps(data)}], how="fixture"))
+    ws = tmp_path / "ws"; ws.mkdir()
+    rec, card = record(tmp_path, ws, "opencode", profile(mcp_tools={"bobbin": ["search"]}))
+    role = tmp_path / "settings/opencode/worker/opencode.json"
+    role.parent.mkdir(parents=True)
+    role.write_text(json.dumps({"permission": {"*": "ask"},
+                                "plugin": [[(role.parent / PLUGIN_NAME).as_uri(), {"hooks": {}}]]}))
+    before = role.read_bytes()
+    assert provision.provision(card, tmp_path) == ["bobbin"]
+    assert role.read_bytes() == before, "a job's kit must never land in the shared role file"
+    assert "opencode-mcp(Quipu drift)" not in provision.missing_kit(card, tmp_path)
+    target = Path(jobs.prepare_settings(tmp_path, card, str(role)))
+    assert set(json.loads(target.read_text())["mcp"]) == {"bobbin"}

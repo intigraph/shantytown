@@ -4074,10 +4074,12 @@ def _spawn_merge_pin(a, req_head, item, repo, pr) -> tuple[str | None, str | Non
 
 def _spawn_lane_release(a, rec, *, run=None) -> str:
     """A merge job that ended WITHOUT merging hands chaski's lane turn back now
-    instead of waiting out the lease. Off unless [ephemeral] lane_release is set."""
+    instead of waiting out the lease. Off unless [ephemeral] lane_release is set.
+    An enqueued PR keeps the lane like a merged one: releasing it as "failed"
+    would invite a second merge job for a PR already in the queue."""
     from . import gate_verdict as gv
     result = rec.get("result") or {}
-    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
+    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") in ("merged", "enqueued"):
         return ""
     if 'uid_binding' in rec:
         from . import ephemeral as eph
@@ -4118,7 +4120,8 @@ def _spawn_review_mode(a, repo, *, reader=None) -> str:
     return eph.review_mode_from_rows(rows)
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None) -> int:
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None,
+                 sleep=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -4148,12 +4151,48 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None
         return OK
     import subprocess
     run = run or subprocess.run
+    # Already landed or queued (another job, a human, a race): report that
+    # state and never re-run the merge (aegis-1jtb).
+    verdict, line = _spawn_merge_outcome(repo, pr, head, run=run, sleep=sleep, attempts=1)
+    if verdict in ("merged", "enqueued"):
+        print(f"  {line}; already {verdict} before this job merged; "
+              f"now report --verdict {verdict}")
+        return OK
     r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash",
              "--match-head-commit", head], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
-    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    verdict, line = _spawn_merge_outcome(repo, pr, head, run=run, sleep=sleep)
+    if verdict == "blocked":
+        raise eph.Refused(line + "; report --verdict blocked with this state")
+    print(f"  {line}; now report --verdict {verdict}")
     return OK
+
+
+def _spawn_merge_outcome(repo, pr, head, *, run, sleep=None, attempts=3) -> tuple[str, str]:
+    """Read back what `gh pr merge` did (aegis-1jtb): exit 0 means merged OR only
+    enqueued. A state that is neither is re-read briefly, since the forge can lag
+    its own answer, then reported blocked rather than guessed."""
+    import subprocess
+    import time
+    from . import ephemeral as eph
+    owner, name = repo.split("/", 1)
+    verdict, line = "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    for n in range(attempts):
+        if n:
+            (sleep or time.sleep)(2)
+        try:
+            r = run(["gh", "api", "graphql", "-f", f"query={eph.MERGE_STATE_QUERY}",
+                     "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={pr}"],
+                    capture_output=True, text=True, timeout=60)
+            node = (((json.loads(r.stdout or "null") or {}).get("data") or {})
+                    .get("repository") or {}).get("pullRequest") if r.returncode == 0 else None
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            node = None
+        verdict, line = eph.merge_outcome(node, repo, pr, head)
+        if verdict != "blocked":
+            break
+    return verdict, line
 
 
 def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:
@@ -4733,6 +4772,16 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             # drain=False: this slot is the retry's, not the queue's.
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
                        "retried", detached=False, drain=False)
+        if req.job == "merge" and req.repo and req.pr:
+            # aegis-1jtb: a PR the forge already merged or holds in its merge
+            # queue needs no merge job. #753 got three, each re-running a merge
+            # the queue already had. Unreadable proceeds: the guarded merge
+            # reads again before it acts.
+            import subprocess as _sp
+            state, line = _spawn_merge_outcome(req.repo, req.pr, req.head or "",
+                                               run=_sp.run, attempts=1)
+            if state in ("merged", "enqueued"):
+                raise eph.Refused(f"{line}; no merge job was launched or queued")
         # Read once, outside the ledger lock: a job's sandbox has no network.
         item_ctx = _spawn_item_context(a, req.item)
         from .job_context import collect as collect_job_context
@@ -4752,6 +4801,21 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                     f"{req.item} already has a task job: {', '.join(held)}; nothing was "
                     "launched or queued. Wait for it to end, or pass --despite-live "
                     "REASON for a deliberate parallel slice")
+            # aegis-1jtb: one merge job per PR and one review per (item, PR,
+            # head), live or queued. #753 got three merge jobs; aegis-1i5h1j.5
+            # got five review tickets in two minutes.
+            own = ticket["id"] if ticket is not None else None
+            if req.job == "merge" and (dup := eph.merge_holders(
+                    a.root, req.repo, req.pr, ticket=own, superseded=retry_of)):
+                raise eph.Refused(
+                    f"{req.repo}#{req.pr} already has a merge job: {', '.join(dup)}; "
+                    "nothing was launched or queued")
+            if req.job == "review" and (dup := eph.review_holders(
+                    a.root, req.item, req.repo, req.pr, req.head, ticket=own,
+                    superseded=retry_of)):
+                raise eph.Refused(
+                    f"{req.item} already has a review of {req.repo}#{req.pr} at this head: "
+                    f"{', '.join(dup)}; nothing was launched or queued")
             try:
                 rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                                administrator=admin, host=cfg.host_name, now=time.time(),
@@ -4759,6 +4823,13 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                                name=uid_launch[0]['principal'] if uid_launch else None,
                                recruiter_scope=recruiter_scope)
             except eph.OverCap as over:
+                if ticket is not None and isinstance(over, eph.LaneWait):
+                    # A busy merge lane defers this ticket and only this one
+                    # (aegis-1jtb): the drain moves on to other repos' work.
+                    eph.release(a.root, ticket["id"], not_before=over.not_before)
+                    a._ticket_lane_wait = True
+                    a._ticket_lane_wait_reason = str(over)
+                    raise
                 if ticket is not None:
                     # Raced for the slot and lost: the same ticket, same age.
                     eph.release(a.root, ticket["id"])
@@ -5031,8 +5102,14 @@ def _spawn_enqueue(a, req, policy, actor, over) -> int:
         except Exception:  # noqa: BLE001 — no priority sorts it last, by age
             priority = None
     despite = (getattr(a, "despite_live", None) or "").strip() or None
+    if _spawn_item_state(a, req.item) == "closed":
+        # The drain would only drop it (aegis-1jtb, sattler: seven tickets were
+        # queued for a CLOSED item); refuse now, where the requester sees it.
+        # Missing and unknown keep the drain's existing handling.
+        raise eph.Refused(f"item {req.item} is closed; nothing was queued")
     ticket = eph.ticket_for(req, harness=eph.harness_for(req, policy), priority=priority,
-                            requester=actor, now=time.time(), despite_live=despite)
+                            requester=actor, now=time.time(), despite_live=despite,
+                            not_before=getattr(over, "not_before", None))
     ahead = sum(1 for t in eph.tickets(a.root) if eph._order(t) < eph._order(ticket))
     p = "?" if priority is None else priority
     if a.dry_run:
@@ -5323,7 +5400,8 @@ def _spawn_drain(a, policy) -> int:
             ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
                                            harness_caps=r["harness_caps"], shares=r["shares"],
                                            job_caps=r["job_caps"], disk_hold=disk_hold,
-                                           item_state=lambda i: _spawn_item_state(a, i))
+                                           item_state=lambda i: _spawn_item_state(a, i),
+                                           skip=frozenset(seen))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
         if ticket is None or ticket["id"] in seen:
@@ -5352,6 +5430,12 @@ def _spawn_drain(a, policy) -> int:
             out = CANNOT_TELL
         if ns is not None and getattr(ns, "_ticket_requeued", False):
             return rc                     # no slot after all; the next end drains
+        if ns is not None and getattr(ns, "_ticket_lane_wait", False):
+            # Kept queued behind a busy merge lane (aegis-1jtb); other tickets
+            # may still launch, so the drain continues.
+            print(f"  queue: {ticket['id']}: {ns._ticket_lane_wait_reason}; kept queued",
+                  file=sys.stderr)
+            continue
         with eph.lock(a.root):
             left = eph.read_ticket(a.root, ticket["id"])
             if left is not None and left.get("claimed_at") == ticket["claimed_at"]:

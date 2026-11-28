@@ -912,6 +912,35 @@ def test_review_mode_rows_fail_closed():
         assert f(rows) == "non-author", rows
 
 
+OPEN_PR = {"state": "OPEN", "merged": False, "mergedAt": None, "mergeCommit": None,
+           "isInMergeQueue": False, "mergeQueueEntry": None}
+
+
+def _merge_run(ran, node=None, before=OPEN_PR):
+    """A fake `run` for the guarded merge: `gh pr merge` exits 0. A GraphQL read
+    BEFORE the merge answers `before` (an open PR, by default), and the
+    read-back after it (aegis-1jtb) answers `node`, by default a landed PR."""
+    import json as _json
+    node = {"state": "MERGED", "merged": True, "mergedAt": "2026-11-27T22:52:44Z",
+            "mergeCommit": {"oid": "c" * 40}, "isInMergeQueue": False,
+            "mergeQueueEntry": None} if node is None else node
+
+    class _Done:
+        returncode, stderr = 0, ""
+
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def run(argv, **_k):
+        ran.append(argv)
+        if argv[:3] == ["gh", "api", "graphql"]:
+            merged = any(a[:3] == ["gh", "pr", "merge"] for a in ran)
+            return _Done(_json.dumps({"data": {"repository": {"pullRequest":
+                                                              node if merged else before}}}))
+        return _Done()
+    return run
+
+
 def _timeout(*_a, **_k):
     raise TimeoutError("quipu did not answer")
 
@@ -938,10 +967,9 @@ def test_guarded_merge_reads_the_repos_review_mode_from_quipu(store, reader, mer
         asked.append((name, params))
         return reader(root_, name, params, **k)
     go = lambda: cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],  # noqa: E731
-                                  run=lambda argv, **k: ran.append(argv) or _R(),
-                                  review_reader=read)
+                                  run=_merge_run(ran), review_reader=read)
     if merged:
-        assert go() == cli.OK and len(ran) == 1
+        assert go() == cli.OK and ran[0][:3] == ["gh", "api", "graphql"] and ran[1][:3] == ["gh", "pr", "merge"]
     else:
         with pytest.raises(eph.Refused, match="no non-author APPROVE"):
             go()
@@ -963,9 +991,10 @@ def test_guarded_merge_refuses_a_review_job_and_merges_only_when_the_gate_passes
     a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
     a.root = root
     assert cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],
-                            run=lambda argv, **k: ran.append(argv) or _R()) == cli.OK
-    assert ran == [["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
-                    "--match-head-commit", HEAD]]
+                            run=_merge_run(ran)) == cli.OK
+    assert ran[0][:3] == ["gh", "api", "graphql"] and ran[1] == ["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
+                      "--match-head-commit", HEAD]
+    assert ran[2][:3] == ["gh", "api", "graphql"] and len(ran) == 3
     review = _rec(root, job="review", repo="o/n", pr=5, state=eph.LIVE)
     with pytest.raises(eph.Refused, match="only a merge job"):
         cli._spawn_merge(a, review["name"], gh=lambda p: 1 / 0, run=lambda *a, **k: 1 / 0)
@@ -2113,7 +2142,8 @@ def test_a_crash_between_dequeue_and_launch_neither_loses_nor_double_launches(tm
 
 def test_over_cap_spawn_queues_lists_and_drains_on_job_end(store, monkeypatch, capsys):
     root, _panes, launched = store
-    items = {"it-1": "open", "it-2": "open", "it-3": "closed"}
+    # it-3 closes AFTER it was queued (aegis-1jtb: a closed item cannot be queued).
+    items = {"it-1": "open", "it-2": "open", "it-3": "open"}
     monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: items.get(i, "missing"))
     drains = []
     def drain_now(r):
@@ -2139,7 +2169,8 @@ def test_over_cap_spawn_queues_lists_and_drains_on_job_end(store, monkeypatch, c
     js = json.loads(capsys.readouterr().out)
     assert [j["item"] for j in js if j["state"] == "queued"] == ["it-3", "it-2"]
     # The job ends: its slot drains the queue. it-3 outranks it-2 but its item
-    # is closed, so it is dropped and it-2 launches in the freed slot.
+    # has closed since, so it is dropped and it-2 launches in the freed slot.
+    items["it-3"] = "closed"
     assert _st(root, "--stop", first["name"]) == cli.OK
     assert drains and len(launched) == 2
     err = capsys.readouterr().err
@@ -2916,6 +2947,81 @@ def test_spawn_never_rewrites_an_existing_role_artifact(store):
     assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'
 
 
+# --- aegis-1jtb: exit 0 from `gh pr merge` is not a landing ----------------------
+
+def _guarded(root):
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": GOOD_REVIEW,
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
+    a.root = root
+    return a, rec, reads
+
+
+QUEUED = {"state": "OPEN", "merged": False, "mergedAt": None, "mergeCommit": None,
+          "isInMergeQueue": True,
+          "mergeQueueEntry": {"position": 1, "enqueuedAt": "2026-11-27T22:52:39Z",
+                              "state": "AWAITING_CHECKS"}}
+
+
+def test_a_merge_that_only_enqueued_reports_enqueued_not_merged(store, capsys):
+    """shantytown#762: gh exited 0, the PR sat at merge-queue position 1, and the
+    job reported MERGED. The read-back must say enqueued, with the position."""
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    ran = []
+    assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__,
+                            run=_merge_run(ran, QUEUED), sleep=lambda s: None) == cli.OK
+    out = capsys.readouterr().out
+    assert "report --verdict enqueued" in out and "--verdict merged" not in out
+    assert "position 1" in out and "2026-11-27T22:52:39Z" in out and "NOT merged" in out
+    assert len(ran) == 3   # pre-read, merge, one read-back: enqueued is final
+
+
+def test_a_landed_merge_reports_merged_with_its_merge_commit(store, capsys):
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, run=_merge_run([])) == cli.OK
+    out = capsys.readouterr().out
+    assert "report --verdict merged" in out and "c" * 40 in out
+
+
+@pytest.mark.parametrize("node", [
+    {"state": "OPEN", "merged": False, "isInMergeQueue": False, "mergeQueueEntry": None},
+    {"state": "CLOSED", "merged": False, "isInMergeQueue": False},
+    None,
+])
+def test_a_merge_that_neither_landed_nor_queued_is_refused_after_rereads(store, capsys, node):
+    """Exit 0 with no landing and no queue entry is reported blocked, with the
+    observed state, after a bounded re-read; never "merged"."""
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    ran, slept = [], []
+    unreadable = type("_Empty", (), {"returncode": 0, "stdout": "", "stderr": ""})
+    run = _merge_run(ran, node) if node is not None else (
+        lambda argv, **k: ran.append(argv) or unreadable())
+    with pytest.raises(eph.Refused, match="report --verdict blocked") as err:
+        cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, run=run, sleep=slept.append)
+    assert "merged" not in capsys.readouterr().out
+    assert len(ran) == 5 and len(slept) == 2   # pre-read, one merge, three bounded reads
+    if node is not None:
+        assert f"state={node['state']}" in str(err.value)
+
+
+def test_an_enqueued_result_is_a_valid_report_and_holds_the_lane(store):
+    """The verdict is accepted end to end and spaces the lane like a merge."""
+    from shantytown import job_mailbox
+    root, _panes, _launched = store
+    assert "enqueued" in eph.VERDICTS
+    assert job_mailbox.payload({"kind": "report", "verdict": "enqueued", "summary": "q"})
+    with pytest.raises(Exception):
+        job_mailbox.payload({"kind": "report", "verdict": "landed-probably", "summary": "q"})
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.DONE)
+    rec["result"] = {"verdict": "enqueued"}
+    rec["ended_at"] = NOW
+    eph.write(root, rec)
+    assert "spacing merges" in eph.lane_refusal(root, "o/n", 10, NOW + 60)
+
 # --- aegis-bmu3: one task job per item unless --despite-live says why --------
 # aegis-8dda.12 ran eph-task-5d688d and eph-task-ed15d8 together, and aegis-xjh
 # ran f0cb18 and c73519, because two leads filled from the ready list at once.
@@ -3056,3 +3162,157 @@ def test_a_refused_retry_leaves_the_original_running(store, monkeypatch, capsys)
     assert retried["despite_live"]["reason"] == "second slice"
     assert a_job["name"] in " ".join(retried["despite_live"]["held"])
     assert len(launched) == 3
+
+
+# --- aegis-1jtb points 2-4: a busy lane defers, a queued PR stops, one per PR --
+
+def test_a_busy_merge_lane_is_a_queueing_wait_with_its_spacing_end(tmp_path):
+    first = _rec(tmp_path, job="merge", repo="o/n", pr=1)
+    with pytest.raises(eph.LaneWait) as held:
+        _rec(tmp_path, job="merge", repo="o/n", pr=2)
+    assert isinstance(held.value, eph.OverCap) and held.value.not_before is None
+    first.update(state=eph.DONE, ended_at=NOW, result={"verdict": "merged"})
+    eph.write(tmp_path, first)
+    with pytest.raises(eph.LaneWait) as spacing:
+        _rec(tmp_path, job="merge", repo="o/n", pr=2, now=NOW + 60)
+    assert spacing.value.not_before == NOW + 600
+
+
+def _merge_ticket(root, tid, **kw):
+    t = dict({"id": tid, "job": "merge", "item": "it-" + tid[-1], "repo": "o/n", "pr": 1,
+              "checkout": None, "head": None, "harness": "claude", "track": eph.DEFAULT_TRACK,
+              "priority": 1, "requester": "boss", "enqueued_at": NOW, "state": eph.QUEUED,
+              "claimed_by": None, "claimed_at": None}, **kw)
+    eph.enqueue(root, t)
+    return t
+
+
+def test_claim_next_skips_a_spaced_ticket_and_this_passes_tries(tmp_path):
+    _merge_ticket(tmp_path, "q-00000000000a", priority=0, not_before=NOW + 300)
+    _merge_ticket(tmp_path, "q-00000000000b", priority=1)
+    _merge_ticket(tmp_path, "q-00000000000c", priority=2)
+    open_ = lambda _i: "open"
+    t, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW)
+    assert t["id"] == "q-00000000000b"           # a outranks b but is spaced
+    eph.release(tmp_path, t["id"])
+    t, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW,
+                          skip=frozenset({"q-00000000000b"}))
+    assert t["id"] == "q-00000000000c"           # tried this pass: skipped, not the end
+    eph.release(tmp_path, t["id"])
+    t, _ = eph.claim_next(tmp_path, cap=10, item_state=open_, now=NOW + 301)
+    assert t["id"] == "q-00000000000a"           # spacing over: it launches first again
+
+
+def test_release_records_the_lane_wait_and_a_plain_release_clears_it(tmp_path):
+    _merge_ticket(tmp_path, "q-00000000000a")
+    eph.release(tmp_path, "q-00000000000a", not_before=NOW + 60)
+    assert eph.read_ticket(tmp_path, "q-00000000000a")["not_before"] == NOW + 60
+    eph.release(tmp_path, "q-00000000000a")
+    assert eph.read_ticket(tmp_path, "q-00000000000a")["not_before"] is None
+
+
+def test_merge_and_review_holders_name_live_jobs_and_tickets_per_pr_and_head(tmp_path):
+    job = _rec(tmp_path, job="merge", repo="o/n", pr=7, state=eph.LIVE)
+    _merge_ticket(tmp_path, "q-00000000000a", pr=8)
+    assert eph.merge_holders(tmp_path, "o/n", 7) == [f"{job['name']} (live)"]
+    assert eph.merge_holders(tmp_path, "o/n", "8") == ["q-00000000000a (queued ticket)"]
+    assert eph.merge_holders(tmp_path, "o/n", 8, ticket="q-00000000000a") == []
+    assert eph.merge_holders(tmp_path, "o/other", 7) == []
+    _merge_ticket(tmp_path, "q-00000000000b", job="review", item="it-9", pr=9, head="h1")
+    assert eph.review_holders(tmp_path, "it-9", "o/n", 9, "h1") == ["q-00000000000b (queued ticket)"]
+    assert eph.review_holders(tmp_path, "it-9", "o/n", 9, "h2") == []   # new head: new review
+    assert eph.review_holders(tmp_path, "it-8", "o/n", 9, "h1") == []
+
+
+def test_guarded_merge_of_an_already_queued_pr_reports_enqueued_and_never_merges(store, capsys):
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    ran = []
+    assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__,
+                            run=_merge_run(ran, before=QUEUED), sleep=lambda s: None) == cli.OK
+    out = capsys.readouterr().out
+    assert "already enqueued" in out and "report --verdict enqueued" in out
+    assert not any(r[:3] == ["gh", "pr", "merge"] for r in ran) and len(ran) == 1
+
+
+def _merge_spawn(root, pr, item="it-1"):
+    return _st(root, "--ephemeral", "--job", "merge", "--repo", "o/n", "--pr", str(pr),
+               "--item", item, "--head", HEAD)
+
+
+@pytest.fixture
+def merge_store(store, monkeypatch):
+    """A store with three slots where merge spawns see an open, unqueued PR and
+    every item is open."""
+    root = store[0]
+    toml = root / "shantytown.toml"
+    toml.write_text(toml.read_text().replace("max_agents = 1", "max_agents = 3"))
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "open")
+    monkeypatch.setattr(cli, "_spawn_merge_outcome",
+                        lambda repo, pr, head, **k: ("blocked", f"{repo}#{pr}: open"))
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    return store
+
+
+def test_a_merge_spawn_while_the_lane_is_held_queues_instead_of_failing(merge_store, capsys):
+    root, _panes, launched = merge_store
+    assert _merge_spawn(root, 5) == cli.OK
+    (first,) = eph.live(root)
+    capsys.readouterr()
+    assert _merge_spawn(root, 6, item="it-2") == cli.OK
+    out = capsys.readouterr().out
+    assert "QUEUED q-" in out and "held by " + first["name"] in out
+    (t,) = eph.tickets(root)
+    assert t["pr"] == 6 and t["state"] == eph.QUEUED and len(launched) == 1
+
+
+def test_a_second_merge_spawn_for_the_same_pr_refuses_naming_the_holder(merge_store, capsys):
+    root, _panes, launched = merge_store
+    assert _merge_spawn(root, 5) == cli.OK
+    (first,) = eph.live(root)
+    assert _merge_spawn(root, 5, item="it-2") == cli.REFUSED
+    err = capsys.readouterr().err
+    assert "o/n#5 already has a merge job: " + first["name"] in err
+    assert eph.tickets(root) == [] and len(launched) == 1
+    assert _merge_spawn(root, 6, item="it-2") == cli.OK      # queued behind the lane
+    assert _merge_spawn(root, 6, item="it-3") == cli.REFUSED  # the queued ticket holds #6
+    assert "o/n#6 already has a merge job: q-" in capsys.readouterr().err
+    assert len(eph.tickets(root)) == 1
+
+
+@pytest.mark.parametrize("verdict", ["merged", "enqueued"])
+def test_a_merge_spawn_for_a_pr_already_merged_or_queued_launches_nothing(
+        merge_store, monkeypatch, capsys, verdict):
+    root, _panes, launched = merge_store
+    monkeypatch.setattr(cli, "_spawn_merge_outcome",
+                        lambda repo, pr, head, **k: (verdict, f"{verdict} {repo}#{pr} at head {head}"))
+    assert _merge_spawn(root, 5) == cli.REFUSED
+    assert f"{verdict} o/n#5" in capsys.readouterr().err
+    assert eph.records(root) == [] and eph.tickets(root) == [] and launched == []
+
+
+def test_the_drain_keeps_a_lane_waiting_ticket_and_launches_the_next(merge_store, capsys):
+    root, _panes, launched = merge_store
+    assert _merge_spawn(root, 5) == cli.OK                                  # holds the lane
+    assert _merge_spawn(root, 6, item="it-2") == cli.OK                     # waits on it
+    for item in ("it-7", "it-8", "it-9"):                                   # 2 live, 1 over cap
+        assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", item) == cli.OK
+    assert len(eph.live(root)) == 3 and len(eph.tickets(root)) == 2
+    (task,) = [r for r in eph.live(root) if r.get("item") == "it-7"]
+    capsys.readouterr()
+    assert _st(root, "--stop", task["name"]) == cli.OK
+    _st(root, "--drain")
+    err = capsys.readouterr().err
+    left = {t["item"]: t for t in eph.tickets(root)}
+    assert list(left) == ["it-2"] and left["it-2"]["state"] == eph.QUEUED   # kept, NOT dropped
+    assert "kept queued" in err and "dropped" not in err
+    assert {r["item"] for r in eph.live(root)} == {"it-1", "it-8", "it-9"}  # the task launched
+
+def test_nothing_is_queued_for_a_closed_item(store, monkeypatch, capsys):
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_item_state", lambda a, i: "closed" if i == "it-2" else "open")
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
+    assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-2") == cli.REFUSED
+    assert "item it-2 is closed; nothing was queued" in capsys.readouterr().err
+    assert eph.tickets(root) == []

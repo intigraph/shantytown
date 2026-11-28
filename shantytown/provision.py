@@ -488,7 +488,8 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
     ws = Path(card.workspace).expanduser()
     from .job_tools import selected as job_profile, filter_manifest
     try:
-        manifest = filter_manifest(manifest, job_profile(root, card.name))
+        spec = job_profile(root, card.name)
+        manifest = filter_manifest(manifest, spec)
     except ValueError:
         return ["job tool profile unresolved"]
     template = json.dumps({"mcpServers": manifest.mcp})
@@ -550,6 +551,13 @@ def _manifest_gaps(card: Agent, root, manifest: tooling.Manifest, secrets=None) 
                 gaps.append("agy-mcp(Quipu drift)")
         except (OSError, ValueError):
             gaps.append("agy-mcp(unreadable)")
+    elif card.harness == "opencode" and spec is not None:
+        # A profiled job's kit is the workspace .mcp.json checked above. Its
+        # own job config gets that kit at launch compose, which refuses any
+        # selected server that is missing (job_tools.prepare_settings). The
+        # SHARED role file holds no kit by design (#802), so comparing it here
+        # refused every profiled opencode job (aegis-j550, measured on vati).
+        pass
     elif card.harness == "opencode":
         from .opencode import config_path, translate_servers
         try:

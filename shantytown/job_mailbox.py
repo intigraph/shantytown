@@ -25,7 +25,7 @@ def payload(value):
         raise IdentityError('invalid job message')
     if value['kind'] == 'report':
         if (set(value) not in ({'kind', 'verdict', 'summary'}, {'kind', 'verdict', 'summary', 'review'})
-                or value['verdict'] not in ('approve', 'request-changes', 'merged', 'blocked', 'done', 'failed')
+                or value['verdict'] not in ('approve', 'request-changes', 'merged', 'blocked', 'done', 'failed', 'enqueued')
                 or not isinstance(value['summary'], str) or len(value['summary']) > 1500
                 or '\0' in value['summary']):
             raise IdentityError('invalid job result')
