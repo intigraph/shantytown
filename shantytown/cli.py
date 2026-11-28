@@ -3739,6 +3739,15 @@ def _observe_live(runtime, panes, session, card=None, *, trust_guard=None,
         # destructive full-relaunch fallback. Share the readiness constant so
         # increasing that bound cannot silently recreate the race.
         attempts += math.ceil(TIMEOUT / _LIVE_DELAY) + 1
+    elif card is not None and _LIVE_DELAY > 0:
+        import math
+        try:
+            allowance = float(getattr(harness_mod.for_card(
+                card, root=getattr(runtime, "_root", None)), "startup_allowance_s", 0.0))
+        except harness_mod.UnknownHarness:
+            allowance = 0.0
+        if allowance > 0:
+            attempts += math.ceil(allowance / _LIVE_DELAY)
     for _ in range(attempts):
         screen = panes.capture(session)
         if runtime.is_live(screen):

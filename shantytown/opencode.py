@@ -91,6 +91,11 @@ def make_harness(base):
         picker_markers = ()
         # Captured from the idle 1.18.35 TUI, not guessed from documentation.
         ready_patterns = (r"(?m)^\s*tab agents\s+ctrl\+p commands\s*$",)
+        # MEASURED 2026-11-28 on vati (aegis-j550): opencode 1.18.35 shows the
+        # ready line 4.2s after launch in a warm worktree at 80x24, at the edge
+        # of the shared ~5s window; a cold job launch (shell, env line, three
+        # MCP servers) missed it and was ended as "never observed live".
+        startup_allowance_s = 30.0
         stranded_markers = ()
         clear_command = None
         bypass_markers = ()

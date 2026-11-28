@@ -59,3 +59,29 @@ def test_budget_follows_readiness_constant(monkeypatch):
     card = Agent(name="fixture", role="worker", harness="codex")
     assert cli._observe_live(runtime, panes, "fixture", card)
     assert clock.now == 31.0
+
+
+# aegis-j550: opencode's measured cold start (4.2s warm, more for a job) sits at
+# the edge of the shared ~5s window, so a healthy job launch was ended as
+# "never observed live". The harness declares its own allowance.
+def test_opencode_slow_start_is_observed_live(monkeypatch):
+    clock, panes, runtime = observer(monkeypatch, 6.0)
+    card = Agent(name="fixture", role="worker", harness="opencode")
+    assert cli._observe_live(runtime, panes, "fixture", card)
+    assert clock.now == 6.0
+
+
+def test_claude_window_is_unchanged_by_opencode_allowance(monkeypatch):
+    clock, panes, runtime = observer(monkeypatch, 6.0)
+    card = Agent(name="fixture", role="worker", harness="claude")
+    assert not cli._observe_live(runtime, panes, "fixture", card)
+
+
+def test_opencode_never_ready_stays_bounded(monkeypatch):
+    from shantytown import harness
+    allowance = harness.get("opencode").startup_allowance_s
+    assert allowance > 0
+    clock, panes, runtime = observer(monkeypatch, float("inf"))
+    card = Agent(name="fixture", role="worker", harness="opencode")
+    assert not cli._observe_live(runtime, panes, "fixture", card)
+    assert 5 + allowance <= clock.now <= 5 + allowance + cli._LIVE_DELAY
