@@ -379,3 +379,22 @@ def test_retry_uses_busy_footer_without_retyping(monkeypatch):
         panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Enter', 'Tab']
     assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+
+
+def test_taken_body_with_late_turn_start_is_observed_without_a_second_key(monkeypatch):
+    # aegis-cxy: a fresh Codex job empties the composer at Enter but shows its
+    # Working row only seconds later (MCP boot). That is a delivery, not UNVERIFIED.
+    panes, calls = transport(monkeypatch, [READY, READY, READY, READY, READY, READY, BUSY])
+    panes.send('worker', BODY)
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
+
+
+def test_taken_body_that_never_starts_a_turn_is_still_unverified_and_not_resent(monkeypatch):
+    monkeypatch.setattr(tmux, '_CODEX_OBSERVE_POLLS', 5)
+    panes, calls = transport(monkeypatch, [READY, READY])
+    with pytest.raises(tmux.PaneSubmissionUnverified, match='not observed'):
+        panes.send('worker', BODY)
+    assert sum(c[-1] == 'Enter' for c in keys(calls)) == 1
+    # It watched the whole bounded window before saying so.
+    assert sum(1 for c in calls if c == ('sleep', tmux._CODEX_POLL_S)) >= 2 + 5
