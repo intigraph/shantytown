@@ -748,8 +748,9 @@ def owner_rows(proof, agent: str | None, *, timeout: int = 30,
                     raise ValueError("unexpected inbox candidate")
             if include_closed or row["status"] not in ("closed", "tombstone"):
                 rows.append(row)
-        from .directive_rank import annotate
-        rows = annotate(proof, rows, timeout=timeout)
+        if not (capacity or messages_only or only_specs or decision):
+            from .directive_rank import annotate
+            rows = annotate(proof, rows, timeout=timeout)
         return Answer.complete_read(rows, how=how)
     except seeds_read_cache.WatermarkMoved:
         raise  # The outer owner projection must restart, not just this query.

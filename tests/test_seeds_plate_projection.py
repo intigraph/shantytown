@@ -474,6 +474,9 @@ def test_feed_haul_preserves_short_and_crew_path_owners(monkeypatch, owner):
 
 
 def test_capacity_projects_blocked_and_open_alongside_held_without_hydration(monkeypatch):
+    from shantytown import directive_rank
+    monkeypatch.setattr(directive_rank, 'annotate',
+                        lambda *a, **k: pytest.fail('capacity read requested ranking evidence'))
     tracker = SdTracker(quipu=PROOF.quipu_url, prefix='test')
     monkeypatch.setattr(tracker, 'prove_store', lambda: PROOF)
     queries = []
