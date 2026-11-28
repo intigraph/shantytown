@@ -296,7 +296,7 @@ _GITHUB_HOSTS = ("github.com", "www.github.com")
 
 
 def forge_refusal(job: str, repo: str | None, remote_url: str | None,
-                  pr: int | None = None) -> str:
+                  pr: int | None = None, head: str | None = None) -> str:
     """Why a GitHub-only job cannot run against this repo, or "".
 
     `remote_url` is the origin of the checkout the job would be cut from. An
@@ -309,18 +309,20 @@ def forge_refusal(job: str, repo: str | None, remote_url: str | None,
     parsed = parse_remote(remote_url)
     if parsed is None or parsed[0].lower() in _GITHUB_HOSTS:
         return ""
-    return foreign_forge_line(job, repo, parsed[0], pr)
+    return foreign_forge_line(job, repo, parsed[0], pr, head)
 
 
-def foreign_forge_line(job: str, repo: str, forge: str, pr: int | None = None) -> str:
+def foreign_forge_line(job: str, repo: str, forge: str, pr: int | None = None,
+                       head: str | None = None) -> str:
     if job == "merge":
         # A GitHub merge job cannot preserve its head/CI guarantees by swapping
         # only the read commands. Hand off the whole landing to the native path.
         target = str(pr) if pr is not None else "<number>"
+        pin = head if _SHA.fullmatch(head or "") else "<full-tested-head>"
         return (f"--repo {repo} is hosted on {forge}, not GitHub; "
                 f"refused before any GitHub probe, worktree or pane. "
                 f"Route to the Forgejo merge path: "
-                f"pr-risk merge --forge forgejo --repo {repo} --pr {target} "
+                f"pr-risk merge --forge forgejo --repo {repo} --pr {target} --expected-head {pin} "
                 f"(complete-green check first; --execute only after readiness is proven). "
                 f"Require merge read-back and exact-main CI; retain operator holds "
                 f"and revert on red. Do not retry this as a GitHub merge job")
@@ -1169,6 +1171,9 @@ def codex_job_rules(rec: dict, *, unattended: bool) -> str | None:
     if rec["job"] == "merge":
         lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--merge\"], "
                      "decision=\"allow\", justification=\"st job: guarded merge\")")
+    if rec["job"] == "task" and rec.get("repo") and rec.get("pr"):
+        lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--publish\"], "
+                     "decision=\"allow\", justification=\"st job: guarded task publication\")")
     lines.append("prefix_rule(pattern=[\"st\", \"agent\", \"spawn\", \"--report\"], "
                  "decision=\"allow\", justification=\"st job: report its verdict\")")
     item = str(rec.get("item") or "")
@@ -1758,10 +1763,16 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
 4. Report --verdict done with the diagnosis and evidence, or blocked with the exact missing evidence.""",
     "task": """JOB: do {item}'s acceptance criteria. Read it with `st work item show {item}`.
 {source}
-Commit on your own branch; open a PR if code changed (`st repo pr`). Never push to main.
-If `st repo pr` refuses or fails, do not stop with work only on disk: `git push -u origin HEAD`,
-then `gh pr create` with the same title and body, and put the refusal text in your report.
-Report --verdict done with what changed and the PR link, or blocked.""",
+Commit on your own branch. Run the focused tests BEFORE publishing. Never push to main.
+If this job already names a PR, repair that PR: after tests pass, run
+`st agent spawn --publish --head <full tested commit SHA>`. This publishes a normal fast-forward
+update to the PR's ACTUAL head branch (not merely wt/<job>) and verifies the remote SHA.
+A moved head, hook refusal, fork, missing permission or uncertain reply means blocked: inspect
+and report it, never force, bypass hooks, blindly retry or create a competing PR.
+For NEW work only, open a PR if code changed (`st repo pr`).
+If `st repo pr` refuses or fails, preserve the refusal; for a technical failure (not a policy refusal),
+`git push -u origin HEAD`, then `gh pr create` with the same title and body.
+Report --verdict done with what changed, the tested SHA and verified publication/PR link, or blocked.""",
 }
 
 

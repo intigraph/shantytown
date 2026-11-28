@@ -1386,6 +1386,21 @@ A merge request whose checkout origin names Forgejo is refused before GitHub
 reads, worktree creation or pane launch. The refusal names the native
 `pr-risk merge --forge forgejo --repo OWNER/REPO --pr NUMBER` route, which must
 prove complete green before execution and read back the merge and exact-main
-CI. This is a handoff, not an automatic merge: the native helper currently
-has no expected-head option, so st cannot preserve its job's pinned SHA by
-calling it automatically. Operator holds and deployment safeguards still apply.
+CI. The handoff includes `--expected-head` with the job's pin; require the native
+helper version that implements this option. This remains a handoff rather than
+an automatic merge. Operator holds and deployment safeguards still apply.
+
+### Publishing an existing-PR task repair
+
+After focused tests pass and the repair is committed on the job's own branch,
+an attended task job runs `st agent spawn --publish --head SHA`. The controller
+resolves that job's existing PR and updates its actual in-repository head ref,
+using a normal hook-preserving fast-forward push of the immutable tested SHA.
+It checks source/origin/push URL, the existing clean-source gate (including provisioned kit and private
+scratch), PR ownership/ref, ancestry and a fresh PR
+binding before the push, then reads back the exact remote SHA. Forks, base
+branches, moved bindings, failed hooks, divergence and unknown acknowledgements
+do not pass. Inspect the remote before retrying an uncertain write.
+The job must report the verified publication and test evidence; new work keeps
+the existing own-branch/new-PR flow. The action does not run tests, change trust,
+force updates or grant protected UID jobs a publication capability.
