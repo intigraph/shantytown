@@ -239,9 +239,8 @@ def test_an_event_already_in_flight_is_not_launched_twice(store, tmp_path, capsy
 
 
 def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, monkeypatch):
-    # Task records keep no head, so a head-less in_flight match must only be
-    # asked about an event that was actually spawned, or the new head's fix
-    # would settle against the old head's job and never run.
+    # A task on the old head must hold the branch without settling the new
+    # head's fix against the old job.
     root, _panes, launched = store
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
     path = tmp_path / "ev.jsonl"
@@ -392,25 +391,33 @@ def test_an_open_pr_at_the_event_head_still_spawns(store, tmp_path, monkeypatch)
 
 def _hand_spawn(root, job="task", head=HEAD, pr=7, item="it-1"):
     assert _st(root, "--ephemeral", "--job", job, "--item", item, "--repo", "o/n",
-               "--pr", str(pr), "--head", head) == cli.OK
+               "--pr", str(pr), "--head", head, "--harness", "claude") == cli.OK
     (rec,) = [r for r in eph.live(root) if r["job"] == job and r["pr"] == pr]
     return rec
 
 
-def test_a_hand_spawned_job_is_not_launched_twice_by_the_drain(store, tmp_path, capsys):
+@pytest.mark.parametrize("job", ["review", "task", "merge"])
+def test_a_hand_spawned_job_is_not_launched_twice_by_the_drain(store, tmp_path, capsys, job):
     root, _panes, launched = store
-    _hand_spawn(root)
+    rec = _hand_spawn(root, job=job)
+    assert rec["head"] == HEAD
+    if job == "review":
+        assert f"This review is pinned to head {HEAD}" in eph.prompt(rec)
     assert len(launched) == 1
     capsys.readouterr()
-    assert _st(root, "--drain-events", str(_write(tmp_path / "ev.jsonl", _ev()))) == cli.OK
+    assert _st(root, "--drain-events", str(_write(tmp_path / "ev.jsonl", _ev(job=job)))) == cli.OK
     assert len(launched) == 1                      # no second job
-    assert "  deferred " in capsys.readouterr().out
-    assert pe.settled(root) == {}                  # head-less record: never settles the event
+    assert "already running" in capsys.readouterr().out
+    assert pe.settled(root)[_ev(job=job)["event_id"]]["outcome"] == "admitted"
+    eph.write(root, {**rec, "state": eph.DONE})
+    assert _st(root, "--drain-events", str(tmp_path / "ev.jsonl")) == cli.OK
+    assert len(launched) == 1                      # no sequential duplicate either
 
 
 def test_the_deferred_event_runs_once_the_hand_spawned_job_ends(store, tmp_path):
     root, _panes, launched = store
     rec = _hand_spawn(root)
+    eph.write(root, {**rec, "head": None})  # legacy record with an unknown head
     path = _write(tmp_path / "ev.jsonl", _ev())
     assert _st(root, "--drain-events", str(path)) == cli.OK
     eph.write(root, {**eph.read(root, rec["name"]), "state": eph.DONE})
@@ -445,3 +452,65 @@ def test_occupied_matches_exact_heads_and_holds_head_less_ones():
     assert pe.occupied(ev, [head_less, exact], []) == ("eph-merge-x", True)
     assert pe.occupied(ev, [], [{"id": "q-1", "job": "merge", "repo": "o/n", "pr": 7}]) == ("q-1", False)
     assert pe.occupied(ev, [{**exact, "repo": "o/other"}], []) is None
+
+
+@pytest.mark.parametrize("job", ["review", "task"])
+def test_a_hand_spawn_without_head_keeps_the_forge_head(store, tmp_path, monkeypatch, job):
+    root, _panes, launched = store
+    _forge(monkeypatch)
+    assert _st(root, "--ephemeral", "--job", job, "--item", "it-1",
+               "--repo", "o/n", "--pr", "7", "--harness", "claude") == cli.OK
+    (rec,) = eph.live(root)
+    assert rec["head"] == HEAD
+    path = _write(tmp_path / "ev.jsonl", _ev(job=job))
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    eph.write(root, {**rec, "state": eph.DONE})
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 1
+
+
+def test_a_launching_hand_spawn_defers_until_launch_succeeds_or_fails(store, tmp_path):
+    root, _panes, launched = store
+    rec = _hand_spawn(root, job="merge")
+    eph.write(root, {**rec, "state": eph.LAUNCHING})
+    path = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert pe.settled(root) == {}
+    eph.write(root, {**rec, "state": eph.DONE, "verdict": "failed"})
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 2
+
+
+@pytest.mark.parametrize("head", [None, {}, {"sha": "bad"}, "malformed"])
+def test_an_unproved_forge_head_stays_unknown(store, monkeypatch, head):
+    root, _panes, _launched = store
+    _forge(monkeypatch, head=head)
+    assert _st(root, "--ephemeral", "--job", "task", "--item", "it-1",
+               "--repo", "o/n", "--pr", "7") == cli.OK
+    (rec,) = eph.live(root)
+    assert rec["head"] is None
+    assert pe.occupied(_ev(), [rec], []) == (rec["name"], False)
+
+
+def test_launching_is_not_crash_recovery_proof():
+    rec = {"name": "eph-review-x", "job": "review", "repo": "o/n", "pr": 7,
+           "head": HEAD, "state": eph.LAUNCHING, "spawned_at": 101.0}
+    assert pe.in_flight(_ev(job="review"), [rec], [], since=100.0) is None
+    assert pe.occupied(_ev(job="review"), [rec], []) == (rec["name"], False)
+    rec["state"] = eph.LIVE
+    assert pe.in_flight(_ev(job="review"), [rec], [], since=100.0) == rec["name"]
+
+
+@pytest.mark.parametrize("job", ["review", "task"])
+def test_a_queued_hand_spawn_keeps_the_head_and_settles_its_event(store, tmp_path, monkeypatch, job):
+    root, _panes, launched = store
+    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
+    _hand_spawn(root, item="it-2", pr=8)
+    assert _st(root, "--ephemeral", "--job", job, "--item", "it-1",
+               "--repo", "o/n", "--pr", "7", "--head", HEAD) == cli.OK
+    (ticket,) = eph.tickets(root)
+    assert ticket["head"] == HEAD
+    path = _write(tmp_path / "ev.jsonl", _ev(job=job))
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(launched) == 1 and len(eph.tickets(root)) == 1
+    assert pe.settled(root)[_ev(job=job)["event_id"]]["outcome"] == "admitted"

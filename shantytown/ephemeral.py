@@ -260,7 +260,7 @@ class Request:
     repo: str | None = None          # GitHub owner/name
     pr: int | None = None
     checkout: str | None = None      # local shared checkout for the worktree
-    head: str | None = None          # merge: the exact head the item pins (aegis-c01c.7)
+    head: str | None = None          # PR step identity; merge requires the item-pinned head
     request_id: str | None = None    # merge: chaski's work request id, for lane release
     track: str | None = None         # work track for share routing (aegis-fye); None = roadmap
 
@@ -1774,6 +1774,9 @@ def prompt(rec: dict) -> str:
     job_prompt = (_PROTECTED_TRIAGE if rec["job"] == "triage" and rec.get("uid_binding")
                   else _JOBS["review_attended"] if attended_review(rec)
                   else _JOBS[rec["job"]])
+    if rec["job"] == "review" and rec.get("head"):
+        job_prompt += (f"\nThis review is pinned to head {rec['head']}. If the PR's current head "
+                       "differs, report blocked rather than reviewing another head.")
     custom = job_verdicts(rec) != VERDICTS
     if custom:
         job_prompt += (f"\nThis job's configured verdicts are {fields['verdicts']}; they replace "
