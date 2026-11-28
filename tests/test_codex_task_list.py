@@ -44,7 +44,7 @@ def test_real_transport_refuses_before_any_keystroke(monkeypatch, screen, refuse
     frames = iter([screen, screen.replace("› ", "\x1b[1m›\x1b[0m continue")])
     monkeypatch.setattr(panes, "capture", lambda _, **kw: next(frames))
     # This case isolates task-list admission, not the submission observer.
-    monkeypatch.setattr(panes, "_verify_codex_submission", lambda *_: None)
+    monkeypatch.setattr(panes, "_verify_codex_submission", lambda *_, **kw: None)
     monkeypatch.setattr(tmux, "_journal_send", lambda *_: None)
     monkeypatch.setattr(tmux.time, "sleep", lambda _: None)
     monkeypatch.setattr(tmux.subprocess, "run", lambda argv, **kw: calls.append(argv))

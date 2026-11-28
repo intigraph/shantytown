@@ -1,4 +1,5 @@
 """Submission evidence must be stronger than a successful send-keys call."""
+import hashlib
 import subprocess
 
 import pytest
@@ -133,9 +134,10 @@ def test_clipped_composer_is_not_treated_as_empty(monkeypatch):
     assert keys(calls) == []
 
 
-def test_busy_codex_with_consumed_body_counts_as_delivery(monkeypatch):
+def test_busy_crew_activity_alone_does_not_prove_delivery(monkeypatch):
     panes, calls = transport(monkeypatch, [BUSY, BUSY])
-    panes.send('worker', BODY)
+    with pytest.raises(tmux.PaneSubmissionUnverified):
+        panes.send('worker', BODY)
     assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
 
 
@@ -185,6 +187,25 @@ def test_startup_queue_observation_respects_caller_deadline(monkeypatch):
         panes._verify_codex_submission('worker', BODY, READY, deadline=0.3)
     assert clock[0] == 0.3
     assert keys(calls) == []
+
+
+@pytest.mark.parametrize('proof_kind', ['exact', 'missing', 'other-body', 'other-pane'])
+def test_busy_bootstrap_requires_exact_native_body_proof(monkeypatch, proof_kind):
+    panes, calls = transport(monkeypatch, [BUSY, BUSY])
+    proof = None
+    if proof_kind != 'missing':
+        proof = tmux.SubmissionObserved(
+            'other' if proof_kind == 'other-pane' else 'worker',
+            hashlib.sha256(
+                ('other' if proof_kind == 'other-body' else BODY).encode()).hexdigest())
+    monkeypatch.setattr(panes, '_codex_native_probe', lambda *a: lambda: proof)
+    if proof_kind == 'exact':
+        panes.send('worker', BODY)
+    else:
+        with pytest.raises(tmux.PaneSubmissionUnverified):
+            panes.send('worker', BODY)
+    assert [c[-1] for c in keys(calls) if '-l' not in c] == ['Tab']
+    assert [c[-1] for c in keys(calls) if '-l' in c] == [BODY]
 
 
 def test_other_queue_message_is_not_our_receipt(monkeypatch):

@@ -59,7 +59,7 @@ def world(tmp_path, monkeypatch):
     (root / 'crew/worker.json').write_text(json.dumps(dict(
         pane='%5', harness='codex', workspace=workspace)))
     (root / 'context_budget').mkdir()
-    settings = tmp_path / 'codex/config.toml'
+    settings = tmp_path / 'agent-worker/config.toml'
     path = settings.parent / 'sessions/2026/11/12' / f'rollout-2026-11-12T00-00-00-{SESSION}.jsonl'
     path.parent.mkdir(parents=True)
     header = dict(type='session_meta', payload=dict(id=SESSION, cwd=workspace))
@@ -126,6 +126,36 @@ def test_late_completion_keeps_identity_and_file_fences(world, change):
     with pytest.raises(ReceiptConflict): d.complete('work-1', 'worker', receipt=row['id'])
     assert tracker.get('work-1').revision == 1 and len(panes.sent) == 1
     assert binding.store.read(row['id'])['submission'] is None
+
+
+@pytest.mark.parametrize('change', ['exact', 'runtime', 'other-body', 'session'])
+def test_live_verifier_uses_bound_native_consumption_during_bootstrap(world, monkeypatch, change):
+    from shantytown import tmux
+    from test_codex_submission import BUSY
+    d, binding, tracker, panes, path, header, runtime, hook = world
+    adapter = Tmux(socket='test-only', root=hook.parent.parent)
+    session = [123]
+    monkeypatch.setattr(adapter, 'runtime_identity', lambda _: runtime[0])
+    monkeypatch.setattr(adapter, 'session_created', lambda _: session[0])
+    monkeypatch.setattr(adapter, 'foreground', lambda _: 'codex')
+    monkeypatch.setattr(adapter, 'cmdline', lambda _: f'CODEX_HOME={path.parents[4]} codex')
+    monkeypatch.setattr(adapter, 'capture', lambda *a, **kw: BUSY)
+    monkeypatch.setattr(tmux.time, 'sleep', lambda _: None)
+    monkeypatch.setattr(tmux, '_CODEX_POLLS', 1)
+    monkeypatch.setattr(tmux, '_CODEX_OBSERVE_POLLS', 1)
+    probe = adapter._codex_native_probe('%5', BODY)
+    assert probe is not None
+    path.write_text('\n'.join(json.dumps(x) for x in [header, *rows(
+        'other body' if change == 'other-body' else BODY)]) + '\n')
+    if change == 'runtime':
+        runtime[0] = 'replacement-process'
+    if change == 'session':
+        session[0] = 456
+    if change == 'exact':
+        adapter._verify_codex_submission('%5', BODY, BUSY, native_probe=probe)
+    else:
+        with pytest.raises(tmux.PaneSubmissionUnverified):
+            adapter._verify_codex_submission('%5', BODY, BUSY, native_probe=probe)
 
 
 def test_exhausted_tail_cannot_hide_duplicate_consumption(world, monkeypatch):
