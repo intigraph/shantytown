@@ -637,7 +637,12 @@ def _run_evidence(command: str) -> tuple[float | None, str]:
     except OSError as e:
         return None, f"evidence command could not start: {e}"
     if r.returncode != 0:
-        return None, f"evidence command exited {r.returncode}"
+        # Name WHY when the command says: "exited 1" alone hid a memory plan
+        # stuck before "applied" for 23 days (aegis-9uq.1). Last stderr line only,
+        # bounded; a command that says nothing still reads "exited N".
+        last = next((ln.strip() for ln in reversed((r.stderr or "").splitlines()) if ln.strip()), "")
+        last = last.removeprefix("Error: ")[:160]
+        return None, f"evidence command exited {r.returncode}" + (f": {last}" if last else "")
     out = r.stdout.strip()
     try:
         return float(out), ""
