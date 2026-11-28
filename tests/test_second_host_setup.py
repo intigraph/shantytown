@@ -115,7 +115,7 @@ def test_doctor_gives_a_concrete_local_source_recipe(monkeypatch):
     monkeypatch.setattr(selfcheck, 'canonical_source', lambda _: None)
     report = selfcheck.check_self()
     assert report.verdict == selfcheck.CANNOT_TELL
-    assert 'git clone https://github.com/scbrown/shantytown.git' in report.note
+    assert 'git clone https://github.com/intigraph/shantytown.git' in report.note
     assert 'pipx install --force --editable' in report.note
     assert 'local source path' in report.note
 

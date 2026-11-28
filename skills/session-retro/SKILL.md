@@ -36,7 +36,7 @@ and turns the answer into tracked work.
 | a tracker: `bd` / `gh` / a create command | improvement ideas become **filed issues** you can schedule and close | degrades to a **markdown backlog** file — captured, not lost |
 | **[dispatch-work](../dispatch-work/SKILL.md)** | hand a filed improvement straight to a worker to actually fix | the issue waits in the tracker for someone to pick up |
 | **[quipu](../quipu/SKILL.md)** graph | note recurring friction so the same gap isn't re-filed every session | you may file the same idea twice across sessions |
-| **[desirepath](https://github.com/scbrown/desire-path)** (`dp`) | surface the FAILED tool calls it recorded — a capability reached for that didn't exist is a ready-made improvement issue | the retro asks from memory only; no pre-identified gaps |
+| **[desirepath](https://github.com/intigraph/desire-path)** (`dp`) | surface the FAILED tool calls it recorded — a capability reached for that didn't exist is a ready-made improvement issue | the retro asks from memory only; no pre-identified gaps |
 
 Only two files, both stdlib Python:
 

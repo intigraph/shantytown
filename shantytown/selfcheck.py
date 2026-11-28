@@ -196,7 +196,7 @@ def check_self(*, run=_default_run, canonical: str | None = None,
                           f"no canonical source is configured and this package is "
                           f"not in a git checkout — set ${_CANONICAL_ENV} to the "
                           f"local checkout a fleet deploy must be built from. For a new host: "
-                          "git clone https://github.com/scbrown/shantytown.git ~/src/shantytown; "
+                          "git clone https://github.com/intigraph/shantytown.git ~/src/shantytown; "
                           "pipx install --force --editable ~/src/shantytown; "
                           "set [env] SHANTY_CANONICAL_SOURCE to that absolute local path "
                           "in shantytown.toml. Use your fleet-approved fork if different; "

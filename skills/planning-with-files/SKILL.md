@@ -27,8 +27,8 @@ Work like Manus: Use persistent markdown files as your "working memory on disk."
 | Present | This skill uses it for | Absent — what happens |
 |---|---|---|
 | *(none required)* | the file discipline is plain markdown and works anywhere | — |
-| **[bobbin](https://github.com/scbrown/bobbin)** | `bobbin context "<the goal>"` to populate `findings.md` at the start of a phase, instead of grepping | you rediscover the same files each session |
-| **[yupana](https://github.com/scbrown/yupana)** | `yupana impact <symbol>` when a phase touches code — the blast radius belongs in `findings.md` | plan a change without knowing what it reaches |
+| **[bobbin](https://github.com/intigraph/bobbin)** | `bobbin context "<the goal>"` to populate `findings.md` at the start of a phase, instead of grepping | you rediscover the same files each session |
+| **[yupana](https://github.com/intigraph/yupana)** | `yupana impact <symbol>` when a phase touches code — the blast radius belongs in `findings.md` | plan a change without knowing what it reaches |
 | **[dispatch-work](../dispatch-work/SKILL.md)** | handing a phase to another agent once the plan names discrete phases | do every phase yourself |
 
 This is the one skill here with **no service dependency at all** — it is three
