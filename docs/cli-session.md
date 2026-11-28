@@ -65,6 +65,12 @@ write path. This reminder appears in both anchor startup and the packaged stack
 orientation, including when the plate read is unavailable. It does not perform a
 graph write or grant permission to one.
 
+A plate read refused with HTTP 429, or otherwise incomplete, returns exit 2
+and an `UNKNOWN` diagnostic. `--json` also sets `availability: "unknown"` and
+`error`; its `item: null` must not be treated as a known empty plate. `--short`
+keeps stdout empty and uses the nonzero exit to distinguish unavailability.
+No empty plate is published on this path. An observed empty plate still exits 0.
+
 ### anchor is a read. It must never write.
 
 Gas Town's primer has a `--hook` mode that fires at SessionStart and mutates state. That coupling is

@@ -403,7 +403,9 @@ def plate_reader(tracker: BrTracker, *, require_complete: bool = False, owners=N
     # Seeds reader instead shares only the requested owner's assignments.
     ordinary = cache(lambda: rows_partial(tracker))
     scoped_ready = getattr(tracker, "plate_ready_ids", None)
-    ready = cache(lambda agent: _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else cache(lambda: ready_ids_or_none(tracker))
+    # Strict readers cannot rank an open plate as known when readiness was shed.
+    ready = cache(lambda agent: scoped_ready(agent).exact() if require_complete
+                  else _scoped_readiness(scoped_ready, agent)) if callable(scoped_ready) else cache(lambda: ready_ids_or_none(tracker))
 
     def read(agent):
         seen, failures = snapshot(agent) if callable(scoped) else ordinary()

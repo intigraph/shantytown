@@ -9480,7 +9480,7 @@ def _lead_status(registry, panes):
     return _lead_is_up(registry, panes)
 
 
-def _resolve_anchor(a, me, *, require_complete=False):
+def _resolve_anchor(a, me, *, require_complete=False, display=None):
     """Shared startup read; publication and startup decorations stay in anchor's CLI."""
     registry, panes = _registry(a), _panes(a)
     from .routing_identity import with_remote_lead
@@ -9505,8 +9505,10 @@ def _resolve_anchor(a, me, *, require_complete=False):
     except Exception:
         _mcp = ()
     _anchor_tracker = _tracker(a)
+    if display is None:
+        display = not require_complete
     p = do_anchor(me, registry, panes,
-                  plate=_plate(a, tracker=_anchor_tracker, display=not require_complete, snapshot=require_complete,
+                  plate=_plate(a, tracker=_anchor_tracker, display=display, snapshot=require_complete,
                                require_complete=require_complete, owners=[me]),
                   lead_status=_lead_status(registry, panes),
                   harness=_hn, mcp_preapproved=_mcp)
@@ -9534,13 +9536,17 @@ def _cmd_anchor(a) -> int:
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
     try:
-        p, _anchor_tracker, registry = _resolve_anchor(a, me)
+        p, _anchor_tracker, registry = _resolve_anchor(a, me, require_complete=True, display=True)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED
-    except (Unreachable, CouldNotLook, PartialAnswer) as e:
-        # NOT success, NOT failure. "I could not look" must never say "fine".
-        print(f"  could not tell: {e}", file=sys.stderr)
+    except (Unreachable, CouldNotLook, PartialAnswer, RuntimeError) as e:
+        # An incomplete plate is not an empty one (including a shed 429 read).
+        # Never publish it as empty, even when a display adapter degrades loudly.
+        print(f"  UNKNOWN: could not tell: {e}", file=sys.stderr)
+        if getattr(a, "json", False):
+            print(json.dumps({"schema": "st.task-context/1", "agent": me,
+                              "harness": None, "item": None, "availability": "unknown", "error": str(e)}))
         return CANNOT_TELL
     # PUBLISH the resolved plate for non-Python consumers (aegis-qdjof). This
     # sits in the CLI and NOT in anchor(), whose docstring makes "reads only" a
