@@ -81,6 +81,39 @@ class SdTracker(BrTracker):
 
     _tool = "sd"
 
+    def defer_dependency(self, item_id, blocker, reason):
+        """Verify the native edge before releasing the active item to its gate."""
+        result = self._bd_for(item_id, "dep", "add", item_id, blocker,
+                              "--done-when", "closed", "--json")
+        # Even an error may follow commit. Observe the exact edge, never retry.
+        observed = self._bd_for(item_id, "dep", "list", item_id, "--json")
+        if observed.returncode != 0:
+            raise RuntimeError("dependency readback failed; edge outcome UNKNOWN")
+        rows = json.loads(observed.stdout)
+        if not isinstance(rows, list) or not any(
+                isinstance(row, dict) and row.get("issue_id") == item_id
+                and row.get("depends_on_id") == blocker and row.get("type") == "blocks"
+                for row in rows):
+            raise RuntimeError("dependency edge not verified")
+        if result.returncode != 0:
+            from .br import redact_cause
+            cause = redact_cause(result.stderr.strip() or result.stdout.strip())
+            raise RuntimeError(f"sd dep add failed (exit {result.returncode}); edge observed: {cause}")
+        current = self.defer_read(item_id)
+        from .protocols import BLOCKER_KIND_LABELS
+        notes, force = self._merged_notes(item_id, reason)
+        args = ["update", item_id, "--status=open", "--defer=", f"--notes={notes}"]
+        args.extend(f"--remove-label={label}" for label in sorted(
+            set(current.labels) & set(BLOCKER_KIND_LABELS.values())))
+        if force:
+            args.append("--force")
+        updated = self._bd_for(item_id, *args)
+        current = self.defer_read(item_id)
+        if (updated.returncode != 0 or current.status != "open" or current.defer_until
+                or reason not in (current.notes or "")
+                or set(current.labels) & set(BLOCKER_KIND_LABELS.values())):
+            raise RuntimeError("dependency release update readback unproven")
+
     def create(self, title: str, **fields):
         """Forward repeatable duplicate IDs as separate argv entries."""
         overrides = fields.pop("new_despite", None)

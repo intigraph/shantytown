@@ -421,6 +421,13 @@ status, blocker kind, reason and condition together. An interrupted write return
 non-success with read-back evidence and no automatic retry. An already-deferred
 item is only a no-op when all requested fields are present.
 
+On Seeds, `bead` requires `resume_when: closed:<blocker-id>` plus a
+`--dependency-reason`. It creates and reads back a native `sd dep add` edge
+with `--done-when closed`, then returns the item to `open`, clears its date
+deferral and removes old blocker-kind labels. The dependency controls readiness.
+A date-only bead request refuses before writing; no unchecked `blocked:bead`
+label is added. Dry runs validate the gate without writing either item or edge.
+
 CI, review and merge waits stay `in_progress`, including P0 and milestone work.
 Record the exact head/run/review wake on the item. `st work defer` refuses both
 `ci-terminal:`/`pr-merged:` conditions and explicit CI/review/merge waits before
