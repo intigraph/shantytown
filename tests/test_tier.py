@@ -118,6 +118,21 @@ def test_Q1_lead_cannot_report_to_a_lead(tmp_path):
         role_set(r, "wu", "lead", reports=[])
 
 
+def test_administrator_cannot_be_listed_as_a_leads_report(tmp_path):
+    """--reports names subordinates. Naming the administrator there used to write
+    `administrator reports_to lead` beside `lead reports_to administrator`."""
+    r = reg(tmp_path,
+            sattler={"role": "administrator"},
+            owen={"role": "worker"})
+    with pytest.raises(ValueError, match="is the administrator; it cannot report to a lead"):
+        plan_role_set(r, "owen", "lead", reports=["sattler"])
+    # Nothing was written, and the intended shape still works.
+    assert r.get("sattler").reports_to is None
+    role_set(r, "owen", "lead", reports=[])
+    assert r.get("owen").reports_to == "sattler"
+    assert r.get("sattler").reports_to is None
+
+
 def test_Q1_report_that_is_a_lead_is_refused(tmp_path):
     r = reg(tmp_path,
             malcolm={"role": "worker"},
