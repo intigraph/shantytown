@@ -638,7 +638,8 @@ class Requests:
                 quipu_nodes: list | None = None,
                 no_in_place: bool = False, auto: bool = False,
                 allow_loss: bool = False, bundle_custody_items=None,
-                runtime_update=None, only_if_absent=False) -> bool:
+                runtime_update=None, only_if_absent=False,
+                settings_stale=False) -> bool:
         with self._locked():
             data = self._load()
             if only_if_absent and agent in data:
@@ -676,6 +677,11 @@ class Requests:
                 data[agent]["bundle_custody_items"] = list(bundle_custody_items)
             if runtime_update is not None:
                 data[agent]["runtime_update"] = dict(runtime_update)
+            if settings_stale:
+                # aegis-za4f.20: tend asked because the PROCESS runs on older
+                # settings than its file. Context depth is not the reason, so
+                # the depth sweep must not withdraw it (notify.AutoCycler).
+                data[agent]["settings_stale"] = True
             self._save(data)
             return True
 
