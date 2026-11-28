@@ -267,7 +267,7 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
 def review_rounds(root) -> dict[tuple[str, int], set[str]]:
     """(repo, pr) -> the heads the drain admitted a review for. One round per
     head: re-admitting the same head (a crash replay) is not a new round. Only
-    the drain's own ledger counts, so a review spawned by hand is not a round;
+    the drain's own ledger counts, so a review spawned by hand is not an extra round;
     the cap brakes the automatic loop, not an operator."""
     out: dict[tuple[str, int], set[str]] = {}
     for r in _ledger(root):

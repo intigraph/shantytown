@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 
 import pytest
 
@@ -13,6 +14,8 @@ from shantytown import ephemeral as eph
 from shantytown import pr_events as pe
 
 from test_ephemeral import _st, store  # noqa: F401
+
+_REAL_GH_JSON = cli._gh_json  # the store fixture stubs it offline
 
 HEAD = "a" * 40
 NEWER = "b" * 40
@@ -563,6 +566,29 @@ def test_an_unproved_forge_head_stays_unknown(store, monkeypatch, head):
     (rec,) = eph.live(root)
     assert rec["head"] is None
     assert pe.occupied(_ev(), [rec], []) == (rec["name"], False)
+
+
+@pytest.mark.parametrize("job", ["review", "task"])
+def test_a_hung_gh_spawns_head_less(store, monkeypatch, job):
+    # PR #831 review: _gh_json runs gh with timeout=60, and a hung gh raised
+    # TimeoutExpired, which no lookup caught (review/task head, task --repo
+    # canonical check), so an offline hand spawn died with a traceback.
+    root, _panes, _launched = store
+    real = subprocess.run
+    calls = []
+
+    def run(argv, *args, **kw):
+        if argv[:2] == ["gh", "api"]:
+            calls.append(argv[2])
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+        return real(argv, *args, **kw)
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(cli, "_gh_json", _REAL_GH_JSON)
+    assert _st(root, "--ephemeral", "--job", job, "--item", "it-1",
+               "--repo", "o/n", "--pr", "7", "--harness", "claude") == cli.OK
+    assert "repos/o/n/pulls/7" in calls
+    (rec,) = eph.live(root)
+    assert rec["head"] is None
 
 
 def test_launching_is_not_crash_recovery_proof():

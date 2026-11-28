@@ -3915,7 +3915,13 @@ def _spawn_inside(a, *, principal=None) -> str | None:
 
 def _gh_json(*args):
     import subprocess
-    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    try:
+        r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        # A hung gh (stalled TLS, `dial tcp ... i/o timeout`) raised
+        # TimeoutExpired, which no caller's (RuntimeError, ValueError, OSError)
+        # caught, so an offline spawn died with a traceback (PR #831 review).
+        raise RuntimeError(f"gh api {args[0]} timed out after 60s") from None
     if r.returncode != 0:
         raise RuntimeError(f"gh api {args[0]} failed: {(r.stderr or '').strip()[:160]}")
     return json.loads(r.stdout)

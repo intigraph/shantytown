@@ -360,7 +360,7 @@ not the signed controller `recruit_*` path.
   again, and the PR is raised to the administrator once (`pr-event-capped`). A
   capped PR does not land by itself; a human reviews, fixes or merges it. A
   merge event for an approved head is never capped. Only drain-admitted reviews
-  count, so a review spawned by hand is not a round, and re-admitting the same
+  count, so a review spawned by hand is not an extra round, and re-admitting the same
   head is not a new round either.
 - **Already running** (aegis-8et): ANY live job or queued ticket with the same
   job, repo and PR, whoever launched it, including a hand spawn by the
