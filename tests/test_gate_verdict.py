@@ -578,3 +578,37 @@ def test_gate_typed_with_an_unpublished_class_spelling_is_not_read(q):
     gv.write(record, quipu=q, graph=GRAPH, seed=SEED, verifier=SIGNER)
     _retype_gate(q, record, 'https://w3id.org/intigraph/camayoc/core/ns#GateApproval')
     assert not _approval(q)['approved']
+
+
+# --- aegis-n0wc R1: the verify wait, and that a timeout is still not approval ----
+
+class _Resp:
+    def __init__(self, body): self.body = body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self, n): return self.body
+
+
+def test_the_verify_client_waits_past_quipus_slow_p90(monkeypatch):
+    # A 27 s p90 verify must be waited for: the default bound sits above Quipu's
+    # top finite latency bucket (30 s), and it is what urlopen actually receives.
+    seen = {}
+
+    def urlopen(req, timeout):
+        seen["timeout"] = timeout
+        return _Resp(b'{"trusted": true}')
+
+    monkeypatch.setattr(gv.urllib.request, "urlopen", urlopen)
+    assert gv.VERIFY_TIMEOUT_S == 60.0
+    assert gv.Quipu("http://q.invalid")._post("/verdict/verify", {}, {}) == {"trusted": True}
+    assert seen["timeout"] == gv.VERIFY_TIMEOUT_S > 30.0
+
+
+def test_a_verify_that_times_out_is_still_not_approved(monkeypatch):
+    # Fail-closed is unchanged: a timeout raises VerdictError, never a pass.
+    def urlopen(req, timeout):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(gv.urllib.request, "urlopen", urlopen)
+    with pytest.raises(gv.VerdictError, match="timed out"):
+        gv.Quipu("http://q.invalid")._post("/verdict/verify", {}, {})
