@@ -211,6 +211,15 @@ permission and leave the ledger read-only. An empty summary is refused before
 publishing a verdict or ending the job. Existing stdin reports remain supported
 for callers that can supply stdin without wrapping the command.
 
+The guarded merge reads the PR back after `gh pr merge` exits 0, because on a
+repo with a merge queue that exit only means the PR was ADDED to the queue
+(shantytown#762 was reported merged while it sat at queue position 1). It prints
+the verdict the job must report: `merged` only when the forge says merged=true,
+with the merge commit; `enqueued` when the PR is in the merge queue, with its
+position and enqueuedAt; anything else is refused so the job reports `blocked`
+with the observed state. `enqueued` is appended to the legacy verdict enum,
+spaces the merge lane like a merge, and does not release the lane as failed.
+
 ## The spawn queue
 
 aegis-cui. Before it, a spawn over the cap was refused and the work was lost
@@ -1016,7 +1025,7 @@ action fields are reserved for the JobSpec extension.
 
 `verdicts` lists the verdicts the job may report (1-16 names, `blocked`
 required; `failed` is recorded by st at teardown and refuses here). It replaces
-the legacy enum `approve|request-changes|merged|blocked|done|failed` in the
+the legacy enum `approve|request-changes|merged|blocked|done|failed|enqueued` in the
 job prompt and in `st agent spawn --report --verdict`, which refuses any other
 name. `review` and `merge` may only narrow the legacy names, because their gates
 key on `approve`, `request-changes` and `merged`. An absent key keeps the legacy

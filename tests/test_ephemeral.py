@@ -714,6 +714,28 @@ def test_review_mode_rows_fail_closed():
         assert f(rows) == "non-author", rows
 
 
+def _merge_run(ran, node=None):
+    """A fake `run` for the guarded merge: `gh pr merge` exits 0, and the
+    read-back (aegis-1jtb) answers `node`, by default a landed PR."""
+    import json as _json
+    node = {"state": "MERGED", "merged": True, "mergedAt": "2026-11-27T22:52:44Z",
+            "mergeCommit": {"oid": "c" * 40}, "isInMergeQueue": False,
+            "mergeQueueEntry": None} if node is None else node
+
+    class _Done:
+        returncode, stderr = 0, ""
+
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def run(argv, **_k):
+        ran.append(argv)
+        if argv[:3] == ["gh", "api", "graphql"]:
+            return _Done(_json.dumps({"data": {"repository": {"pullRequest": node}}}))
+        return _Done()
+    return run
+
+
 def _timeout(*_a, **_k):
     raise TimeoutError("quipu did not answer")
 
@@ -740,10 +762,9 @@ def test_guarded_merge_reads_the_repos_review_mode_from_quipu(store, reader, mer
         asked.append((name, params))
         return reader(root_, name, params, **k)
     go = lambda: cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],  # noqa: E731
-                                  run=lambda argv, **k: ran.append(argv) or _R(),
-                                  review_reader=read)
+                                  run=_merge_run(ran), review_reader=read)
     if merged:
-        assert go() == cli.OK and len(ran) == 1
+        assert go() == cli.OK and ran[0][:3] == ["gh", "pr", "merge"]
     else:
         with pytest.raises(eph.Refused, match="no non-author APPROVE"):
             go()
@@ -765,9 +786,10 @@ def test_guarded_merge_refuses_a_review_job_and_merges_only_when_the_gate_passes
     a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
     a.root = root
     assert cli._spawn_merge(a, rec["name"], gh=lambda path: reads[path],
-                            run=lambda argv, **k: ran.append(argv) or _R()) == cli.OK
-    assert ran == [["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
-                    "--match-head-commit", HEAD]]
+                            run=_merge_run(ran)) == cli.OK
+    assert ran[0] == ["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
+                      "--match-head-commit", HEAD]
+    assert ran[1][:3] == ["gh", "api", "graphql"] and len(ran) == 2
     review = _rec(root, job="review", repo="o/n", pr=5, state=eph.LIVE)
     with pytest.raises(eph.Refused, match="only a merge job"):
         cli._spawn_merge(a, review["name"], gh=lambda p: 1 / 0, run=lambda *a, **k: 1 / 0)
@@ -2716,3 +2738,79 @@ def test_spawn_never_rewrites_an_existing_role_artifact(store):
     role_file.write_text('{"hooks": {}, "operator": "kept"}\n')
     assert _st(root, "--ephemeral", "--job", "task", "--repo", "o/n", "--item", "it-1") == cli.OK
     assert role_file.read_text() == '{"hooks": {}, "operator": "kept"}\n'
+
+
+# --- aegis-1jtb: exit 0 from `gh pr merge` is not a landing ----------------------
+
+def _guarded(root):
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.LIVE)
+    reads = {"repos/o/n/pulls/5": _pr(), "repos/o/n/pulls/5/reviews?per_page=100": GOOD_REVIEW,
+             f"repos/o/n/commits/{HEAD}/check-runs?per_page=100": {"check_runs": GREEN}}
+    a = cli._parse_args(["--root", str(root), "agent", "spawn", "--merge", "--head", HEAD])
+    a.root = root
+    return a, rec, reads
+
+
+QUEUED = {"state": "OPEN", "merged": False, "mergedAt": None, "mergeCommit": None,
+          "isInMergeQueue": True,
+          "mergeQueueEntry": {"position": 1, "enqueuedAt": "2026-11-27T22:52:39Z",
+                              "state": "AWAITING_CHECKS"}}
+
+
+def test_a_merge_that_only_enqueued_reports_enqueued_not_merged(store, capsys):
+    """shantytown#762: gh exited 0, the PR sat at merge-queue position 1, and the
+    job reported MERGED. The read-back must say enqueued, with the position."""
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    ran = []
+    assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__,
+                            run=_merge_run(ran, QUEUED), sleep=lambda s: None) == cli.OK
+    out = capsys.readouterr().out
+    assert "report --verdict enqueued" in out and "--verdict merged" not in out
+    assert "position 1" in out and "2026-11-27T22:52:39Z" in out and "NOT merged" in out
+    assert len(ran) == 2   # an enqueued answer is final; no re-read
+
+
+def test_a_landed_merge_reports_merged_with_its_merge_commit(store, capsys):
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, run=_merge_run([])) == cli.OK
+    out = capsys.readouterr().out
+    assert "report --verdict merged" in out and "c" * 40 in out
+
+
+@pytest.mark.parametrize("node", [
+    {"state": "OPEN", "merged": False, "isInMergeQueue": False, "mergeQueueEntry": None},
+    {"state": "CLOSED", "merged": False, "isInMergeQueue": False},
+    None,
+])
+def test_a_merge_that_neither_landed_nor_queued_is_refused_after_rereads(store, capsys, node):
+    """Exit 0 with no landing and no queue entry is reported blocked, with the
+    observed state, after a bounded re-read; never "merged"."""
+    root, _panes, _launched = store
+    a, rec, reads = _guarded(root)
+    ran, slept = [], []
+    unreadable = type("_Empty", (), {"returncode": 0, "stdout": "", "stderr": ""})
+    run = _merge_run(ran, node) if node is not None else (
+        lambda argv, **k: ran.append(argv) or unreadable())
+    with pytest.raises(eph.Refused, match="report --verdict blocked") as err:
+        cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, run=run, sleep=slept.append)
+    assert "merged" not in capsys.readouterr().out
+    assert len(ran) == 4 and len(slept) == 2   # one merge, three bounded reads
+    if node is not None:
+        assert f"state={node['state']}" in str(err.value)
+
+
+def test_an_enqueued_result_is_a_valid_report_and_holds_the_lane(store):
+    """The verdict is accepted end to end and spaces the lane like a merge."""
+    from shantytown import job_mailbox
+    root, _panes, _launched = store
+    assert "enqueued" in eph.VERDICTS
+    assert job_mailbox.payload({"kind": "report", "verdict": "enqueued", "summary": "q"})
+    with pytest.raises(Exception):
+        job_mailbox.payload({"kind": "report", "verdict": "landed-probably", "summary": "q"})
+    rec = _rec(root, job="merge", repo="o/n", pr=5, state=eph.DONE)
+    rec["result"] = {"verdict": "enqueued"}
+    rec["ended_at"] = NOW
+    eph.write(root, rec)
+    assert "spacing merges" in eph.lane_refusal(root, "o/n", 10, NOW + 60)

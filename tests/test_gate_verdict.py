@@ -287,6 +287,22 @@ class _R:
     returncode, stdout, stderr = 0, "", ""
 
 
+def _merge_run(ran):
+    import json as _json
+    node = {"state": "MERGED", "merged": True, "mergeCommit": {"oid": "c" * 40}}
+
+    class _Done(_R):
+        def __init__(self, stdout=""):
+            self.stdout = stdout
+
+    def run(argv, **_k):
+        ran.append(argv)
+        if argv[:3] == ["gh", "api", "graphql"]:
+            return _Done(_json.dumps({"data": {"repository": {"pullRequest": node}}}))
+        return _Done()
+    return run
+
+
 @pytest.fixture(autouse=True)
 def _pinned(monkeypatch):
     monkeypatch.setattr(gv, "trusted_signers", lambda *a, **k: dict(PINNED))
@@ -300,9 +316,9 @@ def test_guarded_merge_merges_on_a_signed_verdict_with_no_github_review(root, q)
     ran = []
     a = _args(root, "--merge", "--head", HEAD)
     assert cli._spawn_merge(a, rec["name"], gh=reads.__getitem__, quipu=q,
-                            run=lambda argv, **k: ran.append(argv) or _R()) == cli.OK
-    assert ran == [["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
-                    "--match-head-commit", HEAD]]
+                            run=_merge_run(ran)) == cli.OK
+    assert ran[0] == ["gh", "pr", "merge", "5", "--repo", "o/n", "--squash",
+                      "--match-head-commit", HEAD]
 
 
 def test_guarded_merge_refuses_a_forged_unsigned_verdict(root, q):

@@ -3992,10 +3992,12 @@ def _spawn_merge_pin(a, req_head, item, repo, pr) -> tuple[str | None, str | Non
 
 def _spawn_lane_release(a, rec, *, run=None) -> str:
     """A merge job that ended WITHOUT merging hands chaski's lane turn back now
-    instead of waiting out the lease. Off unless [ephemeral] lane_release is set."""
+    instead of waiting out the lease. Off unless [ephemeral] lane_release is set.
+    An enqueued PR keeps the lane like a merged one: releasing it as "failed"
+    would invite a second merge job for a PR already in the queue."""
     from . import gate_verdict as gv
     result = rec.get("result") or {}
-    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
+    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") in ("merged", "enqueued"):
         return ""
     if 'uid_binding' in rec:
         from . import ephemeral as eph
@@ -4036,7 +4038,8 @@ def _spawn_review_mode(a, repo, *, reader=None) -> str:
     return eph.review_mode_from_rows(rows)
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None) -> int:
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None,
+                 sleep=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -4070,8 +4073,37 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None
              "--match-head-commit", head], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
-    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    verdict, line = _spawn_merge_outcome(repo, pr, head, run=run, sleep=sleep)
+    if verdict == "blocked":
+        raise eph.Refused(line + "; report --verdict blocked with this state")
+    print(f"  {line}; now report --verdict {verdict}")
     return OK
+
+
+def _spawn_merge_outcome(repo, pr, head, *, run, sleep=None, attempts=3) -> tuple[str, str]:
+    """Read back what `gh pr merge` did (aegis-1jtb): exit 0 means merged OR only
+    enqueued. A state that is neither is re-read briefly, since the forge can lag
+    its own answer, then reported blocked rather than guessed."""
+    import subprocess
+    import time
+    from . import ephemeral as eph
+    owner, name = repo.split("/", 1)
+    verdict, line = "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    for n in range(attempts):
+        if n:
+            (sleep or time.sleep)(2)
+        try:
+            r = run(["gh", "api", "graphql", "-f", f"query={eph.MERGE_STATE_QUERY}",
+                     "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={pr}"],
+                    capture_output=True, text=True, timeout=60)
+            node = (((json.loads(r.stdout or "null") or {}).get("data") or {})
+                    .get("repository") or {}).get("pullRequest") if r.returncode == 0 else None
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            node = None
+        verdict, line = eph.merge_outcome(node, repo, pr, head)
+        if verdict != "blocked":
+            break
+    return verdict, line
 
 
 def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:

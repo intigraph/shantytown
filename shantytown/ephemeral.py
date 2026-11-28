@@ -39,7 +39,9 @@ from typing import Callable
 
 PREFIX = "eph-"
 JOBS = ("review", "merge", "triage", "task")
-VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+#: "enqueued" (aegis-1jtb): the guarded merge ADDED the PR to the forge's merge
+#: queue and it has not landed. Appended, so the legacy prefix stays stable.
+VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 
 
 def job_verdicts(rec: dict, spec: dict | None = None) -> tuple[str, ...]:
@@ -368,9 +370,10 @@ def lane_refusal(root, repo: str, spacing_minutes: int, now: float) -> str:
     if holder:
         return f"merge lane for {repo} is held by {holder['name']}; one merge at a time"
     # Spacing follows MERGES. A job that ended without merging (blocked, failed,
-    # stopped) frees the lane at once: there is no deploy to space behind.
+    # stopped) frees the lane at once: there is no deploy to space behind. An
+    # enqueued PR is a merge in flight, so it is spaced behind like one.
     ended = [r.get("ended_at") or 0 for r in merges
-             if (r.get("result") or {}).get("verdict") == "merged"]
+             if (r.get("result") or {}).get("verdict") in ("merged", "enqueued")]
     last = max(ended, default=0)
     wait = last + spacing_minutes * 60 - now
     if wait > 0:
@@ -1599,7 +1602,9 @@ for you for as long as you live; it is why no other merge can run beside you. Ne
    If the PR's head is no longer {head}, report blocked: a new head needs a new review.
    NEVER run `gh pr merge` yourself, never `--admin`, never push to the base branch, never bypass or
    edit branch protection, never force-push.
-4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise --verdict merged.""",
+4. If any condition is unproven or the merge is refused, report --verdict blocked with the reason. Otherwise
+   report the verdict the guarded merge PRINTS, never one you infer: --verdict merged only when it says the
+   PR merged; --verdict enqueued when it says the PR was only added to the merge queue (it has NOT landed).""",
     "triage": """JOB: diagnose the ONE failure or alert described by {item}{target_short}.
 1. Identify the subject from the item and the bounded context. For an infrastructure alert, use admitted
    alert/metrics/service READ tools; do not invent a CI run. Use forge run/check logs only for a CI failure.
@@ -2022,6 +2027,45 @@ def merge_gate(rec: dict | None, head: str, pr: dict, reviews: list, checks: lis
     if bad:
         return "checks not green on the head: " + ", ".join(sorted(bad)[:5])
     return ""
+
+
+#: One read of what `gh pr merge` actually did (aegis-1jtb). A repo with a merge
+#: queue makes `gh pr merge` exit 0 after only ENQUEUEING the PR: shantytown#762
+#: was reported "MERGED" while REST said merged=false and GraphQL said
+#: isInMergeQueue=true, position 1, and its head was not on main.
+MERGE_STATE_QUERY = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    state merged mergedAt headRefOid mergeCommit { oid }
+    isInMergeQueue mergeQueueEntry { position enqueuedAt state }
+  } }
+}"""
+
+
+def merge_outcome(node, repo: str, pr: int, head: str) -> tuple[str, str]:
+    """(verdict, line) for the PR state read AFTER `gh pr merge` returned 0.
+
+    Pure. Only merged=true is "merged"; a PR in the merge queue is "enqueued"
+    with its position and enqueuedAt, never "merged", because a red merge_group
+    run or a conflict can still eject it. Anything else, including an
+    unreadable answer, is "blocked" with the observed state, so a zero exit
+    code alone can never be reported as a landing."""
+    if not isinstance(node, dict):
+        return "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    observed = (f"state={node.get('state')} merged={node.get('merged')} "
+                f"isInMergeQueue={node.get('isInMergeQueue')}")
+    if node.get("merged") is True:
+        commit = (node.get("mergeCommit") or {}).get("oid") or "UNKNOWN"
+        return "merged", (f"merged {repo}#{pr} at head {head} as merge commit {commit} "
+                          f"(mergedAt {node.get('mergedAt') or 'UNKNOWN'})")
+    entry = node.get("mergeQueueEntry")
+    if node.get("isInMergeQueue") is True or isinstance(entry, dict):
+        entry = entry if isinstance(entry, dict) else {}
+        return "enqueued", (f"enqueued {repo}#{pr} at head {head} in the merge queue, NOT "
+                            f"merged: position {entry.get('position', 'UNKNOWN')}, "
+                            f"enqueuedAt {entry.get('enqueuedAt') or 'UNKNOWN'}, "
+                            f"queue state {entry.get('state') or 'UNKNOWN'}")
+    return "blocked", (f"{repo}#{pr}: gh pr merge exited 0 but the PR is neither merged nor "
+                       f"in the merge queue ({observed})")
 
 
 # --- identity that does not rest on the environment ---------------------------

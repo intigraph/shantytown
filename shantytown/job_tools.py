@@ -13,7 +13,7 @@ from dataclasses import replace
 _FIELDS = {"mcp_servers", "skills", "claude_ai_connectors", "mcp_tools", "verdicts"}
 # Review and merge gates key on these exact names (approve/request-changes sign a
 # GateApproval, merged ends the queue), so those jobs may narrow but never rename.
-LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 _GATED_JOBS = {"review", "merge"}
 _RESERVED = {"budget", "model", "harness", "verdict", "trigger", "action", "actions",
              "prompt_template", "max_tool_calls"}

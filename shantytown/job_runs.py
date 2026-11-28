@@ -116,7 +116,7 @@ def ending_steps(defn: dict, current: str, verdict: str, *, pr: bool = False) ->
                 "reject": ["reject"]}.get(verdict)
         if current == "approved" and verdict == "approve":
             path = ["report"]
-    elif verdict in ("done", "merged", "approve"):
+    elif verdict in ("done", "merged", "enqueued", "approve"):
         path = {"claimed": ["work", "open-pr", "report"] if pr else ["work", "report"],
                 "worked": ["open-pr", "report"] if pr else ["report"],
                 "pr-open": ["report"]}.get(current)
