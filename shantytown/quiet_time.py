@@ -35,6 +35,7 @@ class Status:
     # (name, effect) per detector; a name absent here is "full", which keeps
     # every Status built before effects existed meaning what it meant.
     effects: tuple[tuple[str, str], ...] = ()
+    probe_enabled: tuple[tuple[str, bool], ...] = ()
 
     def effect(self, name):
         return dict(self.effects).get(name, FULL)
@@ -235,17 +236,22 @@ def _collect(root, *, probing=False, proc=Path('/proc'), now=None):
         return Status((('gaming', gaming.read(root, now=now)),
                        ('config', Observation('unknown', error='invalid quiet-time configuration'))))
     entries = []
+    probe_enabled = []
     for spec in policy.detectors:
         if spec.kind == 'steam':
             # Preserve the old API and status for unconfigured installations.
             kwargs = {} if spec == Policy().detectors[0] else {'spec': spec}
             value = (gaming.probe(root, proc=proc, now=now, **kwargs) if probing else
                      gaming.read(root, now=now, **kwargs))
+            detecting = gaming.detection_enabled(folder(root, spec.name), spec)
         else:
             value = _probe(root, spec, proc, now) if probing else _read(root, spec, now)
+            detecting = enabled(root, spec)
         entries.append((spec.name, value))
+        probe_enabled.append((spec.name, detecting))
     return (entries[0][1] if len(entries) == 1 else
-            Status(tuple(entries), tuple((spec.name, spec.effect) for spec in policy.detectors)))
+            Status(tuple(entries), tuple((spec.name, spec.effect) for spec in policy.detectors),
+                   tuple(probe_enabled)))
 
 
 def read(root, *, now=None):
@@ -267,6 +273,7 @@ def manual(root, name, *, clear=False):
 
 def metrics(status):
     entries = status.entries if isinstance(status, Status) else (('gaming', status),)
+    probe_enabled = dict(status.probe_enabled) if isinstance(status, Status) else {}
     text = gaming.metrics(dict(entries).get('gaming', gaming.Status()))
     text += '# TYPE aegis_quiet_time_hold_active gauge\n'
     text += f'aegis_quiet_time_hold_active {int(status.held)}\n'
@@ -282,8 +289,16 @@ def metrics(status):
     text += '# HELP aegis_quiet_time_throttled Crew CPU slowdown applies (a hold, or a shader compile).\n'
     text += '# TYPE aegis_quiet_time_throttled gauge\n'
     text += f'aegis_quiet_time_throttled {int(getattr(status, "throttled", status.held))}\n'
+    text += '# HELP aegis_quiet_time_probe_enabled Automatic detector observation is enabled.\n'
+    text += '# TYPE aegis_quiet_time_probe_enabled gauge\n'
     for name, value in entries:
         text += f'aegis_quiet_time_detector_active{{reason="{name}"}} {int(value.held)}\n'
+        detecting = probe_enabled.get(name, value.state != 'off')
+        text += f'aegis_quiet_time_probe_enabled{{reason="{name}"}} {int(detecting)}\n'
+        # OFF is an intentional setting, not failed evidence (aegis-md1q).
+        # A manual hold stays visible even when its automatic reader is disabled.
+        if not detecting:
+            continue
         text += f'aegis_quiet_time_probe_ok{{reason="{name}"}} {int(value.state not in {"unknown", "off"})}\n'
         text += f'aegis_quiet_time_probe_timestamp_seconds{{reason="{name}"}} {value.observed}\n'
     return text

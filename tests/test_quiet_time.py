@@ -171,6 +171,51 @@ def test_empty_is_clear_but_missing_schema_is_unknown(tmp_path, monkeypatch):
         detectors.json_signal(http_spec(), tmp_path, {}, 0)
 
 
+@pytest.mark.parametrize('body,expected_ok', [
+    ({'MediaContainer': {'size': 0}}, 1),
+    ({}, 0),
+])
+def test_media_probe_exports_its_actual_reader_result(tmp_path, monkeypatch, body, expected_ok):
+    # A clear aggregate (gaming) must not hide a failed media observation.
+    response(monkeypatch, body)
+    value = quiet._probe(tmp_path, http_spec(), tmp_path, 1000)
+    status = quiet.Status((('gaming', gaming.Status('clear')), ('media', value)))
+    text = quiet.metrics(status)
+    assert 'aegis_quiet_time_probe_enabled{reason="media"} 1\n' in text
+    assert f'aegis_quiet_time_probe_ok{{reason="media"}} {expected_ok}\n' in text
+    assert 'aegis_quiet_time_probe_timestamp_seconds{reason="media"} 1000\n' in text
+    assert value.state == ('clear' if expected_ok else 'unknown')
+
+
+def test_disabled_media_never_calls_reader_or_claims_a_fresh_probe(tmp_path, monkeypatch):
+    from dataclasses import replace
+    spec = replace(http_spec(), enabled=False)
+    def unexpected(*args):
+        pytest.fail('disabled detector must not read media')
+    monkeypatch.setitem(detectors.READERS, 'http_json', unexpected)
+    value = quiet._probe(tmp_path, spec, tmp_path, 1000)
+    assert value.state == 'off' and value.observed == 0
+    text = quiet.metrics(quiet.Status((('media', value),)))
+    assert 'aegis_quiet_time_probe_enabled{reason="media"} 0\n' in text
+    assert 'aegis_quiet_time_probe_ok{reason="media"}' not in text
+    assert 'aegis_quiet_time_probe_timestamp_seconds{reason="media"}' not in text
+
+
+def test_probe_enablement_is_independent_of_manual_hold_and_first_read(tmp_path):
+    configure(tmp_path, 'enabled = false\n')
+    quiet.manual(tmp_path, 'media')
+    text = quiet.metrics(quiet.read(tmp_path, now=1000))
+    assert 'aegis_quiet_time_detector_active{reason="media"} 1\n' in text
+    assert 'aegis_quiet_time_probe_enabled{reason="media"} 0\n' in text
+    assert 'aegis_quiet_time_probe_ok{reason="media"}' not in text
+    quiet.manual(tmp_path, 'media', clear=True)
+    configure(tmp_path)
+    text = quiet.metrics(quiet.read(tmp_path, now=1001))
+    assert 'aegis_quiet_time_probe_enabled{reason="media"} 1\n' in text
+    assert 'aegis_quiet_time_probe_ok{reason="media"} 0\n' in text
+    assert 'aegis_quiet_time_probe_timestamp_seconds{reason="media"} 0\n' in text
+
+
 @pytest.mark.parametrize('lift,held', [('inactive', False), ('absent', True)])
 def test_paused_lift_rule_is_configured(tmp_path, monkeypatch, lift, held):
     spec = http_spec()

@@ -237,8 +237,14 @@ only when no detector supplies a healthy observation and at least one is unknown
 `aegis_quiet_time_detector_active{reason="media"}` identifies
 the cause; `aegis_quiet_time_hold_active` is the combined launch-hold decision
 (full-effect detectors only). Per-reason
+`aegis_quiet_time_probe_enabled{reason}` shows whether each automatic detector is
+enabled. Disabled detectors remain visible as zero and omit their probe-health
+and timestamp series; OFF is not a failed observation. For enabled detectors,
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
-unavailable or stale evidence. Existing gaming metrics still describe gaming only.
+unavailable or stale evidence, including UNKNOWN before the first read. Alert on
+failed, stale or missing observations only for enabled reasons. A manual hold
+remains visible independently of automatic enablement. Existing gaming metrics
+still describe gaming only.
 
 Scheduled probes deliver operational hold/lift transitions to live crew panes,
 separately from routine budget advice. Failed pane deliveries remain pending.
