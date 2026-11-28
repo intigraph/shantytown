@@ -5183,7 +5183,9 @@ def _spawn_drain_events(a) -> int:
     a merge pin mismatch), crashed, or no item to report on. A refusal is
     not dropped: the cap and the governor are the brakes, not this loop.
     Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
-    printed, so a permanent refusal cannot hold exit 2 forever."""
+    printed, so a permanent refusal cannot hold exit 2 forever.
+    Capped (settled): a new head's review or a fix for a PR that already has
+    pr_events.MAX_REVIEW_ROUNDS reviewed heads; raised once per PR."""
     from . import ephemeral as eph
     from . import pr_events as pe
     if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
@@ -5193,7 +5195,8 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "launch-failed": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0,
+              "launch-failed": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -5211,6 +5214,7 @@ def _spawn_drain_events(a) -> int:
         refused = pe.first_refused(a.root)
         tried = pe.attempted(a.root)
         heads = pe.current_heads(events)
+        rounds = pe.review_rounds(a.root)
         seen = set()
         for ev in events:
             eid = ev["event_id"]
@@ -5250,6 +5254,15 @@ def _spawn_drain_events(a) -> int:
                 counts["superseded"] += 1
                 print(f"  superseded {label}: {stale}; no spawn")
                 continue
+            reviewed = rounds.setdefault((ev["repo"], ev["pr"]), set())
+            if pe.capped(ev, reviewed):
+                # Review of #792: capping only the review left round 3's fix
+                # job pushing a head nobody would review, so the PR sat with
+                # no APPROVE, no merge event and nothing raised. Past the cap
+                # the drain recruits neither, and says so to a human once.
+                rc = CANNOT_TELL
+                _drain_event_capped(a, pe, ev, label, len(reviewed), counts)
+                continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -5270,6 +5283,8 @@ def _spawn_drain_events(a) -> int:
                 detail = f"launch crashed: {type(error).__name__}: {str(error)[:200]}"
             if out == OK:
                 pe.settle(a.root, ev, "admitted", time.time(), ev["reason"])
+                if ev["job"] == "review":
+                    reviewed.add(ev["head"])
                 counts["admitted"] += 1
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
@@ -5282,7 +5297,7 @@ def _spawn_drain_events(a) -> int:
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
           f"pending {counts['pending']}, expired {counts['expired']}, "
-          f"launch-failed {counts['launch-failed']}, already settled "
+          f"launch-failed {counts['launch-failed']}, capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
 
@@ -5323,22 +5338,41 @@ def _drain_event_launch_failed(a, pe, ev, label, made, why, counts) -> bool:
     pe.settle(a.root, ev, "launch-failed", now, text)
     counts["launch-failed"] += 1
     print(f"  launch-failed {label}: {text}", file=sys.stderr)
+    _drain_event_raise(a, ev, "launch-failed", text, f"pr-events:{ev['event_id']}:launch-failed")
+    return True
+
+
+def _drain_event_capped(a, pe, ev, label, rounds, counts) -> None:
+    """Settle an event past pe.MAX_REVIEW_ROUNDS as "capped" and raise the PR
+    to the administrator, once per PR: from here a human reviews or merges."""
+    text = (f"{label} on {ev['item']}: {rounds} review rounds already recruited "
+            f"(max {pe.MAX_REVIEW_ROUNDS}); the drain recruits no more review or fix "
+            f"jobs for {ev['repo']}#{ev['pr']}. A human must review, fix or merge it.")
+    counts["capped"] += 1
+    print(f"  capped {text}", file=sys.stderr)
+    if a.dry_run:
+        return
+    pe.settle(a.root, ev, "capped", time.time(), text)
+    _drain_event_raise(a, ev, "capped", text, f"pr-events:{ev['repo']}#{ev['pr']}:capped")
+
+
+def _drain_event_raise(a, ev, outcome, text, key) -> None:
+    """Raise a settled event to the administrator. The key makes the raise
+    idempotent; a failed raise is printed and the settle stands."""
     from .events import FilesEvents
     cfg, _err = config.load_or_default(Path(a.root))
     admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
     if not admin:
-        print("  ⚠ no administrator card on this host; launch-failed NOT raised",
+        print(f"  ⚠ no administrator card on this host; {outcome} NOT raised",
               file=sys.stderr)
-        return True
+        return
     try:
-        # The key makes the raise idempotent: once per event, ever.
         FilesEvents(Path(a.root) / "events").persist(
-            to=admin, frm="pr-events", reason="pr-event-launch-failed", rose=True,
-            item=ev["item"], detail=text[:600], key=f"pr-events:{ev['event_id']}:launch-failed")
+            to=admin, frm="pr-events", reason=f"pr-event-{outcome}", rose=True,
+            item=ev["item"], detail=text[:600], key=key)
     except Exception as e:  # noqa: BLE001 -- the settle stands; say the raise did not
-        print(f"  ⚠ launch-failed NOT raised to {admin} ({type(e).__name__}: {e})",
+        print(f"  ⚠ {outcome} NOT raised to {admin} ({type(e).__name__}: {e})",
               file=sys.stderr)
-    return True
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
