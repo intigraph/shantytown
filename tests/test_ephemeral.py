@@ -100,6 +100,27 @@ def test_reviews_default_to_codex_and_the_rest_to_claude():
                            _policy(harness_by_job={"task": "codex"})) == "codex"
 
 
+def test_repo_harness_precedence_and_config(tmp_path):
+    path = tmp_path / "shantytown.toml"
+    path.write_text('[ephemeral.harness_by_job]\ntask = "codex"\n'
+                    '[ephemeral.harness_by_repo]\n"o/n" = "claude"\n')
+    policy = config.load(tmp_path).ephemeral
+    assert policy.harness_by_repo == {"o/n": "claude"}
+    assert eph.harness_for(eph.Request("task", "i", repo="o/n"), policy) == "claude"
+    assert eph.harness_for(eph.Request("task", "i", repo="o/n", harness="agy"), policy) == "agy"
+    assert eph.harness_for(eph.Request("task", "i", repo="o/other"), policy) == "codex"
+    from dataclasses import replace
+    policy = replace(policy, model_by_harness={"claude": "chosen-model", "codex": "other-model"})
+    rec = eph.plan(eph.Request("task", "i", repo="o/n"), root=tmp_path,
+                   policy=policy, actor="boss", administrator="boss", host=None,
+                   now=NOW, role_of=lambda n: "administrator")
+    assert rec["harness"] == "claude" and rec["model"] == "chosen-model"
+    for bad in ('"o/n" = ""', '"o/n" = 5', '"invalid" = "claude"'):
+        path.write_text(f'[ephemeral.harness_by_repo]\n{bad}\n')
+        with pytest.raises(config.ConfigError, match="harness_by_repo"):
+            config.load(tmp_path)
+
+
 def test_administrator_and_opt_in_verified_authority():
     roles = {"boss": "administrator", "lex": "worker", "lead1": "lead"}.get
     eph.authority(None, roles)  # unmigrated human shell

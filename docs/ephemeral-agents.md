@@ -193,8 +193,10 @@ retry refused for a sibling job leaves the original running. A retry of a job
 launched with `--despite-live` carries that reason over, since the slice it
 was launched beside is still live.
 
-`--harness` overrides the default. `[ephemeral.harness_by_job]` changes the
-defaults per deployment.
+Harness selection uses `--harness` first, then an exact `owner/name` match in
+`[ephemeral.harness_by_repo]`, then `[ephemeral.harness_by_job]`, then the
+built-in job default. PR lifecycle event drains use the same selection. The
+selected harness determines the model from `[ephemeral.model_by_harness]`.
 
 `[ephemeral.model_by_harness]` names the model a job runs on each harness
 (aegis-jsp0). Spawn copies it onto the job card, so the launch passes `--model`
@@ -448,6 +450,10 @@ lane_release = []           # e.g. ["chaski-github-work", "--config", "/etc/chas
 
 [ephemeral.harness_by_job]
 review = "codex"
+
+# Overrides for all jobs on a repository; quote the owner/name key.
+[ephemeral.harness_by_repo]
+"example/project" = "claude"
 
 # The model each harness's jobs run and declare (aegis-jsp0). Unset = none.
 [ephemeral.model_by_harness]

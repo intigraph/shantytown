@@ -166,6 +166,7 @@ class Ephemeral:
     review_enqueue_attended_uid: int | None = None
     review_enqueue_attended_dir: str = ""
     harness_by_job: dict = field(default_factory=dict)
+    harness_by_repo: dict = field(default_factory=dict)
     # aegis-jsp0: the model a job runs, {harness: model}. Spawn copies it onto
     # the job card, so the launch passes --model AND exports SHANTY_MODEL from
     # that one value (X-Quipu-Model). Keyed by harness so a claude slug never
@@ -1268,7 +1269,7 @@ _FLEET_KEYS = {"stood_down", "max_load_per_core", "admin_self_slots"}
 
 
 _EPHEMERAL_KEYS = {"max_agents", "lifetime_minutes", "max_turns", "max_context_k",
-                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job", "model_by_harness",
+                   "merge_spacing_minutes", "unattended", "require_verified_identity", "unattended_uid_ready", "recruitment_launch_ready", "harness_by_job", "harness_by_repo", "model_by_harness",
                    "verdict_graph", "verdict_signer", "verdict_key", "lane_release", "jobs", "limits",
                    "job_servers", "review_enqueue_enabled", "review_enqueue_command",
                    "review_enqueue_attended_uid", "review_enqueue_attended_dir",
@@ -1338,6 +1339,14 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     for job, harness in by_job.items():
         if not isinstance(harness, str) or not harness.strip():
             raise ConfigError(f"{path}: ephemeral.harness_by_job.{job} must be a harness name")
+    by_repo = tbl.get("harness_by_repo", {})
+    if not isinstance(by_repo, dict):
+        raise ConfigError(f"{path}: [ephemeral.harness_by_repo] must be a table")
+    from .ephemeral import _REPO
+    for repo, harness in by_repo.items():
+        if (not _REPO.fullmatch(repo) or any(part in (".", "..") for part in repo.split("/"))
+                or not isinstance(harness, str) or not harness.strip()):
+            raise ConfigError(f"{path}: ephemeral.harness_by_repo.{repo} needs an owner/name and harness name")
     by_harness_model = tbl.get("model_by_harness", {})
     if not isinstance(by_harness_model, dict):
         raise ConfigError(f"{path}: [ephemeral.model_by_harness] must be a table")
@@ -1403,7 +1412,7 @@ def _ephemeral(path: Path, tbl: dict) -> Ephemeral:
     return Ephemeral(unattended=unattended, require_verified_identity=verified,
                      unattended_uid_ready=uid_ready,
                      recruitment_launch_ready=recruitment_ready,
-                     harness_by_job=dict(by_job), jobs=jobs, **values)
+                     harness_by_job=dict(by_job), harness_by_repo=dict(by_repo), jobs=jobs, **values)
 
 
 def _fleet(path: Path, tbl: dict) -> Fleet:
