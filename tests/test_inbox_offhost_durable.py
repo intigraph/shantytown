@@ -19,6 +19,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from shantytown import cli
 from shantytown.cli import main, OK
 
@@ -258,3 +260,48 @@ def test_offhost_dry_run_names_the_relay_and_writes_nothing(tmp_path, monkeypatc
     out = capsys.readouterr().out
     assert f"+ live relay via ssh {PEER_SSH} -> host host-b" in out
     assert calls == [] and open_messages(root) == []
+
+
+@pytest.mark.parametrize('owner_state', ['live', 'down', 'unknown', 'error'])
+def test_local_process_observation_uses_current_owner_state(
+        tmp_path, monkeypatch, capsys, owner_state):
+    from shantytown.owned_work import OwnedWork
+    root = two_admins(tmp_path, monkeypatch)
+    service = OwnedWork(root)
+    service.confirmed_down('wu', now=100,
+                           reason='confirmed cycle refusal; stranded work')
+    before = service.snapshot()
+    fake_panes(monkeypatch, 'shanty-wu')
+
+    def observe(self, pane):
+        if owner_state == 'error':
+            raise OSError('process census unavailable')
+        return owner_state
+    monkeypatch.setattr(cli.Tmux, 'owner_state', observe, raising=False)
+    ticks = []
+    monkeypatch.setattr(cli, '_owned_work_tick', lambda *a, **kw: ticks.append(kw))
+    assert durable(root, 'wu', 'local observation control') == OK
+    captured = capsys.readouterr()
+    assert 'live to shanty-wu' in captured.out
+    assert service.snapshot() == before
+    if owner_state == 'live':
+        assert 'stopped-owner' not in captured.err
+        assert 'must decide ownership' not in captured.err
+        assert ticks == []
+    else:
+        assert 'stopped-owner: wu stopped' in captured.err
+        assert ticks == [{'card': None, 'wake_owner': 'wu'}]
+
+
+def test_live_pane_does_not_undo_explicit_local_stop(tmp_path, monkeypatch, capsys):
+    from shantytown.owned_work import OwnedWork
+    root = two_admins(tmp_path, monkeypatch)
+    OwnedWork(root).stop('wu', at=100)
+    fake_panes(monkeypatch, 'shanty-wu')
+    monkeypatch.setattr(cli.Tmux, 'owner_state', lambda self, pane: 'live', raising=False)
+    ticks = []
+    monkeypatch.setattr(cli, '_owned_work_tick', lambda *a, **kw: ticks.append(kw))
+    assert durable(root, 'wu', 'deliberate stop control') == OK
+    captured = capsys.readouterr()
+    assert 'stopped-owner: wu stopped' in captured.err
+    assert ticks == [{'card': None, 'wake_owner': 'wu'}]

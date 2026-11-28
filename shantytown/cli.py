@@ -8478,7 +8478,17 @@ def _cmd_inbox(a) -> int:
         try:
             from .owned_work import OwnedWork
             stopped = _stops(a).get(agent.name)
-            custody = OwnedWork(a.root).snapshot().get(agent.name, {}).get("state")
+            observation = OwnedWork(a.root).snapshot().get(agent.name, {})
+            custody = observation.get("state")
+            # A blocked cycle can retain a process-absence observation while
+            # the original process remains live. Recheck only that evidence;
+            # current liveness never overrides deliberate stop/ceiling intent.
+            if not stopped and observation.get("process_observation"):
+                try:
+                    if panes.owner_state(agent.pane) == "live":
+                        custody = None
+                except Exception:
+                    pass  # No positive process proof: retain the existing flag.
             if stopped or custody in ("stopped", "ceiling", "expired"):
                 condition = "deliberately stopped" if stopped else custody
                 print(f"  stopped-owner: {agent.name} {condition}; "
