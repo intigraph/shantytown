@@ -1369,6 +1369,20 @@ bypasses their bytecode through its separate cache prefix; the poisoned-bytecode
 control includes both ordinary and pytest-tagged poison. Arbitrary source,
 untagged bytecode, unknown tag text and redirects still refuse.
 
+### Codex launch observation
+
+Codex ephemeral submissions retain default-on, private diagnostic traces under
+`ephemeral/<job>.submission-<random-id>.jsonl` in the configured runtime root.
+Each trace has at most three records: `paste-end`, `enter-sent` (including the
+actual key, which can be Tab), and `verify` (observed or unverified). Each
+record includes UTC and monotonic timestamps, pane identity and the submitted
+body's SHA256, plus at most the last 16 KiB of the captured pane. Capture errors
+are recorded by exception type; storage errors warn without changing delivery.
+Files are created exclusively with mode 0600; appends reject replaced, linked
+or permissive files. These frames are diagnostic evidence, never permission
+to submit or resend. Existing ownership checks, deadlines and keys are unchanged.
+No trace is collected for ordinary crew sends or unsubmitted typing.
+
 ## Codex jobs refuse interactive approval
 
 A controller-ledger-bound live or launching Codex job uses

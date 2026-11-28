@@ -930,6 +930,8 @@ class Tmux:
         # up to the break and is told nothing; the sender gets a traceback
         # instead of a delivery line. Partial delivery reported as neither
         # success nor failure is the worst of the three outcomes.
+        from .codex_submission_trace import for_launch
+        trace = for_launch(self.delivery_root, pane, text) if codex and submit else None
         for n, chunk in enumerate(chunks):
             if n:
                 self._refuse_in_mode(pane, sent=n)
@@ -938,6 +940,8 @@ class Tmux:
                                check=True)
             if n + 1 < len(chunks):
                 time.sleep(_SEND_CHUNK_GAP_S)
+        if trace is not None:
+            trace.capture('paste-end', self.capture)
         # Refuse copy-mode before settling or returning an unsubmitted body.
         self._refuse_in_mode(pane, sent=len(chunks))
         if not submit:
@@ -976,7 +980,15 @@ class Tmux:
         native_probe = self._codex_native_probe(pane, text) if codex else None
         subprocess.run(self._cmd("send-keys", "-t", pane, submit_key), check=True)
         if codex:
-            self._verify_codex_submission(pane, text, before, native_probe=native_probe)
+            if trace is not None:
+                trace.capture('enter-sent', self.capture, key=submit_key)
+            outcome = 'unverified'
+            try:
+                self._verify_codex_submission(pane, text, before, native_probe=native_probe)
+                outcome = 'observed'
+            finally:
+                if trace is not None:
+                    trace.capture('verify', self.capture, outcome=outcome)
             return SubmissionObserved(pane, hashlib.sha256(text.encode()).hexdigest())
         if claude_before is not None and claude_birth is not None:
             from .triage import input_state, strip_attrs, INPUT_EMPTY, INPUT_PLACEHOLDER
