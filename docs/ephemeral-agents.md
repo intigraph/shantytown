@@ -572,7 +572,10 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
 - **Stranded work.** A task job that reports `blocked` or `failed` first pushes
   its own `wt/<name>` branch. If an ssh push to a `github.com` origin fails, st
   retries the same branch over HTTPS with `gh auth git-credential`, so a broken
-  host ssh config does not leave committed work local-only. `st repo pr`
+  host ssh config does not leave committed work local-only. The retry targets
+  git's resolved push URL (`pushurl` and `pushInsteadOf` applied). Several push
+  URLs, or a push repository other than the fetch repository, get no retry, and
+  the work is reported local-only. `st repo pr`
   preflight ignores st's own kit in the worktree. When it refuses, it names the
   category in parentheses (for example `tracked or staged change` or
   `untracked path outside st's kit`), never the path.

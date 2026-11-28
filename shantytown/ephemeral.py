@@ -2462,16 +2462,34 @@ def push_stranded_work(rec: dict, base: str = "origin/main", git=_git) -> str:
 
 
 def _https_github_url(git, ws) -> str | None:
-    """The HTTPS URL of a GitHub origin reached over ssh, else None. Only a
-    github.com ssh origin is rewritten: an HTTPS origin already failed as itself,
-    and another forge's credentials are not gh's to supply."""
+    """The HTTPS URL of the GitHub repository origin PUSHES to over ssh, else None.
+
+    Only a github.com ssh push destination is rewritten: an HTTPS one already
+    failed as itself, and another forge's credentials are not gh's to supply.
+    The destination is git's own resolved push URL (pushurl and pushInsteadOf
+    applied), never the fetch URL: review of #822 caught that a fetch-URL retry
+    could land the work in a different repository than the push that failed,
+    and still report "pushed". Several push URLs, or a push repository that is
+    not the fetch repository, is ambiguous: no retry, the work stays reported
+    local-only."""
     from .forgejo import parse_remote
-    url = git("-C", ws, "remote", "get-url", "origin")
-    origin = (url.stdout or "").strip() if not url.returncode else ""
-    parsed = parse_remote(origin)
-    if parsed is None or parsed[0] != "github.com" or origin.startswith(("https://", "http://")):
+    push = git("-C", ws, "remote", "get-url", "--push", "--all", "origin")
+    fetch = git("-C", ws, "remote", "get-url", "origin")
+    if push.returncode or fetch.returncode:
         return None
-    return f"https://github.com/{parsed[1]}/{parsed[2]}.git"
+    urls = (push.stdout or "").split()
+    if len(urls) != 1:
+        return None
+    target = urls[0]
+    if target.startswith(("https://", "http://")):
+        return None
+    dest, source = parse_remote(target), parse_remote((fetch.stdout or "").strip())
+    if dest is None or dest[0] != "github.com" or source is None:
+        return None
+    # GitHub owner and repository names are case-insensitive.
+    if tuple(x.lower() for x in source) != tuple(x.lower() for x in dest):
+        return None
+    return f"https://github.com/{dest[1]}/{dest[2]}.git"
 
 
 def clear_ignored_cargo_targets(dest: Path, git=_git) -> list[str]:
