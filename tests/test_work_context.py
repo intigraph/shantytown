@@ -61,6 +61,7 @@ def known(monkeypatch):
 def run(monkeypatch, rows_for, tracker=None):
     query, seen = answer(rows_for)
     monkeypatch.setattr(work_context, "_query", query)
+    monkeypatch.setattr(work_context, "_root_query", query)
     ctx = work_context.context(tracker or Tracker(PROOF), "aegis-edp", onto=ONTO)
     return ctx, work_context.render(ctx), seen
 

@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 
 from .beads import _is_placeholder_dep
 from .protocols import WorkItem, blocker_kind, rank_order
-from .seeds_plate import SCHEMA, SEEDS, BLOCKED_ON, _iri, _query
+from .seeds_plate import SCHEMA, SEEDS, BLOCKED_ON, _iri, typed_cells_query as _query
 
 TYPE = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 LABEL = "http://www.w3.org/2000/01/rdf-schema#label"
