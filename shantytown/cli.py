@@ -9444,7 +9444,7 @@ def _lead_status(registry, panes):
     return _lead_is_up(registry, panes)
 
 
-def _resolve_anchor(a, me, *, require_complete=False):
+def _resolve_anchor(a, me, *, require_complete=False, display=None):
     """Shared startup read; publication and startup decorations stay in anchor's CLI."""
     registry, panes = _registry(a), _panes(a)
     from .routing_identity import with_remote_lead
@@ -9469,8 +9469,10 @@ def _resolve_anchor(a, me, *, require_complete=False):
     except Exception:
         _mcp = ()
     _anchor_tracker = _tracker(a)
+    if display is None:
+        display = not require_complete
     p = do_anchor(me, registry, panes,
-                  plate=_plate(a, tracker=_anchor_tracker, display=not require_complete, snapshot=require_complete,
+                  plate=_plate(a, tracker=_anchor_tracker, display=display, snapshot=require_complete,
                                require_complete=require_complete, owners=[me]),
                   lead_status=_lead_status(registry, panes),
                   harness=_hn, mcp_preapproved=_mcp)
@@ -9498,7 +9500,7 @@ def _cmd_anchor(a) -> int:
     if getattr(a, "harness", False):
         return _anchor_harness(a, me)
     try:
-        p, _anchor_tracker, registry = _resolve_anchor(a, me, require_complete=True)
+        p, _anchor_tracker, registry = _resolve_anchor(a, me, require_complete=True, display=True)
     except LookupError as e:
         print(f"  refused: {e}", file=sys.stderr)
         return REFUSED

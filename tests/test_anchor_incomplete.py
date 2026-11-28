@@ -18,6 +18,8 @@ def test_incomplete_owner_read_is_unknown_not_empty(tmp_path, monkeypatch, capsy
         [], how='fixture owner query', caveat='HTTP 429 read_not_started'))
 
     def reader(*args, **kwargs):
+        # Keep bounded display coalescing while refusing incomplete evidence.
+        assert kwargs.get('display') is True
         # Exercise the real partial-answer boundary, not a mocked CLI exception.
         return plate_reader(tracker, require_complete=kwargs.get('require_complete', False))
 
