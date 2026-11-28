@@ -1,4 +1,4 @@
-"""tmux eats a TRAILING `;` from a send-keys argument — aegis-hni.
+r"""tmux eats a TRAILING `;` from a send-keys argument — aegis-hni.
 
 tmux parses an argument ending in `;` as a command separator, `-l --` or not.
 Measured on tmux 3.6: `send-keys -l -- "A;"` types `A`; a mid-argument `;`
@@ -22,7 +22,7 @@ class _FakeTmux:
         if "send-keys" in argv:
             if "-l" in argv:
                 arg = argv[-1]
-                if arg.endswith("\;"):
+                if arg.endswith("\\;"):
                     arg = arg[:-2] + ";"
                 elif arg.endswith(";"):
                     arg = arg[:-1]
@@ -57,7 +57,7 @@ def test_a_chunk_boundary_right_after_a_semicolon_arrives_byte_identical(monkeyp
 
 
 def test_a_body_ending_in_semicolons_arrives_intact(monkeypatch):
-    for body in ("done;", ";", ";;;", "path\;", "a;b;"):
+    for body in ("done;", ";", ";;;", "path\\;", "a;b;"):
         assert _send(monkeypatch, body).text() == body, body
 
 
