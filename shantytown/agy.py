@@ -72,7 +72,9 @@ def project_hooks(workspace, settings_path):
     except (OSError, ValueError):
         raise ProvisionError('agy workspace hooks are unreadable; preserved') from None
     data[HOOK_NAME] = projected_hooks(settings_path)
-    private_write(path, json.dumps(data, indent=2) + '\n')
+    body = json.dumps(data, indent=2) + '\n'
+    private_write(path, body)
+    return body
 
 
 def translate_servers(rendered):
@@ -100,7 +102,9 @@ def project_mcp(card, root, rendered, replace=False):
     new = translate_servers(rendered)
     if not replace:
         new['mcpServers'] = {**before.get('mcpServers', {}), **new['mcpServers']}
-    private_write(path, json.dumps(new, indent=2) + '\n')
+    body = json.dumps(new, indent=2) + '\n'
+    private_write(path, body)
+    return body
 
 
 def receipt_path(root, agent):

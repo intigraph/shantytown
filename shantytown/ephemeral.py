@@ -1216,6 +1216,10 @@ TRUST_SURFACE = (".claude", ".mcp.json", ".codex", ".agents", "AGENTS.md", "CLAU
 
 INSTRUCTION_FILES = ("AGENTS.md", "CLAUDE.md")
 
+#: Harness workspace files st's provisioning writes into a job worktree and
+#: records by sha256 in rec["kit_files_sha256"] (provision._record_job_kit_file).
+KIT_FILES = (".agents/hooks.json", ".agents/mcp_config.json")
+
 
 def _only_tooling_block(base_text: str, path: Path) -> bool:
     """Does the worktree file equal the base file once st's provisioned tooling
@@ -1285,7 +1289,8 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
       - every UNTRACKED path there is st's kit: the job's settings.local.json
         with the exact sha256 st recorded when it wrote it, a provisioned skill
         (.claude/skills or .agents/skills)
-        that is a symlink resolving OUTSIDE the worktree, or an untracked
+        that is a symlink resolving OUTSIDE the worktree, an agy kit file
+        (KIT_FILES) with the exact sha256 provisioning recorded, or an untracked
         .mcp.json naming only the provisioned servers AND holding the exact
         bytes provisioning recorded for this job (kit_mcp_sha256);
       - a TRACKED .mcp.json is held to that same rule. Provisioning replaces
@@ -1372,6 +1377,16 @@ def trust_surface_refusal(rec: dict | None, *, run=None, expected_servers=None) 
         elif rel == ".mcp.json":
             if why := mcp_refusal(path):
                 return why
+        elif rel in KIT_FILES:
+            files = rec.get("kit_files_sha256")
+            want = files.get(rel) if isinstance(files, dict) else None
+            if not want or path.is_symlink():
+                return f"{rel} was not written by st's provisioning for this job"
+            try:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != want:
+                    return f"{rel} differs from the kit st provisioned for this job"
+            except OSError:
+                return f"{rel} is unreadable"
         elif rel in INSTRUCTION_FILES:
             # A repository that tracks no instruction file (intigraph/tambo,
             # aegis-47ca): provisioning creates it from empty, so it is
