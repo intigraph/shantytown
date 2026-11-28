@@ -361,10 +361,19 @@ def signed_turtle(record: GateApproval, *, seed: bytes, verifier: str) -> str:
 
 # --- Quipu transport (injected in tests) ----------------------------------------
 
+# aegis-n0wc R1: a slow verify must not read as "no approval". Quipu's
+# /verdict/verify p90 reached 27 s under the writer-lock mix (11-27 18Z) and its
+# top finite latency bucket is 30 s, so the old 15 s turned valid approvals into
+# "verdict source unreadable" (the shantytown#808 merge). A timeout or any error
+# is still NOT approved: only the wait changes, never the fail-closed reading.
+VERIFY_TIMEOUT_S = 60.0
+
+
 class Quipu:
     """The three calls this needs, over Quipu's public REST surface."""
 
-    def __init__(self, server: str, *, timeout: float = 15.0, client: str = "st-gate-verdict"):
+    def __init__(self, server: str, *, timeout: float = VERIFY_TIMEOUT_S,
+                 client: str = "st-gate-verdict"):
         self.server, self.timeout, self.client = server.rstrip("/"), timeout, client
 
     def _post(self, path: str, body: dict, headers: dict) -> dict:
