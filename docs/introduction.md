@@ -4,6 +4,8 @@
 part of the Quipu stack.** Shantytown turns work items into coordinated agent
 work, with ownership, capacity limits and a record of what happened.
 
+![How a work item moves through a crew: ask, dispatch, work, stop and deliver. The administrator dispatches, a worker works in its own pane and takes its next item at each stop, and a reviewer agent can review the change. Under each stage is the part of the Quipu stack that serves it: Chaski and Shuttle trigger an item, Seeds and Quipu say who owns what, Bobbin and Yupana inform and constrain the work, Camayoc and Desire Path account for it, and Quipu remembers the outcome. Every stack tool is optional.](diagrams/work-item-lifecycle.svg)
+
 ## A software factory
 
 Give a crew a concrete outcome and divide it into work with named owners.
@@ -63,12 +65,19 @@ Valid time is supplied per fact and write enforcement is opt-in; see the
 | Tambo | Review and install tool versions, including its crew profile. Its reviewed pins can trail newer releases. |
 | Chaski and Shuttle | Optional external reactions and workflows that can hand work to the crew. |
 
+Most of these reach an agent through hooks. A tool registers its hooks once
+with `st ops hooks register`. Shantytown writes them into the settings of each
+agent program beside its own, and they run at fixed points of a session:
+
+![What reaches an agent during a session. A stack tool registers a hook bundle, Shantytown writes one settings file per role and the agent program runs the hooks at four points. At session start, st anchor gives identity, plate and lead, and Yupana briefs the agent on its work item. At each prompt, Shantytown recalls earlier incidents and Bobbin adds matching code. At each tool call, Shantytown captures tools, files and tokens, Yupana checks an edit against policies and reports its impact, and Desire Path records a failed call. At stop, Shantytown decides between the next item, a report to the lead and rest, and Quipu asks the agent to record what it learned.](diagrams/session-hooks.svg)
+
 ## Capability status
 
 Release 0.22 supports:
 
 - work ownership, capped plates and dispatch that respects a busy session;
-- roles with a reporting chain, across more than one host;
+- roles with a reporting chain, across more than one host
+  ([a crew across hosts](multi-host.md));
 - four agent programs: Claude Code, Codex, OpenCode and, experimentally,
   Antigravity ([harnesses](harnesses.md));
 - five trackers: files, beads, `br`, Seeds and Forgejo issues

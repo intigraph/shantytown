@@ -1,5 +1,8 @@
 # New-host setup and acceptance
 
+[A crew across hosts](multi-host.md) shows the whole setup in one picture and
+lists the steps in order. This page covers scaffolding and acceptance.
+
 `st fleet init` scaffolds one host. `st ops doctor --deploy` checks the resulting
 setup, including each peer's local checklist and its return entry. Run the
 checklist **from both hosts over non-interactive SSH**: a return entry alone does

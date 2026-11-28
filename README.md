@@ -16,6 +16,8 @@ Python CLI with no resident service; the agents run in tmux. The same crew can
 take on everyday work such as research and follow-ups. It is part of the Quipu
 stack and also runs without it.
 
+<p align="center"><img src="docs/diagrams/work-item-lifecycle.svg" width="900" alt="How a work item moves through a crew: ask, dispatch, work, stop and deliver. The administrator dispatches, a worker works in its own pane and takes its next item at each stop, and a reviewer agent can review the change. Under each stage is the part of the Quipu stack that serves it: Chaski and Shuttle trigger an item, Seeds and Quipu say who owns what, Bobbin and Yupana inform and constrain the work, Camayoc and Desire Path account for it, and Quipu remembers the outcome. Every stack tool is optional."/></p>
+
 ## Why you would want it
 
 - **Hand work to an agent without typing over it.** `st go` assigns a work item
@@ -105,6 +107,7 @@ With a crew created, use the ID your tracker returns in place of `st-1`:
 | Create a work item | `st task "fix the login timeout"` |
 | Give it to an agent | `st go st-1 builder` |
 | See who is free, busy or down | `st crew` |
+| Run one crew on two machines | [A crew across hosts](https://intigraph.github.io/shantytown/multi-host.html) |
 | See what one agent has on its plate | `st anchor builder` |
 | Open an agent's terminal | `st attach builder` |
 | Start a supervised agent for one pull-request review | `st agent spawn --ephemeral --job review --item st-1 --repo OWNER/NAME --pr 12` |

@@ -15,8 +15,9 @@
 
 - [Getting started](getting-started.md)
   - [Installation reference](installation-reference.md)
-- [New host setup](new-host.md)
-- [Second host setup](second-host.md)
+- [A crew across hosts](multi-host.md)
+  - [New host setup](new-host.md)
+  - [Second host setup](second-host.md)
 - [Configuration](configuration.md)
   - [Configuration source](config-source.md)
 - [The CLI](cli.md)

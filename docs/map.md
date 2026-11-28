@@ -19,7 +19,7 @@ every chapter; this page routes by task.
 |---|---|
 | Install, pin a release or remove it | [Installation reference](installation-reference.md) |
 | Create and launch a first crew | [Getting started](getting-started.md) |
-| Add a host | [New host](new-host.md), [second host](second-host.md) |
+| Run one crew on more than one host | [A crew across hosts](multi-host.md), then [new host](new-host.md) and [second host](second-host.md) |
 | Configure accounts, backends and controls | [Configuration](configuration.md), [configuration source](config-source.md) |
 | Every command and exit code | [The CLI](cli.md), [`st prime`](prime.md) |
 | One group of commands in depth | The pages under [The CLI](cli.md#where-each-command-is-described): sessions, dispatch, work items, crews, stops, messages, supervision, tooling and pushes |

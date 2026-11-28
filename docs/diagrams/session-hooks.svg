@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 628" role="img" aria-label="What reaches an agent during a session. A stack tool registers a hook bundle with st ops hooks register. Shantytown writes one settings file per role, holding its own hooks and every registered one, for the agent program: Claude Code, Codex, OpenCode or Antigravity. The hooks run at four fixed points of a session. At session start, Shantytown runs st anchor to give identity, plate and lead, and Yupana briefs the agent on its work item. At each prompt, Shantytown recalls earlier incidents and Bobbin adds the code that matches the prompt. At each tool call, Shantytown captures tools run, files touched and tokens spent, Yupana checks an edit against your policies and reports its impact, and Desire Path records a call that failed. At stop, Shantytown decides between the next item, a report to the lead and rest, and Quipu asks the agent to record what it learned.">
+  <style>
+    .t{font-family:Inter,Segoe UI,Helvetica,Arial,sans-serif}
+    .m{font-family:JetBrains Mono,Menlo,Consolas,monospace}
+    .card{fill:#20203a;stroke:#2e2e4d}
+    .pipe{stroke:#ff8a70;stroke-width:2.5;fill:none;stroke-dasharray:6 6;opacity:.75;animation:flow 1.2s linear infinite}
+    .up{stroke:#ffc24d;stroke-width:2;fill:none;stroke-dasharray:4 5;opacity:.8;animation:flow 1.6s linear infinite}
+    .down{stroke:#ff4fa0;stroke-width:2;fill:none;stroke-dasharray:4 5;opacity:.8;animation:flow 1.6s linear infinite reverse}
+    @keyframes flow{to{stroke-dashoffset:-24}}
+    @media (prefers-reduced-motion: reduce){.pipe,.up,.down{animation:none}}
+  </style>
+  <rect width="960" height="628" rx="20" fill="#12121f"/>
+  <text class="t" x="40" y="52" fill="#ecebf5" font-size="24" font-weight="700">What reaches an agent during a session</text>
+  <text class="t" x="40" y="78" fill="#a7a6c2" font-size="14">Shantytown writes one settings file per role. It holds Shantytown&#x27;s own hooks and every hook a stack tool has registered.</text>
+  <rect x="30" y="104" width="250" height="74" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="46" y="130" fill="#ecebf5" font-size="15" font-weight="700">A stack tool registers</text>
+  <text class="m" x="46" y="152" fill="#ff4fa0" font-size="12.5">st ops hooks register</text>
+  <path class="pipe" d="M284 141 H336"/>
+  <polygon points="344,141 335,136 335,146" fill="#ff8a70"/>
+  <rect x="348" y="104" width="250" height="74" rx="14" fill="#20203a" stroke="#ff4fa0" stroke-width="1.6"/>
+  <text class="t" x="364" y="130" fill="#ecebf5" font-size="15" font-weight="700">Shantytown renders</text>
+  <text class="t" x="364" y="152" fill="#a7a6c2" font-size="12.5">one settings file per role</text>
+  <path class="pipe" d="M602 141 H654"/>
+  <polygon points="662,141 653,136 653,146" fill="#ff8a70"/>
+  <rect x="666" y="104" width="264" height="74" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="682" y="130" fill="#ecebf5" font-size="15" font-weight="700">The agent program runs</text>
+  <text class="t" x="682" y="152" fill="#a7a6c2" font-size="11.5">Claude Code, Codex, OpenCode, Antigravity</text>
+  <text class="t" x="40" y="208" fill="#6f6e8f" font-size="10.5" font-weight="700" letter-spacing="1.2">ONE SESSION, FOUR HOOK POINTS</text>
+  <path class="pipe" d="M50 252 H908"/>
+  <polygon points="918,252 909,247 909,257" fill="#ff8a70"/>
+  <path d="M135.0 260 V282" stroke="#2e2e4d" stroke-width="1.5"/>
+  <circle cx="135.0" cy="252" r="7" fill="#12121f" stroke="#ffc24d" stroke-width="2.5"/>
+  <text class="t" x="135.0" y="236" fill="#ecebf5" font-size="13.5" font-weight="700" text-anchor="middle">Session start</text>
+  <rect x="30" y="282" width="210" height="112" rx="14" fill="#20203a" stroke="#ff4fa0" stroke-width="1.2"/>
+  <text class="t" x="46" y="306" fill="#ff4fa0" font-size="9.5" font-weight="700" letter-spacing="0.8">SHANTYTOWN</text>
+  <text class="m" x="46" y="329" fill="#ecebf5" font-size="13">st anchor</text>
+  <text class="t" x="46" y="352.0" fill="#a7a6c2" font-size="12.5">Identity, plate, lead and</text>
+  <text class="t" x="46" y="369.2" fill="#a7a6c2" font-size="12.5">standing directives.</text>
+  <path d="M135.0 394 V424" stroke="#2e2e4d" stroke-width="1.5"/>
+  <rect x="30" y="424" width="210" height="142" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="46" y="448" fill="#ffc24d" font-size="9.5" font-weight="700" letter-spacing="0.8">STACK</text>
+  <text class="t" x="46" y="471" fill="#ffc24d" font-size="14.5" font-weight="700">Yupana</text>
+  <text class="t" x="46" y="494.0" fill="#a7a6c2" font-size="12.5">Briefs the agent on its</text>
+  <text class="t" x="46" y="511.2" fill="#a7a6c2" font-size="12.5">work item.</text>
+  <path d="M365.0 260 V282" stroke="#2e2e4d" stroke-width="1.5"/>
+  <circle cx="365.0" cy="252" r="7" fill="#12121f" stroke="#ffc24d" stroke-width="2.5"/>
+  <text class="t" x="365.0" y="236" fill="#ecebf5" font-size="13.5" font-weight="700" text-anchor="middle">Each prompt</text>
+  <rect x="260" y="282" width="210" height="112" rx="14" fill="#20203a" stroke="#ff4fa0" stroke-width="1.2"/>
+  <text class="t" x="276" y="306" fill="#ff4fa0" font-size="9.5" font-weight="700" letter-spacing="0.8">SHANTYTOWN</text>
+  <text class="m" x="276" y="329" fill="#ecebf5" font-size="13">incident recall</text>
+  <text class="t" x="276" y="352.0" fill="#a7a6c2" font-size="12.5">Earlier incidents that</text>
+  <text class="t" x="276" y="369.2" fill="#a7a6c2" font-size="12.5">match what is being asked.</text>
+  <path d="M365.0 394 V424" stroke="#2e2e4d" stroke-width="1.5"/>
+  <rect x="260" y="424" width="210" height="142" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="276" y="448" fill="#ffc24d" font-size="9.5" font-weight="700" letter-spacing="0.8">STACK</text>
+  <text class="t" x="276" y="471" fill="#ffc24d" font-size="14.5" font-weight="700">Bobbin</text>
+  <text class="t" x="276" y="494.0" fill="#a7a6c2" font-size="12.5">Adds the code that matches</text>
+  <text class="t" x="276" y="511.2" fill="#a7a6c2" font-size="12.5">the prompt.</text>
+  <path d="M595.0 260 V282" stroke="#2e2e4d" stroke-width="1.5"/>
+  <circle cx="595.0" cy="252" r="7" fill="#12121f" stroke="#ffc24d" stroke-width="2.5"/>
+  <text class="t" x="595.0" y="236" fill="#ecebf5" font-size="13.5" font-weight="700" text-anchor="middle">Each tool call</text>
+  <rect x="490" y="282" width="210" height="112" rx="14" fill="#20203a" stroke="#ff4fa0" stroke-width="1.2"/>
+  <text class="t" x="506" y="306" fill="#ff4fa0" font-size="9.5" font-weight="700" letter-spacing="0.8">SHANTYTOWN</text>
+  <text class="m" x="506" y="329" fill="#ecebf5" font-size="13">capture</text>
+  <text class="t" x="506" y="352.0" fill="#a7a6c2" font-size="12.5">Tools run, files touched</text>
+  <text class="t" x="506" y="369.2" fill="#a7a6c2" font-size="12.5">and tokens spent.</text>
+  <path d="M595.0 394 V424" stroke="#2e2e4d" stroke-width="1.5"/>
+  <rect x="490" y="424" width="210" height="142" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="506" y="448" fill="#ffc24d" font-size="9.5" font-weight="700" letter-spacing="0.8">STACK</text>
+  <text class="t" x="506" y="471" fill="#ffc24d" font-size="14.5" font-weight="700">Yupana · Desire Path</text>
+  <text class="t" x="506" y="494.0" fill="#a7a6c2" font-size="12.5">Checks an edit against your</text>
+  <text class="t" x="506" y="511.2" fill="#a7a6c2" font-size="12.5">policies and reports its</text>
+  <text class="t" x="506" y="528.4" fill="#a7a6c2" font-size="12.5">impact. Records a failed</text>
+  <text class="t" x="506" y="545.6" fill="#a7a6c2" font-size="12.5">call.</text>
+  <path d="M825.0 260 V282" stroke="#2e2e4d" stroke-width="1.5"/>
+  <circle cx="825.0" cy="252" r="7" fill="#12121f" stroke="#ffc24d" stroke-width="2.5"/>
+  <text class="t" x="825.0" y="236" fill="#ecebf5" font-size="13.5" font-weight="700" text-anchor="middle">Stop</text>
+  <rect x="720" y="282" width="210" height="112" rx="14" fill="#20203a" stroke="#ff4fa0" stroke-width="1.2"/>
+  <text class="t" x="736" y="306" fill="#ff4fa0" font-size="9.5" font-weight="700" letter-spacing="0.8">SHANTYTOWN</text>
+  <text class="m" x="736" y="329" fill="#ecebf5" font-size="13">stop decision</text>
+  <text class="t" x="736" y="352.0" fill="#a7a6c2" font-size="12.5">Take the next item, report</text>
+  <text class="t" x="736" y="369.2" fill="#a7a6c2" font-size="12.5">to the lead, or rest.</text>
+  <path d="M825.0 394 V424" stroke="#2e2e4d" stroke-width="1.5"/>
+  <rect x="720" y="424" width="210" height="142" rx="14" fill="#20203a" stroke="#2e2e4d" stroke-width="1.2"/>
+  <text class="t" x="736" y="448" fill="#ffc24d" font-size="9.5" font-weight="700" letter-spacing="0.8">STACK</text>
+  <text class="t" x="736" y="471" fill="#ffc24d" font-size="14.5" font-weight="700">Quipu</text>
+  <text class="t" x="736" y="494.0" fill="#a7a6c2" font-size="12.5">Asks the agent to record</text>
+  <text class="t" x="736" y="511.2" fill="#a7a6c2" font-size="12.5">what it learned.</text>
+  <text class="t" x="40" y="598" fill="#a7a6c2" font-size="12.5">A registered hook survives every regeneration of the settings. With no stack tool registered, only the Shantytown row runs.</text>
+</svg>

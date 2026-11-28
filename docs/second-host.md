@@ -1,5 +1,8 @@
 # Joining an existing fleet from a second host
 
+[A crew across hosts](multi-host.md) shows the whole setup in one picture and
+lists the steps in order. This page covers the second host in detail.
+
 Use the same Quipu URL and ontology namespace as the first host, and a distinct,
 explicit host name. A host name is an identity shared by the graph, cards and
 configuration; do not derive it from the machine's current network name.
@@ -14,10 +17,10 @@ pipx install --editable ~/src/shantytown
 st --version
 ```
 
-Host-scoped projection and administrator-demotion protection first landed in
-commit `08895073`. Development builds shared `0.4.0+dev`, so that package version
-alone does not prove either capability. The explicit host-sync protocol is now
-version **1**. Keep this requirement on every sync invocation, including previews:
+The host-sync protocol is version **1**. It scopes projection to this host and
+protects an administrator from demotion. A package version alone does not prove
+either capability, so keep this requirement on every sync invocation, including
+previews:
 
 ```sh
 st --root "/opt/fleet/.shanty" fleet roles sync --require-host-sync 1 --dry-run
@@ -73,7 +76,7 @@ Optionally set `[host] admission_owner` to the same always-on host name on both
 hosts, so launches serialize on one lock while that host is up. Either host can
 still launch when the other is down: it admits locally against the other host's
 last census and says so. A reachable host with a missing or disagreeing owner
-declaration holds growth; see [account admission](cli.md) for the lock and
+declaration holds growth; see [account admission](cli-supervision.md#account-governors-across-hosts) for the lock and
 peer-census boundaries.
 
 `SHANTY_CANONICAL_SOURCE` is an absolute **local checkout path**, not a Git URL or
