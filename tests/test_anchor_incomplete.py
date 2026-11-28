@@ -10,12 +10,23 @@ from shantytown.br import plate_reader
 from shantytown.tmux import NullPanes
 
 
+@pytest.mark.parametrize('phase', ['owner', 'readiness'])
 @pytest.mark.parametrize('flags', [[], ['--short'], ['--json']])
-def test_incomplete_owner_read_is_unknown_not_empty(tmp_path, monkeypatch, capsys, flags):
+def test_incomplete_owner_read_is_unknown_not_empty(tmp_path, monkeypatch, capsys, flags, phase):
     (tmp_path / 'crew').mkdir()
     (tmp_path / 'crew' / 'worker.json').write_text(json.dumps({'role': 'worker'}))
-    tracker = SimpleNamespace(plate_rows=lambda _: Answer.capped(
-        [], how='fixture owner query', caveat='HTTP 429 read_not_started'))
+    def owner_rows(_):
+        if phase == 'owner':
+            return Answer.capped([], how='fixture owner query',
+                                 caveat='HTTP 429 read_not_started')
+        return Answer.complete_read([{'id': 'fixture-1', 'title': 'known owned work',
+                                      'assignee': 'worker', 'status': 'open', 'priority': 0}],
+                                     how='fixture complete owner query')
+
+    tracker = SimpleNamespace(plate_rows=owner_rows,
+                              plate_ready_ids=lambda _: Answer.capped(
+                                  set(), how='fixture readiness query',
+                                  caveat='HTTP 429 read_not_started'))
 
     def reader(*args, **kwargs):
         # Keep bounded display coalescing while refusing incomplete evidence.
