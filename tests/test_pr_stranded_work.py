@@ -214,3 +214,106 @@ def test_no_commits_means_no_push(tmp_path):
     remote, ws, git = job_repo(tmp_path, commit=False)
     assert eph.push_stranded_work({"job": "task", "name": "eph-task-abc123",
                                    "workspace": str(ws)}) == ""
+
+
+# (d) aegis-cxy: a refusal names its category, a linked codex job worktree with
+# st's kit passes, and an ssh push that fails is retried over HTTPS.
+
+def test_refusal_names_its_category_without_naming_the_path(tmp_path):
+    world = World(tmp_path)
+    provision(tmp_path)
+    world.head = world.git("rev-parse", "HEAD").decode().strip()
+    (tmp_path / "secret_scratch_name.py").write_text("x")
+    with pytest.raises(p.Refused) as error:
+        p.require_clean_source(tmp_path)
+    assert "untracked path outside st's kit" in str(error.value)
+    assert "secret_scratch_name" not in str(error.value)
+
+
+def codex_job_worktree(tmp_path):
+    """A linked worktree shaped like a codex task job: CLAUDE.md is a tracked
+    symlink to AGENTS.md, the kit's skills are symlinks out of the tree."""
+    main = tmp_path / "main"
+    def git(*a, cwd=main):
+        return subprocess.run(["git", "-C", str(cwd), *a], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True)
+    git("config", "user.email", "t@example.org"); git("config", "user.name", "T")
+    (main / "AGENTS.md").write_text("# rules\n")
+    (main / "CLAUDE.md").symlink_to("AGENTS.md")
+    (main / "src.py").write_text("x = 1\n")
+    git("add", "."); git("commit", "-qm", "base")
+    ws = tmp_path / "wt" / "eph-task-abc123"
+    git("worktree", "add", "-q", "-b", "wt/eph-task-abc123", str(ws))
+    (ws / "src.py").write_text("x = 2\n")
+    git("commit", "-qam", "candidate", cwd=ws)
+    (ws / "AGENTS.md").write_text(f"# rules\n\n{BEGIN}\nprojected tooling\n{END}\n")
+    skills = tmp_path / "skills-src" / "quipu"
+    skills.mkdir(parents=True)
+    for d in (".agents/skills", ".claude/skills"):
+        (ws / d).mkdir(parents=True)
+        (ws / d / "quipu").symlink_to(skills)
+    for f in (".bobbin/session/0a/ledger.jsonl", ".codex/config.toml"):
+        (ws / f).parent.mkdir(parents=True, exist_ok=True)
+        (ws / f).write_text("kit")
+    (ws / ".shantytown-tooling.json").write_text("{}")
+    return ws
+
+
+def test_codex_job_worktree_with_kit_and_committed_candidate_passes(tmp_path):
+    p.require_clean_source(codex_job_worktree(tmp_path))
+
+
+def test_codex_job_worktree_with_a_real_uncommitted_change_still_refuses(tmp_path):
+    ws = codex_job_worktree(tmp_path)
+    (ws / "src.py").write_text("x = 3\n")
+    with pytest.raises(p.Refused, match="tracked or staged change"):
+        p.require_clean_source(ws)
+
+
+class SshBroken:
+    """git that fails any push to origin (ssh) and records the HTTPS retry."""
+    def __init__(self, origin, https_ok=True):
+        self.origin, self.https_ok, self.pushes = origin, https_ok, []
+
+    def __call__(self, *args, cwd=None):
+        argv = list(args)
+        def done(code=0, out="", err=""):
+            return subprocess.CompletedProcess(argv, code, out, err)
+        if "symbolic-ref" in argv:
+            return done(out="wt/eph-task-abc123\n")
+        if "rev-list" in argv:
+            return done(out="1\n")
+        if argv[-3:-1] == ["get-url", "origin"] or argv[-2:] == ["get-url", "origin"]:
+            return done(out=self.origin + "\n")
+        if "push" in argv:
+            self.pushes.append(argv)
+            target = argv[argv.index("push") + 1]
+            if target == "origin":
+                return done(255, err="Bad owner or permissions on /etc/ssh/ssh_config.d/x.conf")
+            return done(0 if self.https_ok else 128, err="" if self.https_ok else "auth failed")
+        raise AssertionError(argv)
+
+
+REC = {"job": "task", "name": "eph-task-abc123"}
+
+
+def test_failed_ssh_push_is_retried_over_https_with_gh_credentials(tmp_path):
+    git = SshBroken("git@github.com:intigraph/shantytown.git")
+    note = eph.push_stranded_work({**REC, "workspace": str(tmp_path)}, git=git)
+    assert note.startswith("pushed wt/eph-task-abc123 to origin over HTTPS")
+    retry = git.pushes[-1]
+    assert "https://github.com/intigraph/shantytown.git" in retry
+    assert "credential.helper=!gh auth git-credential" in retry
+    assert retry[-1] == "HEAD:refs/heads/wt/eph-task-abc123"
+
+
+@pytest.mark.parametrize("origin,https_ok", [
+    ("git@github.com:intigraph/shantytown.git", False),   # HTTPS fails too
+    ("https://github.com/intigraph/shantytown.git", True),  # already HTTPS: no retry
+    ("git@forgejo.local:o/n.git", True),                   # not GitHub: no gh creds
+])
+def test_no_https_rescue_still_reports_local_only(tmp_path, origin, https_ok):
+    git = SshBroken(origin, https_ok)
+    note = eph.push_stranded_work({**REC, "workspace": str(tmp_path)}, git=git)
+    assert "NOT pushed" in note and "local-only" in note and "Bad owner" in note
+    assert len(git.pushes) == (2 if origin.startswith("git@github.com") else 1)
