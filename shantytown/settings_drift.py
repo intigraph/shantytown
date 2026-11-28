@@ -122,6 +122,6 @@ def admin_notices(agents, launches) -> list[str]:
                          f"file; hooks added since are not loaded. Cycle at your next "
                          f"idle: `st agent cycle {card.name} --no-in-place -r '...'`")
         else:
-            lines.append(f"{SETTINGS_STALE}: {card.name}; tend cycles it at its next "
-                         f"idle stop")
+            lines.append(f"{SETTINGS_STALE}: {card.name} runs on older settings; "
+                         f"a replacement cycle will load the current file")
     return lines

@@ -126,11 +126,25 @@ def test_a_render_that_would_drop_a_hand_hook_is_held(root, monkeypatch):
 
 
 def test_the_depth_sweep_does_not_withdraw_a_settings_request(root):
-    reqs = cycle.Requests(root)
-    reqs.request("dearing", "cp", auto=True, no_in_place=True, settings_stale=True)
-    pending = reqs.pending()
-    # the AutoCycler withdrawal rule (notify.py) spares runtime and settings requests
-    assert pending["dearing"].get("settings_stale") is True
+    from test_auto_cycle import _world, _sweep
+    from test_cycle import _saturated_pane
+
+    ac, panes, reqs, *_ = _world(root, _saturated_pane(646.0))
+    _sweep(ac)  # creates the depth episode that a below-threshold sweep clears
+    reqs.request("kelly", "cp", auto=True, no_in_place=True, settings_stale=True)
+    panes.screens["p-kelly"] = _saturated_pane(40.0)
+    _sweep(ac)
+    assert reqs.pending()["kelly"]["settings_stale"] is True
+
+
+def test_stale_worker_notice_does_not_promise_an_automatic_cycle(root):
+    launches = _launch_everyone(root)
+    path = root / "settings" / "worker.settings.json"
+    path.write_text(path.read_text() + " ")
+    notice = next(n for n in settings_drift.admin_notices(_cards(root), launches)
+                  if "dearing" in n)
+    assert "replacement cycle" in notice
+    assert "tend cycles" not in notice
 
 
 def _declared(monkeypatch, tmp_path, operators):
