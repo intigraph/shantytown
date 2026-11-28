@@ -3984,8 +3984,9 @@ def _spawn_verdict_approval(a, repo, pr, node_id, head, *, quipu=None) -> dict |
 
 def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None, now=None):
     """A review job's signed GateApproval record (aegis-c01c.7). Returns
-    (note, problem): the note goes into the job's summary; a problem means the
-    record was NOT written, so no merge can rest on this review."""
+    (note, problem): both go into the job's summary. A problem means writing
+    or merge-reader verification is unproved; it never erases an acknowledged
+    write or authorizes retrying it blindly."""
     from . import gate_verdict as gv
     outcome = gv.outcome_word(verdict)
     if rec.get("job") != "review" or outcome is None:
@@ -4016,7 +4017,24 @@ def _spawn_write_verdict(a, rec, verdict, head, evidence, *, gh=None, quipu=None
                        verifier=signer)
     except (gv.VerdictError, RuntimeError, OSError, ValueError) as exc:
         return "", f"verdict record NOT written: {exc}"
-    return f"signed verdict record {iri} ({outcome} on {head[:12]}, signer {signer})", ""
+    note = f"signed verdict record {iri} ({outcome} on {head[:12]}, signer {signer})"
+    # A successful write is not proof that the merge reader trusts the record.
+    # Use exactly its graph, pinned keys and server verification, without
+    # enrolling a signer or changing trust on a failed read-back.
+    try:
+        readback = gv.approval(quipu, repo=record.repo, pr=record.pr, node_id=node,
+                               head=record.head, graph=policy.verdict_graph,
+                               signers=gv.trusted_signers())
+        visible = readback["approvals"] + readback["blocking"]
+        if not any(row["record"] == iri for row in visible):
+            reason = next((row["why"] for row in readback["ignored"]
+                           if row["record"] == iri), "exact record not visible to merge reader")
+            return note, f"verdict write acknowledged; merge acceptance unproved: {reason}"
+        if outcome == "approve" and readback["author_agent_unknown"]:
+            return note, "verdict write acknowledged; the PR's author agent is unknown"
+    except (gv.VerdictError, RuntimeError, OSError, ValueError) as exc:
+        return note, f"verdict write acknowledged; merge read-back failed: {exc}"
+    return note, ""
 
 
 def _spawn_post_review_comment(rec, verdict, head, summary, *, run=None):
@@ -4263,7 +4281,7 @@ def _spawn_forge_refusal(req) -> str:
     from .workspace import git_origin
     checkout = _spawn_checkout({"checkout": req.checkout, "repo": req.repo})
     origin = git_origin(checkout) if checkout is not None and checkout.exists() else None
-    return eph.forge_refusal(req.job, req.repo, origin)
+    return eph.forge_refusal(req.job, req.repo, origin, req.pr)
 
 
 def _spawn_checkout_refusal(req) -> str:
@@ -4583,12 +4601,13 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                     summary = (summary.rstrip() + "\n\n" + pushed).strip()
             note, problem = _spawn_write_verdict(a, job, a.verdict, a.head, evidence)
             if note or problem:
-                summary = (summary.rstrip() + "\n\n" + (note or problem)).strip()
+                summary = (summary.rstrip() + "\n\n" + "\n".join(
+                    value for value in (note, problem) if value)).strip()
             if attended and a.verdict == 'approve' and cfg.ephemeral.review_enqueue_enabled:
                 try:
                     from . import review_enqueue
                     if problem:
-                        raise eph.Refused('signed verdict was not written')
+                        raise eph.Refused('signed verdict write/read-back unproved')
                     message = dict(verdict=a.verdict, head=a.head,
                         signer=policy.verdict_signer or f"st-review.{cfg.host_name or 'host'}")
                     intent = review_enqueue.report(a.root, job, None, message, policy)

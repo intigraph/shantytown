@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -145,7 +146,9 @@ print(json.dumps(dict(schema=r['schema'],intent=r['intent'],attempt=r['attempt']
     root, rec = _attended_review(store, monkeypatch)
     if fault != 'off': assert rec['head'] == HEAD
     shared_mode = root.stat().st_mode
-    q = signed(monkeypatch, rec['name'], 3)
+    # The CLI writes at the current clock. Keep this pre-existing review older,
+    # so exact-record read-back does not correctly reject it as superseded.
+    q = signed(monkeypatch, rec['name'], 3, now=time.time() - 60)
     monkeypatch.setattr(cli, '_spawn_quipu', lambda _: q)
     monkeypatch.setattr(gv, 'load_or_generate', lambda _: SEED)
     monkeypatch.setattr(gv, 'default_key_path', lambda: tmp_path / 'unused-key')
