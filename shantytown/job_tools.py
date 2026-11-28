@@ -13,7 +13,7 @@ from dataclasses import replace
 _FIELDS = {"mcp_servers", "skills", "claude_ai_connectors", "mcp_tools", "verdicts"}
 # Review and merge gates key on these exact names (approve/request-changes sign a
 # GateApproval, merged ends the queue), so those jobs may narrow but never rename.
-LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed")
+LEGACY_VERDICTS = ("approve", "request-changes", "merged", "blocked", "done", "failed", "enqueued")
 _GATED_JOBS = {"review", "merge"}
 _RESERVED = {"budget", "model", "harness", "verdict", "trigger", "action", "actions",
              "prompt_template", "max_tool_calls"}
@@ -188,19 +188,102 @@ def filter_manifest(manifest, spec):
 
 def settings_target(root, card):
     base = Path(root) / "settings"
-    return (base / "codex" / f"agent-{card.name}" / "config.toml" if card.harness == "codex"
-            else base / f"{card.name}.job.settings.json")
+    if card.harness == "codex":
+        return base / "codex" / f"agent-{card.name}" / "config.toml"
+    if card.harness == "agy":
+        # agy keeps a native launch-settings.json beside its canonical file, so
+        # each job gets its own directory rather than sharing settings/.
+        return base / "agy" / f"job-{card.name}" / "settings.json"
+    if card.harness == "opencode":
+        return base / "opencode" / f"job-{card.name}" / "opencode.json"
+    return base / f"{card.name}.job.settings.json"
+
+
+def _gate_hook(root, card):
+    import shlex
+    import sys
+    command = shlex.join([sys.executable, "-m", "shantytown.job_tools", "--root", str(root),
+                          "--job", card.name])
+    return {"matcher": "mcp__.*", "hooks": [{"type": "command", "command": command, "timeout": 5}]}
+
+
+def _ambient_opencode_mcp(card):
+    """OpenCode merges global and project config into OPENCODE_CONFIG. The bridge
+    names only servers it was told about as mcp__<server>__<tool>; a server from
+    any other config would keep a raw tool name the gate never matches. So an
+    MCP declaration anywhere else refuses (a false positive refuses, never opens)."""
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    places = [config_home / "opencode"]
+    if card.workspace:
+        places += [Path(card.workspace), Path(card.workspace) / ".opencode"]
+    found = []
+    for place in places:
+        for name in ("opencode.json", "opencode.jsonc", "config.json"):
+            path = place / name
+            try:
+                if path.is_file() and '"mcp"' in path.read_text():
+                    found.append(str(path))
+            except OSError:
+                found.append(str(path))
+    return found
 
 
 def prepare_settings(root, card, base):
     spec = selected(root, card.name)
     if spec is None:
         return base
-    if card.harness not in ("claude", "codex"):
+    # agy takes the Claude-shaped canonical file: its hook adapter (agy_hooks)
+    # runs these PreToolUse hooks on every call_mcp_tool, translated to
+    # mcp__<server>__<tool>, and denies on any refusal or adapter error. Its
+    # server set is the workspace kit, which provisioning filters by this same
+    # profile. OpenCode's bridge plugin runs the hooks in its own options and
+    # throws (refusing the tool) on a deny or any hook failure.
+    if card.harness not in ("claude", "codex", "agy", "opencode"):
         raise ValueError("job tool profile is not supported by this harness")
     from . import codex
     source = Path(base).read_text()
-    if card.harness == "codex":
+    if card.harness == "opencode":
+        from .opencode import PLUGIN_NAME
+        if (ambient := _ambient_opencode_mcp(card)):
+            raise ValueError("OpenCode MCP is declared outside the job config: " + ", ".join(ambient))
+        data = json.loads(source)
+        # The kit comes from the workspace .mcp.json that provisioning wrote for
+        # THIS job (already narrowed to the profile, credentials projected), never
+        # from the shared role file, which holds no kit (aegis-j550, measured on
+        # vati: every opencode job refused "not provisioned"). The pre-flight
+        # compose runs before provisioning, so no kit yet means an empty kit;
+        # the launch compose runs after it and must find every selected server.
+        data["mcp"] = {}
+        kit = Path(card.workspace) / ".mcp.json" if card.workspace else None
+        if kit is not None and (kit.is_symlink() or kit.exists()):
+            from .opencode import translate_servers
+            from .provision import ProvisionError
+            if kit.is_symlink() or not kit.is_file():
+                raise ValueError("workspace .mcp.json is not a regular file")
+            servers = json.loads(kit.read_text()).get("mcpServers", {})
+            missing = set(spec["mcp_servers"]) - set(servers)
+            if missing:
+                raise ValueError("JobSpec MCP servers are not provisioned: " + ", ".join(sorted(missing)))
+            try:
+                data["mcp"] = translate_servers(
+                    {"mcpServers": {name: servers[name] for name in spec["mcp_servers"]}})
+            except ProvisionError as exc:
+                raise ValueError(str(exc)) from None
+        bridges = [p for p in data.get("plugin", []) if isinstance(p, list) and len(p) == 2
+                   and str(p[0]).endswith(PLUGIN_NAME) and isinstance(p[1], dict)]
+        if len(bridges) != 1:
+            raise ValueError("OpenCode job config needs exactly one shantytown bridge")
+        # sattler ruling 2026-11-27 (aegis-j550 c22): an ephemeral opencode job
+        # runs unattended, the same posture as a claude job. Nobody answers an
+        # "ask" in a job pane, so the job config allows; it stays bounded by
+        # the JobSpec gate below and the job worktree. Only this per-job file
+        # changes; the shared role file keeps its "ask" for crew agents.
+        data["permission"] = {"*": "allow"}
+        options = bridges[0][1]
+        options["mcp_servers"] = sorted(data["mcp"])
+        options.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_gate_hook(root, card))
+        body = json.dumps(data, indent=2) + "\n"
+    elif card.harness == "codex":
         data = tomllib.loads(source)
         data["mcp_servers"] = filter_servers(data.get("mcp_servers", {}), spec)
         for name, tools in spec["mcp_tools"].items():
@@ -216,13 +299,8 @@ def prepare_settings(root, card, base):
         permissions["allow"] = [rule for rule in permissions.get("allow", [])
                                 if not str(rule).startswith("mcp__")] + [
             f"mcp__{server}__{tool}" for server, tools in spec["mcp_tools"].items() for tool in tools]
-        import shlex
-        import sys
-        command = shlex.join([sys.executable, "-m", "shantytown.job_tools", "--root", str(root),
-                              "--job", card.name])
         hooks = data.setdefault("hooks", {})
-        hooks.setdefault("PreToolUse", []).append({"matcher": "mcp__.*", "hooks": [
-            {"type": "command", "command": command, "timeout": 5}]})
+        hooks.setdefault("PreToolUse", []).append(_gate_hook(root, card))
         body = json.dumps(data, sort_keys=True, indent=2) + "\n"
     target = settings_target(root, card)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -237,6 +315,17 @@ def prepare_settings(root, card, base):
             temporary.replace(target)
         finally:
             temporary.unlink(missing_ok=True)
+    if card.harness == "agy":
+        # Point the workspace hook projection and the native launch file at this
+        # job-owned canonical file; agy's SessionStart refuses a mismatch.
+        if not card.workspace:
+            raise ValueError("agy job tool profile requires the job workspace")
+        # Record the hooks bytes written here (they replace provisioning's), or
+        # the trust guard refuses st's own .agents/hooks.json (eph-task-ed2827).
+        from .agy import project_hooks
+        from .provision import _record_job_kit_file
+        body = project_hooks(card.workspace, str(target))
+        _record_job_kit_file(card, root, Path(card.workspace), ".agents/hooks.json", body)
     if card.harness == "codex":
         # The job-owned config makes its directory the job's CODEX_HOME, so
         # the attended exec-policy rules st wrote at spawn (the exact per-PR

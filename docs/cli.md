@@ -1044,6 +1044,19 @@ exits 2 instead of treating zero inspected bundles as a pass. Its JSON report
 retains schema `st.hook-check/1` and includes `store_error: "no store found"`.
 A real, existing store with an empty registry can still pass with exit 0.
 
+A harness with no evidence of use on the host (no running process on one of its
+settings files, no card pinned to this host declaring it, no session record in
+the last 24h: claude transcripts, or codex rollouts under st's role homes or the
+`$XDG_STATE_HOME/shantytown/codex/<name>/sessions` store) has its `live` and
+`firing` layers reported as `not-in-use` instead of `not-checked` (aegis-9uq.2).
+That state is never counted as ok and never as cannot-tell, so it holds neither
+exit 1 nor exit 2; its `configured` layer is still checked. A harness that does
+run there keeps its verdicts: a live hook with old evidence and unreadable
+activity stays `unknown` and exit 2. Unreadable crew or session stores change
+nothing, so an unreadable host is never reported as "not in use". A card with
+no `host` counts as use only when the deployment names no host; on a named host
+it would otherwise mark its harness in use on every host.
+
 Codex and administrator launches also deliver the same anchor render through the
 verified startup input, together with any unread mail in one message. Any other
 launch with an empty inbox submits this initial anchor turn too: SessionStart
@@ -2418,6 +2431,16 @@ The contract, because a program depends on it:
   busy/idle state we can actually answer; an agent that is down, has no pane, or shows a pane with no
   runtime UI is in **neither** number. Counting the unknowns into the denominator would print a
   capacity figure that was never measured, in the same font as one that was.
+- **Status-bar modes read Quipu at background priority** (aegis-69x). `anchor --short/--events/--harness`,
+  `crew --count/--governor/--display-snapshot`, `inbox --count`, `dashboard`, `tend` and `watch` send
+  `X-Quipu-Priority: background` on every Quipu read, so a busy Quipu sheds them first with
+  429 + Retry-After instead of making interactive reads wait behind them. The one list lives in
+  `query_identity.BACKGROUND_INVOCATIONS`, and the one place the header is attached is
+  `quipu_read_budget.open_read`, which carries reads only; writes and interactive commands
+  (`st anchor`, `st work item show`, `st go`) never carry it. A shed read is UNKNOWN with its retry
+  time, never an empty or green value, and further background reads skip the network until
+  Retry-After expires (`quipu_busy`). The header has no effect until the server enables
+  `read_admission_wait_ms`.
 
 ## What's deliberately absent
 
@@ -2640,7 +2663,8 @@ clear even if a peer is UNKNOWN (including before its first probe). That peer
 remains UNKNOWN in diagnostics and per-reason metrics. The aggregate is UNKNOWN
 only when no detector supplies a healthy observation and at least one is unknown.
 `aegis_quiet_time_detector_active{reason="media"}` identifies
-the cause; `aegis_quiet_time_hold_active` is the combined decision. Per-reason
+the cause; `aegis_quiet_time_hold_active` is the combined launch-hold decision
+(full-effect detectors only). Per-reason
 `aegis_quiet_time_probe_ok` and `aegis_quiet_time_probe_timestamp_seconds` expose
 unavailable or stale evidence. Existing gaming metrics still describe gaming only.
 
@@ -2649,6 +2673,24 @@ separately from routine budget advice. Failed pane deliveries remain pending.
 An unknown detector or failed slowdown verification warns the administrator;
 a continuous hold lasting 30 minutes warns once and never clears automatically.
 Before honouring a hold copied from notes, run `st fleet hold all --status`.
+Each detector declares its hold `effect`. `full` (the default, and the only effect
+gaming accepts) holds launches, dispatch and respawns. `no-heavy-builds` holds none of
+them: agents keep launching and working, and only heavy local builds (cargo
+build/test/clippy and the other heavy-work wrappers) are refused. A media session
+needs only the CPU kept free; under a full hold, 20 minutes of playback refused ~15
+drain jobs and stalled every PR lane. `st fleet hold all --status` exits 1 (defer
+heavy work) while any hold, throttle or builds-only hold is active, and also while a
+builds-only detector is UNKNOWN: builds fail closed, launches do not. The separate
+gauge `aegis_quiet_time_build_hold_active` carries that same decision for an external
+build policy (Yupana). It is its own metric, not an `effect` label on
+`aegis_quiet_time_hold_active`, so existing rules on the launch-hold series do not
+start matching film playback. A builds-only hold does not CPU-throttle crew panes
+(`aegis_quiet_time_throttled` stays 0): the rule is "still do work, just refrain from
+heavy builds", and the heavy builds are refused outright instead. A builds-only hold,
+an UNKNOWN builds-only detector, and the lift of either are announced to crew panes
+like any other hold.
+Changing `effect` does not discard a detector's current observation.
+
 With the default 120-second lift delay and minute probes, a continuously negative
 media signal clears within 180 seconds. A message saying one reason ended does
 not override another active reason or the budget governor.
@@ -2693,6 +2735,7 @@ enter_delay = 0
 grace = 0
 lift_delay = 120
 lift_rule = "inactive"
+effect = "no-heavy-builds"   # playback needs CPU, not an idle fleet
 ```
 
 The HTTP reader issues a bounded read-only GET, refuses redirects, and matches
@@ -3586,6 +3629,14 @@ outcome remains unproven: read back the
 item before deciding whether to retry. The command never retries or changes the
 principal, blocker checks or close reason to get past a failure.
 
+`st work item close` refuses, before any write, an item whose
+`agent_context.deploy_admission` phase is not terminal (`drained` or
+`cancelled`), and an item whose agent context cannot be parsed. Closing the
+item does not release the admission, so CD would keep refusing on a
+"competing INFLIGHT operation". `deploy_admission.py cancel` will not cancel a
+closed item either. Cancel a never-begun `planned` operation, or resolve it,
+before closing.
+
 ### Alert causes and members
 
 A **cause** is the currently firing root alarm class selected from Quipu's
@@ -3832,13 +3883,22 @@ unknown until a real hook payload is observed; fixtures do not establish it.
 
 A rendered API message containing `safeguards` takes priority over every other
 error category. It records a hold for that launch and durably notifies the
-canonical administrator, with request IDs extracted from the rendered message.
+agent's stop recipient, with request IDs extracted from the rendered message.
+The recipient is chosen exactly as an ordinary stop's is (`route_stop`, with the
+same live-lead check): the card's lead. The administrator receives it only when
+the agent has no lead, when the lead is down or unreachable (the event rises and
+is marked ROSE), or when the route cannot be read (a loud fallback, so a routing
+read never loses the notice). That fallback covers every routing step, including the off-host lead read
+from Quipu and the liveness probe: any error there still records the hold and
+notifies the administrator. The scheduled `tend` safeguard reconciliation,
+which only resumes a notification the hook never attempted, still reports to the
+administrator.
 The hold also prevents ordinary input and automatic cycles when the pane has no
 banner. A human relaunch creates a fresh launch stamp; a normal successful Stop
 does not clear a safeguard hold. Rate-limit and authentication failures enter the
 existing `limited` and `auth-dead` supervision paths; a later successful Stop can
-retire these transient signals. Other errors produce a durable administrator
-inbox notice. Notification work runs asynchronously with a bounded timeout and
+retire these transient signals. Other errors produce a durable inbox notice to
+the same recipient. Notification work runs asynchronously with a bounded timeout and
 never asks the model to continue. Launch verification checks the running
 process's selected settings against its recorded launch snapshot; a newly
 rewritten settings file is not proof that an old process loaded the hook.

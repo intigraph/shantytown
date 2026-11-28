@@ -10,6 +10,10 @@ _command = ContextVar("query_command", default=None)
 _caller = ContextVar("query_caller", default=None)
 _source = ContextVar("query_source", default="shantytown")
 _operation = ContextVar("query_operation", default="query")
+# aegis-69x: set for the whole of one non-interactive st invocation (status-bar
+# modes, dashboard, tend). A context, not an env var, so it never leaks into a
+# child process or a later interactive command in the same shell.
+_priority = ContextVar("query_priority", default=None)
 
 
 def current_query_identity():
@@ -88,8 +92,51 @@ def read_context():
         "QUIPU_SOURCE": _command.get() or _key(env.get("QUIPU_SOURCE")) or _source.get(),
         "QUIPU_OPERATION": _key(env.get("QUIPU_OPERATION")) or _operation.get(),
         # aegis-jve/69x: scheduling class only; can only LOWER priority.
-        "QUIPU_PRIORITY": "background" if (env.get("QUIPU_PRIORITY") or "").strip().lower() == "background" else None,
+        "QUIPU_PRIORITY": read_priority(),
     }.items() if v is not None}
+
+
+def read_priority():
+    """"background" or None. Only ever lowers: there is no way to ask for more."""
+    if _priority.get() == "background":
+        return "background"
+    value = (os.environ.get("QUIPU_PRIORITY") or "").strip().lower()
+    return "background" if value == "background" else None
+
+
+@contextmanager
+def background_reads():
+    """Mark every Quipu READ in this context as sheddable background traffic."""
+    token = _priority.set("background")
+    try:
+        yield
+    finally:
+        _priority.reset(token)
+
+
+#: The st invocations nobody waits on (aegis-69x, Stiwi 2026-11-19: "these shanty
+#: segments, those arent critical at all"). Each entry is (command, flags): the
+#: invocation is background when it is that command with ANY of those flags set,
+#: or with no flags listed, always. Anything not here stays normal priority: an
+#: agent reading its own anchor or an item is waiting on the answer, and a
+#: background 429 there would stall real work to protect a status bar.
+BACKGROUND_INVOCATIONS = (
+    ("anchor", ("short", "events", "harness")),  # status-bar segments
+    ("crew", ("count", "governor", "display_snapshot")),  # status bar, display cache
+    ("inbox", ("count",)),  # status bar
+    ("dashboard", ()),  # self-refreshing panel
+    ("tend", ()),  # supervision poll; re-runs on its own schedule
+    ("watch", ()),  # peer liveness poll
+)
+
+
+def background_invocation(args):
+    """Is this parsed st invocation one whose reads may be shed first?"""
+    command = getattr(args, "cmd", None)
+    for name, flags in BACKGROUND_INVOCATIONS:
+        if command == name and (not flags or any(getattr(args, f, False) is True for f in flags)):
+            return True
+    return False
 
 
 def read_headers():

@@ -160,6 +160,9 @@ admin_self_slots = 1
 #
 # [ephemeral.harness_by_job]
 # review = "codex"
+#
+# [ephemeral.model_by_harness]   # job model per harness; unset = harness default
+# opencode = "ollama/gemma4:12b"
 
 # ---------------------------------------------------------------------------
 # [env] — this deployment's PLUMBING: where the tracker is, which backend, the

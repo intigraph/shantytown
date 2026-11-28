@@ -652,6 +652,11 @@ def _assigned_to(me: str, beads: list[dict]) -> list[dict]:
     return out
 
 
+def held_ready_line(ids) -> str:
+    """The one sentence a stop-time wake leads with: what this agent holds."""
+    return f"you hold {len(ids)} ready item(s): {', '.join(ids)}"
+
+
 def _owned_asks(me, rows):
     return [row for row in rows
             if (row.get("assignee") or "").split("/")[-1] == me and is_ask(row)]
@@ -925,8 +930,18 @@ def _haul(reg: FilesRegistry, panes, me: str, root: Path, *, payload=None) -> in
                 pass
         from .tracker_examples import for_deployment
         examples = for_deployment(root, reg)
+        # NAME EVERYTHING HELD, not just the next item (aegis-0dh5). A lead that
+        # stops idle holding ready work must be told what it holds at that stop.
+        # Workers get the same line, and the count INCLUDES the item claimed
+        # just now: it is everything held at this stop, not what remains after.
+        # "(N more)" alone left the rest to a plate read nobody was prompted to
+        # make, and ellie sat 56 minutes with ready work she did not know about.
+        held_ids = [b.get("id", "?") for b in mine]
+        if nid not in held_ids:
+            held_ids.insert(0, nid)
         print(json.dumps({"decision": "block",
-                          "reason": "anchor closed ✓ — "
+                          "reason": held_ready_line(held_ids) + "\n"
+                          + "anchor closed ✓ — "
                           + haul_feed_message(nid, title, rest,
                                               headroom=headroom, repeats=repeats,
                                               advisory=advisory, examples=examples)}))

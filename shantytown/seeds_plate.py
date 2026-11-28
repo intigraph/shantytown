@@ -102,7 +102,14 @@ def _query(proof, query: str, timeout: int, *, verbose: bool = False) -> dict:
     if not seeds_read_cache.primary_reads_required() and seeds_push_read.enabled():
         if verbose:
             raise ValueError("push read cannot provide primary profiling evidence")
-        return _validate_query(seeds_push_read.read(proof, query, timeout), query)
+        # aegis-fzu: the az3d re-enable was rolled back because one refusal left
+        # the board UNKNOWN. A read the projection cannot serve now says so and
+        # takes the direct read below; it never becomes an empty answer.
+        if not seeds_push_read.refused(proof):
+            try:
+                return _validate_query(seeds_push_read.read(proof, query, timeout), query)
+            except (ValueError, TypeError) as refusal:
+                seeds_push_read.fall_back(proof, refusal)
 
     def fetch():
         return _query_wire(proof, query, timeout, verbose=verbose)

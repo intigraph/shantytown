@@ -128,13 +128,19 @@ def test_a_stale_head_is_superseded_not_spawned(store, tmp_path, capsys):
 def test_a_new_head_re_arms_the_same_job(store, tmp_path, monkeypatch):
     root, _panes, launched = store
     monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
     path = tmp_path / "ev.jsonl"
-    _write(path, _ev(job="review", head=HEAD))
+    _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    _write(path, _ev(job="review", head=HEAD), _ev(job="review", head=NEWER))
+    _write(path, _ev(head=HEAD), _ev(head=NEWER))
+    # aegis-bmu3: one task job per item. While the first head's job is live the
+    # new head's event is refused and stays pending, queuing no duplicate...
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert len(launched) == 1 and eph.tickets(root) == []
+    assert NEWER not in {r["head"] for r in pe.settled(root).values()}
+    # ...and once that job ends, the same job re-arms for the new head.
+    (first,) = eph.live(root)
+    assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    # The second head's event is admitted (queued: the first job holds the slot).
     assert len(launched) + len(eph.tickets(root)) == 2
 
 
@@ -235,13 +241,13 @@ def test_a_new_head_task_is_not_mistaken_for_the_running_one(store, tmp_path, mo
     _write(path, _ev(head=HEAD))
     assert _st(root, "--drain-events", str(path)) == cli.OK
     _write(path, _ev(head=HEAD), _ev(head=NEWER))
-    # The old head's fix is still live, so the new head's waits (pending, not
-    # settled against it) rather than stacking a second job on the branch.
+    # aegis-bmu3: held pending, not settled against the old head's live job.
     assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
-    assert [r["head"] for r in pe.settled(root).values()] == [HEAD]
-    _end_jobs(root)
+    assert NEWER not in {r["head"] for r in pe.settled(root).values()}
+    (first,) = eph.live(root)
+    assert _st(root, "--stop", first["name"]) == cli.OK
     assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(launched) == 2
+    assert len(launched) + len(eph.tickets(root)) == 2
     (new,) = [r for r in pe.settled(root).values() if r["head"] == NEWER]
     assert "in flight" not in new.get("detail", "")
 
@@ -271,15 +277,42 @@ def test_the_drain_recruits_three_review_rounds_and_caps_the_fourth(store, tmp_p
     fourth = "e" * 40
     lines.append(_ev(job="review", head=fourth))
     _write(path, *lines)
-    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL   # loud, once
     assert len(launched) == 3                      # no fourth review
-    assert "capped review o/n#7@eeeeeeeeeeee: 3 review rounds" in capsys.readouterr().err
+    assert "capped review o/n#7@eeeeeeeeeeee on it-1: 3 review rounds" in capsys.readouterr().err
     assert pe.settled(root)[pe.event_id("o/n", 7, fourth, "review")]["outcome"] == "capped"
     # Settled, so it is not re-offered; another PR still gets its first round.
     lines.append(_ev(job="review", pr=8, head=fourth))
     _write(path, *lines)
     assert _st(root, "--drain-events", str(path)) == cli.OK
     assert len(launched) == 4 and "capped 0" in capsys.readouterr().out
+
+
+def test_past_the_cap_no_fix_is_recruited_and_the_pr_is_raised_once(store, tmp_path, monkeypatch, capsys):
+    # Review of #792: round 3 said REQUEST-CHANGES, the drain still recruited the
+    # fix, its push (head 4) was capped, and the PR sat with no APPROVE, no
+    # merge event and nothing raised.
+    root, _panes, launched = store
+    monkeypatch.setitem(eph.DEFAULT_HARNESS, "review", "claude")   # fixture has no codex
+    raised = []
+    monkeypatch.setattr(cli, "_drain_event_raise", lambda a, ev, outcome, text, key:
+                        raised.append((outcome, key)))
+    third = _review_rounds(pe.MAX_REVIEW_ROUNDS)[-1]
+    for head in _review_rounds(pe.MAX_REVIEW_ROUNDS):
+        pe.settle(root, pe.parse(json.dumps(_ev(job="review", head=head))), "admitted", 1.0)
+    path = _write(tmp_path / "ev.jsonl", _ev(job="review", head=third), _ev(job="task", head=third))
+    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
+    assert launched == []                          # no fix job for an unreviewable head
+    assert pe.settled(root)[pe.event_id("o/n", 7, third, "task")]["outcome"] == "capped"
+    assert "A human must review, fix or merge it" in capsys.readouterr().err
+    assert raised == [("capped", "pr-events:o/n#7:capped")]
+    # Settled: the next drain is clean and raises nothing more.
+    assert _st(root, "--drain-events", str(path)) == cli.OK
+    assert len(raised) == 1
+    # An approved head still merges: the cap never blocks a merge event.
+    assert not pe.capped(pe.parse(json.dumps(_ev(job="merge", head=third,
+                                                  reason="green-and-approved"))), {"a", "b", "c"})
+    assert not pe.capped(pe.parse(json.dumps(_ev(job="task", head=third))), {"a", "b"})
 
 
 def test_the_cap_counts_heads_not_admissions(store, tmp_path):
@@ -290,29 +323,6 @@ def test_the_cap_counts_heads_not_admissions(store, tmp_path):
         pe.settle(root, ev, "admitted", 1.0)
     pe.settle(root, pe.parse(json.dumps(_ev(job="task", head=NEWER))), "admitted", 1.0)
     assert pe.review_rounds(root) == {("o/n", 7): {HEAD}}
-
-
-def test_a_task_is_refused_while_one_is_live_for_the_same_item_and_pr(store, tmp_path, monkeypatch, capsys):
-    # 6vf.10 got three fix jobs from drain plus hand spawns.
-    root, panes, launched = store
-    monkeypatch.setattr(eph, "kick_drain", lambda r: None)
-    hand = {"name": "eph-task-abc123", "job": "task", "item": "it-1", "repo": "o/n",
-            "pr": 7, "state": eph.LIVE}
-    eph.write(root, hand)
-    path = _write(tmp_path / "ev.jsonl", _ev(job="task", reason="ci-red"))
-    assert _st(root, "--drain-events", str(path)) == cli.CANNOT_TELL
-    assert "task job eph-task-abc123 is already live for it-1" in capsys.readouterr().err
-    assert launched == [] and pe.settled(root) == {}
-    # A queued ticket for the same item and PR blocks it too.
-    assert pe.live_task(pe.parse(json.dumps(_ev())), [],
-                        [{"id": "q-1", "job": "task", "item": "it-1", "repo": "o/n", "pr": 7}]) == "q-1"
-    # Another PR, another item or a review job are not duplicates.
-    assert pe.live_task(pe.parse(json.dumps(_ev(pr=8))), [hand], []) is None
-    assert pe.live_task(pe.parse(json.dumps(_ev(item="it-2"))), [hand], []) is None
-    assert pe.live_task(pe.parse(json.dumps(_ev())), [{**hand, "job": "review"}], []) is None
-    eph.write(root, {**hand, "state": eph.DONE})
-    assert _st(root, "--drain-events", str(path)) == cli.OK
-    assert len(launched) == 1
 
 
 def test_a_malformed_line_holds_exit_2_once_not_forever(store, tmp_path, capsys):
@@ -355,3 +365,87 @@ def test_a_head_less_hand_spawned_job_does_not_settle_a_new_head():
     assert pe.in_flight(ev, [], [ticket], since=100.0) == "q-1"
     exact = {**hand, "name": "eph-merge-x", "head": NEWER, "spawned_at": 1.0}
     assert pe.in_flight(ev, [exact], [], since=100.0) == "eph-merge-x"
+
+
+# --- aegis-qi22: a launch that always fails, and a PR that already merged ----
+
+def test_a_launch_that_always_fails_spawns_3_times_then_is_terminal(store, tmp_path, capsys):
+    # bobbin#259's merge event launched 8 jobs, each dying on the same bug.
+    root, panes, launched = store
+    panes.behaviour["rc"] = cli.REFUSED                  # every launch fails
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    eid = _ev()["event_id"]
+    for _ in range(pe.MAX_LAUNCH_FAILURES - 1):
+        assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+        assert eid not in pe.settled(root)
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    err = capsys.readouterr().err
+    assert "launch-failed task o/n#7" in err
+    assert pe.settled(root)[eid]["outcome"] == "launch-failed"
+    for _ in range(3):                                   # terminal: never again
+        assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == pe.MAX_LAUNCH_FAILURES == 3
+    # Raised once to the administrator, by key, not on every drain.
+    raised = [json.loads(p.read_text()) for p in (root / "events").rglob("*.json")]
+    raised = [e for e in raised if e.get("reason") == "pr-event-launch-failed"]
+    assert len(raised) == 1 and raised[0]["to"] == "boss" and raised[0]["item"] == "it-1"
+
+
+def test_a_refusal_before_any_job_exists_is_not_a_launch_failure(store, tmp_path, monkeypatch):
+    # The cap counts launches only: a governor hold makes no job, stays
+    # pending and is bounded by PENDING_TTL_S, so it must not go terminal.
+    root, _panes, launched = store
+    monkeypatch.setattr(cli, "_spawn_governor_refusal", lambda a, card: "governor: held")
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    for _ in range(pe.MAX_LAUNCH_FAILURES + 2):
+        assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    assert pe.settled(root) == {} and pe.launch_failures(root) == {}
+
+
+def test_a_launch_that_fails_then_succeeds_is_admitted(store, tmp_path):
+    root, panes, launched = store
+    panes.behaviour["rc"] = cli.REFUSED
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.CANNOT_TELL
+    panes.behaviour["rc"] = cli.OK
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert pe.settled(root)[_ev()["event_id"]]["outcome"] == "admitted"
+    assert len(launched) == 2
+
+
+def _forge(monkeypatch, **info):
+    seen = []
+
+    def gh(*args):
+        seen.append(args[0])
+        return {"state": "open", "merged": False, "head": {"sha": HEAD}, **info}
+    monkeypatch.setattr(cli, "_gh_json", gh)
+    return seen
+
+
+@pytest.mark.parametrize("info,why", [
+    ({"state": "closed", "merged": True, "merged_at": "2026-11-28T01:56:26Z"}, "pr-merged"),
+    ({"state": "closed"}, "pr-closed"),
+    ({"head": {"sha": NEWER}}, "head moved to bbbbbbbbbbbb"),
+])
+def test_a_pr_that_moved_on_spawns_nothing_and_is_settled(store, tmp_path, monkeypatch, capsys, info, why):
+    root, _panes, launched = store
+    seen = _forge(monkeypatch, **info)
+    events = _write(tmp_path / "ev.jsonl", _ev(job="merge"))
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == [] and eph.records(root) == []
+    assert seen == ["repos/o/n/pulls/7"]
+    rec = pe.settled(root)[_ev(job="merge")["event_id"]]
+    assert rec["outcome"] == "superseded" and rec["detail"] == why
+    assert why in capsys.readouterr().out
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert launched == []
+
+
+def test_an_open_pr_at_the_event_head_still_spawns(store, tmp_path, monkeypatch):
+    # The re-read says no only when the PR moved on.
+    root, _panes, launched = store
+    _forge(monkeypatch)
+    events = _write(tmp_path / "ev.jsonl", _ev())
+    assert _st(root, "--drain-events", str(events)) == cli.OK
+    assert len(launched) == 1

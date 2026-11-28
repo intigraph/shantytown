@@ -16,7 +16,7 @@
       "source": "docs/design.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fdesign.md",
       "summary": "Tracker and pane protocols separate work storage from session transport. Dispatch verification reads back delivery; refusal and dry-run outcomes preserve explicit uncertainty.",
-      "source_sha256": "994bf420ba3acbe04f87fb51e2f057ef625ab4019a9c5ab44132929f6009f914",
+      "source_sha256": "85d93e04484c2ade4e514410f6b8d76f03c779294ae19f6343a69f91ae791d85",
       "type": "Concept"
     },
     {
@@ -84,7 +84,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "62f90f9383fdd631957962c5c63fa7e60dcc8569107b0444913cc5f0f520d66e",
+      "source_sha256": "c5e7d155cc77f1ffc5b024a8a3a45f1fa2c647811b0823a6115b293ff75a26bd",
       "properties": {
         "startHereOrder": 2
       }

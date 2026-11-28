@@ -6,8 +6,9 @@ queue. A busy answer (408 / 429 / 503) told nothing to the next caller.
 
 WHAT. A busy answer records `busy until <now + Retry-After>` for that server in
 one private per-host file (Retry-After honoured, else 5 s; clamped to 1..30 s).
-While it holds, BACKGROUND callers (`QUIPU_PRIORITY=background`: status
-segments, dashboards, census) do not touch the network; they fail fast with a
+While it holds, BACKGROUND callers (`QUIPU_PRIORITY=background`, or an st
+invocation in query_identity.BACKGROUND_INVOCATIONS: status segments,
+dashboards, tend) do not touch the network; they fail fast with a
 "quipu busy" error that the snapshot/UNKNOWN paths already treat as transient.
 Normal callers are never blocked by this: they read as before, and their busy
 answers refresh the signal. Storage failures only disable the gate.
@@ -32,7 +33,8 @@ class QuipuBusy(TimeoutError):
 
 
 def background() -> bool:
-    return (os.environ.get("QUIPU_PRIORITY") or "").strip().lower() == "background"
+    from .query_identity import read_priority
+    return read_priority() == "background"
 
 
 def _path(server: str) -> Path:

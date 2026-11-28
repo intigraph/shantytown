@@ -60,6 +60,16 @@ def _no_detached_self_cycle_waiter(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_latched_push_refusal():
+    """seeds_push_read latches a reader refusal for the process. One test's
+    latch must not send a later test's reads straight to direct /query."""
+    from shantytown import seeds_push_read
+    seeds_push_read.reset()
+    yield
+    seeds_push_read.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_inbox_count_cache(monkeypatch, tmp_path):
     """`st inbox --count` caches per agent under the user cache dir (aegis-dnw).
     A test must never read a count another test, or the operator, left there;

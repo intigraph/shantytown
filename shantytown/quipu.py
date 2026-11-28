@@ -588,6 +588,16 @@ class QuipuRegistry:
                 raise QuipuNotQuipu(not_quipu(
                     self.server, "/query",
                     f"HTTP {e.code} — no query endpoint here")) from e
+            from . import quipu_busy
+            if e.code in quipu_busy.BUSY_CODES:
+                # A shed read (aegis-69x) is quipu saying "not now", not "fix
+                # your query": the remedy is to wait, so it is a could-not-look
+                # with its retry time, never a rejection or an empty answer.
+                quipu_busy.observe(self.server, e)
+                seconds = quipu_busy.retry_after_seconds(e.headers.get("Retry-After")
+                                                         if e.headers is not None else None)
+                raise QuipuUnreachable(
+                    f"quipu busy (HTTP {e.code}); retry after {seconds}s") from e
             detail = _http_error_detail(e)
             raise QuipuQueryRejected(
                 f"quipu rejected the query (HTTP {e.code}): {detail}") from e

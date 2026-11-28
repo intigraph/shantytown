@@ -39,9 +39,17 @@ _ID = re.compile(r"[0-9a-f]{64}")
 
 LEDGER = "pr-events.jsonl"
 # Outcomes that end an event. "refused" (dates the first refusal),
-# "spawning" (intent, written before the spawn) and "malformed" (a bad line
+# "spawning" (intent, written before the spawn), "launch-failure" (one spawn
+# that made a job which then failed to launch) and "malformed" (a bad line
 # already reported, keyed by line_id) are also written; none settles an event.
-SETTLING = ("admitted", "superseded", "expired", "capped")
+SETTLING = ("admitted", "superseded", "expired", "launch-failed", "capped")
+# Failed launches an event gets before it is settled "launch-failed" and raised
+# to the administrator. Before this a launch failure only left the event
+# pending, so every drain made one more job: bobbin#259's merge event
+# (aegis-qi22) launched 8 merge jobs about 150 s apart, each dying on the same
+# bug, for a PR that had already merged. A governor or pool refusal makes no
+# job and is not counted; PENDING_TTL_S bounds those.
+MAX_LAUNCH_FAILURES = 3
 # How long a pending event is offered again before it expires. Without a bound
 # a permanent refusal (a merge pin mismatch, a PR closed with no newer head)
 # re-spawned on every drain and held exit 2 forever (review of #776), so a
@@ -52,8 +60,9 @@ PENDING_TTL_S = 24 * 3600
 # drain reviews (1d484a, 07aef5, 65b603, fc24ee, 9efbf4), each REQUEST-CHANGES
 # with one new finding, at 91% of the weekly Claude budget (sattler 17:4xZ):
 # a reviewer always finds one more thing, so an uncapped loop never converges.
-# Round 4 is settled as "capped", printed, and never offered again; a later
-# head is a later round and is capped too, so the PR lands on green instead.
+# Past the cap, a new head's review and any fix are settled "capped" and the PR
+# is raised once to the administrator: it does not land by itself, a human
+# reviews or merges it. An approved head's merge event is never capped.
 MAX_REVIEW_ROUNDS = 3
 
 
@@ -180,6 +189,40 @@ def note_malformed(root, lid: str, problem: str, now: float) -> None:
         fh.write(json.dumps(rec, sort_keys=True) + "\n")
 
 
+def launch_failures(root) -> dict[str, int]:
+    """event_id -> how many of its spawns made a job that failed to launch."""
+    out: dict[str, int] = {}
+    for r in _ledger(root):
+        if r.get("outcome") == "launch-failure":
+            out[r["event_id"]] = out.get(r["event_id"], 0) + 1
+    return out
+
+
+def new_jobs(ev: dict, before: set[str], after: list[dict]) -> list[str]:
+    """Job records for this event's step that one spawn created: in `after`
+    (eph.records) but not in `before` (their names before the spawn). A spawn
+    that returned non-OK and left one of these behind made a job that failed
+    to launch; one that left none was refused before any job existed."""
+    return [r["name"] for r in after
+            if r.get("name") not in before
+            and (r.get("job"), r.get("repo"), r.get("pr")) == (ev["job"], ev["repo"], ev["pr"])]
+
+
+def pr_state(ev: dict, info: dict) -> str | None:
+    """Why this event's step no longer applies to the PR as the forge reports
+    it now (`gh api repos/R/pulls/N`), or None while it still does. The file is
+    append-only and the emitter can lag, so its last line is not the PR's
+    state: bobbin#259 merged at 01:56Z and its merge event kept spawning."""
+    if info.get("merged") or info.get("merged_at"):
+        return "pr-merged"
+    if info.get("state") == "closed":
+        return "pr-closed"
+    sha = (info.get("head") or {}).get("sha")
+    if isinstance(sha, str) and sha and sha != ev["head"]:
+        return f"head moved to {sha[:12]}"
+    return None
+
+
 def attempted(root) -> dict[str, float]:
     """event_id -> when its spawn was first started: the intent line written
     just before it. in_flight() needs the time, not just the fact."""
@@ -231,17 +274,15 @@ def review_rounds(root) -> dict[tuple[str, int], set[str]]:
     return out
 
 
-def live_task(ev: dict, live: list[dict], tickets: list[dict]) -> str | None:
-    """A task job already live or queued for this event's item and PR, or None.
-    Drain and hand spawns stacked three fix jobs on 6vf.10 and two or three on
-    az3d.2 (sattler 17:4xZ), each pushing to the same branch. The live one's
-    push moves the head, which supersedes this event; if it ends without one,
-    the event is still pending and the next drain recruits the fix."""
-    for r in [*live, *tickets]:
-        if (r.get("job"), r.get("item"), r.get("repo"), r.get("pr")) == \
-                ("task", ev["item"], ev["repo"], ev["pr"]):
-            return r.get("name") or r.get("id") or "?"
-    return None
+def capped(ev: dict, reviewed: set[str]) -> bool:
+    """True when the drain must not recruit this event's job: its PR already
+    has MAX_REVIEW_ROUNDS reviewed heads, and the job is a review of a new head
+    or a fix. A fix past the cap pushes a head no drain review will approve, so
+    the PR could never reach a merge event. A merge is never capped, nor a
+    replay of a head already reviewed."""
+    if len(reviewed) < MAX_REVIEW_ROUNDS:
+        return False
+    return ev["job"] == "task" or (ev["job"] == "review" and ev["head"] not in reviewed)
 
 
 def settle(root, ev: dict, outcome: str, now: float, detail: str = "") -> None:

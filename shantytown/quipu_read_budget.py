@@ -84,7 +84,31 @@ def admit(server):
 
 
 def open_read(server, request, *, timeout, opener):
-    """Charge the initial dispatch and refuse uncharged redirect dispatches."""
+    """Charge the initial dispatch and refuse uncharged redirect dispatches.
+
+    Also the ONE place a read's priority reaches the wire (aegis-69x): every
+    Python Quipu read passes through here, and writes never do, so a background
+    invocation cannot mark a write sheddable. Background reads skip the network
+    while quipu is recorded busy, and their own busy answers record it.
+    """
+    from . import quipu_busy
+    from .query_identity import read_priority
+    if read_priority() != "background":
+        return _dispatch(server, request, timeout=timeout, opener=opener)
+    from urllib.error import HTTPError
+    from urllib.request import Request
+    if isinstance(request, str):
+        request = Request(request)
+    request.add_header("X-Quipu-Priority", "background")
+    quipu_busy.gate(server)
+    try:
+        return _dispatch(server, request, timeout=timeout, opener=opener)
+    except HTTPError as error:
+        quipu_busy.observe(server, error)
+        raise
+
+
+def _dispatch(server, request, *, timeout, opener):
     if not admit(server):
         return opener(request, timeout=timeout)
     from urllib.request import HTTPRedirectHandler, build_opener

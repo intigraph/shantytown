@@ -37,9 +37,6 @@ from .quipu import _ENDPOINT_MISSING, not_quipu, request_headers, resolve_server
 #: renames it, like every other identity parameter in this package.
 OPEN_DATASET = "urn:shuttle:dataset:open"
 
-#: Exact historical vocabulary, retained for old exported windows.
-_AEGIS = "http://aegis.gastown.local/ontology/"
-
 
 @dataclass(frozen=True)
 class ShuttleRun:

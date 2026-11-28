@@ -14,7 +14,7 @@ from pathlib import Path
 
 from . import gaming
 from .files import write_json_atomic
-from .quiet_detectors import Detector, Policy, READERS
+from .quiet_detectors import Detector, Policy, READERS, FULL, NO_HEAVY_BUILDS
 
 
 @dataclass(frozen=True)
@@ -32,10 +32,42 @@ class Observation:
 @dataclass(frozen=True)
 class Status:
     entries: tuple[tuple[str, object], ...]
+    # (name, effect) per detector; a name absent here is "full", which keeps
+    # every Status built before effects existed meaning what it meant.
+    effects: tuple[tuple[str, str], ...] = ()
+
+    def effect(self, name):
+        return dict(self.effects).get(name, FULL)
 
     @property
     def reasons(self):
-        return tuple(name for name, status in self.entries if status.held)
+        """Detectors holding launches, dispatch and respawns."""
+        return tuple(name for name, status in self.entries
+                     if status.held and self.effect(name) == FULL)
+
+    @property
+    def build_reasons(self):
+        """Detectors refusing only heavy builds; launches continue (aegis-nh4)."""
+        return tuple(name for name, status in self.entries
+                     if status.held and self.effect(name) == NO_HEAVY_BUILDS)
+
+    @property
+    def build_unknown(self):
+        """A builds-only detector whose state cannot be read. Builds fail CLOSED on
+        it, launches do not: unknown playback must not stall the fleet, but it must
+        not let a cargo build start over a film either."""
+        return tuple(name for name, status in self.entries
+                     if status.state == 'unknown' and self.effect(name) == NO_HEAVY_BUILDS)
+
+    @property
+    def launch_unknown(self):
+        return any(status.state == 'unknown' and self.effect(name) == FULL
+                   for name, status in self.entries)
+
+    @property
+    def builds_held(self):
+        """Heavy local builds must wait. A launch hold or throttle implies it."""
+        return bool(self.held or self.throttled or self.build_reasons or self.build_unknown)
 
     @property
     def held(self):
@@ -45,13 +77,32 @@ class Status:
     def throttled(self):
         """Crew CPU slowdown applies. A superset of held: gaming's `shader` state
         (a Steam precompile with no game) throttles without holding dispatch
-        (aegis-da2tfj)."""
-        return any(getattr(s, 'throttled', s.held) for _, s in self.entries)
+        (aegis-da2tfj). A builds-only detector (media) never throttles: the
+        operator's media rule is "still do work, just refrain from heavy builds", and
+        throttling every crew pane under it slowed the fleet while the render said
+        only builds were held (aegis-nh4 review)."""
+        return any(getattr(s, 'throttled', s.held) for n, s in self.entries
+                   if self.effect(n) == FULL)
+
+    @property
+    def build_refusal(self):
+        """What a heavy-build gate (the Yupana policy, the cargo wrapper) says."""
+        if self.held:
+            return self.refusal
+        if self.build_reasons:
+            return (f"QUIET-TIME HEAVY BUILDS HELD — {', '.join(self.build_reasons)}; heavy local "
+                    'builds (cargo build/test/clippy) refused, launches, dispatch and respawns '
+                    'continue. Retry after the hold lifts (lift_delay after the signal ends).')
+        if self.build_unknown:
+            return (f"QUIET-TIME HEAVY BUILDS HELD — {', '.join(self.build_unknown)} UNKNOWN; heavy "
+                    'local builds refused until a probe reads it. Launches continue.')
+        return ''
 
     @property
     def state(self):
         if self.held:
-            return 'manual' if all(s.state == 'manual' for _, s in self.entries if s.held) else 'active'
+            return 'manual' if all(s.state == 'manual' for n, s in self.entries
+                                   if n in self.reasons) else 'active'
         # A healthy negative is a usable admission decision. An unavailable
         # peer remains visible in its own metrics/rendering, not an outage of
         # every consumer (notably while a new detector awaits its first probe).
@@ -77,6 +128,8 @@ class Status:
                 'quiet-time observation UNKNOWN — automatic hold not applied' if self.state == 'unknown' else
                 'QUIET-TIME HOLD LIFTED — resume per the budget governor, not automatically to cap.'
                 if self.state == 'clear' else 'quiet-time detection off')
+        if self.build_refusal and not self.held:
+            text = self.build_refusal + (' ' + text if self.state == 'unknown' else '')
         if self.throttled and not self.held:
             text += ' Steam shader compile with no game: crew CPU throttled, dispatch NOT held.'
         if self.game_present_idle:
@@ -88,7 +141,7 @@ class Status:
             return ()
         lines = [f"launch anyway, this once:  {invocation or 'st <command>'} {gaming.OVERRIDE_FLAG}"]
         for name, status in self.entries:
-            if status.held:
+            if name in self.reasons:
                 lines.append(f'st fleet hold {name} --clear' if status.state == 'manual' else
                              f'{name} is automatic; --clear cannot lift it.')
         return tuple(lines)
@@ -99,7 +152,10 @@ def folder(root, name):
 
 
 def fingerprint(spec):
-    return hashlib.sha256(json.dumps(asdict(spec), sort_keys=True).encode()).hexdigest()
+    # effect changes what a hold refuses, not what is observed: changing it must
+    # not discard the fresh observation and leave the detector UNKNOWN.
+    data = {k: v for k, v in asdict(spec).items() if k != 'effect'}
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
 
 def enabled(root, spec):
@@ -188,7 +244,8 @@ def _collect(root, *, probing=False, proc=Path('/proc'), now=None):
         else:
             value = _probe(root, spec, proc, now) if probing else _read(root, spec, now)
         entries.append((spec.name, value))
-    return entries[0][1] if len(entries) == 1 else Status(tuple(entries))
+    return (entries[0][1] if len(entries) == 1 else
+            Status(tuple(entries), tuple((spec.name, spec.effect) for spec in policy.detectors)))
 
 
 def read(root, *, now=None):
@@ -213,6 +270,15 @@ def metrics(status):
     text = gaming.metrics(dict(entries).get('gaming', gaming.Status()))
     text += '# TYPE aegis_quiet_time_hold_active gauge\n'
     text += f'aegis_quiet_time_hold_active {int(status.held)}\n'
+    # The build hold is its OWN gauge (aegis-nh4). Labelling the launch-hold series by
+    # effect instead made every existing `aegis_quiet_time_hold_active == 1` rule match
+    # the build series too, so long-hold alerts would fire on a film. It is 1 under a
+    # full hold, a throttle or an UNKNOWN builds-only detector as well, so a build gate
+    # (the Yupana policy) watches this one series and fails closed.
+    text += '# HELP aegis_quiet_time_build_hold_active Heavy local builds (cargo) refused.\n'
+    text += '# TYPE aegis_quiet_time_build_hold_active gauge\n'
+    text += (f'aegis_quiet_time_build_hold_active '
+             f'{int(getattr(status, "builds_held", status.held or getattr(status, "throttled", False)))}\n')
     text += '# HELP aegis_quiet_time_throttled Crew CPU slowdown applies (a hold, or a shader compile).\n'
     text += '# TYPE aegis_quiet_time_throttled gauge\n'
     text += f'aegis_quiet_time_throttled {int(getattr(status, "throttled", status.held))}\n'

@@ -181,7 +181,8 @@ import re
 # over. Found by a test written for the provenance work (internal-ref).
 from dataclasses import replace
 from pathlib import Path
-from .query_identity import declared_query_identity, declared_command
+from .query_identity import (declared_query_identity, declared_command,
+                             background_invocation, background_reads)
 from .answer import CouldNotLook, PartialAnswer
 from .sd import BR_LIKE
 
@@ -1406,6 +1407,82 @@ def _hooks_running(a, cards) -> list:
     return out
 
 
+#: How far back a session record counts as evidence that a harness is used here.
+HOOKS_USE_WINDOW_S = 24 * 3600
+
+
+def _harness_of_settings(path: str) -> str | None:
+    """Which harness an st-emitted settings file belongs to, from its layout."""
+    p = Path(path)
+    if p.name.endswith(".settings.json"):
+        return "claude"
+    kind = p.parent.parent.name
+    return kind if kind in ("codex", "opencode", "agy") else None
+
+
+_UNSET = object()
+
+
+def _hooks_in_use(a, cards, running, now: float | None = None,
+                  local=_UNSET) -> dict[str, list[str]] | None:
+    """{harness: [evidence]} that each harness is used on THIS host (aegis-9uq.2).
+
+    Evidence: a running process launched on one of its settings files, a card
+    pinned to this host that declares it, or a session record from the window
+    (claude transcripts; codex rollouts under st's role homes AND the durable
+    $XDG_STATE_HOME/shantytown/codex/<name>/sessions store that launch redirects
+    CODEX_HOME runtime sessions into, cost.py). Missing the XDG store reported a
+    host that ran codex jobs an hour ago as "not in use" (#810 review).
+
+    A HOSTLESS card counts only when the deployment names no host. In a
+    multi-host deployment `host = None` means "no host declared", not "runs
+    everywhere": counting it made one hostless codex card mark codex in use on
+    every host, so the Mac that runs no codex could never leave not-checked.
+    Real use there still shows up as a process or a session record.
+
+    Erring toward "in use" is otherwise the safe direction: it only keeps an
+    item not-checked. None when the crew or the session stores cannot be read,
+    so the caller changes nothing."""
+    import os
+    import time
+    from .harness import for_card
+    if cards is None:
+        return None
+    now = time.time() if now is None else now
+    if local is _UNSET:
+        from .deployment import local_host as _lh
+        local = _lh(a.root)
+    out: dict[str, list[str]] = {}
+    for r in running:
+        h = _harness_of_settings(r.settings_file)
+        if h:
+            out.setdefault(h, []).append(f"running: {r.agent}")
+    for c in cards:
+        if local is not None and c.host != local:
+            continue
+        try:
+            h = for_card(c, root=a.root).name
+        except Exception:
+            return None
+        out.setdefault(h, []).append(f"card: {c.name}")
+    cutoff = now - HOOKS_USE_WINDOW_S
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    stores = [("claude", Path.home() / ".claude" / "projects", "*/*.jsonl"),
+              ("codex", Path(a.root) / "settings" / "codex", "*/sessions/**/*.jsonl"),
+              ("codex", state / "shantytown" / "codex", "*/sessions/*/*/*/*.jsonl")]
+    try:
+        for h, base, pattern in stores:
+            if h in out or not base.is_dir():
+                continue
+            for p in base.glob(pattern):
+                if p.stat().st_mtime >= cutoff:
+                    out.setdefault(h, []).append(f"session record: {p}")
+                    break
+    except OSError:
+        return None
+    return out
+
+
 def _hooks_check_context(a) -> tuple[dict[str, str], list]:
     """What `hooks check` needs from the cards, resolved the way launch resolves it.
 
@@ -1536,13 +1613,14 @@ def _cmd_hooks(a) -> int:
         from .deployment import local_host as _lh
         cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
     except Exception:
-        cards = []
-    running = _hooks_running(a, cards)
+        cards = None        # unreadable crew: "in use" cannot be told, see _hooks_in_use
+    running = _hooks_running(a, cards or [])
     hb.apply_live(res, running)
     from . import stats as _stats
     hb.apply_firing(res, hb.load(root), running=running,
                     last_active=_stats.last_activity(Path(root)),
                     last_stopped=_stats.last_activity(Path(root), kind="stop"))
+    hb.apply_in_use(res, _hooks_in_use(a, cards, running))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -1562,7 +1640,8 @@ def _cmd_hooks(a) -> int:
     print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
           f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
           f"live: {s['live_ok']} ok, {s['live_stale']} stale; "
-          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent")
+          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent; "
+          f"{s['not_in_use']} not in use on this host")
     return res.exit_code
 
 
@@ -2043,6 +2122,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--item", help="the work item this job reports on")
     sp.add_argument("--priority", type=int, default=None,
                     help="queue priority if over cap, 0 highest (default: the item's)")
+    sp.add_argument("--despite-live", default=None, metavar="REASON",
+                    help="launch a task job although the item already has a live or "
+                         "queued task job (a deliberate parallel slice); the reason is "
+                         "recorded on the job")
     sp.add_argument("--quipu-node", action="append", default=[], metavar="IRI",
                     help="exact Quipu node IRI to include in the bounded startup snapshot")
     sp.add_argument("--harness", default=None, help="claude | codex (default per job; review: codex)")
@@ -2974,6 +3057,9 @@ def main(argv: list[str] | None = None) -> int:
     a = _parse_args(argv)
     # a.cmd/a.group come from argparse choices, so they are registered verbs.
     with declared_command(a.cmd, getattr(a, "group", None), registered=True):
+        if background_invocation(a):
+            with background_reads():
+                return _main(a, argv)
         return _main(a, argv)
 
 
@@ -3501,7 +3587,7 @@ def _record_launch_unretirement(a, card) -> bool:
 # fleet owner host only (aegis-1g55ji); everything else in a tend pass is host-local.
 FLEET_SWEEPS = ("idle-fleet", "governor-setpoint", "governor-utilization",
                 "blocked-stale", "deferral-sweep", "unblocked-events",
-                "blocked-misstatus")
+                "new-seeds", "blocked-misstatus")
 
 
 def runs_fleet_sweeps(cfg, owner_unreachable: bool = False) -> bool:
@@ -3988,10 +4074,12 @@ def _spawn_merge_pin(a, req_head, item, repo, pr) -> tuple[str | None, str | Non
 
 def _spawn_lane_release(a, rec, *, run=None) -> str:
     """A merge job that ended WITHOUT merging hands chaski's lane turn back now
-    instead of waiting out the lease. Off unless [ephemeral] lane_release is set."""
+    instead of waiting out the lease. Off unless [ephemeral] lane_release is set.
+    An enqueued PR keeps the lane like a merged one: releasing it as "failed"
+    would invite a second merge job for a PR already in the queue."""
     from . import gate_verdict as gv
     result = rec.get("result") or {}
-    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") == "merged":
+    if rec.get("job") != "merge" or not rec.get("request_id") or result.get("verdict") in ("merged", "enqueued"):
         return ""
     if 'uid_binding' in rec:
         from . import ephemeral as eph
@@ -4032,7 +4120,8 @@ def _spawn_review_mode(a, repo, *, reader=None) -> str:
     return eph.review_mode_from_rows(rows)
 
 
-def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None) -> int:
+def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None,
+                 sleep=None) -> int:
     """The ONLY merge path a merge job is given. Every condition the prompt
     states is re-checked here, in code, against fresh forge reads."""
     from . import ephemeral as eph
@@ -4062,12 +4151,48 @@ def _spawn_merge(a, me, *, gh=_gh_json, run=None, quipu=None, review_reader=None
         return OK
     import subprocess
     run = run or subprocess.run
+    # Already landed or queued (another job, a human, a race): report that
+    # state and never re-run the merge (aegis-1jtb).
+    verdict, line = _spawn_merge_outcome(repo, pr, head, run=run, sleep=sleep, attempts=1)
+    if verdict in ("merged", "enqueued"):
+        print(f"  {line}; already {verdict} before this job merged; "
+              f"now report --verdict {verdict}")
+        return OK
     r = run(["gh", "pr", "merge", str(pr), "--repo", repo, "--squash",
              "--match-head-commit", head], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
         raise eph.Refused(f"gh refused the merge: {(r.stderr or r.stdout).strip()[:200]}")
-    print(f"  merged {repo}#{pr} at {head}; now report --verdict merged")
+    verdict, line = _spawn_merge_outcome(repo, pr, head, run=run, sleep=sleep)
+    if verdict == "blocked":
+        raise eph.Refused(line + "; report --verdict blocked with this state")
+    print(f"  {line}; now report --verdict {verdict}")
     return OK
+
+
+def _spawn_merge_outcome(repo, pr, head, *, run, sleep=None, attempts=3) -> tuple[str, str]:
+    """Read back what `gh pr merge` did (aegis-1jtb): exit 0 means merged OR only
+    enqueued. A state that is neither is re-read briefly, since the forge can lag
+    its own answer, then reported blocked rather than guessed."""
+    import subprocess
+    import time
+    from . import ephemeral as eph
+    owner, name = repo.split("/", 1)
+    verdict, line = "blocked", f"{repo}#{pr}: the PR state after the merge was unreadable"
+    for n in range(attempts):
+        if n:
+            (sleep or time.sleep)(2)
+        try:
+            r = run(["gh", "api", "graphql", "-f", f"query={eph.MERGE_STATE_QUERY}",
+                     "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={pr}"],
+                    capture_output=True, text=True, timeout=60)
+            node = (((json.loads(r.stdout or "null") or {}).get("data") or {})
+                    .get("repository") or {}).get("pullRequest") if r.returncode == 0 else None
+        except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
+            node = None
+        verdict, line = eph.merge_outcome(node, repo, pr, head)
+        if verdict != "blocked":
+            break
+    return verdict, line
 
 
 def _spawn_administrator(files, cfg) -> tuple[str | None, bool]:
@@ -4177,6 +4302,44 @@ def _spawn_item_comment(a):
     return comment
 
 
+def _spawn_result_route(a, panes):
+    """The readers eph.notify routes a job's result with (aegis-0dh5): the
+    spawner's card, whether its pane is live, and a live wake into that pane.
+    Each one fails toward the administrator or toward "not delivered", never
+    toward a silent success."""
+    from .attribution import ST_JOB_RESULT, attribute
+    from .tmux import PaneNotAgent, PaneSubmissionUnverified
+    try:
+        reg = _registry(a)
+    except Exception:  # noqa: BLE001 -- no registry: result_recipient says UNKNOWN
+        return None, None, None
+
+    def card_of(name):
+        try:
+            return reg.get(name)
+        except LookupError:
+            return None
+
+    def is_up(card):
+        return bool(card.pane) and panes.exists(card.pane)
+
+    def wake(name, text):
+        # text is eph.wake_text: st's own headline, no agent summary, so st
+        # may sign it. Signing the summary would launder a PR-shaped string.
+        card = card_of(name)
+        if card is None or not is_up(card):
+            return False
+        try:
+            panes.send(card.pane, attribute(" ".join(text.split()), ST_JOB_RESULT))
+        except PaneSubmissionUnverified:
+            return None           # typed, submit unconfirmed: never resend
+        except PaneNotAgent:
+            # A shell, not an agent: typing would EXECUTE it (aegis-ikj4t).
+            return False
+        return True
+    return card_of, is_up, wake
+
+
 def _spawn_keep_pane(a, panes, session, name):
     """Save a failed job's last screen before its pane is killed (aegis-e579).
 
@@ -4233,10 +4396,12 @@ def _spawn_end(a, name, verdict, summary, cause, *, detached, drain=True):
         current = eph.read(a.root, name) or rec
         lane = _spawn_lane_release(a, current) if 'uid_binding' in current else ''
         return current, [lane] if lane else []
+    card_of, is_up, wake = _spawn_result_route(a, panes)
     rec, problems = eph.finish(a.root, name, verdict, summary, cause,
                                persist_event=events.persist,
                                comment=_spawn_item_comment(a),
-                               schedule_teardown=schedule, now=time.time())
+                               schedule_teardown=schedule, now=time.time(),
+                               card_of=card_of, is_up=is_up, wake=wake)
     if lane := _spawn_lane_release(a, rec):
         problems = [*problems, lane]
     if drain and not detached:
@@ -4578,10 +4743,45 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             # is qualified, live replacement refuses; completed retries can use
             # a fresh protected slot. Attended compatibility behavior is intact.
             raise eph.Refused("isolated retry requires a finished original job; old lane preserved")
+        despite = getattr(a, "despite_live", None)
+        if despite is not None:
+            despite = despite.strip()
+            if not despite:
+                raise eph.Refused("--despite-live needs a nonempty REASON; it is recorded on the job")
+            if req.job != "task":
+                raise eph.Refused("--despite-live applies to task jobs only; "
+                                  f"{req.job} jobs keep their own rules")
+        elif a.retry:
+            # A retried parallel slice is still that slice: the operator's
+            # recorded reason carries over rather than the retry being refused
+            # by the sibling it was deliberately launched beside.
+            despite = ((old.get("despite_live") or {}).get("reason") or "").strip() or None
+        if a.retry and req.job == "task" and not despite:
+            # Checked again under the lock below; this pass exists because the
+            # supersede that follows ends the original, and a retry refused for
+            # a sibling job afterwards had already lost the original's lane
+            # (eph-review-093a9c on #770).
+            with eph.lock(a.root):
+                held = eph.task_holders(a.root, req.item, superseded=retry_of)
+            if held:
+                raise eph.Refused(
+                    f"{req.item} already has a task job: {', '.join(held)}; {a.retry} was "
+                    "left running and nothing was launched. Pass --despite-live REASON "
+                    "for a deliberate parallel slice")
         if a.retry and old.get("state") != eph.DONE and not a.dry_run:
             # drain=False: this slot is the retry's, not the queue's.
             _spawn_end(a, a.retry, "failed", f"superseded by a retry ({actor})",
                        "retried", detached=False, drain=False)
+        if req.job == "merge" and req.repo and req.pr:
+            # aegis-1jtb: a PR the forge already merged or holds in its merge
+            # queue needs no merge job. #753 got three, each re-running a merge
+            # the queue already had. Unreadable proceeds: the guarded merge
+            # reads again before it acts.
+            import subprocess as _sp
+            state, line = _spawn_merge_outcome(req.repo, req.pr, req.head or "",
+                                               run=_sp.run, attempts=1)
+            if state in ("merged", "enqueued"):
+                raise eph.Refused(f"{line}; no merge job was launched or queued")
         # Read once, outside the ledger lock: a job's sandbox has no network.
         item_ctx = _spawn_item_context(a, req.item)
         from .job_context import collect as collect_job_context
@@ -4589,6 +4789,33 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
         from .job_context import current_comments
         graph_ctx["comments"] = current_comments(lambda: _tracker(a), req.item)
         with eph.lock(a.root):
+            # Under the ledger lock, before plan(): an over-cap spawn must not
+            # queue a duplicate ticket either, and two leads racing from the
+            # ready list serialise here (aegis-bmu3).
+            held = (eph.task_holders(a.root, req.item,
+                                     ticket=ticket["id"] if ticket is not None else None,
+                                     superseded=retry_of)
+                    if req.job == "task" else [])
+            if held and not despite:
+                raise eph.Refused(
+                    f"{req.item} already has a task job: {', '.join(held)}; nothing was "
+                    "launched or queued. Wait for it to end, or pass --despite-live "
+                    "REASON for a deliberate parallel slice")
+            # aegis-1jtb: one merge job per PR and one review per (item, PR,
+            # head), live or queued. #753 got three merge jobs; aegis-1i5h1j.5
+            # got five review tickets in two minutes.
+            own = ticket["id"] if ticket is not None else None
+            if req.job == "merge" and (dup := eph.merge_holders(
+                    a.root, req.repo, req.pr, ticket=own, superseded=retry_of)):
+                raise eph.Refused(
+                    f"{req.repo}#{req.pr} already has a merge job: {', '.join(dup)}; "
+                    "nothing was launched or queued")
+            if req.job == "review" and (dup := eph.review_holders(
+                    a.root, req.item, req.repo, req.pr, req.head, ticket=own,
+                    superseded=retry_of)):
+                raise eph.Refused(
+                    f"{req.item} already has a review of {req.repo}#{req.pr} at this head: "
+                    f"{', '.join(dup)}; nothing was launched or queued")
             try:
                 rec = eph.plan(req, root=a.root, policy=policy, actor=actor,
                                administrator=admin, host=cfg.host_name, now=time.time(),
@@ -4596,6 +4823,13 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                                name=uid_launch[0]['principal'] if uid_launch else None,
                                recruiter_scope=recruiter_scope)
             except eph.OverCap as over:
+                if ticket is not None and isinstance(over, eph.LaneWait):
+                    # A busy merge lane defers this ticket and only this one
+                    # (aegis-1jtb): the drain moves on to other repos' work.
+                    eph.release(a.root, ticket["id"], not_before=over.not_before)
+                    a._ticket_lane_wait = True
+                    a._ticket_lane_wait_reason = str(over)
+                    raise
                 if ticket is not None:
                     # Raced for the slot and lost: the same ticket, same age.
                     eph.release(a.root, ticket["id"])
@@ -4607,6 +4841,12 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 return _spawn_enqueue(a, req, policy, actor, over)
             if ticket is not None:
                 rec["ticket"] = ticket["id"]
+            if despite:
+                rec["despite_live"] = {"reason": despite, "by": actor or "operator",
+                                       "held": held}
+                if held:
+                    print(f"  despite live task job(s) {', '.join(held)}: {despite}",
+                          file=sys.stderr)
             if recruiter_scope is not None:
                 rec['recruiter'] = {'principal': recruiter_scope.principal,
                                     'host': recruiter_scope.host, 'uid': recruiter_scope.uid, 'item': req.item,
@@ -4861,8 +5101,15 @@ def _spawn_enqueue(a, req, policy, actor, over) -> int:
             priority = exact(_tracker(a), req.item).priority
         except Exception:  # noqa: BLE001 — no priority sorts it last, by age
             priority = None
+    despite = (getattr(a, "despite_live", None) or "").strip() or None
+    if _spawn_item_state(a, req.item) == "closed":
+        # The drain would only drop it (aegis-1jtb, sattler: seven tickets were
+        # queued for a CLOSED item); refuse now, where the requester sees it.
+        # Missing and unknown keep the drain's existing handling.
+        raise eph.Refused(f"item {req.item} is closed; nothing was queued")
     ticket = eph.ticket_for(req, harness=eph.harness_for(req, policy), priority=priority,
-                            requester=actor, now=time.time())
+                            requester=actor, now=time.time(), despite_live=despite,
+                            not_before=getattr(over, "not_before", None))
     ahead = sum(1 for t in eph.tickets(a.root) if eph._order(t) < eph._order(ticket))
     p = "?" if priority is None else priority
     if a.dry_run:
@@ -4937,8 +5184,8 @@ def _spawn_drain_events(a) -> int:
     not dropped: the cap and the governor are the brakes, not this loop.
     Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
     printed, so a permanent refusal cannot hold exit 2 forever.
-    Capped (settled): a review past pr_events.MAX_REVIEW_ROUNDS for its PR.
-    A task event waits pending while a task job for its item and PR is live."""
+    Capped (settled): a new head's review or a fix for a PR that already has
+    pr_events.MAX_REVIEW_ROUNDS reviewed heads; raised once per PR."""
     from . import ephemeral as eph
     from . import pr_events as pe
     if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
@@ -4948,7 +5195,8 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "capped": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0,
+              "launch-failed": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -4996,23 +5244,24 @@ def _spawn_drain_events(a) -> int:
                 counts["admitted"] += 1
                 print(f"  admitted {label}: already in flight as {running}")
                 continue
-            reviewed = rounds.setdefault((ev["repo"], ev["pr"]), set())
-            if (ev["job"] == "review" and ev["head"] not in reviewed
-                    and len(reviewed) >= pe.MAX_REVIEW_ROUNDS):
+            stale = _drain_event_pr_stale(ev)
+            if stale:
+                # Re-read before every spawn (aegis-qi22): the emitter's last
+                # line is not the PR's state, and bobbin#259 had merged while
+                # its merge event kept spawning jobs.
                 if not a.dry_run:
-                    pe.settle(a.root, ev, "capped", time.time(),
-                              f"{len(reviewed)} review rounds already recruited")
-                counts["capped"] += 1
-                print(f"  capped {label}: {len(reviewed)} review rounds already "
-                      f"recruited (max {pe.MAX_REVIEW_ROUNDS}); not offered again",
-                      file=sys.stderr)
+                    pe.settle(a.root, ev, "superseded", time.time(), stale)
+                counts["superseded"] += 1
+                print(f"  superseded {label}: {stale}; no spawn")
                 continue
-            if ev["job"] == "task" and (dup := pe.live_task(
-                    ev, eph.live(a.root), eph.tickets(a.root))):
+            reviewed = rounds.setdefault((ev["repo"], ev["pr"]), set())
+            if pe.capped(ev, reviewed):
+                # Review of #792: capping only the review left round 3's fix
+                # job pushing a head nobody would review, so the PR sat with
+                # no APPROVE, no merge event and nothing raised. Past the cap
+                # the drain recruits neither, and says so to a human once.
                 rc = CANNOT_TELL
-                _drain_event_pending(a, pe, ev, label, refused, counts,
-                                     f"task job {dup} is already live for "
-                                     f"{ev['item']} on this PR")
+                _drain_event_capped(a, pe, ev, label, len(reviewed), counts)
                 continue
             spawn = pe.argv(ev)
             if a.dry_run:
@@ -5021,6 +5270,7 @@ def _spawn_drain_events(a) -> int:
                 continue
             if eid not in tried:
                 pe.settle(a.root, ev, "spawning", time.time())
+            before = {r.get("name") for r in eph.records(a.root)}
             ns, out, detail = None, CANNOT_TELL, ""
             try:
                 ns = _parse_args(["--root", str(a.root), "agent", "spawn", *spawn])
@@ -5039,14 +5289,90 @@ def _spawn_drain_events(a) -> int:
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
                 rc = CANNOT_TELL
-                _drain_event_pending(a, pe, ev, label, refused, counts,
-                                     detail or "spawn refused (reason above)")
+                why = detail or "spawn refused (reason above)"
+                made = pe.new_jobs(ev, before, eph.records(a.root))
+                if made and _drain_event_launch_failed(a, pe, ev, label, made, why, counts):
+                    continue
+                _drain_event_pending(a, pe, ev, label, refused, counts, why)
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
           f"pending {counts['pending']}, expired {counts['expired']}, "
-          f"capped {counts['capped']}, already settled "
+          f"launch-failed {counts['launch-failed']}, capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
+
+
+def _drain_event_pr_stale(ev) -> str:
+    """Why the PR no longer wants this event's step ("pr-merged", "pr-closed",
+    "head moved to ..."), or "" while it does. A forge that cannot be read
+    keeps the event's old behaviour (offered, and the job re-verifies the PR
+    itself), loudly: an outage must not settle live events, and the launch
+    cap still bounds what it can cost."""
+    from . import pr_events as pe
+    try:
+        info = _gh_json(f"repos/{ev['repo']}/pulls/{ev['pr']}") or {}
+    except (RuntimeError, ValueError, OSError) as e:
+        print(f"  note: could not re-read {ev['repo']}#{ev['pr']} ({e}); "
+              "offering the event as recorded", file=sys.stderr)
+        return ""
+    if not isinstance(info, dict):
+        return ""
+    return pe.pr_state(ev, info) or ""
+
+
+def _drain_event_launch_failed(a, pe, ev, label, made, why, counts) -> bool:
+    """Count one launch failure (a spawn that made `made` and returned non-OK)
+    against the event. At pe.MAX_LAUNCH_FAILURES the event is settled
+    "launch-failed" and raised once to the administrator; True then, so the
+    caller does not also leave it pending. Before aegis-qi22 a failed launch
+    was just "pending", and the next drain launched the same broken job again."""
+    now = time.time()
+    pe.settle(a.root, ev, "launch-failure", now, f"{', '.join(made)}: {why}")
+    n = pe.launch_failures(a.root).get(ev["event_id"], 0)
+    if n < pe.MAX_LAUNCH_FAILURES:
+        print(f"  launch failed {label}: {', '.join(made)} ({n}/{pe.MAX_LAUNCH_FAILURES})",
+              file=sys.stderr)
+        return False
+    text = (f"{label} on {ev['item']}: {n} launches failed (last {made[-1]}: {why}); "
+            "settled launch-failed and not offered again. A new head re-arms the step.")
+    pe.settle(a.root, ev, "launch-failed", now, text)
+    counts["launch-failed"] += 1
+    print(f"  launch-failed {label}: {text}", file=sys.stderr)
+    _drain_event_raise(a, ev, "launch-failed", text, f"pr-events:{ev['event_id']}:launch-failed")
+    return True
+
+
+def _drain_event_capped(a, pe, ev, label, rounds, counts) -> None:
+    """Settle an event past pe.MAX_REVIEW_ROUNDS as "capped" and raise the PR
+    to the administrator, once per PR: from here a human reviews or merges."""
+    text = (f"{label} on {ev['item']}: {rounds} review rounds already recruited "
+            f"(max {pe.MAX_REVIEW_ROUNDS}); the drain recruits no more review or fix "
+            f"jobs for {ev['repo']}#{ev['pr']}. A human must review, fix or merge it.")
+    counts["capped"] += 1
+    print(f"  capped {text}", file=sys.stderr)
+    if a.dry_run:
+        return
+    pe.settle(a.root, ev, "capped", time.time(), text)
+    _drain_event_raise(a, ev, "capped", text, f"pr-events:{ev['repo']}#{ev['pr']}:capped")
+
+
+def _drain_event_raise(a, ev, outcome, text, key) -> None:
+    """Raise a settled event to the administrator. The key makes the raise
+    idempotent; a failed raise is printed and the settle stands."""
+    from .events import FilesEvents
+    cfg, _err = config.load_or_default(Path(a.root))
+    admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
+    if not admin:
+        print(f"  ⚠ no administrator card on this host; {outcome} NOT raised",
+              file=sys.stderr)
+        return
+    try:
+        FilesEvents(Path(a.root) / "events").persist(
+            to=admin, frm="pr-events", reason=f"pr-event-{outcome}", rose=True,
+            item=ev["item"], detail=text[:600], key=key)
+    except Exception as e:  # noqa: BLE001 -- the settle stands; say the raise did not
+        print(f"  ⚠ {outcome} NOT raised to {admin} ({type(e).__name__}: {e})",
+              file=sys.stderr)
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
@@ -5108,7 +5434,8 @@ def _spawn_drain(a, policy) -> int:
             ticket, notes = eph.claim_next(a.root, cap=r["cap"], now=time.time(),
                                            harness_caps=r["harness_caps"], shares=r["shares"],
                                            job_caps=r["job_caps"], disk_hold=disk_hold,
-                                           item_state=lambda i: _spawn_item_state(a, i))
+                                           item_state=lambda i: _spawn_item_state(a, i),
+                                           skip=frozenset(seen))
         for note in notes:
             print(f"  queue: {note}", file=sys.stderr)
         if ticket is None or ticket["id"] in seen:
@@ -5117,7 +5444,8 @@ def _spawn_drain(a, policy) -> int:
         argv = ["--root", str(a.root), "agent", "spawn", "--ephemeral",
                 "--job", ticket["job"], "--item", ticket["item"]]
         for flag, key in (("--repo", "repo"), ("--pr", "pr"), ("--checkout", "checkout"),
-                          ("--harness", "harness"), ("--head", "head"), ("--track", "track")):
+                          ("--harness", "harness"), ("--head", "head"), ("--track", "track"),
+                          ("--despite-live", "despite_live")):
             if ticket.get(key) is not None:
                 argv += [flag, str(ticket[key])]
         ns, crash = None, None
@@ -5136,6 +5464,12 @@ def _spawn_drain(a, policy) -> int:
             out = CANNOT_TELL
         if ns is not None and getattr(ns, "_ticket_requeued", False):
             return rc                     # no slot after all; the next end drains
+        if ns is not None and getattr(ns, "_ticket_lane_wait", False):
+            # Kept queued behind a busy merge lane (aegis-1jtb); other tickets
+            # may still launch, so the drain continues.
+            print(f"  queue: {ticket['id']}: {ns._ticket_lane_wait_reason}; kept queued",
+                  file=sys.stderr)
+            continue
         with eph.lock(a.root):
             left = eph.read_ticket(a.root, ticket["id"])
             if left is not None and left.get("claimed_at") == ticket["claimed_at"]:
@@ -6025,6 +6359,11 @@ def _launch_admitted(a, card, panes, runtime, *, dry_run: bool = False,
                   + type(exc).__name__ + ')', file=sys.stderr)
             return CANNOT_TELL
     # A bounded manifest must never launch before its private parent is ready.
+    # subprocess is imported HERE because the except below names it, and that
+    # clause is only evaluated when preparation fails: without the import a
+    # failed preparation raised NameError after the pane existed, crashing the
+    # spawn and leaving a LAUNCHING job at a bare shell (aegis-5x2x c10).
+    import subprocess
     from . import mcp_limits
     try:
         if not uid_launch:
@@ -15940,7 +16279,9 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     # Initial clear is not a lift event. Once any state has reached the
     # coordinator, changes (including recovery from UNKNOWN) must reach it too.
     ledger = Path(a.root) / "notify" / "gaming_hold.json"
-    if status.state in {"off", "clear"} and not ledger.exists():
+    builds = (tuple(getattr(status, "build_reasons", ()))
+              + tuple(n + '?' for n in getattr(status, "build_unknown", ())))
+    if status.state in {"off", "clear"} and not builds and not ledger.exists():
         return []
     if status.state == "off":
         status = (quiet_time_mod.Status((("quiet_time", quiet_time_mod.Observation("clear")),))
@@ -15948,7 +16289,7 @@ def _gaming_advisory(a, status, *, reg=None, panes=None):
     key = ('game_present_idle' if status.game_present_idle and status.state != 'manual'
            else 'held' if status.held else status.state)
     if isinstance(status, quiet_time_mod.Status):
-        key += ':' + ','.join(status.reasons)
+        key += ':' + ','.join(status.reasons) + (';builds=' + ','.join(builds) if builds else '')
     try:
         return creel_advisory_mod.Alerter(
             Path(a.root), reg if reg is not None else _registry(a),
@@ -16063,8 +16404,11 @@ def _cmd_hold(a) -> int:
         # for heavy work that runs OUTSIDE the throttled pane scopes: the CD cargo build,
         # the cargo wrapper and the CVE scan all proceed on 0 and defer on 1. A shader
         # compile holds no dispatch, but a build must still defer through it, or it starts
-        # during a real launch's pre-reaper shader phase.
-        return CANNOT_TELL if status.state == "unknown" else int(status.throttled)
+        # during a real launch's pre-reaper shader phase. A builds-only hold (media,
+        # aegis-nh4) defers it too, and an UNKNOWN builds-only detector fails closed
+        # here while launches carry on.
+        return CANNOT_TELL if status.state == "unknown" else int(
+            getattr(status, "builds_held", status.throttled))
     return CANNOT_TELL if status.state == "unknown" or slowdown_unknown else OK
 
 
@@ -17042,6 +17386,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         if unblocked:
             print(f"  ✓ acted on {len(unblocked)} unblocked event(s): "
                   f"{', '.join(f'{b} {v}' for b, v in unblocked)}", file=sys.stderr)
+        # NEW SEEDS (Stiwi 2026-11-27): every new non-pointer seed reaches the
+        # administrator in ONE batched notice with its likely duplicates, so it is
+        # ranked, linked, modified or rejected instead of piling up unranked.
+        from . import seed_notify as seed_notify_mod
+        announced = _fleet_sweep("new-seeds", seed_notify_mod.NewSeedNotifier(
+            Path(a.root), _registry(a), panes, log=_log,
+            stand_in=bool(owner_down)).sweep)
+        if announced:
+            print(f"  🌱 announced {len(announced)} new seed(s) to the administrator: "
+                  f"{', '.join(announced)}", file=sys.stderr)
         misstatused = _fleet_sweep("blocked-misstatus", lambda: notify_mod.BlockedMisstatusAlerter(
             Path(a.root), _registry(a), panes, log=_log,
             seen=consumer.seen_foci).sweep())
@@ -17071,6 +17425,16 @@ def _tend_once(a, quiet: bool = False) -> int:
         if _e:
             print(f"  ⚠ escalated {len(_e)} still-NEGLECTED anchor(s) to the "
                   f"coordinator (self-heal nudge unanswered): {', '.join(_e)}",
+                  file=sys.stderr)
+        # A STALLED LEAD WITH READY WORK (aegis-0dh5). The worker sweep above
+        # skips leads, so `st crew` showed ellie "stalled" for 56 minutes and
+        # nothing acted on it. One notice per stall episode.
+        lead_stalled = _sweep("lead-stalled", lambda: notify_mod.LeadStallAlerter(
+            Path(a.root), _registry(a), panes, runtime, log=_log,
+            verdict_for=_card_verdict, catalog=_catalog(a)).sweep(agents))
+        if lead_stalled:
+            print(f"  ⚠ raised {len(lead_stalled)} stalled lead(s) holding ready "
+                  f"work to the administrator: {', '.join(lead_stalled)}",
                   file=sys.stderr)
         # THE DRAIN (aegis-hdqej). Ask every live agent the tier excludes to
         # commit, push, report what went up, and stop itself. Deduped per drain

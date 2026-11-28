@@ -1,0 +1,66 @@
+{
+  "frozen": {
+    "fingerprint": "1234567890abcdef",
+    "fingerprint_kind": "alertmanager-native",
+    "item": "item-1",
+    "onset_utc": "2026-11-22T04:00:00Z",
+    "version": 1
+  },
+  "jobspec": {
+    "resolved": {
+      "on": {
+        "diagnosed": [
+          "comment-item",
+          "file-followup"
+        ],
+        "needs-owner": [
+          "notify-owner"
+        ],
+        "unknown": []
+      },
+      "verdicts": [
+        "diagnosed",
+        "needs-owner",
+        "unknown"
+      ]
+    },
+    "sha256": "e1bc58e40634310f210a76a8f39a3b2e44e9531dfcf438a452348c370211b411"
+  },
+  "kind": "incident_report",
+  "record": {
+    "evidence": [
+      {
+        "kind": "log",
+        "ref": "receipt:1"
+      }
+    ],
+    "job": "triage",
+    "report": {
+      "coverage": "complete",
+      "diagnosis": "Row type differs from the declared schema",
+      "diagnosis_evidence": [
+        "receipt:1"
+      ],
+      "incident": {
+        "carrier_item": "item-1",
+        "fingerprint": "1234567890abcdef",
+        "host": "fixture",
+        "onset": "2026-11-22T04:00:00Z",
+        "service": "example",
+        "source": "alertmanager-native"
+      },
+      "proposed_fix": {
+        "repo": "example/project",
+        "scope": "source only",
+        "verification": "Repeat the row validation"
+      }
+    },
+    "run_id": "run-1",
+    "subject": {
+      "id": "native-alert-1",
+      "kind": "alert"
+    },
+    "summary": "Measured scope defect",
+    "verdict": "diagnosed"
+  }
+}

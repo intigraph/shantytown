@@ -12,6 +12,15 @@
     ]
   },
   {
+    "old": "http://aegis.gastown.local/ontology/GateApproval",
+    "new": "https://w3id.org/intigraph/quipu/ns#GateApproval",
+    "owner": "quipu/ns",
+    "declared_in": [],
+    "referenced_in": [
+      "quipu/ns"
+    ]
+  },
+  {
     "old": "http://aegis.gastown.local/ontology/WorkflowRun",
     "new": "https://w3id.org/intigraph/quipu/ns#WorkflowRun",
     "owner": "quipu/ns",

@@ -120,8 +120,12 @@ def _plate_snapshot(plate, agent):
         return None, "?"
 
 
-def capture(root, agent, payload, *, administrator, events, plate, deliver):
-    """Persist payload before external reads/delivery; injected fixture seams."""
+def capture(root, agent, payload, *, to, events, plate, deliver, rose=False, detail_note=None):
+    """Persist payload before external reads/delivery; injected fixture seams.
+
+    `to` is the stop recipient route_recipient chose (the card's lead, or the
+    administrator when it rose); `deliver` must already target the same name.
+    """
     import fcntl
     directory = Path(root) / "stop-failures"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -141,14 +145,15 @@ def capture(root, agent, payload, *, administrator, events, plate, deliver):
         item, item_status = _plate_snapshot(plate, agent)
         record.update(plate=item, item_status=item_status)
         _save(path, record)
-        detail = json.dumps({"kind": "stop-failure", "verdict": verdict, **payload}, sort_keys=True)
-        events.persist(administrator, agent, "stop-failure", False, item=item,
+        detail = json.dumps({"kind": "stop-failure", "verdict": verdict, **payload,
+                             **({"routing": detail_note} if detail_note else {})}, sort_keys=True)
+        events.persist(to, agent, "stop-failure", rose, item=item,
                        item_status=item_status, detail=detail, key=event_key,
                        kind="stop-failure", error=payload.get("error", "unknown"),
                        error_details=payload.get("error_details"),
                        last_assistant_message=payload.get("last_assistant_message"))
         # Limit/auth paths are consumed by tend; all other failures also reach
-        # the durable inbox, independent of the administrator's Stop hook.
+        # the durable inbox, independent of the recipient's Stop hook.
         if verdict in ("limited", "auth-dead"):
             return record
         _notify_record(root, record, deliver)
@@ -185,13 +190,73 @@ def reconcile(root, agent, deliver, log):
     return _notify_record(root, record, deliver, log)
 
 
+def _fall_back(reg, exc):
+    """Route UNKNOWN: the administrator, loudly -- never a lost notice."""
+    from .tier import find_administrator
+    administrator = find_administrator(reg)
+    if not administrator:
+        raise ValueError(f"stop recipient UNKNOWN ({exc}) and administrator UNKNOWN") from None
+    note = f"lead route UNKNOWN ({type(exc).__name__}: {exc}); fell back to administrator"
+    print(f"stop-failure: {note}", file=sys.stderr)
+    return administrator, True, note
+
+
+def route_recipient(reg, agent, lead_is_up, catalog=None):
+    """Who receives this StopFailure: the SAME answer an ordinary stop gets.
+
+    This hook used to hard-code find_administrator, so franklin's safeguard
+    stop reached sattler while every ordinary stop that evening reached its lead
+    harding (aegis-rr3). Route through tier.route_stop with the same liveness
+    predicate; the administrator is the recipient only when route_stop rises
+    (lead down / unreachable), or when the route itself cannot be read. That
+    last case catches ANY exception, not just the lookup family: the old
+    recipient read was local-only find_administrator, and a tmux or graph error
+    inside the liveness predicate must not now cost the safety hold and the
+    notice (review of #762). Returns (to, rose, note).
+    """
+    from .tier import route_stop
+    try:
+        routing = route_stop(reg, agent, lead_is_up=lead_is_up, catalog=catalog)
+    except Exception as exc:
+        return _fall_back(reg, exc)
+    note = None
+    if routing.rose:
+        reason = routing.reason.value if routing.reason else "rose"
+        note = f"{reason}: {routing.detail}" if routing.detail else reason
+    return routing.to, routing.rose, note
+
+
+def resolve_recipient(reg, agent, root, panes):
+    """main's route read, every external step inside the fallback.
+
+    with_remote_lead reaches Quipu for an off-host lead and lets backend
+    failures propagate by design; building the liveness predicate or reading
+    the deployment catalog can fail too. Any of those used to escape to main's
+    outer except before capture() ran, so no safeguard-blocked hold was written
+    and nobody was told (review of #762). Here they fall back to the
+    administrator like an unreadable route.
+    """
+    from . import stop_event
+    from .routing_identity import with_remote_lead
+    from .tier import deployment_catalog
+    try:
+        try:
+            routed = with_remote_lead(reg, agent, root)
+        except LookupError:
+            routed = reg  # route_recipient reports the unresolved lead and falls back.
+        lead_is_up = stop_event._lead_is_up(routed, panes)
+        catalog = deployment_catalog(root)
+    except Exception as exc:
+        return _fall_back(reg, exc)
+    return route_recipient(routed, agent, lead_is_up, catalog)
+
+
 def main(argv=None):
     """Async, bounded notification hook. No model-facing output/continuation."""
     from types import SimpleNamespace
     from . import cli, stop_event
     from .events import FilesEvents
     from .files import FilesRegistry
-    from .tier import find_administrator
     from .tmux import Tmux, declared_socket
     args = list(sys.argv[1:] if argv is None else argv)
     root = stop_event._root(args)
@@ -215,14 +280,12 @@ def main(argv=None):
         if not agent:
             raise ValueError("agent identity unavailable")
         reg.get(agent)  # exact registry identity, including outside tmux
-        administrator = find_administrator(reg)
-        if not administrator:
-            raise ValueError("administrator UNKNOWN")
+        to, rose, note = resolve_recipient(reg, agent, root, panes)
         options = SimpleNamespace(root=root, backend=None)
         inbox = cli._inbox(options, default="beads")
         def deliver(text):
-            return inbox.deliver(administrator, text, frm="st-stop-failure").id
-        capture(root, agent, payload, administrator=administrator,
+            return inbox.deliver(to, text, frm="st-stop-failure").id
+        capture(root, agent, payload, to=to, rose=rose, detail_note=note,
                 events=FilesEvents(root / "events"),
                 plate=lambda name: stop_event._plate_of(root, name)[:2], deliver=deliver)
     except Exception as exc:
