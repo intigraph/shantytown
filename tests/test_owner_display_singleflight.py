@@ -7,7 +7,7 @@ import time
 
 import pytest
 from shantytown import seeds_plate as plate, seeds_read_cache as cache
-from test_seeds_plate_projection import PROOF, fields, answer
+from test_seeds_plate_projection import PROOF, fields, answer, change_answer
 from shantytown.owner_display_cache import display_reads
 
 
@@ -25,6 +25,10 @@ def owner_wire(tmp_path, monkeypatch):
         def read(self, size):
             return json.dumps(answer(fields(title=state['title']))).encode()
     def send(request, timeout):
+        if request.get_method() == "GET":
+            response = Response()
+            response.read = lambda size: json.dumps(change_answer(request, "owner-fixture", 10)).encode()
+            return response
         with mutex:
             state['queries'] += 1
         time.sleep(.05)
@@ -207,9 +211,16 @@ def test_own_write_during_projection_prevents_display_publication(owner_wire, mo
         return result
     monkeypatch.setattr(plate, '_project_fields', overlap)
     with display_reads():
-        plate.owner_rows(PROOF, 'worker').exact()
+        assert not plate.owner_rows(PROOF, 'worker').complete
     clear_exact_entries()
     owner_wire['title'] = 'post-write observation'
+    with display_reads():
+        assert not plate.owner_rows(PROOF, 'worker').complete  # Existing failure backoff stays active.
+    from types import SimpleNamespace
+    from shantytown import seeds_read_flight
+    monotonic = time.monotonic
+    monkeypatch.setattr(seeds_read_flight, 'time',
+                        SimpleNamespace(monotonic=lambda: monotonic() + 2, sleep=time.sleep))
     with display_reads():
         assert plate.owner_rows(PROOF, 'worker').exact()[0]['title'] == 'post-write observation'
 

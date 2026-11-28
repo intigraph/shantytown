@@ -1,7 +1,10 @@
 """Optional shared read acceleration, never a tracker or a stale-read fallback.
 
-Hits share a one-second observation of (store_id, watermark_tx). Results are
-published only when that pair stayed unchanged across a successful fetch.
+Ordinary hits share a one-second observation of (store_id, watermark_tx).
+Projection scopes take one fresh initial observation and certify all consumed
+rows through a post-query change-feed target; they never share that initial
+observation across scopes. Ordinary results publish only when the pair stayed
+unchanged across a successful fetch.
 Striped publication locks protect local files only. Bounded-staleness misses
 share a separate bounded flight lock; exact readers never enter that seam.
 Single reads retry a moving transaction at most three times. Owner projections
@@ -137,6 +140,11 @@ def invalidate_stale(*, message_only=False) -> None:
     lookups also refuse the tier while the cache cannot be written, so the
     fail-closed state survives this process.
     """
+    scope = _PROJECTION.get()
+    while scope is not None:
+        scope["failure"] = ValueError("projection invalidated by a write; start a new scope")
+        _forget_projection(scope)
+        scope = scope["parent"]
     try:
         directory = _directory()
     except _CACHE_ERRORS:
@@ -227,7 +235,9 @@ def stale_lookup(parts, validate, *, ttl=None, owner_display=False):
 def projection_reads(budget=None):
     """Collect the oldest observation used by one exact owner projection."""
     token = _PROJECTION.set({"mark": None, "paths": set(), "epoch": None,
-                              "refresh": False, "pending": [], "budget": budget})
+                              "refresh": False, "pending": [], "budget": budget,
+                              "watermark": None, "server": None, "failure": None,
+                              "parent": _PROJECTION.get()})
     try:
         yield
     finally:
@@ -273,19 +283,14 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
     page is not absence evidence. Missing, malformed or oversized proof refuses.
     The source change log retains whole transactions, including retractions.
     """
-    scope = _PROJECTION.get()
+    scope = _projection_check(server)
     if scope is None or scope["mark"] is None:
         return  # Explicit query-only admission (or an entirely injected reader).
     store, since = scope["mark"]
-    end_store, target = _watermark(server, projection_timeout(timeout), opener)
-    if end_store != store:
-        _forget_projection(scope)
-        raise StoreChanged("seeds store changed across projection")
-    if target < since:
-        raise ValueError("seeds watermark regressed across projection")
-    if target == since:
-        _publish_projection(scope, (store, target))
-        return
+    # A reused initial mark cannot certify queries made after it. The first
+    # post-query change page supplies a fresh fixed target instead of paying
+    # for a second /watermark. Every graph/page still proves through that target.
+    target = None
     epoch = scope["epoch"]
     changed = set()
     membership_changed = set()
@@ -312,7 +317,8 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
                 raise ValueError("truncated projection change feed")
             source = page.get("source")
             if not isinstance(source, dict) or source.get("store_id") != store:
-                raise ValueError("seeds store changed across projection")
+                _forget_projection(scope)
+                raise StoreChanged("seeds store changed across projection")
             this_epoch = source.get("log_epoch")
             if not isinstance(this_epoch, str) or not this_epoch or (epoch is not None and epoch != this_epoch):
                 raise ValueError("projection change-feed history changed")
@@ -322,8 +328,11 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
                     or page.get("capture") != "new_values"
                     or not isinstance(records, list) or len(records) > 10000
                     or type(next_tx) is not int or next_tx < cursor
-                    or type(watermark) is not int or watermark < target):
+                    or type(watermark) is not int or watermark < since or next_tx > watermark
+                    or (target is not None and watermark < target)):
                 raise ValueError("invalid projection change-feed page")
+            if target is None:
+                target = watermark
             transactions = set()
             for record in records:
                 if (not isinstance(record, dict) or type(record.get("tx")) is not int
@@ -342,13 +351,24 @@ def certify_projection(server, graphs, entities, membership, timeout, opener):
             if (next_tx != (max(transactions) if transactions else cursor)
                     or len(transactions) > _CHANGE_TX_LIMIT):
                 raise ValueError("invalid projection change-feed cursor")
+            if target == since:
+                # The page's global head proves no commits in ANY graph since
+                # the oldest consumed row. No second graph/page is necessary.
+                _projection_check(server)
+                projection_timeout(timeout)
+                scope["epoch"] = epoch
+                _publish_projection(scope, (store, target))
+                return
             if next_tx >= target or len(transactions) < _CHANGE_TX_LIMIT:
                 break
             cursor = next_tx
         else:
             raise ValueError("projection change-feed page budget reached")
 
+    _projection_check()
     projection_timeout(timeout)
+    if target is None:
+        raise ValueError("projection has no change-feed proof")
     scope["epoch"] = epoch
     if membership_changed or changed:
         _forget_projection(scope)
@@ -523,7 +543,36 @@ def _locked(directory: Path, key: str):
         os.close(fd)
 
 
+def _projection_check(server=None):
+    scope = _PROJECTION.get()
+    if scope is not None:
+        if scope["failure"] is not None:
+            raise scope["failure"]
+        if (server is not None and scope["server"] is not None
+                and scope["server"] != server.rstrip("/")):
+            scope["failure"] = ValueError("projection cannot reuse a watermark across servers")
+            raise scope["failure"]
+    return scope
+
+
 def _watermark(server: str, timeout: int, opener) -> tuple[str, int]:
+    scope = _projection_check(server)
+    if scope is None:
+        return _watermark_live(server, timeout, opener)
+    projection_timeout(timeout)
+    server = server.rstrip("/")
+    if scope["watermark"] is None:
+        try:
+            mark = _watermark_live(server, timeout, opener)
+            _projection_check()
+        except Exception as error:
+            scope["failure"] = error
+            raise
+        scope["server"], scope["watermark"] = server, mark
+    return scope["watermark"]
+
+
+def _watermark_live(server: str, timeout: int, opener) -> tuple[str, int]:
     while True:
         try:
             return _watermark_once(server, projection_timeout(timeout), opener)
@@ -629,14 +678,16 @@ def read(server: str, query: str, timeout: int, *, opener, fetch, validate):
 def _read(server: str, query: str, timeout: int, *, opener, fetch, validate):
     # A projection owns its retry boundary: never keep its earlier fields and
     # retry just one query against a newer snapshot.
-    scope = _PROJECTION.get()
+    scope = _projection_check(server)
     if scope is not None and not _DIRECT_READS.get() and scope["mark"] is None:
         _projection_mark(_watermark(server, timeout, opener))
     attempts = 1 if _READ_SNAPSHOT.get()[0] or scope is not None else 3
     for attempt in range(attempts):
         try:
-            return _read_once(server, query, timeout, opener=opener,
-                              fetch=fetch, validate=validate)
+            result = _read_once(server, query, timeout, opener=opener,
+                                fetch=fetch, validate=validate)
+            _projection_check()
+            return result
         except WatermarkMoved:
             if attempt == attempts - 1:
                 raise
@@ -678,8 +729,9 @@ def _read_once(server: str, query: str, timeout: int, *, opener, fetch, validate
         # The lock protects local files only. A slow reader must not hold a
         # cache stripe across HTTP and force unrelated readers to wait a second.
         with _locked(directory, key):
-            before = _cached(mark_path, None, valid_mark,
-                             max_age=max(_WATERMARK_MAX_AGE, fence_age))
+            before = (scope["mark"] if scope is not None else
+                      _cached(mark_path, None, valid_mark,
+                              max_age=max(_WATERMARK_MAX_AGE, fence_age)))
             hit = _cached(path, before, validate, retain=_RETAIN_CANDIDATES.get()) if before is not None else None
         if before is None:
             before = (scope["mark"] if scope is not None else
