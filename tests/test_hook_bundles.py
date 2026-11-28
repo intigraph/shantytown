@@ -915,3 +915,97 @@ def test_stop_silence_requires_a_stop_opportunity_after_last_evidence(root):
     assert check({'alice': 900.}) == hb.NOT_CHECKED, 'capture already covered the last Stop'
     assert check({'alice': 9990.}) == 'silent', 'real missed Stop remains actionable'
     assert check(None) == 'unknown', 'unreadable opportunity evidence is not healthy'
+
+
+# --- not-in-use (aegis-9uq.2) -----------------------------------------------------
+# A harness with no evidence of use on the host is its own state: never ok, never
+# cannot-tell, and it must not hold the check at exit 2 forever.
+
+def _codex_firing_setup(root, max_age=60):
+    b = bundle(hooks=[{"event": "UserPromptSubmit", "command": EXAMPLE_CMD,
+                       "harnesses": ["claude", "codex"],
+                       "evidence": {"command": "example-tool last-run", "max_age_seconds": max_age}}])
+    register(root, b)
+    claude = emit(root, "claude", "worker")
+    codex = emit(root, "codex", "worker")
+    return claude, codex
+
+
+def _layers(res, harness):
+    return {(i["live"], i["firing"]) for i in res.items if i["harness"] == harness}
+
+
+def test_a_host_with_no_codex_sessions_reports_codex_NOT_IN_USE_and_exits_0(root):
+    claude, _ = _codex_firing_setup(root)
+    res = hb.check(root)
+    running = [hb.Running("alice", str(claude), launch_bytes=claude.read_bytes())]
+    hb.apply_live(res, running)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (9_990.0, ""),
+                    running=running, last_active={"alice": 9_990.0})
+    hb.apply_in_use(res, {"claude": ["running: alice"]})
+    assert _layers(res, "codex") == {(hb.NOT_IN_USE, hb.NOT_IN_USE)}
+    assert _layers(res, "claude") == {("ok", "ok")}          # in use: untouched
+    codex = [i for i in res.items if i["harness"] == "codex"][0]
+    assert "no codex session record" in codex["detail"]
+    assert res.summary()["not_in_use"] == 1
+    assert res.summary()["live_ok"] == 1 and res.summary()["firing_ok"] == 1   # not counted ok
+    assert res.exit_code == 0
+
+
+def test_a_codex_session_present_with_the_hook_not_firing_STILL_exits_2(root):
+    """The control: in use here, live, old evidence and unreadable activity is
+    cannot-tell, and apply_in_use must not launder it."""
+    claude, codex = _codex_firing_setup(root)
+    res = hb.check(root)
+    running = [hb.Running("alice", str(claude), launch_bytes=claude.read_bytes()),
+               hb.Running("carol", str(codex), launch_bytes=codex.read_bytes())]
+    hb.apply_live(res, running)
+    hb.apply_firing(res, hb.load(root), now=10_000, runner=lambda c: (1_000.0, ""),
+                    running=running, last_active=None)
+    hb.apply_in_use(res, {"claude": ["running: alice"], "codex": ["running: carol"]})
+    assert _layers(res, "codex") == {("ok", "unknown")}
+    assert res.summary()["not_in_use"] == 0
+    assert res.exit_code == 2
+
+
+def test_in_use_evidence_unreadable_changes_nothing(root):
+    _codex_firing_setup(root)
+    res = hb.check(root)
+    hb.apply_in_use(res, None)
+    assert not any(hb.NOT_IN_USE in (i["live"], i["firing"]) for i in res.items)
+
+
+def test_not_in_use_never_hides_a_configured_failure(root):
+    _, codex = _codex_firing_setup(root)
+    codex.write_text("")                                     # hooks gone by hand
+    res = hb.check(root)
+    hb.apply_in_use(res, {})
+    item = [i for i in res.items if i["harness"] == "codex"][0]
+    assert item["configured"] == "missing" and item["live"] == hb.NOT_IN_USE
+    assert res.exit_code == 1
+
+
+def _in_use_args(root):
+    import argparse
+    return argparse.Namespace(root=root)
+
+
+def test_hooks_in_use_evidence_from_running_cards_and_session_records(root, tmp_path, monkeypatch):
+    from shantytown import cli
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    a = _in_use_args(root)
+    # Nothing at all: no harness is in use.
+    assert cli._hooks_in_use(a, [], [], now=10_000) == {}
+    # A running process on a codex role file is use of codex.
+    run = [hb.Running("carol", str(root / "settings" / "codex" / "worker" / "config.toml"))]
+    assert cli._hooks_in_use(a, [], run, now=10_000) == {"codex": ["running: carol"]}
+    # A fresh rollout under st's codex home is use; an old one is not.
+    rollout = root / "settings" / "codex" / "worker" / "sessions" / "2026" / "11" / "27" / "r.jsonl"
+    rollout.parent.mkdir(parents=True)
+    rollout.write_text("{}\n")
+    import os
+    os.utime(rollout, (5_000, 5_000))
+    assert cli._hooks_in_use(a, [], [], now=5_000 + cli.HOOKS_USE_WINDOW_S + 1) == {}
+    assert "codex" in cli._hooks_in_use(a, [], [], now=5_100)
+    # An unreadable crew registry is cannot-tell, never "not in use".
+    assert cli._hooks_in_use(a, None, [], now=10_000) is None

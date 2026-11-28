@@ -1407,6 +1407,59 @@ def _hooks_running(a, cards) -> list:
     return out
 
 
+#: How far back a session record counts as evidence that a harness is used here.
+HOOKS_USE_WINDOW_S = 24 * 3600
+
+
+def _harness_of_settings(path: str) -> str | None:
+    """Which harness an st-emitted settings file belongs to, from its layout."""
+    p = Path(path)
+    if p.name.endswith(".settings.json"):
+        return "claude"
+    kind = p.parent.parent.name
+    return kind if kind in ("codex", "opencode", "agy") else None
+
+
+def _hooks_in_use(a, cards, running, now: float | None = None) -> dict[str, list[str]] | None:
+    """{harness: [evidence]} that each harness is used on THIS host (aegis-9uq.2).
+
+    Evidence: a running process launched on one of its settings files, a local
+    card that declares it, or a session record from the window (claude
+    transcripts, rollouts under st's codex homes). Erring toward "in use" is
+    the safe direction: it only keeps an item not-checked. None when the
+    session stores cannot be read, so the caller changes nothing."""
+    import time
+    from .harness import for_card
+    if cards is None:
+        return None
+    now = time.time() if now is None else now
+    out: dict[str, list[str]] = {}
+    for r in running:
+        h = _harness_of_settings(r.settings_file)
+        if h:
+            out.setdefault(h, []).append(f"running: {r.agent}")
+    for c in cards:
+        try:
+            h = for_card(c, root=a.root).name
+        except Exception:
+            return None
+        out.setdefault(h, []).append(f"card: {c.name}")
+    cutoff = now - HOOKS_USE_WINDOW_S
+    stores = [("claude", Path.home() / ".claude" / "projects", "*/*.jsonl"),
+              ("codex", Path(a.root) / "settings" / "codex", "*/sessions/**/*.jsonl")]
+    try:
+        for h, base, pattern in stores:
+            if h in out or not base.is_dir():
+                continue
+            for p in base.glob(pattern):
+                if p.stat().st_mtime >= cutoff:
+                    out.setdefault(h, []).append(f"session record: {p}")
+                    break
+    except OSError:
+        return None
+    return out
+
+
 def _hooks_check_context(a) -> tuple[dict[str, str], list]:
     """What `hooks check` needs from the cards, resolved the way launch resolves it.
 
@@ -1537,13 +1590,14 @@ def _cmd_hooks(a) -> int:
         from .deployment import local_host as _lh
         cards = [c for c in _registry(a).all().exact() if c.host in (None, _lh(a.root))]
     except Exception:
-        cards = []
-    running = _hooks_running(a, cards)
+        cards = None        # unreadable crew: "in use" cannot be told, see _hooks_in_use
+    running = _hooks_running(a, cards or [])
     hb.apply_live(res, running)
     from . import stats as _stats
     hb.apply_firing(res, hb.load(root), running=running,
                     last_active=_stats.last_activity(Path(root)),
                     last_stopped=_stats.last_activity(Path(root), kind="stop"))
+    hb.apply_in_use(res, _hooks_in_use(a, cards, running))
     if a.json:
         print(json.dumps(res.to_json(root=root, host=local_host(root)), indent=2))
         return res.exit_code
@@ -1563,7 +1617,8 @@ def _cmd_hooks(a) -> int:
     print(f"hook bundles: {s['items']} item(s), {s['configured_ok']} configured, "
           f"{s['missing']} missing, {s['unsupported']} unsupported, {s['duplicate']} duplicate; "
           f"live: {s['live_ok']} ok, {s['live_stale']} stale; "
-          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent")
+          f"firing: {s['firing_ok']} ok, {s['firing_silent']} silent; "
+          f"{s['not_in_use']} not in use on this host")
     return res.exit_code
 
 
