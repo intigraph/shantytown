@@ -58,6 +58,11 @@ def projected_hooks(settings_path):
 
 
 def project_hooks(workspace, settings_path):
+    """Merge st's hook group into the workspace hooks.json. Returns the bytes
+    written when the file now holds ONLY st's group, else None: the caller hashes
+    the return value to admit the file at the folder-trust guard, and a hash of
+    merged bytes would bless whatever foreign hook group was already there (a
+    retried job's reused worktree, or a write by the job itself; #808 review)."""
     from .provision import ProvisionError
     ws = Path(workspace).resolve()
     write_native_settings(settings_path)
@@ -72,7 +77,9 @@ def project_hooks(workspace, settings_path):
     except (OSError, ValueError):
         raise ProvisionError('agy workspace hooks are unreadable; preserved') from None
     data[HOOK_NAME] = projected_hooks(settings_path)
-    private_write(path, json.dumps(data, indent=2) + '\n')
+    body = json.dumps(data, indent=2) + '\n'
+    private_write(path, body)
+    return body if set(data) == {HOOK_NAME} else None
 
 
 def translate_servers(rendered):
@@ -91,16 +98,21 @@ def translate_servers(rendered):
 
 
 def project_mcp(card, root, rendered, replace=False):
+    """Write the agy MCP config. Returns the bytes written when they are exactly
+    the translated render, else None, for the same reason as project_hooks: a
+    merge keeps servers st did not render, and those must not be hashed as kit."""
     from .provision import ProvisionError
     path = Path(card.workspace) / '.agents' / 'mcp_config.json'
     if path.is_symlink():
         raise ProvisionError('agy MCP destination cannot be a symlink')
     path.parent.mkdir(parents=True, exist_ok=True)
     before = json.loads(path.read_text()) if path.exists() else {}
-    new = translate_servers(rendered)
-    if not replace:
-        new['mcpServers'] = {**before.get('mcpServers', {}), **new['mcpServers']}
-    private_write(path, json.dumps(new, indent=2) + '\n')
+    own = translate_servers(rendered)
+    new = own if replace else {
+        'mcpServers': {**before.get('mcpServers', {}), **own['mcpServers']}}
+    body = json.dumps(new, indent=2) + '\n'
+    private_write(path, body)
+    return body if new == own else None
 
 
 def receipt_path(root, agent):
