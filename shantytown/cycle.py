@@ -638,7 +638,8 @@ class Requests:
                 quipu_nodes: list | None = None,
                 no_in_place: bool = False, auto: bool = False,
                 allow_loss: bool = False, bundle_custody_items=None,
-                runtime_update=None, only_if_absent=False) -> bool:
+                runtime_update=None, only_if_absent=False,
+                settings_stale=False) -> bool:
         with self._locked():
             data = self._load()
             if only_if_absent and agent in data:
@@ -676,6 +677,37 @@ class Requests:
                 data[agent]["bundle_custody_items"] = list(bundle_custody_items)
             if runtime_update is not None:
                 data[agent]["runtime_update"] = dict(runtime_update)
+            if settings_stale:
+                # aegis-za4f.20: tend asked because the PROCESS runs on older
+                # settings than its file. Context depth is not the reason, so
+                # the depth sweep must not withdraw it (notify.AutoCycler).
+                data[agent]["settings_stale"] = True
+            self._save(data)
+            return True
+
+    def require_replace(self, agent: str) -> bool | None:
+        """Make an agent's PENDING request a settings-stale relaunch.
+
+        None when nothing is pending (the caller files its own request).
+        Otherwise True when the record was upgraded, False when it already
+        was one. aegis-za4f.20 review: settings_drift left an existing request
+        untouched, but the agent's own request may be in-place, and an
+        in-place clear keeps the process and so the stale hooks. Every other
+        field (checkpoint, auto, refusal) is the requester's and is kept.
+        """
+        with self._locked():
+            data = self._load()
+            if agent not in data:
+                return None
+            record = data[agent]
+            if not isinstance(record, dict):
+                record = {"checkpoint": str(record), "checkpoint_bead": "",
+                          "quipu_nodes": []}
+            if record.get("no_in_place") is True and record.get("settings_stale") is True:
+                return False
+            record["no_in_place"] = True
+            record["settings_stale"] = True
+            data[agent] = record
             self._save(data)
             return True
 

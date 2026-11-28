@@ -118,6 +118,10 @@ A completed pass is not a delivery receipt. Check the actual notifier outcome,
 recipient and delivery ID, measured body bytes, and phase latency before claiming
 scheduled-delivery acceptance.
 
+## Settings drift (aegis-za4f.20)
+
+Each `st fleet tend` pass re-emits any role settings file whose bytes differ from what the installed st renders, unless the re-render would drop a hook command (held and logged; `st fleet roles set` accepts the drop). A live agent whose launch stamp no longer matches its file is SETTINGS STALE: tend files an automatic replace-cycle request that is served only at an idle stop. The administrator is never cycled automatically; its anchor shows a SETTINGS STALE notice instead. Inbox operator capture defaults to the deployment `[inbox] operators` when `SHANTY_OPERATOR` is unset.
+
 ## Alert causes and members
 
 A **cause** is the currently firing root alarm class selected from Quipu's

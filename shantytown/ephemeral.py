@@ -1505,9 +1505,43 @@ def codex_job_sandbox(rec: dict, *, unattended: bool, cache_home: Path | None = 
                 raise Refused(f"cannot resolve the git dir of {rec['workspace']} for the job sandbox")
             if own.stdout.strip() not in roots:
                 roots.append(own.stdout.strip())
-    return ["-c", 'sandbox_mode="workspace-write"',
+    args = ["-c", 'sandbox_mode="workspace-write"',
             "-c", "sandbox_workspace_write.network_access=true",
             "-c", "sandbox_workspace_write.writable_roots=" + json.dumps(roots)]
+    if ssh := codex_job_ssh_command():
+        args += ["-c", "shell_environment_policy.set.GIT_SSH_COMMAND=" + json.dumps(ssh)]
+    return args
+
+
+#: A path GIT_SSH_COMMAND can carry unquoted: git runs that value through a shell.
+_SSH_CONFIG_PATH = re.compile(r"/[A-Za-z0-9_./-]+")
+
+
+def codex_job_ssh_command(home: Path | None = None) -> str | None:
+    """The ssh command a Codex task job's git must use, or None to leave ssh alone.
+
+    MEASURED 2026-11-28 (aegis-cxy, codex-cli 0.161.0, `codex sandbox` with the
+    job's workspace-write profile): every codex task job committed and then
+    failed `git push` with "Bad owner or permissions on
+    /etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf". Codex's Linux sandbox is
+    bubblewrap in a user namespace that maps only the job's own uid, so every
+    root-owned file reads as uid 65534 inside it, and ssh refuses a system
+    config Include it cannot prove root owns. The legacy Landlock-only sandbox
+    that would keep the real owners is refused by Codex for a restricted
+    filesystem ("requires bubblewrap"). The uid view cannot be fixed from the
+    job, so ssh is told what is true there: the system config is unverifiable,
+    the user's own config (owned by the job uid, readable) is the config.
+    `ssh -F <file>` reads exactly that file and skips /etc/ssh/ssh_config; keys,
+    known_hosts and the user's Host blocks are unchanged. Measured with it:
+    `ssh -T git@github.com` authenticates and `git push` reaches origin.
+
+    No user config, or a path a shell would have to quote, is None: the job
+    keeps today's ssh rather than run with a guessed one.
+    """
+    config = Path(home or Path.home()) / ".ssh" / "config"
+    if not config.is_file() or not _SSH_CONFIG_PATH.fullmatch(str(config)):
+        return None
+    return f"ssh -F {config}"
 
 
 def write_codex_job_sandbox(rec: dict, home: Path, *, unattended: bool,
@@ -1542,13 +1576,16 @@ def write_codex_job_sandbox(rec: dict, home: Path, *, unattended: bool,
 
 
 _SANDBOX_ARG = re.compile(r'sandbox_mode="workspace-write"|sandbox_workspace_write\.network_access=true'
-                          r'|sandbox_workspace_write\.writable_roots=\[.*\]')
+                          r'|sandbox_workspace_write\.writable_roots=\[.*\]'
+                          # codex_job_ssh_command's exact shape: ssh, -F, one
+                          # unquoted path. Nothing else a shell would run.
+                          r'|shell_environment_policy\.set\.GIT_SSH_COMMAND="ssh -F /[A-Za-z0-9_./-]+"')
 
 
 def codex_daemon_sandbox_args(name: str, home: Path) -> list:
     """The job's recorded daemon overrides, or [] for every other card.
 
-    Only an ephemeral card reads the file, and only the three exact keys pass:
+    Only an ephemeral card reads the file, and only the four exact keys pass:
     a tampered file can never select danger-full-access or an approval policy.
     """
     if not is_ephemeral_name(name):
@@ -2631,6 +2668,8 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
     DONE is the lifecycle proof, not a name prefix or a missing pane. Never
     follow settings symlinks or overwrite an earlier retirement archive.
     """
+    from types import SimpleNamespace
+    from . import job_tools
     from .harness import UnknownHarness, get as get_harness
     name = rec.get("name")
     if not is_ephemeral_name(name) or rec.get("state") != DONE:
@@ -2640,8 +2679,29 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
     if card.exists() or card.is_symlink():
         return "kept (crew card still present)"
     try:
-        rel = get_harness(rec["harness"]).agent_settings_name(name)
-        path = root / "settings" / rel
+        rels = [get_harness(rec["harness"]).agent_settings_name(name)]
+        # MEASURED (aegis-ixj.1, 2026-11-27): a job with a tool profile launches
+        # on job_tools.settings_target, not the per-agent file, and only the
+        # latter was retired. 656 ended claude jobs kept <name>.job.settings.json,
+        # which `st ops hooks check` read as a role: 12,312 of 12,447 items.
+        target = job_tools.settings_target(root, SimpleNamespace(name=name, harness=rec["harness"]))
+        rel = str(target.relative_to(root / "settings"))
+        if rel not in rels:
+            rels.append(rel)
+    except (KeyError, ValueError, UnknownHarness) as error:
+        return f"kept (settings retirement uncertain: {type(error).__name__})"
+    results = [_retire_one(root, root / "settings" / rel, dry_run) for rel in rels]
+    for result in results:
+        if result.startswith("kept"):
+            return result
+    for result in results:
+        if result != "none":
+            return result
+    return "none"
+
+
+def _retire_one(root: Path, path: Path, dry_run: bool) -> str:
+    try:
         parent = root
         if parent.is_symlink():
             return "kept (settings symlink)"
@@ -2661,7 +2721,7 @@ def retire_settings(root, rec: dict, *, dry_run: bool = False) -> str:
         if not dry_run:
             path.rename(archive)
         return "would retire" if dry_run else "retired"
-    except (KeyError, ValueError, OSError, UnknownHarness) as error:
+    except (ValueError, OSError) as error:
         return f"kept (settings retirement uncertain: {type(error).__name__})"
 
 

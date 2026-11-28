@@ -5183,7 +5183,9 @@ def _spawn_drain_events(a) -> int:
     a merge pin mismatch), crashed, or no item to report on. A refusal is
     not dropped: the cap and the governor are the brakes, not this loop.
     Expired (settled): pending for pr_events.PENDING_TTL_S, recorded and
-    printed, so a permanent refusal cannot hold exit 2 forever."""
+    printed, so a permanent refusal cannot hold exit 2 forever.
+    Capped (settled): a new head's review or a fix for a PR that already has
+    pr_events.MAX_REVIEW_ROUNDS reviewed heads; raised once per PR."""
     from . import ephemeral as eph
     from . import pr_events as pe
     if eph.is_ephemeral_name(os.environ.get("SHANTY_AGENT")):
@@ -5193,7 +5195,8 @@ def _spawn_drain_events(a) -> int:
     except OSError as e:
         raise eph.Refused(f"cannot read {a.drain_events}: {e.strerror or e}") from None
     rc = OK
-    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0, "launch-failed": 0}
+    counts = {"admitted": 0, "superseded": 0, "pending": 0, "expired": 0,
+              "launch-failed": 0, "capped": 0}
     with pe.lock(a.root):
         reported = pe.malformed_seen(a.root)
         for lid, problem in problems:
@@ -5211,6 +5214,7 @@ def _spawn_drain_events(a) -> int:
         refused = pe.first_refused(a.root)
         tried = pe.attempted(a.root)
         heads = pe.current_heads(events)
+        rounds = pe.review_rounds(a.root)
         seen = set()
         for ev in events:
             eid = ev["event_id"]
@@ -5250,6 +5254,15 @@ def _spawn_drain_events(a) -> int:
                 counts["superseded"] += 1
                 print(f"  superseded {label}: {stale}; no spawn")
                 continue
+            reviewed = rounds.setdefault((ev["repo"], ev["pr"]), set())
+            if pe.capped(ev, reviewed):
+                # Review of #792: capping only the review left round 3's fix
+                # job pushing a head nobody would review, so the PR sat with
+                # no APPROVE, no merge event and nothing raised. Past the cap
+                # the drain recruits neither, and says so to a human once.
+                rc = CANNOT_TELL
+                _drain_event_capped(a, pe, ev, label, len(reviewed), counts)
+                continue
             spawn = pe.argv(ev)
             if a.dry_run:
                 counts["admitted"] += 1
@@ -5270,6 +5283,8 @@ def _spawn_drain_events(a) -> int:
                 detail = f"launch crashed: {type(error).__name__}: {str(error)[:200]}"
             if out == OK:
                 pe.settle(a.root, ev, "admitted", time.time(), ev["reason"])
+                if ev["job"] == "review":
+                    reviewed.add(ev["head"])
                 counts["admitted"] += 1
                 print(f"  admitted {label} on {ev['item']} ({ev['reason']})")
             else:
@@ -5282,7 +5297,7 @@ def _spawn_drain_events(a) -> int:
     verb = "would admit" if a.dry_run else "admitted"
     print(f"  pr events: {verb} {counts['admitted']}, superseded {counts['superseded']}, "
           f"pending {counts['pending']}, expired {counts['expired']}, "
-          f"launch-failed {counts['launch-failed']}, already settled "
+          f"launch-failed {counts['launch-failed']}, capped {counts['capped']}, already settled "
           f"{len({e['event_id'] for e in events} & set(done))}")
     return rc
 
@@ -5323,22 +5338,41 @@ def _drain_event_launch_failed(a, pe, ev, label, made, why, counts) -> bool:
     pe.settle(a.root, ev, "launch-failed", now, text)
     counts["launch-failed"] += 1
     print(f"  launch-failed {label}: {text}", file=sys.stderr)
+    _drain_event_raise(a, ev, "launch-failed", text, f"pr-events:{ev['event_id']}:launch-failed")
+    return True
+
+
+def _drain_event_capped(a, pe, ev, label, rounds, counts) -> None:
+    """Settle an event past pe.MAX_REVIEW_ROUNDS as "capped" and raise the PR
+    to the administrator, once per PR: from here a human reviews or merges."""
+    text = (f"{label} on {ev['item']}: {rounds} review rounds already recruited "
+            f"(max {pe.MAX_REVIEW_ROUNDS}); the drain recruits no more review or fix "
+            f"jobs for {ev['repo']}#{ev['pr']}. A human must review, fix or merge it.")
+    counts["capped"] += 1
+    print(f"  capped {text}", file=sys.stderr)
+    if a.dry_run:
+        return
+    pe.settle(a.root, ev, "capped", time.time(), text)
+    _drain_event_raise(a, ev, "capped", text, f"pr-events:{ev['repo']}#{ev['pr']}:capped")
+
+
+def _drain_event_raise(a, ev, outcome, text, key) -> None:
+    """Raise a settled event to the administrator. The key makes the raise
+    idempotent; a failed raise is printed and the settle stands."""
     from .events import FilesEvents
     cfg, _err = config.load_or_default(Path(a.root))
     admin, _ = _spawn_administrator(FilesRegistry(Path(a.root) / "crew"), cfg)
     if not admin:
-        print("  ⚠ no administrator card on this host; launch-failed NOT raised",
+        print(f"  ⚠ no administrator card on this host; {outcome} NOT raised",
               file=sys.stderr)
-        return True
+        return
     try:
-        # The key makes the raise idempotent: once per event, ever.
         FilesEvents(Path(a.root) / "events").persist(
-            to=admin, frm="pr-events", reason="pr-event-launch-failed", rose=True,
-            item=ev["item"], detail=text[:600], key=f"pr-events:{ev['event_id']}:launch-failed")
+            to=admin, frm="pr-events", reason=f"pr-event-{outcome}", rose=True,
+            item=ev["item"], detail=text[:600], key=key)
     except Exception as e:  # noqa: BLE001 -- the settle stands; say the raise did not
-        print(f"  ⚠ launch-failed NOT raised to {admin} ({type(e).__name__}: {e})",
+        print(f"  ⚠ {outcome} NOT raised to {admin} ({type(e).__name__}: {e})",
               file=sys.stderr)
-    return True
 
 
 def _drain_event_pending(a, pe, ev, label, refused, counts, why) -> None:
@@ -8137,44 +8171,59 @@ def _emit_role_settings(root: Path, roles: set[str],
     sdir = Path(root) / "settings"
     written = []
     for role in sorted(roles):
-        p = sdir / program.settings_name(role)
-        # mkdir per artifact, not once for sdir: a harness's name may carry
-        # directories (codex needs a DIRECTORY per role — CODEX_HOME names one).
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # Pass the root: the hook must reach THIS store, not cwd/.shanty (the
-        # agent's own workspace, which has none) — see _stop_cmd.
-        emitted = settings_for_role(role, root=root, harness_name=harness_name)
-        # MERGE, NEVER CLOBBER (GitHub #15, #16). This was an unconditional full
-        # overwrite, so anything an operator added — a permission, an env var, a
-        # SessionStart self-prime — was silently dropped on the next `roles set`.
-        # cli.md tells the reader to wire their own SessionStart hook; the emitter
-        # then erased it, which made the documented escape hatch unkeepable.
-        #
-        # st OWNS the hook EVENTS it emits and replaces those wholesale (a stale
-        # stop direction must never survive a rewrite); every other key, and every
-        # hook event st does not emit, is the operator's and is preserved. The
-        # merge AND the serialization are the harness's render() — one call,
-        # because they are one decision and this emitter must not learn a second
-        # file format to keep the rule.
-        # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
-        # and write_text truncates first, so a failure mid-write left it 0 bytes.
-        existing = _read_text(p)
-        rendered = program.render(emitted, existing, root=root)
-        # Compare the actual artifacts: registry membership alone misses manual
-        # hooks, and an event may be preserved by one harness but replaced by another.
-        from . import hook_bundles as hb
-        before = hb._hooks_from_bytes(program.name, existing.encode()) or {}
-        after = hb._hooks_from_bytes(program.name, rendered.encode()) or {}
-        for event, groups in sorted(before.items()):
-            removed = hb._commands_in(groups) - hb._commands_in(after.get(event))
-            for matcher, command in sorted(removed, key=lambda item: (str(item[0]), item[1])):
-                print(f"warning: dropping hook from {p}: event={event!r} "
-                      f"matcher={matcher!r} command={command!r}; "
-                      "absent from regenerated settings; register intended hooks "
-                      "with st ops hooks register before re-emitting", file=sys.stderr)
+        p, existing, rendered, dropped = _render_role_settings(root, role, harness_name)
+        for event, matcher, command in dropped:
+            print(f"warning: dropping hook from {p}: event={event!r} "
+                  f"matcher={matcher!r} command={command!r}; "
+                  "absent from regenerated settings; register intended hooks "
+                  "with st ops hooks register before re-emitting", file=sys.stderr)
         write_text_atomic(p, rendered)
         written.append(p)
     return written
+
+
+def _render_role_settings(root: Path, role: str, harness_name: str | None = None):
+    """(path, existing, rendered, dropped) for one role file, writing nothing.
+
+    Split out of _emit_role_settings so tend can tell a role file that has
+    drifted from the code without rewriting it (aegis-za4f.20, settings_drift).
+    dropped: (event, matcher, command) the render would remove."""
+    program = harness_mod.get(harness_name)
+    sdir = Path(root) / "settings"
+    p = sdir / program.settings_name(role)
+    # mkdir per artifact, not once for sdir: a harness's name may carry
+    # directories (codex needs a DIRECTORY per role — CODEX_HOME names one).
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # Pass the root: the hook must reach THIS store, not cwd/.shanty (the
+    # agent's own workspace, which has none) — see _stop_cmd.
+    emitted = settings_for_role(role, root=root, harness_name=harness_name)
+    # MERGE, NEVER CLOBBER (GitHub #15, #16). This was an unconditional full
+    # overwrite, so anything an operator added — a permission, an env var, a
+    # SessionStart self-prime — was silently dropped on the next `roles set`.
+    # cli.md tells the reader to wire their own SessionStart hook; the emitter
+    # then erased it, which made the documented escape hatch unkeepable.
+    #
+    # st OWNS the hook EVENTS it emits and replaces those wholesale (a stale
+    # stop direction must never survive a rewrite); every other key, and every
+    # hook event st does not emit, is the operator's and is preserved. The
+    # merge AND the serialization are the harness's render() — one call,
+    # because they are one decision and this emitter must not learn a second
+    # file format to keep the rule.
+    # ATOMIC (aegis-yb8ifi): every agent on this role launches on this file,
+    # and write_text truncates first, so a failure mid-write left it 0 bytes.
+    existing = _read_text(p)
+    rendered = program.render(emitted, existing, root=root)
+    # Compare the actual artifacts: registry membership alone misses manual
+    # hooks, and an event may be preserved by one harness but replaced by another.
+    from . import hook_bundles as hb
+    before = hb._hooks_from_bytes(program.name, existing.encode()) or {}
+    after = hb._hooks_from_bytes(program.name, rendered.encode()) or {}
+    dropped = []
+    for event, groups in sorted(before.items()):
+        removed = hb._commands_in(groups) - hb._commands_in(after.get(event))
+        for matcher, command in sorted(removed, key=lambda item: (str(item[0]), item[1])):
+            dropped.append((event, matcher, command))
+    return p, existing, rendered, dropped
 
 
 def _read_text(path: Path) -> str:
@@ -9115,6 +9164,11 @@ def _capture_operator_inbox(a, sender, recipient, text) -> None:
     """
     from . import operator_capture
     operator = _deployment_default(a, operator_capture.OPERATOR_KEY)
+    if not operator:
+        # MEASURED (aegis-za4f.20): SHANTY_OPERATOR was unset in the deployment
+        # while shantytown.toml already named the operators under [inbox], so
+        # no inbox message was ever captured. The declared list is not a guess.
+        operator = sender if sender in _operator_names(a) else ""
     if not operator or sender != operator:
         return
     proven = getattr(a, "authenticated_sender", None) == operator
@@ -9485,7 +9539,14 @@ def _cmd_anchor(a) -> int:
         p.orphan_directives = orphan_directives.render(orphan_directives.load(a.root))
         from . import operator_capture
         captured = "\n".join(operator_capture.notices(Path(a.root)))
-        p.orphan_directives = "\n".join(x for x in (p.orphan_directives, captured) if x)
+        from . import settings_drift
+        try:
+            stale = "\n".join(settings_drift.admin_notices(
+                _registry(a).all().exact(), _launches(a)))
+        except Exception as exc:  # noqa: BLE001 — the anchor must still render
+            stale = f"{settings_drift.SETTINGS_STALE}: UNKNOWN ({type(exc).__name__})"
+        p.orphan_directives = "\n".join(
+            x for x in (p.orphan_directives, captured, stale) if x)
     from . import due_brief
     p.decision_view = due_brief.render(due_brief.load(
         _anchor_tracker, Path(a.root), None if p.me.role == "administrator" else me),
@@ -13430,7 +13491,7 @@ def _cmd_cycle(a) -> int:
     return OK
 
 
-def _runtime_checkpoint(a, card, evidence):
+def _runtime_checkpoint(a, card, evidence, headline=None):
     """Save the observed anchor and last written notes, without inventing work.
 
     The generated snapshot is st-authored. An agent may add richer reasoning
@@ -13440,7 +13501,7 @@ def _runtime_checkpoint(a, card, evidence):
     held = _tracker_plate(trk, card.name)
     item = held.id if held is not None else ""
     lines = [f"st automatic runtime checkpoint for {card.name}",
-             f"Exact session: {evidence.session}; {evidence.running} -> {evidence.installed}.",
+             headline or f"Exact session: {evidence.session}; {evidence.running} -> {evidence.installed}.",
              "Snapshot of stored state; no claim to capture unwritten reasoning."]
     if item:
         from .br import comments, append_comment
@@ -13464,6 +13525,28 @@ def _runtime_checkpoint(a, card, evidence):
         if not any(c.get("text") == text for c in comments(trk, item)):
             raise ValueError("automatic checkpoint comment did not read back")
     return dict(text=text, item=item, nodes=nodes)
+
+
+def _settings_drift_sweep(a, agents, panes, log):
+    from . import settings_drift
+    root = Path(a.root)
+    settings_drift.reemit_drifted(
+        root, lambda h, role: _render_role_settings(root, role, harness_name=h),
+        write_text_atomic, log=log)
+    stale = settings_drift.stale_live(
+        agents, _launches(a),
+        lambda card: bool(card.pane and panes is not None and panes.exists(card.pane)))
+    if not notify_mod.auto_cycle_enabled():
+        for card in stale:
+            log(f"settings-drift: {card.name} is {settings_drift.SETTINGS_STALE}; "
+                "auto-cycle is off, so it reloads at its next relaunch")
+        return []
+    return settings_drift.request_cycles(
+        stale, cycle_mod.Requests(a.root),
+        lambda card: _runtime_checkpoint(
+            a, card, None, headline="Its launch settings are older than its role "
+            "file (SETTINGS STALE); replaced at an idle stop to load the new hooks."),
+        log=log)
 
 
 def _runtime_roll_sweep(a, agents, panes, runtime, log):
@@ -17202,6 +17285,12 @@ def _tend_once(a, quiet: bool = False) -> int:
             if auto:
                 print(f"  ⚠ auto-cycle requested for {len(auto)} checkpointed "
                       f"agent(s) past the line: {', '.join(auto)}", file=sys.stderr)
+        # SETTINGS DRIFT (aegis-za4f.20). Re-emit role files the code has moved
+        # past, then queue an idle REPLACE cycle for each live agent still on
+        # older settings, served by the loop just below. The administrator only
+        # gets a notice. See settings_drift for why each half is needed.
+        if not a.dry_run:
+            _sweep("settings-drift", lambda: _settings_drift_sweep(a, agents, panes, _log))
         # HONOUR SELF-REQUESTED CYCLES (aegis-3laza). An agent cannot cycle itself
         # in-process — the stop kills the session running the stop — so `st agent cycle
         # --self` can only record a request, and this is what honours it. It is the

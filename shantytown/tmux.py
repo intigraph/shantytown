@@ -108,6 +108,9 @@ _CODEX_POLL_S = 0.15
 _CODEX_POLLS = 8
 _CODEX_ATTEMPTS = 2
 _CODEX_DEADLINE_S = 25
+#: Extra polls (~12 s at _CODEX_POLL_S) once the composer no longer holds our
+#: body: Codex took it, so only observation, never a key, can settle delivery.
+_CODEX_OBSERVE_POLLS = 80
 
 
 def _codex_submission_busy(screen: str) -> bool:
@@ -1075,9 +1078,9 @@ class Tmux:
                     (triage.INPUT_EMPTY, triage.INPUT_PLACEHOLDER) and
                     not _codex_queued(screen, text) and
                     not was_busy and triage.mid_flight(screen))
-        for attempt in range(_CODEX_ATTEMPTS):
-            screen = ""
-            for _ in range(_CODEX_POLLS):
+        def watch(polls, screen):
+            """(True, screen) once the turn is seen; (False, last screen) otherwise."""
+            for _ in range(polls):
                 if time.monotonic() >= deadline:
                     break
                 time.sleep(_CODEX_POLL_S)
@@ -1089,10 +1092,27 @@ class Tmux:
                 # Existing activity alone proves nothing: the new body can
                 # remain typed while an older turn is still working.
                 if observed(screen):
-                    return
+                    return True, screen
                 if _codex_queued(screen, text):
                     raise PaneSubmissionUnverified(
                         f'UNVERIFIED: Codex queued input in {pane}; not delivered')
+            return False, screen
+        for attempt in range(_CODEX_ATTEMPTS):
+            seen, screen = watch(_CODEX_POLLS, "")
+            if seen:
+                return
+            if screen and not _codex_owned_input(screen, text):
+                # aegis-cxy: 4 of ~14 codex job launches on 2026-11-28 raised
+                # "submission not observed; body was not resent" with NO stranded
+                # input: Codex had taken the body, but a fresh session (MCP
+                # servers still booting) showed no Working row inside the 1.2 s
+                # poll window, and an emptied composer broke straight out. Our
+                # body is gone from the composer, so no key is authorized; keep
+                # WATCHING, bounded by the deadline, before calling it unverified.
+                seen, screen = watch(_CODEX_OBSERVE_POLLS, screen)
+                if seen:
+                    return
+                break
             if (attempt + 1 < _CODEX_ATTEMPTS and time.monotonic() < deadline
                     and _codex_owned_input(screen, text)):
                 # Submit only the exact body we own. Busy Codex queues with

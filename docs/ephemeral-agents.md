@@ -351,6 +351,17 @@ not the signed controller `recruit_*` path.
   crashed after the spawn but before it settled; for review and merge jobs the
   spawn path does not refuse a duplicate itself. A job spawned before the attempt, such as a hand-spawned
   task on an older head, never matches, so it cannot settle a new head's event.
+- **Capped** (settled): the PR already has `pr_events.MAX_REVIEW_ROUNDS` (3)
+  reviewed heads admitted in the ledger, and the event is a review of a new
+  head or a fix (`task`). On tambo#311 the drain recruited five reviews, each
+  REQUEST-CHANGES with one new finding. Capping only the review was not enough:
+  round 3's fix pushed a head nobody would review, so no APPROVE and no merge
+  event could follow. A capped event is printed, exits 2 once, is never offered
+  again, and the PR is raised to the administrator once (`pr-event-capped`). A
+  capped PR does not land by itself; a human reviews, fixes or merges it. A
+  merge event for an approved head is never capped. Only drain-admitted reviews
+  count, so a review spawned by hand is not a round, and re-admitting the same
+  head is not a new round either.
 - A `merge` event whose reason is not `green-and-approved` is refused as an
   emitter bug. `--dry-run` prints the spawns and settles nothing.
 
@@ -532,6 +543,17 @@ A task job edits source, so it needs more than a review's sandbox:
   with `network_access=true` and exactly two writable roots: the read-budget
   ledger and the git common dir of the source checkout. It never gets
   `danger-full-access`. A tampered file refuses the launch.
+- **ssh push.** Codex's Linux sandbox is bubblewrap in a user namespace that
+  maps only the job's uid, so root-owned files read as uid 65534 inside it.
+  ssh then refuses `/etc/ssh/ssh_config.d/*` ("Bad owner or permissions"), and
+  every codex task job's `git push` failed (aegis-cxy). Codex refuses the
+  Landlock-only mode for a restricted filesystem, so the uid view cannot
+  change. When `~/.ssh/config` exists, the sandbox file therefore also sets
+  `shell_environment_policy.set.GIT_SSH_COMMAND="ssh -F ~/.ssh/config"`
+  (absolute path). ssh reads the user's own config and skips the unverifiable
+  system file. Keys, known_hosts and Host blocks are unchanged. The job pushes
+  its own branch over ssh. st never pushes for it. The daemon admits only that
+  exact shape: ssh, `-F`, one path a shell needs no quoting for.
 - **git.** Task jobs may run git on their own branch. Pushing main/master,
   force pushes, branch deletion, reset, rebase, and `gh pr merge`/`gh api` are
   exec-policy `forbidden`. Branch protection on the forge stays the boundary
@@ -599,6 +621,10 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
 - **Merge job.** It merges only the head its item pins. When it ends without
   merging, its lane frees at once (spacing counts merges only) and, if
   `lane_release` is set, st calls chaski's `lane release` with the request id.
+- **Preflight refusals.** `st repo pr` preflight ignores st's own kit in the
+  worktree. When it refuses, it names the category in parentheses (for example
+  `tracked or staged change` or `untracked path outside st's kit`), never the
+  path.
 - **Authorship.** `st repo pr --create` records `<PR> aegis:authoredByAgent
   "<agent>"` so chaski and the gate can tell author from reviewer.
 
