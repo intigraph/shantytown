@@ -22,9 +22,9 @@ first didn't leak.
 
 | layer | first-class (default) | the second implementation, which is the *proof* |
 |---|---|---|
-| **registry** *(identity)* | **quipu** | `files` — a flat registry. **Required layer; still needs two impls.** |
-| **runtime** | **Claude Code** | **codex** — shipped. `shantytown/codex.py` |
-| **tracker** | **beads** | `files` — a directory of markdown. Zero dependencies. |
+| **registry** *(identity)* | **quipu** | `files` — a flat registry of generated cards, and the CLI's default. `toml` — hand-written `[crew.<name>]` tables, read-only. **Required layer; still needs two impls.** |
+| **runtime** | **Claude Code** | **codex** — shipped. `shantytown/codex.py`. `opencode` and experimental `agy` also ship, as workers only. |
+| **tracker** | **beads** | `files` — a directory of JSON files. Zero dependencies. `br`, `seeds` and `forgejo` also ship. |
 | **panes** | bare `tmux` | `shanty` / `herdr` adapters, later |
 | **context** | **bobbin** | none-adapter (returns nothing, harness still works) |
 | **knowledge** *(planned — not built)* | quipu | none-adapter |
@@ -53,13 +53,13 @@ reason to keep the second one around when nobody uses it.
 
 ## Runtime — Claude Code first-class, swappable
 
-An agent runtime does three things. That's the interface.
+An agent runtime does two things. That's the interface. Sending text into a pane is not one of
+them: that is `Panes.send`, the pane adapter's job.
 
 ```python
 class Runtime(Protocol):
-    def start(self, card: AgentCard, pane: Pane) -> None: ...
-    def send(self, pane: Pane, text: str) -> None:  ...   # dispatch. this is send-keys.
-    def hooks(self, card: AgentCard) -> HookSpec:   ...   # what stop/start hooks this runtime supports
+    def start(self, card: Agent, pane: str) -> None: ...   # compose the launch and send it
+    def hooks(self, card: Agent) -> HookSpec: ...          # what stop/start hooks this runtime supports
 ```
 
 `hooks()` is where runtimes actually differ, and it's the one that will hurt. Claude Code has a
@@ -76,7 +76,7 @@ events from below". So `hooks()` is not metadata; it's a **capability declaratio
 must refuse a card whose role needs a capability its runtime doesn't have:
 
 ```
-$ st role set malcolm lead
+$ st fleet roles set malcolm lead
   refused: harness 'opencode' does not declare blocking stop hooks;
            role 'lead' requires stop-event delivery to the model.
            malcolm stays worker. Nothing written.
@@ -95,7 +95,8 @@ $ st role set malcolm lead
 > refusal — a lead you could not create. Saying True means a lead on a codex *older* than the hooks
 > system is accepted and absorbs nothing, silently. That is a version floor `st` cannot check from
 > inside the gate (`codex --version` at role-set time measures a binary the agent may not even
-> launch with); it belongs in `st ops doctor` as a tool row, and it is not built yet.
+> launch with); it belongs in `st ops doctor` as a tool row. That row now exists: a capability
+> probe that fails when the installed Codex has no hooks.
 >
 > The gate itself did not change, and that is the point of keying it on the capability: the reversal
 > was one method on one class. The refusal path is still exercised — by `StoplessRuntime` and the
@@ -187,6 +188,10 @@ Two honest gaps, named rather than papered over:
   every card regardless of harness. So a codex agent gets its stop routing and its session-start
   directive and **none of those three**. Same rule as the matchers: the fix is a delivery channel
   measured against codex, not this one aimed at it and hoped for.
+- **Both of the gaps above have since closed.** Codex liveness is read from its measured status
+  line, and provisioning now delivers the three workspace hooks to a codex agent. The two bullets
+  stay as the record of what the seam cost; the current state is in
+  [`harnesses.md`](harnesses.md#what-closed-and-how).
 
 ## Context and knowledge — bobbin and quipu, first-class
 
@@ -277,16 +282,18 @@ shantytown does here inherits these, and they're written down because they cost 
 
 ## Trackers — beads first-class, `files` as the floor
 
-Two functions. That's the whole tracker interface:
+Three methods. That's the whole tracker interface:
 
 ```python
 class Tracker(Protocol):
     def get(self, item_id: str) -> WorkItem: ...
     def update(self, item_id: str, **fields) -> None: ...
+    def create(self, title: str, **fields) -> WorkItem: ...
 ```
 
 Anything more and the tracker is driving the harness. The `files` implementation — a directory of
-markdown — exists to keep that honest and must stay in CI.
+JSON files — exists to keep that honest and must stay in CI. Five backends ship: `files`, `beads`,
+`br`, `seeds` and `forgejo`, chosen with `--backend` or `SHANTY_BACKEND`.
 
 ## What "first-class" does not license
 

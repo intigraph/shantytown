@@ -45,7 +45,7 @@ Ordinary work now refuses Claude and admits Codex; the two admitted classes
 selected Claude and refused an explicit Codex target in that historical version.
 The restored policy admits both authoring harnesses and keeps reviews Codex-only;
 the historical recording is not current acceptance. See the current
-[author/review demonstration](demos/restored-author-lanes.md). Key-off compatibility is
+[author/review demonstration](https://github.com/intigraph/shantytown/blob/main/docs/demos/restored-author-lanes.md). Key-off compatibility is
 covered separately by the real CLI tests.
 
 Run `python docs/demos/work-class.py` against each checkout to repeat the

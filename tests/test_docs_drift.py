@@ -93,7 +93,10 @@ def test_readme_whole_surface_block_lists_exactly_the_wired_commands():
     if "← the anchor" not in README.read_text():
         # The short stack README routes the complete reference to the book.
         # Its surface is still checked in the next test, against the same parser.
-        assert "[full CLI reference](https://scbrown.github.io/shantytown/cli.html)" in README.read_text()
+        # The book is served from the organization the repository moved to; the
+        # old scbrown.github.io address returns 404 and must not come back.
+        assert "[full CLI reference](https://intigraph.github.io/shantytown/cli.html)" in README.read_text()
+        assert "scbrown.github.io" not in README.read_text()
         return
     listed = _surface_in_block(README.read_text(), "← the anchor")
     assert listed == _surface(), (

@@ -54,5 +54,5 @@ without loading a model or calling a production service.
 
 ## Curated knowledge witnesses
 
-See [reviewed knowledge witnesses](knowledge/README.md) for the CLI byte/summary
+See [reviewed knowledge witnesses](knowledge/index.html) for the CLI byte/summary
 separation, strict source controls and one-time migration boundary.

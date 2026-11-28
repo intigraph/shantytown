@@ -1,5 +1,11 @@
 # shantytown — design
 
+> **Design record, July 2026.** The first design, kept as written. The module layout, the protocol
+> listings and the dispatch order below describe that first version. The current protocols are in
+> `shantytown/protocols.py`, and the current behaviour is in [The CLI](cli.md) and
+> [Adapters](adapters.md). Two of the open questions at the end are settled: messages go through
+> `st inbox`, and one crew can span hosts ([second host](second-host.md)).
+
 Read [`vision.md`](vision.md) first. This is the how.
 
 ## Shape

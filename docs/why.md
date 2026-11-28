@@ -11,11 +11,16 @@ earned its size honestly: a mayor, a deacon, convoys, formulas, quotas, scheduli
 orchestration tier for running a real fleet. If you want a town, use the town. Shantytown does not
 try to replace any of that and never will.
 
-Shantytown's whole claim is *smallness*: stdlib-only Python, no resident daemon, no server, and a
-tracker you can swap in two functions. The one scheduled thing is `st fleet tend --install`, which asks
-your systemd user timer (a launchd agent on macOS) to run a one-shot `st fleet tend` pass every five
-minutes; nothing of shantytown's stays running between passes. Your own recurring work rides that
-same pass as declared jobs ([jobs.md](jobs.md)) rather than growing a scheduler of its own.
+Shantytown's claim is *smallness where it counts*: one Python package with one dependency, no
+resident daemon, no server, and a tracker you can swap in three methods. The one scheduled thing is
+`st fleet tend --install`, which asks your systemd user timer (a launchd agent on macOS) to run a
+one-shot `st fleet tend` pass every five minutes; nothing of shantytown's stays running between
+passes. Your own recurring work is declared in Quipu for Chaski to fire ([jobs.md](jobs.md))
+rather than growing a scheduler here.
+
+It is no longer small in every sense. Since the comparison below was first written it has gained leads and an administrator, a usage governor, automatic refill of idle
+agents and supervised one-job agents. What it still does not have is a broker, a bus or a database
+of its own.
 
 |  | **raw tmux + shell scripts** | **[Gas Town](https://github.com/gastownhall/gastown)** | **shantytown** |
 |--|:---:|:---:|:---:|
@@ -23,15 +28,15 @@ same pass as declared jobs ([jobs.md](jobs.md)) rather than growing a scheduler 
 | Agent identity, roles, hierarchy | ❌ | ✅ | ✅ |
 | Stop events routed up a tier | ❌ | ✅ | ✅ |
 | Orchestration tier (mayor, deacon, convoys, formulas) | ❌ | ✅ | ❌ *by design* |
-| Scheduling, quotas, fleet-scale ops | ❌ | ✅ | ❌ |
+| Scheduling, quotas, fleet-scale ops | ❌ | ✅ | *partly:* a usage governor and session ceilings; scheduling is left to Chaski |
 | Refuses to type into a busy pane | ❌ | ❌ | ✅ |
 | Pluggable work tracker (files, beads, yours) | ❌ | ❌ *beads* | ✅ |
 | Runs with no resident daemon (`st fleet tend` is a one-shot on a systemd timer) | ✅ | ❌ | ✅ |
 | No database or data plane to stand up | ✅ | ❌ *Dolt* | ✅ |
-| Third-party runtime dependencies | none | Dolt | **none** |
+| Third-party runtime dependencies | none | Dolt | **one** (`cryptography`) |
 
-The two ❌s in shantytown's column are the point, not an omission. If it grows an orchestration tier,
-we got it wrong.
+The ❌ in shantytown's column is the point, not an omission. If it grows convoys, formulas or a
+mayor that hands out work nobody asked for, we got it wrong.
 
 *Two rows deserve their sources. "Refuses to type into a busy pane": `gt nudge --mode immediate`
 says of itself, in its own help text, "Send directly via `tmux send-keys`. Interrupts in-flight
@@ -42,7 +47,8 @@ set; if we have any of it wrong, open an issue and we'll fix the table.*
 
 ## ⚡ Measured against Gas Town
 
-The project had a gate: *time it against `gt sling`, and if it isn't dramatically faster, say so and
+These timings were taken in July 2026, when the project started, and have not been repeated since.
+The command count is the current one. The project had a gate: *time it against `gt sling`, and if it isn't dramatically faster, say so and
 stop.* Here is what the gate measured.
 
 | | `gt sling` | `st go` | |
@@ -66,7 +72,7 @@ plus every script on one fleet. Full write-up in [`docs/vision.md`](vision.md) a
   coordinating work you did not personally hand out. It does things shantytown does not attempt.
 - **Use raw tmux** when you have one or two agents and dispatch is something you do by hand anyway.
   Honestly, that's fine.
-- **Use shantytown** when you have a handful of agents, you want *create → send → fetch* and nothing
-  else, and you would rather add a tracker than run a daemon.
+- **Use shantytown** when you have a handful of agents, you want *create → send → fetch* with
+  supervision and budget limits around it, and you would rather add a tracker than run a daemon.
 - **Use both.** Nothing here conflicts with Gas Town — shantytown talks to panes and a tracker, so it
   can sit beside a fleet rather than in front of one.

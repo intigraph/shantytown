@@ -83,7 +83,7 @@ st --root /opt/second/store fleet roles set second-admin administrator
 st --root /opt/second/store fleet roles set second-worker worker
 ```
 
-Choose a harness with `st agent harness NAME claude|codex`; do not edit settings
+Choose a harness with `st agent harness NAME claude|codex|opencode|agy`; do not edit settings
 from inside an agent to bootstrap its own permissions. The doctor checks the
 **selected** settings, including per-agent overrides, for PostToolUse and Stop
 capture wiring. A valid role file cannot hide a broken override. This checks

@@ -9,7 +9,7 @@ configuration; do not derive it from the machine's current network name.
 Install from your fleet's approved source checkout. For the upstream project:
 
 ```sh
-git clone https://github.com/scbrown/shantytown.git ~/src/shantytown
+git clone https://github.com/intigraph/shantytown.git ~/src/shantytown
 pipx install --editable ~/src/shantytown
 st --version
 ```

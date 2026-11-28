@@ -2,13 +2,17 @@
 
 Create work and hand it to an agent. The id is the product — it's what step two has to say.
 
+The samples on this page are cut down to the lines that carry the point. A current release
+prints more around them: a dispatch also says who it is signed as and what graph context it
+carries, and the roster adds diagnostics below the table.
+
 ```text
 $ st task "fix the login timeout"
   st-1    fix the login timeout
 
 $ st go st-1 ada
   st-1 -> ada          in progress
-  sent to pane crew-ada
+  sent to pane st-ada
 ```
 
 Every writing command has a `--dry-run`, and dispatch shows you triage's verdict before it commits
@@ -17,11 +21,11 @@ to anything:
 ```text
 $ st go st-1 ada --dry-run
   would: tracker.update(st-1, status=in_progress, assignee=ada)
-  would: send-keys -> pane crew-ada
+  would: send-keys -> pane st-ada
   would NOT: create a convoy, spawn a session, wait for ack
 
   triage: NUDGE    healthy
-         inputs: context_high=False context_k=None pane='crew-ada' screen_lines=24
+         inputs: context_high=False context_k=None pane='st-ada' screen_lines=24
   0 writes. 1 tracker call, 1 send-keys.
 ```
 
@@ -31,20 +35,27 @@ the input it judged on, so you can disagree with it:
 ```text
 $ st go st-2 ada
   refused: pane not ready — REFUSE   in-flight work
-         inputs: marker='esc to interrupt' pane='crew-ada'
+         inputs: marker='esc to interrupt' pane='st-ada'
 $ echo $?
 1
 ```
 
-`st crew` answers the only question a dispatcher actually has — *who can take the next item?*
+`st crew` answers the only question a dispatcher actually has — *who can take the next item?* Each
+row is the agent, its role, whether it is up, whether its settings are current, the state of its
+work tree, what it is doing, its approval posture and its pane. The line under it is how full its
+plate is.
 
 ```text
 $ st crew
 
-  ada         worker         up       current  idle    crew-ada
-  bo          worker         up       current  busy    crew-bo
-  cy          lead           up       stale    idle    crew-cy
-  di          worker         down     —        —       crew-di
+  ada         tree=worker        up            current  ok        idle             bypass  st-ada
+    plate: 1/10
+  bo          tree=worker        up            current  ok        busy             bypass  st-bo
+    plate: 2/10
+  cy          tree=lead          up            STALE    ok        idle             bypass  st-cy
+    plate: 0/10
+  di          tree=worker        down          —        —         —                —       st-di
+    plate: 0/10
 
   2 free: ada, cy
   1 busy: bo
@@ -54,12 +65,16 @@ $ st crew
     (`st agent stop <agent> && st agent new <agent>`) re-reads it.
 ```
 
-And every session starts from the anchor — identity, one item, and where your stop events go:
+And every session starts from the anchor — identity, standing directives, the current item, and
+where your stop events go:
 
 ```text
 $ st anchor ada
 
   You are ada — worker, reports to cy.
+
+  DIRECTIVES
+    Check governing Directives in Quipu before acting; record new operator directives verbatim as Directive entities.
 
   ON YOUR PLATE
     ▶ st-1  fix the login timeout        (in_progress)
@@ -72,7 +87,7 @@ A message to an agent that isn't there is **never** reported as delivered:
 
 ```text
 $ st inbox di "protocol step 3"
-  could not tell: pane crew-di is not there (agent down?)
+  could not tell: pane st-di is not there (agent down?)
 $ echo $?
 2
 ```

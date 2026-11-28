@@ -46,4 +46,4 @@ Rollback removes the namespace wrapper through the normal launch path while
 preserving runtime homes, pairing and sessions. Source review and fixture tests
 alone do not authorize a live restart or satisfy these acceptance conditions.
 
-[Before/after fixture recording](demos/physical-host-identity/caption.md).
+[Before/after fixture recording](https://github.com/intigraph/shantytown/blob/main/docs/demos/physical-host-identity/caption.md).

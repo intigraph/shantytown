@@ -14,7 +14,7 @@ account owner adds a **pending GitHub Trusted Publisher** with:
 | Field | Value |
 | --- | --- |
 | PyPI project name | `shantytown` |
-| GitHub owner | `scbrown` |
+| GitHub owner | `intigraph` |
 | GitHub repository | `shantytown` |
 | Workflow filename | `release.yml` |
 | GitHub environment | `pypi` |

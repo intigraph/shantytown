@@ -8,7 +8,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Shantytown coordinates owned work for a crew through explicit capacity limits, tracker adapters, scheduled passes and recorded outcomes. Quipu integration remains optional.",
-      "source_sha256": "21a87737489b4dfa7b16881acf68cf6e6f33009024f9b7dfd53fda1601cbafe8",
+      "source_sha256": "3438b2ad6bc33dfe19222edac28e8333cba7848e09d4c2a26c1ad6fc01faac19",
       "type": "Concept"
     },
     {
@@ -16,7 +16,7 @@
       "source": "docs/design.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fdesign.md",
       "summary": "Tracker and pane protocols separate work storage from session transport. Dispatch verification reads back delivery; refusal and dry-run outcomes preserve explicit uncertainty.",
-      "source_sha256": "85d93e04484c2ade4e514410f6b8d76f03c779294ae19f6343a69f91ae791d85",
+      "source_sha256": "ce2157d067a3c4f8c9bc224bf0733f35b72e990c04b4d402091d9c5bb59fa8db",
       "type": "Concept"
     },
     {
@@ -47,7 +47,7 @@
       "source": "docs/integrations.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fintegrations.md",
       "summary": "Optional Quipu, Seeds, Bobbin and Yupana integration supplies shared registry, work tracking, context and structural policy through configured adapters.",
-      "source_sha256": "a5d15417ba505f695a0fdc98b03c87b94d9f71cb72d8e83192a29ab8a0d8948b",
+      "source_sha256": "82ce4b94e8d19a356ded62678b2ae55664f3ecf699119c2894ea9609bf418bf3",
       "properties": {
         "interfaceKind": "library",
         "publicName": "Optional stack integrations"
@@ -60,8 +60,8 @@
       "kind": "decision",
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
-      "summary": "The package keeps zero runtime dependencies and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
-      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
+      "summary": "The package keeps one runtime dependency, cryptography, and Python 3.11 as its compatibility floor. Existing source checks and the built console entry point must remain verifiable.",
+      "source_sha256": "0475500ef5d402a6750f9aa62576719f67ece27d69bba58b4b36011dcd692dc8",
       "type": "DecisionRecord",
       "properties": {
         "status": "active",
@@ -73,7 +73,7 @@
       "source": "README.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/README.md",
       "summary": "Start with the public overview and dry-run crew preview before configuring a tracker or launching sessions.",
-      "source_sha256": "21a87737489b4dfa7b16881acf68cf6e6f33009024f9b7dfd53fda1601cbafe8",
+      "source_sha256": "3438b2ad6bc33dfe19222edac28e8333cba7848e09d4c2a26c1ad6fc01faac19",
       "properties": {
         "startHereOrder": 1,
         "glossaryTerm": "https://scbrown.github.io/quechua/ns#WorkItem"
@@ -84,7 +84,7 @@
       "source": "docs/configuration.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/docs%2Fconfiguration.md",
       "summary": "Review root discovery, backend selection and declared settings before changing deployment configuration. The ranking advisory supports a named board-metrics query and preserves UNKNOWN for incomplete coverage.",
-      "source_sha256": "c5e7d155cc77f1ffc5b024a8a3a45f1fa2c647811b0823a6115b293ff75a26bd",
+      "source_sha256": "ededabbc00dae767f52e8cc63771a77a000cf8691a6ef9f04ecd1b1a16dac23a",
       "properties": {
         "startHereOrder": 2
       }
@@ -93,8 +93,8 @@
       "kind": "start-here",
       "source": "CONTRIBUTING.md",
       "subject": "http://aegis.gastown.local/ontology/doc/shantytown/CONTRIBUTING.md",
-      "summary": "Use the contribution guide for supported Python versions, the zero-dependency constraint, test conventions and console-entry checks.",
-      "source_sha256": "be5e9ed7c4a35e417ca8b836e12b9b459d74f8ab7d2c81536bc130449e169336",
+      "summary": "Use the contribution guide for supported Python versions, the one-dependency constraint, test conventions and console-entry checks.",
+      "source_sha256": "0475500ef5d402a6750f9aa62576719f67ece27d69bba58b4b36011dcd692dc8",
       "properties": {
         "startHereOrder": 3
       }

@@ -9,5 +9,5 @@ description = "Agent crews for software delivery and everyday operations on the 
 default-theme = "coal"
 preferred-dark-theme = "coal"
 additional-css = ["custom/css/custom.css"]
-git-repository-url = "https://github.com/scbrown/shantytown"
-edit-url-template = "https://github.com/scbrown/shantytown/edit/main/{path}"
+git-repository-url = "https://github.com/intigraph/shantytown"
+edit-url-template = "https://github.com/intigraph/shantytown/edit/main/{path}"

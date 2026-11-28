@@ -1,5 +1,11 @@
 # shantytown — vision
 
+> **Design record, July 2026.** This is the original case for Shantytown, kept as written. The
+> product has grown since: it has leads and an administrator, a usage governor, automatic refill,
+> one-job ephemeral agents with a merge lane, routines declared in Quipu, and five trackers. Where
+> this page says "we drop" or "non-goal" about one of those, it records the starting point, not
+> the current product. For that, read [Features](features.md) and the [Introduction](introduction.md).
+
 > Create a work item. Tell an agent to go get it. That's the whole idea.
 
 ## The problem, measured

@@ -33,7 +33,7 @@ Vocabulary publication, instance identity, registration, profiles and runtime
 adoption each retain their own gates. This repository's main source refresh has
 live consumers, so merge/adoption requires its normal explicit disposition.
 
-See the [private SPARQL recording](demos/stable-vocabulary-readers/README.md).
+See the [private SPARQL recording](https://github.com/intigraph/shantytown/blob/main/docs/demos/stable-vocabulary-readers/README.md).
 
 Job catalogue decoding also accepts the three exact published Quechua spellings
 of sourceKind, owner and enabled. RDF term metadata and incoming response bytes

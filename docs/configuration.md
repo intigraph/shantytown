@@ -37,9 +37,28 @@ to opt into carrier records. This field defaults to `false`, accepts only a TOML
 boolean, and has no environment override. The producer must read this root's
 configuration; schema support alone does not activate a producer.
 
-Those are the tables most deployments touch. The rest — `[fleet]`, `[governor]` and its tiers,
-`[session_budget]`, `[hostmem]`, `[harness]`, `[model]`, `[roles.<name>]`, `[precedence.<axis>]`,
-`[dream]`, `[crew.<name>]` — are each explained where they appear in the example file.
+Those are the tables most deployments touch. The parser accepts these others, and each is
+explained in the place named here:
+
+| table | what it controls | explained in |
+|---|---|---|
+| `[fleet]`, `[modes.<name>]`, `[admin_wake_budget]` | stand-down, load limits, named crew sets, administrator wake limits | the [example file](shantytown.toml.example) |
+| `[governor]` and its tiers, `[session_budget]` | holds on provider usage, per-session ceilings | the example file |
+| `[harness]`, `[model]` | which agent program and model a card runs | the example file, [Harnesses](harnesses.md) |
+| `[roles.<name>]`, `[precedence.<axis>]` | custom roles and how they rank | the example file, [Roles](roles.md) |
+| `[crew.<name>]` | hand-written cards for `--registry toml` | [Harnesses](harnesses.md) |
+| `[accounts.<name>]` | named provider accounts | [Named accounts](#named-accounts) below |
+| `[jobs]` | where declared jobs live | [Scheduled jobs](#scheduled-jobs-jobs) below, [Jobs](jobs.md) |
+| `[ephemeral]` | limits on one-job agents | the example file, [Ephemeral agents](ephemeral-agents.md) |
+| `[inbox]` | where durable messages are stored | the example file, [Message graph](message-graph.md) |
+| `[overdue]` | overdue, unlock and scope-change reminders | [Overdue reminders](overdue-reminders.md), [Rescope](rescope.md) |
+| `[quiet_time]` | detectors that hold launches while the host is in use | [The CLI](cli.md#configurable-quiet-time-detectors) |
+| `[keep_current]` | the fetch deadline `st agent cycle` allows for each work tree | [The CLI](cli.md) |
+| `[cycle_advice]` | keep-or-cycle advice at a handoff | the example file, [Cycle advice](cycle-advice.md) |
+| `[memory]` | crew file-memory sync | [Per-crew file memory](#per-crew-file-memory-default-off) below, [Crew memory](crew-memory.md) |
+| `[dream]` | spare-capacity reflection | [Sleep / dream](dream.md) |
+| `[hostmem]` | the host memory floor for admitting a launch | `SHANTY_HOSTMEM_FLOOR_GIB` in the table below |
+| `[escalation_poller]` | carrier records for an escalation poller | the paragraph above |
 
 It is `shantytown.toml`, never `shanty.toml` — `shanty` is a different program on the same PATH, for
 the same reason the binary here is `st`. An unknown key is **refused**, not ignored: a silently
@@ -85,7 +104,7 @@ Rendered configuration does not prove a natural hook ran or metrics arrived.
 | `SHANTY_PANE_HIGH_GIB` | `MemoryHigh` on the same scope — the THROTTLE line, where a pane is slowed rather than killed. Defaults to the same value as `SHANTY_PANE_MAX_GIB`, i.e. no throttle band, because a band is only useful when you have measured where the workload actually sits. A value above `MAX` is clamped to it rather than refused: a throttle that can never fire before the kill is meaningless, and a misconfigured pair should still get a working ceiling. | `SHANTY_PANE_MAX_GIB` |
 | `SHANTY_PANE_SWAP_MAX` | `MemorySwapMax` on the scope. `0` — no swap — is deliberate and is a HYPOTHESIS, not a settled default: a capped scope with swap to thrash into grinds against its limit and raises pressure on the whole user slice, which is how a correctly-capped pane still got a bystander killed. With no swap it is killed promptly instead. On a host carrying resident swap use that trades a short hard failure for a long soft one, so raise it if panes start dying that used to survive. | `0` |
 | `SHANTY_REGISTRY` | default identity registry: `files` (generated cards), `quipu` (graph), or `toml` (hand-authored crew configuration). Explicit `--registry` wins; otherwise `[env]` in `<root>/shantytown.toml` takes precedence over the ambient environment. Invalid declared values refuse instead of silently selecting files. This setting does not change the tracker backend. | `files` |
-| `SHANTY_BACKEND` | the deployment's default tracker backend (`files`\|`beads`\|`br`\|`forgejo`) when `--backend` is not given. Set it ONCE (under `[env]` in `<root>/shantytown.toml`, or the env) on a fleet whose plates live in a shared tracker and every plain `st anchor`/`st crew` call — including the status-bar segment and the session picker, which by design pass no flags — resolves the real tracker instead of rendering an empty files plate. An unrecognized value refuses; it never silently means files. Explicit `--backend` always wins. | per-command (`files`; `inbox -d` → `beads`) |
+| `SHANTY_BACKEND` | the deployment's default tracker backend (`files`\|`beads`\|`br`\|`seeds`\|`forgejo`) when `--backend` is not given. Set it ONCE (under `[env]` in `<root>/shantytown.toml`, or the env) on a fleet whose plates live in a shared tracker and every plain `st anchor`/`st crew` call — including the status-bar segment and the session picker, which by design pass no flags — resolves the real tracker instead of rendering an empty files plate. An unrecognized value refuses; it never silently means files. Explicit `--backend` always wins. | per-command (`files`; `inbox -d` → `beads`) |
 | `SHANTY_BEADS_REPO` | the bead store directory for `--backend beads` when `--repo` is not given (bd's `-C`). Same one-time deployment setting as `SHANTY_BACKEND`; explicit `--repo` wins, and unset falls back to the `.beads` walk-up. | the `.beads` walk-up |
 | `SHANTY_BR_REPO` | the SQLite+JSONL store directory for `--backend br` when `--repo` is not given. Explicit `--repo` wins; when unset, the beads repo setting and then the `.beads` walk-up remain compatible migration fallbacks. | migration fallback |
 | `SHANTY_CREATE_JEV_COMMAND` | quoted argv for Camayoc's Jev MCP server, used by agent-only create duplicate advisories; missing configuration produces a visible skip | — |
@@ -176,7 +195,6 @@ What `st` puts INTO an agent's session at launch — read by the agent, not by `
 | `SHANTY_FORGEJO_TOKEN` | API token for `--backend forgejo` (issue read/write on the repo) | — |
 | `SHANTY_REACTOR_URL` | reactor, if you use it as an event source | `http://localhost:8075` |
 | `SHANTY_CANONICAL_SOURCE` | the checkout a fleet deploy must be built from, for `st ops doctor`'s self-check. Unset and not in a git checkout → the check is `CANNOT_TELL`, never OK. | the MAIN working tree of the running package's checkout (a linked worktree resolves to its primary, never itself) |
-| `SHANTY_DEFER_MAX_AGE_S` | ceiling on how long a stop event may be held back because its sender is still mid-flight. The defer gate measures "busy" at the coordinator's drain, so an agent that stops and immediately takes the next item is busy at every later drain and its events were deferred indefinitely while the pending count kept reporting them (aegis-d1qko). Past this age the event is delivered regardless. | `1800` (30m) |
 
 ⚠️ **`SHANTY_ONTO_NS` is data identity, not cosmetics.** Every triple in a graph is keyed under it.
 Pick one per graph, set it before the first write, and never change it — repointing it does not

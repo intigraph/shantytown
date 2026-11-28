@@ -228,8 +228,9 @@ model defeated.
 
 ## What this is not
 
-- **Not a mayor.** No autonomous assignment. A lead delegates what it was already handed; it doesn't
-  go looking for work to distribute.
+- **Not a mayor.** A lead delegates what it was already handed; it doesn't go looking for work to
+  distribute. The one automatic assignment is the tend pass's [refill](automatic-refill.md), which
+  sends ready work to an agent whose queue is empty, through the same checks as `st go`.
 - **Not an approval chain.** Escalation moves *information*, not permission.
 - **Not an org chart.** Two tiers, config-defined, because a specific failure demanded it.
 

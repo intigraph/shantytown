@@ -1,13 +1,14 @@
 # ✨ Features
 
-- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus, no resident
-  scheduler: declared jobs are evaluated by the tend pass ([`docs/jobs.md`](jobs.md)). That pass
-  already runs every five minutes with the store, the journal and crash isolation, so a job gets
-  all three for free instead of living in a host cron that fails silently.
-  `st` is a process that runs, does one thing, and exits — including `st fleet tend`, which a systemd user
-  timer (a launchd agent on macOS) starts every five minutes and which exits when its pass is over.
-- 📮 **`st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent — which is exactly
-  why an undeliverable message can't be quietly queued and reported as sent.
+- 🛖 **A town with no town hall.** No resident daemon, no broker, no message bus. `st` is a process
+  that runs, does one thing, and exits — including `st fleet tend`, which a systemd user timer (a
+  launchd agent on macOS) starts every five minutes and which exits when its pass is over. That pass
+  supervises: it restarts what died, ends what has passed its deadline and feeds what is idle. It is
+  not a cron. A scheduled routine is declared in Quipu for Chaski to fire ([`docs/jobs.md`](jobs.md)).
+- 📮 **A live `st inbox` *is* `tmux send-keys`.** Nothing sits between you and the agent's pane —
+  which is exactly why an undeliverable message can't be quietly queued and reported as sent. A
+  message that must outlive a dead recipient takes `-d`: it is stored in the recipient's inbox
+  first and sent second ([routing](routing.md)).
 - 📋 **`st task` gives you an id.** Create work, get `st-1` back. That id is the whole reason step
   two has anything to say.
 - 🎯 **`st go` is the one that matters.** Bind an item to an agent, tell them, confirm it landed,
@@ -15,22 +16,24 @@
 - 🚦 **Triage before every dispatch.** Refuse · nudge · clear · restart, judged from what the runtime
   actually prints on screen. Not a command you remember to run — `st go` consults it and refuses
   rather than interrupt a working agent.
-- 🧭 **`st anchor` is a pure read.** Who you are, the one item on your plate, and whether the agent
-  your stop events route to will actually receive them — `up` means *will drain*, not "a pane
-  answers to that name". It never writes, and a test asserts that against the filesystem rather
-  than trusting the docstring.
+- 🧭 **`st anchor` tells an agent where it stands.** Who you are, your standing directives, the
+  item on your plate, and whether the agent your stop events route to will actually receive them —
+  `up` means *will drain*, not "a pane answers to that name". It changes no work item. Its one
+  write is a small plate file that hooks and status bars read.
 - 👥 **`st crew` reports work, not just liveness.** `up` is a launch fact; an agent three hours into
   a refactor and one sitting at an empty prompt both print `up`. The work column tells them apart.
 - 🔀 **Stop events route up a tier.** worker → lead → administrator. A lead absorbs what it can and
   escalates what it can't; an unreachable lead does not swallow anything — the event RISES to the
   administrator with a reason, and is on disk before anyone reads it.
-- 🔌 **Pluggable trackers.** A tracker is two functions. Files, beads, `br`, and Forgejo are
-  available today; another backend uses the *same dispatch code*, proven by swap tests rather
-  than by an interface alone.
-- 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world —
-  `codex` ships too, and a crew can mix them: pick per card, per role, or fleet-wide. The tier is
-  program-blind, so a codex worker's stop event reaches a Claude Code lead unchanged. What codex
-  does *not* do yet is written down rather than discovered ([`docs/harnesses.md`](harnesses.md)).
+- 🔌 **Pluggable trackers.** A tracker is three methods: get, update, create. Files, beads, `br`,
+  Seeds and Forgejo are available today; another backend uses the *same dispatch code*, proven by
+  swap tests rather than by an interface alone.
+- 🤖 **Bring your own agent program.** Claude Code is *a* harness, not the shape of the world.
+  Codex, OpenCode and, experimentally, Antigravity (`agy`) ship too, and a crew can mix them: pick
+  per card, per role, or fleet-wide. The tier is program-blind, so a codex worker's stop event
+  reaches a Claude Code lead unchanged. OpenCode and Antigravity run as workers only, because
+  neither can hold a stop for delivery. What each program does *not* do yet is written down rather
+  than discovered ([`docs/harnesses.md`](harnesses.md), [local models](local-models.md)).
 - 🖥️ **tmux-native, socket-aware.** Bring your own panes. Named sockets are first-class, because bare
   tmux cannot see them and will confidently report every live agent as down.
 - 🧪 **`--dry-run` on every writing command**, from commit one.
@@ -49,6 +52,19 @@
 
 ## Newer, and easy to miss
 
+- ⏱️ **One-job agents, supervised.** `st agent spawn --ephemeral` starts a short-lived agent to
+  review a pull request, merge one, triage a failed CI run or do one small task. Every job has a
+  deadline, a turn budget and a context budget; a spawn over the host's cap waits in a visible
+  queue; and every ending, clean or not, reports a result to the item and to whoever manages the
+  job. The administrator or a lead may spawn one; a worker may not
+  ([`docs/ephemeral-agents.md`](ephemeral-agents.md)).
+- 🍽️ **Idle agents are fed.** The tend pass sends unassigned ready work, in priority and rank
+  order, through the normal `st go` checks to a worker or lead whose queue is empty. An uncertain
+  dispatch keeps its reservation, so the same item never goes to a second agent
+  ([`docs/automatic-refill.md`](automatic-refill.md)). The `hold-feed` command under
+  `st work` pauses feeding for one agent without stopping it.
+- 🧑‍🚒 **Work held by a stopped agent is found.** An opt-in sweep reports open work whose owner
+  has stopped, and can release it back to the pool ([`docs/stopped-owner-work.md`](stopped-owner-work.md)).
 - 🌐 **Two hosts, one fleet.** Cards carry a `host`. `st fleet roles sync` projects only the members placed
   on the host it runs on, prints who it skipped, and **never demotes or orphans the administrator**,
   on a dry run or a real one. An ephemeral `st inbox` to an agent on the other host relays through

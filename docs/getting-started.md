@@ -1,14 +1,17 @@
 # 📦 Getting started
 
 ```bash
-git clone https://github.com/scbrown/shantytown && cd shantytown
-pip install -e .
+curl -fsSL https://raw.githubusercontent.com/intigraph/shantytown/main/install.sh | sh
 st ops doctor            # what's installed, what's stale, what's missing
 ```
 
-Python 3.11+ and `tmux`. No third-party dependencies. A tracker backend is optional — the files
-tracker needs nothing at all; `beads`, its Rust port `br`, and a Forgejo issue tracker plug in with
-`--backend` or one line of `[env]`.
+The installer puts `st` in `~/.local/bin`. Pinned releases, pipx and a source install are in the
+[installation reference](installation-reference.md).
+
+You need Python 3.11+, `tmux`, and at least one agent program installed and signed in: Claude Code
+is the default, and [Harnesses](harnesses.md) covers Codex, OpenCode and the others. A tracker
+backend is optional. The files tracker needs nothing at all; `beads`, its Rust port `br`, Seeds and
+a Forgejo issue tracker plug in with `--backend` or one line of `[env]`.
 
 
 ## First run — `st fleet init` asks, and you have a town
@@ -17,10 +20,11 @@ tracker needs nothing at all; `beads`, its Rust port `br`, and a Forgejo issue t
 st fleet init
 ```
 
-Five questions, each with a default that Enter accepts: the administrator's name, worker names, where
-agents should work, the startup mode, and whether the admin may
-[hibernate](cli.md#hibernate). It shows every path
-it would write, waits for a yes, then creates:
+A few questions, each with a default that Enter accepts: the administrator's name, worker names,
+where agents should work, the startup mode, whether the admin may
+[hibernate](cli.md#hibernate), and whether new cards run unattended. Unattended means the agent
+program's approval prompts and sandbox are bypassed; the default is no. It shows every path it would
+write, waits for a yes, then creates:
 
 ```text
   crew/<name>.json                   one card per agent, each with a generated pane (st-<name>)
