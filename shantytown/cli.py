@@ -4688,7 +4688,7 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
                 head, request_id = _spawn_merge_pin(a, a.head, a.item, a.pr_repo, a.pr)
             req = eph.Request(job=a.job, item=a.item, harness=a.harness, repo=a.pr_repo,
                               pr=a.pr, checkout=str(a.checkout) if a.checkout else None,
-                              head=head if a.job == "merge" or recruiter_scope or recruitment else None, request_id=request_id,
+                              head=head, request_id=request_id,
                               track=getattr(a, "track", None))
             if req.job == "task" and req.repo and recruiter_scope is None and recruitment is None:
                 import dataclasses
@@ -4699,6 +4699,20 @@ def _cmd_spawn(a, *, recruitment=None) -> int:
             raise eph.Refused(refusal)
         if refusal := _spawn_checkout_refusal(req):
             raise eph.Refused(refusal)
+        if req.job in ("review", "task") and req.repo and req.pr and req.head is None:
+            # Hand spawns used to discard their head, so the event drain could
+            # only delay a duplicate review, then launch it after the first ended.
+            # A failed lookup stays unknown for compatibility with offline jobs;
+            # occupied() defers these records rather than claiming an exact match.
+            try:
+                info = _gh_json(f"repos/{req.repo}/pulls/{req.pr}")
+                pr_head = info.get("head") if isinstance(info, dict) else None
+                observed = pr_head.get("sha") if isinstance(pr_head, dict) else None
+            except (RuntimeError, ValueError, OSError):
+                observed = None
+            if isinstance(observed, str) and eph._SHA.fullmatch(observed):
+                import dataclasses
+                req = dataclasses.replace(req, head=observed)
         if recruitment is not None:
             try:
                 recruitment.request(req)

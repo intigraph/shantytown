@@ -242,13 +242,15 @@ def in_flight(ev: dict, live: list[dict], tickets: list[dict], since: float) -> 
 
     Only asked for an event that attempted() names, since an event never
     spawned cannot be running; `since` is that attempt's intent time. A merge
-    record keeps its head and must match it exactly. Review and task records
-    keep no head (cli builds their Request with head=None), so a head-less
+    record keeps its head and must match it exactly. Legacy or offline review
+    and task records may have no proved head, so a head-less
     record matches on job, repo and PR only if it was spawned or queued at or
     after the intent. Before, any head-less record matched: a hand-spawned
     task on an older head of the same PR settled a new head's refused event
     as admitted, and the new head's fix never ran (review of #776)."""
     for r in [*live, *tickets]:
+        if r.get("state") == "launching":
+            continue
         if (r.get("job"), r.get("repo"), r.get("pr")) != (ev["job"], ev["repo"], ev["pr"]):
             continue
         if r.get("head") is not None:
@@ -296,12 +298,14 @@ def occupied(ev: dict, live: list[dict], tickets: list[dict]) -> tuple[str, bool
     and two pairs returned opposite verdicts on one head.
 
     exact=True: the record keeps this very head, so it IS this event's step and
-    the event may settle as admitted. exact=False: a head-less review/task
-    record. It may be on an older head, so it must NOT settle the event (the
+    the event may settle as admitted once the job is live (or queued).
+    exact=False: a head-less record, a job still launching, or a task on
+    another head of this branch. It may be on an older head, so it must NOT
+    settle the event (the
     stale-head failure of the #776 review); the caller only holds the event
     back until that job ends. Two concurrent task jobs on one PR branch would
-    also race their pushes. A record on a different explicit head is another
-    step and does not count."""
+    also race their pushes. A review or merge on a different explicit head is
+    another step and does not count."""
     loose = None
     for r in [*live, *tickets]:
         if (r.get("job"), r.get("repo"), r.get("pr")) != (ev["job"], ev["repo"], ev["pr"]):
@@ -309,7 +313,12 @@ def occupied(ev: dict, live: list[dict], tickets: list[dict]) -> tuple[str, bool
         name = r.get("name") or r.get("id") or "?"
         if r.get("head") is not None:
             if r["head"] == ev["head"]:
+                if r.get("state") == "launching":
+                    loose = loose or name
+                    continue
                 return name, True
+            if ev["job"] == "task":
+                loose = loose or name
             continue
         loose = loose or name
     return (loose, False) if loose else None
