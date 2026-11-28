@@ -1096,7 +1096,7 @@ def _record_task_consent(card: Agent, root, ws: Path, body: str) -> None:
         eph.write(root, rec)
 
 
-def _record_job_kit_file(card: Agent, root, ws: Path, rel: str, body: str) -> None:
+def _record_job_kit_file(card: Agent, root, ws: Path, rel: str, body: str | None) -> None:
     """Record the sha256 of a harness workspace file st just wrote into an
     ephemeral job's worktree (agy's .agents/hooks.json and mcp_config.json), so
     the trust guard admits exactly st's own bytes and nothing else at that path.
@@ -1104,9 +1104,11 @@ def _record_job_kit_file(card: Agent, root, ws: Path, rel: str, body: str) -> No
     Without it the guard refused st's own agy kit as foreign and the job never
     started (aegis-j550, eph-task-ed2827). Same rules as _record_job_mcp: no
     record, another workspace, a symlink or different bytes on disk records
-    nothing, and the guard then refuses the file."""
+    nothing, and the guard then refuses the file. body None means the writer
+    merged in content st did not produce (agy.project_hooks/project_mcp): that
+    records nothing too, so foreign hooks still refuse as they did before."""
     from . import ephemeral as eph
-    if not eph.is_ephemeral_name(card.name) or rel not in eph.KIT_FILES:
+    if body is None or not eph.is_ephemeral_name(card.name) or rel not in eph.KIT_FILES:
         return
     import hashlib
     with eph.lock(root):
