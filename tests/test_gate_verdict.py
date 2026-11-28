@@ -353,6 +353,35 @@ def test_a_review_report_writes_a_signed_record_the_merge_gate_accepts(root, q):
     assert out["author_agent"] == "lex"
 
 
+@pytest.mark.parametrize("failure", ["unregistered", "unreadable", "missing"])
+def test_review_report_preserves_written_record_but_refuses_unproved_merge_acceptance(
+        root, q, monkeypatch, failure):
+    gv.write_authorship(quipu=q, graph=GRAPH, node_id=NODE, agent="lex")
+    rec = _rec(root, job="review", state=eph.LIVE)
+    if failure == "unregistered":
+        monkeypatch.setattr(q, "verify", lambda payload: {
+            "trusted": False, "untrusted_reason": "verifier-not-registered"})
+    elif failure == "unreadable":
+        def unavailable(payload):
+            raise gv.VerdictError("verification unavailable")
+        monkeypatch.setattr(q, "verify", unavailable)
+    else:
+        monkeypatch.setattr(q, "knot", lambda turtle, graph: None)
+    note, problem = cli._spawn_write_verdict(
+        _args(root, "--report"), rec, "approve", HEAD, "https://github.com/o/n/pull/5#c1",
+        gh=lambda path: _pr(), quipu=q, now=NOW)
+    assert "signed verdict record" in note
+    assert "write acknowledged" in problem and "NOT written" not in problem
+    if failure == "unregistered":
+        assert "verifier-not-registered" in problem
+        verdict = _approval(q)
+        assert not verdict["approved"]
+        assert "verifier-not-registered" in eph.merge_gate(
+            dict(rec, job="merge"), HEAD, _pr(), [], GREEN, verdict)
+    if failure != "missing":
+        assert any("GateApproval" in turtle for turtle, graph in q.knots)
+
+
 def test_review_verdict_writes_nothing_when_off_and_never_for_other_jobs(root, q, tmp_path):
     rec = _rec(root, job="review", state=eph.LIVE)
     assert cli._spawn_write_verdict(_args(root, "--report"), dict(rec, job="task"), "done",

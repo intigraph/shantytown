@@ -605,8 +605,12 @@ as the record chaski #49 routes on (`shantytown/gate_verdict.py`):
   `targetRef` is that record, signed with quipu's v1 verdict signature
   (ed25519 over `v1|predicate|target|outcome|evidence_hash|tier|verifier`,
   quipu `src/signing.rs`). The evidence hash covers every GateApproval field,
-  so an edit after signing voids it. A failed write is reported, never
-  silent, and no merge can rest on that review.
+  so an edit after signing voids it. After an acknowledged write, the report
+  reads the exact record through the merge reader's graph, pinned keys and
+  server verification. An unregistered signer, failed read-back or unknown
+  author is reported alongside the record ID; an acknowledged write is
+  preserved, and the report does not claim merge acceptance. Neither reporting
+  nor merging enrolls a signer or relaxes trust on failure.
 - **Merge gate.** `st agent spawn --merge` reads the records on exactly the
   head, from the ONE configured `verdict_graph` (never any named graph), and
   recomputes each evidence hash. A record counts only if its signature
@@ -1375,3 +1379,13 @@ No sandbox is widened and no extra command is allowed. Ordinary crew cards keep
 their operator-selected approval policy. This prevents an unattended job from
 waiting on a human picker after a sandbox-limited read fails. The policy does
 not make that read succeed or authorize a retry outside the sandbox.
+
+### Foreign-forge merge handoff
+
+A merge request whose checkout origin names Forgejo is refused before GitHub
+reads, worktree creation or pane launch. The refusal names the native
+`pr-risk merge --forge forgejo --repo OWNER/REPO --pr NUMBER` route, which must
+prove complete green before execution and read back the merge and exact-main
+CI. This is a handoff, not an automatic merge: the native helper currently
+has no expected-head option, so st cannot preserve its job's pinned SHA by
+calling it automatically. Operator holds and deployment safeguards still apply.

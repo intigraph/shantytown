@@ -637,7 +637,11 @@ def approval(quipu, *, repo: str, pr: int, node_id: str, head: str, graph: str,
             if answer.get("trusted") is True:
                 trusted = True
                 break
-            why_not = "quipu does not report the recorded signature as trusted"
+            reason = answer.get("untrusted_reason")
+            # Only expose a bounded reason code, never arbitrary server payloads.
+            suffix = (f" ({reason})" if isinstance(reason, str)
+                      and re.fullmatch(r"[a-z][a-z0-9-]{0,79}", reason) else "")
+            why_not = "quipu does not report the recorded signature as trusted" + suffix
         if not trusted:
             ignored.append({"record": gate, "why": why_not})
             continue
