@@ -543,6 +543,17 @@ A task job edits source, so it needs more than a review's sandbox:
   with `network_access=true` and exactly two writable roots: the read-budget
   ledger and the git common dir of the source checkout. It never gets
   `danger-full-access`. A tampered file refuses the launch.
+- **ssh push.** Codex's Linux sandbox is bubblewrap in a user namespace that
+  maps only the job's uid, so root-owned files read as uid 65534 inside it.
+  ssh then refuses `/etc/ssh/ssh_config.d/*` ("Bad owner or permissions"), and
+  every codex task job's `git push` failed (aegis-cxy). Codex refuses the
+  Landlock-only mode for a restricted filesystem, so the uid view cannot
+  change. When `~/.ssh/config` exists, the sandbox file therefore also sets
+  `shell_environment_policy.set.GIT_SSH_COMMAND="ssh -F ~/.ssh/config"`
+  (absolute path). ssh reads the user's own config and skips the unverifiable
+  system file. Keys, known_hosts and Host blocks are unchanged. The job pushes
+  its own branch over ssh. st never pushes for it. The daemon admits only that
+  exact shape: ssh, `-F`, one path a shell needs no quoting for.
 - **git.** Task jobs may run git on their own branch. Pushing main/master,
   force pushes, branch deletion, reset, rebase, and `gh pr merge`/`gh api` are
   exec-policy `forbidden`. Branch protection on the forge stays the boundary

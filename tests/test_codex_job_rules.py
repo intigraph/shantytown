@@ -190,7 +190,8 @@ def test_task_jobs_get_git_on_their_own_branch_only(tmp_path, cmd, decision):
     assert json.loads(out).get("decision") == decision
 
 
-def test_task_sandbox_is_network_plus_exact_roots_never_full_access(tmp_path):
+def test_task_sandbox_is_network_plus_exact_roots_never_full_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "no-ssh-home"))
     repo = tmp_path / "repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     rec = dict(TASK, worktree_of=str(repo))
@@ -261,7 +262,8 @@ def test_a_linked_worktree_job_also_gets_its_own_gitdir_as_a_root(tmp_path):
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)], check=True)
     rec = dict(TASK, worktree_of=str(repo), workspace=str(wt))
     args = eph.codex_job_sandbox(rec, unattended=False, cache_home=tmp_path / "cache")
-    roots = json.loads(args[-1].split("=", 1)[1])
+    roots = json.loads(next(a for a in args if a.startswith("sandbox_workspace_write.writable_roots="))
+                       .split("=", 1)[1])
     common = str((repo / ".git").resolve())
     assert roots[1] == common
     assert roots[2].startswith(common + "/worktrees/") and len(roots) == 3
@@ -316,3 +318,86 @@ def test_codex_admits_only_the_own_item_read(tmp_path, cmd, decision):
     out = subprocess.run([_codex(), "execpolicy", "check", "-r", str(path), *cmd.split()],
                          capture_output=True, text=True, check=True).stdout
     assert json.loads(out).get("decision") == decision
+
+
+# aegis-cxy: inside Codex's bubblewrap sandbox root-owned files read as uid 65534,
+# so ssh refused /etc/ssh/ssh_config.d/* and every codex task job's push failed.
+
+
+def _ssh_home(tmp_path, monkeypatch, name="home"):
+    home = tmp_path / name
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "config").write_text("Host github.com\n  User git\n")
+    monkeypatch.setenv("HOME", str(home))
+    return home
+
+
+def test_task_sandbox_points_git_ssh_at_the_user_config(tmp_path, monkeypatch):
+    home = _ssh_home(tmp_path, monkeypatch)
+    args = eph.codex_job_sandbox(TASK, unattended=False, cache_home=tmp_path / "c")
+    want = f'shell_environment_policy.set.GIT_SSH_COMMAND="ssh -F {home}/.ssh/config"'
+    assert args[-2:] == ["-c", want]
+    # The daemon admits exactly what the spawner wrote.
+    dh = tmp_path / "daemon"
+    eph.write_codex_job_sandbox(TASK, dh, unattended=False, cache_home=tmp_path / "c")
+    assert eph.codex_daemon_sandbox_args(TASK["name"], dh)[-1] == want
+
+
+@pytest.mark.parametrize("make", ["absent", "dir"])
+def test_no_readable_user_config_leaves_ssh_alone(tmp_path, monkeypatch, make):
+    home = tmp_path / "h"
+    if make == "dir":
+        (home / ".ssh" / "config").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    assert eph.codex_job_ssh_command() is None
+    args = eph.codex_job_sandbox(TASK, unattended=False, cache_home=tmp_path / "c")
+    assert not any("GIT_SSH_COMMAND" in a for a in args)
+
+
+def test_a_path_the_shell_would_reinterpret_is_refused(tmp_path, monkeypatch):
+    _ssh_home(tmp_path, monkeypatch, name="h;touch pwned")
+    assert eph.codex_job_ssh_command() is None
+
+
+@pytest.mark.parametrize("value", [
+    'shell_environment_policy.set.GIT_SSH_COMMAND="ssh -F /x; rm -rf /"',
+    'shell_environment_policy.set.GIT_SSH_COMMAND="sh -c id"',
+    'shell_environment_policy.set.GIT_SSH_COMMAND="ssh -F /x -o ProxyCommand=id"',
+    'shell_environment_policy.set.PATH="/tmp"',
+])
+def test_a_tampered_ssh_override_refuses_the_launch(tmp_path, value):
+    home = tmp_path / "daemon"
+    home.mkdir()
+    (home / eph.CODEX_SANDBOX_FILE).write_text(json.dumps(
+        {"schema": "st-job-sandbox/v1", "name": TASK["name"], "args": ["-c", value]}))
+    with pytest.raises(eph.Refused):
+        eph.codex_daemon_sandbox_args(TASK["name"], home)
+
+
+def _bwrap_ok():
+    try:
+        return subprocess.run([_codex(), "sandbox", "-c", 'sandbox_mode="workspace-write"', "--",
+                               "true"], capture_output=True, timeout=30).returncode == 0
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not Path("/etc/ssh/ssh_config").is_file() or os.geteuid() == 0,
+                    reason="needs a root-owned system ssh config and a non-root runner")
+def test_real_sandbox_ssh_reads_config_only_with_the_override(tmp_path, monkeypatch):
+    """Positive and negative control in the real Codex sandbox: `ssh -G` (config
+    parse only, no network) fails on a host whose /etc/ssh Include is root-owned
+    and passes once GIT_SSH_COMMAND's -F is applied."""
+    if shutil.which("ssh") is None or not _bwrap_ok():
+        pytest.skip("no ssh or no working Codex sandbox here")
+    home = _ssh_home(tmp_path, monkeypatch)
+    ssh = eph.codex_job_ssh_command()
+    base = [_codex(), "sandbox", "-c", 'sandbox_mode="workspace-write"', "--"]
+    plain = subprocess.run(base + ["ssh", "-G", "github.com"], capture_output=True, text=True,
+                           timeout=60)
+    fixed = subprocess.run(base + ["sh", "-c", ssh + " -G github.com"], capture_output=True,
+                           text=True, timeout=60, env={**os.environ, "HOME": str(home)})
+    assert fixed.returncode == 0, fixed.stderr
+    if not any(Path("/etc/ssh/ssh_config.d").glob("*.conf")):
+        pytest.skip("no system Include here; the unfixed control cannot fail")
+    assert plain.returncode != 0 and "Bad owner" in plain.stderr
