@@ -147,8 +147,8 @@ admin_self_slots = 1
 # ---------------------------------------------------------------------------
 # [ephemeral] — bounds on `st agent spawn --ephemeral` (docs/ephemeral-agents.md).
 # Every number is a SUPERVISION bound: a host-wide cap (0 turns spawning off),
-# a hard deadline, and a per-job turn and context budget. Refused over cap,
-# never queued. Defaults shown; reviews default to codex.
+# a hard deadline, and a per-job turn and context budget. A spawn over the cap
+# waits in a visible queue. Defaults shown; reviews default to codex.
 # ---------------------------------------------------------------------------
 # [ephemeral]
 # max_agents = 2

@@ -32,10 +32,10 @@ the message *landed*.
 
 | Present | This skill uses it for | Absent — what happens |
 |---|---|---|
-| **[shantytown](https://github.com/scbrown/shantytown)** (`st`) | **the first-class path.** Dispatch, crew state, identity, durable messages | falls back to the bundled `dispatch.py` — same triage idea, less of it |
+| **[shantytown](https://github.com/intigraph/shantytown)** (`st`) | **the first-class path.** Dispatch, crew state, identity, durable messages | falls back to the bundled `dispatch.py` — same triage idea, less of it |
 | `tmux` | the send itself, either way | nothing works. This is the one hard requirement |
-| **[bobbin](https://github.com/scbrown/bobbin)** | `st context <query>` — attach the right files to the item before you send it | dispatch a bare title; the receiving agent starts by searching |
-| **[yupana](https://github.com/scbrown/yupana)** | `yupana impact <symbol>` / `yupana callers <symbol>` — attach the BLAST RADIUS to a structural item before you send it, so the receiving agent starts knowing what the change touches | dispatch names the file; the receiving agent discovers the fallout mid-edit |
+| **[bobbin](https://github.com/intigraph/bobbin)** | `st context <query>` — attach the right files to the item before you send it | dispatch a bare title; the receiving agent starts by searching |
+| **[yupana](https://github.com/intigraph/yupana)** | `yupana impact <symbol>` / `yupana callers <symbol>` — attach the BLAST RADIUS to a structural item before you send it, so the receiving agent starts knowing what the change touches | dispatch names the file; the receiving agent discovers the fallout mid-edit |
 | a tracker (`bd`, `gh`, files) | somewhere for the id to live | `--backend file` writes to a directory |
 
 **Reach for `st` first.** If `st --help` answers, use it: it does everything
@@ -93,7 +93,7 @@ surface, same rule: do not send work at an item that is no longer live.
 
 ## The `st` path (preferred)
 
-[shantytown](https://github.com/scbrown/shantytown) implements this whole
+[shantytown](https://github.com/intigraph/shantytown) implements this whole
 sequence as one command, and adds the two things a standalone script cannot
 have: **who the agents are**, and **what each one is already holding.**
 
@@ -131,7 +131,7 @@ The rest of the surface worth knowing here:
 | `st anchor [me]` | who am I, the one item on my plate, where my stop events go. A pure read |
 | `st inbox <agent> <msg>` | a message straight into a pane — `send-keys`, nothing between |
 | `st inbox <agent> <msg> -d` | **durable**: persists to the tracker *first*, then attempts the live send, so it survives a dead recipient |
-| `st context <query>` | what code this item is about ([bobbin](https://github.com/scbrown/bobbin) behind it) |
+| `st context <query>` | what code this item is about ([bobbin](https://github.com/intigraph/bobbin) behind it) |
 
 **Use `-d` for anything that must survive the recipient's session dying** — a
 handoff, a protocol step. Use a plain send for routine nudges. An ephemeral
@@ -220,7 +220,7 @@ sending, whether or not the new task is related.
 A structural change — renaming a symbol, changing a signature, moving a module,
 touching anything other code calls — has a **blast radius**, and the cheapest
 moment to learn it is *before* the work starts, not when the tests break.
-[yupana](https://github.com/scbrown/yupana) answers it in milliseconds from a live
+[yupana](https://github.com/intigraph/yupana) answers it in milliseconds from a live
 code graph:
 
 ```bash

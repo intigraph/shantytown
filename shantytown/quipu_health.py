@@ -12,7 +12,7 @@ from . import quipu_auth
 TOKEN_HELP = (
     "Ask the Quipu administrator for an accepted credential; install it in "
     "~/.config/quipu/token (mode 0400), or set QUIPU_AUTH_TOKEN_FILE. "
-    "QUIPU_AUTH_TOKEN overrides the file. See docs/cli.md#quipu-credentials."
+    "QUIPU_AUTH_TOKEN overrides the file. See docs/cli-ops.md#quipu-credentials."
 )
 
 

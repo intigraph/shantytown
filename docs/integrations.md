@@ -1,5 +1,11 @@
 # shantytown — what else is in the toolbox, and how it plugs in
 
+> **Survey record, July 2026.** Kept as written; repository homes are as they were then, and most
+> of these tools now live under the `intigraph` organization. Since the survey: the OpenCode and
+> Antigravity harnesses shipped ([Harnesses](harnesses.md)); the Seeds, `br` and Forgejo trackers
+> shipped ([Adapters](adapters.md)); `st fleet dashboard` exists as a read of the tracker and the
+> cards; and the Desire Path integration reads `dp stats` instead of recording misses.
+
 > Stiwi, 2026-07-16: *"look at my other tooling in forgejo and github repo; what else do i have that we
 > could integrate with and then how will we do it? i would like to have the concept of a dashboard,
 > like tapestry, thats plugable but with default support for tapestry first"* — and *"oh and then also

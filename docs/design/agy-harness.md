@@ -212,7 +212,7 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
     `status` `RESOURCE_EXHAUSTED` or `error_code` 429. Elapsed time is not used.
   - The first one stops the whole batch. `agy` marks it `"retryable": true`,
     but the reset is days away.
-  - The "Resets in <duration>" text goes to the governor (see 6).
+  - The "Resets in `<duration>`" text goes to the governor (see 6).
   - There is no automatic retry of any job.
 - Concurrency: jobs that share one `agy` account (one token) run one at a
   time, under a per-account lock in the st state dir. The quota is per account,
@@ -262,7 +262,7 @@ NOT measured yet. Phase 0 below measures it before any code depends on it.
   session records:
   - It counts model requests (`num_turns`) over a rolling 7 days.
   - It sums `usage` tokens: input, output, thinking and cache.
-- The only authoritative "exhausted" signal is the 429 text "Resets in <dur>".
+- The only authoritative "exhausted" signal is the 429 text "Resets in `<dur>`".
   The source turns it into an exhausted-until timestamp, and the governor
   refuses `agy` dispatch until then.
 - Without a 429, remaining quota is UNKNOWN, never assumed full. The configured

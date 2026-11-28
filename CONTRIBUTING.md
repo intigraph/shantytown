@@ -1,8 +1,8 @@
 # Contributing to shantytown
 
-shantytown is a small harness for running a crew of coding agents. It is a pure
-Python package with **no runtime dependencies**, installed as an editable
-package by the crews that use it.
+shantytown runs a crew of coding agents. It is a pure Python package with
+**one runtime dependency** (`cryptography`), installed as an editable package
+by the crews that use it.
 
 That last detail shapes almost everything below. Because consumers install with
 `pip install -e .`, `main` is what the next `git pull` becomes: a bad merge here
@@ -12,7 +12,7 @@ before you push.
 ## Prerequisites
 
 - Python **3.11 or newer** (`requires-python = ">=3.11"`)
-- `pytest` — the only development dependency; the package itself declares none
+- the `test` extra: `pytest`, `rdflib` and `PyYAML`
 
 Nothing else. There is no compiler step, no lockfile to honour, and no service
 to stand up in order to run the suite.
@@ -23,18 +23,19 @@ to stand up in order to run the suite.
 git clone <this repository>
 cd shantytown
 python3 -m pip install -e .
-python3 -m pip install pytest
+python3 -m pip install ".[test]"
 ```
 
-`pip install -e .` installs the package **and** its console script, `st`.
+`pip install -e .` installs the package **and** its console scripts, `st` and
+`st-context`.
 
-## The four checks CI runs
+## The checks CI runs
 
 CI runs on every push to `main` and on every pull request, across Python 3.11,
-3.12, 3.13 and 3.14. Run the same four locally and you will not be surprised:
+3.12, 3.13 and 3.14. Run these three locally first; they catch most failures:
 
 ```bash
-python3 -m pytest -q                 # 1. the suite (2,571 tests, ~95s)
+python3 -m pytest -q                 # 1. the suite
 st --version                        # 2. the console script actually runs
 python3 -c "import shantytown, tomllib, pathlib; \
   v = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; \
@@ -42,9 +43,20 @@ python3 -c "import shantytown, tomllib, pathlib; \
                                     # 3. the two version constants agree
 ```
 
+CI also runs these, which you can run yourself when a change touches them:
+
+| check | command |
+|---|---|
+| The pull request title follows the convention below | `python scripts/check-pr-title.py` |
+| No private key is tracked | `python3 scripts/check-private-keys.py` |
+| The suite passes with hostile operator settings in the environment | CI only, on Python 3.14 |
+| The suite passes in any test order | `bash scripts/check-test-order-independence.sh` |
+| The repository knowledge witnesses match their sources | `python3 scripts/test-repository-knowledge.py` |
+| The book builds | `mdbook build`, when `docs/` or `book.toml` changes |
+
 The matrix is deliberately `fail-fast: false`. "3.11 broke" and "every version
-broke" are different diagnoses, and running all four is the only thing that can
-tell them apart — so please do not read one red cell as a general failure.
+broke" are different diagnoses, and running every version is the only thing that
+can tell them apart, so please do not read one red cell as a general failure.
 
 ### Why check 2 exists
 
@@ -60,13 +72,13 @@ and `shantytown/__init__.py` — kept in sync by hand with no guard. A bump that
 updates one and forgets the other ships a CLI whose `--version` disagrees with
 its own package metadata. If you bump the version, bump both.
 
-## Two standing constraints
+## Dependencies and the Python floor
 
-**Zero runtime dependencies.** `dependencies = []` is a promise, not an
-accident: it is what lets a consumer install this into any environment without
-negotiating a dependency graph. A change that adds a runtime import from outside
-the standard library needs to argue for itself in the pull request. Test-only
-and development dependencies are a different question and are fine.
+**Runtime dependencies are allowed.** The package depends on `cryptography`
+today, which the signed recruiter requests use to check signatures. Add another
+when it does a job the standard library does poorly. A new dependency reaches
+every install at once, so declare it in `pyproject.toml` and give the reason in
+the pull request. Test-only and development dependencies go in the `test` extra.
 
 **3.11 is a floor, not a formality.** It is a promise to anyone installing on an
 older interpreter. Please do not reach for syntax or standard-library APIs newer
@@ -94,7 +106,7 @@ verifying one.
 - Explain **why** in the commit message, not just what. This codebase's comments
   carry their own reasoning — a reader six months out needs the argument more
   than the diff, which git already has.
-- Make sure the four checks above pass locally.
+- Make sure the three local checks above pass.
 - If a change alters agent-facing behaviour, say so explicitly in the PR
   description: consumers pick it up on their next pull, without a release step.
 
@@ -109,6 +121,13 @@ Please open an issue with:
 
 A report that lets someone else reproduce the behaviour is worth several that
 describe it.
+
+## Documentation
+
+`docs/` is the source of the [book](https://intigraph.github.io/shantytown/).
+A page appears in the book only when `docs/SUMMARY.md` lists it, so add a new
+page there and to `docs/map.md`. If you change behaviour a page describes,
+change the page in the same pull request.
 
 ## Agent-facing documentation
 

@@ -29,7 +29,7 @@ and retained close time are not the historical closing actor. No per-sample
 triples are needed. Enabling the option, publishing metric definitions/catalog
 recipes and granting source reads remain separately reviewed operations.
 
-The [private join proof](probes/metrics-join/README.md) exercises a literal
+The [private join proof](https://github.com/intigraph/shantytown/blob/main/docs/probes/metrics-join/README.md) exercises a literal
 DuckDB query over synthetic daily projections. It does not establish live
 history, catalog admission or full day coverage.
 

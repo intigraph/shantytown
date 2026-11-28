@@ -5,6 +5,11 @@
 >
 > Correct, and the earlier version of this doc was wrong. **Quipu holds identity. The card is a
 > materialized view of it** — generated, never hand-edited, and diffable against the graph.
+>
+> **Since this was written:** the registry is chosen with `--registry` or `SHANTY_REGISTRY`.
+> `quipu` works as this page describes. `files`, the default, uses no graph: the generated cards
+> are the store. `toml` reads hand-written `[crew.<name>]` tables and is read-only. Cards are
+> JSON files, `crew/<name>.json`.
 
 ## Why the card can't be the truth (the argument is our own evidence)
 
@@ -48,7 +53,7 @@ line: the hierarchy isn't a new thing to store, it's a query.
            │  st fleet roles sync     (materialize — one direction, always)
            ▼
   card   ── a cache the runtime can read ───────────────────────
-    crew/ellie.yaml     # GENERATED. Do not edit. Edits are overwritten.
+    crew/ellie.json     # GENERATED. Do not edit. Edits are overwritten.
 ```
 
 **Writes go to the graph. Reads may come from the card.** Never the reverse.
@@ -72,7 +77,7 @@ $ st fleet roles set malcolm lead --reports ellie,ian --dry-run
   quipu   malcolm  aegis:role     "worker" -> "lead"
   quipu   ellie    aegis:reports_to        -> malcolm
   quipu   ian      aegis:reports_to        -> malcolm
-  project crew/malcolm.yaml, crew/ellie.yaml, crew/ian.yaml
+  project crew/malcolm.json, crew/ellie.json, crew/ian.json
   hooks   malcolm  +on_report_stop (absorb | delegate | escalate)
   hooks   ellie, ian  stop -> malcolm  (was -> arnold)
 

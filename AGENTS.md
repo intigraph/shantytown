@@ -8,21 +8,22 @@ given deployment documents itself, not here.
 
 ## What this is
 
-`shantytown` is a small harness for running a crew of coding agents. It installs one
-console script, `st` (`shantytown.cli:main`).
+`shantytown` runs a crew of coding agents: work items, dispatch, roles, supervision and
+budget controls. It installs two console scripts: `st` (`shantytown.cli:main`) and
+`st-context` (`shantytown.work_context_command:main`), which reads one work item's context.
 
 ## Setup
 
 ```bash
-python -m pip install -e .      # editable install; also installs the `st` script
-python -m pip install pytest    # the only extra — see below
+python -m pip install -e .          # editable install; also installs the console scripts
+python -m pip install ".[test]"     # pytest, rdflib and PyYAML, as CI installs them
 ```
 
-**The project declares zero runtime dependencies, and that is a design constraint, not an
-accident.** `dependencies = []` in `pyproject.toml`. Do not add one casually: consumers
-install this as an editable package, so a new dependency becomes a new install-time
-failure mode for everyone at once. If you genuinely need one, say so explicitly in the
-change rather than slipping it into the table.
+**Runtime dependencies are allowed.** The project declares one today, `cryptography`,
+which the signed recruiter requests use to check signatures. Add another when it does a
+job the standard library does poorly. Consumers install this as an editable package, so
+a new dependency reaches every install at once: name it and its reason in the change
+rather than slipping it into the table.
 
 Requires Python >= 3.11. CI runs the matrix 3.11, 3.12, 3.13, 3.14 — the declared floor
 through the newest version, because testing only one end lets the other rot silently.
@@ -38,10 +39,10 @@ case. Tests exercising these settings must set them explicitly through
 `monkeypatch`. CI repeats the Python 3.14 suite with hostile operator defaults
 set, so a clean runner cannot hide a leak into deployment configuration.
 
-Measured 2026-08-26: **2404 passed, 3 skipped, ~119s**. Two places in the repo quote
-older counts (a CI comment says 1770/~57s, the README Principles section said 325); treat
-any hard-coded count as a number that has already drifted once, and re-measure rather
-than repeating it.
+The suite collects more than 12,000 tests (measured 2026-11-27 with
+`python3 -m pytest --collect-only -q`). Older counts are still quoted in places, such as
+a CI comment that says 1770; treat any hard-coded count as a number that has already
+drifted once, and re-measure rather than repeating it.
 
 **A check must be able to fail.** This is the repo's own principle and it is the one most
 worth honouring in new code: anything that reports health must be demonstrated returning
@@ -77,6 +78,15 @@ Update both in the same commit.
 
 ## Docs
 
-`docs/` carries the design surface — `design.md` (dispatch, triage, trackers, panes),
-`cli.md` (commands and boot modes), `roles.md`, `adapters.md`, `harnesses.md`. If you
+`docs/` is the source of the book that CI builds with mdBook and publishes to GitHub
+Pages. `docs/SUMMARY.md` is its table of contents: a page that is not listed there is not
+in the book, so add a new page to `SUMMARY.md` and to `docs/map.md` in the same commit.
+`cli.md` (commands), `configuration.md`, `roles.md`, `adapters.md` and `harnesses.md` are
+the reference pages; `vision.md` and `design.md` are the original design record. If you
 change behaviour a doc describes, change the doc in the same commit.
+
+`tests/test_docs_drift.py` pins the README and several pages to the code: the command
+list, the README's preview output, the environment variables in `configuration.md` and
+the harness list. `docs/knowledge/repository-knowledge.json` holds a sha256 of `README.md`,
+`CONTRIBUTING.md`, `docs/design.md`, `docs/configuration.md` and `docs/integrations.md`;
+editing one of those files means updating its digest there, deliberately.

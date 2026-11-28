@@ -91,8 +91,9 @@ The rest of this page describes the deprecated file format, which is kept for
 the migration window. Before this change, a job was recurring work declared in
 a file: *at 08:43 every day, tell hammond to run the repo patrol*; *when someone
 outside the project opens a PR, create a triage item and hand it to an agent*.
-One TOML file per job lived in `<root>/jobs/`, and `st fleet tend` evaluates
-every job on each pass.
+One TOML file per job lived in `<root>/jobs/`, and `st fleet tend` evaluated
+every job on each pass. Today tend runs only the file jobs that still load
+(see the top of this page), and none once `[jobs] graph` is set.
 
 ## Delegate a host's scheduler to Chaski
 
@@ -313,7 +314,7 @@ lives in `<root>/jobs/.state/<name>.json`.
 
 A failed attempt is retried after `backoff`, then `2×backoff`, `4×backoff`, and
 so on, up to `retry.max` retries. After the last one the job **gives up** and
-sends one durable inbox message to the administrator, naming the job, the error
+records one job-failed event for the administrator, naming the job, the error
 and `st work jobs history <name>`. A job that retries forever hides a broken
 job. A job that gives up without telling anyone is the silent cron this feature
 replaces.
@@ -326,6 +327,7 @@ host" is how one job ends up firing on two machines.
 ## The CLI
 
 ```
+st work jobs new <name>      declare a scheduled job in Quipu; -n prints it and writes nothing
 st work jobs [list]          every job: trigger, next due, last result, action
 st work jobs check [name]    would it fire NOW, and why — reads sources, writes nothing
 st work jobs run <name>      fire once now, in the foreground; recorded, never retried
@@ -410,9 +412,9 @@ no_graph_context = "outside contributions are not modelled in the graph yet"
 ## Not yet
 
 This is a first slice. It does not yet include: `gh.release` and
-`file.changed` sources; recording runs as quipu facts; or moving dream's
-interval and the loose host crons (CI watch, repo audits, `hold gaming --probe`)
-into job files. Each of those is a separate change.
+`file.changed` sources, or recording runs as quipu facts. Each of those is a
+separate change. Loose host crons no longer move into job files: timed job
+files are refused, and a schedule is declared in Quipu instead.
 
 
 ## Store admission and terminal failure notices

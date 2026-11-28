@@ -167,7 +167,7 @@ malformed or failed answers remain UNKNOWN without a fallback order or retry.
 The local `notify/backlog_rank_attempt.json` records attempts, not successful
 acceptance; a failed attempt waits for the next five-minute interval too.
 
-[The isolated before/after recording](demos/backlog-tend-rank/README.md) shows
+[The isolated before/after recording](https://github.com/intigraph/shantytown/blob/main/docs/demos/backlog-tend-rank/README.md) shows
 the existing ranking sweep consuming a fixture graph order while sending no
 notifications or tracker writes. Live query delivery and installed acceptance
 remain separate from that source demonstration.

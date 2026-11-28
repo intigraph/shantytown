@@ -1,7 +1,7 @@
 # Harnesses — running more than one agent program
 
 > Claude Code is **a** harness, not the shape of the world. Four adapters ship: `claude` (the default), `codex`, `opencode` and
-> experimental `agy`. This is the setup and reference doc for both — what to put on a card, what to put in
+> experimental `agy`. This is the setup and reference doc for all four — what to put on a card, what to put in
 > config, what lands on disk, and what does **not** work yet.
 >
 > For *why* the interface looks like this, see [`adapters.md`](adapters.md). This doc is the
@@ -498,10 +498,14 @@ as a per-agent launch failure. A role nobody has is refused for the reason every
 refuses unknown keys: a rule that applies to nobody reads as applied.
 
 A card naming a harness this build does not implement is **refused**, never quietly replaced with
-the default — a card that asks for `opencode` and silently gets `claude` is a launch that succeeded
-at being the wrong thing.
+the default — a card that asks for a program this build lacks and silently gets `claude` is a launch
+that succeeded at being the wrong thing.
 
-### The two harnesses, side by side
+### `claude` and `codex`, side by side
+
+These two can hold any role. `opencode` and `agy` cannot hold a stop for delivery, so they run as
+workers only; [Local models and OpenCode](local-models.md) and the
+[Antigravity section](#antigravity-cli-agy-experimental) below cover them.
 
 | | `claude` | `codex` |
 |---|---|---|
@@ -512,7 +516,7 @@ at being the wrong thing.
 | per-card permission bypass | `--dangerously-skip-permissions` | `--dangerously-bypass-approvals-and-sandbox` |
 | model flag | `--model` | `--model` |
 | browser | `--chrome` / `--no-chrome` | none — preference retained with a notice |
-| pane-reading (is it live?) | measured | **not measured** — see the gaps above |
+| pane-reading (is it live?) | measured | measured on a live pane: the persistent status line |
 | compaction hook (`PreCompact`) | **yes** — `shantytown.precompact` writes a checkpoint at the boundary | **none exists** |
 | so: handoff-before-compaction | automatic backstop + the st lines | the st lines ONLY, plus the `st agent cycle` durable gate |
 
@@ -543,10 +547,11 @@ lines) and ~167k on a 200k-window one (**below both** — that agent compacts be
 anything). The line moves with the MODEL, not the harness. `compaction.jsonl` is what will answer it
 per agent; codex has produced no points yet.
 
-Everything in the codex column was read out of `openai/codex` `main` on 2026-08-06, with the source
-file named beside each fact in [`shantytown/codex.py`](https://github.com/scbrown/shantytown/blob/main/shantytown/codex.py). There was no codex
-binary on the machine that wrote it, and a guess about another CLI's flags is exactly the kind of
-code that looks shipped and has never run.
+The codex column was first read out of `openai/codex` `main` on 2026-08-06, with the source file
+named beside each fact in [`shantytown/codex.py`](https://github.com/intigraph/shantytown/blob/main/shantytown/codex.py). There was no codex
+binary on the machine that wrote that first version, and a guess about another CLI's flags is
+exactly the kind of code that looks shipped and has never run. The pane-reading patterns were
+measured later, on live Codex panes.
 
 ### Editing an emitted artifact by hand
 
@@ -560,11 +565,12 @@ survive** a re-emission. The alternative — surgically editing your TOML as tex
 would have to be right about every time, and being wrong there corrupts the file that decides how
 the agent runs.
 
-### Writing a third harness
+### Writing another harness
 
 `shantytown/harness.py` and one card. The interface is in
 [`adapters.md`](adapters.md#what-the-second-implementation-actually-cost--the-seam-codex-moved);
-`ClaudeHarness` and `CodexHarness` are the two worked examples, and `tests/test_codex_harness.py`
+`ClaudeHarness` and `CodexHarness` are the full worked examples (`opencode.py` and `agy.py` are
+smaller ones), and `tests/test_codex_harness.py`
 separates *claims about the program* from *claims about the seam*, which is the split to copy.
 
 Nothing in the tier, the emitter, the resolver or the capability gate should need to change. If it

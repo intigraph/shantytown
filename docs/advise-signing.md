@@ -47,5 +47,5 @@ verify the old writer, then revoke only the newly introduced sessions. Verify
 revocation before removing their exact key files. Preserve observations, the
 original host key/config and protected registry history.
 
-See the [recorded fixture comparison](demos/advise-signing.md) for matching and
+See the [recorded fixture comparison](https://github.com/intigraph/shantytown/blob/main/docs/demos/advise-signing.md) for matching and
 mismatched actor inputs on base and candidate source.

@@ -914,7 +914,7 @@ partial inventories, outside contributors, existing verdicts, changed custody
 or a changed head refuse. The ordinary cap, protected job UID, hold and governor
 checks remain in the source path. Merge recruitment remains disabled.
 
-[Source demonstration](demos/scoped-recruiter/README.md) uses explicit fake
+[Source demonstration](https://github.com/intigraph/shantytown/blob/main/docs/demos/scoped-recruiter/README.md) uses explicit fake
 identity/forge adapters and no live job. Operational acceptance still requires
 the separately authorized security migration, controller transport and a real
 event-triggered review with durable receipt and latency measurement.
