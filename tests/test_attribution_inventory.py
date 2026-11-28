@@ -103,6 +103,12 @@ INVENTORY: dict[tuple[str, str], tuple[str, str]] = {
         ATTRIBUTED_HERE,
         "shuttle run state change from the windowed-graph poll; same router, "
         "same reason — the graph composed this line, not a person."),
+    ("cli.py", "wake"): (
+        ATTRIBUTED_HERE,
+        "an ephemeral job's result woken into its spawner's live pane "
+        "(_spawn_result_route, aegis-0dh5), signed ST_JOB_RESULT. The line is "
+        "eph.wake_text: ledger fields only, never the job agent's summary, so "
+        "st's name never vouches for PR-shaped text."),
     ("dispatch.py", "go"): (
         ATTRIBUTED_UPSTREAM,
         "p.text was signed in Dispatcher.plan(), so the prefix also reaches "

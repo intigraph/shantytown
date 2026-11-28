@@ -2289,28 +2289,112 @@ def record_result(root, name: str, verdict: str, summary: str, cause: str,
     return rec
 
 
-def report_text(rec: dict) -> str:
+def report_head(rec: dict) -> str:
+    """The result's headline, built from ledger fields st owns. It carries no
+    agent-authored text, which is what lets st sign it (wake_text)."""
     r = rec["result"]
     target = f" {rec['repo']}#{rec['pr']}" if rec.get("pr") else ""
     head = (f"[ephemeral {rec['job']}{target}] {rec['name']} ({rec['harness']}, "
             f"attempt {rec.get('attempt', 1)}): {r['verdict'].upper()}")
     if r["cause"] != "report":
         head += f" — ended by {r['cause']}"
-    return head + ("\n\n" + r["summary"] if r["summary"] else "")
+    return head
 
 
-def notify(rec: dict, *, persist_event, comment) -> list[str]:
-    """Tell the administrator and the item. Each leg is best-effort and named
-    when it fails: one lost leg must not hide the other, and neither may block
-    teardown (an agent that cannot report must still not outlive its bounds)."""
+def report_text(rec: dict) -> str:
+    r = rec["result"]
+    return report_head(rec) + ("\n\n" + r["summary"] if r["summary"] else "")
+
+
+def wake_text(rec: dict) -> str:
+    """The live wake typed into a spawner's pane: a pointer, never the summary.
+    The summary is the job agent's own words (for a review job, shaped by the
+    PR it read); the wake is signed by st, so it must hold only what st wrote.
+    The summary stays in the durable event and the item comment, unsigned."""
+    return (f"{report_head(rec)} for {rec['item']}. Read the result in your "
+            f"stop events or on the item comment.")
+
+
+#: Crew roles whose own job's result goes back to them, not to the
+#: administrator (aegis-0dh5). An administrator spawner is the old path anyway.
+SPAWNER_ROLES = ("lead", "worker", "keeper")
+
+
+def result_recipient(rec: dict, *, card_of=None, is_up=None) -> tuple[str, str]:
+    """Who hears this job's result, and a note when that is a fallback.
+
+    aegis-0dh5, measured 2026-11-27: lead ellie spawned eph-task-25723e and
+    waited on it; its DONE went to rec["administrator"] (sattler), so ellie sat
+    idle 56 min with ready work while the result sat in a context that was then
+    cycled. The SPAWNER is the one waiting, so a crew spawner gets it. The
+    administrator gets it only when it spawned the job itself, or when the
+    spawner is unknown, not a crew role, retired or down: a result must
+    always land somewhere live, never on a card nobody reads.
+
+    card_of(name) -> card or None; is_up(card) -> bool. Either missing (or
+    raising) means UNKNOWN, which routes to the administrator, never nowhere."""
+    admin = rec["administrator"]
+    spawner = rec.get("spawned_by")
+    if not spawner or spawner in (admin, "operator"):
+        return admin, ""
+    if card_of is None or is_up is None:
+        return admin, f"spawner {spawner} unresolved; routed to the administrator"
+    try:
+        card = card_of(spawner)
+    except Exception:  # noqa: BLE001 -- an unreadable registry is UNKNOWN
+        card = None
+    if card is None:
+        return admin, f"spawner {spawner} unknown; routed to the administrator"
+    if getattr(card, "role", None) not in SPAWNER_ROLES or getattr(card, "retired", None):
+        return admin, f"spawner {spawner} is not live crew; routed to the administrator"
+    try:
+        up = bool(is_up(card))
+    except Exception:  # noqa: BLE001
+        up = False
+    if not up:
+        return admin, f"spawner {spawner} is down; routed to the administrator"
+    return spawner, ""
+
+
+def notify(rec: dict, *, persist_event, comment, card_of=None, is_up=None,
+           wake=None) -> list[str]:
+    """Tell whoever is waiting on the job (result_recipient) and the item. Each
+    leg is best-effort and named when it fails: one lost leg must not hide the
+    other, and none may block teardown (an agent that cannot report must still
+    not outlive its bounds).
+
+    The event is durable and drains at the recipient's next stop; an IDLE
+    recipient never stops again, so `wake(name, text)` also types a pointer
+    into its pane. That live wake is what ellie never got (aegis-0dh5).
+    wake returns True (delivered), False (not typed) or None (typed, submit
+    unconfirmed); the text it is given is wake_text, never the summary."""
     problems = []
     text = report_text(rec)
+    to, why = result_recipient(rec, card_of=card_of, is_up=is_up)
+    detail = (f"({why}) " if why else "") + text
     try:
-        persist_event(to=rec["administrator"], frm=rec["name"], reason=RESULT_REASON,
-                      rose=False, item=rec["item"], item_status=None,
-                      detail=text[:600], key=f"ephemeral:{rec['name']}:result")
+        persist_event(to=to, frm=rec["name"], reason=RESULT_REASON,
+                      rose=bool(why), item=rec["item"], item_status=None,
+                      detail=detail[:600], key=f"ephemeral:{rec['name']}:result")
     except Exception as exc:  # noqa: BLE001
-        problems.append(f"administrator event NOT written ({type(exc).__name__})")
+        problems.append(f"result event for {to} NOT written ({type(exc).__name__})")
+    if wake is not None and to != rec["administrator"]:
+        try:
+            woke = wake(to, wake_text(rec))
+        except Exception as exc:  # noqa: BLE001
+            woke = False
+            problems.append(f"live wake of spawner {to} NOT delivered ({type(exc).__name__})")
+        else:
+            if woke is None:
+                # The keys went in but the submit was not confirmed: the text
+                # may well be in the pane, so "NOT delivered" would be a lie,
+                # and a resend could type it twice.
+                problems.append(f"live wake of spawner {to} UNVERIFIED (typed, "
+                                "submit not confirmed; not resent); the durable "
+                                "event is pending")
+            elif not woke:
+                problems.append(f"live wake of spawner {to} NOT delivered; "
+                                "the durable event is pending")
     try:
         comment(rec["item"], text)
     except Exception as exc:  # noqa: BLE001
@@ -2533,12 +2617,38 @@ def teardown(root, name: str, *, kill_session, git=_git, now: float | None = Non
     return rec
 
 
+def claim_wake(root, name: str, now: float) -> bool:
+    """True exactly once per job. The result event is keyed, so a second
+    ending (a report racing a reap) writes nothing new, but a pane is not a
+    keyed store: without this claim the same wake is typed into the spawner's
+    prompt again. Claimed before the send, so a crash mid-send never doubles."""
+    with lock(root):
+        rec = read(root, name)
+        if rec is None or rec.get("woken_at") is not None:
+            return False
+        rec["woken_at"] = now
+        write(root, rec)
+    return True
+
+
+def _wake_once(root, name: str, wake):
+    def once(to, text):
+        if not claim_wake(root, name, time.time()):
+            return True           # already woken by the first ending; not a fault
+        return wake(to, text)
+    return once
+
+
 def finish(root, name: str, verdict: str, summary: str, cause: str, *,
-           persist_event, comment, schedule_teardown, now: float) -> tuple[dict, list[str]]:
+           persist_event, comment, schedule_teardown, now: float,
+           card_of=None, is_up=None, wake=None) -> tuple[dict, list[str]]:
     rec = record_result(root, name, verdict, summary, cause, now)
     # The run ends on the RECORDED result: a second ending keeps the first story.
     run_end(root, name, rec["result"]["verdict"])
-    problems = notify(rec, persist_event=persist_event, comment=comment)
+    if wake is not None:
+        wake = _wake_once(root, name, wake)
+    problems = notify(rec, persist_event=persist_event, comment=comment,
+                      card_of=card_of, is_up=is_up, wake=wake)
     schedule_teardown(name)
     return rec, problems
 
