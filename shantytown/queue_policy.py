@@ -95,6 +95,8 @@ def refusal(item, owner, rows):
                   and (r.get('assignee') or '').split('/')[-1] == owner.split('/')[-1]
                   and r.get('status') != 'closed']
     candidate = dict(vars(item))
+    candidate['operator_directive'] = any(r.get('id') == item.id
+        and r.get('operator_directive') is True for r in candidates)
     candidates = [r for r in candidates if r.get('id') != item.id] + [candidate]
     for row in candidates:
         if row.get('lane') not in ('now', 'next', 'later') or row.get('rank') is None:
@@ -102,7 +104,7 @@ def refusal(item, owner, rows):
         rank_order(row['rank'], row.get('due_at'), row.get('created_at'))
     top = min(candidates, key=lambda r: plate_key(r.get('status'), r.get('priority'),
         r['id'], rank=r.get('rank'), due_at=r.get('due_at'),
-        created_at=r.get('created_at'), lane=r.get('lane')))
+        created_at=r.get('created_at'), lane=r.get('lane'), operator_directive=r.get('operator_directive') is True))
     if top['id'] != item.id:
         return f"{item.id} is out of order; {top['id']} heads {owner}'s ranked plate"
     return ''

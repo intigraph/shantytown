@@ -76,3 +76,9 @@ def test_now_requires_the_configured_operator_now_request(quote, requester):
 def test_requester_policy_cannot_be_assumed_from_the_caller():
     with pytest.raises(ValueError, match='UNKNOWN'):
         promotion('Please do it now', 'operator', True)
+
+
+def test_selected_item_keeps_its_fresh_directive_evidence():
+    rows=[row('a-plain',lane='now'),row('z-operator',lane='now',operator_directive=True)]
+    assert refusal(item(id='z-operator'),'ellie',rows)==''
+    assert 'z-operator' in refusal(item(id='a-plain'),'ellie',rows)

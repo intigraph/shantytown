@@ -648,7 +648,7 @@ def lane_order(lane) -> int:
 
 def plate_key(status: str | None, priority: "int | None", ident: str,
               ready_ids: "set[str] | None" = None, *, rank=None, due_at=None,
-              created_at=None, lane=None) -> tuple:
+              created_at=None, lane=None, operator_directive=False) -> tuple:
     """The ONE plate ordering, shared by every backend (aegis-fxx3y).
 
     Lifecycle/readiness precede priority, explicit work rank, due and age:
@@ -670,6 +670,8 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
        lanes set orders identically to the previous key.
     4. **work rank**, exact decimals, ranked before unranked within priority.
        Ties use due then creation time; unranked uses oldest first.
+    An explicit operator-directive signal breaks ties after exact work rank,
+    before due/creation/id. It never reinstates priority in Now/Next.
     5. **id**, last, purely as a deterministic tiebreak.
 
     Key 4 used to be key 2, and that was the whole defect: among equal-status
@@ -682,12 +684,15 @@ def plate_key(status: str | None, priority: "int | None", ident: str,
     another, which is the divergence the two-implementation rule exists to catch.
     """
     bucket = lane_order(lane)
+    ranked = rank_order(rank, due_at, created_at)
     return (
         _PLATE_RANK.get(status, 2),
         1 if is_blocked(status, ident, ready_ids) else 0,
         bucket,
         (0, 0) if bucket < 2 else (1, 0) if priority is None else (0, priority),
-        *rank_order(rank, due_at, created_at),
+        *ranked[:2],
+        0 if operator_directive is True else 1,
+        *ranked[2:],
         ident,
     )
 

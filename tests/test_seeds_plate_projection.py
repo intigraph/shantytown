@@ -902,7 +902,9 @@ def test_owner_projection_retries_a_moving_snapshot(monkeypatch, tmp_path, motio
         assert observed["queries"] == 6
     else:
         assert result.exact()[0]["id"] == "test-held"
-        assert observed["queries"] == (4 if motion == "settles" else 2)
+        # One additional, separately bounded ROOT advisory read after a complete
+        # owner projection. A failed/partial owner read still never attempts it.
+        assert observed["queries"] == (5 if motion == "settles" else 3)
 
 
 @pytest.mark.parametrize('marker', [
