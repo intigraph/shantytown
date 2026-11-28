@@ -94,6 +94,9 @@ def digest(ready, rows, cards, live, *, counts):
     p0_ids = set(p0)
     witnesses = {r["id"]: r for r in rows if r["id"] in p0_ids}
     witnesses.update({r["id"]: r for r in unowned})
+    boosted = {r["id"] for r in rows if r.get("operator_directive") is True}
+    witnesses = {ident: dict(row, operator_directive=ident in boosted)
+                 for ident, row in witnesses.items()}
     ordered = sorted(witnesses.values(), key=lambda r: (
         priority(r) if priority(r) is not None else math.inf,
         *rank_order(r.get("rank"), r.get("due_at"), r.get("created_at"))[:2],

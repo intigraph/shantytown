@@ -82,3 +82,9 @@ def test_selected_item_keeps_its_fresh_directive_evidence():
     rows=[row('a-plain',lane='now'),row('z-operator',lane='now',operator_directive=True)]
     assert refusal(item(id='z-operator'),'ellie',rows)==''
     assert 'z-operator' in refusal(item(id='a-plain'),'ellie',rows)
+
+
+def test_queue_sequence_uses_directive_only_after_explicit_rank():
+    from shantytown.queue_policy import key
+    assert key(row('z',operator_directive=True)) < key(row('a'))
+    assert key(row('a',rank='0')) < key(row('z',operator_directive=True))

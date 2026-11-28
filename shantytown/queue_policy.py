@@ -55,7 +55,9 @@ def validate(rows):
 
 
 def key(row):
-    return (*rank_order(row.get('rank'), row.get('due_at'), row.get('created_at')), row['id'])
+    ranked = rank_order(row.get('rank'), row.get('due_at'), row.get('created_at'))
+    return (*ranked[:2], 0 if row.get('operator_directive') is True else 1,
+            *ranked[2:], row['id'])
 
 
 def intake(rows):
@@ -135,6 +137,8 @@ def assignment_refusal(candidate, rows, owner):
         return (f'{ident} has no Now/Next rank; assignment to {owner} refused '
                 '(rank it first, or pass --queue-override with a reason)')
     rows = validate(rows)
+    candidate = dict(candidate, operator_directive=any(r.get('id') == candidate.get('id')
+        and r.get('operator_directive') is True for r in rows))
     waiting = sorted((r for r in drop_parked(rows) if r['id'] != candidate.get('id')
                       and not _owner(r) and r.get('status') == 'open' and workable(r)),
                      key=board_key)
